@@ -108,14 +108,34 @@ def _parse_candles(payload: object) -> list[Candle]:
 class OHLCVClient:
     """Async HTTP client, read-only, cautious throttle (public API, no key)."""
 
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = 2.2) -> None:
+    def __init__(
+        self, base_url: str = BASE_URL, *, min_interval: float = 2.2, use_shared_throttle: bool = False,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        # 07/24 -- throughput audit found this client's OWN independent lock
+        # never coordinated with geckoterminal.py's (both pace calls to the
+        # SAME external GeckoTerminal account -- smart_money.py's per-token
+        # loop calls both `gecko.resolve_primary_pool` and `gecko.get_ohlcv`,
+        # which silently delegates here). Default False -- unchanged legacy
+        # behavior for any test-constructed instance (the 7 existing
+        # `OHLCVClient(min_interval=0.0)` sites keep working unmodified, never
+        # touching the shared limiter). Only the module-level singleton below
+        # opts in.
+        self._use_shared_throttle = use_shared_throttle
 
     async def _throttle(self) -> None:
+        if self._use_shared_throttle:
+            # Lazy import, only resolved when actually throttling (never at
+            # module load) -- no circular-import risk even if geckoterminal.py
+            # someday stops being lazy about importing this module back.
+            from aria_core.services.geckoterminal import wait_for_shared_rate_limit
+
+            await wait_for_shared_rate_limit()
+            return
         async with self._lock:
             now = asyncio.get_event_loop().time()
             wait = self._min_interval - (now - self._last_request)
@@ -253,4 +273,4 @@ class OHLCVClient:
         )
 
 
-ohlcv_client = OHLCVClient()
+ohlcv_client = OHLCVClient(use_shared_throttle=True)

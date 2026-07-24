@@ -206,3 +206,57 @@ async def test_min_useful_candles_one_still_falls_back_if_first_tier_truly_empty
 
     assert res.available is True
     assert res.timeframe == "4H"
+
+
+# ── shared GeckoTerminal throttle (07/24, throughput audit -- this client's
+# own independent lock never coordinated with geckoterminal.py's) ───────────
+
+
+@pytest.mark.asyncio
+async def test_default_client_keeps_its_own_independent_lock(monkeypatch):
+    """Non-régression : un client construit sans use_shared_throttle (les 7
+    sites de test existants, min_interval=0.0 compris) n'appelle jamais le
+    limiteur partagé."""
+    called = False
+
+    async def fake_shared(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.wait_for_shared_rate_limit", fake_shared
+    )
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+
+    await client._throttle()
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_shared_throttle_opt_in_calls_the_shared_limiter(monkeypatch):
+    called = False
+
+    async def fake_shared(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.wait_for_shared_rate_limit", fake_shared
+    )
+    client = OHLCVClient(base_url="https://gt.test", use_shared_throttle=True)
+
+    await client._throttle()
+
+    assert called is True
+
+
+@pytest.mark.asyncio
+async def test_module_singleton_uses_the_shared_throttle():
+    """The one real-production instance (ohlcv_client) must opt in -- this is
+    exactly the fix for the dual-lock gap the audit found (smart_money.py's
+    per-token loop calls both gecko.resolve_primary_pool and gecko.get_ohlcv,
+    which delegates here)."""
+    from aria_core.services.ohlcv import ohlcv_client
+
+    assert ohlcv_client._use_shared_throttle is True
