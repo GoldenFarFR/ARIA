@@ -11,6 +11,12 @@ Solution : nouveau `services/doppler.py` -- un pool Doppler EST un pool Uniswap 
 
 ------------------------------------------------------------
 
+[DEPLOYE] Sujet    : Refresh de prix Doppler câblé dans la gestion de position (paper_trader)
+Date : 2026.07.24 / Probleme : sans refresh, une position ouverte sur CLOWNS/BANK resterait figée au prix d'entrée pour toujours -- ni le stop suiveur ni la prise de profit ne pourraient jamais se déclencher (même gap que bonding Virtuals avant #194bis).
+Solution : nouveau `paper_trader._doppler_pair_lookup` (même patron que `_bonding_pair_lookup`), câblé dans `_default_pair_lookup` via un nouveau marqueur `doppler.CHAIN_MARKER = "doppler"` (jamais une vraie chaîne DexScreener). `liquidity_usd` laissé à 0.0 (ce module ne calcule pas encore la TVL d'un pool -- honnête, pas inventé). 6 tests dédiés — paper_trader.py, services/doppler.py, tests/test_paper_trader.py
+
+------------------------------------------------------------
+
 [ETAT ACTUEL] Sujet    : Portée réelle de ce premier client
 Date : 2026.07.24 / Probleme : —
-Solution : couvre uniquement les pools appariés contre WETH (le seul numéraire observé sur les lancements Bankr/Doppler vérifiés à ce jour, CLOWNS/BANK) — un pool contre un autre numéraire retourne `None` plutôt qu'une conversion fausse. Pas encore câblé dans un pipeline d'entrée (bonding_entry.py reste scopé Virtuals) — utilisé pour l'instant en lecture ponctuelle (achats de test forcés par l'opérateur, thèse marquée comme tel, jamais une décision autonome d'ARIA).
+Solution : couvre uniquement les pools appariés contre WETH (le seul numéraire observé sur les lancements Bankr/Doppler vérifiés à ce jour, CLOWNS/BANK) — un pool contre un autre numéraire retourne `None` plutôt qu'une conversion fausse. Sizing/gates d'entrée (rr, align_score, plancher de liquidité) : aucun équivalent de `bonding_entry.evaluate_bonding_entry` construit pour Doppler -- les positions ouvertes sur ce chemin le sont uniquement via un achat de test forcé par l'opérateur, thèse marquée comme tel, jamais une décision autonome d'ARIA.

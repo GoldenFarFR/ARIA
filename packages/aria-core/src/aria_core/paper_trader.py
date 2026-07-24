@@ -1847,6 +1847,36 @@ async def _bonding_pair_lookup(contract: str):
     )
 
 
+async def _doppler_pair_lookup(contract: str):
+    """24/07 -- Doppler chantier: same gap as ``_bonding_pair_lookup`` above,
+    for a Bankr/Doppler-launched token instead of a Virtuals bonding-curve
+    one -- a Doppler token's Uniswap v4 pool has NO DexScreener entry either
+    (confirmed empirically: neither CLOWNS nor BANK, both real, live pools,
+    show up there), so without this branch a position opened on one would
+    sit forever with a frozen entry price, its trailing stop/take-profit
+    never able to fire.
+
+    Returns a real ``PairSnapshot`` built from ``services.doppler`` (current
+    ``sqrtPriceX96`` -> price, converted to USD via the real WETH/USD rate).
+    ``liquidity_usd`` left at 0.0 -- this module doesn't yet compute a pool's
+    total value locked, an honest gap, not an invented number.
+    ``pair_address`` left empty (never fabricated) -- same degradation as
+    ``_bonding_pair_lookup``, ``_robust_close_price`` falls back to the spot
+    price already computed here. ``None`` if the pool can't be found or the
+    price read fails -- never a fabricated price."""
+    from aria_core.services import doppler
+    from aria_core.services.dexscreener import PairSnapshot
+
+    price_usd = await doppler.get_token_price_usd(contract)
+    if price_usd is None or price_usd <= 0:
+        return None
+    return PairSnapshot(
+        price_usd=price_usd,
+        liquidity_usd=0.0,
+        base_address=(contract or "").strip().lower(),
+    )
+
+
 async def _default_pair_lookup(contract: str, *, chain: str = "base"):
     """07/17 -- factored out of ``_default_price_lookup`` so the open-position
     management loop can reuse the SAME DexScreener pair for both the current
@@ -1868,11 +1898,18 @@ async def _default_pair_lookup(contract: str, *, chain: str = "base"):
     24/07 -- bonding-entry chantier: ``chain`` doubles as the bonding marker
     (``bonding_entry.CHAIN_MARKER``, never a real DexScreener chain id) --
     routed to ``_bonding_pair_lookup`` instead, DexScreener has structurally
-    no pair for a token still on a bonding curve."""
+    no pair for a token still on a bonding curve.
+
+    24/07 -- Doppler chantier: same doubling for ``doppler.CHAIN_MARKER``
+    (a Bankr-launched token's Uniswap v4 pool also has no DexScreener
+    entry)."""
     from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import doppler
 
     if chain == CHAIN_MARKER:
         return await _bonding_pair_lookup(contract)
+    if chain == doppler.CHAIN_MARKER:
+        return await _doppler_pair_lookup(contract)
 
     from aria_core.services.dexscreener import fetch_token_pairs
 

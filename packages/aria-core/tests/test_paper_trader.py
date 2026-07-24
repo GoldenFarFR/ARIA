@@ -4064,6 +4064,52 @@ async def test_default_pair_lookup_routes_bonding_chain_marker(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_doppler_pair_lookup_converts_price(monkeypatch):
+    """24/07 -- same gap as _bonding_pair_lookup, for a Bankr/Doppler token
+    instead of a Virtuals bonding one: no DexScreener entry, no on-chain
+    price read -> the position's trailing stop/TP could never fire."""
+    async def fake_get_token_price_usd(contract, *, token_decimals=18, w3=None):
+        assert contract == A
+        return 1.1e-07
+
+    monkeypatch.setattr("aria_core.services.doppler.get_token_price_usd", fake_get_token_price_usd)
+
+    pair = await pt._doppler_pair_lookup(A)
+
+    assert pair is not None
+    assert pair.price_usd == pytest.approx(1.1e-07)
+    assert pair.liquidity_usd == 0.0
+    assert pair.pair_address == ""  # never fabricated -- forces _robust_close_price to spot
+
+
+@pytest.mark.asyncio
+async def test_doppler_pair_lookup_none_when_price_unavailable(monkeypatch):
+    async def fake_get_token_price_usd(contract, *, token_decimals=18, w3=None):
+        return None
+
+    monkeypatch.setattr("aria_core.services.doppler.get_token_price_usd", fake_get_token_price_usd)
+    assert await pt._doppler_pair_lookup(A) is None
+
+
+@pytest.mark.asyncio
+async def test_default_pair_lookup_routes_doppler_chain_marker(monkeypatch):
+    from aria_core.services import doppler
+    from aria_core.services.dexscreener import PairSnapshot
+
+    fake_pair = PairSnapshot(pair_address="", price_usd=1.1e-07, liquidity_usd=0.0, base_address=A)
+
+    async def fake_doppler_lookup(contract):
+        assert contract == A
+        return fake_pair
+
+    monkeypatch.setattr(pt, "_doppler_pair_lookup", fake_doppler_lookup)
+
+    result = await pt._default_pair_lookup(A, chain=doppler.CHAIN_MARKER)
+
+    assert result is fake_pair
+
+
+@pytest.mark.asyncio
 async def test_bonding_signal_gets_extra_size_reduction(tmp_db, monkeypatch):
     """The core fix of task #69: a bonding-tagged BUY signal's allocation is
     the STANDARD risk/ATR sizing (compute_entry_alloc) multiplied by

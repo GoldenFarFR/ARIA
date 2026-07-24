@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RPC_URL = "https://mainnet.base.org"
 
+# Marker used by ``paper_trader._default_pair_lookup`` to route a position's
+# price refresh here instead of DexScreener -- same pattern as
+# ``bonding_entry.CHAIN_MARKER`` ("virtuals-bonding"), never a real chain id.
+CHAIN_MARKER = "doppler"
+
 # Uniswap v4 canonical contracts on Base (chain id 8453).
 POOL_MANAGER_ADDRESS = "0x498581ff718922c3f8e6a244956af099b2652b2b"
 STATE_VIEW_ADDRESS = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
