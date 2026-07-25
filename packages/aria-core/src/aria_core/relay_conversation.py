@@ -85,6 +85,10 @@ _SYSTEM_CONTEXT = (
     "Telegram, pas un rapport -- va droit au but, une seule idee principale par reponse "
     "plutot que de tout couvrir. Si la question a plusieurs volets, choisis le plus "
     "important et reponds seulement a celui-la, plutot que de tout lister.\n"
+    "Exemple du format attendu (a imiter, jamais a copier mot pour mot) : "
+    "\"Honnetement le vrai probleme c'est le volume pas confirme -- j'ai achete sur un "
+    "rebond que personne ne soutenait vraiment. La prochaine fois je regarde ce chiffre "
+    "avant de me fier au R/R affiche.\" -- deux phrases, zero puce, zero titre.\n"
     + forbidden_cliches_prompt("fr")
 )
 
@@ -136,6 +140,22 @@ def _position_facts_block(pos: dict) -> str:
         lines.append(f"- R/R a l'entree : {pos['rr']}")
     if pos.get("conviction_tier"):
         lines.append(f"- Palier de conviction : {pos['conviction_tier']}")
+    if pos.get("discovery_channel") == "floor":
+        # 25/07, operator-found gap: questioned about OWB (a floor-mode entry),
+        # ARIA concluded the floor mechanism itself "pourrait etre un signal de
+        # faiblesse du token" -- a real confusion between a PIPELINE governance
+        # decision (quality bars deliberately waived to force 5 trades/day,
+        # diagnostic purpose) and a property of the TOKEN itself. Spelled out
+        # explicitly so this distinction isn't left for the LLM to infer.
+        lines.append(
+            "- IMPORTANT contexte : cette position vient du plancher quotidien de "
+            "5 trades (mode diagnostique) -- les criteres de QUALITE (volume, R/R, "
+            "alignement technique) ont ete volontairement assouplis pour forcer "
+            "l'ouverture, jamais les criteres de SECURITE (honeypot, liquidite, "
+            "wash-trading restent intacts). Ce n'est PAS un signal sur la qualite "
+            "du token lui-meme -- c'est une decision de gouvernance du pipeline, a "
+            "ne jamais confondre avec une propriete intrinseque du projet."
+        )
     if pos.get("pnl_usd") is not None:
         lines.append(f"- PnL : {pos['pnl_usd']}$ ({pos.get('pnl_pct')}%)")
     thesis = (pos.get("thesis") or "").strip()

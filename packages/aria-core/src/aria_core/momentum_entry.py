@@ -1837,8 +1837,26 @@ async def evaluate_momentum_entry(
         # her best available pick when behind the daily floor.
         action = "BUY"
         floor_trade = True
+        # 25/07 -- operator-found gap, real case (OWB, R/R=50.8): this branch
+        # is reached whenever EITHER signal.rr OR align_score misses its own
+        # direct-buy floor above -- the old message always blamed "R/R faible"
+        # even when the R/R was actually excellent and align_score was the
+        # real gap, a genuinely misleading label (ARIA herself, questioned via
+        # the relay channel about OWB, read this label at face value and
+        # never suspected the R/R figure could be the misdiagnosed part).
+        rr_weak = signal.rr < _RR_MIN_FOR_DIRECT_BUY
+        align_weak = align_score < _ALIGN_SCORE_MIN_FOR_DIRECT_BUY
+        if rr_weak and align_weak:
+            weak_point = f"R/R faible ({signal.rr:.1f}) et alignement technique insuffisant ({align_score}/3)"
+        elif rr_weak:
+            weak_point = f"R/R faible ({signal.rr:.1f})"
+        else:
+            weak_point = (
+                f"alignement technique insuffisant ({align_score}/3) malgré un "
+                f"R/R correct ({signal.rr:.1f})"
+            )
         reasons.append(
-            f"mode plancher (diagnostic 5 trades/jour) : R/R faible ({signal.rr:.1f}) accepté, "
+            f"mode plancher (diagnostic 5 trades/jour) : {weak_point} accepté, "
             "taille réduite, garde-fous sécurité intacts"
         )
     elif signal.rr >= _RR_AMBIGUOUS_FLOOR:

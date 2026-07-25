@@ -198,6 +198,13 @@ def test_system_context_forbids_bullet_lists():
     assert "jamais de liste a puces" in relay_conversation._SYSTEM_CONTEXT
 
 
+def test_system_context_includes_a_format_example():
+    """25/07 -- the CHECK retest and the OWB test both still produced a bulleted
+    reply despite the abstract instruction above -- a concrete example is a
+    stronger lever on an LLM's output format than an abstract rule alone."""
+    assert "Exemple du format attendu" in relay_conversation._SYSTEM_CONTEXT
+
+
 def _fake_position(**overrides):
     base = {
         "symbol": "AUTONO", "contract": "0xb3d7e0c3c39a1d3f1b304663065a2f83ddf56d8e",
@@ -288,6 +295,23 @@ def test_position_facts_block_does_not_flag_a_healthy_fundamental_score():
     )
     block = relay_conversation._position_facts_block(pos)
     assert "SIGNAL QUALITATIF PRIORITAIRE" not in block
+
+
+def test_position_facts_block_clarifies_floor_mode_is_not_a_token_signal():
+    """25/07, operator-found gap: questioned about a floor-mode position (OWB),
+    ARIA concluded the floor mechanism itself "pourrait etre un signal de
+    faiblesse du token" -- confusing a pipeline governance decision (quality
+    bars waived to force 5 trades/day) with a property of the token."""
+    pos = _fake_position(discovery_channel="floor")
+    block = relay_conversation._position_facts_block(pos)
+    assert "plancher quotidien" in block
+    assert "PAS un signal sur la qualite" in block
+
+
+def test_position_facts_block_omits_floor_clarification_for_normal_trades():
+    pos = _fake_position(discovery_channel=None)
+    block = relay_conversation._position_facts_block(pos)
+    assert "plancher quotidien" not in block
 
 
 @pytest.mark.asyncio

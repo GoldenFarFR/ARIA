@@ -3792,3 +3792,47 @@ async def test_category_absent_on_early_hold_before_alignment_computed(monkeypat
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert "category" not in result
+
+
+# ── mode plancher -- libellé exact du point faible (25/07, operator-found gap, cas
+# réel OWB : R/R=50.8 mais le message disait quand même "R/R faible") ───────────────
+
+@pytest.mark.asyncio
+async def test_floor_mode_blames_rr_when_rr_is_actually_weak(monkeypatch, test_settings):
+    """R/R sous le seuil direct-buy, alignement suffisant -- seul le R/R est
+    responsable du passage en mode plancher, le message doit le dire précisément."""
+    weak_rr = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak_rr, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", relaxed=True)
+
+    assert result["action"] == "BUY"
+    floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
+    assert "R/R faible (1.2)" in floor_line
+    assert "alignement" not in floor_line
+
+
+@pytest.mark.asyncio
+async def test_floor_mode_blames_alignment_when_rr_is_actually_strong(monkeypatch, test_settings):
+    """Cas réel OWB : R/R excellent (50.8) mais alignement technique insuffisant --
+    le message ne doit plus jamais blâmer le R/R à tort dans ce cas."""
+    strong_rr_weak_align = EntrySignal(present=True, entry=1.5, invalidation=1.49, target=51, rr=50.8)
+    _patch_pipeline(monkeypatch, signal=strong_rr_weak_align, align=(1, ["EMA12 > EMA26"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", relaxed=True)
+
+    assert result["action"] == "BUY"
+    floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
+    assert "alignement technique insuffisant (1/3)" in floor_line
+    assert "R/R correct (50.8)" in floor_line
+    assert "R/R faible" not in floor_line
+
+
+@pytest.mark.asyncio
+async def test_floor_mode_blames_both_when_both_weak(monkeypatch, test_settings):
+    weak_both = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak_both, align=(1, ["EMA12 > EMA26"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", relaxed=True)
+
+    assert result["action"] == "BUY"
+    floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
+    assert "R/R faible (1.2)" in floor_line
+    assert "alignement technique insuffisant (1/3)" in floor_line
