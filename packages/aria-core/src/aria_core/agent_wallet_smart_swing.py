@@ -129,6 +129,34 @@ MAX_SLIPPAGE_BPS = 1000  # 10%
 # schema change needed).
 WALLET_PRODUCT = "cdp_smart_account_swing"
 
+# Canary probe rows land under their OWN wallet_product so the position pairer
+# (agent_wallet_positions, which reads only WALLET_PRODUCT) never turns a
+# deliberately-small probe round-trip into a "closed position" with a P&L --
+# that would pollute the real-position feed the loss circuit breaker consumes
+# (every canary loses the round-trip tax by design; a run of them must never
+# trip the consecutive-loss brake). Same table, distinct tag, no schema change.
+CANARY_WALLET_PRODUCT = "cdp_smart_account_swing_canary"
+
+# ── Entry canary (VOLET 4) -- probe the REAL buy+sell tax before full size ────
+# Small fixed test buy: large enough that a real pool's fees + price impact
+# register as a measurable round-trip cost, small enough that repeating the
+# probe is cheap (a few cents of real tax per probe) and it is a rounding error
+# against the ~250$ real capital and well under the per-tx cap. 3$ is the chosen
+# default.
+CANARY_TEST_AMOUNT_USD = 3.0
+
+# Reject a full-size entry if the MEASURED canary round-trip loss exceeds this.
+# A round trip is TWO real swaps, so it inherently costs ~2x a one-way swap;
+# at the module's 10% (MAX_SLIPPAGE_BPS) per-swap ceiling the worst *legitimate*
+# round trip approaches ~19% (1 - 0.9*0.9). 20% therefore cleanly separates a
+# genuine liquid pair (a 3$ probe round-trips well under ~5%: two swap fees +
+# negligible impact) from a stealth-tax token / soft honeypot (which taxes far
+# more, or the sell reverts outright -> also a canary failure), WITHOUT
+# false-rejecting a legit token whose two fills happen to land near the max
+# slippage tolerance. Deliberately looser than MAX_SLIPPAGE_BPS (that bounds ONE
+# swap; a round trip is two) but far tighter than a total loss.
+CANARY_MAX_ROUNDTRIP_LOSS_BPS = 2000  # 20%
+
 # Systematic prefix on every real-money log line of this module (same doctrine
 # as agent_wallet_pilot._REAL_MONEY_LOG_PREFIX) -- distinct string so a
 # log-grep can tell the swing pocket apart from the EOA pilot.
@@ -162,6 +190,15 @@ def usd_to_atomic_usdc(amount_usd: float) -> int:
     are integers of smallest units (same convention as the ``parse_units`` used
     for swaps/transfers in agent_wallet_cdp_adapter)."""
     return int(round(amount_usd * (10 ** _USDC_DECIMALS)))
+
+
+def _per_tx_cap_cents() -> int:
+    """The per-transaction USD cap in whole cents, for the Policy's
+    ``NetUSDChangeCriterion`` (safety layer #1). Derived from the SAME constant
+    the application layer enforces (``SPEND_PERMISSION_ALLOWANCE_USD``) so the
+    contract-level bound and the app-level bound can never drift apart.
+    ``changeCents`` must be a non-negative integer (cdp-sdk field constraint)."""
+    return int(round(SPEND_PERMISSION_ALLOWANCE_USD * 100))
 
 
 def build_spend_permission_input(
@@ -227,18 +264,35 @@ def build_swap_only_policy(router_address: str):
     default-denied by the CDP Policy Engine -- that default-deny is what blocks
     a raw transfer to an arbitrary address):
       1. ALLOW a ``sendEvmTransaction`` whose destination (``to``) is exactly
-         ``router_address`` -- the DEX router CDP's swap backend routes through.
-         The router address is obtained dynamically from a real quote
-         (``QuoteSwapResult.to``) and MUST be confirmed STABLE across several
-         real quotes before being hardcoded/trusted here -- it is a caller
-         parameter precisely so it is never guessed.
+         ``router_address`` -- the DEX router CDP's swap backend routes through
+         -- AND whose net USD value moved is at most the per-transaction cap
+         (``NetUSDChangeCriterion(operator="<=", changeCents=<cap>)``, verified
+         to exist in cdp-sdk 1.47.1's ``SendEvmTransactionRule.criteria``). Both
+         criteria in a rule are AND-ed by the Policy Engine, so a router call is
+         accepted ONLY if it targets the router AND stays within the cap. The
+         cap reuses ``SPEND_PERMISSION_ALLOWANCE_USD`` (the same per-tx ceiling
+         ``execute_smart_swing_swap`` enforces at the application layer) -- no
+         second, driftable number. The router address is obtained dynamically
+         from a real quote (``QuoteSwapResult.to``) and MUST be confirmed STABLE
+         across several real quotes before being hardcoded/trusted here -- it is
+         a caller parameter precisely so it is never guessed.
       2. ALLOW a token-agnostic ERC-20 ``transfer`` whose ``to`` parameter is
-         exactly ``SMART_ST_ADDRESS`` -- the return of the swap OUTPUT back to
+         exactly ``SMART_ST_ADDRESS`` -- the return of a swap OUTPUT back to
          the swing pocket. Token-agnostic (matches on the decoded ``to``
          argument, not on a fixed token contract) because the output token
          varies per trade. This is the single most delicate, safety-critical
          carve-out: it is the ONLY transfer the spender may ever make, and only
          ever to the swing pocket.
+
+    REAL bound under a spender-key compromise (stated honestly -- the older
+    "never stealable" claim was WRONG): rule 1 alone previously accepted ANY
+    calldata to the router, so a compromised spender key could have drained up
+    to the FULL Spend Permission allowance through router-shaped calls. The
+    ``NetUSDChangeCriterion`` added here caps the net USD a single accepted
+    router call can move to the per-transaction ceiling
+    (``SPEND_PERMISSION_ALLOWANCE_USD``); combined with the Spend Permission's
+    own period allowance (safety layer #2) the loss under compromise is BOUNDED,
+    not impossible. The honest worst case is bounded by these caps, never zero.
 
     Known open concern to verify during live validation (documented, never
     silently patched): a real swap through the router may ALSO require a
@@ -265,12 +319,25 @@ def build_swap_only_policy(router_address: str):
         EvmDataCondition,
         EvmDataCriterion,
         EvmDataParameterConditionList,
+        NetUSDChangeCriterion,
         SendEvmTransactionRule,
     )
 
     allow_swap_router = SendEvmTransactionRule(
         action="accept",
-        criteria=[EvmAddressCriterion(addresses=[router], operator="in")],
+        criteria=[
+            EvmAddressCriterion(addresses=[router], operator="in"),
+            # Bound the net USD a single router call may move to the per-tx cap
+            # (SPEND_PERMISSION_ALLOWANCE_USD, in cents) -- the same ceiling the
+            # application layer enforces, reused, never a new number. This is
+            # what turns rule 1 from "any calldata to the router" into a
+            # value-bounded allow (the calldata hole fix).
+            NetUSDChangeCriterion(
+                type="netUSDChange",
+                changeCents=_per_tx_cap_cents(),
+                operator="<=",
+            ),
+        ],
     )
     allow_return_to_swing_pocket = SendEvmTransactionRule(
         action="accept",
@@ -307,22 +374,70 @@ BalanceFn = Callable[[], Awaitable[float | None]]
 SpendPullFn = Callable[..., Awaitable[dict[str, Any]]]
 SwapFn = Callable[..., Awaitable[dict[str, Any]]]
 ReturnTransferFn = Callable[..., Awaitable[dict[str, Any]]]
+# Swap-quote seam (VOLET 3). Mirrors ``cdp.evm.create_swap_quote`` (verified
+# signature, cdp-sdk 1.47.1): returns a ``QuoteSwapResult`` (fields ``to_amount``
+# /``min_to_amount`` as decimal-string atomic units, ``liquidity_available``) or
+# a ``SwapUnavailableResult`` (``liquidity_available=False``). Injected, never a
+# live CDP call in this module -- same doctrine as every other seam here.
+QuoteFn = Callable[..., Awaitable[Any]]
 
 
 @dataclass(frozen=True)
 class SmartSwingSwapResult:
     status: str  # "ok" | "blocked" | "failed"
     reason: str = ""
-    pull_tx_hash: str = ""
+    pull_tx_hash: str = ""   # only a BUY pulls; empty on a SELL
     swap_tx_hash: str = ""
-    return_tx_hash: str = ""
-    amount_out: float = 0.0
-    # True if a step failed AFTER USDC had already been pulled into the spender
-    # (swap failed, or return-transfer failed) -- funds are then sitting in the
-    # spender, NOT stolen (the Policy only lets the spender reach the router or
-    # transfer back to aria-smart-st), but misplaced and needing a recovery
-    # step. Surfaced loudly rather than silently swallowed.
+    return_tx_hash: str = ""  # only a SELL returns cash; empty on a BUY (VOLET 2a)
+    amount_out: float = 0.0   # BUY: tokens received; SELL: USDC received
+    # Exact atomic quantity of ``amount_out`` when the swap adapter reports it
+    # (BUY: token atomic held in the spender -- lets a later SELL pass the exact
+    # amount through; SELL: USDC atomic). ``None`` if the adapter didn't provide
+    # it. Never guessed from ``amount_out`` (the token's decimals aren't known
+    # here).
+    amount_out_atomic: int | None = None
+    # True if a step failed and left funds somewhere they must be RECOVERED from
+    # (a swap failed after a BUY pulled USDC -> USDC sits in the spender; or a
+    # SELL's return-transfer failed -> USDC sits in the spender). NOT stolen (the
+    # Policy only lets the spender reach the router or transfer back to
+    # aria-smart-st -- bounded loss under compromise, never zero), but misplaced
+    # and needing a recovery transfer. Surfaced loudly, never silently swallowed.
+    # A SELL whose swap itself fails is NOT "stranded": the token simply stays in
+    # the spender where the prior BUY already deliberately left it (VOLET 2a) --
+    # the position is still open, not newly misplaced.
     funds_stranded: bool = False
+
+
+def _trading_blocked_reason() -> str | None:
+    """The single security-critical "is a swing trade allowed RIGHT NOW"
+    checkpoint, shared by BOTH the buy and the sell primitives so the two
+    real-money paths can NEVER drift apart on it: gate OFF (fail-closed) ->
+    global ``/stop`` kill-switch (strict) -> dedicated LOSS circuit breaker
+    (armed, or corrupted state = fail-closed). Returns a block reason, or
+    ``None`` if clear. Defense-in-depth: enforced in the primitives themselves,
+    so a swap can never execute while blocked even if a future orchestration
+    cycle forgets to check first."""
+    if not smart_swing_enabled():
+        return "ARIA_SMART_SWING_ENABLED désactivé (fail-closed par défaut)"
+    swaps_blocked, block_reason = blocks_swing_swaps()
+    if swaps_blocked:
+        return block_reason or "swaps swing bloqués (coupe-circuit/kill-switch)"
+    return None
+
+
+async def _resolve_real_balance(balance_fn: BalanceFn) -> tuple[float | None, str | None]:
+    """Fail-closed real-balance resolution shared by both primitives: returns
+    ``(balance, None)`` on success, ``(None, reason)`` if the balance is
+    unavailable (the fn raised, or returned ``None``). A real-money path never
+    fails open on an unknown balance -- same doctrine for the buy (USDC balance
+    of aria-smart-st) and the sell (the spender's balance of the held token)."""
+    try:
+        balance = await balance_fn()
+    except Exception as exc:  # noqa: BLE001 -- any balance failure blocks, never fails open
+        return None, f"solde réel indisponible (fail-closed) : {exc}"
+    if balance is None:
+        return None, "solde réel indisponible (fail-closed) : balance_fn a renvoyé None"
+    return balance, None
 
 
 async def execute_smart_swing_swap(
@@ -332,74 +447,72 @@ async def execute_smart_swing_swap(
     balance_fn: BalanceFn,
     spend_pull_fn: SpendPullFn,
     swap_fn: SwapFn,
-    return_transfer_fn: ReturnTransferFn,
     token_in: str = USDC_BASE_ADDRESS,
     network: str = NETWORK,
     slippage_bps: int | None = None,
+    wallet_product: str = WALLET_PRODUCT,
 ) -> SmartSwingSwapResult:
-    """Guarded swing swap: pull USDC from aria-smart-st via the Spend Permission
-    -> swap it for ``token_out`` -> return the OUTPUT back to aria-smart-st.
-    Same 5 application guards as ``agent_wallet_pilot.attempt_swap`` (strict
-    order): gate -> kill-switch -> per-tx cap -> real-balance check -> forced
-    slippage -> execution -> systematic logging.
+    """Guarded swing BUY (``USDC -> token_out``): pull USDC from aria-smart-st
+    via the Spend Permission -> swap it for ``token_out``. The output token then
+    deliberately STAYS in the spender (VOLET 2a, operator-approved temporal-hold
+    redesign 07/25) -- there is NO auto-return to aria-smart-st.
 
-    The three real CDP calls are INJECTED (no key/network here, same doctrine
-    as the EOA pilot):
-      - ``spend_pull_fn(value_atomic=, network=)`` -> ``{"tx_hash"}`` --
-        the spender's ``use_spend_permission(spend_permission=build_spend_
-        permission_input(), value=<usdc atomic>, network=)`` (pulls USDC from
-        aria-smart-st into the spender; needs NO Tangem tap once granted).
+    Why the token is left in the spender by design (this is a primitive, not an
+    oversight): the Spend Permission can only ever pull USDC out of aria-smart-st
+    (``token`` is hardcoded to USDC), so a token returned to aria-smart-st could
+    NEVER be pulled back to be sold. Leaving the bought token in the spender is
+    exactly what makes a later real SELL possible (``execute_smart_swing_sell``,
+    which needs the spender to already hold the token) -- it closes the
+    "no sell leg can exist" gap ``agent_wallet_positions`` documented. Between
+    the buy and its eventual sell the token rests in the spender, protected by
+    the CDP Policy (the spender may only reach the swap router or transfer back
+    to aria-smart-st -- bounded, recoverable, never freely transferable out).
+
+    Same 4 application guards as ``agent_wallet_pilot.attempt_swap`` (strict
+    order): gate/kill-switch/breaker (``_trading_blocked_reason``) -> per-tx cap
+    -> real-balance check -> forced slippage -> execution -> systematic logging.
+
+    The two real CDP calls are INJECTED (no key/network here, same doctrine as
+    the EOA pilot):
+      - ``spend_pull_fn(value_atomic=, network=)`` -> ``{"tx_hash"}`` -- the
+        spender's ``use_spend_permission(spend_permission=build_spend_permission_
+        input(), value=<usdc atomic>, network=)`` (pulls USDC from aria-smart-st
+        into the spender; needs NO Tangem tap once granted).
       - ``swap_fn(network=, token_in=, token_out=, amount_in_usd=,
         slippage_bps=)`` -> ``{"tx_hash", "amount_out", "amount_out_atomic"?}``
-        -- the spender's ``swap(AccountSwapOptions(...))``. Output lands in the
-        spender (``AccountSwapOptions`` has no recipient field, confirmed in
-        cdp-sdk 1.47.1), which is exactly why the explicit return step below is
-        mandatory.
-      - ``return_transfer_fn(to_address=, token_address=, amount_out=,
-        amount_out_atomic=, network=)`` -> ``{"tx_hash"}`` -- the spender's
-        ``transfer(to=SMART_ST_ADDRESS, amount=<out atomic>, token=<token_out>,
-        network=)``. The destination is HARDCODED to ``SMART_ST_ADDRESS`` by
-        this orchestration and passed for the injected fn's convenience only --
-        never a free parameter (defense-in-depth mirroring the Policy's
-        return-transfer carve-out and the EOA pilot's ALLOWED_TRANSFER_ADDRESS).
+        -- the spender's ``swap(...)``. ``amount_out`` is the token quantity
+        received (kept in the spender); ``amount_out_atomic`` (if provided) is
+        the exact atomic quantity a later sell can pass straight through.
 
     ``slippage_bps`` is only accepted to flag a mismatch in the logs -- it is
-    NEVER passed through as-is to ``swap_fn`` (always forced to
-    ``MAX_SLIPPAGE_BPS``).
+    NEVER passed through as-is (always forced to ``MAX_SLIPPAGE_BPS``).
+    ``wallet_product`` defaults to the real swing tag; the entry canary passes
+    ``CANARY_WALLET_PRODUCT`` so probe round-trips stay out of the real-position
+    P&L feed.
 
-    If a step fails AFTER the pull, ``funds_stranded`` is True and the failure
-    is logged loudly: the funds are in the spender and need a recovery
-    transfer back to aria-smart-st (bounded by the Policy -- recoverable, never
-    stealable). No automatic recovery is attempted here (out of scope; a
-    recovery flow is a separate, deliberate step)."""
+    If the swap fails AFTER the pull, ``funds_stranded`` is True and it is
+    logged loudly: the pulled USDC sits in the spender and needs a recovery
+    transfer back to aria-smart-st (bounded by the Policy). A SUCCESSFUL buy is
+    never "stranded" -- the token resting in the spender is the intended open
+    state, not a misplacement. No automatic recovery is attempted here (out of
+    scope; a recovery flow is a separate, deliberate step)."""
     if slippage_bps is not None and slippage_bps != MAX_SLIPPAGE_BPS:
         logger.warning(
             "%s -- slippage_bps=%s ignored, forced to %s (absolute rule 09/07)",
             _REAL_MONEY_LOG_PREFIX, slippage_bps, MAX_SLIPPAGE_BPS,
         )
 
-    if not smart_swing_enabled():
+    blocked_reason = _trading_blocked_reason()
+    if blocked_reason is not None:
         return await _blocked_swap(
             token_in, token_out, amount_in_usd, network,
-            reason="ARIA_SMART_SWING_ENABLED désactivé (fail-closed par défaut)",
-        )
-
-    # Single guard that covers the global ``/stop`` kill-switch (strict,
-    # fail-closed), the dedicated LOSS circuit breaker (armed -> blocked until a
-    # manual resume), AND a corrupted breaker state (fail-closed). Enforced HERE
-    # in the primitive as defense-in-depth: a swap can NEVER execute while the
-    # loss breaker is armed, even if a future orchestration cycle forgets to
-    # check it first.
-    swaps_blocked, block_reason = blocks_swing_swaps()
-    if swaps_blocked:
-        return await _blocked_swap(
-            token_in, token_out, amount_in_usd, network,
-            reason=block_reason or "swaps swing bloqués (coupe-circuit/kill-switch)",
+            reason=blocked_reason, wallet_product=wallet_product,
         )
 
     if amount_in_usd <= 0:
         return await _blocked_swap(
             token_in, token_out, amount_in_usd, network, reason="montant nul ou négatif",
+            wallet_product=wallet_product,
         )
 
     # Per-transaction cap: never above the Spend Permission allowance (a single
@@ -411,24 +524,20 @@ async def execute_smart_swing_swap(
             token_in, token_out, amount_in_usd, network,
             reason=f"montant {amount_in_usd}$ > plafond par transaction {SPEND_PERMISSION_ALLOWANCE_USD}$ "
                    "(borné par l'allowance de la spend permission)",
+            wallet_product=wallet_product,
         )
 
-    try:
-        balance_usd = await balance_fn()
-    except Exception as exc:
+    balance_usd, balance_err = await _resolve_real_balance(balance_fn)
+    if balance_err is not None:
         return await _blocked_swap(
-            token_in, token_out, amount_in_usd, network,
-            reason=f"solde réel indisponible (fail-closed) : {exc}",
-        )
-    if balance_usd is None:
-        return await _blocked_swap(
-            token_in, token_out, amount_in_usd, network,
-            reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
+            token_in, token_out, amount_in_usd, network, reason=balance_err,
+            wallet_product=wallet_product,
         )
     if amount_in_usd > balance_usd:
         return await _blocked_swap(
             token_in, token_out, amount_in_usd, network,
             reason=f"montant {amount_in_usd}$ > solde réel {balance_usd}$",
+            wallet_product=wallet_product,
         )
 
     # ── Step 1: pull USDC from aria-smart-st into the spender ──
@@ -440,10 +549,11 @@ async def execute_smart_swing_swap(
         return await _failed_swap(
             token_in, token_out, amount_in_usd, network, stranded=False,
             reason=f"use_spend_permission (pull) échoué avant tout mouvement : {exc}",
+            wallet_product=wallet_product,
         )
     pull_tx = str(pull.get("tx_hash") or "")
 
-    # ── Step 2: swap the pulled USDC for token_out (output lands in spender) ──
+    # ── Step 2: swap the pulled USDC for token_out (output STAYS in spender) ──
     try:
         swap = await swap_fn(
             network=network, token_in=token_in, token_out=token_out,
@@ -455,63 +565,214 @@ async def execute_smart_swing_swap(
             token_in, token_out, amount_in_usd, network, stranded=True,
             pull_tx=pull_tx,
             reason=f"swap échoué APRÈS pull -- USDC dans le spender, récupération vers aria-smart-st requise : {exc}",
+            wallet_product=wallet_product,
         )
     swap_tx = str(swap.get("tx_hash") or "")
     amount_out = float(swap.get("amount_out") or 0.0)
     amount_out_atomic = swap.get("amount_out_atomic")
 
-    # ── Step 3: MANDATORY return of the output back to aria-smart-st ──
+    # No Step 3: the bought token intentionally rests in the spender (VOLET 2a),
+    # ready to be sold later by execute_smart_swing_sell. Nothing is returned to
+    # aria-smart-st on a buy.
+    logger.info(
+        "%s -- BUY SUCCEEDED: %s -> %s (%.2f$ -> %.6g held in spender), pull=%s swap=%s",
+        _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_usd, amount_out,
+        pull_tx, swap_tx,
+    )
+    await agent_wallet_log.record_transaction(
+        wallet_product=wallet_product,
+        chain=network,
+        action_type="swap",
+        token_in=token_in,
+        token_out=token_out,
+        amount_in=amount_in_usd,     # USD spent -> positions reads as cost_usd
+        amount_out=amount_out,       # tokens received (now held in the spender)
+        slippage_bps=MAX_SLIPPAGE_BPS,
+        tx_hash=swap_tx,             # primary event; pull hash kept in reason
+        to_address="",               # nothing returned on a buy (token held)
+        status="ok",
+        reason=f"pull={pull_tx} (token held in spender)",
+    )
+    return SmartSwingSwapResult(
+        status="ok", pull_tx_hash=pull_tx, swap_tx_hash=swap_tx, amount_out=amount_out,
+        amount_out_atomic=int(amount_out_atomic) if amount_out_atomic is not None else None,
+    )
+
+
+async def execute_smart_swing_sell(
+    *,
+    token_in: str,
+    amount_in_tokens: float,
+    value_in_usd: float,
+    balance_fn: BalanceFn,
+    swap_fn: SwapFn,
+    return_transfer_fn: ReturnTransferFn,
+    amount_in_tokens_atomic: int | None = None,
+    token_out: str = USDC_BASE_ADDRESS,
+    network: str = NETWORK,
+    slippage_bps: int | None = None,
+    wallet_product: str = WALLET_PRODUCT,
+) -> SmartSwingSwapResult:
+    """Guarded swing SELL (``token_in -> USDC``), the exit counterpart of the
+    buy (VOLET 2b). The spender ALREADY holds ``token_in`` from a prior buy
+    (VOLET 2a left it there), so there is NO pull step: swap the held token for
+    USDC, then MANDATORILY return the USDC to aria-smart-st.
+
+    Runs the SAME security checkpoint as the buy (``_trading_blocked_reason`` ->
+    per-tx cap -> real-balance check -> forced slippage) in the SAME strict
+    order -- factored, never copy-pasted, so the two real-money paths can't
+    drift. The differences are only in WHAT the value-checks compare:
+      - the per-tx cap is checked against ``value_in_usd`` (the estimated USD
+        value of the position being sold) -- there is no USDC pull to bound, but
+        a single sell is still capped at ``SPEND_PERMISSION_ALLOWANCE_USD`` for
+        symmetry with the buy;
+      - the real-balance check compares ``amount_in_tokens`` (the human token
+        quantity to sell) against ``balance_fn()`` (the spender's real balance
+        of ``token_in``, human units) -- you can never try to sell more of the
+        token than the spender actually holds.
+
+    Injected CDP calls:
+      - ``swap_fn(network=, token_in=, token_out=, amount_in_tokens=,
+        amount_in_tokens_atomic=, slippage_bps=)`` -> ``{"tx_hash",
+        "amount_out", "amount_out_atomic"?}`` -- the spender's ``swap(...)`` of
+        the held token; ``amount_out`` is the USDC received (lands in the
+        spender). ``amount_in_tokens_atomic`` (optional, e.g. the buy's
+        ``amount_out_atomic``) lets the adapter sell the exact atomic quantity
+        without needing the token's decimals here.
+      - ``return_transfer_fn(to_address=, token_address=, amount_out=,
+        amount_out_atomic=, network=)`` -> ``{"tx_hash"}`` -- the spender's
+        ``transfer`` of the USDC output back to aria-smart-st. Destination
+        HARDCODED to ``SMART_ST_ADDRESS`` (defense-in-depth, mirrors the Policy
+        carve-out), passed only for the injected fn's convenience.
+
+    Stranding semantics (see ``SmartSwingSwapResult.funds_stranded``): a failed
+    SELL swap is NOT stranded (the token stays in the spender where the buy left
+    it -- the position is simply still open, a loud failure but nothing new to
+    recover). A failed RETURN after a successful swap IS stranded (USDC sits in
+    the spender, needs a recovery transfer to aria-smart-st)."""
+    if slippage_bps is not None and slippage_bps != MAX_SLIPPAGE_BPS:
+        logger.warning(
+            "%s -- slippage_bps=%s ignored, forced to %s (absolute rule 09/07)",
+            _REAL_MONEY_LOG_PREFIX, slippage_bps, MAX_SLIPPAGE_BPS,
+        )
+
+    blocked_reason = _trading_blocked_reason()
+    if blocked_reason is not None:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network,
+            reason=blocked_reason, wallet_product=wallet_product,
+        )
+
+    if amount_in_tokens <= 0:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network,
+            reason="quantité de token à vendre nulle ou négative", wallet_product=wallet_product,
+        )
+    if value_in_usd <= 0:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network,
+            reason="valeur USD estimée de la vente nulle ou négative "
+                   "(impossible de borner un ordre non valorisé, fail-closed)",
+            wallet_product=wallet_product,
+        )
+    if value_in_usd > SPEND_PERMISSION_ALLOWANCE_USD:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network,
+            reason=f"valeur {value_in_usd}$ > plafond par transaction {SPEND_PERMISSION_ALLOWANCE_USD}$ "
+                   "(même plafond dur que l'achat)",
+            wallet_product=wallet_product,
+        )
+
+    token_balance, balance_err = await _resolve_real_balance(balance_fn)
+    if balance_err is not None:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network, reason=balance_err,
+            wallet_product=wallet_product,
+        )
+    if amount_in_tokens > token_balance:
+        return await _blocked_swap(
+            token_in, token_out, amount_in_tokens, network,
+            reason=f"quantité {amount_in_tokens} > solde réel du token dans le spender {token_balance}",
+            wallet_product=wallet_product,
+        )
+
+    # ── Step 1: swap the held token for USDC (no pull -- already held) ──
+    try:
+        swap = await swap_fn(
+            network=network, token_in=token_in, token_out=token_out,
+            amount_in_tokens=amount_in_tokens, amount_in_tokens_atomic=amount_in_tokens_atomic,
+            slippage_bps=MAX_SLIPPAGE_BPS,
+        )
+    except Exception as exc:
+        # Sell swap failed -- the token stays in the spender (position still
+        # open, exactly where the buy left it). NOT newly stranded.
+        return await _failed_swap(
+            token_in, token_out, amount_in_tokens, network, stranded=False,
+            reason=f"swap de vente échoué -- {token_in} reste dans le spender "
+                   f"(position ouverte, bornée par la Policy) : {exc}",
+            wallet_product=wallet_product,
+        )
+    swap_tx = str(swap.get("tx_hash") or "")
+    amount_out = float(swap.get("amount_out") or 0.0)  # USDC received
+    amount_out_atomic = swap.get("amount_out_atomic")
+
+    # ── Step 2: MANDATORY return of the USDC output back to aria-smart-st ──
     try:
         ret = await return_transfer_fn(
             to_address=SMART_ST_ADDRESS, token_address=token_out,
             amount_out=amount_out, amount_out_atomic=amount_out_atomic, network=network,
         )
     except Exception as exc:
-        # Swapped but output NOT returned -- token_out is stranded in the spender.
+        # Sold but USDC NOT returned -- USDC stranded in the spender.
         return await _failed_swap(
-            token_in, token_out, amount_in_usd, network, stranded=True,
-            pull_tx=pull_tx, swap_tx=swap_tx, amount_out=amount_out,
-            reason=f"return-transfer échoué APRÈS swap -- {token_out} dans le spender, "
+            token_in, token_out, amount_in_tokens, network, stranded=True,
+            swap_tx=swap_tx, amount_out=amount_out,
+            reason=f"return-transfer (USDC) échoué APRÈS la vente -- USDC dans le spender, "
                    f"récupération vers aria-smart-st requise : {exc}",
+            wallet_product=wallet_product,
         )
     return_tx = str(ret.get("tx_hash") or "")
 
     logger.info(
-        "%s -- swap SUCCEEDED: %s -> %s (%.2f$ -> %.6g), pull=%s swap=%s return=%s",
-        _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_usd, amount_out,
-        pull_tx, swap_tx, return_tx,
+        "%s -- SELL SUCCEEDED: %s -> %s (%.6g tokens -> %.2f$ USDC), swap=%s return=%s",
+        _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_tokens, amount_out,
+        swap_tx, return_tx,
     )
     await agent_wallet_log.record_transaction(
-        wallet_product=WALLET_PRODUCT,
+        wallet_product=wallet_product,
         chain=network,
         action_type="swap",
         token_in=token_in,
         token_out=token_out,
-        amount_in=amount_in_usd,
-        amount_out=amount_out,
+        amount_in=amount_in_tokens,  # tokens sold -> positions reads as qty_sold
+        amount_out=amount_out,       # USDC received -> positions reads as proceeds_usd
         slippage_bps=MAX_SLIPPAGE_BPS,
-        tx_hash=swap_tx,  # primary event; pull/return hashes kept in reason
-        to_address=SMART_ST_ADDRESS,  # the output's final, only-ever destination
+        tx_hash=swap_tx,             # primary event; return hash kept in reason
+        to_address=SMART_ST_ADDRESS,  # USDC's final destination
         status="ok",
-        reason=f"pull={pull_tx} return={return_tx}",
+        reason=f"return={return_tx}",
     )
     return SmartSwingSwapResult(
-        status="ok", pull_tx_hash=pull_tx, swap_tx_hash=swap_tx,
-        return_tx_hash=return_tx, amount_out=amount_out,
+        status="ok", swap_tx_hash=swap_tx, return_tx_hash=return_tx, amount_out=amount_out,
+        amount_out_atomic=int(amount_out_atomic) if amount_out_atomic is not None else None,
     )
 
 
 async def _blocked_swap(
-    token_in: str, token_out: str, amount_in_usd: float, network: str, *, reason: str
+    token_in: str, token_out: str, amount_in: float, network: str, *, reason: str,
+    wallet_product: str = WALLET_PRODUCT,
 ) -> SmartSwingSwapResult:
+    """Log + return a blocked attempt. ``amount_in`` is the input amount of the
+    attempted swap (USD for a buy, token quantity for a sell -- exactly what the
+    journal's ``amount_in`` column means for that leg)."""
     logger.warning("%s -- swap blocked: %s", _REAL_MONEY_LOG_PREFIX, reason)
     await agent_wallet_log.record_transaction(
-        wallet_product=WALLET_PRODUCT,
+        wallet_product=wallet_product,
         chain=network,
         action_type="swap",
         token_in=token_in,
         token_out=token_out,
-        amount_in=amount_in_usd,
+        amount_in=amount_in,
         slippage_bps=MAX_SLIPPAGE_BPS,
         status="blocked",
         reason=reason,
@@ -520,18 +781,22 @@ async def _blocked_swap(
 
 
 async def _failed_swap(
-    token_in: str, token_out: str, amount_in_usd: float, network: str, *,
-    stranded: bool, reason: str, pull_tx: str = "", swap_tx: str = "", amount_out: float = 0.0,
+    token_in: str, token_out: str, amount_in: float, network: str, *,
+    stranded: bool, reason: str, wallet_product: str = WALLET_PRODUCT,
+    pull_tx: str = "", swap_tx: str = "", amount_out: float = 0.0,
 ) -> SmartSwingSwapResult:
+    """Log + return a failed attempt. ``stranded`` -> funds sit in the spender
+    and need a recovery transfer to aria-smart-st (surfaced via ``to_address``);
+    otherwise nothing new is misplaced."""
     log_fn = logger.error if stranded else logger.warning
     log_fn("%s -- swap failed (stranded=%s): %s", _REAL_MONEY_LOG_PREFIX, stranded, reason)
     await agent_wallet_log.record_transaction(
-        wallet_product=WALLET_PRODUCT,
+        wallet_product=wallet_product,
         chain=network,
         action_type="swap",
         token_in=token_in,
         token_out=token_out,
-        amount_in=amount_in_usd,
+        amount_in=amount_in,
         amount_out=amount_out,
         slippage_bps=MAX_SLIPPAGE_BPS,
         tx_hash=swap_tx,
@@ -542,6 +807,304 @@ async def _failed_swap(
     return SmartSwingSwapResult(
         status="failed", reason=reason, pull_tx_hash=pull_tx, swap_tx_hash=swap_tx,
         amount_out=amount_out, funds_stranded=stranded,
+    )
+
+
+# ── VOLET 3: dual-quote round-trip pre-check (pure, non-executing) ───────────
+
+
+@dataclass(frozen=True)
+class SwapPrecheckResult:
+    accepted: bool
+    reason: str = ""
+    # Decision metric: implied round-trip loss from the quotes' EXPECTED amounts.
+    round_trip_loss_bps: float = 0.0
+    # Informational only (never drives the verdict): the guaranteed-minimum
+    # round trip, using each quote's slippage-bounded ``min_to_amount``.
+    worst_case_loss_bps: float = 0.0
+    buy_out_atomic: int = 0   # expected token atomic received on the buy quote
+    sell_out_atomic: int = 0  # expected USDC atomic received on the sell quote
+
+
+def _quote_field(quote: Any, name: str) -> Any:
+    """Read a field off an injected quote result that may be a pydantic
+    ``QuoteSwapResult``/``SwapUnavailableResult`` OR a plain dict (test seam)."""
+    if quote is None:
+        return None
+    if isinstance(quote, dict):
+        return quote.get(name)
+    return getattr(quote, name, None)
+
+
+def _quote_amount_atomic(quote: Any, name: str) -> int | None:
+    """A quote amount (``to_amount``/``min_to_amount``) is a decimal STRING of
+    atomic units in the CDP SDK -- parse it to int, ``None`` if absent/garbage."""
+    raw = _quote_field(quote, name)
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _fetch_quote(
+    quote_fn: QuoteFn, *, from_token: str, to_token: str, from_amount_atomic: int, network: str,
+) -> tuple[Any | None, str | None]:
+    """Fetch one swap quote, fail-closed. ``(quote, None)`` on a usable quote,
+    ``(None, reason)`` on any error or an unavailable quote. Forces
+    ``MAX_SLIPPAGE_BPS`` (same 10% discipline as every real leg here)."""
+    try:
+        quote = await quote_fn(
+            from_token=from_token, to_token=to_token,
+            from_amount_atomic=from_amount_atomic, network=network,
+            slippage_bps=MAX_SLIPPAGE_BPS,
+        )
+    except Exception as exc:  # noqa: BLE001 -- any quote failure blocks, never fails open
+        return None, str(exc)
+    if quote is None:
+        return None, "devis vide (None)"
+    # SwapUnavailableResult carries liquidity_available=False and no to_amount.
+    if _quote_field(quote, "liquidity_available") is False:
+        return None, "liquidité insuffisante (SwapUnavailableResult)"
+    return quote, None
+
+
+async def precheck_swap_roundtrip(
+    *,
+    token: str,
+    notional_usd: float,
+    quote_fn: QuoteFn,
+    max_roundtrip_loss_bps: int = MAX_SLIPPAGE_BPS,
+    network: str = NETWORK,
+) -> SwapPrecheckResult:
+    """Pure, NON-executing first-pass filter (VOLET 3): fetch a BUY quote
+    (USDC -> token) and a SELL quote (token -> USDC) for the SAME notional and
+    measure the implied round-trip cost from the quotes ALONE -- how much value
+    a buy-then-immediately-sell would lose per the quoted prices. No state
+    change, no funds moved.
+
+    What it CATCHES: price/liquidity problems -- a thin pool, a lopsided price,
+    a token quoted so poorly a round trip already bleeds past the ceiling. What
+    it does NOT catch: an ACTIVE honeypot / hidden sell-tax that only trips on a
+    real state-changing transaction (a quote is a read-only price estimate; a
+    scam contract can quote a fair price and still tax or deny the real sell).
+    That real behaviour is what VOLET 4's executed micro-canary measures -- this
+    is a cheap first pass to run BEFORE paying for a canary, never a replacement
+    for it.
+
+    Measurement: the verdict uses the quotes' EXPECTED amounts (``to_amount``),
+    NOT the slippage-tolerance-bounded ``min_to_amount`` -- deliberately, so it
+    reflects real fees + price impact and is NOT inflated by the two legs' 10%
+    tolerances stacking (which would false-reject a legit token; this is the
+    precise handling of "unless the two quotes' own individual slippage already
+    exceeds it"). The guaranteed-minimum round trip (from ``min_to_amount``) is
+    reported as ``worst_case_loss_bps`` for transparency but never drives the
+    accept/reject.
+
+    Verdict: ACCEPT iff ``round_trip_loss_bps <= max_roundtrip_loss_bps``
+    (default ``MAX_SLIPPAGE_BPS`` = the same 10% ceiling used elsewhere here).
+
+    Fail-closed (never fail-open on a real-money path): any quote fetch error,
+    an unavailable quote (``liquidity_available`` False / SwapUnavailableResult),
+    a missing/zero/garbage amount, or a non-positive notional -> REJECT with a
+    clear reason. The injected ``quote_fn`` mirrors ``cdp.evm.create_swap_quote``
+    (verified signature, cdp-sdk 1.47.1); a caller binds it, e.g.::
+
+        async def quote_fn(*, from_token, to_token, from_amount_atomic, network, slippage_bps):
+            return await cdp.evm.create_swap_quote(
+                from_token=from_token, to_token=to_token,
+                from_amount=str(from_amount_atomic), network=network,
+                taker=SPENDER_ADDRESS, slippage_bps=slippage_bps,
+                signer_address=<smart-account owner>,
+            )
+    """
+    if notional_usd <= 0:
+        return SwapPrecheckResult(accepted=False, reason="notional nul ou négatif (fail-closed)")
+
+    notional_atomic = usd_to_atomic_usdc(notional_usd)
+
+    buy_quote, buy_err = await _fetch_quote(
+        quote_fn, from_token=USDC_BASE_ADDRESS, to_token=token,
+        from_amount_atomic=notional_atomic, network=network,
+    )
+    if buy_err is not None:
+        return SwapPrecheckResult(accepted=False, reason=f"devis d'achat indisponible : {buy_err}")
+    buy_out_atomic = _quote_amount_atomic(buy_quote, "to_amount")
+    if not buy_out_atomic or buy_out_atomic <= 0:
+        return SwapPrecheckResult(
+            accepted=False,
+            reason="devis d'achat sans montant de sortie exploitable (fail-closed)",
+        )
+    buy_min_atomic = _quote_amount_atomic(buy_quote, "min_to_amount") or buy_out_atomic
+
+    sell_quote, sell_err = await _fetch_quote(
+        quote_fn, from_token=token, to_token=USDC_BASE_ADDRESS,
+        from_amount_atomic=buy_out_atomic, network=network,
+    )
+    if sell_err is not None:
+        return SwapPrecheckResult(accepted=False, reason=f"devis de vente indisponible : {sell_err}")
+    sell_out_atomic = _quote_amount_atomic(sell_quote, "to_amount")
+    if not sell_out_atomic or sell_out_atomic <= 0:
+        return SwapPrecheckResult(
+            accepted=False,
+            reason="devis de vente sans montant de sortie exploitable (fail-closed)",
+        )
+    sell_min_atomic = _quote_amount_atomic(sell_quote, "min_to_amount") or sell_out_atomic
+
+    scale = float(10 ** _USDC_DECIMALS)
+    recovered_usd = sell_out_atomic / scale
+    round_trip_loss_bps = (notional_usd - recovered_usd) / notional_usd * 10_000.0
+    # Approximate worst case: the guaranteed-minimum USDC out of the sell quote
+    # (informational, ignores that the buy could also yield only its min).
+    worst_recovered_usd = sell_min_atomic / scale
+    worst_case_loss_bps = (notional_usd - worst_recovered_usd) / notional_usd * 10_000.0
+
+    accepted = round_trip_loss_bps <= max_roundtrip_loss_bps
+    if accepted:
+        reason = (
+            f"round-trip devis {round_trip_loss_bps:.0f} bps <= plafond {max_roundtrip_loss_bps} bps "
+            f"(dépense {notional_usd:.2f}$, récupération estimée {recovered_usd:.2f}$)"
+        )
+    else:
+        reason = (
+            f"round-trip devis {round_trip_loss_bps:.0f} bps > plafond {max_roundtrip_loss_bps} bps "
+            f"-- prix/liquidité défavorable (dépense {notional_usd:.2f}$, récupération estimée "
+            f"{recovered_usd:.2f}$) ; NB : ne détecte pas un honeypot actif, cf. canary VOLET 4"
+        )
+    return SwapPrecheckResult(
+        accepted=accepted, reason=reason,
+        round_trip_loss_bps=round_trip_loss_bps, worst_case_loss_bps=worst_case_loss_bps,
+        buy_out_atomic=int(buy_out_atomic), sell_out_atomic=int(sell_out_atomic),
+    )
+
+
+# ── VOLET 4: executed micro-canary buy+sell before committing full size ──────
+
+
+@dataclass(frozen=True)
+class CanaryResult:
+    passed: bool
+    reason: str = ""
+    amount_spent_usd: float = 0.0      # USDC put in on the canary buy
+    amount_recovered_usd: float = 0.0  # USDC recovered on the canary sell
+    round_trip_loss_bps: float = 0.0   # the REAL measured combined buy+sell tax
+    # A mid-flight failure left a (small, canary-sized) amount in the spender to
+    # recover -- bounded by the Policy, tiny by construction.
+    funds_stranded: bool = False
+    buy_result: SmartSwingSwapResult | None = None
+    sell_result: SmartSwingSwapResult | None = None
+
+
+async def run_swing_entry_canary(
+    *,
+    token: str,
+    balance_fn: BalanceFn,
+    spend_pull_fn: SpendPullFn,
+    buy_swap_fn: SwapFn,
+    token_balance_fn: BalanceFn,
+    sell_swap_fn: SwapFn,
+    return_transfer_fn: ReturnTransferFn,
+    canary_amount_usd: float = CANARY_TEST_AMOUNT_USD,
+    max_roundtrip_loss_bps: int = CANARY_MAX_ROUNDTRIP_LOSS_BPS,
+    network: str = NETWORK,
+) -> CanaryResult:
+    """Executed micro-canary (VOLET 4): the REAL buy+sell tax probe that MUST
+    pass before any full-size entry -- so the full amount is never committed to
+    a scam token that only reveals itself on a real transaction (operator's
+    07/25 correction: "éviter l'achat", not merely detect after the fact).
+
+    Steps:
+      1. REAL buy of ``canary_amount_usd`` of ``token`` via the VOLET-2a buy
+         primitive, logged under ``CANARY_WALLET_PRODUCT`` so the probe never
+         counts as a real position P&L (every canary loses the round-trip tax
+         by design -- a run of them must never trip the loss breaker). The token
+         is left in the spender (VOLET 2a).
+      2. REAL sell of exactly what was received via the VOLET-2b sell primitive
+         (same ``CANARY_WALLET_PRODUCT``, exact atomic quantity threaded from
+         the buy when the adapter reported it).
+      3. Compare USDC spent vs USDC recovered = the REAL combined buy+sell tax --
+         more trustworthy than GoPlus's self-reported ``buy_tax``/``sell_tax``,
+         which a well-configured scam can misreport.
+      4. REFUSE (``passed=False``, loud/logged) if the sell fails/blocks outright
+         (a token you can buy but not sell is the exact honeypot signature) OR
+         the measured round-trip loss exceeds ``max_roundtrip_loss_bps``.
+      5. Only on a clean canary (``passed=True``) may the caller proceed to buy
+         the FULL position size via ``execute_smart_swing_swap`` (full amount,
+         token stays in the spender, normal open-position lifecycle from there).
+
+    THERE IS NO full-size buy here and NO heartbeat wiring (deliberately out of
+    scope -- not asked for): a future "open a swing position" orchestrator MUST
+    call this first and gate the full-size ``execute_smart_swing_swap`` on
+    ``result.passed``. This file exposes the canary standalone precisely because
+    no single "open a position" entry point exists yet.
+
+    Seams mirror the two primitives' needs: ``balance_fn`` = USDC balance of
+    aria-smart-st (buy), ``token_balance_fn`` = the spender's balance of
+    ``token`` (sell), ``buy_swap_fn``/``sell_swap_fn`` = the two swap adapters
+    (a buy and a sell are distinct CDP swap calls), ``spend_pull_fn`` /
+    ``return_transfer_fn`` as in the primitives. A FAILED canary can leave a
+    tiny (``canary_amount_usd``) token or USDC amount in the spender -- surfaced
+    via ``funds_stranded``, bounded by the Policy, recoverable-only-to-aria-smart-st."""
+    buy = await execute_smart_swing_swap(
+        token_out=token, amount_in_usd=canary_amount_usd, balance_fn=balance_fn,
+        spend_pull_fn=spend_pull_fn, swap_fn=buy_swap_fn, network=network,
+        wallet_product=CANARY_WALLET_PRODUCT,
+    )
+    if buy.status != "ok":
+        reason = f"canary REFUSÉ -- l'achat test a échoué/bloqué : {buy.reason}"
+        logger.warning("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return CanaryResult(
+            passed=False, reason=reason, amount_spent_usd=canary_amount_usd,
+            funds_stranded=buy.funds_stranded, buy_result=buy,
+        )
+    tokens_bought = buy.amount_out
+    if tokens_bought <= 0:
+        reason = "canary REFUSÉ -- achat test 'réussi' mais 0 token reçu (fail-closed)"
+        logger.warning("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return CanaryResult(
+            passed=False, reason=reason, amount_spent_usd=canary_amount_usd, buy_result=buy,
+        )
+
+    sell = await execute_smart_swing_sell(
+        token_in=token, amount_in_tokens=tokens_bought, value_in_usd=canary_amount_usd,
+        balance_fn=token_balance_fn, swap_fn=sell_swap_fn,
+        return_transfer_fn=return_transfer_fn, amount_in_tokens_atomic=buy.amount_out_atomic,
+        network=network, wallet_product=CANARY_WALLET_PRODUCT,
+    )
+    if sell.status != "ok":
+        # A token you can BUY but not SELL is the exact honeypot signature.
+        reason = f"canary REFUSÉ -- vente test échouée/bloquée (signature honeypot) : {sell.reason}"
+        logger.error("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return CanaryResult(
+            passed=False, reason=reason, amount_spent_usd=canary_amount_usd,
+            funds_stranded=sell.funds_stranded, buy_result=buy, sell_result=sell,
+        )
+
+    recovered_usd = sell.amount_out
+    round_trip_loss_bps = (canary_amount_usd - recovered_usd) / canary_amount_usd * 10_000.0
+    if round_trip_loss_bps > max_roundtrip_loss_bps:
+        reason = (
+            f"canary REFUSÉ -- taxe aller-retour RÉELLE {round_trip_loss_bps:.0f} bps > plafond "
+            f"{max_roundtrip_loss_bps} bps (dépensé {canary_amount_usd:.2f}$, récupéré "
+            f"{recovered_usd:.2f}$) -- token probablement à taxe cachée / honeypot mou"
+        )
+        logger.warning("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return CanaryResult(
+            passed=False, reason=reason, amount_spent_usd=canary_amount_usd,
+            amount_recovered_usd=recovered_usd, round_trip_loss_bps=round_trip_loss_bps,
+            buy_result=buy, sell_result=sell,
+        )
+
+    reason = (
+        f"canary OK -- taxe aller-retour RÉELLE {round_trip_loss_bps:.0f} bps <= plafond "
+        f"{max_roundtrip_loss_bps} bps (dépensé {canary_amount_usd:.2f}$, récupéré {recovered_usd:.2f}$)"
+    )
+    logger.info("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+    return CanaryResult(
+        passed=True, reason=reason, amount_spent_usd=canary_amount_usd,
+        amount_recovered_usd=recovered_usd, round_trip_loss_bps=round_trip_loss_bps,
+        buy_result=buy, sell_result=sell,
     )
 
 

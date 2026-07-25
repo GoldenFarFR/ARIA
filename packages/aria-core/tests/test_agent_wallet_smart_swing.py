@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from aria_core import agent_wallet_smart_swing as sw
+from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 
 
 # ── constants / identities ───────────────────────────────────────────────────
@@ -132,6 +133,25 @@ def test_swap_only_policy_rule1_allowlists_the_given_router():
     assert crit.addresses == [ROUTER]
 
 
+def test_swap_only_policy_rule1_bounds_net_usd_change_to_the_per_tx_cap():
+    """VOLET 1 (calldata hole fix): rule 1 is no longer 'any calldata to the
+    router' -- it ALSO carries a NetUSDChangeCriterion capping the net USD a
+    single router call may move to the per-tx ceiling
+    (SPEND_PERMISSION_ALLOWANCE_USD, in cents). Both criteria AND together, so a
+    router call is accepted only within the cap -- the loss under a spender
+    compromise is BOUNDED, never zero."""
+    pol = sw.build_swap_only_policy(ROUTER)
+    crits = pol.rules[0].criteria
+    assert len(crits) == 2  # router-address AND net-USD-change
+    net = crits[1]
+    assert net.type == "netUSDChange"
+    assert net.operator == "<="
+    # reuses the SAME per-tx constant, never a second driftable number
+    assert net.changeCents == int(round(sw.SPEND_PERMISSION_ALLOWANCE_USD * 100))
+    assert net.changeCents == sw._per_tx_cap_cents()
+    assert net.changeCents >= 0  # cdp-sdk field constraint (ge=0)
+
+
 def test_swap_only_policy_rule2_return_transfer_is_token_agnostic_to_the_swing_pocket():
     """The single most delicate carve-out: an ERC-20 transfer whose recipient
     is the swing pocket, token-AGNOSTIC (no fixed token contract pinned) --
@@ -226,13 +246,31 @@ async def _balance_20() -> float:
 
 
 async def _run_swap(rec: _Recorder, monkeypatch, **overrides):
+    """Drive the BUY primitive (VOLET 2a: pull -> swap, token STAYS in spender,
+    no return step, so no return_transfer_fn)."""
     monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
     kwargs = dict(
         token_out="0x" + "b" * 40, amount_in_usd=10.0, balance_fn=_balance_20,
-        spend_pull_fn=rec.pull, swap_fn=rec.swap, return_transfer_fn=rec.ret,
+        spend_pull_fn=rec.pull, swap_fn=rec.swap,
     )
     kwargs.update(overrides)
     return await sw.execute_smart_swing_swap(**kwargs)
+
+
+async def _run_sell(rec: _Recorder, monkeypatch, **overrides):
+    """Drive the SELL primitive (VOLET 2b: swap held token -> USDC, then
+    MANDATORY return of the USDC to aria-smart-st)."""
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    kwargs = dict(
+        token_in="0x" + "b" * 40, amount_in_tokens=1000.0, value_in_usd=10.0,
+        balance_fn=_balance_2000_tokens, swap_fn=rec.swap, return_transfer_fn=rec.ret,
+    )
+    kwargs.update(overrides)
+    return await sw.execute_smart_swing_sell(**kwargs)
+
+
+async def _balance_2000_tokens() -> float:
+    return 2000.0
 
 
 async def _last_log_row():
@@ -247,7 +285,7 @@ async def test_swap_blocked_when_gate_disabled_by_default():
     rec = _Recorder()
     result = await sw.execute_smart_swing_swap(
         token_out="0x" + "b" * 40, amount_in_usd=10.0, balance_fn=_balance_20,
-        spend_pull_fn=rec.pull, swap_fn=rec.swap, return_transfer_fn=rec.ret,
+        spend_pull_fn=rec.pull, swap_fn=rec.swap,
     )
     assert result.status == "blocked"
     assert "ARIA_SMART_SWING_ENABLED" in result.reason
@@ -344,25 +382,40 @@ async def test_swap_blocked_above_real_balance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_swap_happy_path_pull_swap_return_in_order(monkeypatch):
+async def test_buy_happy_path_pull_then_swap_token_held_in_spender(monkeypatch):
+    """VOLET 2a: a BUY is pull -> swap and STOPS -- the token stays in the
+    spender by design, there is NO return step."""
     rec = _Recorder()
     result = await _run_swap(rec, monkeypatch)
     assert result.status == "ok"
     assert result.funds_stranded is False
     assert result.pull_tx_hash == "0xpull"
     assert result.swap_tx_hash == "0xswap"
-    assert result.return_tx_hash == "0xreturn"
-    assert result.amount_out == 1.5
-    # exact order: pull -> swap -> return
-    assert [c[0] for c in rec.calls] == ["pull", "swap", "return"]
-    # the return transfer destination is hardcoded to the swing pocket
-    assert rec.calls[2][1]["to_address"] == sw.SMART_ST_ADDRESS
+    assert result.return_tx_hash == ""      # a buy never returns anything
+    assert result.amount_out == 1.5         # tokens received, now held in spender
+    assert result.amount_out_atomic == 1_500_000  # exact atomic, threadable to a later sell
+    # exact order: pull -> swap, and NOTHING after (no return)
+    assert [c[0] for c in rec.calls] == ["pull", "swap"]
     # pull value is the USDC atomic amount of amount_in_usd
     assert rec.calls[0][1]["value_atomic"] == sw.usd_to_atomic_usdc(10.0)
     row = await _last_log_row()
     assert row["status"] == "ok"
     assert row["wallet_product"] == sw.WALLET_PRODUCT
-    assert row["to_address"] == sw.SMART_ST_ADDRESS
+    assert row["amount_in"] == 10.0          # USD spent (positions reads as cost_usd)
+    assert row["amount_out"] == 1.5          # tokens received
+    assert row["to_address"] == ""           # nothing returned on a buy
+
+
+@pytest.mark.asyncio
+async def test_buy_default_wallet_product_and_canary_override(monkeypatch):
+    """A normal buy logs under the real swing tag; a canary-tagged buy logs
+    under the separate canary product (kept out of the real-position feed)."""
+    rec = _Recorder()
+    await _run_swap(rec, monkeypatch)
+    assert (await _last_log_row())["wallet_product"] == sw.WALLET_PRODUCT
+    rec2 = _Recorder()
+    await _run_swap(rec2, monkeypatch, wallet_product=sw.CANARY_WALLET_PRODUCT)
+    assert (await _last_log_row())["wallet_product"] == sw.CANARY_WALLET_PRODUCT
 
 
 @pytest.mark.asyncio
@@ -395,16 +448,6 @@ async def test_swap_failure_after_pull_flags_stranded(monkeypatch):
     row = await _last_log_row()
     assert row["status"] == "failed"
     assert row["to_address"] == sw.SMART_ST_ADDRESS  # recovery destination surfaced
-
-
-@pytest.mark.asyncio
-async def test_swap_return_failure_flags_stranded(monkeypatch):
-    rec = _Recorder(ret=RuntimeError("transfer reverted"))
-    result = await _run_swap(rec, monkeypatch)
-    assert result.status == "failed"
-    assert result.funds_stranded is True  # output token stranded in the spender
-    assert [c[0] for c in rec.calls] == ["pull", "swap", "return"]
-    assert result.swap_tx_hash == "0xswap"
 
 
 @pytest.mark.asyncio
@@ -638,3 +681,426 @@ async def test_post_mortem_handles_offschema_llm_answer():
     out = await sw.run_swing_post_mortem(buys, llm=junk_llm)
     # off-schema degrades to a safe "sound" (no fabricated flaw)
     assert "aucune faille" in out.lower()
+
+
+# ── VOLET 2b: execute_smart_swing_sell (held token -> USDC, mandatory return) ──
+
+
+@pytest.mark.asyncio
+async def test_sell_happy_path_swap_then_return_no_pull(monkeypatch):
+    """A SELL is swap -> MANDATORY return (no pull -- the spender already holds
+    the token). The USDC output is returned to aria-smart-st."""
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch)
+    assert result.status == "ok"
+    assert result.funds_stranded is False
+    assert result.pull_tx_hash == ""        # a sell never pulls
+    assert result.swap_tx_hash == "0xswap"
+    assert result.return_tx_hash == "0xreturn"
+    assert result.amount_out == 1.5         # USDC received
+    # exact order: swap -> return (no pull step)
+    assert [c[0] for c in rec.calls] == ["swap", "return"]
+    assert rec.calls[1][1]["to_address"] == sw.SMART_ST_ADDRESS  # USDC back to swing pocket
+    row = await _last_log_row()
+    assert row["status"] == "ok"
+    assert row["wallet_product"] == sw.WALLET_PRODUCT
+    assert row["token_in"] == "0x" + "b" * 40   # the token sold
+    assert row["token_out"] == USDC_BASE_ADDRESS
+    assert row["amount_in"] == 1000.0            # tokens sold (positions qty_sold)
+    assert row["amount_out"] == 1.5              # USDC received (positions proceeds_usd)
+    assert row["to_address"] == sw.SMART_ST_ADDRESS
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_when_gate_disabled_by_default():
+    rec = _Recorder()
+    result = await sw.execute_smart_swing_sell(
+        token_in="0x" + "b" * 40, amount_in_tokens=1000.0, value_in_usd=10.0,
+        balance_fn=_balance_2000_tokens, swap_fn=rec.swap, return_transfer_fn=rec.ret,
+    )
+    assert result.status == "blocked"
+    assert "ARIA_SMART_SWING_ENABLED" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_when_kill_switch_paused(monkeypatch):
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: True)
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch)
+    assert result.status == "blocked"
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_while_loss_breaker_armed(monkeypatch):
+    sw.block_swing_swaps("drawdown 22%", by="test")
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch)
+    assert result.status == "blocked"
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_on_non_positive_quantity(monkeypatch):
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch, amount_in_tokens=0.0)
+    assert result.status == "blocked"
+    assert "nulle ou négative" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_on_non_positive_value(monkeypatch):
+    """A sell must be valued to be capped -- an unpriced sell is fail-closed."""
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch, value_in_usd=0.0)
+    assert result.status == "blocked"
+    assert "non valorisé" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_above_per_tx_cap(monkeypatch):
+    rec = _Recorder()
+    result = await _run_sell(
+        rec, monkeypatch, value_in_usd=sw.SPEND_PERMISSION_ALLOWANCE_USD + 0.01,
+    )
+    assert result.status == "blocked"
+    assert "plafond par transaction" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_when_token_balance_unavailable(monkeypatch):
+    async def none_balance():
+        return None
+
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch, balance_fn=none_balance)
+    assert result.status == "blocked"
+    assert "fail-closed" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_when_token_balance_raises(monkeypatch):
+    async def boom_balance():
+        raise RuntimeError("rpc down")
+
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch, balance_fn=boom_balance)
+    assert result.status == "blocked"
+    assert "fail-closed" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_blocked_above_token_balance(monkeypatch):
+    async def small_token_balance():
+        return 500.0
+
+    rec = _Recorder()
+    result = await _run_sell(rec, monkeypatch, amount_in_tokens=1000.0, balance_fn=small_token_balance)
+    assert result.status == "blocked"
+    assert "solde réel du token" in result.reason
+    assert rec.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_forces_slippage_regardless_of_caller(monkeypatch):
+    rec = _Recorder()
+    await _run_sell(rec, monkeypatch, slippage_bps=3000)
+    swap_call = next(c for c in rec.calls if c[0] == "swap")
+    assert swap_call[1]["slippage_bps"] == sw.MAX_SLIPPAGE_BPS
+
+
+@pytest.mark.asyncio
+async def test_sell_threads_exact_atomic_quantity(monkeypatch):
+    rec = _Recorder()
+    await _run_sell(rec, monkeypatch, amount_in_tokens_atomic=1_500_000)
+    swap_call = next(c for c in rec.calls if c[0] == "swap")
+    assert swap_call[1]["amount_in_tokens"] == 1000.0
+    assert swap_call[1]["amount_in_tokens_atomic"] == 1_500_000
+
+
+@pytest.mark.asyncio
+async def test_sell_swap_failure_is_not_stranded_token_stays_in_spender(monkeypatch):
+    """A failed sell swap leaves the token where the buy put it (spender) -- the
+    position is still open, NOT newly stranded."""
+    rec = _Recorder(swap=RuntimeError("no liquidity"))
+    result = await _run_sell(rec, monkeypatch)
+    assert result.status == "failed"
+    assert result.funds_stranded is False
+    assert [c[0] for c in rec.calls] == ["swap"]  # return never attempted
+    row = await _last_log_row()
+    assert row["status"] == "failed"
+    assert row["to_address"] == ""  # nothing to recover -- token already in spender
+
+
+@pytest.mark.asyncio
+async def test_sell_return_failure_flags_stranded(monkeypatch):
+    """Sold but the USDC return failed -> USDC stranded in the spender, needs
+    recovery to aria-smart-st."""
+    rec = _Recorder(ret=RuntimeError("transfer reverted"))
+    result = await _run_sell(rec, monkeypatch)
+    assert result.status == "failed"
+    assert result.funds_stranded is True
+    assert [c[0] for c in rec.calls] == ["swap", "return"]
+    assert result.swap_tx_hash == "0xswap"
+    row = await _last_log_row()
+    assert row["to_address"] == sw.SMART_ST_ADDRESS  # recovery destination surfaced
+
+
+@pytest.mark.asyncio
+async def test_sell_canary_wallet_product_override(monkeypatch):
+    rec = _Recorder()
+    await _run_sell(rec, monkeypatch, wallet_product=sw.CANARY_WALLET_PRODUCT)
+    assert (await _last_log_row())["wallet_product"] == sw.CANARY_WALLET_PRODUCT
+
+
+@pytest.mark.asyncio
+async def test_buy_then_sell_pairs_into_a_real_closed_position(monkeypatch):
+    """End-to-end VOLET 2 across the real journal + positions pairer: a buy
+    (token held) then a sell of the same token yields ONE closed position with a
+    correct realized P&L -- the gap agent_wallet_positions documented is closed."""
+    from aria_core import agent_wallet_positions as awp
+
+    token = "0x" + "e" * 40
+    # BUY 10$ -> 1000 tokens held in the spender
+    buy_rec = _Recorder(swap={"tx_hash": "0xbuy", "amount_out": 1000.0, "amount_out_atomic": 1000_000000})
+    buy = await _run_swap(buy_rec, monkeypatch, token_out=token, amount_in_usd=10.0)
+    assert buy.status == "ok"
+    # SELL the 1000 tokens back for 13$ USDC (a +3$ win)
+    sell_rec = _Recorder(swap={"tx_hash": "0xsell", "amount_out": 13.0})
+    sell = await sw.execute_smart_swing_sell(
+        token_in=token, amount_in_tokens=1000.0, value_in_usd=10.0,
+        balance_fn=_balance_2000_tokens, swap_fn=sell_rec.swap, return_transfer_fn=sell_rec.ret,
+    )
+    assert sell.status == "ok"
+    result = await awp.load_positions(sw.WALLET_PRODUCT)
+    assert len(result.closed) == 1
+    assert result.open == []
+    pos = result.closed[0]
+    assert pos["contract"] == token
+    assert pos["cost_usd"] == 10.0
+    assert pos["proceeds_usd"] == 13.0
+    assert pos["pnl_usd"] == pytest.approx(3.0)
+
+
+# ── VOLET 3: precheck_swap_roundtrip (dual-quote, pure, non-executing) ────────
+
+_PTOKEN = "0x" + "d" * 40
+
+
+def _quote_provider(*, buy_out, sell_out, buy_min=None, sell_min=None,
+                    unavailable_on=None, raise_on=None, as_dict=True):
+    """Build a fake quote_fn mirroring cdp.evm.create_swap_quote. BUY = USDC->token,
+    SELL = token->USDC. Records the calls it received."""
+    from types import SimpleNamespace
+
+    calls: list[dict] = []
+
+    async def quote_fn(*, from_token, to_token, from_amount_atomic, network, slippage_bps):
+        leg = "buy" if from_token == USDC_BASE_ADDRESS else "sell"
+        calls.append({"leg": leg, "from_token": from_token, "to_token": to_token,
+                      "from_amount_atomic": from_amount_atomic, "slippage_bps": slippage_bps})
+        if raise_on == leg:
+            raise RuntimeError(f"{leg} quote boom")
+        if unavailable_on == leg:
+            return {"liquidity_available": False} if as_dict else SimpleNamespace(liquidity_available=False)
+        out = buy_out if leg == "buy" else sell_out
+        mn = (buy_min if leg == "buy" else sell_min)
+        payload = {"liquidity_available": True, "to_amount": str(out),
+                   "min_to_amount": str(mn if mn is not None else out)}
+        return payload if as_dict else SimpleNamespace(**payload)
+
+    quote_fn.calls = calls
+    return quote_fn
+
+
+@pytest.mark.asyncio
+async def test_precheck_accepts_a_cheap_round_trip():
+    # buy 100$ -> 1e9 token atomic; sell 1e9 tokens -> 99 USDC atomic*... = 99$
+    quote_fn = _quote_provider(buy_out=1_000_000_000, sell_out=99_000_000)
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is True
+    assert res.round_trip_loss_bps == pytest.approx(100.0)  # 1%
+    # forced 10% slippage + correct legs
+    assert all(c["slippage_bps"] == sw.MAX_SLIPPAGE_BPS for c in quote_fn.calls)
+    assert [c["leg"] for c in quote_fn.calls] == ["buy", "sell"]
+    # the sell quote is for the exact token amount the buy would yield
+    assert quote_fn.calls[1]["from_amount_atomic"] == 1_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_precheck_rejects_a_lossy_round_trip():
+    quote_fn = _quote_provider(buy_out=1_000_000_000, sell_out=85_000_000)  # 15% loss
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is False
+    assert res.round_trip_loss_bps == pytest.approx(1500.0)
+    assert "prix/liquidité" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_precheck_reads_a_real_sdk_quote_object():
+    """Proves the field readers work on the actual cdp QuoteSwapResult, not just
+    a dict."""
+    quote_fn = _quote_provider(buy_out=1_000_000_000, sell_out=99_000_000, as_dict=False)
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is True
+
+
+@pytest.mark.asyncio
+async def test_precheck_fail_closed_on_quote_error():
+    quote_fn = _quote_provider(buy_out=1_000_000_000, sell_out=99_000_000, raise_on="buy")
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is False
+    assert "indisponible" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_precheck_fail_closed_on_unavailable_liquidity():
+    quote_fn = _quote_provider(buy_out=1_000_000_000, sell_out=99_000_000, unavailable_on="sell")
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is False
+    assert "liquidité insuffisante" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_precheck_fail_closed_on_zero_out_amount():
+    quote_fn = _quote_provider(buy_out=0, sell_out=99_000_000)
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=100.0, quote_fn=quote_fn)
+    assert res.accepted is False
+    assert "sans montant de sortie" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_precheck_fail_closed_on_non_positive_notional():
+    quote_fn = _quote_provider(buy_out=1, sell_out=1)
+    res = await sw.precheck_swap_roundtrip(token=_PTOKEN, notional_usd=0.0, quote_fn=quote_fn)
+    assert res.accepted is False
+    assert quote_fn.calls == []  # never even fetched a quote
+
+
+# ── VOLET 4: run_swing_entry_canary (executed micro buy+sell probe) ──────────
+
+
+def _canary_seams(*, usdc_balance=100.0, tokens_out=300.0, tokens_out_atomic=300_000000,
+                  spender_token_balance=300.0, usdc_recovered=2.9,
+                  buy_swap_exc=None, sell_swap_exc=None, pull_exc=None, ret_exc=None):
+    calls: list[str] = []
+
+    async def balance_fn():
+        return usdc_balance
+
+    async def spend_pull_fn(**kw):
+        calls.append("pull")
+        if pull_exc:
+            raise pull_exc
+        return {"tx_hash": "0xpull"}
+
+    async def buy_swap_fn(**kw):
+        calls.append("buy_swap")
+        if buy_swap_exc:
+            raise buy_swap_exc
+        return {"tx_hash": "0xbuyswap", "amount_out": tokens_out, "amount_out_atomic": tokens_out_atomic}
+
+    async def token_balance_fn():
+        return spender_token_balance
+
+    async def sell_swap_fn(**kw):
+        calls.append(("sell_swap", kw))
+        if sell_swap_exc:
+            raise sell_swap_exc
+        return {"tx_hash": "0xsellswap", "amount_out": usdc_recovered}
+
+    async def return_transfer_fn(**kw):
+        calls.append("return")
+        if ret_exc:
+            raise ret_exc
+        return {"tx_hash": "0xreturn"}
+
+    seams = dict(
+        balance_fn=balance_fn, spend_pull_fn=spend_pull_fn, buy_swap_fn=buy_swap_fn,
+        token_balance_fn=token_balance_fn, sell_swap_fn=sell_swap_fn,
+        return_transfer_fn=return_transfer_fn,
+    )
+    return seams, calls
+
+
+_CTOKEN = "0x" + "c" * 40
+
+
+@pytest.mark.asyncio
+async def test_canary_clean_passes_and_stays_out_of_the_real_feed(monkeypatch):
+    from aria_core import agent_wallet_positions as awp
+
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, calls = _canary_seams(usdc_recovered=2.9)  # 3$ -> 2.9$ = ~333 bps
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is True
+    assert res.amount_spent_usd == 3.0
+    assert res.amount_recovered_usd == pytest.approx(2.9)
+    assert res.round_trip_loss_bps == pytest.approx(333.3, abs=1.0)
+    # full order: buy(pull, buy_swap) then sell(sell_swap, return)
+    assert [c if isinstance(c, str) else c[0] for c in calls] == ["pull", "buy_swap", "sell_swap", "return"]
+    # the sell got the exact atomic quantity the buy reported
+    sell_call = next(c for c in calls if not isinstance(c, str) and c[0] == "sell_swap")
+    assert sell_call[1]["amount_in_tokens_atomic"] == 300_000000
+    # both canary legs logged under the SEPARATE canary product...
+    swing_positions = await awp.load_positions(sw.WALLET_PRODUCT)
+    assert swing_positions.closed == [] and swing_positions.open == []  # real feed untouched
+    canary_positions = await awp.load_positions(sw.CANARY_WALLET_PRODUCT)
+    assert len(canary_positions.closed) == 1  # the probe round-trip is auditable on its own tag
+
+
+@pytest.mark.asyncio
+async def test_canary_rejects_a_high_real_round_trip_tax(monkeypatch):
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, _ = _canary_seams(usdc_recovered=2.0)  # 3$ -> 2.0$ = ~3333 bps > 2000
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is False
+    assert res.round_trip_loss_bps > sw.CANARY_MAX_ROUNDTRIP_LOSS_BPS
+    assert "taxe aller-retour RÉELLE" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_canary_refuses_when_sell_fails_honeypot_signature(monkeypatch):
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, calls = _canary_seams(sell_swap_exc=RuntimeError("sell reverted"))
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is False
+    assert "honeypot" in res.reason
+    assert res.funds_stranded is False  # token stays in spender (position open), tiny + bounded
+    assert res.sell_result is not None and res.sell_result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_canary_refuses_when_buy_blocked_by_gate():
+    # gate OFF (autouse fixture deletes it) -> the canary buy is blocked
+    seams, calls = _canary_seams()
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is False
+    assert res.buy_result is not None and res.buy_result.status == "blocked"
+    assert calls == []  # no CDP call attempted at all
+
+
+@pytest.mark.asyncio
+async def test_canary_surfaces_stranded_funds_on_buy_swap_failure(monkeypatch):
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, _ = _canary_seams(buy_swap_exc=RuntimeError("no liquidity"))
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is False
+    assert res.funds_stranded is True  # USDC pulled then swap failed -> stuck in spender
+    assert res.sell_result is None     # never got to the sell
+
+
+@pytest.mark.asyncio
+async def test_canary_refuses_when_zero_tokens_received(monkeypatch):
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, _ = _canary_seams(tokens_out=0.0)
+    res = await sw.run_swing_entry_canary(token=_CTOKEN, canary_amount_usd=3.0, **seams)
+    assert res.passed is False
+    assert "0 token" in res.reason
+    assert res.sell_result is None

@@ -26,24 +26,30 @@ already USD-denominated in the journal (a buy's ``amount_in`` is the USD spent,
 a sell's ``amount_out`` is the USDC received), so the realized P&L is exact and
 never depends on the token quantity.
 
-Legs are matched **FIFO, one buy leg to one sell leg** — a DESIGN ASSUMPTION,
-NOT something validated against existing code (audit finding, 07/25, corrected
-here): ``execute_smart_swing_swap`` pulls USDC from ``aria-smart-st`` via the
-Spend Permission for EVERY call regardless of the ``token_in``/``token_out``
-passed in (the permission itself is hardcoded to ``token=USDC_BASE_ADDRESS`` in
-``build_spend_permission_input``) — there is structurally NO way today for the
-spender to pull an arbitrary token X out of ``aria-smart-st`` to sell it back to
-USDC. The swing path as it stands can only ever produce BUY legs
-(``USDC -> X``); no SELL leg (``X -> USDC``) exists anywhere in the codebase
-yet. Consequence: this module's ``closed`` list is empty by construction until
-a real sell/exit mechanism is designed and built (a second, more permissive
-Spend Permission per token is not scalable; the exit likely needs its own
-orchestration, e.g. routed through the Tangem owner directly, or a differently
-scoped permission — an open design question, not decided here). The FIFO
-pairing logic below is still the right generalization for WHENEVER a real sell
-leg exists (if a second buy of the same token ever arrives before the first is
-sold, the oldest lot closes first and the newer lot stays genuinely OPEN) — it
-is simply unexercised by any real data today. Never invents a close.
+Legs are matched **FIFO, one buy leg to one sell leg**. A REAL sell leg now
+exists (temporal-hold redesign, 07/25): ``execute_smart_swing_swap`` (BUY) no
+longer auto-returns the bought token to ``aria-smart-st`` — it deliberately
+leaves it in the spender, which is exactly what lets ``execute_smart_swing_sell``
+(SELL, ``X -> USDC``) later swap that held token back to USDC and return the
+cash. This CLOSES the "no sell leg can exist" gap the earlier version of this
+docstring documented (the old blocker was that the USDC-only Spend Permission
+could never pull an arbitrary token X back out of ``aria-smart-st`` to sell it;
+keeping the token in the spender sidesteps that entirely, no per-token
+permission needed). Consequence: this module's ``closed`` list is NO LONGER
+empty by construction — a buy followed by a sell of the same token produces a
+real closed position. The pairing math was re-verified against the new sell
+leg: the buy logs ``amount_in``=USD spent / ``amount_out``=token qty, the sell
+logs ``amount_in``=token qty sold / ``amount_out``=USDC received, so
+``pnl_usd = proceeds_usd(sell.amount_out) - cost_usd(buy.amount_in)`` is exact
+regardless of token quantity — confirmed correct. FIFO stacking is genuine too
+(if a second buy of the same token arrives before the first is sold, the oldest
+lot closes first and the newer lot stays OPEN). Never invents a close.
+
+Note on canary probes (VOLET 4): the entry-canary buy+sell round-trips are
+logged under a SEPARATE ``wallet_product`` (``cdp_smart_account_swing_canary``),
+never ``SWING_WALLET_PRODUCT`` — so this module never turns a deliberately-small
+probe (which always loses the round-trip tax by design) into a "closed position"
+that would pollute the real-position P&L feed the loss circuit breaker consumes.
 
 Honest limitations (surfaced, never silent — see the module HANDOFF entry)
 --------------------------------------------------------------------------
