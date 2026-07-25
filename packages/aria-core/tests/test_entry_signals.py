@@ -1,7 +1,10 @@
 """Signaux d'entrée : Fibonacci golden pocket + divergence RSI (déterministe, offline)."""
 from __future__ import annotations
 
+from aria_core.skills import entry_signals
 from aria_core.skills.entry_signals import (
+    RSI_DIVERGENCE_MAX,
+    RSI_DIVERGENCE_MIN,
     bullish_rsi_divergence,
     detect_entry,
     fibonacci_zone,
@@ -98,6 +101,67 @@ def test_bullish_divergence_detected_across_non_adjacent_pivots():
     assert ok is True
     assert "RSI remonte" in base
     assert "70" in base  # ancré sur le creux le plus récent (3e), pas un pivot intermédiaire
+
+
+# ── plage RSI absolue [20, 40] au point de divergence (25/07) ────────────────
+# Incident réel opérateur : un achat (ZEN) a été déclenché sur "RSI remonte
+# (39 → 40)" -- une divergence purement relative (creux 2 < creux 1, RSI plus
+# haut), mais 39/40 n'est pas une vraie zone de survente. `bullish_rsi_divergence`
+# exige désormais que le RSI du creux RÉCENT (r2) tombe lui-même dans [20, 40],
+# quel que soit le timeframe des bougies. Les tests ci-dessous surchargent
+# ponctuellement `rsi_series` (même série de prix que `_setup_series()`, dont la
+# divergence relative est déjà validée par `test_bullish_divergence_detected` --
+# seule la valeur RSI au creux récent change) : calibrer une vraie série de prix
+# pour produire un RSI pivot précis au-dessus de 40 s'est avéré non-trivial (le
+# RSI Wilder plafonne naturellement autour de ~38 dès qu'un NOUVEAU plus bas de
+# prix est requis) -- contrôler directement la valeur RSI teste la contrainte de
+# plage elle-même, indépendamment de cette limite arithmétique du RSI.
+_SETUP_RECENT_PIVOT_INDEX = 27  # indice du creux récent (75) dans _setup_series()
+
+
+def _rsi_series_forcing_recent_pivot(closes: list[float], period: int = 14, *, value: float):
+    """Vrai `rsi_series`, sauf au creux récent du setup où le RSI est forcé à `value`."""
+    real = rsi_series(closes, period)
+    real[_SETUP_RECENT_PIVOT_INDEX] = value
+    return real
+
+
+def test_bullish_divergence_rejected_when_recent_rsi_above_max(monkeypatch):
+    """Divergence relative valide (creux 75 < 77, RSI qui remonte) mais RSI récent
+    à 55 (> RSI_DIVERGENCE_MAX=40) -- doit être rejetée (reproduit l'incident ZEN,
+    où 39→40 n'est pas une vraie zone de survente)."""
+    monkeypatch.setattr(
+        entry_signals, "rsi_series",
+        lambda closes, period=14: _rsi_series_forcing_recent_pivot(closes, period, value=55.0),
+    )
+    ok, base = bullish_rsi_divergence(_candles(_setup_series()), lookback=25)
+    assert ok is False
+    assert base == ""
+
+
+def test_bullish_divergence_rejected_when_recent_rsi_below_min(monkeypatch):
+    """Divergence relative valide mais RSI récent à 10 (< RSI_DIVERGENCE_MIN=20) --
+    doit être rejetée (survente trop extrême, hors de la zone de rebond visée)."""
+    monkeypatch.setattr(
+        entry_signals, "rsi_series",
+        lambda closes, period=14: _rsi_series_forcing_recent_pivot(closes, period, value=10.0),
+    )
+    ok, base = bullish_rsi_divergence(_candles(_setup_series()), lookback=25)
+    assert ok is False
+    assert base == ""
+
+
+def test_bullish_divergence_accepted_at_range_boundaries(monkeypatch):
+    """Les bornes [20, 40] sont inclusives -- un RSI récent exactement à 20 ou 40
+    reste une divergence valide (seul l'extérieur strict de la plage est rejeté)."""
+    for boundary in (RSI_DIVERGENCE_MIN, RSI_DIVERGENCE_MAX):
+        monkeypatch.setattr(
+            entry_signals, "rsi_series",
+            lambda closes, period=14, v=boundary: _rsi_series_forcing_recent_pivot(closes, period, value=v),
+        )
+        ok, base = bullish_rsi_divergence(_candles(_setup_series()), lookback=25)
+        assert ok is True, f"borne {boundary} devrait être acceptée"
+        assert "RSI remonte" in base
 
 
 def test_detect_entry_fires_on_setup():

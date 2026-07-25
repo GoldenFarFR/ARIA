@@ -21,6 +21,18 @@ _FIB_RATIOS = (0.236, 0.382, 0.5, 0.618, 0.786)
 _DEFAULT_LOOKBACK = 25
 _RSI_PERIOD = 14
 
+# 25/07, operator-found gap: a real buy (ZEN) had "RSI remonte (39 -> 40)" as
+# its divergence -- accepted by the old criterion (a PURELY relative check:
+# price lower low + RSI higher low, no floor or ceiling on the RSI value
+# itself), even though 39/40 sits well outside a real oversold zone. Operator
+# explicit requirement, timeframe-independent (same reading rule on 15min,
+# 1h, 4h, or day candles -- only the input candles change, never this logic):
+# the RECENT RSI value at the divergence point must itself sit in [20, 40] --
+# a real oversold-recovering zone, not just any two points where the second
+# is marginally higher than the first.
+RSI_DIVERGENCE_MIN = 20.0
+RSI_DIVERGENCE_MAX = 40.0
+
 
 @dataclass(frozen=True)
 class EntrySignal:
@@ -118,6 +130,13 @@ def bullish_rsi_divergence(
     if len(pivots) < 2:
         return False, ""
     _, l2, r2 = pivots[-1]
+    # 25/07, operator explicit requirement: the RECENT RSI value itself must
+    # sit in a real oversold-recovering zone [20, 40] -- same rule regardless
+    # of the candles' timeframe (15min/1h/4h/day), never just "any two points
+    # where the second is marginally higher". A relative-only check let
+    # RSI 39->40 (no real oversold reading at all) pass as a "divergence".
+    if not (RSI_DIVERGENCE_MIN <= r2 <= RSI_DIVERGENCE_MAX):
+        return False, ""
     for _, l1, r1 in reversed(pivots[:-1]):
         if l2 < l1 and r2 > r1:
             return True, f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})"
