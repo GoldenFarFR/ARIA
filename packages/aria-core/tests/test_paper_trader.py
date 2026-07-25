@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -3730,7 +3731,7 @@ def test_daily_floor_target_paces_across_the_day():
     # start of day -> becomes 1 as soon as any time elapsed (nudge to act early)
     assert pt._daily_floor_target(midnight.replace(minute=30)) == 1
     # midday -> ~half
-    assert pt._daily_floor_target(midnight.replace(hour=12)) == 3
+    assert pt._daily_floor_target(midnight.replace(hour=12)) == math.ceil(pt.DAILY_TRADE_FLOOR * 0.5)
     # end of day -> the full floor
     assert pt._daily_floor_target(midnight.replace(hour=23, minute=59)) == pt.DAILY_TRADE_FLOOR
 
@@ -3748,7 +3749,12 @@ def _floor_buy_sig(symbol="FL", price=1.0):
         "action": "BUY", "chain": "base", "symbol": symbol, "price": price,
         "target": 2.0, "invalidation": 0.5, "rr": 1.2, "align_score": 1,
         "floor_trade": True, "strategy": "momentum", "regime": "neutre",
-        "reasons": ["mode plancher (diagnostic)"], "liquidity_usd": 100_000.0,
+        "reasons": ["mode plancher (diagnostic)"],
+        # 25/07 -- generous liquidity so cap_alloc_to_price_impact (applied
+        # inside open_position) never becomes the binding constraint here --
+        # this fixture isolates the dynamic risk/ATR sizing itself, a
+        # separate concern already covered by its own dedicated tests.
+        "liquidity_usd": 10_000_000.0,
         "rvol_multiple": 1.5,
     }
 
@@ -3799,8 +3805,12 @@ async def test_daily_floor_opens_small_tagged_trades_when_behind(tmp_db, monkeyp
 
     monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral)
 
+    # 25/07 -- FLOOR_MAX_OPENS_PER_CYCLE raised to 5, needs at least that many
+    # distinct candidates for this test to actually exercise the per-cycle cap
+    # rather than just running out of candidates first.
     async def _fake_sources(*, limit=20):
-        return [A, B, C], {A: "base", B: "base", C: "base"}
+        addrs = [A, B, C, D, E]
+        return addrs, {addr: "base" for addr in addrs}
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
@@ -3811,16 +3821,61 @@ async def test_daily_floor_opens_small_tagged_trades_when_behind(tmp_db, monkeyp
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
 
     await pt.reset_portfolio(1_000_000.0)
-    # late in the day -> target = 5, none opened yet, so it should open up to
-    # FLOOR_MAX_OPENS_PER_CYCLE this cycle.
+    # late in the day -> target = DAILY_TRADE_FLOOR, none opened yet, so it
+    # should open up to FLOOR_MAX_OPENS_PER_CYCLE this cycle.
     res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
     assert res["outcome"] == "ok"
     assert len(res["opened"]) == pt.FLOOR_MAX_OPENS_PER_CYCLE
     for pos in res["opened"]:
         assert pos["discovery_channel"] == "floor"
-        assert pos["conviction_tier"] == "floor"
-        # small size: ~1% of starting capital, well under the normal 5%
-        assert pos["cost_usd"] <= pt.FLOOR_TRADE_ALLOC_PCT * 1_000_000.0 + 1
+        # 25/07, operator request ("enleve le truc qui force les positions
+        # avec 1% du capital"): sizing is now the SAME dynamic risk/ATR
+        # formula as a normal conviction pick (compute_entry_alloc), never a
+        # fixed 1% ceiling. This weak signal (rr=1.2, align=1, no ATR) lands
+        # on the WEAK tier -- ALLOC_PCT * MIN_ALLOC_MULTIPLIER * start.
+        assert pos["conviction_tier"] == "weak"
+        assert pos["cost_usd"] == pytest.approx(0.05 * 0.4 * 1_000_000.0, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_feeds_a_real_pacing_context_to_the_analyzer(tmp_db, monkeypatch):
+    """25/07, operator request ("je veux qu'elle sache combien elle a dans
+    son portfolio et combien de benefice ou perte elle a realise pour s'auto
+    mettre un stress"): the floor cycle must pass a REAL weekly_context (this
+    window's own $75k target, day 1/1) to the analyzer -- never None, which
+    would leave ARIA blind to her own equity/target during this 24h test."""
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import momentum_entry, risk_guard
+    from aria_core.skills import market_sentiment
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+
+    async def _neutral():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral)
+
+    async def _fake_sources(*, limit=20):
+        return [A], {A: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    captured = {}
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+        captured["weekly_context"] = weekly_context
+        return _floor_buy_sig(symbol=contract[:4])
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
+
+    ctx = captured["weekly_context"]
+    assert ctx is not None
+    assert ctx["day"] == 1 and ctx["days_total"] == 1
+    assert ctx["equity"] == pytest.approx(1_000_000.0)
+    assert ctx["target_equity"] == pytest.approx(1_000_000.0 + pt.DAILY_FLOOR_TARGET_PROFIT_USD)
 
 
 @pytest.mark.asyncio
@@ -3830,10 +3885,18 @@ async def test_daily_floor_on_pace_opens_nothing(tmp_db, monkeypatch):
 
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
     await pt.reset_portfolio(1_000_000.0)
-    # 5 already opened today, early in the day -> target small -> on pace
-    for i, addr in enumerate([A, B, C, D, E]):
-        await pt.open_position(addr, f"T{i}", 1.0, target_price=2.0, invalidation_price=0.5)
-    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 6, 0, 0, tzinfo=_tz.utc))
+    # Already opened the FULL day's floor -- robust to whatever DAILY_TRADE_FLOOR
+    # is set to, unlike a hardcoded count that would drift out of sync with it.
+    # Small explicit alloc_usd so DAILY_TRADE_FLOOR positions always fit
+    # within the $1M cash budget (the default 5% flat alloc would exhaust
+    # cash well before reaching a raised floor target, silently opening
+    # fewer positions than intended).
+    for i in range(pt.DAILY_TRADE_FLOOR):
+        addr = f"0x{i:040x}"
+        await pt.open_position(
+            addr, f"T{i}", 1.0, target_price=2.0, invalidation_price=0.5, alloc_usd=1_000.0,
+        )
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 59, 0, tzinfo=_tz.utc))
     assert res["outcome"] == "on_pace"
     assert res["opened"] == []
 

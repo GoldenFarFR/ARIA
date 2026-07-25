@@ -33,7 +33,12 @@ DB_PATH = str(aria_db_path())
 
 STARTING_CAPITAL_USD = 1_000_000.0
 ALLOC_PCT = 0.05          # 5% of starting capital per position (~$50,000) — trading mode
-MAX_POSITIONS = 15        # cash cushion + diversification
+# 25/07 -- raised 15 -> 30 for the operator's one-off 24h aggressive test
+# ("trader un maximum de tokens"): with the daily-floor sizing now dynamic
+# (risk/ATR, see compute_entry_alloc) instead of a fixed 1%, real cash
+# availability becomes the natural brake before this count-based cap is ever
+# hit -- this just removes an artificial ceiling below that real brake.
+MAX_POSITIONS = 30        # cash cushion + diversification
 MODE = "trading"
 
 # 07/18 -- explicit operator decision: replaces the 30d/7d/14d protocol. ARIA restarts at
@@ -67,9 +72,25 @@ SATELLITE_POCKET_MAX_PCT_OF_CAPITAL = 0.05  # 5% of fixed starting capital ($1M)
 # momentum bet is diagnostic, buying a scam is not. Respects the risk circuit breaker
 # (operator decision 07/23): stops forcing if the drawdown/consecutive-loss hard stop is
 # armed (observing her risk management is itself diagnostic). Gate OFF by default.
-DAILY_TRADE_FLOOR = 5
-FLOOR_TRADE_ALLOC_PCT = 0.01   # 1% of starting capital (~$10,000) -- deliberately small: diagnostic sampling, not conviction
-FLOOR_MAX_OPENS_PER_CYCLE = 2  # never a burst of 5 at once -- paced across the day
+# 25/07 -- raised for the operator's one-off 24h aggressive test ("trader un
+# maximum de tokens... meme si elle ne respecte pas tous les signaux"): 5/day
+# was calibrated for a slow diagnostic trickle, not a volume-maximizing
+# 24h window. 30/day paced across 24 hourly heartbeat passes (see
+# daily_trade_floor_cycle, interval_minutes=60 in heartbeat.py) needs a higher
+# per-pass burst (FLOOR_MAX_OPENS_PER_CYCLE) to actually reach the target
+# instead of trickling in at 2/hour. FLOOR_TRADE_ALLOC_PCT removed entirely --
+# sizing is now the same dynamic risk/ATR formula as a normal conviction pick
+# (compute_entry_alloc), never a fixed 1% ceiling on the upside.
+DAILY_TRADE_FLOOR = 30
+FLOOR_MAX_OPENS_PER_CYCLE = 5  # was 2 -- raised to actually reach a 30/day target
+
+# 25/07, operator request ("je veux qu'elle sache combien elle a dans son
+# portfolio et combien de benefice ou perte elle a realise pour s'auto
+# mettre un stress"): midpoint of the operator's own $50k-$100k target for
+# this 24h window -- reused as the SAME weekly-pacing context mechanism
+# already wired to the LLM prompt (_weekly_pacing_line, "Contexte de rythme"),
+# just with this cycle's real numbers (day 1/1, not day X/7) instead of None.
+DAILY_FLOOR_TARGET_PROFIT_USD = 75_000.0
 
 # #196 -- SHARED lock, regardless of the caller (heartbeat paper_trade_cycle OR the
 # momentum #196 websocket service): without it, two concurrent executions of
@@ -721,6 +742,13 @@ _STATE_ADDED_COLUMNS = [
     # Current cycle number, incremented on every reset -- never NULL after the
     # first call to _ensure_tables (starts at 1, same default value as the SQL column).
     ("cycle_number", "INTEGER NOT NULL DEFAULT 1"),
+    # 25/07 -- operator-requested one-off: a shortened training cycle (24h
+    # instead of the usual 7 days) for THIS cycle only. NULL (default) means
+    # "use WEEKLY_CYCLE_DAYS as normal" -- never a permanent change to the
+    # weekly protocol's doctrine. run_weekly_reset() clears this back to NULL
+    # once the cycle closes, so the NEXT cycle reverts to 7 days unless the
+    # operator explicitly asks for another short one via reset_portfolio().
+    ("cycle_duration_days", "REAL"),
 ]
 
 
@@ -913,7 +941,10 @@ async def starting_capital() -> float:
     return float(row[0]) if row else STARTING_CAPITAL_USD
 
 
-async def reset_portfolio(starting: float = STARTING_CAPITAL_USD, *, created_at: str | None = None) -> None:
+async def reset_portfolio(
+    starting: float = STARTING_CAPITAL_USD, *, created_at: str | None = None,
+    cycle_duration_days: float | None = None,
+) -> None:
     """Starts fresh (new proof run). DESTRUCTIVE: to be triggered explicitly by
     the operator, never by an automatic loop.
 
@@ -925,7 +956,11 @@ async def reset_portfolio(starting: float = STARTING_CAPITAL_USD, *, created_at:
     in ``paper_position_archive``. Now archives whatever is still in the live
     table (open AND closed rows) under the CURRENT ``cycle_number`` before
     dropping -- same non-destructive doctrine as the weekly cycle, never a
-    silent loss of track record."""
+    silent loss of track record.
+
+    ``cycle_duration_days`` (25/07, operator request: "passe le test de 7 jours
+    a 24h"): one-off override of WEEKLY_CYCLE_DAYS for THIS cycle only -- see
+    _STATE_ADDED_COLUMNS for why this is never a permanent doctrine change."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (await db.execute("SELECT cycle_number FROM paper_state WHERE id = 1")).fetchone()
@@ -944,8 +979,9 @@ async def reset_portfolio(starting: float = STARTING_CAPITAL_USD, *, created_at:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_state SET starting_capital = ?, created_at = ?, equity_high_water_mark = ? WHERE id = 1",
-            (starting, created_at or _now(), starting),
+            "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
+            "equity_high_water_mark = ?, cycle_duration_days = ? WHERE id = 1",
+            (starting, created_at or _now(), starting, cycle_duration_days),
         )
         await db.commit()
 
@@ -2176,9 +2212,11 @@ async def run_daily_trade_floor_cycle(*, notifier=None, now: datetime | None = N
         forcing if the drawdown / consecutive-loss hard stop is armed.
       - Respects ``MAX_POSITIONS``, available cash, and never re-buys a contract
         already open.
-      - Forced trades are SMALL (``FLOOR_TRADE_ALLOC_PCT``) and tagged
-        ``discovery_channel="floor"`` so ``/performance`` separates them from
-        ARIA's real conviction picks.
+      - Forced trades are sized by the SAME dynamic risk/ATR formula as a
+        normal conviction pick (25/07, ``compute_entry_alloc`` -- no longer a
+        fixed 1% ceiling) and tagged ``discovery_channel="floor"`` so
+        ``/performance`` separates them from ARIA's other entries by SOURCE,
+        never by size.
       - Kill-switch (``/stop``) honored (this path bypasses ``heartbeat._tick``).
 
     Shares ``_run_cycle_lock`` with ``run_paper_cycle`` -- never two cycles
@@ -2221,7 +2259,29 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
 
     to_open = min(deficit, FLOOR_MAX_OPENS_PER_CYCLE)
     start = await starting_capital()
-    floor_alloc = FLOOR_TRADE_ALLOC_PCT * start
+
+    # 25/07, operator request: ARIA must know her real equity and P&L against
+    # THIS window's own target (not the normal weekly +10%) -- same mechanism
+    # as the weekly cycle's pacing context (_weekly_pacing_line), just fed
+    # this window's real numbers so the "Contexte de rythme" line in her
+    # prompt reflects a 24h/$75k target instead of the dormant weekly one.
+    weekly_context: dict | None = None
+    try:
+        target_equity = start + DAILY_FLOOR_TARGET_PROFIT_USD
+        progress_pct = (risk_state.equity / start - 1.0) * 100.0 if start else 0.0
+        target_pct = (DAILY_FLOOR_TARGET_PROFIT_USD / start) * 100.0 if start else 0.0
+        weekly_context = {
+            "cycle_number": await get_current_cycle_number(),
+            "day": 1,
+            "days_total": 1,
+            "equity": risk_state.equity,
+            "target_equity": target_equity,
+            "progress_pct": progress_pct,
+            "remaining_pct": target_pct - progress_pct,
+        }
+    except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to no context
+        logger.info("daily_floor: pacing context unavailable (%s)", exc)
+        weekly_context = None
 
     from aria_core.skills import market_sentiment
 
@@ -2231,15 +2291,15 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
         current_regime = market_sentiment.META_REGIME_NEUTRAL
 
     candidates, chain_map = await _momentum_candidates_and_chain_map(limit=20)
-    analyzer = _default_momentum_analyzer(chain_map, current_regime=current_regime, relaxed=True)
+    analyzer = _default_momentum_analyzer(
+        chain_map, weekly_context, current_regime=current_regime, relaxed=True,
+    )
 
     opened = 0
     for contract in candidates:
         if opened >= to_open:
             break
         if len(await get_open_positions()) >= MAX_POSITIONS:
-            break
-        if await cash_available() < floor_alloc:
             break
         if await has_open(contract):
             continue
@@ -2253,13 +2313,24 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
         price = sig.get("price")
         if not price or price <= 0:
             continue
+        # 25/07, operator request ("enleve le truc qui force les positions
+        # avec 1% du capital"): the fixed FLOOR_TRADE_ALLOC_PCT sizing
+        # mechanically capped the upside of even a genuinely strong floor
+        # candidate -- now uses the SAME risk/ATR sizing formula as a normal
+        # conviction pick (compute_entry_alloc), so a real signal gets a real
+        # allocation. discovery_channel="floor" (below) still tags the trade
+        # for /performance -- only the SIZE changes, never the diagnostic
+        # labeling of where it came from.
+        entry_alloc, conviction_tier = compute_entry_alloc(sig, start, weekly_context, risk_state)
+        if await cash_available() < entry_alloc:
+            continue
         pos = await open_position(
             contract,
             sig.get("symbol", ""),
             price,
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
-            alloc_usd=floor_alloc,
+            alloc_usd=entry_alloc,
             category=sig.get("category", ""),
             chain=sig.get("chain") or "base",
             thesis=("; ".join(sig.get("reasons") or []) or None),
@@ -2269,7 +2340,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             entry_regime=sig.get("regime"),
             rr=sig.get("rr"),
             align_score=sig.get("align_score"),
-            conviction_tier="floor",
+            conviction_tier=conviction_tier or "floor",
             rvol_multiple=sig.get("rvol_multiple"),
             discovery_channel="floor",
             liquidity_rotation_score=sig.get("liquidity_rotation_score"),
@@ -2312,8 +2383,23 @@ def weekly_target_equity(start_capital: float) -> float:
     return start_capital * WEEKLY_TARGET_MULTIPLIER
 
 
+async def _effective_cycle_days() -> float:
+    """25/07, operator one-off ("passe le test de 7 jours a 24h"):
+    ``paper_state.cycle_duration_days`` overrides ``WEEKLY_CYCLE_DAYS`` for
+    THIS cycle only when set (via ``reset_portfolio``) -- NULL (the default
+    for any normal reset) falls back to the standard 7-day doctrine."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT cycle_duration_days FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    if row and row[0]:
+        return float(row[0])
+    return float(WEEKLY_CYCLE_DAYS)
+
+
 async def weekly_cycle_due() -> bool:
-    """True if ``WEEKLY_CYCLE_DAYS`` have elapsed since the start of the
+    """True if the effective cycle duration (see ``_effective_cycle_days``,
+    ``WEEKLY_CYCLE_DAYS`` by default) has elapsed since the start of the
     current cycle (``paper_state.created_at``). Never brought forward, even if
     the target is already reached -- a REPEATED training loop, not an exit
     gate crossed once."""
@@ -2325,7 +2411,8 @@ async def weekly_cycle_due() -> bool:
     if started_dt.tzinfo is None:
         started_dt = started_dt.replace(tzinfo=timezone.utc)
     elapsed = datetime.now(timezone.utc) - started_dt
-    return elapsed.total_seconds() >= WEEKLY_CYCLE_DAYS * 86400
+    cycle_days = await _effective_cycle_days()
+    return elapsed.total_seconds() >= cycle_days * 86400
 
 
 async def run_weekly_reset(*, price_lookup=None) -> dict:
@@ -2512,8 +2599,8 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         next_cycle = cycle_number + 1
         await db.execute(
             "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
-            "equity_high_water_mark = ?, cycle_number = ?, last_tracking_alert_at = NULL "
-            "WHERE id = 1",
+            "equity_high_water_mark = ?, cycle_number = ?, last_tracking_alert_at = NULL, "
+            "cycle_duration_days = NULL WHERE id = 1",
             (STARTING_CAPITAL_USD, ended_at, STARTING_CAPITAL_USD, next_cycle),
         )
         await db.commit()
