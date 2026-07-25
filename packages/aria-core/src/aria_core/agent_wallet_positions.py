@@ -26,14 +26,24 @@ already USD-denominated in the journal (a buy's ``amount_in`` is the USD spent,
 a sell's ``amount_out`` is the USDC received), so the realized P&L is exact and
 never depends on the token quantity.
 
-Legs are matched **FIFO, one buy leg to one sell leg**. The swing execution
-path (``execute_smart_swing_swap``) does full-position round-trips (buy the whole
-lot, later sell the whole lot back to USDC), so in the intended usage there is
-only ever **one open lot per token at a time** — exactly the task's stated
-assumption. The FIFO queue below is a safe generalization of that: if a second
-buy of the same token ever arrives before the first is sold (accumulation — a
-behavior the current, dormant swing path never produces), the oldest lot is
-closed first and the newer lot stays genuinely OPEN. It never invents a close.
+Legs are matched **FIFO, one buy leg to one sell leg** — a DESIGN ASSUMPTION,
+NOT something validated against existing code (audit finding, 07/25, corrected
+here): ``execute_smart_swing_swap`` pulls USDC from ``aria-smart-st`` via the
+Spend Permission for EVERY call regardless of the ``token_in``/``token_out``
+passed in (the permission itself is hardcoded to ``token=USDC_BASE_ADDRESS`` in
+``build_spend_permission_input``) — there is structurally NO way today for the
+spender to pull an arbitrary token X out of ``aria-smart-st`` to sell it back to
+USDC. The swing path as it stands can only ever produce BUY legs
+(``USDC -> X``); no SELL leg (``X -> USDC``) exists anywhere in the codebase
+yet. Consequence: this module's ``closed`` list is empty by construction until
+a real sell/exit mechanism is designed and built (a second, more permissive
+Spend Permission per token is not scalable; the exit likely needs its own
+orchestration, e.g. routed through the Tangem owner directly, or a differently
+scoped permission — an open design question, not decided here). The FIFO
+pairing logic below is still the right generalization for WHENEVER a real sell
+leg exists (if a second buy of the same token ever arrives before the first is
+sold, the oldest lot closes first and the newer lot stays genuinely OPEN) — it
+is simply unexercised by any real data today. Never invents a close.
 
 Honest limitations (surfaced, never silent — see the module HANDOFF entry)
 --------------------------------------------------------------------------
