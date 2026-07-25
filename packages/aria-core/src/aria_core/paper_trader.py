@@ -1724,13 +1724,16 @@ def format_position_tracking_alert(
     them)."""
     if not tracked:
         return ""
+    n = len(tracked)
+    position_word = "position ouverte" if n == 1 else "positions ouvertes"
     if equity is not None and cash is not None:
         header = (
             f"🧪 SIMULATION — suivi positions ouvertes "
-            f"(portefeuille papier : équité {equity:,.0f} $, cash {cash:,.0f} $)"
+            f"(portefeuille papier : équité {equity:,.0f} $, cash {cash:,.0f} $, "
+            f"{n} {position_word})"
         )
     else:
-        header = "🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$)"
+        header = f"🧪 SIMULATION — suivi positions ouvertes (portefeuille papier 1 M$, {n} {position_word})"
     lines = [header] + [_format_tracked_position_line(t) for t in tracked]
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
