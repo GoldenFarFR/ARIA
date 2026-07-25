@@ -192,6 +192,12 @@ def test_system_context_forbids_generic_ai_cliches():
     assert "CLICHÉS DE REMPLISSAGE IA" in relay_conversation._SYSTEM_CONTEXT
 
 
+def test_system_context_forbids_bullet_lists():
+    """25/07 -- real test on CHECK: the model produced a bulleted multi-paragraph
+    reply despite the earlier "3-4 sentences" instruction and got truncated."""
+    assert "jamais de liste a puces" in relay_conversation._SYSTEM_CONTEXT
+
+
 def _fake_position(**overrides):
     base = {
         "symbol": "AUTONO", "contract": "0xb3d7e0c3c39a1d3f1b304663065a2f83ddf56d8e",
@@ -251,6 +257,37 @@ def test_position_facts_block_flags_missing_thesis_explicitly():
     pos = _fake_position(thesis=None)
     block = relay_conversation._position_facts_block(pos)
     assert "Aucune these texte enregistree" in block
+
+
+def test_position_facts_block_surfaces_low_fundamental_score_as_priority():
+    """25/07, real test on CHECK: this exact red flag ("usurpation probable")
+    sat at the very end of a dense thesis and ARIA never mentioned it -- it
+    must now be pulled to the front and labeled as a priority signal."""
+    pos = _fake_position(
+        thesis=(
+            "honeypot clear (GoPlus); R/R franc (3.9) + alignement technique; "
+            "diligence de conviction : Website : https://example.com -> "
+            "potentiel fondamental 2.0/10 (site trouve, cadence X active : "
+            "Contenu web incoherent et contrat different annonce signalent "
+            "une usurpation probable malgre une activite X active.)"
+        ),
+    )
+    block = relay_conversation._position_facts_block(pos)
+    assert "SIGNAL QUALITATIF PRIORITAIRE" in block
+    assert "usurpation probable" in block
+    # The priority line must appear BEFORE the raw thesis dump, not after.
+    assert block.index("SIGNAL QUALITATIF PRIORITAIRE") < block.index("These reelle enregistree")
+
+
+def test_position_facts_block_does_not_flag_a_healthy_fundamental_score():
+    pos = _fake_position(
+        thesis=(
+            "R/R franc (3.9); diligence de conviction : potentiel fondamental "
+            "8.5/10 (site trouve, cadence X active : projet actif et coherent.)"
+        ),
+    )
+    block = relay_conversation._position_facts_block(pos)
+    assert "SIGNAL QUALITATIF PRIORITAIRE" not in block
 
 
 @pytest.mark.asyncio
