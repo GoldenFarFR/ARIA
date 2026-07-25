@@ -435,3 +435,97 @@ async def test_cycle_leaves_system_context_untouched_without_a_token_match(monke
 
     assert result == {"outcome": "ok"}
     assert captured["system_context"] == relay_conversation._SYSTEM_CONTEXT
+
+
+def test_log_lesson_writes_a_journal_entry(tmp_path, monkeypatch):
+    """25/07, operator request ("qu'elle puisse s'auto-ameliorer"): every
+    exchange grounded in a real position gets persisted so a future Claude
+    Code session can read it and decide whether it's worth promoting into
+    docs/aria-learning-inbox/ or a real code fix -- never lost in an
+    ephemeral Telegram conversation."""
+    monkeypatch.setattr("aria_core.paths.relay_lessons_dir", lambda: tmp_path)
+
+    relay_conversation._log_lesson(
+        _fake_position(symbol="CHECK"), "Ou est l erreur ?", "Le potentiel fondamental etait bas.",
+    )
+
+    log_path = tmp_path / "lessons-log.md"
+    assert log_path.is_file()
+    content = log_path.read_text(encoding="utf-8")
+    assert "CHECK" in content
+    assert "Ou est l erreur ?" in content
+    assert "Le potentiel fondamental etait bas." in content
+
+
+def test_log_lesson_appends_multiple_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr("aria_core.paths.relay_lessons_dir", lambda: tmp_path)
+
+    relay_conversation._log_lesson(_fake_position(symbol="CHECK"), "Q1", "R1")
+    relay_conversation._log_lesson(_fake_position(symbol="OWB"), "Q2", "R2")
+
+    content = (tmp_path / "lessons-log.md").read_text(encoding="utf-8")
+    assert "CHECK" in content
+    assert "OWB" in content
+    assert content.index("CHECK") < content.index("OWB")
+
+
+@pytest.mark.asyncio
+async def test_cycle_logs_a_lesson_when_grounded_in_a_real_position(monkeypatch, tmp_path):
+    await relay_chat.log_message("claude", "Ta position AUTONO, quelle these ?")
+
+    async def fake_open():
+        return [_fake_position(symbol="AUTONO", thesis="Golden pocket confirme.")]
+
+    async def fake_closed(limit=200):
+        return []
+
+    monkeypatch.setattr("aria_core.paper_trader.get_open_positions", fake_open)
+    monkeypatch.setattr("aria_core.paper_trader.get_closed_positions", fake_closed)
+    monkeypatch.setattr("aria_core.paths.relay_lessons_dir", lambda: tmp_path)
+
+    async def fake_chat_with_context(user_message, system_context, history, **kw):
+        return "These solide, R/R confirme."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    async def fake_send_message(text):
+        return True
+
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", fake_send_message)
+
+    result = await relay_conversation.run_relay_conversation_cycle()
+
+    assert result == {"outcome": "ok"}
+    log_path = tmp_path / "lessons-log.md"
+    assert log_path.is_file()
+    assert "AUTONO" in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_cycle_does_not_log_a_lesson_without_a_matched_position(monkeypatch, tmp_path):
+    await relay_chat.log_message("claude", "Comment tu te sens ?")
+
+    async def fake_open():
+        return []
+
+    async def fake_closed(limit=200):
+        return []
+
+    monkeypatch.setattr("aria_core.paper_trader.get_open_positions", fake_open)
+    monkeypatch.setattr("aria_core.paper_trader.get_closed_positions", fake_closed)
+    monkeypatch.setattr("aria_core.paths.relay_lessons_dir", lambda: tmp_path)
+
+    async def fake_chat_with_context(user_message, system_context, history, **kw):
+        return "Ca va bien, merci."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    async def fake_send_message(text):
+        return True
+
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", fake_send_message)
+
+    result = await relay_conversation.run_relay_conversation_cycle()
+
+    assert result == {"outcome": "ok"}
+    assert not (tmp_path / "lessons-log.md").exists()

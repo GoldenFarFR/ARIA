@@ -183,15 +183,44 @@ def _position_facts_block(pos: dict) -> str:
     return "\n".join(lines)
 
 
-async def _position_context_for_message(message: str) -> str | None:
+async def _matched_position_for_message(message: str) -> dict | None:
     from aria_core import paper_trader
 
     open_positions = await paper_trader.get_open_positions()
     matched = _match_position(message, open_positions)
-    if matched is None:
-        closed_positions = await paper_trader.get_closed_positions(limit=200)
-        matched = _match_position(message, closed_positions)
+    if matched is not None:
+        return matched
+    closed_positions = await paper_trader.get_closed_positions(limit=200)
+    return _match_position(message, closed_positions)
+
+
+async def _position_context_for_message(message: str) -> str | None:
+    matched = await _matched_position_for_message(message)
     return _position_facts_block(matched) if matched else None
+
+
+def _log_lesson(position: dict, question: str, reply: str) -> None:
+    """25/07, operator request ("qu'elle puisse s'auto-ameliorer") -- persist
+    every relay exchange grounded in a real position (thesis/R-R/PnL already
+    verified, see _position_facts_block) into a durable, out-of-repo journal.
+    Same doctrine as research-log.md: raw volume here would pollute the public
+    repo's git history -- a future Claude Code session reads this journal and
+    judges what's worth promoting into docs/aria-learning-inbox/ or a real
+    code fix (exactly the manual process that produced items #97/#98 today),
+    never an automatic promotion, never ARIA modifying her own code."""
+    from aria_core.paths import relay_lessons_dir
+
+    label = position.get("symbol") or position.get("contract") or "?"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    entry = (
+        f"## {timestamp} — {label}\n\n"
+        f"**Question :** {question}\n\n"
+        f"**Reponse ARIA :** {reply}\n\n"
+        "---\n\n"
+    )
+    log_path = relay_lessons_dir() / "lessons-log.md"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(entry)
 
 
 async def _autoreplies_today() -> int:
@@ -249,9 +278,9 @@ async def run_relay_conversation_cycle() -> dict:
     last_user_message = history[-1]["content"]
 
     system_context = _SYSTEM_CONTEXT
-    position_facts = await _position_context_for_message(last_claude_message["content"])
-    if position_facts:
-        system_context = f"{system_context}\n\n{position_facts}"
+    matched_position = await _matched_position_for_message(last_claude_message["content"])
+    if matched_position:
+        system_context = f"{system_context}\n\n{_position_facts_block(matched_position)}"
 
     reply = await chat_with_context(
         last_user_message,
@@ -271,4 +300,10 @@ async def run_relay_conversation_cycle() -> dict:
     sent = await relay_chat.send_aria_relay_reply(reply)
     if sent:
         await _mark_claude_message_answered(last_claude_message["id"])
+        # 25/07 -- "qu'elle puisse s'auto-ameliorer" (operator request): only
+        # log exchanges grounded in a real position (thesis/R-R/PnL already
+        # verified) -- everything else (small talk, "how do you feel") is
+        # never actionable and would just add noise to the journal.
+        if matched_position:
+            _log_lesson(matched_position, last_claude_message["content"], reply)
     return {"outcome": "ok" if sent else "send_failed"}

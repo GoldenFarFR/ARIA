@@ -56,6 +56,18 @@ def aria_marketing_video_dir() -> Path:
     return path
 
 
+def relay_lessons_dir() -> Path:
+    """25/07 -- one journal entry per relay exchange grounded in a real position
+    (never every message, just the ones anchored in real data). Hors-repo, same
+    doctrine as research-log.md (a raw stream at this volume would pollute the
+    public repo's history) -- a future Claude Code session reads this journal
+    and judges what's worth promoting into docs/aria-learning-inbox/ or a real
+    code fix, never an automatic promotion."""
+    path = data_dir() / "relay-lessons"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def vector_dir() -> Path:
     """Embedded vector memory persistence — Phase C (opt-in via aria_vector_memory).
 
