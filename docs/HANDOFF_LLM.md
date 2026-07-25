@@ -11,9 +11,15 @@ Solution : env en premier pour resolve_provider ; llm_model réservé au provide
 
 ------------------------------------------------------------
 
+[CODE] Sujet    : ARIA_OUVRIER_CLOUD vide retombe sur "spark" (defaut cache du registre), pas "grok" -- 3e facteur jamais documente
+Date : 2026.07.25 / Probleme : trouve en diagnostiquant pourquoi le canal relay Claude<->ARIA ne repondait plus du tout (les 2 fallbacks -- Virtuals sans cle, Groq/llama a sa limite quotidienne -- echouaient tous les deux). LLM_PROVIDER=grok et VIRTUALS_API_KEY vides etaient bien poses dans le .env (les 2 facteurs deja connus, cf. entree du 16/07 juste en dessous), mais `resolve_provider()` verifie aussi `ARIA_OUVRIER_CLOUD` -- vider cette 3e variable ne la "desactive" pas, `os.environ.get(...) or ""` la fait retomber sur `merged.get("ARIA_OUVRIER_CLOUD")`, qui vient du registre `ecosystem_registry.yaml` (defauts injectes par `propagate_operator_env`) et vaut encore "spark" -- des que `ouvrier_cloud in ("spark","virtuals")`, `resolve_provider()` force le retour a "virtuals" QUEL QUE SOIT `LLM_PROVIDER`. Verifie empiriquement (`resolve_spark_runtime().provider == "virtuals"` malgre `LLM_PROVIDER=grok` confirme dans l'environnement du conteneur) -- jamais suppose. Consequence : le "Grok/x.ai en primaire" affirme par l'entree ETAT ACTUEL precedente etait faux depuis la bascule du 22/07 -- chaque appel LLM passait en realite par Virtuals (echec silencieux, pas de cle) puis par le fallback Groq/llama, qui a fini par epuiser son quota gratuit quotidien (100k TPD).
+Solution : `ARIA_OUVRIER_CLOUD` doit recevoir une valeur EXPLICITE differente de "spark"/"virtuals" (ex. "grok") pour desactiver reellement le mode spark -- le vider ne suffit jamais, meme combine aux 2 autres facteurs deja connus. Verifie apres correction : `resolve_spark_runtime().provider == "grok"` en conditions reelles sur le conteneur redeploye. Aucun changement de code (le defaut "spark" du registre reste une decision produit valide pour le cas general Virtuals/Spark) -- uniquement une lecon de configuration, gravee ici pour la 4e fois qu'une bascule de provider est tentee.
+
+------------------------------------------------------------
+
 [ETAT ACTUEL] Sujet    : Provider LLM en prod
-Date : 2026.07.22  /  Probleme : —
-Solution : Grok/x.ai en primaire, fallback Groq (llama-3.3-70b-versatile) si x.ai tombe
+Date : 2026.07.22 (corrige 2026.07.25)  /  Probleme : —
+Solution : Grok/x.ai en primaire (verifie reellement le 25/07 -- l'affirmation du 22/07 etait fausse en pratique depuis un moment, voir entree juste au-dessus), fallback Groq (llama-3.3-70b-versatile) si x.ai tombe. Pour toute bascule de provider future : verifier LES 3 facteurs (LLM_PROVIDER, VIRTUALS_API_KEY, ARIA_OUVRIER_CLOUD) sont explicitement poses, jamais juste vides.
 
 ------------------------------------------------------------
 
