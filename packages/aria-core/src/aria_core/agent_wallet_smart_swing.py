@@ -1108,6 +1108,177 @@ async def run_swing_entry_canary(
     )
 
 
+# ── Guarded swing entry: precheck -> canary -> full-size buy (VOLET 4 wiring) ─
+#
+# The consumer the adversarial audit flagged as missing: the canary only
+# PRODUCES a verdict, so a full-size real entry must be GATED on it by an actual
+# caller -- otherwise the verdict is inert. This orchestrator is that gate. It
+# chains the three already-tested primitives and aborts the instant any stage
+# refuses, so the full-size real buy is reached ONLY after both the free
+# precheck AND the executed micro-canary have passed.
+#
+# Pure orchestration: it threads the SAME low-level seams the three primitives
+# already use, adds NO new network/CDP call, and does NOT re-implement any of
+# the 5 application guards (gate/kill-switch/breaker/balance/slippage) -- each
+# composed primitive enforces those internally (defense-in-depth). Its ONLY new
+# logic is the abort-early sequencing + a single structured result saying WHERE
+# it stopped and why. Sizing is deliberately NOT decided here (see the required
+# ``amount_in_usd``), and it has NO caller yet: "who decides to open a swing
+# position, with what size/thesis" is a separate, larger chantier this
+# orchestrator has no opinion on and is not wired to.
+
+# Stage markers for ``GuardedSwingEntryResult.stage`` -- WHERE the guarded entry
+# ended (an early abort stops at "precheck"/"canary"; a reached buy is "buy",
+# whether it then opened or itself failed).
+ENTRY_STAGE_PRECHECK = "precheck"
+ENTRY_STAGE_CANARY = "canary"
+ENTRY_STAGE_BUY = "buy"
+
+# Composed-primitive seams. Default to the real module primitives; overridable
+# ONLY so a unit test can inject call-trackers proving the abort-early
+# sequencing (e.g. the full-size buy is NEVER reached on a failed canary). Never
+# rebound in production -- the real money flows through the low-level seams
+# (balance_fn/spend_pull_fn/... below), exactly as the primitives use them.
+PrecheckFn = Callable[..., Awaitable[SwapPrecheckResult]]
+CanaryFn = Callable[..., Awaitable[CanaryResult]]
+FullSizeBuyFn = Callable[..., Awaitable[SmartSwingSwapResult]]
+
+
+@dataclass(frozen=True)
+class GuardedSwingEntryResult:
+    # True ONLY when the full-size buy actually opened the position. Any early
+    # abort (precheck reject / canary fail) or a full-size-buy failure/block
+    # leaves this False -- never a silent "maybe".
+    opened: bool
+    # WHERE the guarded entry ended: it aborted at "precheck" or "canary", or it
+    # reached "buy" (which then either opened -- opened=True -- or itself
+    # failed/blocked -- opened=False).
+    stage: str
+    reason: str = ""
+    # The underlying stage results, in run order, for inspection/logging --
+    # whichever stages actually ran (a precheck reject carries only
+    # precheck_result; a canary fail carries precheck+canary; a reached buy
+    # carries all three). Never swallowed: this is what an operator or a future
+    # review reads to understand a refusal.
+    precheck_result: SwapPrecheckResult | None = None
+    canary_result: CanaryResult | None = None
+    buy_result: SmartSwingSwapResult | None = None
+
+
+async def execute_guarded_swing_entry(
+    *,
+    token: str,
+    amount_in_usd: float,
+    quote_fn: QuoteFn,
+    balance_fn: BalanceFn,
+    spend_pull_fn: SpendPullFn,
+    buy_swap_fn: SwapFn,
+    token_balance_fn: BalanceFn,
+    sell_swap_fn: SwapFn,
+    return_transfer_fn: ReturnTransferFn,
+    canary_amount_usd: float = CANARY_TEST_AMOUNT_USD,
+    canary_max_roundtrip_loss_bps: int = CANARY_MAX_ROUNDTRIP_LOSS_BPS,
+    precheck_max_roundtrip_loss_bps: int = MAX_SLIPPAGE_BPS,
+    network: str = NETWORK,
+    precheck_fn: PrecheckFn = precheck_swap_roundtrip,
+    canary_fn: CanaryFn = run_swing_entry_canary,
+    full_size_buy_fn: FullSizeBuyFn = execute_smart_swing_swap,
+) -> GuardedSwingEntryResult:
+    """Guarded full-size swing entry: precheck (free) -> canary (real ~3$) ->
+    full-size buy (real), aborting the instant any stage refuses -- so real
+    money is NEVER committed at full size to a token that failed the cheap
+    price/liquidity precheck OR the executed honeypot/round-trip-tax canary.
+    This turns the canary's verdict into an actual pre-arming requirement (the
+    gap the adversarial audit flagged: the canary only produced a verdict, with
+    no consumer that gated on it).
+
+    Order & abort-early contract (never proceeds past a refusal):
+      1. PRECHECK (free, non-executing): ``precheck_swap_roundtrip`` on the SAME
+         ``amount_in_usd`` we intend to buy -- price impact is size-dependent, so
+         the precheck reflects the REAL intended size, not the canary size.
+         Rejected -> return immediately (stage="precheck"); the canary is NOT
+         run, and NO spend permission / balance / real call is touched.
+      2. CANARY (real, ``canary_amount_usd`` ~3$): ``run_swing_entry_canary``.
+         ``passed`` False for ANY reason (buy blocked, buy-swap failure/stranded,
+         0 tokens received, sell failed/blocked = the honeypot signature,
+         measured round-trip tax too high) -> return immediately (stage="canary")
+         with the canary attached; the full-size buy is NEVER called.
+      3. FULL-SIZE BUY (real): ``execute_smart_swing_swap`` with the caller's
+         ``amount_in_usd`` passed straight through -- NEVER resized (sizing is not
+         this orchestrator's decision). The bought token stays in the spender by
+         design (normal open-position lifecycle); this orchestrator's job ends
+         once the position is open.
+
+    Pure orchestration: threads the SAME low-level seams the three primitives
+    already use (``quote_fn`` for the precheck; ``balance_fn``/``spend_pull_fn``/
+    ``buy_swap_fn``/``token_balance_fn``/``sell_swap_fn``/``return_transfer_fn``
+    for the canary; ``balance_fn``/``spend_pull_fn``/``buy_swap_fn`` for the
+    full-size buy). It adds NO new network call and does NOT re-implement the 5
+    application guards -- each primitive enforces them internally (so a gate-off
+    run, for instance, is caught by the canary's own buy and reported as a canary
+    refusal, never bypassed here). The full-size buy logs under the real
+    ``WALLET_PRODUCT`` while the canary's legs log under ``CANARY_WALLET_PRODUCT``
+    (kept out of the real-position feed) -- both inherited unchanged from the
+    primitives.
+
+    ``amount_in_usd`` is REQUIRED (this orchestrator does not decide sizing).
+    ``precheck_fn``/``canary_fn``/``full_size_buy_fn`` default to the real module
+    primitives and exist only as composition seams for isolated unit testing of
+    the sequencing (call-tracking) -- never rebound in production. Returns a
+    single ``GuardedSwingEntryResult`` that says WHERE it stopped, why, and
+    carries every stage result that ran (never swallowed)."""
+    # ── Stage 1: PRECHECK (free, non-executing) ──
+    precheck = await precheck_fn(
+        token=token, notional_usd=amount_in_usd, quote_fn=quote_fn,
+        max_roundtrip_loss_bps=precheck_max_roundtrip_loss_bps, network=network,
+    )
+    if not precheck.accepted:
+        reason = f"entrée refusée au PRECHECK (aucun fonds engagé, canary non lancé) : {precheck.reason}"
+        logger.info("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return GuardedSwingEntryResult(
+            opened=False, stage=ENTRY_STAGE_PRECHECK, reason=reason, precheck_result=precheck,
+        )
+
+    # ── Stage 2: CANARY (real micro buy+sell tax probe) ──
+    canary = await canary_fn(
+        token=token, balance_fn=balance_fn, spend_pull_fn=spend_pull_fn,
+        buy_swap_fn=buy_swap_fn, token_balance_fn=token_balance_fn,
+        sell_swap_fn=sell_swap_fn, return_transfer_fn=return_transfer_fn,
+        canary_amount_usd=canary_amount_usd,
+        max_roundtrip_loss_bps=canary_max_roundtrip_loss_bps, network=network,
+    )
+    if not canary.passed:
+        reason = f"entrée refusée au CANARY (achat pleine taille NON exécuté) : {canary.reason}"
+        logger.warning("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+        return GuardedSwingEntryResult(
+            opened=False, stage=ENTRY_STAGE_CANARY, reason=reason,
+            precheck_result=precheck, canary_result=canary,
+        )
+
+    # ── Stage 3: FULL-SIZE BUY (real, caller's amount, NEVER resized) ──
+    buy = await full_size_buy_fn(
+        token_out=token, amount_in_usd=amount_in_usd, balance_fn=balance_fn,
+        spend_pull_fn=spend_pull_fn, swap_fn=buy_swap_fn, network=network,
+    )
+    opened = buy.status == "ok"
+    if opened:
+        reason = (
+            f"position swing OUVERTE pleine taille {amount_in_usd:.2f}$ sur {token} "
+            f"(precheck OK + canary taxe réelle {canary.round_trip_loss_bps:.0f} bps)"
+        )
+        logger.info("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+    else:
+        reason = (
+            f"precheck + canary passés mais l'achat pleine taille a échoué (statut={buy.status}) : "
+            f"{buy.reason}"
+        )
+        logger.error("%s -- %s", _REAL_MONEY_LOG_PREFIX, reason)
+    return GuardedSwingEntryResult(
+        opened=opened, stage=ENTRY_STAGE_BUY, reason=reason,
+        precheck_result=precheck, canary_result=canary, buy_result=buy,
+    )
+
+
 # ── Dedicated LOSS circuit breaker for the real swing wallet ──────────────────
 #
 # The operator's explicit doctrine (07/24): the spend cap is deliberately loose
