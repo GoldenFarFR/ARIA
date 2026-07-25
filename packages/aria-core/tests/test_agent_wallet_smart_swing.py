@@ -1104,3 +1104,323 @@ async def test_canary_refuses_when_zero_tokens_received(monkeypatch):
     assert res.passed is False
     assert "0 token" in res.reason
     assert res.sell_result is None
+
+
+# ── Guarded swing entry orchestrator (precheck -> canary -> full-size buy) ────
+
+_GTOKEN = "0x" + "f" * 40
+
+
+async def _noop_balance():
+    return 100.0
+
+
+def _dummy_low_level_seams():
+    """The 7 low-level seams the orchestrator threads to its stage primitives.
+    In the ISOLATED sequencing tests the stage primitives are stubbed, so these
+    are never actually invoked -- they only need to satisfy the signature (and
+    prove nothing real is touched when a stage aborts early)."""
+    async def quote_fn(**kw):
+        return {"liquidity_available": True, "to_amount": "1", "min_to_amount": "1"}
+
+    async def spend_pull_fn(**kw):
+        return {"tx_hash": "0xpull"}
+
+    async def swap_fn(**kw):
+        return {"tx_hash": "0xswap", "amount_out": 1.0}
+
+    async def return_transfer_fn(**kw):
+        return {"tx_hash": "0xreturn"}
+
+    return dict(
+        quote_fn=quote_fn, balance_fn=_noop_balance, spend_pull_fn=spend_pull_fn,
+        buy_swap_fn=swap_fn, token_balance_fn=_noop_balance, sell_swap_fn=swap_fn,
+        return_transfer_fn=return_transfer_fn,
+    )
+
+
+def _stage_trackers(*, precheck=None, canary=None, buy=None):
+    """Call-tracking stubs for the three composed primitives so the sequencing
+    (which stage runs, which is NEVER reached) is asserted on CALLS, not just on
+    side effects. Each returns a 'pass' result by default; pass a ready-made
+    result to force a refusal/failure. ``seen`` records the ordered stage calls;
+    ``buy_calls`` records the kwargs the full-size buy was invoked with."""
+    seen: list[str] = []
+    buy_calls: list[dict] = []
+
+    async def precheck_fn(**kw):
+        seen.append("precheck")
+        return precheck if precheck is not None else sw.SwapPrecheckResult(
+            accepted=True, reason="precheck ok", round_trip_loss_bps=50.0,
+        )
+
+    async def canary_fn(**kw):
+        seen.append("canary")
+        return canary if canary is not None else sw.CanaryResult(
+            passed=True, reason="canary ok", amount_spent_usd=3.0,
+            amount_recovered_usd=2.9, round_trip_loss_bps=333.0,
+        )
+
+    async def full_size_buy_fn(**kw):
+        seen.append("buy")
+        buy_calls.append(kw)
+        return buy if buy is not None else sw.SmartSwingSwapResult(
+            status="ok", pull_tx_hash="0xfullpull", swap_tx_hash="0xfullswap", amount_out=4321.0,
+        )
+
+    fns = dict(precheck_fn=precheck_fn, canary_fn=canary_fn, full_size_buy_fn=full_size_buy_fn)
+    return fns, seen, buy_calls
+
+
+def _guarded_real_seams(*, buy_out=1_000_000_000, sell_out=99_000_000, **canary_kw):
+    """Full low-level seam set for driving the orchestrator through the REAL
+    primitives: a quote_fn for the precheck (a cheap round trip by default) plus
+    the canary/buy execution seams. Returns ``(seams, calls, quote_fn)`` --
+    ``calls`` is the ordered execution-seam call log from ``_canary_seams``."""
+    seams, calls = _canary_seams(**canary_kw)
+    quote_fn = _quote_provider(buy_out=buy_out, sell_out=sell_out)
+    seams["quote_fn"] = quote_fn
+    return seams, calls, quote_fn
+
+
+# -- isolated sequencing (stage primitives stubbed, asserted on CALLS) --------
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_happy_path_runs_all_three_in_order():
+    fns, seen, buy_calls = _stage_trackers()
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=25.0, **_dummy_low_level_seams(), **fns,
+    )
+    assert res.opened is True
+    assert res.stage == sw.ENTRY_STAGE_BUY
+    # exact order: precheck -> canary -> buy
+    assert seen == ["precheck", "canary", "buy"]
+    # every stage result is surfaced (nothing swallowed)
+    assert res.precheck_result is not None and res.precheck_result.accepted is True
+    assert res.canary_result is not None and res.canary_result.passed is True
+    assert res.buy_result is not None and res.buy_result.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_passes_full_amount_through_never_resized():
+    """The full-size buy must receive EXACTLY the caller's amount and token --
+    this orchestrator owns no sizing decision."""
+    fns, _, buy_calls = _stage_trackers()
+    await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=137.5, **_dummy_low_level_seams(), **fns,
+    )
+    assert len(buy_calls) == 1
+    assert buy_calls[0]["amount_in_usd"] == 137.5   # never silently smaller/larger
+    assert buy_calls[0]["token_out"] == _GTOKEN
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_precheck_reject_never_runs_canary_or_buy():
+    """The exact abort-early guarantee: a rejected precheck spends nothing --
+    canary AND full-size buy are NEVER called (asserted via call tracking)."""
+    fns, seen, buy_calls = _stage_trackers(
+        precheck=sw.SwapPrecheckResult(accepted=False, reason="round-trip devis défavorable"),
+    )
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=25.0, **_dummy_low_level_seams(), **fns,
+    )
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_PRECHECK
+    assert seen == ["precheck"]        # canary + buy never even called
+    assert buy_calls == []
+    assert res.precheck_result is not None and res.precheck_result.accepted is False
+    assert res.canary_result is None   # canary never ran
+    assert res.buy_result is None      # buy never ran
+    assert "PRECHECK" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_never_runs_full_size_buy():
+    """A failed canary aborts before the full-size buy (asserted via call
+    tracking, not just the return value)."""
+    fns, seen, buy_calls = _stage_trackers(
+        canary=sw.CanaryResult(passed=False, reason="taxe aller-retour RÉELLE trop élevée"),
+    )
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=25.0, **_dummy_low_level_seams(), **fns,
+    )
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_CANARY
+    assert seen == ["precheck", "canary"]  # buy never called
+    assert buy_calls == []
+    assert res.canary_result is not None and res.canary_result.passed is False
+    assert res.buy_result is None
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_full_size_buy_failure_surfaced_not_masked():
+    """When precheck+canary pass but the full-size buy itself fails, the result
+    reports it AT the buy stage -- never masked as a precheck/canary failure --
+    and still carries the (passed) precheck+canary results for inspection."""
+    fns, seen, buy_calls = _stage_trackers(
+        buy=sw.SmartSwingSwapResult(
+            status="failed", reason="swap échoué APRÈS pull", funds_stranded=True,
+        ),
+    )
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=25.0, **_dummy_low_level_seams(), **fns,
+    )
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_BUY          # reached the buy, not aborted earlier
+    assert seen == ["precheck", "canary", "buy"]
+    assert res.precheck_result.accepted is True     # not masked as a precheck reject
+    assert res.canary_result.passed is True         # not masked as a canary fail
+    assert res.buy_result is not None
+    assert res.buy_result.status == "failed"
+    assert res.buy_result.funds_stranded is True    # detail preserved, never swallowed
+
+
+# -- integration through the REAL primitives ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_end_to_end_all_real_opens_the_position(monkeypatch):
+    """Full chain through the real precheck + real canary + real full-size buy:
+    the position opens, the canary logs under its own product (out of the real
+    feed) while the full-size buy logs under the real swing product."""
+    from aria_core import agent_wallet_positions as awp
+
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, calls, quote_fn = _guarded_real_seams(usdc_recovered=2.9)  # clean ~333 bps canary
+    res = await sw.execute_guarded_swing_entry(token=_GTOKEN, amount_in_usd=25.0, **seams)
+
+    assert res.opened is True
+    assert res.stage == sw.ENTRY_STAGE_BUY
+    assert res.buy_result is not None and res.buy_result.status == "ok"
+    # precheck ran at the FULL intended size (price impact is size-dependent),
+    # not the canary size -- the buy quote is for 25$ of USDC atomic.
+    assert quote_fn.calls[0]["leg"] == "buy"
+    assert quote_fn.calls[0]["from_amount_atomic"] == sw.usd_to_atomic_usdc(25.0)
+    # execution order: canary(pull, buy_swap, sell_swap, return) THEN the
+    # full-size buy(pull, buy_swap) -- 6 execution-seam calls total.
+    ordered = [c if isinstance(c, str) else c[0] for c in calls]
+    assert ordered == ["pull", "buy_swap", "sell_swap", "return", "pull", "buy_swap"]
+    # the canary legs live on the canary product (out of the real feed); the
+    # full-size buy is the only REAL swing position, at the full 25$.
+    canary_positions = await awp.load_positions(sw.CANARY_WALLET_PRODUCT)
+    assert len(canary_positions.closed) == 1
+    real_positions = await awp.load_positions(sw.WALLET_PRODUCT)
+    assert len(real_positions.open) == 1
+    assert real_positions.open[0]["cost_usd"] == 25.0   # full amount, not resized
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_real_precheck_reject_spends_nothing(monkeypatch):
+    """A real lossy precheck (15% round trip > 10% ceiling) aborts before any
+    execution seam is touched and before the full-size buy is invoked."""
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    # buy 100$ -> 1e9 token atomic; sell 1e9 tokens -> 85 USDC = 15% round-trip
+    # loss > the precheck's 10% ceiling -> reject (the fake quotes are fixed
+    # amounts, so the notional must match: 100$).
+    seams, calls, _ = _guarded_real_seams(buy_out=1_000_000_000, sell_out=85_000_000)
+    buy_calls: list[dict] = []
+
+    async def buy_tracker(**kw):
+        buy_calls.append(kw)
+        return sw.SmartSwingSwapResult(status="ok")
+
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=100.0, full_size_buy_fn=buy_tracker, **seams,
+    )
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_PRECHECK
+    assert calls == []          # no pull/swap/return -- nothing real touched
+    assert buy_calls == []      # full-size buy never called
+    assert res.canary_result is None
+
+
+async def _assert_real_canary_fail_blocks_buy(monkeypatch, *, gate_on, **seam_kw):
+    """Drive the orchestrator with a REAL canary configured to fail, an injected
+    call-tracking full-size buy, and assert the full-size buy is NEVER reached."""
+    if gate_on:
+        monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, _calls, _quote = _guarded_real_seams(**seam_kw)
+    buy_calls: list[dict] = []
+
+    async def buy_tracker(**kw):
+        buy_calls.append(kw)
+        return sw.SmartSwingSwapResult(status="ok")
+
+    res = await sw.execute_guarded_swing_entry(
+        token=_GTOKEN, amount_in_usd=25.0, full_size_buy_fn=buy_tracker, **seams,
+    )
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_CANARY
+    assert res.canary_result is not None and res.canary_result.passed is False
+    assert buy_calls == [], "full-size buy must NEVER run on a failed canary"
+    return res
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_buy_blocked_by_gate_off_blocks_full_buy(monkeypatch):
+    # gate OFF (autouse fixture deleted it, gate_on=False) -> canary's own buy is
+    # blocked -> canary fails -> full-size buy never reached.
+    res = await _assert_real_canary_fail_blocks_buy(monkeypatch, gate_on=False)
+    assert res.canary_result.buy_result is not None
+    assert res.canary_result.buy_result.status == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_buy_swap_stranded_blocks_full_buy(monkeypatch):
+    res = await _assert_real_canary_fail_blocks_buy(
+        monkeypatch, gate_on=True, buy_swap_exc=RuntimeError("no liquidity"),
+    )
+    assert res.canary_result.funds_stranded is True
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_zero_tokens_blocks_full_buy(monkeypatch):
+    res = await _assert_real_canary_fail_blocks_buy(monkeypatch, gate_on=True, tokens_out=0.0)
+    assert "0 token" in res.canary_result.reason
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_sell_honeypot_blocks_full_buy(monkeypatch):
+    res = await _assert_real_canary_fail_blocks_buy(
+        monkeypatch, gate_on=True, sell_swap_exc=RuntimeError("sell reverted"),
+    )
+    assert "honeypot" in res.canary_result.reason
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_canary_fail_high_roundtrip_tax_blocks_full_buy(monkeypatch):
+    # 3$ -> 2.0$ recovered = ~3333 bps > 2000 bps canary ceiling
+    res = await _assert_real_canary_fail_blocks_buy(monkeypatch, gate_on=True, usdc_recovered=2.0)
+    assert res.canary_result.round_trip_loss_bps > sw.CANARY_MAX_ROUNDTRIP_LOSS_BPS
+
+
+@pytest.mark.asyncio
+async def test_guarded_entry_real_full_size_buy_failure_surfaced(monkeypatch):
+    """Real precheck + real canary pass, but the full-size buy's own swap leg
+    fails (2nd buy_swap call) -> reported at the buy stage with the stranded
+    detail, never masked as a canary/precheck failure."""
+    monkeypatch.setenv(sw._SMART_SWING_GATE, "true")
+    seams, calls, _ = _guarded_real_seams(usdc_recovered=2.9)
+
+    # Fail buy_swap ONLY on its 2nd invocation: the canary's probe buy (1st)
+    # succeeds, the full-size buy (2nd) fails after the USDC pull -> stranded.
+    original_buy_swap = seams["buy_swap_fn"]
+    n = {"i": 0}
+
+    async def buy_swap_second_fails(**kw):
+        n["i"] += 1
+        if n["i"] >= 2:
+            raise RuntimeError("full-size swap reverted")
+        return await original_buy_swap(**kw)
+
+    seams["buy_swap_fn"] = buy_swap_second_fails
+    res = await sw.execute_guarded_swing_entry(token=_GTOKEN, amount_in_usd=25.0, **seams)
+
+    assert res.opened is False
+    assert res.stage == sw.ENTRY_STAGE_BUY
+    assert res.precheck_result.accepted is True     # not masked as a precheck reject
+    assert res.canary_result.passed is True         # not masked as a canary fail
+    assert res.buy_result is not None
+    assert res.buy_result.status == "failed"
+    assert res.buy_result.funds_stranded is True    # USDC pulled then swap failed
