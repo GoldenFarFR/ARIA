@@ -7,9 +7,15 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Sujet    : Score fondamental catastrophique n'était jamais un veto d'achat, seulement une reduction de taille
+Date : 2026.07.25 / Probleme : trouve en testant en conditions reelles le canal relay Claude<->ARIA (voir HANDOFF_TELEGRAM.md) -- questionnee sur sa position CHECK (-27,3%, -7 374$), ARIA a fini par identifier elle-meme que sa these d'entree contenait deja un score de potentiel fondamental confirme a 2,0/10 avec une rationale explicite ("contenu web incoherent et contrat different annonce signalent une usurpation probable"), jamais pris en compte au-dela d'une simple degradation de palier de conviction (`risk_guard.FUNDAMENTAL_WEAK_THRESHOLD=4.0`, jamais sous le palier faible -- l'achat a quand meme eu lieu sur le seul merite technique). Le pipeline bonding (`bonding_entry.py`) avait deja resolu ce probleme via un score composite pouvant rejeter (35/35/15/15, seuil 60/100) -- le chemin momentum standard (100% du capital du test 1M$) n'avait pas d'equivalent.
+Solution : nouveau seuil `risk_guard.FUNDAMENTAL_REJECT_THRESHOLD=2.5`, distinct et plus strict que `FUNDAMENTAL_WEAK_THRESHOLD` -- sous ce seuil, `momentum_entry.py` rejette directement l'achat (`action="HOLD"`, `hold_reason="fundamental_score_critical"`), quel que soit le R/R ou l'alignement technique. Entre 2,5 et 4,0 : comportement inchange (degrade seulement le palier). Score absent (recherche indisponible/gate OFF) : jamais de rejet, doctrine fail-open inchangee. Generique par score numerique (jamais un filtrage sur les mots du texte de these) -- s'applique a tout token qui obtiendrait un score aussi bas, pas un patch specifique a CHECK. — risk_guard.py/momentum_entry.py, 3 nouveaux tests dedies + suite complete + test_coherence.py verts.
+
+------------------------------------------------------------
+
 [ETAT ACTUEL] Sujet    : Gates conviction/market-alerts sur le chemin momentum standard
-Date : 2026.07.19  /  Probleme : —
-Solution : `ARIA_CONVICTION_RESEARCH_ENABLED` actif en prod (diligence X/web/GitHub/Farcaster/Telegram sur un candidat déjà confirmé BUY, influence uniquement la taille de position, jamais un gate d'achat) ; `ARIA_MARKET_ALERTS_ENABLED` (Otto AI) reste câblé dans le tie-breaker LLM du chemin ambigu mais OFF par défaut — sans effet réel tant que ce gate n'est pas activé.
+Date : 2026.07.19 (corrige 2026.07.25)  /  Probleme : —
+Solution : `ARIA_CONVICTION_RESEARCH_ENABLED` actif en prod (diligence X/web/GitHub/Farcaster/Telegram sur un candidat deja confirme BUY). **Corrige 25/07** : n'influence plus SEULEMENT la taille -- un score confirme catastrophique (< 2,5/10, `risk_guard.FUNDAMENTAL_REJECT_THRESHOLD`) rejette desormais l'achat lui-meme (voir entree juste au-dessus). Entre 2,5 et 4,0/10, comportement historique inchange (taille seulement). `ARIA_MARKET_ALERTS_ENABLED` (Otto AI) reste cable dans le tie-breaker LLM du chemin ambigu mais OFF par defaut -- sans effet reel tant que ce gate n'est pas active.
 
 ------------------------------------------------------------
 

@@ -125,6 +125,21 @@ MAX_ALLOC_MULTIPLIER = 1.0       # 5% * 1.0 = 5% of starting capital (strong tie
 # fail-open/fail-closed doctrine already validated on wallet-scoring (smart_money.py).
 FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 
+# 25/07 -- operator-found gap, real loss: a CHECK position (-27.3%, -$7374) had a
+# CONFIRMED fundamental score of 2.0/10 with an explicit rationale ("contenu web
+# incoherent et contrat different annonce signalent une usurpation probable") --
+# below FUNDAMENTAL_WEAK_THRESHOLD this only downgraded the conviction tier (never
+# below the WEAK floor, still buys), the setup was bought anyway on pure technical
+# alignment. A score this catastrophic is a different class of signal from merely
+# "weak" -- distinct, stricter threshold below which momentum_entry.py rejects the
+# candidate outright (HOLD), same fail-open-on-unknown/fail-closed-on-confirmed
+# doctrine as everywhere else (None never rejects, only a CONFIRMED bad score).
+# Mirrors the doctrine already proven on bonding_entry.py's composite score (a low
+# potential_score there can already sink the weighted total below its own
+# threshold and reject) -- this closes the same gap on the standard momentum path,
+# which had no equivalent until now.
+FUNDAMENTAL_REJECT_THRESHOLD = 2.5
+
 
 def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *,

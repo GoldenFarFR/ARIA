@@ -1977,6 +1977,25 @@ async def evaluate_momentum_entry(
                     + (f" : {potential_rationale}" if potential_rationale else "")
                     + ")"
                 )
+                # 25/07 -- operator-found gap, real loss (CHECK, -27.3%,
+                # -$7374): a CONFIRMED catastrophic fundamental score (explicit
+                # "usurpation probable"-style rationale) used to only downgrade
+                # the conviction tier (risk_guard.FUNDAMENTAL_WEAK_THRESHOLD,
+                # never below the WEAK floor -- still bought). Below the
+                # stricter FUNDAMENTAL_REJECT_THRESHOLD, reject outright --
+                # applies to ANY token whose research lands this low, not a
+                # patch tied to CHECK's specific wording (the score is numeric,
+                # the rationale text is never pattern-matched).
+                from aria_core import risk_guard
+
+                if potential_score < risk_guard.FUNDAMENTAL_REJECT_THRESHOLD:
+                    action = "HOLD"
+                    hold_reason = "fundamental_score_critical"
+                    reasons.append(
+                        f"potentiel fondamental critique (< "
+                        f"{risk_guard.FUNDAMENTAL_REJECT_THRESHOLD:.1f}/10) -- "
+                        "rejet direct, pas seulement une reduction de taille"
+                    )
 
     return {
         "action": action,

@@ -3537,6 +3537,78 @@ async def test_potential_score_threaded_into_result_when_buy_confirmed(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_potential_score_critical_rejects_the_buy_outright(monkeypatch, test_settings):
+    """25/07, operator-found gap, real loss (CHECK, -27.3%, -$7374): a CONFIRMED
+    catastrophic fundamental score (< risk_guard.FUNDAMENTAL_REJECT_THRESHOLD)
+    used to only downgrade the conviction tier -- never below the WEAK floor,
+    still bought. It must now reject the candidate outright, regardless of an
+    otherwise strong technical setup."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None):
+        return ConvictionResearch(
+            available=True, website_url="https://x.example", posting_cadence="active",
+            contract_corroborated=False, potential_score=2.0,
+            rationale="Contenu web incohérent et contrat différent annoncé "
+            "signalent une usurpation probable.",
+        )
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "fundamental_score_critical"
+    assert any("critique" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_potential_score_merely_weak_still_buys(monkeypatch, test_settings):
+    """A score between FUNDAMENTAL_REJECT_THRESHOLD (2.5) and FUNDAMENTAL_WEAK_
+    THRESHOLD (4.0) stays in the "downgrade the tier, don't reject" zone --
+    unchanged historical behavior, only a genuinely catastrophic score rejects."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None):
+        return ConvictionResearch(
+            available=True, website_url="https://x.example", posting_cadence="calme",
+            contract_corroborated=True, potential_score=3.5, rationale="Equipe discrete.",
+        )
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert result["potential_score"] == 3.5
+
+
+@pytest.mark.asyncio
+async def test_potential_score_none_never_rejects(monkeypatch, test_settings):
+    """Fail-open doctrine: research unavailable/no source found must never
+    reject a candidate -- only a CONFIRMED bad score does."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None):
+        return ConvictionResearch(available=True, potential_score=None, reason="aucune source trouvée")
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
 async def test_process_trail_included_in_thesis_reasons(monkeypatch, test_settings):
     """19/07 -- retour opérateur explicite : "meme si elle a utiliser x402, meme si
     elle a fait des recherche sur tous les liens... pour que toi tu puisse au mieux
