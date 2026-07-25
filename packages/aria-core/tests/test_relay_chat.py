@@ -69,6 +69,28 @@ async def test_recent_messages_since_id_filters(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_latest_messages_returns_the_most_recent_not_the_oldest(monkeypatch):
+    """25/07, operator-found gap: relay_conversation_cycle used recent_messages(limit=50)
+    with no since_id -- once the relay logged more than 50 messages total (early July in
+    prod), that call permanently returned the 50 OLDEST messages ever logged, never the
+    current conversation, so the cycle could never see a fresh Claude message."""
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    for i in range(60):
+        await relay_chat.log_message("operator", f"old message {i}")
+    await relay_chat.log_message("claude", "recent question")
+
+    latest = await relay_chat.latest_messages(limit=50)
+
+    assert len(latest) == 50
+    # Chronological order preserved (oldest of the returned batch first).
+    assert latest[0]["content"] == "old message 11"
+    # The freshest message (Claude's) is last, exactly what a conversation
+    # history needs -- proven absent from the old recent_messages(limit=50) call.
+    assert latest[-1]["sender"] == "claude"
+    assert latest[-1]["content"] == "recent question"
+
+
+@pytest.mark.asyncio
 async def test_send_relay_reply_prefixes_and_logs(monkeypatch):
     monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
     sent = []
@@ -109,6 +131,41 @@ async def test_send_relay_reply_sender_exception_does_not_raise(monkeypatch):
 
     ok = await relay_chat.send_relay_reply("test", sender=broken_sender)
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_send_relay_reply_false_return_without_exception_is_not_a_success(monkeypatch):
+    """25/07, operator-found gap: `telegram_bot.send_message` can return False
+    WITHOUT raising (e.g. its bot application isn't initialized in the calling
+    process -- true for any one-off script). The old code only caught
+    exceptions, so a silent non-delivery was logged as a success ("ok" outcome,
+    a message written to relay_message that was never actually seen on
+    Telegram)."""
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+
+    async def falsy_sender(text):
+        return False  # no exception -- the old bug's exact shape
+
+    ok = await relay_chat.send_relay_reply("test", sender=falsy_sender)
+    assert ok is False
+
+    messages = await relay_chat.recent_messages()
+    assert messages == []  # never logged -- it was never really sent
+
+
+@pytest.mark.asyncio
+async def test_send_aria_relay_reply_false_return_without_exception_is_not_a_success(monkeypatch):
+    monkeypatch.setenv("ARIA_RELAY_ACCESS_TOKEN", "secret123")
+    monkeypatch.setenv("ARIA_RELAY_AUTOREPLY_ENABLED", "true")
+
+    async def falsy_sender(text):
+        return False
+
+    ok = await relay_chat.send_aria_relay_reply("test", sender=falsy_sender)
+    assert ok is False
+
+    messages = await relay_chat.recent_messages()
+    assert messages == []
 
 
 @pytest.mark.asyncio

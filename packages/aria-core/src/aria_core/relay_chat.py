@@ -87,6 +87,12 @@ async def log_message(sender: str, content: str) -> None:
 
 
 async def recent_messages(since_id: int = 0, limit: int = 50) -> list[dict]:
+    """Messages strictly after ``since_id``, OLDEST first, capped at ``limit`` --
+    a forward-pagination cursor (e.g. ``telegram_conversation_miner.py`` walks the
+    whole relay once, in order, from its own saved checkpoint). With the default
+    ``since_id=0`` this returns the OLDEST ``limit`` messages ever logged, not the
+    most recent ones -- correct for that walker, a real trap for any caller that
+    actually wants "what just happened" (see ``latest_messages`` below)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -95,6 +101,27 @@ async def recent_messages(since_id: int = 0, limit: int = 50) -> list[dict]:
             (since_id, limit),
         )
         rows = await cursor.fetchall()
+    return [{"id": r[0], "sender": r[1], "content": r[2], "created_at": r[3]} for r in rows]
+
+
+async def latest_messages(limit: int = 50) -> list[dict]:
+    """The ``limit`` MOST RECENT messages, returned OLDEST first (chronological
+    order, ready to feed straight into an LLM history) -- 25/07, operator-found
+    gap: ``relay_conversation_cycle`` called ``recent_messages(limit=50)`` with no
+    ``since_id``, which (per the docstring above) silently returned the 50
+    OLDEST messages ever logged in the relay -- once the table grew past 50 rows
+    (early July), the conversation cycle was permanently looking at ancient
+    history instead of anything current, so it could never detect a fresh
+    Claude message, no matter what."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, sender, content, created_at FROM relay_message "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    rows.reverse()
     return [{"id": r[0], "sender": r[1], "content": r[2], "created_at": r[3]} for r in rows]
 
 
@@ -117,8 +144,15 @@ async def send_relay_reply(text: str, *, sender=None) -> bool:
 
     prefixed = f"{CLAUDE_PREFIX}{text.strip()}"
     try:
-        await sender(prefixed)
+        delivered = await sender(prefixed)
     except Exception:  # noqa: BLE001 — a failed send must never crash the caller
+        return False
+    # 25/07, operator-found gap: `telegram_bot.send_message` can return False
+    # WITHOUT raising (e.g. the Telegram bot application isn't initialized in
+    # this process -- true for any one-off script, only the real running
+    # server has it) -- the caller must check the return value, not just
+    # catch exceptions, or a silent non-delivery gets logged as a success.
+    if delivered is False:
         return False
     await log_message("claude", text.strip())
     return True
@@ -135,8 +169,10 @@ async def send_aria_relay_reply(text: str, *, sender=None) -> bool:
         from aria_core.gateway.telegram_bot import send_message as sender
 
     try:
-        await sender(text.strip())
+        delivered = await sender(text.strip())
     except Exception:  # noqa: BLE001 — a failed send must never crash the caller
+        return False
+    if delivered is False:  # see send_relay_reply's matching comment (25/07)
         return False
     await log_message("aria", text.strip())
     return True

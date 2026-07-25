@@ -6,9 +6,13 @@ off by default, opt-in separate from the relay token): without it, ARIA never re
 on her own to a message from Claude, even if the relay is active read/write for Claude.
 
 Dome:
-  - ARIA replies ONLY if the LAST message in the relay comes from "claude" -- self-limiting:
-    as soon as she replies, the last message becomes "aria" again and the next cycle has
-    nothing to do until Claude writes again. No infinite loop.
+  - ARIA replies to the MOST RECENT unanswered "claude" message -- tracked via a
+    persisted `last_answered_claude_id` (25/07, operator-found gap: the original
+    "reply only if the LAST relay message is claude" rule silently dropped Claude's
+    question forever if ANY other message -- an automatic paper-trading bulletin, an
+    operator message -- landed in between before the 15-min cycle ran; ~1-in-10 odds
+    in practice, per real observation). Still self-limiting (a message is only ever
+    answered once, tracked by id, never re-answered), just no longer order-fragile.
   - Explicit system prompt: conversation with Claude Code (the operator's technical
     assistant), NOT the operator -- no action/capability/transaction must be
     triggered from this exchange, discussion only.
@@ -25,6 +29,39 @@ from aria_core import relay_chat
 from aria_core.ai_cliches import forbidden_cliches_prompt
 
 MAX_AUTOREPLIES_PER_DAY = 40
+
+
+async def _ensure_state_table() -> None:
+    async with aiosqlite.connect(relay_chat.DB_PATH) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS relay_conversation_state ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "last_answered_claude_id INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        await db.commit()
+
+
+async def _last_answered_claude_id() -> int:
+    """0 if nothing was ever answered -- never fabricated, a real absence."""
+    await _ensure_state_table()
+    async with aiosqlite.connect(relay_chat.DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT last_answered_claude_id FROM relay_conversation_state WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def _mark_claude_message_answered(message_id: int) -> None:
+    await _ensure_state_table()
+    async with aiosqlite.connect(relay_chat.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO relay_conversation_state (id, last_answered_claude_id) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET last_answered_claude_id = excluded.last_answered_claude_id",
+            (message_id,),
+        )
+        await db.commit()
 
 _SYSTEM_CONTEXT = (
     "Tu es ARIA. Tu discutes avec Claude Code, l'assistant technique de l'operateur "
@@ -69,8 +106,15 @@ async def run_relay_conversation_cycle() -> dict:
     if outgoing_pause.is_paused():
         return {"outcome": "paused"}
 
-    messages = await relay_chat.recent_messages(limit=50)
-    if not messages or messages[-1]["sender"] != "claude":
+    messages = await relay_chat.latest_messages(limit=50)
+    claude_indices = [i for i, m in enumerate(messages) if m["sender"] == "claude"]
+    if not claude_indices:
+        return {"outcome": "nothing_to_answer"}
+
+    last_claude_idx = claude_indices[-1]
+    last_claude_message = messages[last_claude_idx]
+    already_answered_id = await _last_answered_claude_id()
+    if last_claude_message["id"] <= already_answered_id:
         return {"outcome": "nothing_to_answer"}
 
     if await _autoreplies_today() >= MAX_AUTOREPLIES_PER_DAY:
@@ -78,7 +122,10 @@ async def run_relay_conversation_cycle() -> dict:
 
     from aria_core.llm import chat_with_context
 
-    history = [_history_message(m) for m in messages[-12:]]
+    # History stops AT the message being answered -- anything logged after it
+    # (an automatic bulletin, a later operator message) is irrelevant to answering
+    # THIS question and would only confuse the prompt.
+    history = [_history_message(m) for m in messages[: last_claude_idx + 1][-12:]]
     last_user_message = history[-1]["content"]
 
     reply = await chat_with_context(
@@ -92,4 +139,6 @@ async def run_relay_conversation_cycle() -> dict:
         return {"outcome": "llm_unavailable"}
 
     sent = await relay_chat.send_aria_relay_reply(reply)
+    if sent:
+        await _mark_claude_message_answered(last_claude_message["id"])
     return {"outcome": "ok" if sent else "send_failed"}

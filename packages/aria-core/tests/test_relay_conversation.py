@@ -86,6 +86,62 @@ async def test_answers_when_last_message_is_claude(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_answers_claude_message_even_if_other_messages_land_after_it(monkeypatch):
+    """25/07, operator-found gap: an automatic bulletin (or an operator message)
+    landing after Claude's question, before the cycle runs, used to make ARIA drop
+    the question forever (only the LAST relay message was ever checked)."""
+    await relay_chat.log_message("claude", "Tu vois une anomalie sur tes wallets ?")
+    await relay_chat.log_message("aria", "🧪 SIMULATION — bilan paper-trading automatique")
+    await relay_chat.log_message("operator", "salut ARIA")
+
+    captured = {}
+
+    async def fake_chat_with_context(user_message, system_context, history, **kw):
+        captured["user_message"] = user_message
+        return "Rien d'anormal de mon côté."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    sent = []
+
+    async def fake_send_message(text):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", fake_send_message)
+
+    result = await relay_conversation.run_relay_conversation_cycle()
+
+    assert result == {"outcome": "ok"}
+    assert sent == ["Rien d'anormal de mon côté."]
+    assert "Tu vois une anomalie" in captured["user_message"]
+
+
+@pytest.mark.asyncio
+async def test_never_answers_the_same_claude_message_twice(monkeypatch):
+    await relay_chat.log_message("claude", "Une question ?")
+
+    async def fake_chat_with_context(*a, **kw):
+        return "Une réponse."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    async def fake_send_message(text):
+        return True
+
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", fake_send_message)
+
+    first = await relay_conversation.run_relay_conversation_cycle()
+    assert first == {"outcome": "ok"}
+
+    # No new "claude" message since -- must not re-answer the same one, even
+    # though other non-claude messages may have landed since (e.g. ARIA's own
+    # reply is now the last message, same as the original rule already covered).
+    second = await relay_conversation.run_relay_conversation_cycle()
+    assert second == {"outcome": "nothing_to_answer"}
+
+
+@pytest.mark.asyncio
 async def test_llm_unavailable_returns_outcome(monkeypatch):
     await relay_chat.log_message("claude", "Une question ?")
 
