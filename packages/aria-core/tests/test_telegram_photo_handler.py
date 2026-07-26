@@ -326,6 +326,73 @@ async def test_vision_ordinary_caption_still_reaches_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vision_forwards_verified_curiosity_block(monkeypatch):
+    """Item #106 (26/07) -- un ticker repéré dans l'image doit produire un bloc de
+    vérification on-chain réel, transmis à _llm_response via extra_system_context."""
+    captured = {}
+
+    async def fake_llm_response(message, lang, *, public=False, image_data_uri=None, extra_system_context=None, **kw):
+        captured["extra_system_context"] = extra_system_context
+        return "voici ma lecture"
+
+    async def fake_verify(image_data_uri):
+        return "# Verification image (curiosite) : ticker 'STONK' repere dans l'image"
+
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
+    monkeypatch.setattr(
+        "aria_core.skills.image_token_curiosity.verify_token_mention", fake_verify,
+    )
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    update = FakeUpdate(caption="tu achètes oui ou non ?", user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), "tu achètes oui ou non ?")
+
+    assert captured["extra_system_context"] is not None
+    assert "STONK" in captured["extra_system_context"]
+
+
+@pytest.mark.asyncio
+async def test_vision_no_curiosity_block_when_nothing_verifiable(monkeypatch):
+    captured = {}
+
+    async def fake_llm_response(message, lang, *, public=False, image_data_uri=None, extra_system_context=None, **kw):
+        captured["extra_system_context"] = extra_system_context
+        return "voici ma lecture"
+
+    async def fake_verify(image_data_uri):
+        return ""
+
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
+    monkeypatch.setattr(
+        "aria_core.skills.image_token_curiosity.verify_token_mention", fake_verify,
+    )
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    update = FakeUpdate(caption="juge cette situation", user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), "juge cette situation")
+
+    assert captured["extra_system_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_vision_curiosity_failure_never_blocks_reply(monkeypatch):
+    async def fake_llm_response(message, lang, *, public=False, image_data_uri=None, extra_system_context=None, **kw):
+        return "voici ma lecture malgre tout"
+
+    async def raising(image_data_uri):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
+    monkeypatch.setattr("aria_core.skills.image_token_curiosity.verify_token_mention", raising)
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    update = FakeUpdate(caption="juge cette situation", user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), "juge cette situation")
+
+    assert update.message.replies == ["voici ma lecture malgre tout"]
+
+
+@pytest.mark.asyncio
 async def test_vision_download_failure_replies_honestly(monkeypatch):
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
     bot = FakeBot(raise_on_get_file=True)

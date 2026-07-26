@@ -101,6 +101,12 @@ class PairSnapshot:
     base_symbol: str = ""
     quote_symbol: str = ""
     project_links: list[dict] = field(default_factory=list)
+    # 26/07 -- populated from the DexScreener `chainId` field (verified live: present
+    # on every pair object, including multi-chain `search_pairs` results). Needed to
+    # route a search result to the right GoPlus chain_id (image curiosity check,
+    # skills/image_token_curiosity.py) -- previously silently discarded since every
+    # OTHER caller of `_parse_pair` already knows its chain ahead of the call.
+    chain_id: str = ""
 
 
 def _extract_project_links(raw: dict) -> list[dict]:
@@ -169,6 +175,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         base_symbol=str(base.get("symbol") or ""),
         quote_symbol=str(quote.get("symbol") or ""),
         project_links=_extract_project_links(raw),
+        chain_id=str(raw.get("chainId") or ""),
     )
 
 

@@ -1518,7 +1518,23 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     from aria_core.locale import LANG_FR, detect_operator_lang
 
     lang = detect_operator_lang(prompt) if caption else LANG_FR
-    reply = await aria_brain._llm_response(prompt, lang, public=False, image_data_uri=image_data_uri)
+
+    # Verified curiosity (26/07) -- if a token ticker is readable in the image,
+    # run a REAL on-chain check (DexScreener + GoPlus) before replying, instead
+    # of a pure visual read alone. Best-effort: any failure here degrades to
+    # None, the pre-existing pure-vision reply is unaffected.
+    verified_block = None
+    try:
+        from aria_core.skills.image_token_curiosity import verify_token_mention
+
+        verified_block = await verify_token_mention(image_data_uri) or None
+    except Exception as exc:  # noqa: BLE001 -- never blocks the vision reply
+        logger.info("vision: verified token curiosity check failed (%s)", exc)
+
+    reply = await aria_brain._llm_response(
+        prompt, lang, public=False, image_data_uri=image_data_uri,
+        extra_system_context=verified_block,
+    )
     if reply is None:
         await _reply(message, "L'analyse d'image a échoué (LLM indisponible) — réessaie plus tard.")
         return

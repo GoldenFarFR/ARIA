@@ -203,6 +203,7 @@ async def test_search_pairs_parses_real_shape(monkeypatch):
     assert len(pairs) == 1
     assert pairs[0].base_symbol == "PAMPU"
     assert pairs[0].liquidity_usd == 168632.44
+    assert pairs[0].chain_id == "base"
 
 
 @pytest.mark.asyncio
