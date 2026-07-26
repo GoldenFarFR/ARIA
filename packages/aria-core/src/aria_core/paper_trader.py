@@ -561,7 +561,7 @@ _POS_FIELDS = (
     "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
-    "mode",
+    "mode", "gp_low", "gp_high",
 )
 
 _ADDED_COLUMNS = [
@@ -700,6 +700,14 @@ _ADDED_COLUMNS = [
     # default (unchanged behavior for any analyzer that doesn't provide it,
     # and for any position opened before this work).
     ("mode", "TEXT NOT NULL DEFAULT 'standard'"),
+    # Item #101 (26/07), operator request ("aria doit pouvoir connaitre en
+    # temps reel toute les valeurs de son golden pocket d'entree et de
+    # sortie"): the golden pocket's own bounds (0.618/0.786 retracement),
+    # previously computed but never persisted -- only the derived
+    # invalidation/target were. NULL for any analyzer that doesn't provide
+    # them (e.g. the old VC-thesis pilot), never an invented value.
+    ("gp_low", "REAL"),
+    ("gp_high", "REAL"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -734,6 +742,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("liquidity_rotation_volume_ratio", "REAL"),
     # Item #101 (26/07): kept in parity with _ADDED_COLUMNS above.
     ("mode", "TEXT NOT NULL DEFAULT 'standard'"),
+    ("gp_low", "REAL"),
+    ("gp_high", "REAL"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1184,6 +1194,20 @@ async def _has_prior_close(contract: str) -> bool:
 # surgical, never blocks another token.
 MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 2
 
+# Item #101 (26/07), operator request ("regle-le pour le scalping"): a looser
+# threshold for scalping mode. Statistical reasoning, not an arbitrary bump --
+# the workflow research (26/07) cites a 50-65% win rate as typical even for a
+# WORKING scalping strategy; at a 50% win rate, back-to-back losses on an
+# otherwise-viable contract happen by pure chance ~25% of the time. Keeping
+# the swing threshold (2) at this trade frequency would suspend re-entry on
+# many contracts that are simply unlucky, not genuinely broken -- fighting the
+# operator's explicit goal of observing ARIA's naturally-occurring behavior
+# rather than artificially constraining it (see MAX_POSITIONS bypass above,
+# same doctrine). 3 still catches a real repeated-failure pattern (a 3-loss
+# streak at 50% win rate is only ~12.5% likely by chance) without over-
+# suspending on normal scalping noise.
+SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 3
+
 
 async def _consecutive_losses_for_contract(contract: str, *, limit: int = 20) -> int:
     """Consecutive losses (``pnl_usd < 0``) on THE SAME contract, most recent
@@ -1281,6 +1305,8 @@ async def open_position(
     liquidity_rotation_accelerating: bool | None = None,
     liquidity_rotation_volume_ratio: float | None = None,
     mode: str = "standard",
+    gp_low: float | None = None,
+    gp_high: float | None = None,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1302,6 +1328,12 @@ async def open_position(
     sans la force" -- observe the naturally-occurring behavior, real cash
     availability remains the brake). Default ``"standard"``, unchanged
     behavior for any caller that doesn't provide it.
+
+    ``gp_low``/``gp_high`` (Item #101, 26/07): the golden pocket's own bounds
+    (0.618/0.786 retracement) -- persisted so the position's real entry ZONE
+    stays queryable in real time (relay conversation, thesis), not just the
+    derived invalidation/target. ``None`` for any analyzer that doesn't
+    provide them, never an invented value.
 
     Contract case (07/18, real bug): preserved for Solana (base58, case is part
     of the value), lowercased for Base/Robinhood (EVM hex, as before) --
@@ -1403,7 +1435,12 @@ async def open_position(
     # ``entry_price`` without a known ``pool_liquidity_usd`` (e.g. the old
     # dormant VC-thesis pilot) -- unchanged historical behavior for any caller
     # that doesn't provide it.
-    fill_price = risk_guard.simulated_fill_price(entry_price, alloc, pool_liquidity_usd)
+    # Item #101 (26/07): real DEX swap fee, scoped to scalping mode only (the
+    # already-running standard/swing path is left byte-for-byte unchanged --
+    # see risk_guard.DEX_SWAP_FEE_PCT's comment).
+    fill_price = risk_guard.simulated_fill_price(
+        entry_price, alloc, pool_liquidity_usd, apply_swap_fee=(mode == "scalping"),
+    )
 
     qty = alloc / fill_price
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1418,8 +1455,8 @@ async def open_position(
                discovery_channel, conviction_process_trail,
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
-               liquidity_rotation_volume_ratio, mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               liquidity_rotation_volume_ratio, mode, gp_low, gp_high)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1436,7 +1473,7 @@ async def open_position(
              conviction_posting_cadence,
              liquidity_rotation_score,
              None if liquidity_rotation_accelerating is None else int(liquidity_rotation_accelerating),
-             liquidity_rotation_volume_ratio, mode or "standard"),
+             liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -1463,6 +1500,15 @@ async def close_position(
     pos = await _get_open(contract)
     if not pos or not exit_price or exit_price <= 0:
         return None
+    # Item #101 (26/07): real DEX swap fee on the sell leg -- read from the
+    # position's OWN persisted mode (set at open_position time), never a
+    # parameter every caller of close_position must remember to pass. Scoped
+    # to scalping-mode positions only, same doctrine as the buy-side fee in
+    # open_position (see risk_guard.DEX_SWAP_FEE_PCT's comment).
+    if pos.get("mode") == "scalping":
+        from aria_core.risk_guard import DEX_SWAP_FEE_PCT
+
+        exit_price = exit_price * (1.0 - DEX_SWAP_FEE_PCT)
     proceeds = pos["qty"] * exit_price
     final_leg_pnl = proceeds - pos["cost_usd"]
     pnl_usd = final_leg_pnl + (pos.get("realized_pnl_partial") or 0.0)
@@ -1499,6 +1545,12 @@ async def reduce_position(
     pos = await _get_open(contract)
     if not pos or not exit_price or exit_price <= 0 or sell_qty <= 0:
         return None
+    # Item #101 (26/07): same real DEX swap fee as close_position, applied to
+    # this partial sell leg too -- see its comment.
+    if pos.get("mode") == "scalping":
+        from aria_core.risk_guard import DEX_SWAP_FEE_PCT
+
+        exit_price = exit_price * (1.0 - DEX_SWAP_FEE_PCT)
     sell_qty = min(sell_qty, pos["qty"])
     frac = sell_qty / pos["qty"] if pos["qty"] else 0.0
     sold_cost = pos["cost_usd"] * frac
@@ -3513,8 +3565,14 @@ async def _run_paper_cycle_locked(
         # beyond MAX_CONSECUTIVE_LOSSES_PER_CONTRACT consecutive losses on
         # THIS specific contract, the 07/19 relaxed re-entry is suspended for
         # it (never for another token, never risk_guard's global circuit breaker).
+        # Item #101 (26/07): looser threshold in scalping mode -- see
+        # SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT's comment.
         loss_streak = await _consecutive_losses_for_contract(contract)
-        if loss_streak >= MAX_CONSECUTIVE_LOSSES_PER_CONTRACT:
+        loss_streak_threshold = (
+            SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT if trading_mode == "scalping"
+            else MAX_CONSECUTIVE_LOSSES_PER_CONTRACT
+        )
+        if loss_streak >= loss_streak_threshold:
             funnel["contract_loss_streak"] = funnel.get("contract_loss_streak", 0) + 1
             from aria_core import counterfactual_tracker
 
@@ -3709,6 +3767,9 @@ async def _run_paper_cycle_locked(
             # below to keep MAX_POSITIONS defense-in-depth check consistent
             # with the cycle-level bypass above.
             mode=sig.get("mode") or "standard",
+            # Item #101 (26/07): golden pocket bounds -- see open_position's docstring.
+            gp_low=sig.get("gp_low"),
+            gp_high=sig.get("gp_high"),
         )
         if pos:
             opened += 1

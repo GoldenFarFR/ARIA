@@ -2076,6 +2076,11 @@ async def evaluate_momentum_entry(
         "price": best.price_usd,
         "target": signal.target,
         "invalidation": signal.invalidation,
+        # Item #101 (26/07): the golden pocket's own bounds -- see
+        # EntrySignal.gp_low/gp_high's comment. None if no setup was found
+        # (HOLD path), never an invented value.
+        "gp_low": signal.gp_low,
+        "gp_high": signal.gp_high,
         "rr": signal.rr,
         # 19/07 -- exposed for risk_guard.cap_alloc_to_price_impact (Gemini
         # cross-review): the REAL liquidity of the targeted pool, needed to

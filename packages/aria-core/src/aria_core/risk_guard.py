@@ -477,24 +477,52 @@ def cap_alloc_to_price_impact(
 # move: these are technical chart levels external to us (Fibonacci/RSI),
 # our own order doesn't move the support/resistance, only the price WE
 # pay.
+# Item #101 (26/07), operator request ("verifie [les frais/slippage cumules]"
+# on the scalping test): a REAL DEX swap fee, distinct from and IN ADDITION TO
+# the price-impact model above -- a protocol-level cost taken on every swap
+# regardless of order size, never modeled here until now. Sourced (never
+# guessed): Uniswap v3 fee tiers are 1% / 0.3% / 0.05% / 0.01%
+# (docs.uniswap.org/support.uniswap.org) -- the lowest tiers are reserved for
+# stable/blue-chip pairs; a new/volatile memecoin pair (ARIA's typical
+# scalping target) almost always sits in the highest 1% tier. Research (26/07
+# workflow) found this cost genuinely material at scalping frequency: 100
+# trades/day at a few dollars each in fees alone adds up to hundreds of
+# $/day -- ignoring it would make the paper-trading result artificially
+# optimistic versus a future real-capital deployment. Deliberately scoped to
+# ``apply_swap_fee=True`` callers only (never the default) -- the standard
+# swing path is left byte-for-byte unchanged so the already-running Milly
+# test's historical behavior/results are never altered retroactively; only
+# NEW scalping-mode callers opt in explicitly.
+DEX_SWAP_FEE_PCT = 0.01
+
+
 def simulated_fill_price(
     entry_price: float, alloc_usd: float, pool_liquidity_usd: float | None,
+    *, apply_swap_fee: bool = False,
 ) -> float:
     """Simulated REAL fill price for a buy of ``alloc_usd`` on a pool of
     ``pool_liquidity_usd`` -- always >= ``entry_price`` (a buy pushes the price
     up, never down). Missing/invalid data (alloc/price zero,
     unknown pool liquidity) -> ``entry_price`` unchanged, fail-open -- same doctrine
     as ``cap_alloc_to_price_impact`` (the hard guardrail on liquidity lives in
-    ``momentum_entry._MIN_LIQUIDITY_USD``, not here)."""
+    ``momentum_entry._MIN_LIQUIDITY_USD``, not here).
+
+    ``apply_swap_fee`` (Item #101, 26/07, default ``False`` = unchanged
+    behavior): adds ``DEX_SWAP_FEE_PCT`` on top of the price-impact model --
+    see its comment. Applied even without a known ``pool_liquidity_usd``
+    (a real protocol fee is charged regardless of whether impact is
+    computable)."""
     if entry_price <= 0 or alloc_usd <= 0:
         return entry_price
+    price = entry_price * (1.0 + DEX_SWAP_FEE_PCT) if apply_swap_fee else entry_price
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
-        return entry_price
-    return entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
+        return price
+    return price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
 
 
 def simulated_exit_price(
     current_price: float, position_value_usd: float, pool_liquidity_usd: float | None,
+    *, apply_swap_fee: bool = False,
 ) -> float:
     """Simulated REAL exit price for a sale of ``position_value_usd`` on a pool of
     ``pool_liquidity_usd`` -- always <= ``current_price`` (a sale pushes the price
@@ -505,12 +533,16 @@ def simulated_exit_price(
     exact spot price, as if its size could always be liquidated with zero
     slippage -- a fictitious x50 was possible on a pool that had become thin. Missing/
     invalid data -> ``current_price`` unchanged, fail-open (same doctrine as
-    ``simulated_fill_price``)."""
+    ``simulated_fill_price``).
+
+    ``apply_swap_fee`` (Item #101, 26/07, default ``False`` = unchanged
+    behavior): symmetric to ``simulated_fill_price``'s -- see ``DEX_SWAP_FEE_PCT``."""
     if current_price <= 0 or position_value_usd <= 0:
         return current_price
+    price = current_price * (1.0 - DEX_SWAP_FEE_PCT) if apply_swap_fee else current_price
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
-        return current_price
-    return current_price * max(0.0, 1.0 - _price_impact_pct(position_value_usd, pool_liquidity_usd))
+        return price
+    return price * max(0.0, 1.0 - _price_impact_pct(position_value_usd, pool_liquidity_usd))
 
 
 # ── 2. Portfolio circuit breaker (persisted state, dedicated file) ────────

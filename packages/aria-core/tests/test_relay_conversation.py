@@ -314,6 +314,55 @@ def test_position_facts_block_omits_floor_clarification_for_normal_trades():
     assert "plancher quotidien" not in block
 
 
+def test_position_facts_block_cites_real_daily_floor_constant():
+    """26/07 -- meme bug de litteral perime que momentum_entry.py (deja
+    corrige) : ce fichier citait aussi "5 trades" en dur alors que
+    DAILY_TRADE_FLOOR vaut 30 depuis Item #100."""
+    from aria_core import paper_trader as pt
+
+    pos = _fake_position(discovery_channel="floor")
+    block = relay_conversation._position_facts_block(pos)
+    assert f"{pt.DAILY_TRADE_FLOOR} trades" in block
+    assert "5 trades" not in block
+
+
+def test_position_facts_block_exposes_golden_pocket_bounds():
+    """Item #101 (26/07), demande operateur ("aria doit pouvoir connaitre en
+    temps reel toute les valeurs de son golden pocket d'entree et de
+    sortie")."""
+    pos = _fake_position(gp_low=3.9e-06, gp_high=4.2e-06)
+    block = relay_conversation._position_facts_block(pos)
+    assert "Golden pocket d'entree" in block
+    assert "3.9e-06" in block
+    assert "4.2e-06" in block
+
+
+def test_position_facts_block_omits_golden_pocket_when_unknown():
+    pos = _fake_position()
+    block = relay_conversation._position_facts_block(pos)
+    assert "Golden pocket d'entree" not in block
+
+
+def test_position_facts_block_exposes_real_time_exit_levels_when_open():
+    """Item #101 (26/07) -- stop actif + paliers de TP recalcules en temps
+    reel, pas figes a l'achat, uniquement sur une position OUVERTE."""
+    pos = _fake_position(
+        status="open", entry_price=1.0, target_price=2.0, invalidation_price=0.9,
+        entry_atr_pct=0.1, high_water_price=1.2, tp_stage_hit=1,
+    )
+    block = relay_conversation._position_facts_block(pos)
+    assert "Stop actif EN TEMPS REEL" in block
+    assert "Paliers de prise de profit" in block
+    assert "1/3 deja atteint" in block
+
+
+def test_position_facts_block_omits_real_time_exit_levels_when_closed():
+    pos = _fake_position(status="closed", close_reason="cible")
+    block = relay_conversation._position_facts_block(pos)
+    assert "Stop actif EN TEMPS REEL" not in block
+    assert "Paliers de prise de profit" not in block
+
+
 @pytest.mark.asyncio
 async def test_position_context_for_message_prefers_open_over_closed(monkeypatch):
     open_pos = _fake_position(symbol="AUTONO", status="open")
@@ -330,7 +379,11 @@ async def test_position_context_for_message_prefers_open_over_closed(monkeypatch
 
     block = await relay_conversation._position_context_for_message("Et AUTONO alors ?")
     assert "ouverte" in block
-    assert "stop suiveur" not in block
+    # 26/07 -- "stop suiveur" seul n'est plus un signal fiable : le bloc temps
+    # reel (stop actif calcule) peut legitimement citer "stop suiveur" comme
+    # SOURCE du stop d'une position OUVERTE. Le vrai signal distinctif de la
+    # position FERMEE est cette ligne precise, absente ici par construction.
+    assert "Raison de cloture : stop suiveur" not in block
 
 
 @pytest.mark.asyncio

@@ -132,6 +132,15 @@ def _position_facts_block(pos: dict) -> str:
     ]
     if pos.get("entry_price") is not None:
         lines.append(f"- Prix d'entree : {pos['entry_price']}")
+    # Item #101 (26/07), demande operateur explicite ("aria doit pouvoir
+    # connaitre en temps reel toute les valeurs de son golden pocket d'entree
+    # et de sortie"): la zone d'entree elle-meme (bornes 0,618/0,786), pas
+    # seulement l'invalidation/la cible derivees.
+    if pos.get("gp_low") is not None and pos.get("gp_high") is not None:
+        lines.append(
+            f"- Golden pocket d'entree (zone Fibonacci 0,618-0,786) : "
+            f"{pos['gp_low']:.6g} - {pos['gp_high']:.6g}"
+        )
     if pos.get("target_price") is not None:
         lines.append(f"- Cible technique : {pos['target_price']}")
     if pos.get("invalidation_price") is not None:
@@ -140,6 +149,35 @@ def _position_facts_block(pos: dict) -> str:
         lines.append(f"- R/R a l'entree : {pos['rr']}")
     if pos.get("conviction_tier"):
         lines.append(f"- Palier de conviction : {pos['conviction_tier']}")
+    # Item #101 (26/07): niveaux de SORTIE recalcules EN TEMPS REEL (au moment
+    # de la question, pas figes a l'achat) -- stop actif (le plus haut de :
+    # stop suiveur ATR, invalidation, point mort verrouille) + les 3 paliers
+    # de prise de profit, meme moteur pur/read-only que la gestion reelle
+    # (paper_trader._compute_active_stop/_effective_tp_stages). Uniquement sur
+    # une position encore OUVERTE -- ces niveaux n'ont plus de sens une fois
+    # cloturee. Simplification assumee et documentee : n'applique PAS le
+    # ratchet de regime macro sur les paliers de TP (necessiterait un appel
+    # reseau/DB supplementaire) -- les paliers affiches sont les paliers
+    # NOMINAUX, le stop actif lui reste a 100% fidele (aucune dependance au
+    # regime).
+    if pos.get("status") == "open" and pos.get("entry_price"):
+        from aria_core import paper_trader as pt
+
+        active_stop, stop_source = pt._compute_active_stop(
+            entry_price=pos["entry_price"],
+            entry_atr_pct=pos.get("entry_atr_pct"),
+            high_water_price=pos.get("high_water_price"),
+            invalidation_price=pos.get("invalidation_price"),
+            breakeven_locked=bool(pos.get("breakeven_locked")),
+        )
+        lines.append(f"- Stop actif EN TEMPS REEL : {active_stop:.6g} (source : {stop_source})")
+        tp_stages = pt._effective_tp_stages(pos.get("target_price"), pos["entry_price"])
+        stage_hit = int(pos.get("tp_stage_hit") or 0)
+        stage_pcts = ", ".join(f"+{s * 100:.0f}%" for s in tp_stages)
+        lines.append(
+            f"- Paliers de prise de profit (nominaux, hors ajustement regime) : "
+            f"{stage_pcts} -- {stage_hit}/{len(tp_stages)} deja atteint(s)"
+        )
     if pos.get("discovery_channel") == "floor":
         # 25/07, operator-found gap: questioned about OWB (a floor-mode entry),
         # ARIA concluded the floor mechanism itself "pourrait etre un signal de
@@ -147,14 +185,20 @@ def _position_facts_block(pos: dict) -> str:
         # decision (quality bars deliberately waived to force 5 trades/day,
         # diagnostic purpose) and a property of the TOKEN itself. Spelled out
         # explicitly so this distinction isn't left for the LLM to infer.
+        # 26/07: cites the REAL DAILY_TRADE_FLOOR constant (30, raised from 5
+        # for Item #100) -- same stale-literal bug already fixed once in
+        # momentum_entry.py, found here too on the same audit pass.
+        from aria_core import paper_trader as pt
+
         lines.append(
-            "- IMPORTANT contexte : cette position vient du plancher quotidien de "
-            "5 trades (mode diagnostique) -- les criteres de QUALITE (volume, R/R, "
-            "alignement technique) ont ete volontairement assouplis pour forcer "
-            "l'ouverture, jamais les criteres de SECURITE (honeypot, liquidite, "
-            "wash-trading restent intacts). Ce n'est PAS un signal sur la qualite "
-            "du token lui-meme -- c'est une decision de gouvernance du pipeline, a "
-            "ne jamais confondre avec une propriete intrinseque du projet."
+            f"- IMPORTANT contexte : cette position vient du plancher quotidien de "
+            f"{pt.DAILY_TRADE_FLOOR} trades (mode diagnostique) -- les criteres de "
+            "QUALITE (volume, R/R, alignement technique) ont ete volontairement "
+            "assouplis pour forcer l'ouverture, jamais les criteres de SECURITE "
+            "(honeypot, liquidite, wash-trading restent intacts). Ce n'est PAS un "
+            "signal sur la qualite du token lui-meme -- c'est une decision de "
+            "gouvernance du pipeline, a ne jamais confondre avec une propriete "
+            "intrinseque du projet."
         )
     if pos.get("pnl_usd") is not None:
         lines.append(f"- PnL : {pos['pnl_usd']}$ ({pos.get('pnl_pct')}%)")

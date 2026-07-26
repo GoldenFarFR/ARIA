@@ -545,6 +545,45 @@ class TestSimulatedExitPrice:
         assert result == current
 
 
+# ── 1sexies. apply_swap_fee (Item #101, 26/07 -- frais de swap DEX reel) ────────
+
+class TestApplySwapFee:
+    """Frais de swap DEX (DEX_SWAP_FEE_PCT=1%, tier Uniswap v3 standard pour
+    paire volatile) -- distinct de l'impact de prix, jamais applique par
+    defaut (apply_swap_fee=False), scope au mode scalping par les appelants."""
+
+    def test_fill_price_applies_fee_even_without_known_liquidity(self):
+        """Un frais de protocole reel est preleve meme si l'impact de prix
+        n'est pas calculable (liquidite inconnue) -- jamais un fail-open total."""
+        price = risk_guard.simulated_fill_price(1.0, 10_000.0, None, apply_swap_fee=True)
+        assert price == pytest.approx(1.0 * (1.0 + risk_guard.DEX_SWAP_FEE_PCT))
+
+    def test_fill_price_combines_fee_and_impact(self):
+        # Frais 1% (-> 1.01) puis impact 20% sur ce prix deja majore.
+        price = risk_guard.simulated_fill_price(1.0, 10_000.0, 100_000.0, apply_swap_fee=True)
+        expected = 1.0 * (1.0 + risk_guard.DEX_SWAP_FEE_PCT) * 1.2
+        assert price == pytest.approx(expected, rel=1e-6)
+
+    def test_fill_price_default_never_applies_fee(self):
+        """Non-regression : sans apply_swap_fee explicite, comportement historique
+        inchange (deja couvert par les tests ci-dessus, verifie ici explicitement)."""
+        price = risk_guard.simulated_fill_price(1.0, 10_000.0, 100_000.0)
+        assert price == pytest.approx(1.2, rel=1e-6)  # pas de frais melange dedans
+
+    def test_exit_price_applies_fee_even_without_known_liquidity(self):
+        price = risk_guard.simulated_exit_price(1.0, 10_000.0, None, apply_swap_fee=True)
+        assert price == pytest.approx(1.0 * (1.0 - risk_guard.DEX_SWAP_FEE_PCT))
+
+    def test_exit_price_combines_fee_and_impact(self):
+        price = risk_guard.simulated_exit_price(1.0, 10_000.0, 100_000.0, apply_swap_fee=True)
+        expected = 1.0 * (1.0 - risk_guard.DEX_SWAP_FEE_PCT) * 0.8
+        assert price == pytest.approx(expected, rel=1e-6)
+
+    def test_exit_price_default_never_applies_fee(self):
+        price = risk_guard.simulated_exit_price(1.0, 10_000.0, 100_000.0)
+        assert price == pytest.approx(0.8, rel=1e-6)
+
+
 # ── 2. Coupe-circuit dédié : persistance, robustesse, distinction avec outgoing_pause ──
 
 

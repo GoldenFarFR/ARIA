@@ -56,6 +56,14 @@ class EntrySignal:
     target: float | None = None
     rr: float | None = None
     lookback_used: int = 0
+    # Item #101 (26/07), operator request ("aria doit pouvoir connaitre en
+    # temps reel toute les valeurs de son golden pocket d'entree et de
+    # sortie"): the golden pocket's own bounds (0.618/0.786 retracement) --
+    # previously computed internally by fibonacci_zone() but never returned,
+    # so nothing downstream (thesis text, relay conversation) could cite the
+    # actual entry ZONE, only the derived invalidation/target levels.
+    gp_low: float | None = None
+    gp_high: float | None = None
 
 
 def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | None]:
@@ -199,7 +207,14 @@ def detect_entry(
         gp_low, gp_high = fib["gp_low"], fib["gp_high"]  # gp_low < gp_high
         if gp_low * (1 - tolerance) <= close <= gp_high * (1 + tolerance):
             in_gp = True
-            reasons.append(f"prix {close:.6g} dans la zone Fibonacci 0,618–0,786 (support profond)")
+            # Item #101 (26/07): the exact zone bounds are now cited in the
+            # thesis text itself, not just the principle -- operator request
+            # ("le parametre d'entree et de sortie doit etre 100% dans la
+            # these").
+            reasons.append(
+                f"prix {close:.6g} dans la zone Fibonacci 0,618–0,786 "
+                f"({gp_low:.6g}–{gp_high:.6g}, support profond)"
+            )
     if div:
         reasons.append("divergence haussière RSI : " + div_base)
 
@@ -233,4 +248,6 @@ def detect_entry(
         target=target,
         rr=rr,
         lookback_used=len(window),
+        gp_low=gp_low,
+        gp_high=gp_high,
     )

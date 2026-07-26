@@ -531,6 +531,42 @@ async def test_reentry_blocked_after_max_consecutive_losses_on_same_contract(tmp
 
 
 @pytest.mark.asyncio
+async def test_scalping_mode_allows_reentry_after_2_losses_but_not_3(tmp_db):
+    """Item #101 (26/07), decision operateur ("regle-le pour le scalping") :
+    seuil assoupli en scalping (3 au lieu de 2) -- raisonnement statistique,
+    pas arbitraire (win rate scalping ~50-65%, 2 pertes d'affilee arrivent par
+    pur hasard ~25% du temps sur un contrat par ailleurs viable)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.close_position(A, 0.6, reason="stop suiveur")
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.7, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.7
+
+    # 2 pertes d'affilee -- toujours autorise en mode scalping (seuil = 3).
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+    assert await pt.has_open(A)
+
+    await pt.close_position(A, 0.5, reason="stop suiveur")
+
+    # 3 pertes d'affilee -- desormais bloque, meme en scalping.
+    act2 = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert act2["opened"] == []
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
 async def test_reentry_allowed_again_after_a_win_breaks_the_streak(tmp_db):
     """Non-régression : un gain entre deux pertes remet le compteur à zéro -- la
     garde ne se déclenche pas si la dernière perte est isolée."""
@@ -1500,12 +1536,77 @@ async def test_open_position_persists_entry_atr_pct(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_position_persists_golden_pocket_bounds(tmp_db):
+    """Item #101 (26/07), demande operateur ("aria doit pouvoir connaitre en
+    temps reel toute les valeurs de son golden pocket d'entree et de
+    sortie") -- gp_low/gp_high doivent survivre la persistance, pas seulement
+    exister dans le dict signal ephemere."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, gp_low=0.95, gp_high=1.05)
+    assert pos["gp_low"] == pytest.approx(0.95)
+    assert pos["gp_high"] == pytest.approx(1.05)
+
+
+@pytest.mark.asyncio
+async def test_open_position_golden_pocket_bounds_default_to_none(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["gp_low"] is None
+    assert pos["gp_high"] is None
+
+
+@pytest.mark.asyncio
 async def test_open_position_entry_atr_pct_defaults_to_none(tmp_db):
     """Non-régression : positions ouvertes sans ATR (ex. ancien pilote VC-thesis) --
     ``entry_atr_pct`` reste ``None``, comportement de stop suiveur inchangé."""
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
     assert pos["entry_atr_pct"] is None
+
+
+from aria_core.risk_guard import DEX_SWAP_FEE_PCT
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_applies_real_dex_swap_fee_on_buy(tmp_db):
+    """Item #101 (26/07), operator request ("verifie [les frais/slippage]") :
+    en mode scalping, le prix de remplissage a l'achat integre le frais de
+    swap DEX reel (1%, Uniswap v3 tier standard pour paire volatile) -- jamais
+    applique en mode standard (comportement historique inchange)."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    assert pos["entry_price"] == pytest.approx(1.0 * (1.0 + DEX_SWAP_FEE_PCT))
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_never_applies_dex_swap_fee_on_buy(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    assert pos["entry_price"] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_applies_real_dex_swap_fee_on_sell(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    closed = await pt.close_position(A, 1.5)
+    assert closed["exit_price"] == pytest.approx(1.5 * (1.0 - DEX_SWAP_FEE_PCT))
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_never_applies_dex_swap_fee_on_sell(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    closed = await pt.close_position(A, 1.5)
+    assert closed["exit_price"] == pytest.approx(1.5)
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_applies_real_dex_swap_fee_on_partial_sell(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    partial = await pt.reduce_position(A, 1.5, 10_000.0, stage=1)
+    assert partial["exit_price"] == pytest.approx(1.5 * (1.0 - DEX_SWAP_FEE_PCT))
 
 
 @pytest.mark.asyncio

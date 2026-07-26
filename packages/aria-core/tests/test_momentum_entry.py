@@ -3938,6 +3938,38 @@ async def test_result_includes_mode_field(monkeypatch, test_settings):
     assert result2["mode"] == "standard"
 
 
+@pytest.mark.asyncio
+async def test_result_includes_golden_pocket_bounds(monkeypatch, test_settings):
+    """Item #101 (26/07), demande operateur ("le parametre d'entree et de
+    sortie doit etre 100% dans la these du scalping") -- gp_low/gp_high
+    doivent atteindre le dict final, pas seulement invalidation/target."""
+    strong = EntrySignal(
+        present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0,
+        gp_low=0.98, gp_high=1.02,
+    )
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["gp_low"] == pytest.approx(0.98)
+    assert result["gp_high"] == pytest.approx(1.02)
+
+
+@pytest.mark.asyncio
+async def test_result_golden_pocket_bounds_none_when_not_provided(monkeypatch, test_settings):
+    """Un signal qui atteint le dict final (R/R faible, HOLD) mais sans
+    gp_low/gp_high fournis (present=True mais pas de golden pocket calcule --
+    cas legacy/analyzer qui n'expose pas encore ce champ) -- jamais une valeur
+    inventee."""
+    tiny = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=tiny)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["gp_low"] is None
+    assert result["gp_high"] is None
+
+
 # ── mode plancher -- libellé exact du point faible (25/07, operator-found gap, cas
 # réel OWB : R/R=50.8 mais le message disait quand même "R/R faible") ───────────────
 

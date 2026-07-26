@@ -1,6 +1,8 @@
 """Signaux d'entrée : Fibonacci golden pocket + divergence RSI (déterministe, offline)."""
 from __future__ import annotations
 
+import pytest
+
 from aria_core.skills import entry_signals
 from aria_core.skills.entry_signals import (
     RSI_DIVERGENCE_MAX,
@@ -170,6 +172,18 @@ def test_detect_entry_fires_on_setup():
     assert sig.in_golden_pocket and sig.rsi_divergence
     assert sig.entry is not None and sig.invalidation < sig.entry < sig.target
     assert sig.rr is not None and sig.rr > 1  # R/R favorable par construction
+
+
+def test_detect_entry_exposes_golden_pocket_bounds():
+    """Item #101 (26/07), demande operateur ("aria doit pouvoir connaitre en
+    temps reel toute les valeurs de son golden pocket d'entree et de sortie") --
+    gp_low/gp_high (les bornes 0,618/0,786 de la zone) doivent etre exposees,
+    pas seulement invalidation/target derives."""
+    sig = detect_entry(_candles(_setup_series()), lookback=25)
+    assert sig.gp_low is not None and sig.gp_high is not None
+    assert sig.gp_low < sig.gp_high
+    # invalidation = gp_low avec une marge de 2% -- coherence interne.
+    assert sig.invalidation == pytest.approx(sig.gp_low * 0.98)
 
 
 def test_detect_entry_absent_on_uptrend():
