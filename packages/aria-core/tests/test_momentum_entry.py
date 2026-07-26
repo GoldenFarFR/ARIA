@@ -1506,6 +1506,56 @@ async def test_evaluate_liquidity_floor_100k_still_enforced_in_fear(monkeypatch)
     assert result["hold_reason"] == "insufficient_liquidity"
 
 
+# ── Plancher de liquidité scalping (26/07, décision opérateur explicite après
+#    des données réelles de funnel : 18/40 candidats rejetés sur le plancher
+#    standard 50k$ en une seule passe scalping) ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_scalping_uses_the_lower_floor(monkeypatch):
+    """20k$ échoue au plancher standard (50k$) mais passe le plancher scalping
+    (15k$) -- non-régression : le mode standard garde son plancher inchangé."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, pairs=[_pair(liquidity_usd=20_000.0)], signal=strong, align=(3, []),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result.get("hold_reason") != "insufficient_liquidity"
+    assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_scalping_floor_still_a_real_floor(monkeypatch):
+    """Le plancher scalping (15k$) reste un vrai plancher, pas désactivé -- 10k$
+    doit toujours être rejeté."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=10_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result["hold_reason"] == "insufficient_liquidity"
+    assert "scalping" in result["reasons"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_standard_mode_unaffected_by_scalping_floor(monkeypatch):
+    """Non-régression explicite : 20k$ (au-dessus du plancher scalping mais sous
+    le plancher standard) doit toujours être rejeté en mode standard (par
+    défaut) -- le plancher scalping ne doit jamais fuiter vers le mode standard."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=20_000.0)])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["hold_reason"] == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_fear_regime_overrides_scalping_floor(monkeypatch):
+    """Le régime Peur (100k$) prime toujours sur le plancher scalping (15k$) --
+    signal de risque macro, indépendant du style de trading. 20k$ passerait le
+    plancher scalping seul mais doit rester rejeté en régime Peur."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=20_000.0)])
+    result = await me.evaluate_momentum_entry(
+        CONTRACT, "base", mode="scalping", current_regime="peur",
+    )
+    assert result["hold_reason"] == "insufficient_liquidity"
+    assert "peur" in result["reasons"][0].lower()
+
+
 @pytest.mark.asyncio
 async def test_evaluate_parabolic_cap_skipped_in_euphoria(monkeypatch):
     """+250% sur 24h franchit le plafond nominal (+200%) mais le régime Euphorie lève

@@ -146,6 +146,18 @@ _MIN_LIQUIDITY_USD = 50_000.0
 # multiplier already decided on 20/07 (preserves the intent "the floor doubles
 # in Fear", never a fixed absolute figure independent of the base).
 _MIN_LIQUIDITY_USD_FEAR = 100_000.0
+# 26/07 -- scalping ran on the standard $50,000 floor for its first live hour
+# on the reset 1M$ test and got starved (18/40 candidates rejected on this
+# single gate in one cycle, by far the largest bottleneck -- real funnel data,
+# not a guess). Explicit operator decision after seeing this: give scalping its
+# OWN, lower floor -- a fast in/out strategy with ATR-sized small positions
+# tolerates a thinner pool than a swing position held much longer. Deliberately
+# NOT combined multiplicatively with the Fear floor above: Fear is a market-wide
+# risk signal, independent of trading style, so it still OVERRIDES this lower
+# floor when active (see the resolution order in evaluate_hard_gates) -- never
+# silently under-protected during a macro stress event just because scalping
+# happens to be the active mode.
+_MIN_LIQUIDITY_USD_SCALPING = 15_000.0
 # 18/07 -- raised 1.5->2.0 (explicit operator decision: "more selective"): only a
 # TRULY clear R/R, not just positive, qualifies for a deterministic buy without
 # going through the LLM. _RR_AMBIGUOUS_FLOOR (1.0) UNCHANGED -- the widened
@@ -1518,6 +1530,7 @@ async def _llm_confirm_and_gate(
 
 async def evaluate_hard_gates(
     contract: str, chain: str, *, current_regime: str | None = None, relaxed: bool = False,
+    mode: str = "standard",
 ) -> tuple["PairSnapshot | None", str | None, dict | None]:
     """Shared hard ANTI-SCAM guardrails, extracted from
     ``evaluate_momentum_entry`` with no behavior change (22/07, unified VC/Swing
@@ -1540,6 +1553,15 @@ async def evaluate_hard_gates(
     legitimately lose money on a weak momentum setup (diagnostic signal on
     ARIA's selection), but must NEVER buy a scam -- losing on a rug is zero
     information, only a loss.
+
+    ``mode`` (26/07, real funnel data: the reset 1M$ test's first live hour in
+    scalping mode was rejecting ~45% of candidates on the standard $50,000
+    liquidity floor alone): ``mode="scalping"`` uses the lower
+    ``_MIN_LIQUIDITY_USD_SCALPING`` floor instead of ``_MIN_LIQUIDITY_USD`` --
+    a fast in/out, ATR-sized strategy tolerates a thinner pool than a swing
+    position held much longer. Fear regime still overrides both (market-wide
+    risk signal, independent of trading style). No other hard gate here
+    changes with ``mode``.
 
     Returns:
     - ``(None, None, hold_dict)`` on the first hard rejection (same HOLD dict as
@@ -1570,9 +1592,16 @@ async def evaluate_hard_gates(
         return None, None, None
 
     liquidity_usd = best.liquidity_usd or 0.0
-    effective_min_liquidity = (
-        _MIN_LIQUIDITY_USD_FEAR if current_regime == "peur" else _MIN_LIQUIDITY_USD
-    )
+    # 26/07 -- Fear regime OVERRIDES the scalping floor (market-wide risk signal,
+    # independent of trading style -- never silently under-protected during a
+    # macro stress event just because scalping is the active mode). Otherwise,
+    # scalping gets its own lower floor (see _MIN_LIQUIDITY_USD_SCALPING).
+    if current_regime == "peur":
+        effective_min_liquidity = _MIN_LIQUIDITY_USD_FEAR
+    elif mode == "scalping":
+        effective_min_liquidity = _MIN_LIQUIDITY_USD_SCALPING
+    else:
+        effective_min_liquidity = _MIN_LIQUIDITY_USD
     if liquidity_usd < effective_min_liquidity:
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
@@ -1580,6 +1609,7 @@ async def evaluate_hard_gates(
             "reasons": [
                 f"liquidité insuffisante ({liquidity_usd:,.0f}$ < {effective_min_liquidity:,.0f}$"
                 + (" -- plancher doublé, régime macro Peur" if current_regime == "peur" else "")
+                + (" -- plancher scalping" if current_regime != "peur" and mode == "scalping" else "")
                 + ") -- risque de scam/manipulation, rejet même si le reste est propre"
             ],
             "hold_reason": "insufficient_liquidity",
@@ -1807,7 +1837,7 @@ async def evaluate_momentum_entry(
     contract = normalize_contract_case(contract, chain)
 
     best, honeypot_reason, hard_gate_hold = await evaluate_hard_gates(
-        contract, chain, current_regime=current_regime, relaxed=relaxed,
+        contract, chain, current_regime=current_regime, relaxed=relaxed, mode=mode,
     )
     if hard_gate_hold is not None:
         return hard_gate_hold
