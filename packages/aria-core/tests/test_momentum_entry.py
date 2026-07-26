@@ -1871,11 +1871,19 @@ async def test_evaluate_allows_buy_via_coingecko_fallback_when_dexscreener_has_n
 
 @pytest.mark.asyncio
 async def test_evaluate_rejects_on_holder_concentration(monkeypatch):
-    _patch_pipeline(monkeypatch, concentration=(True, "concentration des 10 plus gros détenteurs : 85% >= 80%"))
+    """26/07 -- holder concentration is now checked AFTER R/R confirmation
+    (deferred from evaluate_hard_gates, cf. evaluate_momentum_entry's
+    docstring step 9bis) -- a real R/R signal is required to reach this gate
+    at all, unlike before this reorder."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(3, []),
+        concentration=(True, "concentration des 10 plus gros détenteurs : 85% >= 80%"),
+    )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "holder_concentration"
-    assert "concentration" in result["reasons"][0].lower()
+    assert any("concentration" in r.lower() for r in result["reasons"])
 
 
 @pytest.mark.asyncio
@@ -1887,6 +1895,24 @@ async def test_evaluate_allows_low_holder_concentration(monkeypatch):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "holder_concentration"
     assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_never_pays_holder_concentration_when_no_entry_signal(monkeypatch):
+    """26/07 -- the whole point of the reorder (backlog #113, full-pipeline
+    audit): a candidate rejected for FREE on no_entry_signal must never reach
+    the (potentially x402-paid) holder-concentration check at all."""
+    calls = {"n": 0}
+
+    async def _counting_concentration(*args, **kwargs):
+        calls["n"] += 1
+        return False, ""
+
+    _patch_pipeline(monkeypatch, signal=None)  # signal=None -> present=False, no_entry_signal
+    monkeypatch.setattr(me, "_check_holder_concentration", _counting_concentration)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["hold_reason"] == "no_entry_signal"
+    assert calls["n"] == 0
 
 
 class _FakeHoldersClient:

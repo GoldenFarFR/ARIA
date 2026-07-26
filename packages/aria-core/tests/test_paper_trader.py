@@ -4110,6 +4110,40 @@ async def test_daily_floor_feeds_a_real_pacing_context_to_the_analyzer(tmp_db, m
 
 
 @pytest.mark.asyncio
+async def test_daily_floor_forwards_the_portfolio_wide_trading_mode(tmp_db, monkeypatch):
+    """26/07 -- real bug found via an operator-reported Telegram screenshot: a
+    real position (AERO) was opened by this cycle with mode="standard" even
+    though the portfolio-wide switch was set to "scalping" (get_trading_mode()
+    was never called here) -- its thesis showed the full conviction_research
+    diligence that scalping mode is specifically supposed to skip (Item #101).
+    This test locks in the fix: set_trading_mode("scalping") must be reflected
+    in the mode= kwarg the floor cycle forwards to evaluate_momentum_entry."""
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import momentum_entry, risk_guard
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+
+    async def _fake_sources(*, limit=20):
+        return [A], {A: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    captured = {}
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        captured["mode"] = mode
+        return _floor_buy_sig(symbol=contract[:4])
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
+
+    assert captured["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
 async def test_daily_floor_on_pace_opens_nothing(tmp_db, monkeypatch):
     monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
     from aria_core import risk_guard

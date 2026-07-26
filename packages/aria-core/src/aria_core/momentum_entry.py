@@ -1638,7 +1638,7 @@ async def _llm_confirm_and_gate(
 
 async def evaluate_hard_gates(
     contract: str, chain: str, *, current_regime: str | None = None, relaxed: bool = False,
-    mode: str = "standard",
+    mode: str = "standard", defer_holder_concentration: bool = False,
 ) -> tuple["PairSnapshot | None", str | None, dict | None]:
     """Shared hard ANTI-SCAM guardrails, extracted from
     ``evaluate_momentum_entry`` with no behavior change (22/07, unified VC/Swing
@@ -1681,6 +1681,19 @@ async def evaluate_hard_gates(
       ``honeypot_reason`` is the text of the last guardrail (always "clear" at
       this stage), to be appended to ``reasons`` by the caller, never
       recomputed.
+
+    ``defer_holder_concentration`` (26/07, real x402 waste found by the
+    full-pipeline audit: 333 real payments/$0.666 since 21/07 for this check's
+    paid fallback -- some of them on candidates rejected for FREE moments
+    later on the R/R computation, which this function never even runs, cf.
+    its own docstring). Default ``False`` = strictly unchanged behavior
+    (``unified_entry.py``'s VC-thesis bucket never passes this -- a VC thesis
+    has no R/R step to defer to, so the check stays exactly where it always
+    was). When ``True`` (used only by ``evaluate_momentum_entry``), this
+    function SKIPS the holder-concentration check entirely and the caller is
+    responsible for running it itself, AFTER its own free R/R computation
+    confirms there's actually a setup worth paying for -- see
+    ``evaluate_momentum_entry``'s docstring, step 8bis.
 
     Order and thresholds STRICTLY identical to before this extraction -- see
     the ``evaluate_momentum_entry`` docstring for the detail of each step."""
@@ -1797,15 +1810,16 @@ async def evaluate_hard_gates(
             "hold_reason": "no_verified_profile",
         }
 
-    too_concentrated, concentration_reason = await _check_holder_concentration(
-        contract, chain, best.pair_address,
-    )
-    if too_concentrated:
-        return None, None, {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd, "reasons": [concentration_reason],
-            "hold_reason": "holder_concentration",
-        }
+    if not defer_holder_concentration:
+        too_concentrated, concentration_reason = await _check_holder_concentration(
+            contract, chain, best.pair_address,
+        )
+        if too_concentrated:
+            return None, None, {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd, "reasons": [concentration_reason],
+                "hold_reason": "holder_concentration",
+            }
 
     clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
     if not clear:
@@ -1899,27 +1913,36 @@ async def evaluate_momentum_entry(
          paid DexScreener profile (free, already in hand) OR CoinGecko listing
          (network, short-circuited if DexScreener suffices); hard rejection if
          neither.
-      8. Holder concentration (``_check_holder_concentration``, top 10
-         excluding pool/burn >= 80%, 19/07) -- Blockscout, generous throughput
-         (~270/min), paid x402 fallback (21/07) if the free/Pro path fails --
-         rejection if a massive insider dump remains possible.
-      9. Honeypot check (GoPlus, ~55/min sustained -- the SCARCEST resource in
+      8. Honeypot check (GoPlus, ~55/min sustained -- the SCARCEST resource in
          the whole pipeline, cf. 21/07 calibration) -- moved to LAST among the
-         hard guardrails (honeypot used to be checked 2nd, even before the free
-         filters): a candidate that reaches this stage has already survived all
-         free filters AND the two other network guardrails, so GoPlus is never
+         hard guardrails inside ``evaluate_hard_gates`` (honeypot used to be
+         checked 2nd, even before the free filters): a candidate that reaches
+         this stage has already survived all free filters, so GoPlus is never
          spent on a candidate that was going to be rejected for another reason
          anyway. Fail-closed behavior unchanged -- only the order changes.
-      10. R/R (golden pocket + RSI divergence, ``entry_signals.detect_entry``)
-          -- HOLD if absent (never a fabricated target).
-      11. Technical alignment (bonus, never blocking) -- reinforces confidence.
-      12. Clear R/R (>= 2.0) + technical alignment >= 2/3 -> deterministic BUY
+      9. R/R (golden pocket + RSI divergence, ``entry_signals.detect_entry``)
+         -- HOLD if absent (never a fabricated target).
+      9bis. Holder concentration (``_check_holder_concentration``, top 10
+         excluding pool/burn >= 80%, 19/07) -- Blockscout, generous throughput
+         (~270/min), paid x402 fallback (21/07) if the free/Pro path fails --
+         rejection if a massive insider dump remains possible. MOVED here from
+         inside ``evaluate_hard_gates`` (26/07, real x402 waste found by the
+         full-pipeline audit -- 333 real payments/$0.666 since 21/07, some on
+         candidates rejected for FREE by step 9 moments later): now only runs
+         once step 9 confirms a real setup exists, via
+         ``evaluate_hard_gates(defer_holder_concentration=True)``.
+         ``unified_entry.py``'s VC-thesis bucket never sets that flag -- it
+         still gets this guardrail at its original place (before honeypot,
+         cf. ``evaluate_hard_gates``'s own docstring), since a VC thesis has no
+         R/R step to defer to.
+      10. Technical alignment (bonus, never blocking) -- reinforces confidence.
+      11. Clear R/R (>= 2.0) + technical alignment >= 2/3 -> deterministic BUY
           (18/07, "more selective": raised from 1.5/1 signal). Positive R/R but
           below this threshold (1.0-2.0) -> light LLM confirmation (calibrated
           on weekly pacing, cf. ``weekly_context``). Otherwise HOLD.
-      13. Final security guard (LLM, ``_llm_security_gate``) -- can still
+      12. Final security guard (LLM, ``_llm_security_gate``) -- can still
           cancel an already-decided BUY.
-      14. Relative volume (RVOL, ``_check_volume_confirmation``, 19/07) -- on a
+      13. Relative volume (RVOL, ``_check_volume_confirmation``, 19/07) -- on a
           still-valid BUY: REJECT if real per-candle volume is available and
           disproves it (< 3.0x the average of the previous 10 candles);
           fail-open (never a rejection) if the data is structurally absent, but
@@ -1946,6 +1969,7 @@ async def evaluate_momentum_entry(
 
     best, honeypot_reason, hard_gate_hold = await evaluate_hard_gates(
         contract, chain, current_regime=current_regime, relaxed=relaxed, mode=mode,
+        defer_holder_concentration=True,
     )
     if hard_gate_hold is not None:
         return hard_gate_hold
@@ -1980,6 +2004,23 @@ async def evaluate_momentum_entry(
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons, "hold_reason": "no_entry_signal",
+        }
+
+    # 26/07 -- deferred from evaluate_hard_gates (defer_holder_concentration=True
+    # above): the full-pipeline audit found real x402 money (paid Blockscout
+    # fallback) spent on candidates that were about to be rejected for FREE by
+    # the R/R computation just above -- this check now only runs once a real
+    # setup is confirmed to exist, never before. VC-thesis path (unified_entry.py)
+    # is unaffected: it never sets defer_holder_concentration, so it still gets
+    # this guardrail at its original place inside evaluate_hard_gates.
+    too_concentrated, concentration_reason = await _check_holder_concentration(
+        contract, chain, best.pair_address,
+    )
+    if too_concentrated:
+        return {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": reasons + [concentration_reason],
+            "hold_reason": "holder_concentration",
         }
 
     align_score, align_reasons = _technical_alignment(candles)

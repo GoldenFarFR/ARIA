@@ -420,7 +420,31 @@ class MomentumWebsocketListener:
         self._evaluation_timestamps.extend([now] * len(candidates))
 
         chain_by_contract = {c["contract"]: c["chain"] for c in filtered}
-        analyzer = paper_trader._default_momentum_analyzer(chain_by_contract)
+        # 26/07 -- real bug found alongside Item #117 (same class): this drain
+        # never resolved trading_mode/current_regime, silently defaulting to
+        # "standard"/neutral regardless of the portfolio-wide switches the
+        # periodic cycle (_run_paper_cycle_locked) already resolves once per
+        # cycle -- a candidate caught by the real-time WebSocket path got a
+        # DIFFERENT evaluation (wrong RSI period/timeframe, full
+        # conviction_research diligence never skipped in scalping mode) than
+        # the SAME candidate would get from the periodic scan. weekly_context
+        # stays None here (unchanged, pre-existing) -- its computation is
+        # cycle-cadence specific and not critical to this fix's scope.
+        try:
+            trading_mode = await paper_trader.get_trading_mode()
+        except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to "standard"
+            logger.info("momentum_websocket: trading_mode lookup failed (%s)", exc)
+            trading_mode = "standard"
+        try:
+            from aria_core.skills import market_sentiment
+
+            current_regime = await market_sentiment.resolve_meta_regime()
+        except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to neutral
+            logger.info("momentum_websocket: meta-regime lookup failed (%s)", exc)
+            current_regime = None
+        analyzer = paper_trader._default_momentum_analyzer(
+            chain_by_contract, current_regime=current_regime, mode=trading_mode,
+        )
         try:
             from aria_core.gateway.telegram_bot import send_trading_notification
 

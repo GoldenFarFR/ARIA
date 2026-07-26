@@ -2397,9 +2397,22 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
     except Exception:  # noqa: BLE001
         current_regime = market_sentiment.META_REGIME_NEUTRAL
 
+    # 26/07 -- real bug found (operator report via a live Telegram screenshot):
+    # this cycle never resolved trading_mode, so it always forwarded the
+    # "standard" default to _default_momentum_analyzer even while the
+    # portfolio-wide switch was set to "scalping" -- a real position (AERO)
+    # was opened this way, its thesis showing the full conviction_research
+    # diligence (Website/Docs/X/Tavily/x402 twit.sh) that scalping mode is
+    # specifically supposed to skip (Item #101). Same resolution as
+    # _run_paper_cycle_locked (get_trading_mode(), once per cycle) -- this
+    # additive cycle must never silently diverge from the portfolio's actual
+    # mode.
+    trading_mode = await get_trading_mode()
+
     candidates, chain_map = await _momentum_candidates_and_chain_map(limit=20)
     analyzer = _default_momentum_analyzer(
         chain_map, weekly_context, current_regime=current_regime, relaxed=True,
+        mode=trading_mode,
     )
 
     opened = 0

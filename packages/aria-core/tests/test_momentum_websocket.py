@@ -271,6 +271,59 @@ async def test_drain_triggers_run_paper_cycle_with_skip_position_management(monk
     assert (B, "solana") in listener._seen
 
 
+@pytest.mark.asyncio
+async def test_drain_forwards_the_portfolio_wide_trading_mode_and_regime(monkeypatch):
+    """26/07 -- real bug found alongside Item #117 (same class, discovered the
+    same day): this drain used to call _default_momentum_analyzer with NO
+    mode/current_regime at all, silently defaulting to "standard"/neutral
+    regardless of the portfolio-wide switches the periodic cycle already
+    resolves once per cycle -- a candidate caught by the real-time WebSocket
+    path got a DIFFERENT evaluation than the SAME candidate would get from the
+    periodic scan. This test locks in the fix."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader
+    from aria_core.skills import market_sentiment
+
+    async def _fake_trading_mode():
+        return "scalping"
+
+    async def _fake_regime():
+        return market_sentiment.META_REGIME_EUPHORIA
+
+    monkeypatch.setattr(paper_trader, "get_trading_mode", _fake_trading_mode)
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _fake_regime)
+
+    captured: dict = {}
+
+    def _fake_analyzer_factory(chain_by_contract, **kwargs):
+        captured.update(kwargs)
+
+        async def _analyzer(contract):
+            return None
+
+        return _analyzer
+
+    monkeypatch.setattr(paper_trader, "_default_momentum_analyzer", _fake_analyzer_factory)
+
+    async def _fake_run_paper_cycle(**kwargs):
+        return {"opened": []}
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+
+    assert captured["mode"] == "scalping"
+    assert captured["current_regime"] == market_sentiment.META_REGIME_EUPHORIA
+
+
 # ── limit-order processing (07/23) ───────────────────────────────────────────
 
 @pytest.mark.asyncio
