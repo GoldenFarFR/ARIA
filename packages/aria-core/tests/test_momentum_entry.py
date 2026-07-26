@@ -74,6 +74,24 @@ def _reset_wash_trading_confirmation():
 
 
 @pytest.fixture(autouse=True)
+def _reset_holders_cache():
+    """26/07 -- ``_holders_cache``/``_holders_x402_cache``/``_holders_locks`` are
+    module-level dicts keyed by (chain, contract) shared between
+    ``_check_holder_concentration`` and ``_check_parabolic_smart_money_rescue``.
+    Almost every test in this file uses the SAME ``CONTRACT``/``"base"`` pair --
+    without this reset, whichever test runs first would populate the cache and
+    every later test would silently read its stale result instead of exercising
+    its own mock, same trap as ``_reset_provider_circuit_breaker`` above."""
+    me._holders_cache.clear()
+    me._holders_x402_cache.clear()
+    me._holders_locks.clear()
+    yield
+    me._holders_cache.clear()
+    me._holders_x402_cache.clear()
+    me._holders_locks.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     """21/07 -- ``_check_honeypot`` peut désormais attendre réellement
     (``_HONEYPOT_NO_DATA_RETRY_DELAY_S``) avant un retry ciblé sur ``no_data`` --
@@ -1875,8 +1893,10 @@ class _FakeHoldersClient:
     def __init__(self, result, *, metadata=None):
         self._result = result
         self._metadata = metadata
+        self.calls = 0
 
     async def get_token_holders(self, token_address):
+        self.calls += 1
         return self._result
 
     async def get_token_metadata(self, token_address):
@@ -2150,6 +2170,137 @@ class TestCheckHolderConcentration:
         )
         too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
         assert too_concentrated is False
+
+
+# ── cache TTL partagé holders (26/07, full-pipeline audit -- gaspillage x402 réel) ──
+
+class TestHoldersSharedCache:
+    """333 real x402 "token-holders" payments/$0.666 since 21/07, 31% pure
+    duplicates 2.5-4.5s apart (periodic cycle vs. WebSocket drain, no per-
+    contract lock) -- plus a separate double Blockscout call on parabolic
+    candidates (_check_parabolic_smart_money_rescue then _check_holder_
+    concentration re-fetching the same contract). See module comment above
+    ``_HOLDERS_CACHE_TTL_SECONDS`` in momentum_entry.py."""
+
+    @pytest.mark.asyncio
+    async def test_second_call_within_ttl_reuses_cache_no_new_network_call(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        result = TokenHoldersResult(holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True)
+        client = _FakeHoldersClient(result)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert client.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_cache_expires_after_ttl(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        result = TokenHoldersResult(holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True)
+        client = _FakeHoldersClient(result)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        fake_now = {"t": 1000.0}
+        monkeypatch.setattr(me.time, "monotonic", lambda: fake_now["t"])
+
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        fake_now["t"] += me._HOLDERS_CACHE_TTL_SECONDS + 1.0
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert client.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_shared_between_parabolic_rescue_and_concentration_check(self, monkeypatch):
+        """_check_parabolic_smart_money_rescue fetches first -- _check_holder_
+        concentration on the SAME contract right after must reuse its result
+        instead of paying for its own Blockscout call (the exact double-call
+        the audit found, "nothing to reuse here" is no longer true)."""
+        import aria_core.services.blockscout as blockscout_module
+        import aria_core.services.smart_money as smart_money_module
+        from aria_core.services.blockscout import TokenHoldersResult
+        from aria_core.services.smart_money import SmartMoneySignal
+
+        result = TokenHoldersResult(holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True)
+        client = _FakeHoldersClient(result)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        async def _fake_smart_money(contract, holders, *, client, lp_address=None, pair_created_at_ms=None):
+            return SmartMoneySignal(available=False)
+
+        monkeypatch.setattr(smart_money_module, "analyze_smart_money", _fake_smart_money)
+
+        pair = _pair()
+        await me._check_parabolic_smart_money_rescue(CONTRACT, "base", pair)
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert client.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_different_contracts_never_share_a_cache_entry(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        result = TokenHoldersResult(holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True)
+        client = _FakeHoldersClient(result)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        other_contract = "0x" + "b" * 40
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        await me._check_holder_concentration(other_contract, "base", "0xpool")
+        assert client.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_x402_fallback_path_also_cached(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        calls = {"n": 0}
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            calls["n"] += 1
+            return [{"holder_address": "0xreal1", "value": "30000", "is_contract": False, "is_verified": False}]
+
+        monkeypatch.setattr("aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402)
+
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_on_same_contract_only_hit_network_once(self, monkeypatch):
+        """Two truly concurrent evaluations (periodic cycle + WebSocket drain
+        landing at the same instant, not just a few seconds apart) must not
+        both observe a cache miss -- the per-contract lock makes the second
+        wait for the first instead of racing it into its own network call."""
+        import asyncio as asyncio_module
+
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        calls = {"n": 0}
+
+        class _SlowClient:
+            async def get_token_holders(self, token_address):
+                calls["n"] += 1
+                await asyncio_module.sleep(0.01)
+                return TokenHoldersResult(
+                    holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True,
+                )
+
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _SlowClient())
+        await asyncio_module.gather(
+            me._check_holder_concentration(CONTRACT, "base", "0xpool"),
+            me._check_holder_concentration(CONTRACT, "base", "0xpool"),
+        )
+        assert calls["n"] == 1
 
 
 # ── volume relatif -- RVOL (19/07, revue croisée Gemini, 4e round) ──────────────────

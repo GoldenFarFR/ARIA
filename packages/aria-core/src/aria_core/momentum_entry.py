@@ -223,6 +223,93 @@ _MAX_PRICE_CHANGE_24H_PCT = 200.0
 # already up 4.5x).
 _PARABOLIC_RESCUE_MAX_PCT = 350.0
 
+# 26/07 -- process-local TTL cache shared between _check_parabolic_smart_money_
+# rescue and _check_holder_concentration, both of which independently fetch
+# Blockscout holders for the same contract (full-pipeline audit: on a
+# parabolic candidate, the rescue check's docstring already admitted "nothing
+# to reuse here" -- this cache is exactly that reuse). Same audit found the
+# paid x402 fallback (blockscout_x402.get_token_holders_x402) being re-paid
+# 2-6x per contract within 2.5-4.5 seconds -- the periodic scan cycle
+# (_run_cycle_lock, a GLOBAL lock, not per-contract) and the WebSocket drain
+# loop (momentum_websocket._drain_once) independently re-evaluate the same
+# fresh candidate and each pay their own x402 call. Real ledger measured:
+# 333 "token-holders" x402 payments / $0.666 since 21/07, 104 of them (31%)
+# pure duplicates on 31 contracts. TTL 5 min -- holder distribution doesn't
+# meaningfully shift within a single evaluation window, and this guards a
+# security check, not a price feed (this short a staleness carries no risk).
+_HOLDERS_CACHE_TTL_SECONDS = 300.0
+_holders_cache: dict[tuple[str, str], tuple[float, object]] = {}
+_holders_x402_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
+# 26/07 -- per-contract asyncio lock, on top of the TTL cache above. The cache
+# alone closes the common case (periodic cycle and WebSocket drain land a few
+# seconds apart, confirmed by the real ledger), but two truly concurrent
+# evaluations of the same fresh candidate could both observe a cache miss
+# before either finishes writing -- the lock makes the second caller wait for
+# the first's network call instead of racing it, so it always reads the
+# freshly-written cache entry rather than paying its own x402 call.
+_holders_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _holders_lock_for(key: tuple[str, str]) -> asyncio.Lock:
+    lock = _holders_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _holders_locks[key] = lock
+    return lock
+
+
+def _purge_expired_holders_state(now: float) -> None:
+    """Opportunistic eviction, run on every cache write -- a long-running
+    process (weeks/months, cf. the VPS's 4GB RAM constraint) would otherwise
+    grow these dicts by one entry per DISTINCT contract ever evaluated,
+    forever. Bounds them to roughly the contracts seen within the last TTL
+    window instead. A lock is only ever dropped when it's not currently held
+    (``not lock.locked()``) -- safe without extra synchronization since
+    there's no ``await`` between the check and the ``del`` in this single-
+    threaded event loop, so no other coroutine can acquire it in between."""
+    for cache in (_holders_cache, _holders_x402_cache):
+        expired = [k for k, (ts, _v) in cache.items() if (now - ts) >= _HOLDERS_CACHE_TTL_SECONDS]
+        for k in expired:
+            del cache[k]
+    live_keys = set(_holders_cache) | set(_holders_x402_cache)
+    stale_locks = [k for k, lock in _holders_locks.items() if k not in live_keys and not lock.locked()]
+    for k in stale_locks:
+        del _holders_locks[k]
+
+
+async def _cached_get_token_holders(client, chain: str, contract: str):
+    """Shared TTL cache in front of ``client.get_token_holders`` -- see the
+    module comment above ``_HOLDERS_CACHE_TTL_SECONDS``."""
+    key = (chain, contract.lower())
+    async with _holders_lock_for(key):
+        now = time.monotonic()
+        cached = _holders_cache.get(key)
+        if cached is not None and (now - cached[0]) < _HOLDERS_CACHE_TTL_SECONDS:
+            return cached[1]
+        result = await client.get_token_holders(contract)
+        _holders_cache[key] = (now, result)
+        _purge_expired_holders_state(now)
+        return result
+
+
+async def _cached_get_token_holders_x402(contract: str, chain: str) -> list[dict]:
+    """Shared TTL cache in front of ``blockscout_x402.get_token_holders_x402``
+    -- this is the path that actually spends real USDC per call, see the
+    module comment above ``_HOLDERS_CACHE_TTL_SECONDS``."""
+    key = (chain, contract.lower())
+    async with _holders_lock_for(key):
+        now = time.monotonic()
+        cached = _holders_x402_cache.get(key)
+        if cached is not None and (now - cached[0]) < _HOLDERS_CACHE_TTL_SECONDS:
+            return cached[1]
+        from aria_core.services.blockscout_x402 import get_token_holders_x402
+
+        raw_holders = await get_token_holders_x402(contract, chain=chain, token_symbol="")
+        _holders_x402_cache[key] = (now, raw_holders)
+        _purge_expired_holders_state(now)
+        return raw_holders
+
 
 async def _check_parabolic_smart_money_rescue(
     contract: str, chain: str, pair: "PairSnapshot",
@@ -230,13 +317,15 @@ async def _check_parabolic_smart_money_rescue(
     """Rescue of the "already parabolic" rejection (200-350%) via smart-money
     convergence.
 
-    Costs a DEDICATED Blockscout holders call (the concentration check, later in
-    the gate order, also fetches holders but AFTER this point -- nothing to reuse
-    here) -- bounded: only attempted for candidates already in this rare tier,
-    never for every candidate evaluated. Blockscout coverage limited to Base as
-    of today (same limit as the existing ``reference_tokens_excluded``/smart
-    money analysis) -- on other chains, no rescue is ever attempted, the hard
-    rejection remains unchanged.
+    Costs a Blockscout holders call -- bounded: only attempted for candidates
+    already in this rare tier, never for every candidate evaluated. Shared via
+    ``_cached_get_token_holders`` (26/07) with the concentration check
+    (``_check_holder_concentration``, later in the gate order, also fetches
+    holders for the same contract) -- no longer a truly independent call, see
+    the module comment above ``_HOLDERS_CACHE_TTL_SECONDS``. Blockscout
+    coverage limited to Base as of today (same limit as the existing
+    ``reference_tokens_excluded``/smart money analysis) -- on other chains, no
+    rescue is ever attempted, the hard rejection remains unchanged.
     """
     if chain != "base":
         return False, "sauvetage smart money non tenté (couverture limitée à Base)"
@@ -246,7 +335,7 @@ async def _check_parabolic_smart_money_rescue(
 
     client = get_blockscout_client(chain)
     try:
-        holders = await client.get_token_holders(contract)
+        holders = await _cached_get_token_holders(client, chain, contract)
         signal = await analyze_smart_money(
             contract, holders, client=client,
             lp_address=pair.pair_address, pair_created_at_ms=pair.pair_created_at,
@@ -839,11 +928,19 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     always tried first, zero incremental cost as long as it works (normal
     case). Avoids resting this security guardrail on a credit pool that
     regularly runs dry, without paying systematically on every candidate
-    either."""
+    either.
+
+    26/07 -- both the free/Pro call and the paid x402 fallback go through the
+    shared TTL cache (``_cached_get_token_holders``/``_cached_get_token_holders_
+    x402``, see the module comment above ``_HOLDERS_CACHE_TTL_SECONDS``) --
+    full-pipeline audit found the periodic scan cycle and the WebSocket drain
+    loop independently re-evaluating the same fresh candidate a few seconds
+    apart, each paying its own x402 call for the same contract (333 real
+    payments/$0.666 since 21/07, 31% pure duplicates)."""
     from aria_core.services.blockscout import get_blockscout_client
 
     client = get_blockscout_client(chain)
-    result = await client.get_token_holders(contract)
+    result = await _cached_get_token_holders(client, chain, contract)
 
     entries: list[tuple[str, float, bool | None, bool | None]] = []
     if result.available and result.holders and result.total_supply:
@@ -856,9 +953,7 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
         if not metadata.available or not metadata.total_supply or metadata.decimals is None:
             return False, ""
 
-        from aria_core.services.blockscout_x402 import get_token_holders_x402
-
-        raw_holders = await get_token_holders_x402(contract, chain=chain, token_symbol="")
+        raw_holders = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
             return False, ""
 
