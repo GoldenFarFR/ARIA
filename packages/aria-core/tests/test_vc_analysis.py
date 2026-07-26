@@ -12,10 +12,24 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from aria_core.services import virtuals as virtuals_module
 from aria_core.skills import vc_analysis as vc
 from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 
 ADDR = "0x" + "a" * 40
+
+
+def _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address):
+    """Patches the CLASS (``type(virtuals_client)``), never the singleton
+    INSTANCE directly -- ``virtuals_client`` lives for the whole pytest process.
+    Patching the instance leaves a residual instance attribute after
+    monkeypatch's teardown (the original bound method gets *restored* as an
+    instance attribute, permanently shadowing any later class-level patch from
+    other test files) -- same real pollution class found and fixed in
+    test_image_token_curiosity.py/goplus_client (26/07)."""
+    monkeypatch.setattr(
+        type(virtuals_module.virtuals_client), "fetch_by_address", staticmethod(fake_fetch_by_address),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -36,10 +50,7 @@ def _no_network_virtuals_diligence(monkeypatch):
     réseau coupé par défaut ici aussi -- ``None`` (pas un token Virtuals connu), pour le
     même invariant « aucun appel réseau réel » que la fixture ci-dessus. Les tests dédiés
     à la diligence Virtuals le remontent explicitement avec leur propre monkeypatch."""
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address",
-        AsyncMock(return_value=None),
-    )
+    _patch_virtuals_fetch(monkeypatch, AsyncMock(return_value=None))
     yield
 
 
@@ -1642,9 +1653,7 @@ async def test_fetch_virtuals_product_diligence_reuses_bonding_scan_no_extra_cal
     async def _fail_if_called(address, chain="BASE"):
         raise AssertionError("ne doit pas re-fetch : le payload est déjà en mémoire (ctx)")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _fail_if_called,
-    )
+    _patch_virtuals_fetch(monkeypatch, _fail_if_called)
 
     result = await vc._fetch_virtuals_product_diligence(ctx)
     assert result == {
@@ -1673,9 +1682,7 @@ async def test_fetch_virtuals_product_diligence_graduated_token_best_effort_fall
             additional_details="Roadmap Q4 2026",
         )
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     result = await vc._fetch_virtuals_product_diligence(ctx)
     assert result == {
@@ -1696,9 +1703,7 @@ async def test_fetch_virtuals_product_diligence_soft_degrades_when_fields_absent
     async def fake_fetch_by_address(address, chain="BASE"):
         return VirtualToken(name="Bare Agent", symbol="BARE", status="AVAILABLE")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     assert await vc._fetch_virtuals_product_diligence(ctx) is None
 
@@ -1710,9 +1715,7 @@ async def test_fetch_virtuals_product_diligence_non_virtuals_token_unchanged(mon
     async def fake_fetch_by_address(address, chain="BASE"):
         return None
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=1)
     assert await vc._fetch_virtuals_product_diligence(ctx) is None
@@ -1725,9 +1728,7 @@ async def test_fetch_virtuals_product_diligence_never_attempted_when_no_pair_and
     async def _fail_if_called(address, chain="BASE"):
         raise AssertionError("ne doit pas retenter un appel réseau ici")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _fail_if_called,
-    )
+    _patch_virtuals_fetch(monkeypatch, _fail_if_called)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True, pairs_found=0)
     assert await vc._fetch_virtuals_product_diligence(ctx) is None
@@ -1740,9 +1741,7 @@ async def test_fetch_virtuals_product_diligence_degrades_on_network_error(monkey
     async def _boom(address, chain="BASE"):
         raise RuntimeError("Virtuals API indisponible")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", _boom,
-    )
+    _patch_virtuals_fetch(monkeypatch, _boom)
 
     assert await vc._fetch_virtuals_product_diligence(ctx) is None
 

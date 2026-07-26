@@ -1691,7 +1691,7 @@ async def test_check_project_profile_true_on_dexscreener_links_no_network_call(m
     async def fail_if_called(*args, **kwargs):
         raise AssertionError("CoinGecko ne doit jamais être appelé si DexScreener a déjà un profil")
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fail_if_called)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fail_if_called))
     pair = _pair(project_links=[{"label": "Site officiel", "url": "https://example.test"}])
     ok, reason = await me._check_project_profile("base", CONTRACT, pair)
     assert ok is True
@@ -1704,7 +1704,7 @@ async def test_check_project_profile_true_on_coingecko_listing_fallback(monkeypa
         assert platform_id == "base"
         return TokenFundamentals(contract=contract, available=True)
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
     pair = _pair(project_links=[])
     ok, reason = await me._check_project_profile("base", CONTRACT, pair)
     assert ok is True
@@ -1719,7 +1719,7 @@ async def test_check_project_profile_uses_the_right_platform_per_chain(monkeypat
         seen["platform_id"] = platform_id
         return TokenFundamentals(contract=contract, available=True)
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
     pair = _pair(project_links=[])
     await me._check_project_profile("solana", CONTRACT, pair)
     assert seen["platform_id"] == "solana"
@@ -1732,7 +1732,7 @@ async def test_check_project_profile_false_when_neither_available(monkeypatch):
     async def fake_fundamentals(contract, *, platform_id="base"):
         return TokenFundamentals(contract=contract, available=False)
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
     pair = _pair(project_links=[])
     ok, reason = await me._check_project_profile("base", CONTRACT, pair)
     assert ok is False
@@ -1755,7 +1755,7 @@ async def test_evaluate_rejects_when_no_verified_profile(monkeypatch):
     async def fake_fundamentals(contract, *, platform_id="base"):
         return TokenFundamentals(contract=contract, available=False)
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
     _patch_pipeline(monkeypatch, pairs=[_pair(project_links=[])])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
@@ -1769,7 +1769,7 @@ async def test_evaluate_allows_buy_via_coingecko_fallback_when_dexscreener_has_n
     async def fake_fundamentals(contract, *, platform_id="base"):
         return TokenFundamentals(contract=contract, available=True)
 
-    monkeypatch.setattr(me.coingecko_client, "get_token_fundamentals", fake_fundamentals)
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, pairs=[_pair(project_links=[])], signal=strong, align=(3, []))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")

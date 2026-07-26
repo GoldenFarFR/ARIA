@@ -8,10 +8,25 @@ from __future__ import annotations
 import pytest
 
 from aria_core import token_holder_intel
+from aria_core.services import coingecko as coingecko_module
 from aria_core.services import token_holder_extraction_cycle as cycle
 
 CONTRACT_A = "0x" + "a" * 40
 CONTRACT_B = "0x" + "b" * 40
+
+
+def _patch_coingecko_fundamentals(monkeypatch, fake_get_token_fundamentals):
+    """Patches the CLASS (``type(coingecko_client)``), never the singleton
+    INSTANCE directly -- ``coingecko_client`` lives for the whole pytest
+    process. Patching the instance leaves a residual instance attribute after
+    monkeypatch's teardown (the original bound method gets *restored* as an
+    instance attribute, permanently shadowing any later class-level patch from
+    other test files) -- same real pollution class found and fixed in
+    test_image_token_curiosity.py/goplus_client (26/07)."""
+    monkeypatch.setattr(
+        type(coingecko_module.coingecko_client), "get_token_fundamentals",
+        staticmethod(fake_get_token_fundamentals),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -112,9 +127,7 @@ async def test_cycle_extracts_and_stores_with_correct_tier(monkeypatch):
             for i in range(3)
         ]
 
-    monkeypatch.setattr(
-        "aria_core.services.coingecko.coingecko_client.get_token_fundamentals", _fake_fundamentals,
-    )
+    _patch_coingecko_fundamentals(monkeypatch, _fake_fundamentals)
     monkeypatch.setattr(
         "aria_core.services.blockscout_x402.get_token_holders_x402_paginated", _fake_paginated,
     )
@@ -147,9 +160,7 @@ async def test_cycle_unknown_market_cap_falls_back_to_default_tier(monkeypatch):
         captured_target["value"] = target_count
         return []
 
-    monkeypatch.setattr(
-        "aria_core.services.coingecko.coingecko_client.get_token_fundamentals", _fake_fundamentals,
-    )
+    _patch_coingecko_fundamentals(monkeypatch, _fake_fundamentals)
     monkeypatch.setattr(
         "aria_core.services.blockscout_x402.get_token_holders_x402_paginated", _fake_paginated,
     )
@@ -170,9 +181,7 @@ async def test_cycle_empty_extraction_stores_nothing_but_never_crashes(monkeypat
     async def _fake_paginated(contract, *, chain, target_count, token_symbol):
         return []  # budget épuisé / panne réseau
 
-    monkeypatch.setattr(
-        "aria_core.services.coingecko.coingecko_client.get_token_fundamentals", _fake_fundamentals,
-    )
+    _patch_coingecko_fundamentals(monkeypatch, _fake_fundamentals)
     monkeypatch.setattr(
         "aria_core.services.blockscout_x402.get_token_holders_x402_paginated", _fake_paginated,
     )
@@ -199,9 +208,7 @@ async def test_cycle_exception_on_one_token_never_blocks_the_others(monkeypatch)
              "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1"},
         ]
 
-    monkeypatch.setattr(
-        "aria_core.services.coingecko.coingecko_client.get_token_fundamentals", _fake_fundamentals,
-    )
+    _patch_coingecko_fundamentals(monkeypatch, _fake_fundamentals)
     monkeypatch.setattr(
         "aria_core.services.blockscout_x402.get_token_holders_x402_paginated", _fake_paginated,
     )
@@ -227,9 +234,7 @@ async def test_cycle_notifies_summary_when_holders_stored(monkeypatch):
              "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1"},
         ]
 
-    monkeypatch.setattr(
-        "aria_core.services.coingecko.coingecko_client.get_token_fundamentals", _fake_fundamentals,
-    )
+    _patch_coingecko_fundamentals(monkeypatch, _fake_fundamentals)
     monkeypatch.setattr(
         "aria_core.services.blockscout_x402.get_token_holders_x402_paginated", _fake_paginated,
     )

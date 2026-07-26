@@ -10,11 +10,25 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core.services import virtuals as virtuals_module
 from aria_core.services.virtuals import VirtualToken
 from aria_core.skills import acp_onchain_scan as scan
 from aria_core.skills.acp_onchain_scan import TokenScanContext
 
 ADDR = "0x" + "a" * 40
+
+
+def _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address):
+    """Patches the CLASS (``type(virtuals_client)``), never the singleton
+    INSTANCE directly -- ``virtuals_client`` lives for the whole pytest process.
+    Patching the instance leaves a residual instance attribute after
+    monkeypatch's teardown (the original bound method gets *restored* as an
+    instance attribute, permanently shadowing any later class-level patch from
+    other test files) -- same real pollution class found and fixed in
+    test_image_token_curiosity.py/goplus_client (26/07)."""
+    monkeypatch.setattr(
+        type(virtuals_module.virtuals_client), "fetch_by_address", staticmethod(fake_fetch_by_address),
+    )
 
 
 def _bonding_token(**overrides) -> VirtualToken:
@@ -45,9 +59,7 @@ async def test_resolve_bonding_phase_captures_product_diligence(monkeypatch):
             additional_details="Équipe doxxée, roadmap publique",
         )
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -64,9 +76,7 @@ async def test_resolve_bonding_phase_product_diligence_absent_stays_none(monkeyp
     async def fake_fetch_by_address(address, chain="BASE"):
         return _bonding_token(description=None, tokenomics=None, additional_details=None)
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -82,9 +92,7 @@ async def test_resolve_bonding_phase_not_found_leaves_diligence_none(monkeypatch
     async def fake_fetch_by_address(address, chain="BASE"):
         return None
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -158,9 +166,7 @@ async def test_resolve_bonding_phase_sets_fields_when_in_bonding(monkeypatch):
         assert address == ADDR
         return _bonding_token()
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -177,9 +183,7 @@ async def test_resolve_bonding_phase_sets_token_created_at_ms(monkeypatch):
     async def fake_fetch_by_address(address, chain="BASE"):
         return _bonding_token(created_at="2026-07-06T12:00:00.000Z")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -192,9 +196,7 @@ async def test_resolve_bonding_phase_missing_created_at_stays_none(monkeypatch):
     async def fake_fetch_by_address(address, chain="BASE"):
         return _bonding_token(created_at=None)
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -214,9 +216,7 @@ async def test_resolve_bonding_phase_onchain_fallback_when_gate_on(monkeypatch):
             virtual_raised=None, pair_address="0xPair", pre_token_address=ADDR,
         )
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
     monkeypatch.setattr(
         "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: True,
     )
@@ -242,9 +242,7 @@ async def test_resolve_bonding_phase_onchain_fallback_skipped_when_gate_off(monk
     def _should_not_be_called(**kwargs):
         raise AssertionError("onchain_graduation_progress ne doit pas être appelé, gate OFF")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
     monkeypatch.setattr(
         "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: False,
     )
@@ -271,9 +269,7 @@ async def test_resolve_bonding_phase_onchain_fallback_not_tried_when_api_heurist
     def _should_not_be_called(**kwargs):
         raise AssertionError("onchain_graduation_progress ne doit pas être appelé, heuristique déjà résolue")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
     monkeypatch.setattr(
         "aria_core.services.base_onchain.onchain_graduation_enabled", lambda: True,
     )
@@ -294,9 +290,7 @@ async def test_resolve_bonding_phase_graduated_token_stays_false(monkeypatch):
     async def fake_fetch_by_address(address, chain="BASE"):
         return _bonding_token(status="AVAILABLE", raw_status="AVAILABLE")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -309,9 +303,7 @@ async def test_resolve_bonding_phase_not_found_stays_false(monkeypatch):
     async def fake_fetch_by_address(address, chain="BASE"):
         return None
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)
@@ -324,9 +316,7 @@ async def test_resolve_bonding_phase_network_failure_never_raises(monkeypatch):
     async def fake_fetch_by_address(address, chain="BASE"):
         raise RuntimeError("Virtuals API indisponible")
 
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
     await scan._resolve_bonding_phase(ctx, ADDR)  # ne doit jamais lever
@@ -358,9 +348,7 @@ async def test_scan_base_token_uses_bonding_data_when_no_dex_pair(monkeypatch):
     monkeypatch.setattr(scan, "_fetch_token_pairs", fake_pairs)
     monkeypatch.setattr(type(scan.blockscout_client), "check_contract_flags", fake_flags)
     monkeypatch.setattr(type(scan.blockscout_client), "get_token_holders", fake_holders)
-    monkeypatch.setattr(
-        "aria_core.services.virtuals.virtuals_client.fetch_by_address", fake_fetch_by_address,
-    )
+    _patch_virtuals_fetch(monkeypatch, fake_fetch_by_address)
 
     ctx = await scan.scan_base_token(ADDR)
 
