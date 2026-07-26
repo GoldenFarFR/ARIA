@@ -118,9 +118,9 @@ async def test_ingest_frame_preserves_solana_address_case(monkeypatch):
     length" observé en prod). Base reste insensible à la casse -- vérifié séparément
     ci-dessous, non-régression.
 
-    20/07 -- ``_ALLOWED_CHAINS`` monkeypatché explicitement : ``DEFAULT_CHAINS`` est
-    resserré à Base seul (décision opérateur), ce test exerce la préservation de
-    casse elle-même, indépendante du périmètre par défaut du moment."""
+    20/07 -- ``_ALLOWED_CHAINS`` monkeypatché explicitement à ("base", "solana") --
+    ce test exerce la préservation de casse elle-même, indépendante de ce que vaut
+    DEFAULT_CHAINS (donc _ALLOWED_CHAINS) par défaut au moment où le test tourne."""
     monkeypatch.setattr(mw, "_ALLOWED_CHAINS", frozenset({"base", "solana"}))
     listener = mw.MomentumWebsocketListener()
     mixed_case = "GuSBoRgzPo6HC7msoRouqYPj3psxGAhm4amc9idHpump"
@@ -157,8 +157,10 @@ async def test_ingest_frame_ignores_malformed_json():
 
 @pytest.mark.asyncio
 async def test_ingest_frame_ignores_disallowed_chain():
+    # "polygon" n'est pas (encore) dans DEFAULT_CHAINS -- "ethereum" ne convient plus
+    # comme exemple de chaîne non couverte depuis son ajout au 26/07.
     listener = mw.MomentumWebsocketListener()
-    await listener._ingest_frame(_listing_frame([_item(chain_id="ethereum", token_address=A)]))
+    await listener._ingest_frame(_listing_frame([_item(chain_id="polygon", token_address=A)]))
     assert listener._pending == {}
 
 

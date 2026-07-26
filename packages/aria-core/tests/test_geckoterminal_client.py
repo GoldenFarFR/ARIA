@@ -607,6 +607,49 @@ class TestGetOhlcvNetworkParam:
 
         assert captured["network"] == "bsc"
 
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_translates_ethereum_to_the_real_gecko_slug(self, monkeypatch):
+        """26/07 -- real gap found adding Ethereum to the momentum pipeline:
+        GECKO_NETWORK_SLUGS existed since 14/07 but was never actually applied
+        anywhere (grepped, zero consumers) -- every caller silently relied on
+        the ARIA chain name matching GeckoTerminal's own slug, true only for
+        "base" by coincidence. GeckoTerminal's real slug for Ethereum is "eth"
+        (verified live, GET /api/v2/networks), not "ethereum" -- without this
+        translation every Ethereum OHLCV lookup would 404/empty silently."""
+        from aria_core.services import ohlcv as ohlcv_module
+
+        captured = {}
+
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
+            captured["network"] = network
+            return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+        monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
+
+        client = GeckoTerminalClient()
+        await client.get_ohlcv("0xpool", network="ethereum")
+
+        assert captured["network"] == "eth"
+
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_base_unaffected_by_the_translation(self, monkeypatch):
+        """Non-régression : "base" -> "base" reste une identité (GECKO_NETWORK_SLUGS
+        mappe base sur lui-même), comportement historique inchangé."""
+        from aria_core.services import ohlcv as ohlcv_module
+
+        captured = {}
+
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
+            captured["network"] = network
+            return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+        monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
+
+        client = GeckoTerminalClient()
+        await client.get_ohlcv("0xpool", network="base")
+
+        assert captured["network"] == "base"
+
 
 # ── Authentification optionnelle (18/07, #211) ───────────────────────────────────────
 

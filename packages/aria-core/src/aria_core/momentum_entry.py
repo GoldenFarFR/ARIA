@@ -100,22 +100,33 @@ logger = logging.getLogger(__name__)
 # 20/07 -- explicit operator decision (following Gemini cross-review): focus on
 # Base ONLY for now -- Solana (active since 15/07) and Robinhood (never really
 # covered, uncertain OHLCV) removed. Roadmap stated by the operator for later:
-# native Ethereum, then 1-2 more chains where projects succeed best -- not yet
-# decided, not yet built. History (15/07-19/07): GoPlus honeypot check confirmed
-# working on all 3 (real curl) AND DexScreener covers them natively -- the
-# technical coverage still exists in `_DEXSCREENER_TO_GOPLUS_CHAIN_ID`/
-# `_COINGECKO_PLATFORM_BY_CHAIN` below (removing an entry would break the
-# CoinGecko fallback for nothing); only the DISCOVERY scope (`DEFAULT_CHAINS`)
-# is narrowed.
-DEFAULT_CHAINS: tuple[str, ...] = ("base",)
+# native Ethereum, then 1-2 more chains where projects succeed best. History
+# (15/07-19/07): GoPlus honeypot check confirmed working on all 3 (real curl)
+# AND DexScreener covers them natively -- the technical coverage still exists
+# in `_DEXSCREENER_TO_GOPLUS_CHAIN_ID`/`_COINGECKO_PLATFORM_BY_CHAIN` below
+# (removing an entry would break the CoinGecko fallback for nothing); only the
+# DISCOVERY scope (`DEFAULT_CHAINS`) is narrowed.
+# 26/07 -- Ethereum added (explicit operator decision, the exact roadmap item
+# named above): all THREE providers this pipeline hard-depends on confirmed
+# live before adding it (never assumed) -- GoPlus (id "1", supported_chains
+# real call), DexScreener (chainId "ethereum", real pair lookup), CoinGecko
+# (platform_id "ethereum", real asset_platforms call). A REAL gap found and
+# fixed in the same pass: GeckoTerminal's own network slug is "eth", not
+# "ethereum" (verified live, GET /api/v2/networks) -- the OHLCV path never
+# translated this (see `GeckoTerminalClient.get_ohlcv`'s fix), which would
+# have silently starved every Ethereum candidate on `ohlcv_unavailable`
+# (empty/404 response, not an error) the moment this chain went live.
+DEFAULT_CHAINS: tuple[str, ...] = ("base", "ethereum")
 
-# DexScreener uses readable slugs ("base", "solana", "robinhood"); GoPlus expects
-# its own chain identifier (numeric for most EVMs, or a special keyword for
-# Solana) -- verified live tonight for these 3 chains.
+# DexScreener uses readable slugs ("base", "solana", "robinhood", "ethereum");
+# GoPlus expects its own chain identifier (numeric for most EVMs, or a special
+# keyword for Solana) -- verified live for each entry (real supported_chains
+# call, 26/07 for "ethereum").
 _DEXSCREENER_TO_GOPLUS_CHAIN_ID: dict[str, str] = {
     "base": "8453",
     "solana": "solana",
     "robinhood": "4663",
+    "ethereum": "1",
 }
 
 _SOURCE_LIMIT_PER_CHANNEL = 30
@@ -328,12 +339,14 @@ _BURN_ADDRESSES = ("0x" + "0" * 40, "0x000000000000000000000000000000000000dead"
 # nothing (preserves pipeline speed, #194 doctrine -- most legitimate projects
 # already have project_links, so the network path stays rare in practice).
 # CoinGecko platforms confirmed via a real call to /api/v3/asset_platforms
-# (20/07): base/solana/robinhood ALL 3 have a direct platform_id -- no chain in
-# the momentum pipeline is structurally denied the CoinGecko fallback.
+# (20/07, "ethereum" added 26/07 same way): all 4 have a direct platform_id --
+# no chain in the momentum pipeline is structurally denied the CoinGecko
+# fallback.
 _COINGECKO_PLATFORM_BY_CHAIN: dict[str, str] = {
     "base": "base",
     "solana": "solana",
     "robinhood": "robinhood",
+    "ethereum": "ethereum",
 }
 
 # 19/07 -- relative volume (RVOL, Gemini cross-review, round 4). Targets the

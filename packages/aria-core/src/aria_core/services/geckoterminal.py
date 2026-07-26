@@ -372,14 +372,27 @@ class GeckoTerminalClient:
         default ``"standard"`` is the original day/4h/1h ladder, unchanged
         behavior for every existing caller. ``**_kwargs`` absorbs any
         inherited period/aggregate/limit (no caller in production currently
-        passes them) without raising."""
+        passes them) without raising.
+
+        26/07 -- real gap found while adding Ethereum to the momentum
+        pipeline's ``DEFAULT_CHAINS``: ``GECKO_NETWORK_SLUGS`` existed since
+        14/07 (#157) but was NEVER actually applied anywhere in the codebase
+        (grepped, zero consumers) -- every caller silently relied on the ARIA
+        chain name already matching GeckoTerminal's own slug, true only for
+        ``"base"`` by coincidence. GeckoTerminal's real slug for Ethereum is
+        ``"eth"``, not ``"ethereum"`` (verified live, GET
+        ``/api/v2/networks``) -- without this translation, every Ethereum
+        OHLCV lookup would have hit a nonexistent network path and silently
+        starved every candidate on ``ohlcv_unavailable``. Applied HERE (the
+        one place every caller funnels through), never at each call site."""
         from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
         extra: dict[str, object] = {}
         if min_useful_candles is not None:
             extra["min_useful_candles"] = min_useful_candles
 
-        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network, mode=mode, **extra)
+        gecko_network = GECKO_NETWORK_SLUGS.get(network, network)
+        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=gecko_network, mode=mode, **extra)
         if not wide.available or not wide.candles:
             return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
         return OHLCVResult(candles=wide.candles, available=True, error=None)

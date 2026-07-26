@@ -121,8 +121,8 @@ async def test_discover_dedupes_across_sources(monkeypatch):
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
     monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
-    # 20/07 -- DEFAULT_CHAINS resserré à Base seul (décision opérateur) ; ce test
-    # exerce le dédoublonnage inter-sources, indépendant du périmètre par défaut.
+    # Chaînes passées explicitement ("base", "solana") -- ce test exerce le
+    # dédoublonnage inter-sources, indépendant de ce que vaut DEFAULT_CHAINS.
     candidates = await me.discover_momentum_candidates(chains=("base", "solana"))
 
     keys = {(c["contract"], c["chain"]) for c in candidates}
@@ -218,7 +218,10 @@ async def test_discover_filters_unlisted_chains(monkeypatch):
 
     candidates = await me.discover_momentum_candidates(chains=("base", "solana", "robinhood"))
 
-    assert candidates == []  # "ethereum" n'est pas dans DEFAULT_CHAINS -- garde-fou honeypot non couvert
+    # "ethereum" n'est pas dans le tuple `chains` explicitement passé ci-dessus
+    # (indépendant de DEFAULT_CHAINS, qui inclut "ethereum" depuis le 26/07) --
+    # ce test vérifie le filtrage par le paramètre explicite, pas le défaut.
+    assert candidates == []
 
 
 @pytest.mark.asyncio
@@ -239,9 +242,8 @@ async def test_discover_tolerates_source_failure(monkeypatch):
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
     monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
 
-    # 20/07 -- DEFAULT_CHAINS resserré à Base seul (décision opérateur) ; ce test
-    # exerce la tolérance de panne + la casse Solana, indépendant du périmètre
-    # par défaut.
+    # Chaînes passées explicitement ("base", "solana") -- ce test exerce la
+    # tolérance de panne + la casse Solana, indépendant de ce que vaut DEFAULT_CHAINS.
     candidates = await me.discover_momentum_candidates(chains=("base", "solana"))
 
     # Casse préservée pour Solana (18/07) -- "Sol222" reste "Sol222", jamais "sol222".
@@ -746,7 +748,9 @@ async def test_honeypot_genuine_failure_is_never_retried(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_honeypot_unmapped_chain_fails_closed():
-    clear, reason, code = await me._check_honeypot(CONTRACT, "ethereum")
+    # "polygon" n'est pas (encore) dans `_DEXSCREENER_TO_GOPLUS_CHAIN_ID` -- "ethereum"
+    # ne convient plus comme exemple depuis son ajout au mapping le 26/07.
+    clear, reason, code = await me._check_honeypot(CONTRACT, "polygon")
     assert clear is False
     assert "non couverte" in reason.lower()
     assert code == "chain_not_covered"
@@ -765,6 +769,24 @@ async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
     await me._check_honeypot(CONTRACT, "solana")
     assert seen["chain_id"] == "solana"
+
+
+@pytest.mark.asyncio
+async def test_honeypot_translates_chain_id_for_ethereum(monkeypatch):
+    """26/07 -- Ethereum ajouté à `_DEXSCREENER_TO_GOPLUS_CHAIN_ID` ("1", vérifié en
+    direct contre `supported_chains`) -- verrouille la traduction, même patron que
+    Solana ci-dessus."""
+    from aria_core.services import goplus as gp
+
+    seen = {}
+
+    async def fake_get_token_security(address, *, chain_id):
+        seen["chain_id"] = chain_id
+        return FakeSecurity()
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    await me._check_honeypot(CONTRACT, "ethereum")
+    assert seen["chain_id"] == "1"
 
 
 # ── #207 (18/07) : repli RugCheck sur Solana quand GoPlus n'a AUCUNE donnée ──────────
@@ -3804,10 +3826,10 @@ async def test_result_includes_chain_scoped_category_when_multi_chain_active(mon
     quelque chose (plusieurs chaînes actives), jamais mélangé avec les catégories
     launchpad de l'ancien pipeline VC-thesis.
 
-    20/07 -- ``DEFAULT_CHAINS`` monkeypatché explicitement à 2 chaînes : depuis le
-    resserrement à Base seule (même jour), le comportement par défaut est couvert par
-    ``test_category_empty_when_single_chain_active`` ci-dessous -- ce test verrouille
-    la catégorisation par chaîne pour le jour où plusieurs chaînes seront réactivées."""
+    20/07 -- ``DEFAULT_CHAINS`` monkeypatché explicitement à 2 chaînes (indépendant de la
+    valeur réelle du défaut, qui est elle-même multi-chaînes depuis le 26/07 -- cf.
+    ``test_category_populated_by_default_since_multi_chain`` ci-dessous) -- ce test
+    verrouille la catégorisation par chaîne indépendamment de ce que vaut le défaut réel."""
     monkeypatch.setattr(me, "DEFAULT_CHAINS", ("base", "solana"))
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
@@ -3817,15 +3839,37 @@ async def test_result_includes_chain_scoped_category_when_multi_chain_active(mon
 
 
 @pytest.mark.asyncio
-async def test_category_empty_when_single_chain_active(monkeypatch):
+async def test_category_populated_by_default_since_multi_chain(monkeypatch):
     """20/07 -- angle mort trouvé par une revue croisée externe, confirmé dans le code :
-    catégoriser par chaîne (19/07) ne protège plus de rien depuis que ``DEFAULT_CHAINS``
-    s'est resserré à Base seule (même jour) -- toutes les positions retombaient dans le
-    même seau "momentum-base", transformant le plafond de diversification (#187, 40%) en
-    plafond global de facto à 400 000$ sur tout le portefeuille de trading, bien avant
-    ``MAX_POSITIONS`` ou le cash disponible. Catégorie vide (comportement par défaut réel
-    aujourd'hui, ``DEFAULT_CHAINS = ("base",)``) neutralise le plafond via le garde déjà
-    existant ``if not category`` -- ce test aurait échoué avant le correctif."""
+    catégoriser par chaîne (19/07) ne protège plus de rien si ``DEFAULT_CHAINS`` ne
+    contient qu'une seule chaîne -- toutes les positions retomberaient dans le même seau
+    "momentum-<chain>", transformant le plafond de diversification (#187, 40%) en plafond
+    global de facto sur tout le portefeuille de trading, bien avant ``MAX_POSITIONS`` ou le
+    cash disponible. Catégorie vide dans ce cas (garde déjà existant ``if not category``
+    dans ``fit_alloc_to_concentration_cap``/``category_exposure_usd``) neutraliserait
+    proprement le plafond.
+
+    26/07 -- ``DEFAULT_CHAINS`` est redevenu réellement multi-chaînes (Ethereum ajouté à
+    Base) -- le comportement par défaut est donc désormais l'inverse de ce que ce test
+    vérifiait jusqu'ici : la catégorie EST peuplée par défaut, le plafond de concentration
+    est actif sans monkeypatch. Ce test verrouille ce nouvel état réel plutôt que de rester
+    figé sur un ancien défaut mono-chaîne périmé."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["category"] == "momentum-base"
+
+
+@pytest.mark.asyncio
+async def test_category_empty_when_chains_monkeypatched_to_single_chain(monkeypatch):
+    """26/07 -- ``DEFAULT_CHAINS`` monkeypatché explicitement à une seule chaîne : verrouille
+    le garde ``if len(DEFAULT_CHAINS) > 1`` (et donc, en aval, le garde ``if not category``
+    de ``fit_alloc_to_concentration_cap``/``category_exposure_usd``) pour le jour où le
+    sourcing redeviendrait mono-chaîne -- couverture qui existait implicitement via le
+    défaut réel avant que celui-ci ne redevienne multi-chaînes le 26/07 (Ethereum ajouté à
+    Base), désormais explicite pour ne pas la perdre."""
+    monkeypatch.setattr(me, "DEFAULT_CHAINS", ("base",))
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
