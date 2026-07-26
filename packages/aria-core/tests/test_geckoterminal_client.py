@@ -94,7 +94,7 @@ async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
     from aria_core.services import ohlcv as ohlcv_module
     from aria_core.skills.ta_levels import Candle
 
-    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
         assert pool_address == "0xpool"
         return ohlcv_module.OHLCVResult(
             pool_address=pool_address,
@@ -124,7 +124,7 @@ async def test_get_ohlcv_forwards_min_useful_candles_to_wide_client(monkeypatch)
 
     captured = {}
 
-    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", min_useful_candles=20):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", min_useful_candles=20, **_kwargs):
         captured["min_useful_candles"] = min_useful_candles
         return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
 
@@ -161,7 +161,7 @@ async def test_get_ohlcv_omits_min_useful_candles_when_not_passed(monkeypatch):
 async def test_get_ohlcv_unavailable_when_wide_client_has_nothing(monkeypatch):
     from aria_core.services import ohlcv as ohlcv_module
 
-    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
         return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, error="pool introuvable sur GeckoTerminal")
 
     monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
@@ -546,7 +546,7 @@ class TestWethPoolSelectionRegression:
             self._CORRUPTED_POOL: 244.664600282265,  # valeur mesurée en direct le 14/07, pool corrompu
         }
 
-        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
             close = prices_by_pool[pool_address]
             return ohlcv_module.OHLCVResult(
                 pool_address=pool_address,
@@ -596,7 +596,7 @@ class TestGetOhlcvNetworkParam:
 
         captured = {}
 
-        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base"):
+        async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
             captured["network"] = network
             return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
 

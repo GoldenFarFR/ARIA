@@ -347,6 +347,7 @@ class GeckoTerminalClient:
         *,
         network: str = NETWORK,
         min_useful_candles: int | None = None,
+        mode: str = "standard",
         **_kwargs: object,
     ) -> OHLCVResult:
         """Delegates to ``services.ohlcv.ohlcv_client`` -- 14/07 fix (#157):
@@ -366,15 +367,19 @@ class GeckoTerminalClient:
         passed through to ``services/ohlcv.py`` -- ``None`` by default (the
         corresponding parameter of ``ohlcv_client.get_ohlcv`` then keeps ITS
         own default, ``_MIN_USEFUL_CANDLES``, no change for existing callers).
-        ``**_kwargs`` absorbs any inherited period/aggregate/limit (no caller
-        in production currently passes them) without raising."""
+        ``mode`` (Item #101, 26/07): ``"scalping"`` is passed through to reach
+        ``services/ohlcv.py``'s dedicated 15min/30min sub-hour ladder --
+        default ``"standard"`` is the original day/4h/1h ladder, unchanged
+        behavior for every existing caller. ``**_kwargs`` absorbs any
+        inherited period/aggregate/limit (no caller in production currently
+        passes them) without raising."""
         from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
         extra: dict[str, object] = {}
         if min_useful_candles is not None:
             extra["min_useful_candles"] = min_useful_candles
 
-        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network, **extra)
+        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=network, mode=mode, **extra)
         if not wide.available or not wide.candles:
             return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
         return OHLCVResult(candles=wide.candles, available=True, error=None)

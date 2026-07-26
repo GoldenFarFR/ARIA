@@ -91,7 +91,7 @@ from aria_core.services.dexscreener import (
     token_profiles_recent_updates,
 )
 from aria_core.skills.candlestick_patterns import detect_patterns
-from aria_core.skills.entry_signals import detect_entry
+from aria_core.skills.entry_signals import SCALPING_RSI_PERIOD, _RSI_PERIOD, detect_entry
 from aria_core.skills.indicators import bollinger_bands, ema_series, macd_series
 from aria_core.skills.ta_levels import Candle
 
@@ -948,7 +948,10 @@ def _wash_trading_ratio_confirmed(contract: str, chain: str, volume_to_liq: floa
     return (now - breach_since) >= _WASH_TRADING_CONFIRMATION_SECONDS
 
 
-async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None) -> list[Candle]:
+async def _fetch_candles(
+    pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
+    mode: str = "standard",
+) -> list[Candle]:
     """FIVE-stage OHLCV cascade (16/07, explicit operator request: "I want
     everything wired even if they do the same thing, a highway not a country
     road" then "wire them all, I want a complete web with dexscreener and dune";
@@ -980,12 +983,23 @@ async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", p
          not POOL address).
     Every provider degrades honestly (no fabricated candle); if all five fail,
     `[]` -- the pipeline already knows how to handle this case (HOLD, "OHLCV
-    unavailable")."""
+    unavailable").
+
+    ``mode="scalping"`` (Item #101, 26/07): ONLY stage 1 (GeckoTerminal) is
+    attempted, requesting its dedicated 15min/30min sub-hour ladder. Stages
+    2-5 (CoinMarketCap/Mobula/DexScreener synthesis/Dune) have NO sub-hour
+    granularity -- none of them can produce real 15-30min candles, only
+    day/hour-scale data. Falling back to one of them would silently feed
+    day-scale candles into a scalping RSI(10)/lookback tuned for 15-30min
+    noise, corrupting the read without any visible error. A scalping
+    candidate whose pool lacks GeckoTerminal minute-candles is therefore
+    skipped honestly (``[]`` -> HOLD, "OHLCV unavailable"), never degraded to
+    a wrong-granularity fallback."""
     from aria_core.services.geckoterminal import geckoterminal_client
 
     if not _provider_in_cooldown("geckoterminal"):
         try:
-            result = await geckoterminal_client.get_ohlcv(pool_address, network=chain)
+            result = await geckoterminal_client.get_ohlcv(pool_address, network=chain, mode=mode)
         except Exception as exc:  # noqa: BLE001
             logger.info("_fetch_candles: GeckoTerminal %s/%s failed (%s)", chain, pool_address[:10], exc)
             result = None
@@ -996,6 +1010,10 @@ async def _fetch_candles(pool_address: str, chain: str, *, contract: str = "", p
             _record_provider_outcome("geckoterminal", ok=False)
     else:
         logger.info("_fetch_candles: GeckoTerminal paused (adaptive circuit breaker), falling back directly")
+
+    if mode == "scalping":
+        # No other provider below has sub-hour granularity -- see docstring.
+        return []
 
     from aria_core.services import coinmarketcap
 
@@ -1667,9 +1685,23 @@ async def evaluate_hard_gates(
 
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
-    current_regime: str | None = None, relaxed: bool = False,
+    current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
 ) -> dict | None:
     """Momentum entry decision (#194) for ``contract`` on ``chain``.
+
+    ``mode`` (Item #101, 26/07, default ``"standard"`` = strictly unchanged
+    behavior): ``"scalping"`` switches three things, all confirmed by the
+    operator-requested workflow research: (1) ``_fetch_candles`` requests
+    GeckoTerminal's dedicated 15-30min ladder and skips every other provider
+    on failure (see its docstring -- no fallback provider has sub-hour
+    granularity); (2) ``detect_entry`` uses ``SCALPING_RSI_PERIOD`` (10)
+    instead of the swing default (14); (3) the conviction/fundamentals
+    diligence (``conviction_research.py`` + its x402 fallback) is skipped
+    entirely -- confirmed to carry no predictive value on a 15-30min horizon
+    and to have zero veto power in the pipeline (purely informational), so
+    skipping it is a pure speed/cost win, not a safety regression. The
+    honeypot/security hard gates (``evaluate_hard_gates``) are UNCHANGED and
+    fully active regardless of mode.
 
     ``relaxed`` (07/23, daily-trade-floor diagnostic, default ``False`` =
     strictly unchanged behavior): when ``True``, the SOFT/technical bars are
@@ -1783,7 +1815,7 @@ async def evaluate_momentum_entry(
         return None
 
     reasons: list[str] = [honeypot_reason]
-    candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best)
+    candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best, mode=mode)
     if not candles:
         reasons.append("OHLCV indisponible sur cette chaîne -- R/R non calculable, pas d'entrée")
         return {
@@ -1799,8 +1831,11 @@ async def evaluate_momentum_entry(
     # the displayed R/R could then significantly over/under-estimate the one of
     # the trade ACTUALLY taken (cf. entry_signals.detect_entry docstring).
     # invalidation/target remain derived from the real Fibonacci/RSI levels,
-    # unchanged.
-    signal = detect_entry(candles, execution_price=best.price_usd)
+    # unchanged. Item #101 (26/07): scalping mode uses SCALPING_RSI_PERIOD
+    # (10) instead of the swing default (14) -- see evaluate_momentum_entry's
+    # docstring.
+    entry_period = SCALPING_RSI_PERIOD if mode == "scalping" else _RSI_PERIOD
+    signal = detect_entry(candles, execution_price=best.price_usd, period=entry_period)
     reasons.extend(signal.reasons)
     if not signal.present or signal.rr is None or signal.rr <= 0:
         reasons.append("pas de setup golden pocket + divergence RSI avec R/R positif")
@@ -1976,7 +2011,13 @@ async def evaluate_momentum_entry(
     conviction_process_trail: str | None = None
     conviction_website_corroborated: bool | None = None
     conviction_posting_cadence: str | None = None
-    if action == "BUY":
+    # Item #101 (26/07): skipped entirely in scalping mode -- confirmed by the
+    # operator-requested workflow research to carry no predictive value on a
+    # 15-30min horizon, and purely informational here (zero veto power in this
+    # pipeline), so skipping it is a pure speed/cost win, never a safety
+    # regression. Frees the shared weekly x402 budget for the swing/VC path
+    # where this diligence genuinely matters.
+    if action == "BUY" and mode != "scalping":
         from aria_core.conviction_research import research_project_potential
 
         research = await research_project_potential(
@@ -2027,6 +2068,9 @@ async def evaluate_momentum_entry(
 
     return {
         "action": action,
+        # Item #101 (26/07) -- lets paper_trader.py/the thesis text know
+        # which mode produced this signal ("standard"/"scalping").
+        "mode": mode,
         "chain": chain,
         "symbol": best.base_symbol,
         "price": best.price_usd,

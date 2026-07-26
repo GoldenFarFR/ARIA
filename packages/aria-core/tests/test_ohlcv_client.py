@@ -251,6 +251,70 @@ async def test_shared_throttle_opt_in_calls_the_shared_limiter(monkeypatch):
     assert called is True
 
 
+# ── mode="scalping" (Item #101, 26/07 -- dedicated 15min/30min sub-hour ladder) ─
+
+@pytest.mark.asyncio
+async def test_scalping_mode_uses_15min_candles_when_available(monkeypatch):
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(monkeypatch, {_url("minute"): FakeResponse(200, _payload(_rows(120)))})
+
+    res = await client.get_ohlcv(POOL, mode="scalping")
+
+    assert res.available is True
+    assert res.timeframe == "15M"
+    assert len(res.candles) == 120
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_falls_back_to_30min_when_15min_thin(monkeypatch):
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    # 15min vide -> descend au 30min (même period="minute", aggregate différent).
+    _patch(
+        monkeypatch,
+        {_url("minute"): [FakeResponse(200, _payload([])), FakeResponse(200, _payload(_rows(50)))]},
+    )
+
+    res = await client.get_ohlcv(POOL, mode="scalping")
+
+    assert res.available is True
+    assert res.timeframe == "30M"
+    assert len(res.candles) == 50
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_never_falls_back_to_standard_ladder(monkeypatch):
+    """Si 15min ET 30min échouent tous les deux, le mode scalping renvoie
+    available=False -- il ne dégrade JAMAIS vers le ladder standard (day/hour),
+    qui corromprait silencieusement la lecture RSI/golden-pocket calibrée pour
+    du 15-30min avec des bougies day-scale."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {_url("minute"): [FakeResponse(404), FakeResponse(404)]},
+    )
+
+    res = await client.get_ohlcv(POOL, mode="scalping")
+
+    assert res.available is False
+    assert res.candles == []
+    assert res.error
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_never_calls_minute_endpoint(monkeypatch):
+    """Non-régression : mode="standard" (défaut, tous les appelants existants)
+    ne touche jamais au endpoint minute -- comportement 1D/4H/1H inchangé."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(monkeypatch, {_url("day"): FakeResponse(200, _payload(_rows(40)))})
+
+    res = await client.get_ohlcv(POOL)  # mode par défaut = "standard"
+
+    assert res.available is True
+    assert res.timeframe == "1D"
+    # aucune réponse "minute" n'a été enregistrée -- si le code y avait appelé,
+    # FakeClient.get lèverait un KeyError (non attrapé), faisant échouer le test.
+
+
 @pytest.mark.asyncio
 async def test_module_singleton_uses_the_shared_throttle():
     """The one real-production instance (ohlcv_client) must opt in -- this is

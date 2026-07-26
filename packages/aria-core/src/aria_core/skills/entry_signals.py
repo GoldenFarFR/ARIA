@@ -33,6 +33,15 @@ _RSI_PERIOD = 14
 RSI_DIVERGENCE_MIN = 20.0
 RSI_DIVERGENCE_MAX = 40.0
 
+# Item #101 (26/07): dedicated RSI period for the scalping mode (15-30min
+# candles). Workflow research (3-agent pipeline, operator-requested): generic
+# forex-scalping advice (period 5-9) is calibrated for a CALMER underlying --
+# Base microcaps are already noisy even on a swing timeframe, so a period
+# that short would amplify false signals. Multiple sources converge on 9-11
+# specifically paired with a 15min chart -- 10 picked as the middle of that
+# range, not backtested on real Base memecoins yet (flagged open risk).
+SCALPING_RSI_PERIOD = 10
+
 
 @dataclass(frozen=True)
 class EntrySignal:
@@ -149,8 +158,14 @@ def detect_entry(
     lookback: int = _DEFAULT_LOOKBACK,
     tolerance: float = 0.03,
     execution_price: float | None = None,
+    period: int = _RSI_PERIOD,
 ) -> EntrySignal:
     """Detects the "golden pocket + RSI divergence" setup over <= ``lookback`` candles.
+
+    ``period`` (Item #101, 26/07): the RSI period passed through to
+    ``bullish_rsi_divergence`` -- default ``_RSI_PERIOD`` (14, swing/standard
+    mode), unchanged behavior for every existing caller. The scalping mode
+    passes ``SCALPING_RSI_PERIOD`` (10) instead.
 
     ``present`` only if the current price is in (or very close to) the deep
     Fibonacci zone AND a bullish RSI divergence is present. Then provides
@@ -170,12 +185,12 @@ def detect_entry(
     reference for R/R (AND the returned ``entry`` field) --
     ``invalidation``/``target`` stay derived from the real Fibonacci/RSI
     levels, unchanged (they describe the setup's STRUCTURE, not a fill price)."""
-    if len(candles) < _RSI_PERIOD + 2:
+    if len(candles) < period + 2:
         return EntrySignal(present=False, reasons=["série trop courte pour un signal fiable"])
 
     window = candles[-lookback:]
     fib = fibonacci_zone(window)
-    div, div_base = bullish_rsi_divergence(candles, lookback=lookback)
+    div, div_base = bullish_rsi_divergence(candles, lookback=lookback, period=period)
     close = candles[-1].close
     reasons: list[str] = []
 

@@ -904,7 +904,7 @@ async def test_fetch_candles_uses_geckoterminal_first(monkeypatch):
 
     gt_candles = _plain_candles(3)
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
 
     cmc_called = False
@@ -927,7 +927,7 @@ async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     cmc_candles = _plain_candles(4)
@@ -947,7 +947,7 @@ async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -971,7 +971,7 @@ async def test_fetch_candles_falls_back_to_mobula_when_configured(monkeypatch):
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -1001,7 +1001,7 @@ async def test_fetch_candles_skips_mobula_when_not_configured(monkeypatch):
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -1032,7 +1032,7 @@ async def test_fetch_candles_skips_mobula_without_contract(monkeypatch):
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -1063,7 +1063,7 @@ async def test_fetch_candles_mobula_not_tried_when_coinmarketcap_succeeds(monkey
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     cmc_candles = _plain_candles(4)
@@ -1093,7 +1093,7 @@ async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import dune
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -1120,7 +1120,7 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import dune
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         raise RuntimeError("boom")
 
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
@@ -1150,7 +1150,7 @@ async def test_fetch_candles_provider_cooldown_skips_after_threshold_failures(mo
 
     gt_calls = 0
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         nonlocal gt_calls
         gt_calls += 1
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1182,7 +1182,7 @@ async def test_fetch_candles_provider_recovers_after_success(monkeypatch):
     outcomes = iter([False, False, True, False, False])
     gt_calls = 0
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         nonlocal gt_calls
         gt_calls += 1
         ok = next(outcomes)
@@ -1206,7 +1206,7 @@ async def test_fetch_candles_empty_result_not_counted_as_provider_failure(monkey
     contrairement à ``available=False`` (rate limit/panne confirmée)."""
     from aria_core.services import geckoterminal as gt
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=True, error=None)
 
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
@@ -1223,7 +1223,7 @@ async def test_fetch_candles_provider_cooldown_expires(monkeypatch):
     écoulées, GeckoTerminal est retenté normalement."""
     from aria_core.services import geckoterminal as gt
 
-    async def fake_gt_ohlcv(pool_address, *, network):
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
@@ -1304,7 +1304,7 @@ def _patch_pipeline(
     async def fake_fetch_pairs(contract, *, chain="base"):
         return pairs if pairs is not None else [_pair()]
 
-    async def fake_candles(pool_address, chain, *, contract="", pair=None):
+    async def fake_candles(pool_address, chain, *, contract="", pair=None, **_kwargs):
         return candles if candles is not None else [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
 
     def fake_detect_entry(candles_arg, **kwargs):
@@ -3792,6 +3792,150 @@ async def test_category_absent_on_early_hold_before_alignment_computed(monkeypat
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert "category" not in result
+
+
+# ── mode="scalping" (Item #101, 26/07) ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_scalping_mode_passes_scalping_flag_to_fetch_candles(monkeypatch, test_settings):
+    """mode="scalping" doit atteindre _fetch_candles avec mode="scalping" -- capture
+    directe des kwargs reçus plutôt que le fake générique de _patch_pipeline (qui les
+    ignore)."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    received = {}
+
+    async def capturing_fetch(pool_address, chain, *, contract="", pair=None, mode="standard"):
+        received["mode"] = mode
+        return [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
+
+    monkeypatch.setattr(me, "_fetch_candles", capturing_fetch)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert received["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_passes_standard_flag_to_fetch_candles(monkeypatch, test_settings):
+    """Non-régression : sans mode explicite, "standard" doit être le défaut reçu par
+    _fetch_candles."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    received = {}
+
+    async def capturing_fetch(pool_address, chain, *, contract="", pair=None, mode="standard"):
+        received["mode"] = mode
+        return [Candle(ts=0, open=1, high=1, low=1, close=1)] * 20
+
+    monkeypatch.setattr(me, "_fetch_candles", capturing_fetch)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert received["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_uses_scalping_rsi_period_in_detect_entry(monkeypatch, test_settings):
+    """mode="scalping" doit passer SCALPING_RSI_PERIOD (10) à detect_entry, pas le
+    défaut swing (14)."""
+    _patch_pipeline(monkeypatch, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    received = {}
+
+    def capturing_detect_entry(candles_arg, **kwargs):
+        received["period"] = kwargs.get("period")
+        return EntrySignal(present=False, reasons=["setup non réuni"])
+
+    monkeypatch.setattr(me, "detect_entry", capturing_detect_entry)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert received["period"] == me.SCALPING_RSI_PERIOD
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_uses_default_rsi_period_in_detect_entry(monkeypatch, test_settings):
+    """Non-régression : sans mode explicite, la période RSI par défaut (14) reste
+    utilisée."""
+    _patch_pipeline(monkeypatch, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    received = {}
+
+    def capturing_detect_entry(candles_arg, **kwargs):
+        received["period"] = kwargs.get("period")
+        return EntrySignal(present=False, reasons=["setup non réuni"])
+
+    monkeypatch.setattr(me, "detect_entry", capturing_detect_entry)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert received["period"] == me._RSI_PERIOD
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_never_calls_conviction_research_even_on_confirmed_buy(monkeypatch, test_settings):
+    """Même avec le gate ARIA_CONVICTION_RESEARCH_ENABLED actif et un achat confirmé,
+    mode="scalping" ne doit jamais appeler research_project_potential (aucune valeur
+    prédictive à cet horizon, coût/latence à économiser -- confirmé par le workflow
+    de recherche du 26/07)."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    called = False
+
+    async def fake_research(contract, symbol, chain, known_links=None):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result["action"] == "BUY"
+    assert called is False
+    assert result["potential_score"] is None
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_still_calls_conviction_research(monkeypatch, test_settings):
+    """Non-régression : mode="standard" (défaut) garde l'appel conviction_research
+    inchangé quand le gate est actif."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    called = False
+
+    async def fake_research(contract, symbol, chain, known_links=None):
+        nonlocal called
+        called = True
+        return ConvictionResearch(available=False)
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert called is True
+
+
+@pytest.mark.asyncio
+async def test_result_includes_mode_field(monkeypatch, test_settings):
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result["mode"] == "scalping"
+
+    result2 = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result2["mode"] == "standard"
 
 
 # ── mode plancher -- libellé exact du point faible (25/07, operator-found gap, cas

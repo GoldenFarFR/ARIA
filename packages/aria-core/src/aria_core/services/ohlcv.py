@@ -51,6 +51,31 @@ _FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
 # levels → we try the next finer timeframe in the ladder.
 _MIN_USEFUL_CANDLES = 20
 
+# Item #101 (26/07) -- dedicated sub-hour ladder for the scalping mode
+# (15-30min candles, operator-fixed). The standard ladder above never goes
+# below 1h -- structurally too coarse for a scalping decision. 15min first
+# (the operator's primary choice), 30min as a fallback for a pool too thin
+# for 15min candles. Deliberately does NOT fall through to the standard
+# ladder's 1D/4H/1H rungs: mixing a scalping RSI/golden-pocket read (period
+# 10, tuned for 15-30min noise) with day-scale candles would silently
+# corrupt its meaning -- a candidate whose pool is too thin even for 30min
+# candles gets an honest `available=False`, never a misleadingly coarse
+# fallback (same "never fabricate, never mislead" dome as the rest of this
+# module).
+_SCALPING_FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
+    ("minute", 15, 120, "15M"),
+    ("minute", 30, 120, "30M"),
+)
+
+
+def _ladder_for_mode(mode: str) -> tuple[tuple[str, int, int, str], ...]:
+    """``mode="scalping"`` -> the dedicated sub-hour ladder above; anything
+    else (default ``"standard"``) -> the original 1D/4H/1H ladder, unchanged
+    behavior for every existing caller."""
+    if mode == "scalping":
+        return _SCALPING_FETCH_LADDER
+    return _FETCH_LADDER
+
 
 @dataclass
 class OHLCVResult:
@@ -213,7 +238,8 @@ class OHLCVClient:
             return response.json(), None
 
     async def get_ohlcv(
-        self, pool_address: str, *, network: str = DEFAULT_NETWORK, min_useful_candles: int = _MIN_USEFUL_CANDLES,
+        self, pool_address: str, *, network: str = DEFAULT_NETWORK,
+        min_useful_candles: int = _MIN_USEFUL_CANDLES, mode: str = "standard",
     ) -> OHLCVResult:
         """Fetches the best available OHLCV series for a pool.
 
@@ -232,7 +258,12 @@ class OHLCVClient:
         GeckoTerminal calls (insufficient day -> 4h -> 1h) for a
         young/microcap token that doesn't yet have 20 daily candles. Default
         unchanged (`_MIN_USEFUL_CANDLES`) for all existing callers -- no
-        regression on `/vc`."""
+        regression on `/vc`.
+
+        ``mode`` (Item #101, 26/07): ``"scalping"`` walks the dedicated
+        15min -> 30min ladder instead -- see ``_ladder_for_mode``. Default
+        ``"standard"`` is the original 1D/4H/1H ladder, unchanged behavior
+        for every existing caller."""
         pool = (pool_address or "").strip()
         if not pool:
             return OHLCVResult(pool_address="", network=network, error=f"{UNAVAILABLE} (missing pool)")
@@ -240,7 +271,7 @@ class OHLCVClient:
         best: OHLCVResult | None = None
         last_error: str | None = None
 
-        for period, aggregate, limit, label in _FETCH_LADDER:
+        for period, aggregate, limit, label in _ladder_for_mode(mode):
             data, error = await self._get_json(
                 f"/networks/{network}/pools/{pool}/ohlcv/{period}",
                 {"aggregate": aggregate, "limit": limit},
