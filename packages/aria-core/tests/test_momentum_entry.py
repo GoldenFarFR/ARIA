@@ -92,6 +92,17 @@ def _reset_holders_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_pair_snapshot_cache():
+    """26/07 -- ``_pair_snapshot_cache`` is a module-level dict keyed by
+    (chain, contract), shared between ``_batch_liquidity_prefilter`` and
+    ``evaluate_hard_gates``. Same trap as ``_reset_holders_cache`` above --
+    almost every test in this file uses the SAME ``CONTRACT``/``"base"`` pair."""
+    me._pair_snapshot_cache.clear()
+    yield
+    me._pair_snapshot_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     """21/07 -- ``_check_honeypot`` peut désormais attendre réellement
     (``_HONEYPOT_NO_DATA_RETRY_DELAY_S``) avant un retry ciblé sur ``no_data`` --
@@ -986,6 +997,7 @@ async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
 async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -993,8 +1005,12 @@ async def test_fetch_candles_falls_back_to_dexscreener_synthesis(monkeypatch):
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
         return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
@@ -1040,6 +1056,7 @@ async def test_fetch_candles_skips_mobula_when_not_configured(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1053,9 +1070,13 @@ async def test_fetch_candles_skips_mobula_when_not_configured(monkeypatch):
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)
 
     pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
@@ -1071,6 +1092,7 @@ async def test_fetch_candles_skips_mobula_without_contract(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1084,9 +1106,13 @@ async def test_fetch_candles_skips_mobula_without_contract(monkeypatch):
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
 
     pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
@@ -1132,6 +1158,7 @@ async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import dune
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1144,9 +1171,13 @@ async def test_fetch_candles_falls_back_to_dune_as_last_resort(monkeypatch):
     async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
         return dune.DunePriceHistoryResult(candles=dune_candles, available=True, error=None)
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     # pas de `pair` fourni -> saute l'étage DexScreener, tombe directement sur Dune
@@ -1159,6 +1190,7 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import dune
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         raise RuntimeError("boom")
@@ -1169,9 +1201,13 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     async def fake_dune_price_history(contract_address, *, blockchain="base", lookback_hours=48, performance="medium"):
         return dune.DunePriceHistoryResult(candles=[], available=False, error="DUNE_API_KEY absente")
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(dune, "get_price_history", fake_dune_price_history)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
 
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
@@ -1240,6 +1276,7 @@ async def test_fetch_candles_scalping_degrades_to_30m_when_15m_empty(monkeypatch
 async def test_fetch_candles_scalping_returns_empty_when_mobula_fails_both_periods(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1247,8 +1284,12 @@ async def test_fetch_candles_scalping_returns_empty_when_mobula_fails_both_perio
     async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
         return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
 
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
@@ -1262,6 +1303,7 @@ async def test_fetch_candles_scalping_skips_mobula_when_not_configured(monkeypat
     synthèse DexScreener/Dune restent structurellement sautés en mode scalping)."""
     from aria_core.services import geckoterminal as gt
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1272,8 +1314,12 @@ async def test_fetch_candles_scalping_skips_mobula_when_not_configured(monkeypat
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)
 
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
@@ -1288,6 +1334,7 @@ async def test_fetch_candles_scalping_skips_mobula_without_contract(monkeypatch)
     chemin standard, cf. test_fetch_candles_skips_mobula_without_contract)."""
     from aria_core.services import geckoterminal as gt
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1298,8 +1345,12 @@ async def test_fetch_candles_scalping_skips_mobula_without_contract(monkeypatch)
         called["mobula"] = True
         return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
 
     result = await me._fetch_candles("0xpool", "base", mode="scalping")  # pas de contract=
@@ -1310,11 +1361,12 @@ async def test_fetch_candles_scalping_skips_mobula_without_contract(monkeypatch)
 @pytest.mark.asyncio
 async def test_fetch_candles_scalping_never_falls_back_to_coinmarketcap_or_dexscreener(monkeypatch):
     """Non-régression -- CoinMarketCap/synthèse DexScreener/Dune restent SAUTÉS en
-    mode scalping (confirmé sans grain infra-horaire), même si Mobula échoue aussi
-    sur les deux granularités."""
+    mode scalping (confirmé sans grain infra-horaire), même si Mobula ET
+    DexPaprika échouent aussi sur les deux granularités."""
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
     from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
@@ -1328,15 +1380,115 @@ async def test_fetch_candles_scalping_never_falls_back_to_coinmarketcap_or_dexsc
     async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
         return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
 
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
     monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
 
     pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
     result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, pair=pair, mode="scalping")
     assert cmc_called["value"] is False
     assert result == []  # jamais la synthèse DexScreener dégradée non plus
+
+
+# ── #130, 26/07 : étage DexPaprika (dernier maillon avant la synthèse dégradée en
+#    mode standard ; dernier maillon avant [] en mode scalping) ─────────────────────
+
+@pytest.mark.asyncio
+async def test_fetch_candles_falls_back_to_dexpaprika_standard(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import dexpaprika as dp
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    dp_candles = _plain_candles(30)
+
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        assert pool_address == "0xpool"
+        assert network == "base"
+        assert mode == "standard"
+        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == dp_candles
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_dexpaprika_not_tried_when_mobula_succeeds(monkeypatch):
+    """Ordre de cascade respecté -- DexPaprika n'est jamais appelé si un étage
+    plus rapide/moins cher a déjà réussi."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    mobula_candles = _plain_candles(6)
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        return gt.OHLCVResult(candles=mobula_candles, available=True, error=None)
+
+    called = {"dexpaprika": False}
+
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        called["dexpaprika"] = True
+        return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
+    assert result == mobula_candles
+    assert called["dexpaprika"] is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_falls_back_to_dexpaprika(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    dp_candles = _plain_candles(120)
+
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        assert mode == "scalping"
+        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert result == dp_candles
 
 
 # ── _fetch_candles : coupe-circuit adaptatif par fournisseur (#95, 19/07) ───────────
@@ -1584,6 +1736,78 @@ async def test_evaluate_hard_gates_rejects_on_honeypot_and_blacklists(monkeypatc
     assert best is None and reason is None
     assert hold["hold_reason"] == "honeypot_rejected"
     assert await bl.is_blacklisted(CONTRACT, "base") is True
+
+
+# ── PairSnapshot cache shared with _batch_liquidity_prefilter (26/07, Item #122
+# -- full-pipeline audit finding: evaluate_hard_gates used to always refetch via
+# fetch_token_pairs the EXACT same pair the batch pre-filter had already fetched
+# moments earlier, on every single candidate) ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_reuses_cached_pair_snapshot(monkeypatch):
+    """A fresh cache entry (as _batch_liquidity_prefilter would have written)
+    must be reused -- fetch_token_pairs must NEVER be called in this case."""
+    _patch_pipeline(monkeypatch)
+    cached = _pair(price_usd=2.5, liquidity_usd=80_000.0, base_address=CONTRACT_LOWER)
+    me._cache_pair_snapshot("base", CONTRACT, cached)
+
+    async def _never_called(contract, *, chain="base"):
+        raise AssertionError("fetch_token_pairs must not be called when the cache is warm")
+
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold is None
+    assert best is cached
+    assert best.price_usd == 2.5
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_falls_back_to_network_when_cache_empty(monkeypatch):
+    """Non-regression: an empty/expired cache must still fall back to the
+    original network call -- exactly the pre-existing behavior."""
+    _patch_pipeline(monkeypatch)
+    called = {"value": False}
+
+    async def fake_fetch_pairs(contract, *, chain="base"):
+        called["value"] = True
+        return [_pair()]
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert called["value"] is True
+    assert hold is None
+    assert best is not None
+
+
+@pytest.mark.asyncio
+async def test_batch_prefilter_populates_pair_snapshot_cache(monkeypatch):
+    """The batch pre-filter must write the SAME best pair evaluate_hard_gates
+    would compute on its own (_best_pair: max liquidity among own pairs)."""
+    liquid = "0x" + "1" * 40
+    thin_pair = _batch_pair(liquid, 100_000.0)
+    richer_pair = _batch_pair(liquid, 150_000.0)
+    candidates = [{"contract": liquid, "chain": "base"}]
+
+    async def fake_batch(addrs, *, chain="base"):
+        return [thin_pair, richer_pair]  # richer_pair has the higher liquidity
+
+    monkeypatch.setattr(me, "fetch_tokens_batch", fake_batch)
+    await me._batch_liquidity_prefilter(candidates)
+
+    cached = me._get_cached_pair_snapshot("base", liquid)
+    assert cached is richer_pair
+
+
+def test_pair_snapshot_cache_expires_after_ttl():
+    pair = _pair(price_usd=1.0, liquidity_usd=50_000.0, base_address=CONTRACT_LOWER)
+    me._cache_pair_snapshot("base", CONTRACT, pair)
+    assert me._get_cached_pair_snapshot("base", CONTRACT) is pair
+
+    key = ("base", CONTRACT.lower())
+    ts, cached_pair = me._pair_snapshot_cache[key]
+    me._pair_snapshot_cache[key] = (ts - me._PAIR_SNAPSHOT_CACHE_TTL_SECONDS - 1, cached_pair)
+    assert me._get_cached_pair_snapshot("base", CONTRACT) is None
 
 
 @pytest.mark.asyncio

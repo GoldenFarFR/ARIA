@@ -259,6 +259,40 @@ def _holders_lock_for(key: tuple[str, str]) -> asyncio.Lock:
     return lock
 
 
+# 26/07 -- process-local TTL cache sharing the PairSnapshot already fetched by
+# _batch_liquidity_prefilter with evaluate_hard_gates, which used to refetch
+# the EXACT same data moments later via a separate DexScreener endpoint
+# (full-pipeline audit finding, ELEVE severity: this doublon hits every single
+# candidate, on both the periodic scan and the WebSocket drain -- the two
+# functions independently compute the same "best pair" -- max liquidity_usd
+# among pairs where this contract is the base token -- _best_pair's own
+# intermediate _MIN_LIQUIDITY_USD filter never changes which pair has the
+# global max, so the two selections are provably identical). Deliberately a
+# much shorter TTL than the 300s holders cache above -- a PairSnapshot carries
+# a live price, and the real gap this closes is a few seconds within the SAME
+# evaluation (scan -> hard gates), never several minutes.
+_PAIR_SNAPSHOT_CACHE_TTL_SECONDS = 60.0
+_pair_snapshot_cache: dict[tuple[str, str], tuple[float, "PairSnapshot"]] = {}
+
+
+def _cache_pair_snapshot(chain: str, contract: str, pair: "PairSnapshot") -> None:
+    now = time.monotonic()
+    _pair_snapshot_cache[(chain, contract.lower())] = (now, pair)
+    expired = [k for k, (ts, _p) in _pair_snapshot_cache.items() if (now - ts) >= _PAIR_SNAPSHOT_CACHE_TTL_SECONDS]
+    for k in expired:
+        del _pair_snapshot_cache[k]
+
+
+def _get_cached_pair_snapshot(chain: str, contract: str) -> "PairSnapshot | None":
+    cached = _pair_snapshot_cache.get((chain, contract.lower()))
+    if cached is None:
+        return None
+    ts, pair = cached
+    if (time.monotonic() - ts) >= _PAIR_SNAPSHOT_CACHE_TTL_SECONDS:
+        return None
+    return pair
+
+
 def _purge_expired_holders_state(now: float) -> None:
     """Opportunistic eviction, run on every cache write -- a long-running
     process (weeks/months, cf. the VPS's 4GB RAM constraint) would otherwise
@@ -591,6 +625,7 @@ async def _batch_liquidity_prefilter(
                     best_liquidity[key] = p.liquidity_usd
                     if p.price_usd and p.price_usd > 0:
                         best_price[key] = p.price_usd
+                    _cache_pair_snapshot(chain, addr, p)
 
     kept: list[dict] = []
     for c in candidates:
@@ -1072,14 +1107,15 @@ async def _fetch_candles(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard",
 ) -> list[Candle]:
-    """FIVE-stage OHLCV cascade (16/07, explicit operator request: "I want
+    """SIX-stage OHLCV cascade (16/07, explicit operator request: "I want
     everything wired even if they do the same thing, a highway not a country
     road" then "wire them all, I want a complete web with dexscreener and dune";
     Mobula added on 18/07, same request expanded -- "we need more call margin,
-    we're too constrained") -- each stage is only attempted IF the previous one
-    fails or returns nothing (never in parallel, to avoid doubling the load on
-    already-strained APIs), and the order strictly follows increasing
-    speed/cost:
+    we're too constrained"; DexPaprika added 26/07, Item #130, same request
+    again after a real GeckoTerminal rate-limit burst) -- each stage is only
+    attempted IF the previous one fails or returns nothing (never in
+    parallel, to avoid doubling the load on already-strained APIs), and the
+    order strictly follows increasing speed/cost:
       1. GeckoTerminal -- the fastest, already the historical source.
       2. CoinMarketCap -- same result shape, no conversion needed.
       3. Mobula (#212, 18/07) -- REAL candles (not a synthesis), queries by
@@ -1087,44 +1123,54 @@ async def _fetch_candles(
          provided AND ``MOBULA_API_KEY`` is configured. Added after a real
          blockage diagnosed live: GeckoTerminal (429) and CoinMarketCap (500)
          unavailable simultaneously the same evening -> cascade fell back to
-         DexScreener synthesis (stage 4) -> systematic HOLD
+         DexScreener synthesis (stage 5) -> systematic HOLD
          (``no_entry_signal``, no R/R setup findable on such poor data). Mobula
          fills this gap BEFORE degrading.
-      4. DexScreener (degraded synthesis, FREE and INSTANT -- no extra network
+      4. DexPaprika (Item #130, 26/07) -- REAL candles, free, no API key,
+         queries by POOL (like GeckoTerminal/CoinMarketCap). Verified live via
+         a 3-agent due-diligence workflow BEFORE integration (never assumed
+         from marketing docs): legitimate but young sub-product (launched
+         2025-03-31), self-contradictory documented rate limits, sustained
+         throughput measured empirically at ~53 req/min. Deliberately kept as
+         the LAST real-candle tier (never primary) per the workflow's own
+         recommendation -- the free tier's long-term stability carries more
+         uncertainty than GeckoTerminal's.
+      5. DexScreener (degraded synthesis, FREE and INSTANT -- no extra network
          call if ``pair`` is already in hand) -- 5 approximate price points,
          never a real candlestick (cf.
          ``dexscreener.synthesize_candles_from_pair``). Enough for a rough
          trend bias, almost never enough for a real R/R setup -- HOLD remains
          the most likely honest outcome even here.
-      5. Dune (``prices.usd``, last resort) -- real reconstructed hourly
+      6. Dune (``prices.usd``, last resort) -- real reconstructed hourly
          candles, but SLOW (SQL execution, potentially dozens of seconds) AND
-         paid in credits -- never attempted before the 4 previous stages fail,
+         paid in credits -- never attempted before the 5 previous stages fail,
          and only if ``contract`` is provided (Dune queries by TOKEN address,
          not POOL address).
-    Every provider degrades honestly (no fabricated candle); if all five fail,
+    Every provider degrades honestly (no fabricated candle); if all six fail,
     `[]` -- the pipeline already knows how to handle this case (HOLD, "OHLCV
     unavailable").
 
-    ``mode="scalping"`` (Item #101, 26/07; fallback added 26/07 -- see below):
-    stage 1 (GeckoTerminal) is tried first, requesting its dedicated
-    15min/30min sub-hour ladder. CoinMarketCap/DexScreener synthesis/Dune
-    (stages 2, 4, 5) are SKIPPED in this mode -- confirmed to have NO
-    sub-hour granularity, only day/hour-scale data; falling back to one of
-    them would silently feed day-scale candles into a scalping RSI(10)
-    tuned for 15-30min noise, corrupting the read without any visible
-    error.
+    ``mode="scalping"`` (Item #101, 26/07; Mobula fallback added 26/07, see
+    below; DexPaprika fallback added 26/07, Item #130): stage 1
+    (GeckoTerminal) is tried first, requesting its dedicated 15min/30min
+    sub-hour ladder. CoinMarketCap/DexScreener synthesis/Dune (stages 2, 5, 6)
+    are SKIPPED in this mode -- confirmed to have NO sub-hour granularity,
+    only day/hour-scale data; falling back to one of them would silently
+    feed day-scale candles into a scalping RSI(10) tuned for 15-30min noise,
+    corrupting the read without any visible error.
 
-    Mobula (stage 3) is the ONE exception, real fallback (not a synthesis):
-    an operator-relayed external review questioned the (until then never
-    empirically verified) assumption that "no other provider has sub-hour
-    granularity" -- a live test in the prod container on real scalping
-    candidates (period="15m"/"30m") confirmed Mobula DOES return real
-    sub-hour candles for Base. Tried 15m first (matches the standard
-    scalping candle width), then 30m if 15m comes back empty -- a
-    degradation to 30m is always logged explicitly (never a silent
-    granularity swap the caller can't see). Only if BOTH Mobula
-    granularities fail does this skip honestly (``[]`` -> HOLD, "OHLCV
-    unavailable")."""
+    Mobula (stage 3) and DexPaprika (stage 4) are the exceptions, real
+    fallbacks (not a synthesis): an operator-relayed external review
+    questioned the (until then never empirically verified) assumption that
+    "no other provider has sub-hour granularity" -- a live test in the prod
+    container on real scalping candidates (period="15m"/"30m") confirmed
+    Mobula DOES return real sub-hour candles for Base, and a separate
+    due-diligence workflow confirmed the same for DexPaprika. Tried 15m first
+    (matches the standard scalping candle width), then 30m if 15m comes back
+    empty -- a degradation to 30m is always logged explicitly (never a silent
+    granularity swap the caller can't see). Only if Mobula's own 15m/30m
+    AND DexPaprika's own 15m/30m all fail does this skip honestly
+    (``[]`` -> HOLD, "OHLCV unavailable")."""
     from aria_core.services.geckoterminal import geckoterminal_client
 
     if not _provider_in_cooldown("geckoterminal"):
@@ -1173,6 +1219,26 @@ async def _fetch_candles(
                             )
                         return mobula_result.candles
                 _record_provider_outcome("mobula", ok=False)
+
+        # 26/07 -- DexPaprika, last-resort tier even in scalping mode (Item
+        # #130): verified live (3-agent due-diligence workflow) to support
+        # real 15m/30m candles on Base, same doctrine as the Mobula fallback
+        # above -- never primary, only tried after GeckoTerminal/Mobula both
+        # come up empty.
+        if not _provider_in_cooldown("dexpaprika"):
+            from aria_core.services import dexpaprika
+
+            try:
+                dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain, mode="scalping")
+            except Exception as exc:  # noqa: BLE001
+                logger.info("_fetch_candles: DexPaprika scalping fallback %s/%s failed (%s)", chain, pool_address[:10], exc)
+                dp_result = None
+            if dp_result is not None and dp_result.available and dp_result.candles:
+                _record_provider_outcome("dexpaprika", ok=True)
+                logger.info("_fetch_candles: DexPaprika scalping fallback (real candles) %s/%s", chain, pool_address[:10])
+                return dp_result.candles
+            if dp_result is None or not dp_result.available:
+                _record_provider_outcome("dexpaprika", ok=False)
         return []
 
     from aria_core.services import coinmarketcap
@@ -1206,6 +1272,27 @@ async def _fetch_candles(
                 return mobula_result.candles
             if mobula_result is None or not mobula_result.available:
                 _record_provider_outcome("mobula", ok=False)
+
+    # 26/07 -- DexPaprika (Item #130), inserted before the degraded DexScreener
+    # synthesis: real candles beat 5 synthetic price points, but this stays
+    # the LAST tier tried before that degradation (never primary), per the
+    # due-diligence workflow's explicit recommendation -- the free tier's
+    # documented limits are self-contradictory across DexPaprika's own pages,
+    # and the sub-product is young (launched 2025-03-31).
+    if not _provider_in_cooldown("dexpaprika"):
+        from aria_core.services import dexpaprika
+
+        try:
+            dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("_fetch_candles: DexPaprika %s/%s failed (%s)", chain, pool_address[:10], exc)
+            dp_result = None
+        if dp_result is not None and dp_result.available and dp_result.candles:
+            _record_provider_outcome("dexpaprika", ok=True)
+            logger.info("_fetch_candles: DexPaprika fallback (real candles) %s/%s", chain, pool_address[:10])
+            return dp_result.candles
+        if dp_result is None or not dp_result.available:
+            _record_provider_outcome("dexpaprika", ok=False)
 
     if pair is not None:
         from aria_core.services.dexscreener import synthesize_candles_from_pair
@@ -1747,8 +1834,10 @@ async def evaluate_hard_gates(
             "hold_reason": "blacklisted",
         }
 
-    pairs = await fetch_token_pairs(contract, chain=chain)
-    best = _best_pair(pairs, contract)
+    best = _get_cached_pair_snapshot(chain, contract)
+    if best is None:
+        pairs = await fetch_token_pairs(contract, chain=chain)
+        best = _best_pair(pairs, contract)
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None, None, None
 

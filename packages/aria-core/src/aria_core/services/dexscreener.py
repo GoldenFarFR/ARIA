@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -57,6 +58,46 @@ async def _throttle() -> None:
         if wait > 0:
             await asyncio.sleep(wait)
         _last_request = asyncio.get_event_loop().time()
+
+
+# 26/07 -- reactive circuit breaker (full-pipeline audit finding, ELEVE
+# severity: DexScreener is the MOST-CALLED external service of the whole
+# pipeline -- 17+ call sites across momentum_entry.py, momentum_websocket.py,
+# paper_trader.py, limit_orders.py, bonding_entry.py, conviction_research.py,
+# skills/acp_onchain_scan.py, skills/liquidity_rotation.py,
+# skills/image_token_curiosity.py, token_candidate_screening.py,
+# agent_wallet_monitor.py... -- yet, unlike geckoterminal.py/mobula.py/
+# coinmarketcap.py (the OHLCV cascade) or goplus.py, it had NO mechanism
+# to stop hammering the network once a rate-limit/outage is confirmed
+# ongoing: every new candidate/chunk retried the full 429 backoff (up to 2
+# attempts) blind to a failure that had JUST happened moments earlier on
+# the exact same shared client. Same pattern/thresholds as the OHLCV
+# cascade's per-provider breaker (momentum_entry.py's
+# _PROVIDER_FAIL_THRESHOLD/_PROVIDER_COOLDOWN_SECONDS) -- a single shared
+# provider here (DexScreener only), so plain module-level counters rather
+# than a dict keyed by provider name.
+_CIRCUIT_FAIL_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 180.0
+_consecutive_failures = 0
+_circuit_open_until = 0.0
+
+
+def _in_cooldown() -> bool:
+    return time.monotonic() < _circuit_open_until
+
+
+def _record_outcome(*, ok: bool) -> None:
+    global _consecutive_failures, _circuit_open_until
+    if ok:
+        _consecutive_failures = 0
+        return
+    _consecutive_failures += 1
+    if _consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD:
+        _circuit_open_until = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+        logger.warning(
+            "dexscreener: circuit breaker opened after %s consecutive failures -- pausing %ss",
+            _consecutive_failures, _CIRCUIT_COOLDOWN_SECONDS,
+        )
 
 _SOCIAL_LABELS = {
     "twitter": "X (Twitter)",
@@ -182,7 +223,17 @@ def _parse_pair(raw: dict) -> PairSnapshot:
 async def _get_json(url: str) -> tuple[object | None, str | None]:
     """GET with retry on 429/5xx/timeout -- same policy as blockscout.py/
     geckoterminal.py. The original implementation (in acp_onchain_scan.py)
-    had no retry; an isolated 429 gave up outright with no log."""
+    had no retry; an isolated 429 gave up outright with no log.
+
+    26/07 -- reactive circuit breaker (see module comment above
+    ``_CIRCUIT_FAIL_THRESHOLD``): a fresh cooldown skips the network call
+    entirely, and only a REAL failure (not a mid-retry attempt) is recorded --
+    a still-open backoff loop above never counts as a confirmed failure until
+    it actually gives up."""
+    if _in_cooldown():
+        logger.info("dexscreener: circuit breaker open, skipping network call for %s", url)
+        return None, "dexscreener unavailable (circuit breaker)"
+
     attempt_429 = 0
     timeout_retried = False
 
@@ -197,12 +248,14 @@ async def _get_json(url: str) -> tuple[object | None, str | None]:
                 await asyncio.sleep(5.0)
                 continue
             logger.warning("dexscreener: timeout on %s -> %s", url, exc)
+            _record_outcome(ok=False)
             return None, f"dexscreener unavailable (timeout, {exc})"
 
         if response.status_code == 429:
             attempt_429 += 1
             if attempt_429 >= 3:
                 logger.warning("dexscreener: HTTP 429 on %s after %s attempts", url, attempt_429)
+                _record_outcome(ok=False)
                 return None, "dexscreener unavailable (rate limit)"
             await asyncio.sleep(0.5 * (2**attempt_429))
             continue
@@ -213,14 +266,17 @@ async def _get_json(url: str) -> tuple[object | None, str | None]:
                 await asyncio.sleep(5.0)
                 continue
             logger.warning("dexscreener: HTTP %s on %s", response.status_code, url)
+            _record_outcome(ok=False)
             return None, f"dexscreener unavailable (server error {response.status_code})"
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.warning("dexscreener: %s", exc)
+            _record_outcome(ok=False)
             return None, f"dexscreener unavailable ({exc})"
 
+        _record_outcome(ok=True)
         return response.json(), None
 
 
