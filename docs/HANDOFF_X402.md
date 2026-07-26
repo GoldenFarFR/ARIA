@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[CODE] Subject  : x402 seller -- revenue-ledger wiring gap closed (#39, still dormant/testnet)
+Date : 2026.07.26 / Problem : `x402_revenue_ledger.record_sale()` existed since 24/07 but was never actually CALLED anywhere on the payment path (`app/api/routes/x402_signals.py`) -- the ledger would have stayed empty forever even after the FastAPI route (built 24/07, #59) started settling real payments.
+Solution : `x402_signals._record_sale_if_paid()` reads the payer address off `request.state.payment_payload` (set by the x402 middleware on `payment-verified`) and the price off `x402_seller.PRICING_CATALOG`, records every successfully-served paid request. Known, documented limitation: the SDK settles the payment AFTER the route handler returns (no post-settlement hook exposed at the app level in x402 2.16.0), so this records "ok" at successful-response time, not confirmed on-chain settlement -- acceptable since verification (a strong cryptographic guarantee) already happened before the handler runs. Wrapped in try/except (dome doctrine), never breaks the paid response. Both gates (`ARIA_X402_SELLER_ENABLED`/`ARIA_X402_SELLER_MAINNET`) confirmed OFF in prod via `docker exec` -- no live payment surface affected. Only remaining step before this ever accepts a real payment: the operator's own testnet self-payment test (base-sepolia) -- cannot be automated, needs the operator's own wallet. Full scoping: `docs/x402-seller-scoping.md`. — `vanguard/backend/app/api/routes/x402_signals.py` -- 6 new tests, full backend suite green (134 passed).
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : #199 — Cybercentry retenu comme 1ère ressource x402
 Date : 2026.07.17  /  Probleme : schéma x402 obsolète attendu (amount/asset="USDC") vs le vrai facilitator CDP (maxAmountRequired/asset=<adresse>) + extra Docker [x402] non installé
 Solution : repli sur les deux conventions de schéma + extra installé — services/cybercentry.py (7baa0b67)

@@ -2,12 +2,21 @@
 
 > **Repo PUBLIC — no IP/secret/token/key/personal email in clear here.**
 
-Status at 2026-07-23: **scoped, NOT built, blocked on three operator/legal decisions
-below.** This is the mirror of everything built so far: every real-money mechanism to
-date governs ARIA *spending* capital (wallet_guard, Sepolia rehearsal, agent-wallet
-pilot). This is the first time ARIA would *receive* capital (incoming x402 payments for
-API access) — a new governance category, to treat with the same rigor as the
-agent-wallet pilot diligence, never a quick bolt-on.
+**Status at 2026-07-26: CODE COMPLETE (route + verify/settle wiring + revenue ledger),
+both gates still OFF in prod (verified live via `docker exec`). The ONLY remaining step
+is the operator's own testnet self-payment test** (pay a tiny real x402 from their own
+wallet to `aria-x402` on base-sepolia) — this cannot be done from a Claude Code session,
+it requires the operator's own wallet. Once that passes, flipping
+`ARIA_X402_SELLER_MAINNET` is the operator's own call. This is the mirror of everything
+built so far: every real-money mechanism to date governs ARIA *spending* capital
+(wallet_guard, Sepolia rehearsal, agent-wallet pilot). This is the first time ARIA would
+*receive* capital (incoming x402 payments for API access) — a new governance category,
+treated with the same rigor as the agent-wallet pilot diligence, never a quick bolt-on.
+
+*(Historical note, superseded by the line above: this doc originally said "scoped, NOT
+built" on 23/07 — the FastAPI route + verify/settle wiring were built the very next day
+(#59, 24/07) and the revenue-ledger wiring gap was closed 26/07. The "Still to build"
+section further down is now STALE except for the testnet validation step itself.)*
 
 ## The core idea
 
@@ -144,18 +153,41 @@ decision 2 below; it is NOT a blocker.)
   never needs ARIA's private key (buyer signs EIP-3009, facilitator settles) — no signing
   key exposed on the seller path, unlike every spending path.
 
-## Still to build — the LIVE integration (validate with the operator's testnet self-payment)
+## DONE (24/07, #59) — the FastAPI route + verify/settle wiring
 
-The FastAPI route in `vanguard/backend` + the verify/settle wiring
-(`x402ResourceServer.verify_payment`/`settle_payment` with a testnet
-`FacilitatorClient`) — deliberately NOT written blind against the evolving Alpha API. To
-be built and validated end-to-end WITH the operator's own test plan (23/07): pay a tiny
-real x402 from their own wallet to ARIA's `aria-x402` on **base-sepolia first**, confirm
-verify→settle→scrubbed-payload works, THEN flip `ARIA_X402_SELLER_MAINNET`. Plus, later:
-the 8h anti-front-running delay (only if a live push-alert product is added — the current
-on-demand lookups don't tip a trade happening now), and the substance-cache TTL policy
-(#40). No mainnet receiving until the testnet test passes AND both gates are explicitly
-set.
+`vanguard/backend/app/x402_seller.py` (`mount_x402_seller`, wired in `main.py` behind
+`x402_seller_ready()`) + `app/api/routes/x402_signals.py` (`GET /api/x402/walletscore`,
+paid; `GET /api/x402/walletscore/exists`, free pre-check) — verified against the really-
+installed x402 2.16.0 SDK (`PaymentMiddlewareASGI`/`RouteConfig`/`PaymentOption`, CAIP-2
+network format, real bug found and fixed the same day). Both gates (`ARIA_X402_SELLER_
+ENABLED`/`ARIA_X402_SELLER_MAINNET`) confirmed OFF in prod (`docker exec`, 26/07) — no
+live payment surface active.
+
+## DONE (26/07) — revenue-ledger wiring gap closed
+
+`x402_revenue_ledger.record_sale()` existed since 24/07 but was never actually CALLED on
+the payment path — found while finishing this scoping item. `x402_signals._record_sale_
+if_paid()` now reads the payer address off `request.state.payment_payload` (set by the
+x402 middleware on a verified payment) and the price off `x402_seller.PRICING_CATALOG`,
+recording every successfully-served paid request. Known limitation, documented in the
+code: the SDK settles the payment AFTER the route handler returns (no post-settlement
+hook exposed at the app level in x402 2.16.0), so this records "ok" at successful-
+response time, not at confirmed on-chain settlement time — acceptable given verification
+(a strong cryptographic guarantee) already happened before the handler runs, and a
+facilitator-side settlement failure would itself surface as an error response. Wrapped
+in try/except (dome doctrine) — a ledger-write failure never breaks the paid response.
+
+## Still to do — the operator's OWN testnet self-payment test (cannot be automated)
+
+Pay a tiny real x402 from the operator's own wallet to ARIA's `aria-x402` receiving
+address on **base-sepolia** (requires `ARIA_X402_SELLER_ENABLED=true` in the deployed
+`.env`, `ARIA_X402_SELLER_MAINNET` left OFF/unset — testnet is the default network the
+instant the seller gate alone is on), confirm verify→settle→scrubbed-payload works end to
+end, THEN — and only then — flip `ARIA_X402_SELLER_MAINNET` for real Base mainnet
+receiving. Plus, later: the 8h anti-front-running delay (only if a live push-alert
+product is added — the current on-demand lookups don't tip a trade happening now), and
+the substance-cache TTL policy (#40). No mainnet receiving until the testnet test passes
+AND both gates are explicitly set by the operator.
 
 ## Pricing strategy — two explicit phases (24/07, operator decision)
 

@@ -103,3 +103,122 @@ async def test_wallet_score_returns_composite_percentile(monkeypatch):
 
     result = await x402_signals.x402_wallet_score(address="0xSCORED")
     assert result == {"wallet": "0xscored", "composite_percentile": 91.2}
+
+
+# ── record_sale wiring (26/07) -- record_sale() existed since 07/24 but was ──
+# ── never actually called anywhere on the payment path until now ────────────
+
+class _FakeState:
+    def __init__(self, payment_payload=None):
+        self.payment_payload = payment_payload
+
+
+class _FakeRequest:
+    def __init__(self, payment_payload=None):
+        self.state = _FakeState(payment_payload)
+
+
+class _FakePaymentPayload:
+    def __init__(self, from_address):
+        self.payload = {"authorization": {"from": from_address}}
+
+
+@pytest.mark.asyncio
+async def test_record_sale_noop_when_request_is_none(monkeypatch):
+    import aria_core.x402_revenue_ledger as ledger_module
+
+    from app.api.routes import x402_signals
+
+    async def fail_if_called(**kwargs):
+        raise AssertionError("record_sale should never be called without a request")
+
+    monkeypatch.setattr(ledger_module, "record_sale", fail_if_called)
+    await x402_signals._record_sale_if_paid(None, "wallet_score")
+
+
+@pytest.mark.asyncio
+async def test_record_sale_noop_when_no_payment_payload(monkeypatch):
+    import aria_core.x402_revenue_ledger as ledger_module
+
+    from app.api.routes import x402_signals
+
+    async def fail_if_called(**kwargs):
+        raise AssertionError("record_sale should never be called without a payment")
+
+    monkeypatch.setattr(ledger_module, "record_sale", fail_if_called)
+    await x402_signals._record_sale_if_paid(_FakeRequest(payment_payload=None), "wallet_score")
+
+
+@pytest.mark.asyncio
+async def test_record_sale_calls_ledger_with_payer_and_catalog_price(monkeypatch, tmp_path):
+    from aria_core import x402_revenue_ledger as ledger
+
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyerAddress"))
+    await x402_signals._record_sale_if_paid(request, "wallet_score")
+
+    sales = await ledger.list_sales()
+    assert len(sales) == 1
+    assert sales[0]["product"] == "wallet_score"
+    assert sales[0]["payer_address"] == "0xBuyerAddress"
+    assert sales[0]["amount_usd"] == pytest.approx(0.10)
+    assert sales[0]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_record_sale_failure_never_raises(monkeypatch):
+    import aria_core.x402_revenue_ledger as ledger_module
+
+    from app.api.routes import x402_signals
+
+    async def raising(**kwargs):
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr(ledger_module, "record_sale", raising)
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
+    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_wallet_score_route_records_a_sale_when_paid(monkeypatch, tmp_path):
+    from aria_core import x402_revenue_ledger as ledger
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    async def fake_score(address: str):
+        return 77.0
+
+    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
+    result = await x402_signals.x402_wallet_score(address="0xScored", request=request)
+
+    assert result == {"wallet": "0xscored", "composite_percentile": 77.0}
+    sales = await ledger.list_sales()
+    assert len(sales) == 1
+    assert sales[0]["payer_address"] == "0xPayer"
+
+
+@pytest.mark.asyncio
+async def test_wallet_score_404_never_records_a_sale(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from aria_core import x402_revenue_ledger as ledger
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    async def fake_score(address: str):
+        return None
+
+    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
+    with pytest.raises(HTTPException):
+        await x402_signals.x402_wallet_score(address="0xneverscored", request=request)
+
+    assert await ledger.list_sales() == []
