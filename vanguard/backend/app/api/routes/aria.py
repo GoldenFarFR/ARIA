@@ -553,11 +553,18 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
             # _effective_trail_pct), la vraie largeur de stop suiveur appliquée à CETTE
             # position -- ``None`` = stop fixe (TRAIL_STOP_PCT), sinon adaptatif.
             "entry_atr_pct": p.get("entry_atr_pct"),
+            # 26/07 -- mode de SOURCING de cette position précise (standard/scalping),
+            # jamais rétroactif au portefeuille-wide trading_mode ci-dessous. Manquait
+            # totalement de cet endpoint : le mode scalping venant d'être activé sur le
+            # test 1M$, aucune session (watchdog inclus) ne pouvait distinguer une
+            # position scalping d'une position standard sans accès direct à aria.db.
+            "mode": p.get("mode"),
         }
 
     open_positions = await paper_trader.get_open_positions()
     closed_positions = await paper_trader.get_closed_positions(limit=closed_limit)
     starting_capital = await paper_trader.starting_capital()
+    trading_mode = await paper_trader.get_trading_mode()
 
     return {
         # 20/07 -- extraction directe de la thèse écrite par ARIA elle-même
@@ -570,6 +577,10 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
         "simulated": True,
         "disclaimer": "Portefeuille papier fictif -- aucun capital réel, aucune position réelle.",
         "starting_capital": starting_capital,
+        # 26/07 -- mode PORTEFEUILLE-WIDE actuel (standard/scalping, paper_state.
+        # trading_mode) -- gouverne le SOURCING de toute NOUVELLE position, distinct du
+        # champ "mode" par position ci-dessus qui reste figé au moment de l'ouverture.
+        "trading_mode": trading_mode,
         "open_positions": [_fmt(p) for p in open_positions],
         "closed_positions": [_fmt(p) for p in closed_positions],
     }

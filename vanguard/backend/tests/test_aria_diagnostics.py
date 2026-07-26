@@ -122,7 +122,7 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     await paper_trader.open_position(
         "0xopen", "OPEN", 1.0,
         target_price=2.0, invalidation_price=0.8, chain="base", thesis="momentum + R/R 2.4",
-        entry_atr_pct=0.09,
+        entry_atr_pct=0.09, mode="scalping",
     )
     await paper_trader.open_position(
         "0xclosed", "CLOSED", 1.0,
@@ -146,6 +146,11 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     assert body["open_positions"][0]["invalidation_price"] == 0.8
     # 19/07 -- revue croisée Gemini : ATR persisté, exposé par cet endpoint diagnostic.
     assert body["open_positions"][0]["entry_atr_pct"] == pytest.approx(0.09)
+    # 26/07 -- mode de sourcing par position, manquait totalement de cet endpoint.
+    assert body["open_positions"][0]["mode"] == "scalping"
+    assert body["closed_positions"][0]["mode"] == "standard"
+    # 26/07 -- mode portefeuille-wide courant, distinct du mode par position.
+    assert body["trading_mode"] == "standard"
     assert len(body["closed_positions"]) == 1
     assert body["closed_positions"][0]["contract"] == "0xclosed"
     assert body["closed_positions"][0]["close_reason"] == "cible atteinte"
@@ -173,6 +178,27 @@ async def test_paper_ledger_empty_seam_before_any_trade(tmp_path, monkeypatch):
     body = res.json()
     assert body["open_positions"] == []
     assert body["closed_positions"] == []
+    assert body["trading_mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_paper_ledger_reflects_scalping_trading_mode(tmp_path, monkeypatch):
+    """26/07 -- le mode scalping vient d'être activé sur le test 1M$ (trading_mode
+    portefeuille-wide, distinct du mode par position) -- toute session/watchdog qui
+    lit cet endpoint doit pouvoir le voir sans accès direct à aria.db."""
+    from aria_core import paper_trader
+
+    monkeypatch.setattr(paper_trader, "DB_PATH", str(tmp_path / "paper_scalping.db"))
+    monkeypatch.setenv("ARIA_DIAGNOSTIC_TOKEN", "diagsecret")
+
+    await paper_trader.set_trading_mode("scalping")
+
+    async with await _client() as client:
+        res = await client.get(
+            "/api/aria/diagnostics/paper-ledger", headers={"X-Diagnostic-Access": "diagsecret"}
+        )
+    assert res.status_code == 200
+    assert res.json()["trading_mode"] == "scalping"
 
 
 @pytest.mark.asyncio
