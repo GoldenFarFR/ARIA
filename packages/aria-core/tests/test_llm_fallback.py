@@ -97,6 +97,34 @@ def test_grok_direct_route_ignores_virtuals_catalog_llm_model():
     assert routes[0].auth_key == "xai-real-key"
 
 
+def test_grok_direct_route_rejects_an_explicit_virtuals_catalog_model():
+    """26/07, real incident found (operator report "aria ne trade pas en
+    scalping"): prod logs showed ``provider=grok model=anthropic-claude-opus-4-8``
+    -- HTTP 400 "Model not found" on every call reaching this state, silently
+    forcing every LLM call in the system onto the Groq fallback, which then
+    hit its own daily token quota. Unlike ``test_grok_direct_route_ignores_
+    virtuals_catalog_llm_model`` above (settings.llm_model as an IMPLICIT
+    fallback), this covers the case where the Virtuals catalog ID arrives as
+    an EXPLICIT ``model=`` argument to ``_resolve_routes`` -- the exact
+    calling shape of the still-unidentified path that triggered the real
+    incident. ``_resolve_model`` must reject it for a non-Virtuals provider
+    just the same, never a guaranteed 400 to a real third-party API."""
+    settings = get_settings()
+    settings.aria_llm_enabled = True
+    settings.llm_provider = "grok"
+    settings.grok_api_key = "xai-real-key"
+    settings.llm_model = ""
+    settings.virtuals_api_key = ""
+    settings.llm_fallback_provider = ""
+    settings.llm_fallback_api_key = ""
+
+    routes = _resolve_routes("anthropic-claude-opus-4-8")
+    assert len(routes) == 1
+    assert routes[0].provider == "grok"
+    assert routes[0].model == "grok-4.3"  # DEFAULT_MODELS["grok"], never the rejected catalog ID
+    assert routes[0].auth_key == "xai-real-key"
+
+
 def test_grok_direct_route_uses_dedicated_grok_api_key_not_llm_api_key():
     """17/07 -- grok_api_key doit gagner sur llm_api_key (souvent une clé Groq, service
     différent malgré le nom proche) quand les deux sont présents."""

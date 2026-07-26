@@ -65,7 +65,22 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # CLAUDE.md "90% calibrated throughput" doctrine): 27 req/min = 2.222s.
 # Replaces the 2.1s (95%, insufficient margin) set on 19/07 out of caution
 # after the incident.
-_AUTHENTICATED_MIN_INTERVAL = 2.222
+#
+# 26/07 -- real incident found (operator report "aria ne trade pas en
+# scalping"): 0 HTTP 429 on this endpoint in the 6h before Ethereum was added
+# to the momentum pipeline's DEFAULT_CHAINS, 13+ right after -- confirmed via
+# real prod logs, not assumed. The per-call throttle itself never changed;
+# what changed is that Base+Ethereum together keep this client PERMANENTLY
+# busy (no more idle gaps between scans for the shared budget to recover),
+# which is what actually exposed a real sustained cap lower than the 30
+# req/min documented figure (documented != empirically measured under
+# continuous load -- same doctrine as the GoPlus/Tavily incidents in
+# CLAUDE.md). Widened the safety margin 90% -> 70% of documented (30*0.7=21
+# req/min = 2.857s) as an immediate, reversible precaution -- a real
+# burst-controlled empirical measurement of the true sustained cap under this
+# NEW continuous two-chain load still needs to happen separately, this is not
+# a substitute for it.
+_AUTHENTICATED_MIN_INTERVAL = 2.857
 
 
 def geckoterminal_authenticated() -> bool:
@@ -112,7 +127,11 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # throughput" doctrine): 27 req/min = 2.222s. The vanguard/backend client now
 # shares this same throttle (wait_for_shared_rate_limit), no more need to keep
 # the two aligned manually.
-_MIN_INTERVAL = 2.222
+# 26/07 -- widened alongside _AUTHENTICATED_MIN_INTERVAL (same real incident,
+# see its comment) to keep the "authenticated is never slower than keyless"
+# invariant intact -- this path isn't the one active in prod today
+# (authenticated mode is), but kept consistent rather than left stale.
+_MIN_INTERVAL = 2.857
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,

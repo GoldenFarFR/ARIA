@@ -56,10 +56,27 @@ DEFAULT_MODELS = {
 
 
 def _resolve_model(provider: str, explicit: str) -> str:
-    """SSOT spark_config — never a banned model as Virtuals primary."""
+    """SSOT spark_config — never a banned model as Virtuals primary.
+
+    26/07 -- real incident found (operator report "aria ne trade pas en
+    scalping"): prod logs showed ``provider=grok model=anthropic-claude-opus-4-8``
+    -- HTTP 400 "Model not found" on EVERY call reaching this state, silently
+    forcing every LLM call in the whole system onto the Groq fallback (never
+    meant to be the primary path), which then hit its own daily token quota.
+    ``llm_economy._spark_model_for_depth`` already guards the conversation
+    path against this (rejects a Virtuals catalog ID when Virtuals isn't
+    active) -- but an exhaustive search found no caller reaching THIS
+    function with that exact explicit model, meaning some path bypasses that
+    guard (never fully identified). Rather than leave every OTHER caller of
+    ``chat_with_context`` exposed to the same silent failure mode, the same
+    "reject a Virtuals catalog ID for a non-Virtuals provider" check is
+    applied HERE too -- the single funnel point every call to a real
+    provider goes through, regardless of which caller resolved the model."""
     from aria_core.spark_config import (
         BANNED_VIRTUALS_PRIMARY_MODELS,
         DEFAULT_FALLBACK_MODEL,
+        DEFAULT_MODEL_BRIEF,
+        DEFAULT_MODEL_DEVELOP,
         DEFAULT_MODEL_STANDARD,
         resolve_primary_llm_model,
     )
@@ -68,6 +85,13 @@ def _resolve_model(provider: str, explicit: str) -> str:
     if model in BANNED_VIRTUALS_PRIMARY_MODELS:
         model = ""
     p = provider.lower()
+    if model and p != "virtuals" and model in (DEFAULT_MODEL_STANDARD, DEFAULT_MODEL_DEVELOP, DEFAULT_MODEL_BRIEF):
+        logger.warning(
+            "_resolve_model: rejected Virtuals catalog model %r for non-Virtuals provider %r -- "
+            "falling back to %r's own default instead of a guaranteed 400",
+            model, p, p,
+        )
+        model = ""
     if model:
         return model
     if p == "virtuals":
