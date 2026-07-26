@@ -1855,8 +1855,18 @@ async def evaluate_momentum_entry(
                 f"alignement technique insuffisant ({align_score}/3) malgré un "
                 f"R/R correct ({signal.rr:.1f})"
             )
+        # 26/07, operator-found gap (real Telegram alert screenshot): this
+        # literal said "5 trades/jour" even after Item #100 raised
+        # paper_trader.DAILY_TRADE_FLOOR from 5 to 30 -- a stale hardcoded
+        # number silently diverging from the real config, exactly the kind of
+        # drift the "verify before affirming" doctrine exists to catch. Local
+        # import (paper_trader already imports momentum_entry, never the
+        # reverse at module load time -- this stays lazy/function-scoped so no
+        # circular import is introduced).
+        from aria_core.paper_trader import DAILY_TRADE_FLOOR
+
         reasons.append(
-            f"mode plancher (diagnostic 5 trades/jour) : {weak_point} accepté, "
+            f"mode plancher (diagnostic {DAILY_TRADE_FLOOR} trades/jour) : {weak_point} accepté, "
             "taille réduite, garde-fous sécurité intacts"
         )
     elif signal.rr >= _RR_AMBIGUOUS_FLOOR:

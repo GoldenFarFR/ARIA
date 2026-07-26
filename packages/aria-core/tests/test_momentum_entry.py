@@ -3836,3 +3836,19 @@ async def test_floor_mode_blames_both_when_both_weak(monkeypatch, test_settings)
     floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
     assert "R/R faible (1.2)" in floor_line
     assert "alignement technique insuffisant (1/3)" in floor_line
+
+
+@pytest.mark.asyncio
+async def test_floor_mode_message_cites_the_real_daily_floor_constant(monkeypatch, test_settings):
+    """26/07, operator-found gap (real Telegram alert): the message said "5
+    trades/jour" as a stale hardcoded literal even after Item #100 raised
+    paper_trader.DAILY_TRADE_FLOOR to 30 -- locks the message to the REAL
+    constant so it can never silently diverge again."""
+    from aria_core import paper_trader as pt
+
+    weak_rr = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak_rr, align=(2, ["EMA12 > EMA26", "MACD"]))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", relaxed=True)
+
+    floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
+    assert f"diagnostic {pt.DAILY_TRADE_FLOOR} trades/jour" in floor_line
