@@ -1178,6 +1178,167 @@ async def test_fetch_candles_returns_empty_when_everything_fails(monkeypatch):
     assert result == []
 
 
+# ── _fetch_candles : fallback Mobula réel en mode scalping (26/07, "check" opérateur
+#    sur une revue externe -- confirmé en direct : Mobula supporte de vraies bougies
+#    15m/30m sur Base, contrairement à CoinMarketCap/synthèse DexScreener/Dune qui
+#    n'ont aucun grain infra-horaire) ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_falls_back_to_mobula_15m(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    mobula_candles = _plain_candles(6)
+    received_periods = []
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        received_periods.append(period)
+        return gt.OHLCVResult(candles=mobula_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert result == mobula_candles
+    assert received_periods == ["15m"]  # jamais tenté 30m -- 15m a suffi
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_degrades_to_30m_when_15m_empty(monkeypatch):
+    """15m ne renvoie rien (available=True mais candles=[] -- pas une panne
+    fournisseur, juste rien à ce grain précis) -- doit retenter en 30m avant
+    d'abandonner, jamais un abandon direct."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    mobula_30m_candles = _plain_candles(4)
+    received_periods = []
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        received_periods.append(period)
+        if period == "15m":
+            return gt.OHLCVResult(candles=[], available=True, error=None)
+        return gt.OHLCVResult(candles=mobula_30m_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert result == mobula_30m_candles
+    assert received_periods == ["15m", "30m"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_returns_empty_when_mobula_fails_both_periods(monkeypatch):
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_skips_mobula_when_not_configured(monkeypatch):
+    """Sans MOBULA_API_KEY, aucun appel réseau -- HOLD honnête (``[]``) plutôt
+    qu'une dégradation silencieuse vers un provider day-scale (CoinMarketCap/
+    synthèse DexScreener/Dune restent structurellement sautés en mode scalping)."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    called = {"mobula": False}
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        called["mobula"] = True
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.delenv("MOBULA_API_KEY", raising=False)
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert called["mobula"] is False
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_skips_mobula_without_contract(monkeypatch):
+    """Mobula interroge par adresse de TOKEN, pas de POOL -- sans ``contract``,
+    l'étage est sauté même si la clé est configurée (même doctrine que le
+    chemin standard, cf. test_fetch_candles_skips_mobula_without_contract)."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    called = {"mobula": False}
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        called["mobula"] = True
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", mode="scalping")  # pas de contract=
+    assert called["mobula"] is False
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_scalping_never_falls_back_to_coinmarketcap_or_dexscreener(monkeypatch):
+    """Non-régression -- CoinMarketCap/synthèse DexScreener/Dune restent SAUTÉS en
+    mode scalping (confirmé sans grain infra-horaire), même si Mobula échoue aussi
+    sur les deux granularités."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    cmc_called = {"value": False}
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        cmc_called["value"] = True
+        return cmc.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    pair = _pair(price_usd=2.0, price_change_24h=10.0, price_change_h6=5.0, price_change_h1=1.0, price_change_m5=0.1)
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, pair=pair, mode="scalping")
+    assert cmc_called["value"] is False
+    assert result == []  # jamais la synthèse DexScreener dégradée non plus
+
+
 # ── _fetch_candles : coupe-circuit adaptatif par fournisseur (#95, 19/07) ───────────
 
 @pytest.mark.asyncio
@@ -4299,3 +4460,106 @@ async def test_floor_mode_message_cites_the_real_daily_floor_constant(monkeypatc
 
     floor_line = next(r for r in result["reasons"] if r.startswith("mode plancher"))
     assert f"diagnostic {pt.DAILY_TRADE_FLOOR} trades/jour" in floor_line
+
+
+# ── _diagnose_weak_point -- helper partagé (26/07, extrait pour que le fix 25/07
+#    (mode plancher) et le fix 26/07 (branche ambiguë standard, cas réel ZEN) ne
+#    dupliquent jamais deux fois la même logique de diagnostic) ─────────────────────
+
+def test_diagnose_weak_point_blames_rr_alone_when_only_rr_misses_the_bar():
+    message = me._diagnose_weak_point(1.2, 2)
+    assert message == "R/R faible (1.2)"
+    assert "alignement" not in message
+
+
+def test_diagnose_weak_point_blames_alignment_alone_when_only_alignment_misses_the_bar():
+    message = me._diagnose_weak_point(6.1, 1)
+    assert message == "alignement technique insuffisant (1/3) malgré un R/R correct (6.1)"
+    assert "R/R faible" not in message
+
+
+def test_diagnose_weak_point_blames_both_when_both_miss_the_bar():
+    message = me._diagnose_weak_point(1.2, 1)
+    assert message == "R/R faible (1.2) et alignement technique insuffisant (1/3)"
+
+
+# ── branche ambiguë standard -- même fix de libellé que le mode plancher (26/07,
+#    operator-found gap, cas réel ZEN : R/R=6.1 mais align_score=1/3 -- le message
+#    disait encore "R/R faible" alors que le R/R n'était pas le point faible) ───────
+
+@pytest.mark.asyncio
+async def test_standard_ambiguous_blames_rr_when_rr_is_actually_weak(monkeypatch):
+    """R/R sous le seuil direct-buy (1.0 <= rr < 2.0), alignement suffisant (>=2) --
+    seul le R/R est responsable du passage par le LLM, le message doit le dire
+    précisément."""
+    weak_rr = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak_rr, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    async def fake_llm_confirm_and_gate(*args, **kwargs):
+        return "BUY", ""
+
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_llm_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    line = next(r for r in result["reasons"] if "confirmé par le LLM" in r)
+    assert "R/R faible (1.2)" in line
+    assert "alignement" not in line
+
+
+@pytest.mark.asyncio
+async def test_standard_ambiguous_blames_alignment_when_rr_is_actually_strong(monkeypatch):
+    """Cas réel ZEN : R/R excellent (6.1, largement >= 2.0) mais align_score=1/3
+    (sous le seuil direct-buy 2/3) -- l'AND du direct-buy échoue sur l'alignement
+    SEUL, la branche ambiguë standard reste atteinte (rr >= _RR_AMBIGUOUS_FLOOR).
+    Le message ne doit plus jamais blâmer le R/R à tort dans ce cas."""
+    strong_rr_weak_align = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=2.1, rr=6.1)
+    _patch_pipeline(monkeypatch, signal=strong_rr_weak_align, align=(1, ["EMA12 > EMA26"]))
+
+    async def fake_llm_confirm_and_gate(*args, **kwargs):
+        return "BUY", ""
+
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_llm_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    line = next(r for r in result["reasons"] if "confirmé par le LLM" in r)
+    assert "alignement technique insuffisant (1/3)" in line
+    assert "R/R correct (6.1)" in line
+    assert "R/R faible" not in line
+
+
+@pytest.mark.asyncio
+async def test_standard_ambiguous_blames_both_when_both_weak(monkeypatch):
+    weak_both = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=1.8, rr=1.2)
+    _patch_pipeline(monkeypatch, signal=weak_both, align=(1, ["EMA12 > EMA26"]))
+
+    async def fake_llm_confirm_and_gate(*args, **kwargs):
+        return "BUY", ""
+
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_llm_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    line = next(r for r in result["reasons"] if "confirmé par le LLM" in r)
+    assert "R/R faible (1.2)" in line
+    assert "alignement technique insuffisant (1/3)" in line
+
+
+@pytest.mark.asyncio
+async def test_standard_ambiguous_hold_weak_cites_correct_weak_point(monkeypatch):
+    """Le même libellé corrigé s'applique aussi au chemin HOLD (non confirmé par
+    le LLM) -- pas seulement au chemin BUY."""
+    strong_rr_weak_align = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=2.1, rr=6.1)
+    _patch_pipeline(monkeypatch, signal=strong_rr_weak_align, align=(1, ["EMA12 > EMA26"]))
+
+    async def fake_llm_confirm_and_gate(*args, **kwargs):
+        return "HOLD_WEAK", "llm_not_confirmed"
+
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_llm_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    line = next(r for r in result["reasons"] if "non confirmé" in r)
+    assert "alignement technique insuffisant (1/3)" in line
+    assert "R/R faible" not in line

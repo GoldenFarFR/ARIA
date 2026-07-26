@@ -1105,16 +1105,26 @@ async def _fetch_candles(
     `[]` -- the pipeline already knows how to handle this case (HOLD, "OHLCV
     unavailable").
 
-    ``mode="scalping"`` (Item #101, 26/07): ONLY stage 1 (GeckoTerminal) is
-    attempted, requesting its dedicated 15min/30min sub-hour ladder. Stages
-    2-5 (CoinMarketCap/Mobula/DexScreener synthesis/Dune) have NO sub-hour
-    granularity -- none of them can produce real 15-30min candles, only
-    day/hour-scale data. Falling back to one of them would silently feed
-    day-scale candles into a scalping RSI(10)/lookback tuned for 15-30min
-    noise, corrupting the read without any visible error. A scalping
-    candidate whose pool lacks GeckoTerminal minute-candles is therefore
-    skipped honestly (``[]`` -> HOLD, "OHLCV unavailable"), never degraded to
-    a wrong-granularity fallback."""
+    ``mode="scalping"`` (Item #101, 26/07; fallback added 26/07 -- see below):
+    stage 1 (GeckoTerminal) is tried first, requesting its dedicated
+    15min/30min sub-hour ladder. CoinMarketCap/DexScreener synthesis/Dune
+    (stages 2, 4, 5) are SKIPPED in this mode -- confirmed to have NO
+    sub-hour granularity, only day/hour-scale data; falling back to one of
+    them would silently feed day-scale candles into a scalping RSI(10)
+    tuned for 15-30min noise, corrupting the read without any visible
+    error.
+
+    Mobula (stage 3) is the ONE exception, real fallback (not a synthesis):
+    an operator-relayed external review questioned the (until then never
+    empirically verified) assumption that "no other provider has sub-hour
+    granularity" -- a live test in the prod container on real scalping
+    candidates (period="15m"/"30m") confirmed Mobula DOES return real
+    sub-hour candles for Base. Tried 15m first (matches the standard
+    scalping candle width), then 30m if 15m comes back empty -- a
+    degradation to 30m is always logged explicitly (never a silent
+    granularity swap the caller can't see). Only if BOTH Mobula
+    granularities fail does this skip honestly (``[]`` -> HOLD, "OHLCV
+    unavailable")."""
     from aria_core.services.geckoterminal import geckoterminal_client
 
     if not _provider_in_cooldown("geckoterminal"):
@@ -1132,7 +1142,37 @@ async def _fetch_candles(
         logger.info("_fetch_candles: GeckoTerminal paused (adaptive circuit breaker), falling back directly")
 
     if mode == "scalping":
-        # No other provider below has sub-hour granularity -- see docstring.
+        # 26/07 -- real Mobula fallback, see docstring. CoinMarketCap/
+        # DexScreener synthesis/Dune stay skipped in this mode (confirmed no
+        # sub-hour granularity), but Mobula's real 15m/30m candles were
+        # verified live and are worth trying before giving up.
+        if contract:
+            from aria_core.services import mobula
+
+            if mobula.mobula_configured() and not _provider_in_cooldown("mobula"):
+                for period in ("15m", "30m"):
+                    try:
+                        mobula_result = await mobula.get_ohlcv(contract, blockchain=chain, period=period)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info(
+                            "_fetch_candles: Mobula scalping fallback (%s) %s/%s failed (%s)",
+                            period, chain, pool_address[:10], exc,
+                        )
+                        mobula_result = None
+                    if mobula_result is not None and mobula_result.available and mobula_result.candles:
+                        _record_provider_outcome("mobula", ok=True)
+                        if period == "15m":
+                            logger.info(
+                                "_fetch_candles: Mobula scalping fallback (real 15min candles) %s/%s",
+                                chain, pool_address[:10],
+                            )
+                        else:
+                            logger.info(
+                                "_fetch_candles: Mobula scalping fallback DEGRADED to %s "
+                                "(15m unavailable) %s/%s", period, chain, pool_address[:10],
+                            )
+                        return mobula_result.candles
+                _record_provider_outcome("mobula", ok=False)
         return []
 
     from aria_core.services import coinmarketcap
@@ -1835,6 +1875,32 @@ async def evaluate_hard_gates(
     return best, honeypot_reason, None
 
 
+def _diagnose_weak_point(rr: float, align_score: int) -> str:
+    """Real motive behind missing the direct-buy AND condition
+    (``signal.rr >= _RR_MIN_FOR_DIRECT_BUY and align_score >= _ALIGN_SCORE_
+    MIN_FOR_DIRECT_BUY``) -- never assumes "R/R faible" by default. 25/07,
+    operator-found gap (real case, OWB, R/R=50.8): the direct-buy AND can
+    fail on align_score ALONE while R/R is already excellent -- the old
+    messages always blamed the R/R regardless, a genuinely misleading label
+    (ARIA herself, questioned via the relay channel about OWB, read this
+    label at face value and never suspected the R/R figure could be the
+    misdiagnosed part). Originally fixed only in the floor-mode branch
+    (`relaxed=True`) -- 26/07: the SAME mislabeling was found live on a real
+    case (ZEN, R/R=6.1, only align_score=1/3 missed the bar) reaching the
+    standard ambiguous branch (`_RR_AMBIGUOUS_FLOOR <= rr <
+    _RR_MIN_FOR_DIRECT_BUY` is NOT the only way in -- rr can already be far
+    above _RR_MIN_FOR_DIRECT_BUY here too), which still had the old
+    unconditional wording. Single shared helper now, never a second copy of
+    this diagnosis logic."""
+    rr_weak = rr < _RR_MIN_FOR_DIRECT_BUY
+    align_weak = align_score < _ALIGN_SCORE_MIN_FOR_DIRECT_BUY
+    if rr_weak and align_weak:
+        return f"R/R faible ({rr:.1f}) et alignement technique insuffisant ({align_score}/3)"
+    if rr_weak:
+        return f"R/R faible ({rr:.1f})"
+    return f"alignement technique insuffisant ({align_score}/3) malgré un R/R correct ({rr:.1f})"
+
+
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
@@ -2058,17 +2124,7 @@ async def evaluate_momentum_entry(
         # real gap, a genuinely misleading label (ARIA herself, questioned via
         # the relay channel about OWB, read this label at face value and
         # never suspected the R/R figure could be the misdiagnosed part).
-        rr_weak = signal.rr < _RR_MIN_FOR_DIRECT_BUY
-        align_weak = align_score < _ALIGN_SCORE_MIN_FOR_DIRECT_BUY
-        if rr_weak and align_weak:
-            weak_point = f"R/R faible ({signal.rr:.1f}) et alignement technique insuffisant ({align_score}/3)"
-        elif rr_weak:
-            weak_point = f"R/R faible ({signal.rr:.1f})"
-        else:
-            weak_point = (
-                f"alignement technique insuffisant ({align_score}/3) malgré un "
-                f"R/R correct ({signal.rr:.1f})"
-            )
+        weak_point = _diagnose_weak_point(signal.rr, align_score)
         # 26/07, operator-found gap (real Telegram alert screenshot): this
         # literal said "5 trades/jour" even after Item #100 raised
         # paper_trader.DAILY_TRADE_FLOOR from 5 to 30 -- a stale hardcoded
@@ -2084,19 +2140,26 @@ async def evaluate_momentum_entry(
             "taille réduite, garde-fous sécurité intacts"
         )
     elif signal.rr >= _RR_AMBIGUOUS_FLOOR:
+        # 26/07 -- same mislabeling gap as the 25/07 floor-mode fix (see
+        # _diagnose_weak_point's docstring): this branch is ALSO reached
+        # whenever the direct-buy AND fails on align_score alone while R/R is
+        # already excellent (real case, ZEN, R/R=6.1) -- the messages below
+        # used to always blame "R/R faible" regardless of which condition
+        # actually missed the bar.
+        weak_point = _diagnose_weak_point(signal.rr, align_score)
         verdict, gate_hold_reason = await _llm_confirm_and_gate(
             contract, best.base_symbol, chain, signal.rr, reasons, weekly_context=weekly_context,
         )
         security_already_checked = True
         if verdict == "BUY":
             action = "BUY"
-            reasons.append(f"R/R faible ({signal.rr:.1f}) mais confirmé par le LLM (garde de sécurité incluse)")
+            reasons.append(f"{weak_point} mais confirmé par le LLM (garde de sécurité incluse)")
         elif verdict == "HOLD_TRAP":
             hold_reason = gate_hold_reason
-            reasons.append(f"R/R faible ({signal.rr:.1f}) aurait été confirmé, mais piège concret identifié -- HOLD")
+            reasons.append(f"{weak_point} aurait été confirmé, mais piège concret identifié -- HOLD")
         else:
             hold_reason = gate_hold_reason
-            reasons.append(f"R/R faible ({signal.rr:.1f}), non confirmé -- HOLD")
+            reasons.append(f"{weak_point}, non confirmé -- HOLD")
     else:
         reasons.append(f"R/R positif mais sous le seuil ambigu ({signal.rr:.1f} < {_RR_AMBIGUOUS_FLOOR})")
         hold_reason = "rr_below_ambiguous_floor"
