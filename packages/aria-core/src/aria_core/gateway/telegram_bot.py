@@ -655,6 +655,41 @@ async def _handle_performance(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _reply(update.message, format_breakdown_report(trades))
 
 
+async def _handle_trading_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/mode [standard|scalping] -- Item #101, 26/07: the ONLY way to switch the
+    Milly ($1M) test's entry mode. No argument: shows the current one. Operator
+    decision: scalping REPLACES swing/momentum and the VC pocket entirely on
+    this portfolio, never a blend -- switching is a deliberate, explicit act,
+    never automatic (no code path promotes itself into scalping based on
+    observed trade volume or anything else)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core import paper_trader
+
+    text = (message.text or "").strip()
+    parts = text.split()
+    arg = parts[1].strip().lower() if len(parts) >= 2 else ""
+    if not arg and context.args:
+        arg = " ".join(context.args).strip().lower()
+
+    if not arg:
+        current = await paper_trader.get_trading_mode()
+        await _reply(message, f"Mode de trading actuel du test Milly : {current}.")
+        return
+
+    try:
+        await paper_trader.set_trading_mode(arg)
+    except ValueError:
+        await _reply(message, "Usage : /mode standard ou /mode scalping.")
+        return
+
+    await _reply(message, f"Mode de trading du test Milly basculé sur : {arg}.")
+
+
 async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/topwallets -- 21/07: "best investors" leaderboard (capacity
     MAX_LEADERBOARD_SIZE, real composite_percentile -- never a
@@ -2171,6 +2206,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("langue", "Langue des analyses (fr/en)"),
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+    ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
@@ -3219,6 +3255,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("regime", _handle_regime))
     app.add_handler(CommandHandler("counterfactual", _handle_counterfactual))
     app.add_handler(CommandHandler("performance", _handle_performance))
+    app.add_handler(CommandHandler("mode", _handle_trading_mode))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))

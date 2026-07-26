@@ -1669,6 +1669,37 @@ async def test_max_positions_capped(tmp_db):
     assert await pt.open_position("0x" + "f" * 40, "OVER", 1.0, alloc_usd=1_000) is None
 
 
+@pytest.mark.asyncio
+async def test_max_positions_never_capped_in_scalping_mode(tmp_db):
+    """Item #101 (26/07), décision opérateur explicite ("laisse libre, voyons
+    comment ARIA trade sans la force") -- aucun plafond de nombre de positions
+    en mode scalping, contrairement au mode standard."""
+    await pt.reset_portfolio(1_000_000.0)
+    for i in range(pt.MAX_POSITIONS + 5):
+        c = "0x" + f"{i:040x}"
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, mode="scalping") is not None
+
+
+@pytest.mark.asyncio
+async def test_trading_mode_defaults_to_standard(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    assert await pt.get_trading_mode() == "standard"
+
+
+@pytest.mark.asyncio
+async def test_trading_mode_can_be_switched_to_scalping(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    assert await pt.get_trading_mode() == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_trading_mode_rejects_unknown_value(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    with pytest.raises(ValueError):
+        await pt.set_trading_mode("swing")
+
+
 def test_alerts_labeled_simulation():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,
@@ -3814,7 +3845,7 @@ async def test_daily_floor_opens_small_tagged_trades_when_behind(tmp_db, monkeyp
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
         assert relaxed is True  # the floor must always evaluate in relaxed mode
         return _floor_buy_sig(symbol=contract[:4])
 
@@ -3862,7 +3893,7 @@ async def test_daily_floor_feeds_a_real_pacing_context_to_the_analyzer(tmp_db, m
 
     captured = {}
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
         captured["weekly_context"] = weekly_context
         return _floor_buy_sig(symbol=contract[:4])
 
@@ -3994,7 +4025,7 @@ async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(m
         bonding_called_with["contract"] = contract
         return {"action": "HOLD", "chain": CHAIN_MARKER, "hold_reason": "test"}
 
-    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False):
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
         momentum_called_with["contract"] = contract
         momentum_called_with["chain"] = chain
         return {"action": "HOLD", "chain": chain, "hold_reason": "test"}

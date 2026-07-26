@@ -561,6 +561,7 @@ _POS_FIELDS = (
     "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
+    "mode",
 )
 
 _ADDED_COLUMNS = [
@@ -694,6 +695,11 @@ _ADDED_COLUMNS = [
     ("liquidity_rotation_score", "REAL"),
     ("liquidity_rotation_accelerating", "INTEGER"),
     ("liquidity_rotation_volume_ratio", "REAL"),
+    # Item #101 (26/07): entry mode this position was sourced under
+    # ("standard"/"scalping") -- see open_position's docstring. 'standard' by
+    # default (unchanged behavior for any analyzer that doesn't provide it,
+    # and for any position opened before this work).
+    ("mode", "TEXT NOT NULL DEFAULT 'standard'"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -726,6 +732,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("liquidity_rotation_score", "REAL"),
     ("liquidity_rotation_accelerating", "INTEGER"),
     ("liquidity_rotation_volume_ratio", "REAL"),
+    # Item #101 (26/07): kept in parity with _ADDED_COLUMNS above.
+    ("mode", "TEXT NOT NULL DEFAULT 'standard'"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -749,6 +757,14 @@ _STATE_ADDED_COLUMNS = [
     # once the cycle closes, so the NEXT cycle reverts to 7 days unless the
     # operator explicitly asks for another short one via reset_portfolio().
     ("cycle_duration_days", "REAL"),
+    # Item #101 (26/07) -- which entry mode `run_paper_cycle` sources candidates
+    # with: "standard" (swing/momentum, unchanged default) or "scalping" (once
+    # fully wired -- operator's explicit decision: the Milly test switches to
+    # 100% scalping, REPLACING swing/momentum and the VC pocket, never a mix of
+    # both at once). A portfolio-wide setting (not per-position) because the
+    # operator's decision is a full switch, not a blend -- see
+    # get_trading_mode/set_trading_mode below.
+    ("trading_mode", "TEXT NOT NULL DEFAULT 'standard'"),
 ]
 
 
@@ -1025,6 +1041,31 @@ async def set_last_tracking_alert_at(value: str) -> None:
         await db.commit()
 
 
+async def get_trading_mode() -> str:
+    """Portfolio-wide entry mode ("standard"/"scalping", Item #101, 26/07) --
+    "standard" (unchanged behavior) until the operator explicitly switches the
+    Milly test to scalping via ``set_trading_mode``. A single switch, never a
+    per-position blend (operator's explicit decision: scalping REPLACES
+    swing/momentum and the VC pocket on this portfolio, not a mix)."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT trading_mode FROM paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    return row[0] if row and row[0] else "standard"
+
+
+async def set_trading_mode(mode: str) -> None:
+    """Operator-only switch (Item #101) -- no automatic promotion from within
+    the codebase; the code observes the naturally-occurring trade volume, it
+    never imposes or targets one."""
+    if mode not in ("standard", "scalping"):
+        raise ValueError(f"trading_mode must be 'standard' or 'scalping', got {mode!r}")
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE paper_state SET trading_mode = ? WHERE id = 1", (mode,))
+        await db.commit()
+
+
 async def get_open_positions() -> list[dict]:
     await _ensure_tables()
     cols = ", ".join(_POS_FIELDS)
@@ -1239,6 +1280,7 @@ async def open_position(
     liquidity_rotation_score: float | None = None,
     liquidity_rotation_accelerating: bool | None = None,
     liquidity_rotation_volume_ratio: float | None = None,
+    mode: str = "standard",
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1252,6 +1294,14 @@ async def open_position(
     what price. Persistence takes priority over Telegram display: saved HERE,
     regardless of whether any notifier/topic is configured. Returns the
     position or None.
+
+    ``mode`` (Item #101, 26/07): the entry mode this signal was sourced under
+    ("standard"/"scalping") -- persisted as-is. In "scalping" mode, the
+    position-count cap (``MAX_POSITIONS``) is not enforced here either
+    (operator's explicit decision: "laisse libre, voyons comment ARIA trade
+    sans la force" -- observe the naturally-occurring behavior, real cash
+    availability remains the brake). Default ``"standard"``, unchanged
+    behavior for any caller that doesn't provide it.
 
     Contract case (07/18, real bug): preserved for Solana (base58, case is part
     of the value), lowercased for Base/Robinhood (EVM hex, as before) --
@@ -1292,7 +1342,7 @@ async def open_position(
         return None
     if await has_open(contract):
         return None
-    if len(await get_open_positions()) >= MAX_POSITIONS:
+    if mode != "scalping" and len(await get_open_positions()) >= MAX_POSITIONS:
         return None
 
     # #186 -- defense-in-depth safety chokepoint: checked HERE (not just in
@@ -1368,8 +1418,8 @@ async def open_position(
                discovery_channel, conviction_process_trail,
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
-               liquidity_rotation_volume_ratio)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               liquidity_rotation_volume_ratio, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1386,7 +1436,7 @@ async def open_position(
              conviction_posting_cadence,
              liquidity_rotation_score,
              None if liquidity_rotation_accelerating is None else int(liquidity_rotation_accelerating),
-             liquidity_rotation_volume_ratio),
+             liquidity_rotation_volume_ratio, mode or "standard"),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -2123,7 +2173,7 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
 
 def _default_momentum_analyzer(
     chain_by_contract: dict[str, str], weekly_context: dict | None = None,
-    current_regime: str | None = None, *, relaxed: bool = False,
+    current_regime: str | None = None, *, relaxed: bool = False, mode: str = "standard",
 ):
     """Closes over the contract->chain table built at sourcing time (#194) --
     keeps the historical ``analyzer(contract)`` signature unchanged, no
@@ -2136,6 +2186,11 @@ def _default_momentum_analyzer(
     ``evaluate_momentum_entry`` so the daily-floor cycle can sample ARIA's best
     available pick with the quality bars waived (safety always enforced) --
     default ``False``, unchanged behavior for the normal path.
+
+    ``mode`` (Item #101, 26/07): forwarded as-is to
+    ``evaluate_momentum_entry`` -- ``"standard"`` (default, unchanged) or
+    ``"scalping"`` (resolved ONCE per cycle by the caller via
+    ``get_trading_mode()``, a portfolio-wide switch, never per-candidate).
 
     24/07, bonding-entry chantier: a contract tagged ``bonding_entry.
     CHAIN_MARKER`` in ``chain_by_contract`` is routed to
@@ -2155,7 +2210,7 @@ def _default_momentum_analyzer(
             )
         return await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
-            relaxed=relaxed,
+            relaxed=relaxed, mode=mode,
         )
 
     return analyzer
@@ -2850,6 +2905,11 @@ async def _run_paper_cycle_locked(
         logger.info("paper_cycle: meta-regime unavailable (%s) -- defaulting to neutral", exc)
         current_regime = market_sentiment.META_REGIME_NEUTRAL
 
+    # Item #101 (26/07) -- resolved ONCE per cycle, same pattern as
+    # current_regime above: a portfolio-wide switch (operator-only, via
+    # set_trading_mode), never per-candidate.
+    trading_mode = await get_trading_mode()
+
     # 1) Manage open positions: first a continuous SAFETY monitoring
     #    (#187 -- honeypot/ownership that appeared after entry, never checked
     #    more than once before), which takes priority over any price-based
@@ -3354,6 +3414,7 @@ async def _run_paper_cycle_locked(
         candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
         analyzer = _default_momentum_analyzer(
             _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+            mode=trading_mode,
         )
     elif candidates is None:
         from aria_core.skills.candidate_ranking import top_candidates
@@ -3411,7 +3472,12 @@ async def _run_paper_cycle_locked(
     for contract in candidates:
         if opened >= max_new:
             break
-        if len(await get_open_positions()) >= MAX_POSITIONS:
+        # Item #101 (26/07), operator explicit decision: no position-count cap
+        # in scalping mode -- "laisse libre, voyons comment ARIA trade sans la
+        # force" -- observe the naturally-occurring behavior rather than
+        # constraining it. Real cash availability (checked inside
+        # open_position) remains the natural brake. Unchanged for "standard".
+        if trading_mode != "scalping" and len(await get_open_positions()) >= MAX_POSITIONS:
             break
         if contract in closed_this_cycle:
             continue
@@ -3638,6 +3704,11 @@ async def _run_paper_cycle_locked(
             liquidity_rotation_score=sig.get("liquidity_rotation_score"),
             liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
             liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
+            # Item #101 (26/07): the entry mode the signal was sourced under
+            # ("standard"/"scalping") -- persisted on the position and used
+            # below to keep MAX_POSITIONS defense-in-depth check consistent
+            # with the cycle-level bypass above.
+            mode=sig.get("mode") or "standard",
         )
         if pos:
             opened += 1
