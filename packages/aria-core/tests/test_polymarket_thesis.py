@@ -24,6 +24,19 @@ def _market(*, yes_price=0.5, question="Will X happen?") -> PolymarketCandidateM
 
 
 @pytest.fixture(autouse=True)
+def _reset_judgment_cache():
+    """26/07 -- ``_judgment_cache`` is a module-level dict keyed by
+    yes_token_id -- almost every test in this file uses the SAME fixed
+    ``"yes-token"`` id via ``_market()``'s default. Without this reset,
+    whichever test runs first would populate the cache and every later test
+    would silently read its stale result instead of exercising its own mock,
+    same trap already fixed once for momentum_entry.py's holders cache."""
+    pt._judgment_cache.clear()
+    yield
+    pt._judgment_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_price_history_calls(monkeypatch):
     """`estimate_market_probability` now also fetches recent price-history
     for the velocity signal -- default to "no history" (velocity None) so no
@@ -365,3 +378,88 @@ async def test_estimate_does_not_highlight_small_velocity(monkeypatch):
     await pt.estimate_market_probability(_market(yes_price=0.5))
 
     assert "Signal de marché" not in captured["message"]
+
+
+# ── cache TTL (26/07, full-pipeline audit -- gaspillage Tavily/LLM réel) ────────────
+
+class TestJudgmentCache:
+    @pytest.mark.asyncio
+    async def test_second_call_within_ttl_reuses_cache_no_new_llm_call(self, monkeypatch):
+        _patch_tavily(monkeypatch, _TavilyUnavailable())
+        calls = {"n": 0}
+
+        async def fake_chat_with_context(*args, **kwargs):
+            calls["n"] += 1
+            return _vote_json(0.9)
+
+        monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+
+        market = _market(yes_price=0.5)
+        first = await pt.estimate_market_probability(market)
+        second = await pt.estimate_market_probability(market)
+
+        assert calls["n"] == pt.VOTE_COUNT  # only the first call actually votes
+        assert second is first  # same cached PolymarketJudgment object
+
+    @pytest.mark.asyncio
+    async def test_cache_expires_after_ttl(self, monkeypatch):
+        _patch_tavily(monkeypatch, _TavilyUnavailable())
+        _patch_votes(monkeypatch, [_vote_json(0.9), _vote_json(0.9), _vote_json(0.9)])
+
+        fake_now = {"t": 1000.0}
+        monkeypatch.setattr(pt.time, "monotonic", lambda: fake_now["t"])
+
+        market = _market(yes_price=0.5)
+        await pt.estimate_market_probability(market)
+
+        calls = {"n": 0}
+
+        async def fake_chat_with_context(*args, **kwargs):
+            calls["n"] += 1
+            return _vote_json(0.9)
+
+        monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+        fake_now["t"] += pt._JUDGMENT_CACHE_TTL_SECONDS + 1.0
+        await pt.estimate_market_probability(market)
+
+        assert calls["n"] == pt.VOTE_COUNT  # re-judged for real after expiry
+
+    @pytest.mark.asyncio
+    async def test_different_markets_never_share_a_cache_entry(self, monkeypatch):
+        _patch_tavily(monkeypatch, _TavilyUnavailable())
+        calls = {"n": 0}
+
+        async def fake_chat_with_context(*args, **kwargs):
+            calls["n"] += 1
+            return _vote_json(0.9)
+
+        monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+
+        other = _market(yes_price=0.5, question="Will Y happen?")
+        other.yes_token_id = "a-different-yes-token"
+        await pt.estimate_market_probability(_market(yes_price=0.5))
+        await pt.estimate_market_probability(other)
+
+        assert calls["n"] == pt.VOTE_COUNT * 2
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_question_text_when_token_id_missing(self, monkeypatch):
+        """A market with no yes_token_id (e.g. velocity signal structurally
+        unavailable for it too) must still be cached, keyed by its question
+        text -- never silently skip caching just because the preferred key is
+        absent."""
+        _patch_tavily(monkeypatch, _TavilyUnavailable())
+        calls = {"n": 0}
+
+        async def fake_chat_with_context(*args, **kwargs):
+            calls["n"] += 1
+            return _vote_json(0.9)
+
+        monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+
+        market = _market(yes_price=0.5)
+        market.yes_token_id = None
+        await pt.estimate_market_probability(market)
+        await pt.estimate_market_probability(market)
+
+        assert calls["n"] == pt.VOTE_COUNT

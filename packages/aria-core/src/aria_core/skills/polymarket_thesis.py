@@ -53,6 +53,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from aria_core.llm import chat_with_context
@@ -245,7 +246,53 @@ def _extreme_price_skip(market: PolymarketCandidateMarket) -> PolymarketJudgment
     return None
 
 
+# 26/07 -- process-local TTL cache (full-pipeline audit, Item #115):
+# estimate_market_probability had NO dedup at all, unlike conviction_
+# research.py's LanceDB cache -- a real manual test the same day showed the
+# same ~6 evergreen questions (Fed decisions, novelty bets) re-researched
+# (Tavily + VOTE_COUNT=3 LLM calls) 4 times in 35 minutes. At the real 12h
+# cycle cadence (polymarket_paper_cycle), this would burn through the shared
+# Tavily budget re-judging markets whose meaning hasn't changed, without ever
+# reaching later candidates. Keyed by yes_token_id (stable per market, same
+# identifier _recent_velocity already relies on) -- falls back to the
+# question text if somehow absent, never skips caching. TTL 6h: shorter than
+# the 12h cycle cadence on purpose (a genuinely fast-moving market -- see
+# probability_velocity_7d above -- still gets re-judged well within a day),
+# long enough to kill same-session repeats and same-cycle duplicate
+# evaluations.
+_JUDGMENT_CACHE_TTL_SECONDS = 6.0 * 3600.0
+_judgment_cache: dict[str, tuple[float, PolymarketJudgment]] = {}
+
+
+def _judgment_cache_key(market: PolymarketCandidateMarket) -> str:
+    return market.yes_token_id or f"question:{market.question}"
+
+
+def _purge_expired_judgment_cache(now: float) -> None:
+    """Opportunistic eviction, run on every cache write -- bounds the dict to
+    roughly the markets seen within the last TTL window rather than growing
+    forever on a long-running process (same doctrine as momentum_entry.py's
+    ``_purge_expired_holders_state``)."""
+    expired = [k for k, (ts, _j) in _judgment_cache.items() if (now - ts) >= _JUDGMENT_CACHE_TTL_SECONDS]
+    for k in expired:
+        del _judgment_cache[k]
+
+
 async def estimate_market_probability(market: PolymarketCandidateMarket) -> PolymarketJudgment:
+    """TTL cache in front of ``_estimate_market_probability_uncached`` -- see
+    the module comment above ``_JUDGMENT_CACHE_TTL_SECONDS``."""
+    key = _judgment_cache_key(market)
+    now = time.monotonic()
+    cached = _judgment_cache.get(key)
+    if cached is not None and (now - cached[0]) < _JUDGMENT_CACHE_TTL_SECONDS:
+        return cached[1]
+    judgment = await _estimate_market_probability_uncached(market)
+    _judgment_cache[key] = (now, judgment)
+    _purge_expired_judgment_cache(now)
+    return judgment
+
+
+async def _estimate_market_probability_uncached(market: PolymarketCandidateMarket) -> PolymarketJudgment:
     """Full judgment pipeline for one candidate market: research -> VOTE_COUNT
     independent LLM probability votes -> convergence check -> win-probability
     floor -> edge vs market price -> BET/SKIP decision.

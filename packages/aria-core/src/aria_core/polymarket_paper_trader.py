@@ -74,6 +74,16 @@ MAX_OPEN_POSITIONS = 15
 CANDIDATES_PER_CYCLE = 3
 
 
+# 26/07 -- Item #109, drawdown circuit breaker (polymarket_risk_guard.py):
+# same migration pattern as paper_trader.py's _STATE_ADDED_COLUMNS (idempotent
+# ALTER TABLE, never destructive) -- the high-water mark lives on THIS
+# module's own state table, never shared with the $1M momentum portfolio's
+# equity_high_water_mark (structurally separate pockets, separate risk state).
+_STATE_ADDED_COLUMNS = [
+    ("equity_high_water_mark", "REAL"),
+]
+
+
 async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -85,6 +95,12 @@ async def _ensure_tables() -> None:
             )
             """
         )
+        state_existing = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(polymarket_paper_state)")).fetchall()
+        }
+        for name, ddl in _STATE_ADDED_COLUMNS:
+            if name not in state_existing:
+                await db.execute(f"ALTER TABLE polymarket_paper_state ADD COLUMN {name} {ddl}")
         await db.execute(
             "INSERT OR IGNORE INTO polymarket_paper_state (id, starting_capital, created_at) VALUES (1, ?, ?)",
             (STARTING_CAPITAL_USD, _now()),
@@ -198,7 +214,9 @@ async def has_open_position(event_slug: str, question: str) -> bool:
             return (await cur.fetchone()) is not None
 
 
-def compute_bet_size(judgment: PolymarketJudgment, entry_price: float, equity_usd: float) -> float:
+def compute_bet_size(
+    judgment: PolymarketJudgment, entry_price: float, equity_usd: float, *, alloc_multiplier: float = 1.0,
+) -> float:
     """Fractional-Kelly sizing on the side ARIA actually bets on.
 
     ``win_probability``/``entry_price`` are both for the SAME side (never a
@@ -209,7 +227,13 @@ def compute_bet_size(judgment: PolymarketJudgment, entry_price: float, equity_us
 
     Clamped to [0, MAX_BET_PCT] -- never negative (would mean "don't bet",
     already excluded upstream by the judgment gates) and never above the
-    hard ceiling regardless of what the formula alone suggests."""
+    hard ceiling regardless of what the formula alone suggests.
+
+    ``alloc_multiplier`` (Item #109, 26/07): applied AFTER the hard ceiling,
+    never lets the drawdown circuit breaker's soft tier (polymarket_risk_
+    guard.SOFT_ALLOC_MULTIPLIER) raise a bet above what Kelly/the ceiling
+    alone would already allow -- a multiplier, never a bonus, same doctrine
+    as ``risk_guard.py``'s own alloc_multiplier on the momentum side."""
     p = judgment.win_probability
     if p is None or entry_price is None or entry_price <= 0.0 or entry_price >= 1.0:
         return 0.0
@@ -217,7 +241,7 @@ def compute_bet_size(judgment: PolymarketJudgment, entry_price: float, equity_us
     kelly_f = p - (1.0 - p) / b if b > 0 else 0.0
     kelly_f = max(0.0, kelly_f)
     fraction = min(kelly_f * KELLY_FRACTION, MAX_BET_PCT)
-    return fraction * equity_usd
+    return fraction * equity_usd * alloc_multiplier
 
 
 async def _resolve_entry_price(market: PolymarketCandidateMarket, side: str) -> float | None:
@@ -237,11 +261,19 @@ async def _resolve_entry_price(market: PolymarketCandidateMarket, side: str) -> 
     return market.yes_price if side == "YES" else (1.0 - market.yes_price)
 
 
-async def open_bet(market: PolymarketCandidateMarket, judgment: PolymarketJudgment) -> dict | None:
+async def open_bet(
+    market: PolymarketCandidateMarket, judgment: PolymarketJudgment, *, alloc_multiplier: float = 1.0,
+) -> dict | None:
     """Books a fictitious bet from an already-decided ``BET`` judgment.
     Returns the position dict, or ``None`` if refused (already positioned on
     this exact market, position cap reached, no real entry price available,
-    or the computed size rounds to nothing)."""
+    or the computed size rounds to nothing).
+
+    ``alloc_multiplier`` (Item #109, 26/07): forwarded as-is to
+    ``compute_bet_size`` -- resolved ONCE per cycle by the caller via
+    ``polymarket_risk_guard.evaluate_portfolio_risk()``, never recomputed
+    per candidate (same pattern as the momentum pipeline's own
+    ``current_regime``)."""
     if judgment.action != "BET" or not judgment.side:
         return None
     await _ensure_tables()
@@ -255,7 +287,7 @@ async def open_bet(market: PolymarketCandidateMarket, judgment: PolymarketJudgme
         return None
 
     equity = await cash_available()
-    size_usd = compute_bet_size(judgment, entry_price, equity)
+    size_usd = compute_bet_size(judgment, entry_price, equity, alloc_multiplier=alloc_multiplier)
     cash = await cash_available()
     size_usd = min(size_usd, cash)
     if size_usd <= 1.0:  # not worth booking a near-zero position
@@ -344,6 +376,30 @@ async def portfolio_summary() -> dict:
     }
 
 
+async def get_equity_high_water_mark() -> float:
+    """Highest equity ever reached (Item #109, drawdown circuit breaker) --
+    initialized to the starting capital as long as no higher equity has been
+    observed yet, never NULL after this call (migrated DBs have the column
+    but not the value). Same pattern as paper_trader.get_equity_high_water_
+    mark, on this module's own dedicated column."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT equity_high_water_mark FROM polymarket_paper_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+    if row and row[0] is not None:
+        return float(row[0])
+    return await starting_capital()
+
+
+async def set_equity_high_water_mark(value: float) -> None:
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE polymarket_paper_state SET equity_high_water_mark = ? WHERE id = 1", (value,),
+        )
+        await db.commit()
+
+
 def format_bet_alert(pos: dict) -> str:
     return (
         f"[FICTIF] Pari Polymarket -- {pos['side']}\n"
@@ -381,6 +437,15 @@ async def format_portfolio_report(*, recent_closed_limit: int = 5) -> str:
     if summary["win_rate"] is not None:
         lines.append(f"Taux de réussite : {summary['win_rate']:.0%} | PnL réalisé : {summary['realized_pnl']:+,.2f}$")
 
+    # Item #109 (26/07): surfaces the dedicated circuit breaker's state --
+    # without this, an operator checking /polymarket after a drawdown would
+    # have no way to know WHY new bets stopped appearing.
+    from aria_core import polymarket_risk_guard
+
+    blocked, block_reason = polymarket_risk_guard.blocks_new_bets()
+    if blocked:
+        lines.append(f"⛔ Coupe-circuit armé : {block_reason}")
+
     open_positions = await get_open_positions()
     if open_positions:
         lines.append("\nPositions ouvertes :")
@@ -400,10 +465,17 @@ async def format_portfolio_report(*, recent_closed_limit: int = 5) -> str:
 
 
 async def run_polymarket_paper_cycle(notifier=None) -> dict:
-    """Full cycle: (1) resolve anything mature, (2) if room/cash/gate allow,
-    judge a bounded batch of new liquid candidates and book any that clear
-    the bar. Gate checked here too (defence in depth, same pattern as
-    `paper_trader.open_position`'s `risk_guard.blocks_new_entries` check)."""
+    """Full cycle: (1) resolve anything mature (ALWAYS, regardless of the
+    circuit breaker's state -- an already-open bet must reach its resolution
+    normally), (2) if room/cash/gate/circuit-breaker allow, judge a bounded
+    batch of new liquid candidates and book any that clear the bar.
+
+    Item #109 (26/07): ``polymarket_risk_guard.evaluate_portfolio_risk()`` is
+    resolved ONCE per cycle, same pattern as ``paper_trader``'s own
+    ``risk_guard`` check -- a hard-tier breach (drawdown >= 20% or 5
+    consecutive losses) blocks any NEW bet this cycle (existing positions are
+    untouched, they only ever wait for resolution), a soft-tier breach halves
+    the size of any bet that still gets booked."""
     resolved = await check_resolutions()
     for pos in resolved:
         if notifier:
@@ -411,21 +483,30 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
 
     opened: list[dict] = []
     if polymarket_paper_enabled() and len(await get_open_positions()) < MAX_OPEN_POSITIONS:
-        candidates = await polymarket_client.list_liquid_events()
-        evaluated = 0
-        for market in candidates:
-            if evaluated >= CANDIDATES_PER_CYCLE:
-                break
-            if await has_open_position(market.event_slug, market.question):
-                continue
-            evaluated += 1
-            judgment = await estimate_market_probability(market)
-            if judgment.action != "BET":
-                continue
-            position = await open_bet(market, judgment)
-            if position:
-                opened.append(position)
-                if notifier:
-                    await notifier(format_bet_alert(position))
+        from aria_core import polymarket_risk_guard
+
+        risk_state = await polymarket_risk_guard.evaluate_portfolio_risk()
+        if notifier and risk_state.newly_triggered_hard:
+            await notifier(polymarket_risk_guard.format_hard_drawdown_alert(risk_state))
+        elif notifier and risk_state.newly_triggered_soft:
+            await notifier(polymarket_risk_guard.format_soft_drawdown_alert(risk_state))
+
+        if not risk_state.blocked:
+            candidates = await polymarket_client.list_liquid_events()
+            evaluated = 0
+            for market in candidates:
+                if evaluated >= CANDIDATES_PER_CYCLE:
+                    break
+                if await has_open_position(market.event_slug, market.question):
+                    continue
+                evaluated += 1
+                judgment = await estimate_market_probability(market)
+                if judgment.action != "BET":
+                    continue
+                position = await open_bet(market, judgment, alloc_multiplier=risk_state.alloc_multiplier)
+                if position:
+                    opened.append(position)
+                    if notifier:
+                        await notifier(format_bet_alert(position))
 
     return {"resolved": resolved, "opened": opened}
