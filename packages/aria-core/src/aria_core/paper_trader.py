@@ -2962,6 +2962,28 @@ async def _run_paper_cycle_locked(
     # set_trading_mode), never per-candidate.
     trading_mode = await get_trading_mode()
 
+    # Item #105 (26/07): daily profit target check, resolved ONCE per cycle --
+    # used by the scalping-mode bearish RSI divergence exit signal further
+    # below (secure the gain if the target isn't reached yet, let normal
+    # management govern if it already is). Reuses the SAME target as the
+    # diagnostic daily-trade-floor cycle (DAILY_FLOOR_TARGET_PROFIT_USD, the
+    # operator's real $50-100k/24h target), never a second diverging number.
+    # Approximation acknowledged: equity here is cash + cost basis of open
+    # positions (no mark-to-market price_lookup, to avoid an extra network
+    # call per position just for this check) -- good enough to judge whether
+    # the target is "roughly already banked", not a precise dollar figure.
+    daily_target_reached = False
+    if trading_mode == "scalping":
+        try:
+            _target_summary = await portfolio_summary()
+            _target_start = await starting_capital()
+            daily_target_reached = (
+                (_target_summary.get("equity") or 0.0) >= _target_start + DAILY_FLOOR_TARGET_PROFIT_USD
+            )
+        except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to "not reached" (safer default: keeps securing gains)
+            logger.info("paper_cycle: daily target check unavailable (%s) -- defaulting to not-reached", exc)
+            daily_target_reached = False
+
     # 1) Manage open positions: first a continuous SAFETY monitoring
     #    (#187 -- honeypot/ownership that appeared after entry, never checked
     #    more than once before), which takes priority over any price-based
@@ -3032,6 +3054,52 @@ async def _run_paper_cycle_locked(
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
             })
+
+            # Item #105 (26/07): scalping-mode exit signal -- a confirmed
+            # bearish RSI divergence (mirror of the entry-side signal, RSI
+            # [60,80] on the recent pivot) closes the position OUTRIGHT if the
+            # portfolio hasn't yet reached its daily profit target; if the
+            # target is already reached, normal management (trailing stop/TP
+            # stages below) keeps governing unchanged -- never a second exit
+            # path stacked on top. Costs one extra candle fetch per scalping
+            # position per cycle, same scalping ladder as entry (shared
+            # GeckoTerminal throttle already coordinated). Scoped strictly to
+            # "scalping" -- the already-running standard/swing path never
+            # takes this branch.
+            if p.get("mode") == "scalping" and pair is not None and pair.pair_address:
+                from aria_core import momentum_entry
+                from aria_core.skills.entry_signals import bearish_rsi_divergence
+
+                try:
+                    exit_candles = await momentum_entry._fetch_candles(
+                        pair.pair_address, p.get("chain") or "base",
+                        contract=p["contract"], pair=pair, mode="scalping",
+                    )
+                except Exception:  # noqa: BLE001 -- never blocks position management
+                    exit_candles = []
+                bearish = False
+                bearish_reason = ""
+                if exit_candles:
+                    bearish, bearish_reason = bearish_rsi_divergence(exit_candles)
+                if bearish and not daily_target_reached:
+                    exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
+                    exit_notes = (
+                        f"Divergence RSI baissière confirmée ({bearish_reason}) -- objectif de "
+                        f"profit 24h pas encore atteint -- sécurisation immédiate "
+                        f"({exit_gain_pct:+.1f}% vs entrée), {_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price,
+                        reason="divergence RSI baissière (scalping)", notes=exit_notes,
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
 
             # 07/20 -- Formula B (VC exit discipline, see
             # VC_MIN_LIQUIDITY_FLOOR_USD/VC_LIQUIDITY_DROP_INVALIDATION_PCT/

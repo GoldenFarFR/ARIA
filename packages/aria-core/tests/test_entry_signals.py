@@ -7,6 +7,9 @@ from aria_core.skills import entry_signals
 from aria_core.skills.entry_signals import (
     RSI_DIVERGENCE_MAX,
     RSI_DIVERGENCE_MIN,
+    RSI_EXIT_DIVERGENCE_MAX,
+    RSI_EXIT_DIVERGENCE_MIN,
+    bearish_rsi_divergence,
     bullish_rsi_divergence,
     detect_entry,
     fibonacci_zone,
@@ -164,6 +167,78 @@ def test_bullish_divergence_accepted_at_range_boundaries(monkeypatch):
         ok, base = bullish_rsi_divergence(_candles(_setup_series()), lookback=25)
         assert ok is True, f"borne {boundary} devrait être acceptée"
         assert "RSI remonte" in base
+
+
+# ── bearish_rsi_divergence (Item #105, 26/07 -- signal de SORTIE scalping) ────
+
+def _bearish_setup_series() -> list[float]:
+    """Divergence baissière classique, miroir de _setup_series() : euphorie
+    (sommet 1, RSI très haut), repli, nouveau sommet PLUS HAUT (sommet 2) mais
+    RSI plus bas -- calibré empiriquement pour un RSI au pivot récent dans
+    [60, 80] (69, ici)."""
+    lead_in = [100.0] * 15
+    euphoria = [100, 110, 118, 123]      # sommet 1 = 123, RSI très haut
+    pullback = [115, 107, 102, 99, 97]   # repli
+    retest = [104, 112, 121, 125]        # sommet 2 = 125 (plus haut) mais RSI plus bas
+    tail = [120]                          # confirme le sommet 2 comme pivot
+    return lead_in + euphoria + pullback + retest + tail
+
+
+def test_bearish_divergence_detected():
+    ok, base = bearish_rsi_divergence(_candles(_bearish_setup_series()), lookback=25)
+    assert ok is True
+    assert "RSI faiblit" in base
+
+
+def test_no_bearish_divergence_on_plain_uptrend():
+    ok, _ = bearish_rsi_divergence(_candles([100 + i for i in range(30)]), lookback=25)
+    assert ok is False
+
+
+_BEARISH_SETUP_RECENT_PIVOT_INDEX = 27  # sommet récent (125) dans _bearish_setup_series()
+
+
+def _rsi_series_forcing_recent_bearish_pivot(closes: list[float], period: int = 14, *, value: float):
+    real = rsi_series(closes, period)
+    real[_BEARISH_SETUP_RECENT_PIVOT_INDEX] = value
+    return real
+
+
+def test_bearish_divergence_rejected_when_recent_rsi_above_max(monkeypatch):
+    """Divergence relative valide (sommet 125 > 123, RSI qui faiblit) mais RSI
+    récent à 90 (> RSI_EXIT_DIVERGENCE_MAX=80) -- doit être rejetée (pas une
+    vraie zone de surachat affaiblissante)."""
+    monkeypatch.setattr(
+        entry_signals, "rsi_series",
+        lambda closes, period=14: _rsi_series_forcing_recent_bearish_pivot(closes, period, value=90.0),
+    )
+    ok, base = bearish_rsi_divergence(_candles(_bearish_setup_series()), lookback=25)
+    assert ok is False
+    assert base == ""
+
+
+def test_bearish_divergence_rejected_when_recent_rsi_below_min(monkeypatch):
+    """RSI récent à 50 (< RSI_EXIT_DIVERGENCE_MIN=60) -- doit être rejetée
+    (pas encore une vraie faiblesse de surachat)."""
+    monkeypatch.setattr(
+        entry_signals, "rsi_series",
+        lambda closes, period=14: _rsi_series_forcing_recent_bearish_pivot(closes, period, value=50.0),
+    )
+    ok, base = bearish_rsi_divergence(_candles(_bearish_setup_series()), lookback=25)
+    assert ok is False
+    assert base == ""
+
+
+def test_bearish_divergence_accepted_at_range_boundaries(monkeypatch):
+    """Les bornes [60, 80] sont inclusives."""
+    for boundary in (RSI_EXIT_DIVERGENCE_MIN, RSI_EXIT_DIVERGENCE_MAX):
+        monkeypatch.setattr(
+            entry_signals, "rsi_series",
+            lambda closes, period=14, v=boundary: _rsi_series_forcing_recent_bearish_pivot(closes, period, value=v),
+        )
+        ok, base = bearish_rsi_divergence(_candles(_bearish_setup_series()), lookback=25)
+        assert ok is True, f"borne {boundary} devrait être acceptée"
+        assert "RSI faiblit" in base
 
 
 def test_detect_entry_fires_on_setup():

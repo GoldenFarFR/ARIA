@@ -160,6 +160,46 @@ def bullish_rsi_divergence(
     return False, ""
 
 
+# Item #105 (26/07): exit-side mirror of RSI_DIVERGENCE_MIN/MAX above -- the
+# recent pivot's RSI must sit in a real overbought-weakening zone [60, 80],
+# same timeframe-independent doctrine (only the input candles change, never
+# this range). Used as a scalping-mode SELL signal, not an entry gate.
+RSI_EXIT_DIVERGENCE_MIN = 60.0
+RSI_EXIT_DIVERGENCE_MAX = 80.0
+
+
+def bearish_rsi_divergence(
+    candles: list[Candle], *, lookback: int = _DEFAULT_LOOKBACK, period: int = _RSI_PERIOD
+) -> tuple[bool, str]:
+    """Bearish divergence: price makes a HIGHER high, RSI makes a LOWER high --
+    the exact mirror of ``bullish_rsi_divergence`` (entry), used here as a
+    scalping-mode EXIT signal (Item #105, 26/07). Same non-adjacent-pivot
+    search (widest recent high vs any earlier high, not just the immediately
+    preceding one) and same absolute-range requirement on the recent pivot's
+    RSI (``RSI_EXIT_DIVERGENCE_MIN``/``MAX``) as the entry-side function --
+    never a purely relative check. Classic sign of an uptrend running out of
+    steam. Returns (present, factual basis)."""
+    closes_all = [c.close for c in candles]
+    rsis = rsi_series(closes_all, period)
+    start = max(1, len(candles) - lookback) if lookback else 1
+    pivots: list[tuple[int, float, float]] = []
+    for i in range(start, len(candles) - 1):
+        r = rsis[i]
+        if r is None:
+            continue
+        if candles[i].high >= candles[i - 1].high and candles[i].high >= candles[i + 1].high:
+            pivots.append((i, candles[i].high, r))
+    if len(pivots) < 2:
+        return False, ""
+    _, h2, r2 = pivots[-1]
+    if not (RSI_EXIT_DIVERGENCE_MIN <= r2 <= RSI_EXIT_DIVERGENCE_MAX):
+        return False, ""
+    for _, h1, r1 in reversed(pivots[:-1]):
+        if h2 > h1 and r2 < r1:
+            return True, f"plus-haut prix {h2:.6g} > {h1:.6g} mais RSI faiblit ({r1:.0f} → {r2:.0f})"
+    return False, ""
+
+
 def detect_entry(
     candles: list[Candle],
     *,

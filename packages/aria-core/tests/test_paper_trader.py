@@ -1609,6 +1609,105 @@ async def test_scalping_mode_applies_real_dex_swap_fee_on_partial_sell(tmp_db):
     assert partial["exit_price"] == pytest.approx(1.5 * (1.0 - DEX_SWAP_FEE_PCT))
 
 
+# ── Item #105 (26/07) -- vente sur divergence RSI baissière confirmée (scalping) ──
+
+def _bearish_divergence_candles():
+    """Même série calibrée que test_entry_signals.py::_bearish_setup_series() --
+    RSI au sommet récent ~69 (dans [60,80]), divergence confirmée."""
+    from aria_core.skills.ta_levels import Candle
+
+    lead_in = [100.0] * 15
+    euphoria = [100, 110, 118, 123]
+    pullback = [115, 107, 102, 99, 97]
+    retest = [104, 112, 121, 125]
+    tail = [120]
+    closes = lead_in + euphoria + pullback + retest + tail
+    return [Candle(ts=i, open=c, high=c, low=c, close=c, volume=1_000.0) for i, c in enumerate(closes)]
+
+
+def _scalping_exit_pair_lookup(*, price):
+    async def fake_pair_lookup(contract, *, chain="base"):
+        from aria_core.services.dexscreener import PairSnapshot
+
+        return PairSnapshot(
+            pair_address="0xpool", price_usd=price, liquidity_usd=200_000.0,
+            volume_24h_usd=10_000.0, base_symbol="AAA",
+        )
+
+    return fake_pair_lookup
+
+
+@pytest.mark.asyncio
+async def test_scalping_position_closes_on_bearish_divergence_when_target_not_reached(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.2))
+
+    async def fake_fetch_candles(*args, **kwargs):
+        return _bearish_divergence_candles()
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    act = await pt.run_paper_cycle(candidates=[])
+
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "divergence RSI baissière (scalping)"
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_scalping_position_stays_open_on_bearish_divergence_when_target_already_reached(
+    tmp_db, monkeypatch,
+):
+    """Objectif de profit 24h déjà atteint -- la divergence baissière ne force
+    plus rien, le comportement normal (stop suiveur/paliers TP) continue de
+    gouverner seul."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.01))
+
+    async def fake_fetch_candles(*args, **kwargs):
+        return _bearish_divergence_candles()
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    async def fake_summary(*args, **kwargs):
+        return {"equity": 1_000_000.0 + pt.DAILY_FLOOR_TARGET_PROFIT_USD + 1.0}
+
+    monkeypatch.setattr(pt, "portfolio_summary", fake_summary)
+
+    act = await pt.run_paper_cycle(candidates=[])
+
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_standard_mode_never_checks_bearish_divergence(tmp_db, monkeypatch):
+    """Non-régression : mode standard (défaut) ne déclenche jamais ce check,
+    même face à une divergence baissière confirmée."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)  # mode="standard" implicite
+    monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.2))
+
+    called = False
+
+    async def fake_fetch_candles(*args, **kwargs):
+        nonlocal called
+        called = True
+        return _bearish_divergence_candles()
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    act = await pt.run_paper_cycle(candidates=[])
+
+    assert called is False
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
 @pytest.mark.asyncio
 async def test_run_paper_cycle_threads_entry_atr_pct_from_analyzer(tmp_db):
     """Bout en bout : un analyzer momentum-style (avec ``entry_atr_pct``, comme
