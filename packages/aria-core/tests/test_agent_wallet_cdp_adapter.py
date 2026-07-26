@@ -242,6 +242,104 @@ async def test_execute_swap_propagates_exception_on_failure(monkeypatch):
         )
 
 
+# ── _patch_cdp_swap_fee_validation (26/07 -- real `URANUS` incident, 19/07) ──
+# 5 real swap attempts all failed with the same Pydantic error on the REAL
+# installed cdp-sdk (CommonSwapResponseFees.gasFee rejecting None) -- these
+# tests exercise the REAL cdp package (never the fake module above, which
+# replaces cdp.openapi_client entirely and would make these submodules
+# unimportable) to prove the fix genuinely works against the actual SDK.
+
+@pytest.fixture(autouse=True)
+def _reset_cdp_patch_guard(monkeypatch):
+    """The patch guard is a module-level flag -- reset it around every test in
+    this file so an earlier test's patch application never silently skips a
+    later test's own check."""
+    monkeypatch.setattr(adapter, "_cdp_swap_fee_validation_patched", False)
+    yield
+
+
+def test_patch_relaxes_gas_fee_validation_on_the_real_sdk():
+    """Must run BEFORE any other test in this file calls the real (unmocked)
+    ``_patch_cdp_swap_fee_validation()`` -- unlike the module-level flag reset
+    by the fixture above, mutating ``CommonSwapResponseFees.model_fields`` is a
+    real, permanent change to the imported class for the rest of the process
+    (Pydantic model rebuilds aren't undoable by monkeypatch). This is the only
+    test asserting the PRE-patch failure mode, so it must be the first to
+    touch the real class -- kept in one self-contained test rather than split
+    across two, precisely to avoid that ordering trap."""
+    from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
+
+    with pytest.raises(Exception):  # noqa: PT011 -- real pydantic.ValidationError, unpatched
+        CommonSwapResponseFees.from_dict({"gasFee": None, "protocolFee": None})
+
+    adapter._patch_cdp_swap_fee_validation()
+
+    result = CommonSwapResponseFees.from_dict({"gasFee": None, "protocolFee": None})
+    assert result.gas_fee is None
+    assert result.protocol_fee is None
+
+
+def test_patch_still_parses_a_real_valid_fee_after_patching():
+    """The patch only relaxes null -- a genuinely present fee must still parse
+    correctly (never silently dropped)."""
+    from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
+
+    adapter._patch_cdp_swap_fee_validation()
+
+    result = CommonSwapResponseFees.from_dict({
+        "gasFee": {"amount": "100", "token": adapter.USDC_BASE_ADDRESS},
+        "protocolFee": None,
+    })
+    assert result.gas_fee is not None
+    assert result.gas_fee.amount == "100"
+    assert result.protocol_fee is None
+
+
+def test_patch_is_idempotent():
+    adapter._patch_cdp_swap_fee_validation()
+    adapter._patch_cdp_swap_fee_validation()  # must not raise on a 2nd call
+    assert adapter._cdp_swap_fee_validation_patched is True
+
+
+def test_patch_degrades_softly_on_unexpected_sdk_shape(monkeypatch):
+    """If the installed SDK ever changes shape (renamed field, model_rebuild
+    signature change...), the patch must degrade softly rather than raise up
+    into execute_swap -- never blocks a real swap attempt just because this
+    one narrow workaround itself broke. Forced by monkeypatching model_fields
+    to a dict missing the expected keys (deterministic regardless of Python's
+    own sys.modules import cache, unlike faking the parent package -- once
+    the real submodule has been imported anywhere in the process, as the test
+    above already does, re-faking its parent package no longer blocks a fresh
+    import of an already-cached submodule)."""
+    from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
+
+    monkeypatch.setattr(CommonSwapResponseFees, "model_fields", {})
+    adapter._patch_cdp_swap_fee_validation()  # must not raise
+    assert adapter._cdp_swap_fee_validation_patched is False
+
+
+@pytest.mark.asyncio
+async def test_execute_swap_calls_the_patch_before_swapping(monkeypatch):
+    called = {"value": False}
+
+    def fake_patch():
+        called["value"] = True
+
+    monkeypatch.setattr(adapter, "_patch_cdp_swap_fee_validation", fake_patch)
+    _install_fake_cdp_module(
+        monkeypatch,
+        balances_result=None,
+        swap_result={"transaction_hash": "0xdeadbeef", "to_amount": "0.0015"},
+    )
+
+    await adapter.execute_swap(
+        chain="base", token_in="USDC", token_out="WETH", amount_in_usd=5.0,
+        wallet_address="0xabc123", slippage_bps=1000,
+    )
+
+    assert called["value"] is True
+
+
 @pytest.mark.asyncio
 async def test_list_all_token_balances_returns_every_token(monkeypatch):
     _install_fake_cdp_module(

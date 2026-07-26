@@ -99,6 +99,57 @@ async def _get_wallet_account(cdp: Any) -> Any:
         raise
 
 
+_cdp_swap_fee_validation_patched = False
+
+
+def _patch_cdp_swap_fee_validation() -> None:
+    """Real bug found 26/07 (`URANUS` incident, 19/07): 5 real swap attempts on
+    5 distinct Base tokens all failed with the SAME Pydantic error --
+    ``CommonSwapResponseFees.gasFee`` rejecting ``None``. Traced through the
+    actually-installed ``cdp-sdk`` (1.47.1, still latest as of this fix, no
+    version bump fixes it): Coinbase's own create-swap-quote endpoint can
+    return ``liquidityAvailable: true`` with a null ``gasFee``/``protocolFee``
+    for some low-liquidity routes -- the SDK's auto-generated OpenAPI model
+    requires both fields non-null, so parsing the (otherwise valid) quote
+    raises before any transaction is ever built or signed. Confirmed identical
+    on BOTH call shapes (inline ``account.swap(...)`` and the documented
+    "quote-then-execute" pattern): both funnel through the same
+    ``create_swap_quote()`` -> ``CreateSwapQuoteResponse.from_dict()`` ->
+    ``CommonSwapResponseFees`` parse.
+
+    Fix: relax ``gas_fee``/``protocol_fee`` to ``Optional[TokenFee] = None`` on
+    the live Pydantic model (verified live against the installed SDK before
+    writing this). Safe because neither field is ever read anywhere in this
+    module (``execute_swap`` only reads ``transaction_hash``/``to_amount``) --
+    this only unblocks PARSING of an otherwise-valid quote, it changes nothing
+    about transaction building, Permit2 signing, or broadcast. Idempotent
+    (module-level guard), applied lazily right before a real swap attempt --
+    never at import time, so a host that never executes a swap never touches
+    this at all."""
+    global _cdp_swap_fee_validation_patched
+    if _cdp_swap_fee_validation_patched:
+        return
+    try:
+        from typing import Optional
+
+        from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
+        from cdp.openapi_client.models.token_fee import TokenFee
+
+        for field_name in ("gas_fee", "protocol_fee"):
+            field = CommonSwapResponseFees.model_fields[field_name]
+            field.annotation = Optional[TokenFee]
+            field.default = None
+        CommonSwapResponseFees.model_rebuild(force=True)
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks the swap attempt
+        logger.warning(
+            "%s -- could not patch CommonSwapResponseFees validation (%s), "
+            "swap attempt will proceed unpatched",
+            _REAL_MONEY_LOG_PREFIX, exc,
+        )
+    else:
+        _cdp_swap_fee_validation_patched = True
+
+
 def _get(obj: Any, *names: str) -> Any:
     """Reads an attribute or dict key, whatever the format returned by
     the SDK (Pydantic object or raw dict depending on version) -- defensive,
@@ -210,6 +261,8 @@ async def execute_swap(
     first version, no `token_in` other than USDC is considered)."""
     from cdp import CdpClient, parse_units
     from cdp.actions.evm.swap import AccountSwapOptions
+
+    _patch_cdp_swap_fee_validation()
 
     async with CdpClient() as cdp:
         account = await _get_wallet_account(cdp)
