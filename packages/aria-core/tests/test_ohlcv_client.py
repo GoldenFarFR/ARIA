@@ -5,6 +5,7 @@ Vérifie : parsing robuste (lignes malformées ignorées), l'échelle de repli
 chronologique. Motif de mock identique à test_coingecko_client.py (FakeClient).
 """
 
+import httpx
 import pytest
 
 from aria_core.services.ohlcv import (
@@ -39,8 +40,6 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            import httpx
-
             raise httpx.HTTPStatusError("error", request=None, response=self)
 
 
@@ -130,19 +129,88 @@ async def test_falls_back_to_hourly_when_daily_thin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_all_unavailable_is_graceful(monkeypatch):
+    """26/07 -- day 404 ("pool not found") est une vraie erreur réseau, pas un
+    "pas assez de bougies" -- la cascade s'arrête immédiatement, "hour" n'est
+    JAMAIS appelé (le pool n'existera pas plus à une autre granularité)."""
     client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
-    # day (1x) + hour (2x : 4H puis 1H) tous en 404.
-    _patch(
-        monkeypatch,
-        {
-            _url("day"): FakeResponse(404),
-            _url("hour"): [FakeResponse(404), FakeResponse(404)],
-        },
-    )
+    _patch(monkeypatch, {_url("day"): FakeResponse(404)})
     res = await client.get_ohlcv(POOL)
     assert res.available is False
     assert res.candles == []
     assert res.error  # message explicite, jamais une bougie inventée
+    # si le code avait quand même appelé "hour", FakeClient lèverait un
+    # KeyError (absent du dict responses) -- confirme l'arrêt immédiat.
+
+
+# ── #26/07 : une vraie erreur réseau (429/timeout/5xx/pool inconnu) arrête la
+# cascade au lieu d'escalader -- distinct du cas légitime "pas assez de
+# bougies après un succès HTTP", qui doit toujours continuer à escalader ──
+
+@pytest.mark.asyncio
+async def test_rate_limit_on_first_rung_stops_the_ladder(monkeypatch):
+    """Un vrai 429 (3 tentatives internes épuisées) sur "day" ne doit JAMAIS
+    déclencher un essai sur "hour" -- le rate limit s'applique à tout le
+    pool/endpoint, pas à une granularité précise (confirmé en prod : le même
+    pool a pris day->429 PUIS hour->429 dans la même rafale)."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {_url("day"): [FakeResponse(429), FakeResponse(429), FakeResponse(429)]},
+    )
+    res = await client.get_ohlcv(POOL)
+    assert res.available is False
+    assert "rate limit" in res.error
+    # "hour" absent du dict responses -- un appel dessus lèverait un KeyError.
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_on_second_rung_preserves_partial_result_from_first(monkeypatch):
+    """Cas le plus important : "day" réussit mais avec peu de bougies (best
+    partiel retenu), PUIS "hour" tape un vrai rate limit -- le résultat
+    partiel du premier palier doit être retourné, jamais un échec total qui
+    jetterait une donnée déjà obtenue à cause d'un problème réseau survenu
+    APRÈS ce succès."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {
+            _url("day"): FakeResponse(200, _payload(_rows(5))),  # < _MIN_USEFUL_CANDLES
+            _url("hour"): [FakeResponse(429), FakeResponse(429), FakeResponse(429)],
+        },
+    )
+    res = await client.get_ohlcv(POOL)
+    assert res.available is True
+    assert res.timeframe == "1D"
+    assert len(res.candles) == 5
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_first_rung_stops_the_ladder(monkeypatch):
+    """Même doctrine que le rate limit -- un timeout confirmé (retry interne
+    épuisé) est une vraie panne réseau, pas un signal "pas assez de bougies
+    à ce grain" -- la cascade s'arrête, jamais un essai sur "hour"."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+
+    class RaisingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params=None, headers=None):
+            raise httpx.TransportError("boom")
+
+    monkeypatch.setattr("aria_core.services.ohlcv.httpx.AsyncClient", lambda **kw: RaisingClient())
+
+    async def _no_sleep(_):
+        return None
+
+    monkeypatch.setattr("aria_core.services.ohlcv.asyncio.sleep", _no_sleep)
+
+    res = await client.get_ohlcv(POOL)
+    assert res.available is False
+    assert "timeout" in res.error
 
 
 @pytest.mark.asyncio
@@ -283,21 +351,21 @@ async def test_scalping_mode_falls_back_to_30min_when_15min_thin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scalping_mode_never_falls_back_to_standard_ladder(monkeypatch):
-    """Si 15min ET 30min échouent tous les deux, le mode scalping renvoie
+    """Si 15min échoue avec une vraie erreur réseau, le mode scalping renvoie
     available=False -- il ne dégrade JAMAIS vers le ladder standard (day/hour),
     qui corromprait silencieusement la lecture RSI/golden-pocket calibrée pour
-    du 15-30min avec des bougies day-scale."""
+    du 15-30min avec des bougies day-scale. 26/07 : 30min n'est même plus
+    tenté (même vraie erreur réseau que 15min, un SEUL appel "minute")."""
     client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
-    _patch(
-        monkeypatch,
-        {_url("minute"): [FakeResponse(404), FakeResponse(404)]},
-    )
+    _patch(monkeypatch, {_url("minute"): [FakeResponse(404)]})
 
     res = await client.get_ohlcv(POOL, mode="scalping")
 
     assert res.available is False
     assert res.candles == []
     assert res.error
+    # liste à un seul élément -- si le code avait quand même retenté 30min,
+    # FakeClient lèverait un IndexError (pop(0) sur liste vide).
 
 
 @pytest.mark.asyncio

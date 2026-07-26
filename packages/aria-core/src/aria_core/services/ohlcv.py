@@ -263,7 +263,27 @@ class OHLCVClient:
         ``mode`` (Item #101, 26/07): ``"scalping"`` walks the dedicated
         15min -> 30min ladder instead -- see ``_ladder_for_mode``. Default
         ``"standard"`` is the original 1D/4H/1H ladder, unchanged behavior
-        for every existing caller."""
+        for every existing caller.
+
+        26/07 -- operator-found gap (real prod incident, GeckoTerminal 429s
+        during a 40-candidate scan burst): a real network/rate-limit/server
+        error (429, timeout, 5xx, unknown pool) used to be treated the SAME
+        as "not enough candles at this timeframe" -- both fell through to
+        `continue`, escalating to the next rung of the ladder. But a 429 or
+        an unknown-pool 404 applies to the WHOLE pool/endpoint regardless of
+        which timeframe is requested -- confirmed live in prod logs: the
+        SAME pool hit `ohlcv/day -> 429` immediately followed by
+        `ohlcv/hour -> 429` within a burst, wasting 2-3x the throttled calls
+        on a candidate already doomed by the SAME underlying condition.
+        Escalating the ladder only ever helps the OTHER case (server
+        answered fine, this pool/timeframe combination just doesn't have
+        enough candles yet) -- so a real error now stops the ladder
+        immediately (``break``), returning whatever partial result (`best`)
+        was already obtained rather than compounding the failure with more
+        doomed attempts. Cuts real request volume during a burst by
+        ~2-3x with zero loss of coverage (no candidate is scanned less
+        often -- this only trims wasted retries on candidates already
+        rate-limited)."""
         pool = (pool_address or "").strip()
         if not pool:
             return OHLCVResult(pool_address="", network=network, error=f"{UNAVAILABLE} (missing pool)")
@@ -278,7 +298,7 @@ class OHLCVClient:
             )
             if error is not None:
                 last_error = error
-                continue
+                break
             candles = _parse_candles(data)
             if not candles:
                 last_error = f"{UNAVAILABLE} (no {label} candle)"
