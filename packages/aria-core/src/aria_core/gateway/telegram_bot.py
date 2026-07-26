@@ -655,6 +655,19 @@ async def _handle_performance(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _reply(update.message, format_breakdown_report(trades))
 
 
+async def _handle_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/polymarket -- Item #108 (26/07): operator-facing snapshot of the
+    dedicated $100k paper-trading pocket on Polymarket prediction markets.
+    Admin-only, read-only, no network call -- found missing while reviewing
+    this chantier (the only way to check the portfolio was scrolling past
+    Telegram alerts)."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.polymarket_paper_trader import format_portfolio_report
+
+    await _reply(update.message, await format_portfolio_report())
+
+
 async def _handle_trading_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/mode [standard|scalping] -- Item #101, 26/07: the ONLY way to switch the
     Milly ($1M) test's entry mode. No argument: shows the current one. Operator
@@ -2224,6 +2237,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
+    ("polymarket", "Portefeuille papier Polymarket (équité, positions ouvertes, dernières résolutions)"),
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
@@ -3271,6 +3285,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("regime", _handle_regime))
     app.add_handler(CommandHandler("counterfactual", _handle_counterfactual))
     app.add_handler(CommandHandler("performance", _handle_performance))
+    app.add_handler(CommandHandler("polymarket", _handle_polymarket))
     app.add_handler(CommandHandler("mode", _handle_trading_mode))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))

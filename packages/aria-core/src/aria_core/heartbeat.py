@@ -298,6 +298,28 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="polymarket_paper_cycle",
+        name="Polymarket paper trading (simulation, $100k)",
+        description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
+        # 720min (12h, 2 cycles/day): prediction markets move far slower than
+        # momentum crypto (resolution is often days/weeks away, not minutes)
+        # -- no need for a fast cadence. Paired DELIBERATELY with
+        # polymarket_paper_trader.CANDIDATES_PER_CYCLE=3 -- calibrated
+        # together (26/07) against the REAL shared Tavily monthly budget
+        # (checked live: 900 credits/month cap, 790 remaining at calibration
+        # time) since each judged candidate costs 1 real Tavily search: 3
+        # candidates x 2 cycles/day = up to 6 credits/day (~180/month, ~20%
+        # of the shared cap) -- a deliberately small, non-dominant share of a
+        # budget already used by several other established consumers (X/
+        # Website/Docs substance, conviction research, operator/visitor
+        # web_verify questions). A starting value, not set in stone --
+        # loosen only after measuring real spend under this cadence (same
+        # "start conservative, measure, loosen later" doctrine as every
+        # other threshold in this chantier).
+        interval_minutes=720,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="aria_exam_cycle",
         name="ARIA trading exam (pedagogical rehearsal)",
         description="Generates ~25 trading questions/day (50-concept curriculum), poses them to ARIA's reasoning, grades via an LLM judge. 20 days, in parallel with paper-trading. No financial action.",
@@ -602,6 +624,10 @@ def _sync_x_curiosity_enabled() -> None:
                     "1", "true", "yes", "on",
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "polymarket_paper_cycle":
+                from aria_core.polymarket_paper_trader import polymarket_paper_enabled
+
+                task.enabled = polymarket_paper_enabled()
             if task.id == "aria_exam_cycle":
                 from aria_core.exam import exam_enabled
 
@@ -1292,6 +1318,19 @@ class AriaHeartbeat:
                     "paper",
                     f"[paper_trade] fictif 1M$ (plancher {actions.get('already_today', 0)}"
                     f"/{actions.get('target', 0)} du jour) : +{len(actions['opened'])} achats forcés",
+                )
+
+        elif task_id == "polymarket_paper_cycle":
+            from aria_core import polymarket_paper_trader
+
+            actions = await polymarket_paper_trader.run_polymarket_paper_cycle(
+                notifier=self._notify_telegram_trading,
+            )
+            if actions.get("opened") or actions.get("resolved"):
+                append_memory(
+                    "paper",
+                    f"[polymarket_paper] fictif 100k$ : +{len(actions.get('opened', []))} paris / "
+                    f"{len(actions.get('resolved', []))} résolutions",
                 )
 
         elif task_id == "aria_exam_cycle":
