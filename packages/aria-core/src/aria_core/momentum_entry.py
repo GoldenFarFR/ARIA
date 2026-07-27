@@ -116,7 +116,19 @@ logger = logging.getLogger(__name__)
 # translated this (see `GeckoTerminalClient.get_ohlcv`'s fix), which would
 # have silently starved every Ethereum candidate on `ohlcv_unavailable`
 # (empty/404 response, not an error) the moment this chain went live.
-DEFAULT_CHAINS: tuple[str, ...] = ("base", "ethereum")
+# 27/07 -- Ethereum narrowed back out, explicit operator decision, TEMPORARY
+# ("pour l'instant"): while diagnosing why the scalping/VC pockets (3-pocket
+# architecture) opened zero positions in ~7.5h despite continuous candidate
+# evaluation, Ethereum candidates were a large share of the funnel traffic
+# with no successful entry -- narrowing discovery to Base alone removes that
+# variable while the real per-pocket funnel breakdown (Phase 5, not built
+# yet) is missing. All Ethereum compatibility mappings below (GoPlus/
+# DexScreener/CoinGecko/GeckoTerminal) are left untouched -- same doctrine as
+# the 20/07 Solana/Robinhood narrowing (removing them would break the
+# fallback for nothing). Re-add "ethereum" here once the pockets are
+# confirmed healthy on Base alone, or once per-pocket funnel data explains
+# the zero-entry pattern.
+DEFAULT_CHAINS: tuple[str, ...] = ("base",)
 
 # DexScreener uses readable slugs ("base", "solana", "robinhood", "ethereum");
 # GoPlus expects its own chain identifier (numeric for most EVMs, or a special

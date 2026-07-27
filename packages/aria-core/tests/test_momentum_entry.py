@@ -4433,7 +4433,7 @@ async def test_result_includes_chain_scoped_category_when_multi_chain_active(mon
 
 
 @pytest.mark.asyncio
-async def test_category_populated_by_default_since_multi_chain(monkeypatch):
+async def test_category_empty_by_default_since_ethereum_narrowed_back_out(monkeypatch):
     """20/07 -- angle mort trouvé par une revue croisée externe, confirmé dans le code :
     catégoriser par chaîne (19/07) ne protège plus de rien si ``DEFAULT_CHAINS`` ne
     contient qu'une seule chaîne -- toutes les positions retomberaient dans le même seau
@@ -4443,16 +4443,21 @@ async def test_category_populated_by_default_since_multi_chain(monkeypatch):
     dans ``fit_alloc_to_concentration_cap``/``category_exposure_usd``) neutraliserait
     proprement le plafond.
 
-    26/07 -- ``DEFAULT_CHAINS`` est redevenu réellement multi-chaînes (Ethereum ajouté à
-    Base) -- le comportement par défaut est donc désormais l'inverse de ce que ce test
-    vérifiait jusqu'ici : la catégorie EST peuplée par défaut, le plafond de concentration
-    est actif sans monkeypatch. Ce test verrouille ce nouvel état réel plutôt que de rester
-    figé sur un ancien défaut mono-chaîne périmé."""
+    26/07 -- ``DEFAULT_CHAINS`` était redevenu réellement multi-chaînes (Ethereum ajouté à
+    Base) -- ce test vérifiait alors l'inverse (catégorie peuplée par défaut).
+
+    27/07 -- Ethereum retiré à nouveau de ``DEFAULT_CHAINS`` (décision opérateur explicite,
+    temporaire, le temps de diagnostiquer pourquoi les poches scalping/VC n'ouvraient aucune
+    position malgré une part importante de candidats Ethereum dans le funnel) -- le défaut
+    réel redevient mono-chaîne, donc la catégorie redevient vide par défaut. Ce test
+    verrouille cet état réel plutôt que de rester figé sur l'ancien défaut multi-chaînes
+    périmé -- voir ``test_category_empty_when_chains_monkeypatched_to_single_chain``
+    ci-dessous pour la même assertion indépendante de la valeur réelle du défaut."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "BUY"
-    assert result["category"] == "momentum-base"
+    assert result["category"] == ""
 
 
 @pytest.mark.asyncio
