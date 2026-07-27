@@ -385,8 +385,10 @@ et `2026-07-17-veille-base-198-request-for-builders-ai-agents.md`, déjà à jou
   anti-dump/sécurité/traction réelle/investissement direct — **Clanker recommandé** (LP
   verrouillée jusqu'en 2100, croissance +37%/mois, audit réel, racheté par Farcaster/Neynar) ;
   Bankr et Virtuals écartés (incidents sécurité récurrents / déclin structurel -95% revenus
-  malgré Virtuals Ventures comme piste alternative d'investissement). Détail complet :
-  `docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md`.
+  malgré Virtuals Ventures comme piste alternative d'investissement). Diligence complète et
+  sourcée : `docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md`.
+  **Fiche de référence VIVANTE** (à reprendre périodiquement, une question de vigilance par
+  launchpad sur son point faible identifié) : `docs/base-blockchain-launchpads.md`.
 
 ## Plan momentum mi-juillet — exécuté intégralement (archivé)
 Le plan de bataille posé le 15/07 pour lancer le pipeline momentum (#194 pivot,
