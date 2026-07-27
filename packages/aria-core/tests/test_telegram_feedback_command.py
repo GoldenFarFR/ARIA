@@ -75,7 +75,7 @@ async def test_feedback_shows_starting_pnl_and_result(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
 
-    async def fake_summary(*, price_lookup=None):
+    async def fake_summary(*, price_lookup=None, wallet="swing"):
         return {
             "starting": 1_000_000.0,
             "cash": 950_000.0,
@@ -109,7 +109,7 @@ async def test_feedback_result_equals_starting_plus_pnl_total(monkeypatch):
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
 
-    async def fake_summary(*, price_lookup=None):
+    async def fake_summary(*, price_lookup=None, wallet="swing"):
         return {
             "starting": 500_000.0, "cash": 480_000.0, "equity": 465_000.0,
             "return_pct": -7.0, "realized_pnl": -10_000.0, "unrealized_pnl": -25_000.0,
@@ -172,6 +172,53 @@ async def test_feedback_includes_open_position_detail_with_url(monkeypatch, tmp_
             break
     else:
         pytest.fail("no line starting with COBOT found")
+
+
+@pytest.mark.asyncio
+async def test_feedback_shows_all_3_pockets_distinctly(monkeypatch):
+    """27/07 -- 3-pocket architecture plan, Phase 5: /feedback must show
+    scalping/swing/vc side by side, each with ITS OWN numbers -- not a single
+    aggregate that silently hides two of the three pockets."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
+
+    per_wallet = {
+        "scalping": {
+            "starting": 1_000_000.0, "cash": 990_000.0, "equity": 995_000.0,
+            "return_pct": -0.5, "realized_pnl": -3_000.0, "unrealized_pnl": -2_000.0,
+            "open_positions": 1, "closed_trades": 4, "win_rate": 50.0,
+        },
+        "swing": {
+            "starting": 1_000_000.0, "cash": 900_000.0, "equity": 1_050_000.0,
+            "return_pct": 5.0, "realized_pnl": 30_000.0, "unrealized_pnl": 20_000.0,
+            "open_positions": 3, "closed_trades": 2, "win_rate": 100.0,
+        },
+        "vc": {
+            "starting": 1_000_000.0, "cash": 1_000_000.0, "equity": 1_000_000.0,
+            "return_pct": 0.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "open_positions": 0, "closed_trades": 0, "win_rate": None,
+        },
+    }
+
+    async def fake_summary(*, price_lookup=None, wallet="swing"):
+        return per_wallet[wallet]
+
+    monkeypatch.setattr("aria_core.paper_trader.portfolio_summary", fake_summary)
+    monkeypatch.setattr(
+        "aria_core.paper_ledger_report.build_positions_detail_block", _fake_empty_detail_block,
+    )
+
+    update = FakeUpdate("/feedback", user_id=42)
+    await telegram_bot._handle_feedback(update, FakeContext())
+
+    reply = update.message.replies[0]
+    assert "Scalping" in reply
+    assert "Swing" in reply
+    assert "VC" in reply
+    # Each pocket's own numbers appear, distinctly -- never a single merged figure.
+    assert "995,000" in reply  # scalping equity
+    assert "1,050,000" in reply  # swing equity
+    assert "1,000,000" in reply  # vc equity (starting == equity, flat)
 
 
 @pytest.mark.asyncio

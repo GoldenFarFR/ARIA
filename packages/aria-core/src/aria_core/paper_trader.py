@@ -960,10 +960,35 @@ async def _ensure_tables() -> None:
         # Never a destructive DELETE/UPDATE anywhere other than the reset's own
         # upsert -- this is the real track record of the weekly protocol, must
         # survive indefinitely.
+        #
+        # 27/07 -- 3-pocket architecture plan, Phase 4: cycle_number was a
+        # GLOBAL primary key (documented limitation in run_weekly_reset's
+        # docstring) -- a 2nd pocket (scalping) now also calling this reset
+        # would collide on the same cycle_number as swing's. Same rename-aside/
+        # recreate/copy-forward/drop pattern as paper_state's own migration
+        # above -- idempotent (a DB already on the new schema has no `wallet`
+        # column left to detect, so this branch is skipped).
+        legacy_weekly_cols = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(paper_weekly_cycle)")).fetchall()
+        }
+        legacy_weekly_rows: list[dict] = []
+        if legacy_weekly_cols and "wallet" not in legacy_weekly_cols:
+            legacy_weekly_col_order = [
+                row[1]
+                for row in await (await db.execute("PRAGMA table_info(paper_weekly_cycle)")).fetchall()
+            ]
+            raw_rows = await (
+                await db.execute(f"SELECT {', '.join(legacy_weekly_col_order)} FROM paper_weekly_cycle")
+            ).fetchall()
+            legacy_weekly_rows = [dict(zip(legacy_weekly_col_order, raw)) for raw in raw_rows]
+            await db.execute("ALTER TABLE paper_weekly_cycle RENAME TO paper_weekly_cycle_legacy_migrated")
+
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS paper_weekly_cycle (
-                cycle_number INTEGER PRIMARY KEY,
+                wallet TEXT NOT NULL DEFAULT 'swing',
+                cycle_number INTEGER NOT NULL,
                 started_at TEXT NOT NULL,
                 ended_at TEXT,
                 target_equity REAL NOT NULL,
@@ -972,10 +997,23 @@ async def _ensure_tables() -> None:
                 return_pct REAL,
                 validated INTEGER,
                 closed_trades INTEGER,
-                win_rate REAL
+                win_rate REAL,
+                PRIMARY KEY (wallet, cycle_number)
             )
             """
         )
+        if legacy_weekly_rows:
+            # Every existing row is swing's history (only swing ever called
+            # run_weekly_reset before this work) -- never re-attributed to
+            # another pocket.
+            for row in legacy_weekly_rows:
+                cols_to_copy = list(row.keys())
+                await db.execute(
+                    f"INSERT OR IGNORE INTO paper_weekly_cycle (wallet, {', '.join(cols_to_copy)}) "
+                    f"VALUES ('swing', {', '.join('?' for _ in cols_to_copy)})",
+                    tuple(row[c] for c in cols_to_copy),
+                )
+            await db.execute("DROP TABLE paper_weekly_cycle_legacy_migrated")
         # 07/18 -- COMPLETE history never destroyed: unlike reset_portfolio()
         # (DROP TABLE, destructive by design), run_weekly_reset() archives EACH
         # position of the week HERE (including opened-then-force-closed) before
@@ -2096,15 +2134,19 @@ def _format_tracked_position_line(t: dict) -> str:
     return line
 
 
-async def build_open_positions_tracking_lines(*, price_lookup=None) -> list[str]:
+async def build_open_positions_tracking_lines(*, price_lookup=None, wallet: str | None = None) -> list[str]:
     """On-demand equivalent of the per-position lines inside
     ``format_position_tracking_alert`` -- WITHOUT its header/footer -- for a
     caller (``/feedback``) that already renders its own aggregated header and
     just wants the same compact, one-line-per-position rendering appended.
     Reuses ``get_open_positions()`` (no duplicated query); an unavailable
     live price degrades to the entry price (never blocks, never invents a
-    made-up figure beyond that honest fallback)."""
-    opens = await get_open_positions()
+    made-up figure beyond that honest fallback).
+
+    27/07 -- 3-pocket architecture plan, Phase 5: ``wallet`` scopes the lines
+    to ONE pocket (``None`` keeps the historical behavior -- every pocket's
+    open positions, used by callers that never scoped this before)."""
+    opens = await get_open_positions(wallet=wallet)
     tracked = []
     for p in opens:
         price = None
@@ -3094,26 +3136,22 @@ async def run_weekly_reset(*, price_lookup=None, wallet: str = "swing") -> dict:
         await db.execute(
             "DELETE FROM paper_position WHERE pocket != 'satellite' AND wallet = ?", (wallet,),
         )
-        # 27/07 -- known limitation, out of scope for this work: paper_weekly_
-        # cycle's cycle_number is a GLOBAL primary key, not yet scoped per
-        # wallet -- a future pocket that also adopts this weekly reset (Phase
-        # 4 of the 3-pocket plan) could collide on the same cycle_number as
-        # 'swing'. Harmless today (only 'swing' ever calls run_weekly_reset),
-        # deliberately deferred rather than widening this table's schema
-        # ahead of actual need.
+        # 27/07 -- 3-pocket architecture plan, Phase 4: cycle_number is scoped
+        # per wallet now (migrated schema above) -- scalping adopting this
+        # same weekly reset no longer collides with swing's own numbering.
         await db.execute(
             """
             INSERT INTO paper_weekly_cycle
-              (cycle_number, started_at, ended_at, target_equity, start_capital,
+              (wallet, cycle_number, started_at, ended_at, target_equity, start_capital,
                end_equity, return_pct, validated, closed_trades, win_rate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(cycle_number) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(wallet, cycle_number) DO UPDATE SET
               ended_at = excluded.ended_at, target_equity = excluded.target_equity,
               start_capital = excluded.start_capital, end_equity = excluded.end_equity,
               return_pct = excluded.return_pct, validated = excluded.validated,
               closed_trades = excluded.closed_trades, win_rate = excluded.win_rate
             """,
-            (cycle_number, started_at, ended_at, target_equity, start_capital,
+            (wallet, cycle_number, started_at, ended_at, target_equity, start_capital,
              end_equity, return_pct, int(validated), summary["closed_trades"], summary["win_rate"]),
         )
         next_cycle = cycle_number + 1
@@ -3160,12 +3198,17 @@ async def run_weekly_reset(*, price_lookup=None, wallet: str = "swing") -> dict:
     }
 
 
-def format_weekly_cycle_report(report: dict) -> str:
+def format_weekly_cycle_report(report: dict, *, wallet: str = "swing") -> str:
     wr = report.get("win_rate")
     wr_str = f"{wr:.0f}%" if wr is not None else "n/a"
     verdict = "✅ VALIDÉ" if report["validated"] else "❌ non atteint"
+    # 27/07 -- 3-pocket architecture plan, Phase 4: with scalping now also
+    # calling this weekly reset, the pocket must be explicit in the report --
+    # otherwise two consecutive Telegram messages (swing, then scalping)
+    # would be indistinguishable.
+    pocket_label = {"swing": "SWING", "scalping": "SCALPING"}.get(wallet, wallet.upper())
     lines = [
-        "🧪 SIMULATION — bilan hebdomadaire (cycle d'entraînement 1M$)",
+        f"🧪 SIMULATION — bilan hebdomadaire {pocket_label} (cycle d'entraînement 1M$)",
         f"Semaine #{report['cycle_number']} : {verdict} (objectif {report['target_equity']:,.0f} $)",
         f"Départ {report['start_capital']:,.0f} $ → clôture {report['end_equity']:,.0f} $ "
         f"({report['return_pct']:+.2f}%)",

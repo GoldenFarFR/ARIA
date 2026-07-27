@@ -294,7 +294,9 @@ async def build_regime_report(closed_limit: int = 500) -> tuple[str, dict]:
     return text, machine
 
 
-async def build_positions_detail_block(*, closed_limit: int = 5, price_lookup=None) -> str:
+async def build_positions_detail_block(
+    *, closed_limit: int = 5, price_lookup=None, wallet: str | None = None,
+) -> str:
     """"Position detail" block alone -- WITHOUT the aggregated header
     (starting/equity/winrate) from ``build_report``, for a caller that
     already computes its own aggregated numbers elsewhere and just wants to
@@ -323,11 +325,15 @@ async def build_positions_detail_block(*, closed_limit: int = 5, price_lookup=No
     glued style as the OPEN section). ``/ledger`` (``build_report``) keeps the
     verbose ``_render_closed`` unchanged -- a deliberate divergence now (quick
     bilan vs. deep-dive dossier), not the accidental duplicate format the
-    original docstring here was trying to avoid."""
+    original docstring here was trying to avoid.
+
+    27/07 -- 3-pocket architecture plan, Phase 5: ``wallet`` scopes both
+    sections to ONE pocket (``None`` keeps the historical behavior -- every
+    pocket combined)."""
     from aria_core.paper_trader import build_open_positions_tracking_lines
 
-    open_lines = await build_open_positions_tracking_lines(price_lookup=price_lookup)
-    closed = await paper_trader.get_closed_positions(limit=closed_limit)
+    open_lines = await build_open_positions_tracking_lines(price_lookup=price_lookup, wallet=wallet)
+    closed = await paper_trader.get_closed_positions(limit=closed_limit, wallet=wallet)
     open_section = [f"--- Positions ouvertes ({len(open_lines)}) ---"] + (open_lines or ["  (aucune)"])
     closed_section = [f"--- Positions clôturées récentes ({len(closed)}) ---"] + (
         [_render_closed_compact(p) for p in closed] or ["  (aucune)"]

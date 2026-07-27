@@ -641,3 +641,111 @@ def test_format_weekly_cycle_report_shows_satellite_pocket():
     assert "satellite" in text.lower()
     assert "1" in text  # count(s) présents
     assert "30 000" in text or "30,000" in text
+
+
+# ── 27/07 -- 3-pocket architecture plan, Phase 4 ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_weekly_reset_scoped_per_wallet_no_cycle_number_collision(tmp_db):
+    """Both swing and scalping start at cycle_number=1 (independent counters,
+    see paper_state's own per-wallet cycle_number) -- the composite PK
+    (wallet, cycle_number) must let both coexist in paper_weekly_cycle without
+    one overwriting the other, which the OLD global PK (cycle_number alone)
+    would have silently done via its ON CONFLICT clause."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def price_lookup(contract):
+        return 2.0
+
+    swing_report = await pt.run_weekly_reset(price_lookup=price_lookup, wallet="swing")
+    scalping_report = await pt.run_weekly_reset(price_lookup=price_lookup, wallet="scalping")
+    assert swing_report["cycle_number"] == 1
+    assert scalping_report["cycle_number"] == 1
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        async with db.execute(
+            "SELECT wallet, cycle_number FROM paper_weekly_cycle ORDER BY wallet"
+        ) as cur:
+            rows = await cur.fetchall()
+    assert rows == [("scalping", 1), ("swing", 1)]
+
+
+@pytest.mark.asyncio
+async def test_weekly_cycle_due_independent_per_wallet(tmp_db):
+    """scalping's own paper_state.created_at ages independently from swing's --
+    swing being due must never make scalping due too, and vice versa."""
+    await pt.reset_portfolio(1_000_000.0)
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        started = datetime.now(timezone.utc) - timedelta(days=8)
+        await db.execute(
+            "UPDATE paper_state SET created_at = ? WHERE wallet = 'swing'", (started.isoformat(),),
+        )
+        await db.commit()
+
+    assert await pt.weekly_cycle_due(wallet="swing") is True
+    assert await pt.weekly_cycle_due(wallet="scalping") is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_paper_weekly_cycle_schema_migrates_to_wallet_scoped(tmp_db):
+    """A DB still on the pre-Phase-4 schema (cycle_number alone as PK, no
+    wallet column) must migrate cleanly on the next _ensure_tables() call --
+    same rename-aside/recreate/copy-forward/drop pattern as paper_state's own
+    migration -- and the pre-existing row must survive, attributed to
+    'swing' (the only pocket that ever wrote to this table before this work)."""
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE paper_weekly_cycle (
+                cycle_number INTEGER PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                target_equity REAL NOT NULL,
+                start_capital REAL NOT NULL,
+                end_equity REAL,
+                return_pct REAL,
+                validated INTEGER,
+                closed_trades INTEGER,
+                win_rate REAL
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO paper_weekly_cycle VALUES (1, '2026-07-20T00:00:00+00:00', "
+            "'2026-07-27T00:00:00+00:00', 1100000.0, 1000000.0, 1050000.0, 5.0, 0, 3, 66.0)"
+        )
+        await db.commit()
+
+    await pt._ensure_tables()
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        cols = {row[1] for row in await (await db.execute("PRAGMA table_info(paper_weekly_cycle)")).fetchall()}
+        assert "wallet" in cols
+        async with db.execute(
+            "SELECT wallet, cycle_number, start_capital FROM paper_weekly_cycle"
+        ) as cur:
+            rows = await cur.fetchall()
+    assert rows == [("swing", 1, 1000000.0)]
+
+    # Idempotent: a second call never re-migrates / never duplicates the row.
+    await pt._ensure_tables()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM paper_weekly_cycle") as cur:
+            (count,) = await cur.fetchone()
+    assert count == 1
+
+
+def test_format_weekly_cycle_report_labels_scalping_pocket():
+    report = {
+        "cycle_number": 1, "start_capital": 1_000_000.0, "target_equity": 1_100_000.0,
+        "end_equity": 1_000_000.0, "return_pct": 0.0, "closed_trades": 0, "win_rate": None,
+        "validated": False, "force_closed": 0, "next_cycle_number": 2,
+        "satellite_added_this_cycle": [], "satellite_open_positions": 0,
+        "satellite_reserved_usd": 0.0, "satellite_rejected_no_room": 0,
+    }
+    swing_text = pt.format_weekly_cycle_report(report, wallet="swing")
+    scalping_text = pt.format_weekly_cycle_report(report, wallet="scalping")
+    assert "SWING" in swing_text
+    assert "SCALPING" in scalping_text
+    assert swing_text != scalping_text

@@ -176,6 +176,14 @@ def key_discovery_channel(t: dict) -> str:
     return t.get("discovery_channel") or "unknown"
 
 
+def key_wallet(t: dict) -> str:
+    """27/07 -- 3-pocket architecture plan, Phase 5: segments by pocket
+    (scalping/swing/vc) -- ``"swing"`` for any pre-Phase-1 trade that never
+    had this column populated (paper_position's own DEFAULT), never
+    "unknown" for those (a real, correct attribution, not a data gap)."""
+    return t.get("wallet") or "swing"
+
+
 def _bucket(value: float | None, edges: list[tuple[float, str]], *, above: str) -> str:
     """Shared helper for every numeric bucket below: ``edges`` is a list of
     ``(upper_bound, label)`` pairs, checked in order -- ``above`` is the label
@@ -259,6 +267,7 @@ def key_day_of_week(t: dict) -> str:
 # ── every ready-made segmentation, run together by the Telegram command ────
 
 ALL_BREAKDOWNS: dict[str, Callable[[dict], str]] = {
+    "Poche": key_wallet,
     "Palier de conviction": key_conviction_tier,
     "Chaîne": key_chain,
     "Régime macro à l'entrée": key_regime,

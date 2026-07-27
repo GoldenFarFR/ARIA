@@ -1303,16 +1303,25 @@ class AriaHeartbeat:
         elif task_id == "paper_weekly_review_cycle":
             from aria_core import paper_trader
 
-            if not await paper_trader.weekly_cycle_due():
-                return
-            report = await paper_trader.run_weekly_reset()
-            append_memory(
-                "paper",
-                f"[paper_weekly] cycle #{report['cycle_number']} -> "
-                f"{'validé' if report['validated'] else 'échoué'} "
-                f"({report['return_pct']:+.2f}%, objectif +10%) -- nouveau cycle #{report['next_cycle_number']}",
-            )
-            await self._notify_telegram_trading(paper_trader.format_weekly_cycle_report(report))
+            # 27/07 -- 3-pocket architecture plan, Phase 4: scalping adopts the
+            # SAME weekly training protocol as swing (both are trading
+            # pockets on a short/medium horizon) -- VC deliberately NEVER
+            # resets (judged on a rolling history instead, per the plan's own
+            # decision), so it's not in this loop. Each wallet is fully
+            # independent: a due/reset failure on one never blocks the other.
+            for wallet in ("swing", "scalping"):
+                if not await paper_trader.weekly_cycle_due(wallet=wallet):
+                    continue
+                report = await paper_trader.run_weekly_reset(wallet=wallet)
+                append_memory(
+                    "paper",
+                    f"[paper_weekly:{wallet}] cycle #{report['cycle_number']} -> "
+                    f"{'validé' if report['validated'] else 'échoué'} "
+                    f"({report['return_pct']:+.2f}%, objectif +10%) -- nouveau cycle #{report['next_cycle_number']}",
+                )
+                await self._notify_telegram_trading(
+                    paper_trader.format_weekly_cycle_report(report, wallet=wallet)
+                )
 
         elif task_id == "daily_trade_floor_cycle":
             from aria_core import paper_trader
