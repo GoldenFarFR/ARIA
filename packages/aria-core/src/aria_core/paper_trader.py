@@ -1813,6 +1813,16 @@ async def reduce_position(
     return {
         **pos, "sold_qty": sell_qty, "exit_price": exit_price, "pnl_usd": pnl_usd,
         "pnl_pct": pnl_pct, "close_reason": reason, "close_notes": notes, "remaining_qty": new_qty,
+        # 27/07, real bug found (operator screenshot): the periodic tracking
+        # alert built LATER in the same cycle read this position's snapshot
+        # from BEFORE this reduction (taken at the top of the management
+        # loop, never refreshed) -- displayed the stale pre-reduction
+        # cost_usd for one cycle (e.g. "35 000$" right after a partial exit
+        # that had already reduced it to "23 333$" in the DB). ``cost_usd``
+        # itself stays the OLD value via ``**pos`` (unchanged for any
+        # existing caller) -- this new explicit field is what the cycle loop
+        # now uses to refresh its own in-memory tracking snapshot.
+        "remaining_cost_usd": new_cost,
         "tp_stage_hit": stage,
     }
 
@@ -2074,6 +2084,13 @@ def _format_tracked_position_line(t: dict) -> str:
         f"{name} ({_strategy_label(t)}) : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
         f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
     )
+    # 27/07, operator request (seeing a partial-exit alert with no entry
+    # price/hold time): same two fields as format_sell_alert/
+    # format_partial_exit_alert, appended here too for the periodic tracking
+    # line -- entry_price is already computed above (``entry``), reused as-is.
+    if entry:
+        hold = _format_hold_duration(t.get("opened_at"))
+        line += f" · entrée {entry:.6g}" + (f" · détenue {hold}" if hold else "")
     if t.get("contract"):
         line += f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
     return line
@@ -2144,6 +2161,31 @@ def format_position_tracking_alert(
     return "\n".join(lines)
 
 
+def _format_hold_duration(opened_at: str | None, *, until: str | None = None) -> str:
+    """27/07, operator request (seeing a partial-exit alert with no entry
+    price/hold time): human-readable duration since ``opened_at`` (ISO,
+    persisted at ``open_position`` time) up to ``until`` (ISO, e.g.
+    ``closed_at`` for a full close) or now (partial exit / still-open
+    tracking, no close timestamp exists yet). ``""`` if ``opened_at`` is
+    missing/unparsable -- never a fabricated duration."""
+    if not opened_at:
+        return ""
+    try:
+        start = datetime.fromisoformat(opened_at)
+        end = datetime.fromisoformat(until) if until else datetime.now(timezone.utc)
+    except ValueError:
+        return ""
+    delta = end - start
+    total_minutes = max(0, int(delta.total_seconds() // 60))
+    days, rem_minutes = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem_minutes, 60)
+    if days > 0:
+        return f"{days}j {hours}h"
+    if hours > 0:
+        return f"{hours}h{minutes:02d}"
+    return f"{minutes}min"
+
+
 def format_sell_alert(closed: dict) -> str:
     name = closed.get("symbol") or (closed.get("contract") or "")[:10]
     pnl = closed.get("pnl_usd") or 0.0
@@ -2154,6 +2196,14 @@ def format_sell_alert(closed: dict) -> str:
         f"VENTE FICTIVE {name} ({closed.get('close_reason', '')})",
         f"Sortie {closed['exit_price']:.6g} · P&L {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%)",
     ]
+    hold = _format_hold_duration(closed.get("opened_at"), until=closed.get("closed_at"))
+    entry_line = f"Entrée {closed['entry_price']:.6g}" if closed.get("entry_price") else ""
+    if entry_line and hold:
+        lines.append(f"{entry_line} · détenue {hold}")
+    elif entry_line:
+        lines.append(entry_line)
+    elif hold:
+        lines.append(f"Détenue {hold}")
     notes = (closed.get("close_notes") or "").strip()
     if notes:
         lines.append(f"Pourquoi : {notes}")
@@ -2174,6 +2224,14 @@ def format_partial_exit_alert(partial: dict) -> str:
         f"Sortie {partial['exit_price']:.6g} · {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%) sur la tranche vendue",
         f"Position restante : {partial.get('remaining_qty', 0):.6g} unités",
     ]
+    hold = _format_hold_duration(partial.get("opened_at"))
+    entry_line = f"Entrée {partial['entry_price']:.6g}" if partial.get("entry_price") else ""
+    if entry_line and hold:
+        lines.append(f"{entry_line} · détenue {hold}")
+    elif entry_line:
+        lines.append(entry_line)
+    elif hold:
+        lines.append(f"Détenue {hold}")
     notes = (partial.get("close_notes") or "").strip()
     if notes:
         lines.append(f"Pourquoi : {notes}")
@@ -3581,6 +3639,24 @@ async def run_paper_cycle(
         )
 
 
+def _refresh_tracked_after_partial(tracked: list[dict], contract: str, partial: dict) -> None:
+    """27/07, robustness suggestion from an independent Grok review of the
+    stale-``tracked``-snapshot fix above: looks up the entry by ``contract``
+    instead of assuming it's ``tracked[-1]`` -- verified harmless today (the
+    management loop below never sorts/filters ``tracked`` between its own
+    ``append`` and this call, so ``[-1]`` was never actually wrong), but an
+    explicit lookup can't silently break if a future refactor ever
+    introduces such a reorder. Only the LAST matching entry is updated
+    (``reversed()``) -- same reasoning as ``[-1]`` before: the position
+    currently being managed is always the most recently appended one for
+    this contract."""
+    for t in reversed(tracked):
+        if t["contract"] == contract:
+            t["qty"] = partial["remaining_qty"]
+            t["cost_usd"] = partial["remaining_cost_usd"]
+            return
+
+
 async def _run_paper_cycle_locked(
     *,
     candidates=None,
@@ -3929,6 +4005,14 @@ async def _run_paper_cycle_locked(
                         )
                         if partial:
                             actions["partial"].append(partial)
+                            # 27/07, real bug found (operator screenshot): this
+                            # position's entry in ``tracked`` was appended
+                            # BEFORE this reduction, so it still holds the
+                            # pre-reduction qty/cost_usd -- the periodic
+                            # tracking alert built later this same cycle would
+                            # otherwise display a stale capital figure for one
+                            # cycle (e.g. the full pre-Take-Seed cost).
+                            _refresh_tracked_after_partial(tracked, p["contract"], partial)
                             if notifier:
                                 try:
                                     await notifier(format_partial_exit_alert(partial))
@@ -4083,6 +4167,13 @@ async def _run_paper_cycle_locked(
                 if partial:
                     actions["partial"].append(partial)
                     remaining_qty = partial["remaining_qty"]
+                    # 27/07, real bug found (operator screenshot): same stale-
+                    # snapshot issue as the Take Seed branch above -- refresh
+                    # this position's already-appended ``tracked`` entry so
+                    # the periodic tracking alert built later this cycle
+                    # shows the real post-reduction capital, not the
+                    # pre-reduction one.
+                    _refresh_tracked_after_partial(tracked, p["contract"], partial)
                     if notifier:
                         try:
                             await notifier(format_partial_exit_alert(partial))

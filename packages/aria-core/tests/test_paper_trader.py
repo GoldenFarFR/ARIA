@@ -3162,6 +3162,51 @@ async def test_run_cycle_tracking_alert_excludes_positions_closed_this_cycle(tmp
 
 
 @pytest.mark.asyncio
+async def test_tracked_snapshot_reflects_partial_exit_from_the_same_cycle(tmp_db):
+    """27/07, real bug found (operator screenshot): a partial profit-take
+    (TP stage 1/3) and the periodic tracking alert can both happen within the
+    SAME cycle -- the tracking alert must show the POST-reduction cost_usd
+    (the real remaining capital), never the stale pre-reduction snapshot
+    taken earlier in this same cycle's management loop. A real incident
+    showed a tracking alert displaying the FULL pre-reduction cost (100% of
+    the position) right after its own partial-exit alert had already sold a
+    third of it moments earlier."""
+    await pt.reset_portfolio(1_000_000.0)
+    # alloc_usd=30_000 (not the requested 90_000): with invalidation_price=0.5
+    # (50% risk distance) and the 2%-of-capital risk cap already enforced by
+    # open_position -> size_position_by_risk, any alloc above 40_000 here
+    # gets silently clamped down to 40_000 -- picking a value already under
+    # that cap keeps this test's arithmetic exact and independent from that
+    # unrelated guardrail.
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=30_000, wallet="swing")
+
+    async def price_lookup(contract):
+        return 1.6  # +60% -- crosses TP stage 1 (+50%) but not stage 2 (+100%)
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    assert len(act["partial"]) == 1
+    assert act["closed"] == []
+    assert len(act["tracked"]) == 1
+    # Real bug: this used to still be 30_000 (the full pre-reduction cost),
+    # even though the partial exit had already reduced it moments earlier in
+    # the very same cycle.
+    assert act["tracked"][0]["cost_usd"] == pytest.approx(30_000 * 2 / 3)
+    assert act["tracked"][0]["qty"] == pytest.approx(act["partial"][0]["remaining_qty"])
+    tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
+    assert len(tracking_alerts) == 1
+    # The stale pre-reduction cost (30 000) must never appear in the
+    # displayed alert -- only the fresh post-reduction figure (20 000).
+    assert "30 000" not in tracking_alerts[0]
+    assert "30000" not in tracking_alerts[0]
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_tracking_alert_throttled_to_every_other_cycle(tmp_db):
     """17/07, demande opérateur explicite : réduire de moitié le bruit Telegram de
     l'alerte de suivi -- un cycle qui suit de trop près le précédent (même position
