@@ -324,6 +324,56 @@ def test_build_prototypes_url_custom_page_size():
     assert "pagination[pageSize]=25" in url
 
 
+def test_build_prototypes_url_page_size_cap_raised_to_500():
+    """27/07 -- real incident: an operator-supplied contract (HoloStudio,
+    created 25/02) was invisible because this cap used to be 200 -- verified
+    live against the real API before raising it: 500 and even 2000 both
+    returned a full page quickly, 10000 failed/timed out. 500 is the
+    calibrated ceiling, not the old unverified 200."""
+    url = build_prototypes_url(page_size=500)
+    assert "pagination[pageSize]=500" in url
+    # still capped -- an absurd value never reaches the real API uncapped.
+    url = build_prototypes_url(page_size=100_000)
+    assert "pagination[pageSize]=500" in url
+
+
+def test_build_prototypes_url_page_param_only_appended_above_1():
+    """``page=1`` (default) keeps the URL byte-for-byte identical to before
+    this change -- zero behavior change for every existing caller that
+    doesn't ask for a specific page."""
+    assert "pagination[page]" not in build_prototypes_url()
+    assert "pagination[page]" not in build_prototypes_url(page=1)
+    url = build_prototypes_url(page=3)
+    assert "pagination[page]=3" in url
+
+
+def test_build_graduated_url_page_param_forwarded():
+    url = build_graduated_url(page=4)
+    assert "pagination[page]=4" in url
+
+
+def test_build_prototypes_url_min_holder_count_omitted_by_default():
+    """``min_holder_count=None`` (default) keeps the URL byte-for-byte
+    identical to before this parameter existed -- zero behavior change for
+    every existing caller."""
+    assert "holderCount" not in build_prototypes_url()
+
+
+def test_build_prototypes_url_min_holder_count_appended_when_given():
+    """27/07 -- operator's own suggestion, verified live before accepting it:
+    unlike ``filters[status]`` (confirmed ignored server-side), a NUMERIC
+    filter DOES work -- ``filters[holderCount][$gte]=15`` cut the real total
+    from 54,565 to 6,799 (110 pages -> 14), HoloStudio (307 holders)
+    confirmed present in that filtered set."""
+    url = build_prototypes_url(min_holder_count=15)
+    assert "filters[holderCount][$gte]=15" in url
+
+
+def test_build_graduated_url_min_holder_count_forwarded():
+    url = build_graduated_url(min_holder_count=20)
+    assert "filters[holderCount][$gte]=20" in url
+
+
 def test_build_graduated_url_filters_available():
     url = build_graduated_url()
     assert "filters[status]=AVAILABLE" in url
@@ -404,6 +454,137 @@ async def test_fetch_prototypes_network_error_returns_empty(monkeypatch):
 
     result = await client.fetch_prototypes()
     assert result == []
+
+
+# ----------------------------------------------------------------------
+# Pagination (27/07 -- real incident: HoloStudio, created 25/02, was invisible
+# because both fetch_prototypes/fetch_graduated only ever requested page 1)
+# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_fetch_prototypes_default_max_pages_is_a_single_request(monkeypatch):
+    """``max_pages`` defaults to 1 -- unchanged historical behavior, a single
+    HTTP call, no ``pagination[page]`` param on the request URL."""
+    client = VirtualsClient()
+    calls: list[str] = []
+
+    async def _get_json(url):
+        calls.append(url)
+        return {"data": [_strapi_prototype()]}, None
+
+    monkeypatch.setattr(client, "_get_json", _get_json)
+
+    tokens = await client.fetch_prototypes()
+
+    assert len(calls) == 1
+    assert "pagination[page]" not in calls[0]
+    assert len(tokens) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_forwards_min_holder_count(monkeypatch):
+    client = VirtualsClient()
+    calls: list[str] = []
+
+    async def _get_json(url):
+        calls.append(url)
+        return {"data": []}, None
+
+    monkeypatch.setattr(client, "_get_json", _get_json)
+
+    await client.fetch_prototypes(min_holder_count=15)
+
+    assert "filters[holderCount][$gte]=15" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_paginates_across_multiple_pages(monkeypatch):
+    client = VirtualsClient()
+    page1_url = build_prototypes_url(page_size=2)
+    page2_url = build_prototypes_url(page_size=2, page=2)
+    _patch_client(
+        monkeypatch,
+        {
+            page1_url: FakeResponse(200, {
+                "data": [_strapi_prototype(name="Un"), _strapi_prototype(name="Deux")],
+                "meta": {"pagination": {"page": 1, "pageSize": 2, "pageCount": 2, "total": 3}},
+            }),
+            page2_url: FakeResponse(200, {
+                "data": [_strapi_prototype(name="Trois")],
+                "meta": {"pagination": {"page": 2, "pageSize": 2, "pageCount": 2, "total": 3}},
+            }),
+        },
+    )
+
+    tokens = await client.fetch_prototypes(page_size=2, max_pages=5)
+
+    assert {t.name for t in tokens} == {"Un", "Deux", "Trois"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_stops_using_page_count_from_meta(monkeypatch):
+    """Never guessed from response length (the API doesn't guarantee a page
+    always has exactly ``page_size`` items) -- the real ``meta.pagination.
+    pageCount`` field is what stops the walk, requested up to ``max_pages``."""
+    client = VirtualsClient()
+    page1_url = build_prototypes_url(page_size=2)
+    calls: list[str] = []
+
+    async def _get_json(url):
+        calls.append(url)
+        return {
+            "data": [_strapi_prototype()],
+            "meta": {"pagination": {"page": 1, "pageSize": 2, "pageCount": 1, "total": 1}},
+        }, None
+
+    monkeypatch.setattr(client, "_get_json", _get_json)
+
+    tokens = await client.fetch_prototypes(page_size=2, max_pages=10)
+
+    assert len(calls) == 1  # pageCount=1 -- never requests page 2
+    assert len(tokens) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_keeps_partial_results_on_later_page_failure(monkeypatch):
+    """A later page failing (real incident: deep pagination sometimes times
+    out server-side) must never discard pages already fetched successfully
+    -- partial results beat losing everything."""
+    client = VirtualsClient()
+    call_count = 0
+
+    async def _get_json(url):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {
+                "data": [_strapi_prototype(name="Un")],
+                "meta": {"pagination": {"page": 1, "pageSize": 1, "pageCount": 3, "total": 3}},
+            }, None
+        return None, "donnée Virtuals indisponible (timeout Virtuals)"
+
+    monkeypatch.setattr(client, "_get_json", _get_json)
+
+    tokens = await client.fetch_prototypes(page_size=1, max_pages=5)
+
+    assert len(tokens) == 1
+    assert tokens[0].name == "Un"
+
+
+@pytest.mark.asyncio
+async def test_fetch_prototypes_page1_failure_still_returns_empty(monkeypatch):
+    """Unchanged historical behavior: the FIRST page failing still returns
+    ``[]`` outright, exactly like before this change -- only a page AFTER a
+    successful one preserves partial results."""
+    client = VirtualsClient()
+
+    async def _get_json(url):
+        return None, "donnée Virtuals indisponible (timeout Virtuals)"
+
+    monkeypatch.setattr(client, "_get_json", _get_json)
+
+    tokens = await client.fetch_prototypes(max_pages=5)
+
+    assert tokens == []
 
 
 @pytest.mark.asyncio

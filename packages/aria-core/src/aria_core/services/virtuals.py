@@ -388,7 +388,10 @@ def _first(mapping: dict, *keys: str) -> object:
 # ----------------------------------------------------------------------
 # URL construction (public Strapi endpoints)
 # ----------------------------------------------------------------------
-def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: str = "UNDERGRAD") -> str:
+def build_prototypes_url(
+    chain: str = "BASE", page_size: int = 100, *, status: str = "UNDERGRAD", page: int = 1,
+    min_holder_count: int | None = None,
+) -> str:
     """URL of the index filtered by status (nominally), sorted by recency.
 
     ``status`` defaults to ``"UNDERGRAD"`` (still in bonding, unchanged
@@ -397,30 +400,77 @@ def build_prototypes_url(chain: str = "BASE", page_size: int = 100, *, status: s
     construction point, never duplicated.
 
     Warning: real diagnostic (11/07, direct network access to
-    api.virtuals.io): ``filters[status]`` is IGNORED server-side regardless
-    of the value sent (all return the same unfiltered list). The parameter
-    is kept in the URL (in case the API respects it one day, zero cost) but
-    does NOT actually filter — the real filtering happens client-side in
-    ``VirtualsClient.fetch_prototypes`` / ``fetch_graduated`` via
-    ``is_in_bonding``.
+    api.virtuals.io, RECONFIRMED live 27/07): ``filters[status]`` is IGNORED
+    server-side regardless of the value sent (both ``UNDERGRAD`` and
+    ``AVAILABLE`` return the identical total, 54,565, as of 27/07). The
+    parameter is kept in the URL (in case the API respects it one day, zero
+    cost) but does NOT actually filter — the real filtering happens
+    client-side in ``VirtualsClient.fetch_prototypes`` / ``fetch_graduated``
+    via ``is_in_bonding``.
+
+    ``page_size`` cap raised 200 -> 500 and ``page`` added (27/07, real
+    incident: an operator-supplied contract, HoloStudio, created 25/02, was
+    invisible to ``fetch_prototypes()`` because it only ever requested page 1
+    -- this was NEVER a server-side limit, just an unverified assumption
+    baked into this function). Verified live against the real API before
+    raising the cap: ``pagination[pageSize]=500`` and even ``=2000`` both
+    returned a full page quickly; ``=10000`` failed/timed out -- 500 is the
+    calibrated safe ceiling (same "verify before affirming" doctrine as every
+    other rate/size limit in this codebase), not a guess. The response also
+    reveals real pagination metadata (``meta.pagination.pageCount``/``total``)
+    -- confirmed live: ~54,500+ tokens indexed in total as of 27/07, spanning
+    back to April 2024, reachable via ``pagination[page]=N``. ``page``
+    defaults to 1 -- unchanged behavior for every existing caller.
+
+    ``min_holder_count`` (27/07, operator's own suggestion, verified before
+    accepting it): unlike ``filters[status]``, a NUMERIC filter DOES work
+    server-side -- confirmed live, ``filters[holderCount][$gte]=15`` cuts the
+    total from 54,565 to 6,799 (110 pages -> 14), and HoloStudio (307
+    holders) is confirmed present in that filtered set (page 3) -- not a
+    false negative. ``None`` (default) omits the filter entirely, unchanged
+    behavior for every existing caller. This is the intended way for a
+    future catch-up scan to walk the FULL bonding history in far fewer
+    pages/requests than an unfiltered walk, directly cutting the deep-
+    pagination timeout risk documented above (fewer pages needed at all).
 
     Ex. ``…/api/virtuals?filters[status]=UNDERGRAD&filters[chain]=BASE&sort[0]=createdAt:desc&pagination[pageSize]=100``
+    (``pagination[page]`` only appended when ``page`` > 1, ``filters[holderCount][$gte]``
+    only appended when ``min_holder_count`` is given -- the default URL stays
+    byte-for-byte identical to before this change, zero behavior change for
+    every existing caller).
     """
     try:
         size = int(page_size)
     except (TypeError, ValueError):
         size = 100
-    size = max(1, min(size, 200))
+    size = max(1, min(size, 500))
+    try:
+        page_num = int(page)
+    except (TypeError, ValueError):
+        page_num = 1
+    page_num = max(1, page_num)
     params = [
         ("filters[status]", str(status)),
         ("filters[chain]", str(chain).upper()),
         ("sort[0]", "createdAt:desc"),
         ("pagination[pageSize]", str(size)),
     ]
+    if page_num > 1:
+        params.append(("pagination[page]", str(page_num)))
+    if min_holder_count is not None:
+        try:
+            min_holders = int(min_holder_count)
+        except (TypeError, ValueError):
+            min_holders = None
+        if min_holders is not None:
+            params.append(("filters[holderCount][$gte]", str(max(0, min_holders))))
     return f"{_VIRTUALS_ENDPOINT}?{urlencode(params, safe='[]:$')}"
 
 
-def build_graduated_url(chain: str = "BASE", page_size: int = 100) -> str:
+def build_graduated_url(
+    chain: str = "BASE", page_size: int = 100, *, page: int = 1,
+    min_holder_count: int | None = None,
+) -> str:
     """URL of tokens that recently graduated (``AVAILABLE`` status requested).
 
     ``sort[0]=createdAt:desc`` stays sorted by the prototype's CREATION date
@@ -433,8 +483,14 @@ def build_graduated_url(chain: str = "BASE", page_size: int = 100) -> str:
     list. Use ``VirtualsClient.fetch_graduated`` (never this raw URL) to get
     a real list of graduated tokens — the real filtering happens client-side
     there.
+
+    ``min_holder_count`` (27/07): see ``build_prototypes_url``'s docstring --
+    forwarded as-is, ``None`` by default (unchanged behavior).
     """
-    return build_prototypes_url(chain=chain, page_size=page_size, status="AVAILABLE")
+    return build_prototypes_url(
+        chain=chain, page_size=page_size, status="AVAILABLE", page=page,
+        min_holder_count=min_holder_count,
+    )
 
 
 def build_token_url(virtual_id: object) -> str:
@@ -726,7 +782,69 @@ class VirtualsClient:
             self._record_success()
             return response.json(), None
 
-    async def fetch_prototypes(self, chain: str = "BASE", page_size: int = 100) -> list[VirtualToken]:
+    async def _fetch_paginated(
+        self, url_builder, chain: str, page_size: int, max_pages: int, keep_token,
+        min_holder_count: int | None = None,
+    ) -> list[VirtualToken]:
+        """Shared pagination walk for ``fetch_prototypes``/``fetch_graduated``
+        (27/07, real incident: an operator-supplied contract, HoloStudio,
+        created 25/02, was invisible because both callers only ever
+        requested page 1 -- never a server-side limit, confirmed live the
+        real index holds ~54,500+ tokens across ~110 pages at ``page_size=
+        500``). ``max_pages=1`` (default) preserves the EXACT historical
+        behavior (single request, ``[]`` on any error) for every existing
+        caller. ``max_pages>1`` walks forward using the API's own
+        ``meta.pagination.pageCount`` (never guessed from response length,
+        which the API doesn't guarantee to always equal ``page_size``) and
+        stops early once that many pages are exhausted. A page fetched
+        successfully is kept even if a LATER page then fails/errors (partial
+        results beat losing everything already fetched) -- only the ``max_pages=1``
+        case (unchanged callers) still returns ``[]`` outright on its single
+        page failing, identical to before this change.
+
+        ``min_holder_count`` (27/07, operator's own suggestion): forwarded to
+        ``url_builder`` -- cuts the ``pageCount`` the walk needs to exhaust
+        (confirmed live: 110 -> 14 pages at ``>= 15`` holders), directly
+        reducing the deep-pagination timeout risk above by needing far fewer
+        requests. ``None`` (default) omits it, unchanged behavior."""
+        tokens: list[VirtualToken] = []
+        for page in range(1, max(1, max_pages) + 1):
+            try:
+                url = url_builder(
+                    chain=chain, page_size=page_size, page=page, min_holder_count=min_holder_count,
+                )
+                data, error = await self._get_json(url)
+                if error is not None or not isinstance(data, dict):
+                    if page == 1:
+                        return []
+                    break
+                items = data.get("data")
+                if not isinstance(items, list):
+                    if page == 1:
+                        return []
+                    break
+                for item in items:
+                    token = parse_virtual(item)
+                    if token is not None and keep_token(token):
+                        tokens.append(token)
+                if not items:
+                    break
+                page_count = (
+                    (data.get("meta") or {}).get("pagination") or {}
+                ).get("pageCount")
+                if isinstance(page_count, int) and page >= page_count:
+                    break
+            except Exception as exc:  # ultimate degradation: never an outgoing exception
+                logger.info("virtuals: paginated fetch failed on page %s — %s", page, exc)
+                if page == 1:
+                    return []
+                break
+        return tokens
+
+    async def fetch_prototypes(
+        self, chain: str = "BASE", page_size: int = 100, *, max_pages: int = 1,
+        min_holder_count: int | None = None,
+    ) -> list[VirtualToken]:
         """Index of tokens still in bonding. Always a list (``[]`` on error).
 
         ``is_in_bonding`` filter applied CLIENT-SIDE after receiving the
@@ -737,26 +855,21 @@ class VirtualsClient:
         Without this client-side filter, an already-graduated token would
         slip into the "still in bonding" index — see the detailed comment
         above ``_VIRTUAL_RAISED_KEYS``.
-        """
-        try:
-            url = build_prototypes_url(chain=chain, page_size=page_size)
-            data, error = await self._get_json(url)
-            if error is not None or not isinstance(data, dict):
-                return []
-            items = data.get("data")
-            if not isinstance(items, list):
-                return []
-            tokens: list[VirtualToken] = []
-            for item in items:
-                token = parse_virtual(item)
-                if token is not None and is_in_bonding(token):
-                    tokens.append(token)
-            return tokens
-        except Exception as exc:  # ultimate degradation: never an outgoing exception
-            logger.info("virtuals: fetch_prototypes unexpected failure — %s", exc)
-            return []
 
-    async def fetch_graduated(self, chain: str = "BASE", page_size: int = 100) -> list[VirtualToken]:
+        ``max_pages`` (27/07): see ``_fetch_paginated``'s docstring -- default
+        1 keeps this call scoped to the most recent page only, unchanged
+        behavior for every existing caller. ``min_holder_count`` (27/07): see
+        ``build_prototypes_url``'s docstring -- ``None`` by default,
+        unchanged behavior."""
+        return await self._fetch_paginated(
+            build_prototypes_url, chain, page_size, max_pages, is_in_bonding,
+            min_holder_count=min_holder_count,
+        )
+
+    async def fetch_graduated(
+        self, chain: str = "BASE", page_size: int = 100, *, max_pages: int = 1,
+        min_holder_count: int | None = None,
+    ) -> list[VirtualToken]:
         """Tokens that recently graduated (``AVAILABLE`` status). Always a list.
 
         These tokens have real DEX liquidity (post-graduation): they join
@@ -773,24 +886,16 @@ class VirtualsClient:
         filter, a token still ``UNDERGRAD`` would slip into the "graduated"
         index and wrongly join the STANDARD pipeline — see the detailed
         comment above ``_VIRTUAL_RAISED_KEYS``.
-        """
-        try:
-            url = build_graduated_url(chain=chain, page_size=page_size)
-            data, error = await self._get_json(url)
-            if error is not None or not isinstance(data, dict):
-                return []
-            items = data.get("data")
-            if not isinstance(items, list):
-                return []
-            tokens: list[VirtualToken] = []
-            for item in items:
-                token = parse_virtual(item)
-                if token is not None and not is_in_bonding(token):
-                    tokens.append(token)
-            return tokens
-        except Exception as exc:  # ultimate degradation: never an outgoing exception
-            logger.info("virtuals: fetch_graduated unexpected failure — %s", exc)
-            return []
+
+        ``max_pages`` (27/07): see ``_fetch_paginated``'s docstring -- default
+        1 keeps this call scoped to the most recent page only, unchanged
+        behavior for every existing caller. ``min_holder_count`` (27/07): see
+        ``build_prototypes_url``'s docstring -- ``None`` by default,
+        unchanged behavior."""
+        return await self._fetch_paginated(
+            build_graduated_url, chain, page_size, max_pages, lambda t: not is_in_bonding(t),
+            min_holder_count=min_holder_count,
+        )
 
     async def fetch_virtual(self, virtual_id: object) -> VirtualToken | None:
         """A token's detail by Strapi id. ``None`` on error (never an exception)."""
