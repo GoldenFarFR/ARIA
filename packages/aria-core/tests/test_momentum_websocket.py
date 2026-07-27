@@ -5,6 +5,7 @@ second chemin de décision (le pipeline momentum réel reste testé dans
 test_momentum_entry.py/test_paper_trader.py)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -699,5 +700,238 @@ async def test_drain_does_nothing_when_pending_empty(monkeypatch):
         return {"opened": []}
 
     monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+    await listener._drain_once()
+    assert called is False
+
+
+# ── 3-pocket architecture plan, Phase 2 (27/07) ──────────────────────────────
+# Mirrors paper_trader.py's own multi_pocket_sourcing_enabled() gate: OFF
+# (default, every test above) keeps this module's single-analyzer/"swing"-only
+# behavior byte-for-byte -- these tests cover the NEW gate-ON dispatch
+# (_drain_multi_pocket), and prove the gate-OFF path never reaches it.
+
+
+def _fake_portfolio_risk_state(risk_guard_module, *, blocked=False):
+    return risk_guard_module.PortfolioRiskState(
+        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=blocked,
+    )
+
+
+@pytest.mark.asyncio
+async def test_drain_multi_pocket_gate_off_never_dispatches_three_pockets(monkeypatch):
+    """Gate OFF (default): _drain_multi_pocket must never even be called --
+    the drain stays on its historical single-analyzer/run_paper_cycle path."""
+    monkeypatch.delenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", raising=False)
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    called = False
+
+    async def _spy(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(listener, "_drain_multi_pocket", _spy)
+
+    from aria_core import paper_trader
+
+    async def _fake_run_paper_cycle(**kwargs):
+        return {"opened": []}
+
+    monkeypatch.setattr(paper_trader, "run_paper_cycle", _fake_run_paper_cycle)
+
+    await listener._drain_once()
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_analyzers_and_caps(
+    monkeypatch,
+):
+    """Gate ON: scalping+swing share THIS module's WebSocket-detected
+    candidate (A) with mode-differentiated analyzers, vc sources
+    INDEPENDENTLY from candidate_ranking.top_candidates (B) -- each pocket
+    gets its own real per-pocket position cap and the "websocket" discovery
+    channel tag, exactly mirroring paper_trader._run_paper_cycle_locked's own
+    multi-pocket branch."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader, risk_guard
+    from aria_core import paper_trader_risk as risk
+    from aria_core.skills import candidate_ranking, market_sentiment
+
+    # #196 -- a fresh Lock per test, same reason as test_paper_trader.py's own
+    # tmp_db fixture: _run_cycle_lock is a module-level singleton created once
+    # at import, reusing it across tests bound to different pytest-asyncio
+    # event loops raises. _drain_multi_pocket acquires it directly (bypasses
+    # run_paper_cycle, see its own docstring).
+    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
+
+    async def _no_depeg():
+        return 0.0
+
+    monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
+
+    async def _fake_evaluate(*, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard)
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate)
+
+    async def _fake_regime():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _fake_regime)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(B)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    analyzer_calls: list[dict] = []
+
+    def _fake_analyzer_factory(chain_by_contract, **kwargs):
+        analyzer_calls.append(kwargs)
+
+        async def _analyzer(contract):
+            return None
+
+        return _analyzer
+
+    monkeypatch.setattr(paper_trader, "_default_momentum_analyzer", _fake_analyzer_factory)
+
+    captured_calls: list[dict] = []
+
+    async def _fake_open_new_entries(wallet, candidates, analyzer, **kwargs):
+        captured_calls.append({
+            "wallet": wallet,
+            "candidates": list(candidates),
+            "max_positions_cap": kwargs.get("max_positions_cap"),
+            "trading_mode": kwargs.get("trading_mode"),
+            "discovery_channel": kwargs.get("discovery_channel"),
+        })
+        return [], 0
+
+    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
+
+    await listener._drain_once()
+
+    assert [c["mode"] for c in analyzer_calls] == ["scalping", "standard"]
+
+    by_wallet = {c["wallet"]: c for c in captured_calls}
+    assert set(by_wallet) == {"scalping", "swing", "vc"}
+    assert by_wallet["scalping"]["candidates"] == [A]
+    assert by_wallet["swing"]["candidates"] == [A]
+    assert by_wallet["vc"]["candidates"] == [B]
+    assert by_wallet["scalping"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_SCALPING
+    assert by_wallet["swing"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_SWING
+    assert by_wallet["vc"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_VC
+    assert by_wallet["scalping"]["trading_mode"] == "scalping"
+    assert by_wallet["swing"]["trading_mode"] == "standard"
+    assert by_wallet["vc"]["trading_mode"] == "standard"
+    assert all(c["discovery_channel"] == "websocket" for c in captured_calls)
+
+
+@pytest.mark.asyncio
+async def test_drain_multi_pocket_skips_all_pockets_when_usdc_depegged(monkeypatch):
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader
+    from aria_core import paper_trader_risk as risk
+    from aria_core.skills import candidate_ranking
+
+    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
+
+    async def _depegged():
+        return 0.05  # 5% -- above USDC_DEPEG_THRESHOLD_PCT (1%)
+
+    monkeypatch.setattr(risk, "usdc_depeg_pct", _depegged)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    called = False
+
+    async def _fake_open_new_entries(*args, **kwargs):
+        nonlocal called
+        called = True
+        return [], 0
+
+    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
+
+    await listener._drain_once()
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_drain_multi_pocket_skips_all_pockets_when_risk_blocked(monkeypatch):
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader, risk_guard
+    from aria_core import paper_trader_risk as risk
+    from aria_core.skills import candidate_ranking
+
+    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
+
+    async def _no_depeg():
+        return 0.0
+
+    monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_evaluate_blocked(*, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard, blocked=True)
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_blocked)
+
+    called = False
+
+    async def _fake_open_new_entries(*args, **kwargs):
+        nonlocal called
+        called = True
+        return [], 0
+
+    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
+
     await listener._drain_once()
     assert called is False

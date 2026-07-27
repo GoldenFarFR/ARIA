@@ -55,6 +55,15 @@ Scope strictly respected (16/07, operator-approved plan):
     ``paper_trader.run_paper_cycle`` already wraps EVERY call in
     ``paper_trader._run_cycle_lock`` (shared module) -- never two cycles in
     parallel, regardless of the caller (heartbeat OR this service).
+
+27/07 -- 3-pocket architecture plan, Phase 2 (``paper_trader.
+multi_pocket_sourcing_enabled()``): gate OFF (default) keeps this module's
+historical single-analyzer behavior, byte-for-byte -- ``_drain_new_
+candidates`` still drives ONE analyzer off the portfolio-wide
+``trading_mode`` switch and books into "swing" via ``run_paper_cycle``. Gate
+ON dispatches the SAME WebSocket-detected candidates to all 3 pockets
+(scalping/swing/vc) independently every drain -- see ``_drain_multi_pocket``'s
+own docstring for the mechanics (it bypasses ``run_paper_cycle`` on purpose).
 """
 from __future__ import annotations
 
@@ -431,17 +440,37 @@ class MomentumWebsocketListener:
         # stays None here (unchanged, pre-existing) -- its computation is
         # cycle-cadence specific and not critical to this fix's scope.
         try:
-            trading_mode = await paper_trader.get_trading_mode()
-        except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to "standard"
-            logger.info("momentum_websocket: trading_mode lookup failed (%s)", exc)
-            trading_mode = "standard"
-        try:
             from aria_core.skills import market_sentiment
 
             current_regime = await market_sentiment.resolve_meta_regime()
         except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to neutral
             logger.info("momentum_websocket: meta-regime lookup failed (%s)", exc)
             current_regime = None
+
+        # 27/07 -- 3-pocket architecture plan, Phase 2 (same gate as
+        # paper_trader._run_paper_cycle_locked's own multi-pocket branch):
+        # scalping/swing/vc drain independently, sourced from THIS module's
+        # WebSocket-detected candidates for scalping/swing (vc sources
+        # separately) -- see _drain_multi_pocket's own docstring for why this
+        # bypasses run_paper_cycle() below rather than passing it these
+        # candidates directly.
+        if paper_trader.multi_pocket_sourcing_enabled():
+            await self._drain_multi_pocket(candidates, chain_by_contract, current_regime)
+            return
+
+        # gate OFF (default): EXACT unchanged historical behavior -- a single
+        # analyzer driven by the portfolio-wide trading_mode switch, booked
+        # into "swing" via run_paper_cycle's own single-pocket path (an
+        # explicit candidates/analyzer caller always stays "swing" there
+        # regardless of the gate, see test_multi_pocket_gate_on_never_splits_
+        # an_explicit_caller in test_paper_trader.py -- this module only
+        # diverges from that contract in the branch above, by never reaching
+        # run_paper_cycle at all once the gate is ON).
+        try:
+            trading_mode = await paper_trader.get_trading_mode()
+        except Exception as exc:  # noqa: BLE001 -- never blocking, degrades to "standard"
+            logger.info("momentum_websocket: trading_mode lookup failed (%s)", exc)
+            trading_mode = "standard"
         analyzer = paper_trader._default_momentum_analyzer(
             chain_by_contract, current_regime=current_regime, mode=trading_mode,
         )
@@ -467,6 +496,125 @@ class MomentumWebsocketListener:
             )
         except Exception as exc:  # noqa: BLE001 -- a failed drain never kills the service
             logger.exception("momentum_websocket: run_paper_cycle failed (%s)", exc)
+
+    async def _drain_multi_pocket(
+        self, candidates: list[str], chain_by_contract: dict[str, str], current_regime,
+    ) -> None:
+        """27/07 -- 3-pocket architecture plan, Phase 2. Mirrors
+        ``paper_trader._run_paper_cycle_locked``'s own multi-pocket branch:
+        scalping and swing share THIS module's WebSocket-detected
+        ``candidates`` (real-time momentum feed, different analyzer ``mode``
+        only) -- the vc pocket sources INDEPENDENTLY from
+        ``candidate_ranking.top_candidates()`` (a wholly separate candidate
+        universe, screened_pool VC theses, never fed by the WebSocket
+        momentum feed), exactly as the periodic heartbeat cycle already does.
+
+        Deliberately bypasses ``paper_trader.run_paper_cycle()``: that
+        entrypoint's OWN multi-pocket branch only activates on its "default
+        sourcing" case (``candidates=None`` AND ``analyzer=None``) -- passing
+        it THIS module's WebSocket-detected candidates explicitly would
+        instead hit its "explicit caller" branch (see
+        ``test_multi_pocket_gate_on_never_splits_an_explicit_caller`` in
+        test_paper_trader.py) and silently discard them, re-fetching its OWN
+        momentum candidates via REST and booking everything into "swing"
+        only -- exactly the stale-latency problem this whole module exists to
+        avoid. Calls ``paper_trader._open_new_entries_for_wallet`` directly
+        for each pocket instead (the SAME helper the periodic cycle uses),
+        replicating the depeg-check/risk-state/funnel bookkeeping
+        ``run_paper_cycle`` would otherwise have applied -- protected by the
+        SAME ``paper_trader._run_cycle_lock`` (never two cycles opening
+        positions in parallel, regardless of caller).
+
+        Simplifications carried over from the gate-OFF path above (never a
+        NEW behavior introduced here): ``weekly_context`` stays ``None`` for
+        all 3 pockets (26/07 comment, "not critical to this fix's scope");
+        this drain never closes positions itself (position management stays
+        the periodic heartbeat's job), so ``closed_this_cycle`` is always
+        empty."""
+        from aria_core import momentum_funnel_log, paper_trader, risk_guard
+        from aria_core import paper_trader_risk as risk
+        from aria_core.gateway.telegram_bot import send_trading_notification
+        from aria_core.skills.candidate_ranking import top_candidates
+
+        async with paper_trader._run_cycle_lock:
+            try:
+                vc_candidates = [c.contract for c in await top_candidates(20)]
+            except Exception as exc:  # noqa: BLE001 -- never blocks the scalping/swing pockets
+                logger.info("momentum_websocket: top_candidates lookup failed (%s)", exc)
+                vc_candidates = []
+
+            # USDC depeg check (#187) -- same guard run_paper_cycle applies,
+            # all 3 pockets share this pricing assumption. Skipped entirely
+            # if nothing to buy anywhere (avoids a needless network call),
+            # same avoidance as the periodic cycle's own depeg check.
+            if candidates or vc_candidates:
+                try:
+                    depeg_pct = await risk.usdc_depeg_pct()
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("momentum_websocket: USDC depeg check failed (%s)", exc)
+                    depeg_pct = None
+                if depeg_pct is not None and depeg_pct > risk.USDC_DEPEG_THRESHOLD_PCT:
+                    logger.warning(
+                        "momentum_websocket: USDC depegged %.2f%% (> threshold %.2f%%) -- "
+                        "multi-pocket drain skipped this pass",
+                        depeg_pct * 100, risk.USDC_DEPEG_THRESHOLD_PCT * 100,
+                    )
+                    return
+
+            risk_state = await risk_guard.evaluate_portfolio_risk(
+                price_lookup=paper_trader._default_price_lookup,
+            )
+            if risk_state.newly_triggered_hard:
+                try:
+                    await send_trading_notification(
+                        risk_guard.format_hard_circuit_breaker_alert(risk_state)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            elif risk_state.newly_triggered_soft:
+                try:
+                    await send_trading_notification(risk_guard.format_soft_drawdown_alert(risk_state))
+                except Exception:  # noqa: BLE001
+                    pass
+            if risk_state.blocked:
+                return
+
+            scalping_analyzer = paper_trader._default_momentum_analyzer(
+                chain_by_contract, current_regime=current_regime, mode="scalping",
+            )
+            swing_analyzer = paper_trader._default_momentum_analyzer(
+                chain_by_contract, current_regime=current_regime, mode="standard",
+            )
+
+            closed_this_cycle: set[str] = set()
+            funnel: dict[str, int] = {}
+
+            for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
+                ("scalping", candidates, scalping_analyzer, "scalping", paper_trader.MAX_POSITIONS_SCALPING),
+                ("swing", candidates, swing_analyzer, "standard", paper_trader.MAX_POSITIONS_SWING),
+                ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
+            ):
+                try:
+                    await paper_trader._open_new_entries_for_wallet(
+                        pocket_wallet, pocket_candidates, pocket_analyzer,
+                        price_lookup=paper_trader._default_price_lookup,
+                        notifier=send_trading_notification, max_new=MAX_NEW_PER_DRAIN,
+                        using_default_price_lookup=True, closed_this_cycle=closed_this_cycle,
+                        weekly_context=None, risk_state=risk_state, discovery_channel="websocket",
+                        trading_mode=pocket_mode, max_positions_cap=pocket_cap, funnel=funnel,
+                    )
+                except Exception as exc:  # noqa: BLE001 -- a failed pocket never blocks the others
+                    logger.exception(
+                        "momentum_websocket: multi-pocket drain failed for wallet=%s (%s)",
+                        pocket_wallet, exc,
+                    )
+
+            if funnel:
+                logger.info("momentum_websocket funnel (multi-pocket drain): %s", funnel)
+                try:
+                    await momentum_funnel_log.record_funnel(funnel)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("momentum_websocket: funnel persistence failed (%s)", exc)
 
 
 momentum_websocket_listener = MomentumWebsocketListener()

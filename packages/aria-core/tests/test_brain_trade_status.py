@@ -40,7 +40,7 @@ async def _fake_repertoire_summary(lang):
 @pytest.mark.asyncio
 async def test_trade_status_question_injects_real_ledger_into_llm_context(monkeypatch, tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AERO", 0.4889, target_price=0.5282, invalidation_price=0.4736, alloc_usd=50_000)
+    await pt.open_position(A, "AERO", 0.4889, target_price=0.5282, invalidation_price=0.4736, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.4734, reason="invalidation")
 
     captured = {}
@@ -84,7 +84,7 @@ async def test_thesis_question_on_open_position_injects_real_thesis(monkeypatch,
     await pt.open_position(
         A, "COBOT", 0.0001439,
         target_price=0.000165774, invalidation_price=0.000137165,
-        alloc_usd=50_000, thesis=real_thesis,
+        alloc_usd=50_000, thesis=real_thesis, wallet="swing",
     )
 
     captured = {}
@@ -138,7 +138,7 @@ async def test_trade_status_public_visitor_never_gets_private_ledger(monkeypatch
     jamais recevoir le registre paper-trading, même s'il pose une question qui ressemble
     à une question de trade."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AERO", 0.4889, invalidation_price=0.4736, alloc_usd=50_000)
+    await pt.open_position(A, "AERO", 0.4889, invalidation_price=0.4736, alloc_usd=50_000, wallet="swing")
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("_try_trade_status_response ne doit jamais être atteint en mode public")

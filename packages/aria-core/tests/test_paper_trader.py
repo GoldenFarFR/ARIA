@@ -131,7 +131,7 @@ async def test_reset_portfolio_archives_closed_positions_before_dropping(tmp_db)
     import aiosqlite
 
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 4.0, reason="cible")
 
     await pt.reset_portfolio(1_000_000.0)  # manual reset -- must archive AAA first
@@ -156,7 +156,7 @@ async def test_reset_portfolio_archives_open_positions_too(tmp_db):
     import aiosqlite
 
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
 
     await pt.reset_portfolio(1_000_000.0)
 
@@ -170,17 +170,17 @@ async def test_reset_portfolio_archives_open_positions_too(tmp_db):
 @pytest.mark.asyncio
 async def test_open_deducts_cash_and_no_double(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 2.0, target_price=3.0, invalidation_price=1.5, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 2.0, target_price=3.0, invalidation_price=1.5, alloc_usd=50_000, wallet="swing")
     assert pos is not None
     assert pos["qty"] == 25_000  # 50000 / 2
     assert await pt.cash_available() == 950_000.0
-    assert await pt.open_position(A, "AAA", 2.0, alloc_usd=10_000) is None  # déjà ouverte
+    assert await pt.open_position(A, "AAA", 2.0, alloc_usd=10_000, wallet="swing") is None  # déjà ouverte
 
 
 @pytest.mark.asyncio
 async def test_close_profit(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
     closed = await pt.close_position(A, 4.0, reason="cible")
     assert closed["pnl_usd"] == 50_000
     assert round(closed["pnl_pct"], 1) == 100.0
@@ -194,7 +194,7 @@ async def test_close_profit(tmp_db):
 @pytest.mark.asyncio
 async def test_close_loss(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(B, "BBB", 1.0, alloc_usd=100_000)
+    await pt.open_position(B, "BBB", 1.0, alloc_usd=100_000, wallet="swing")
     closed = await pt.close_position(B, 0.5, reason="invalidation")
     assert closed["pnl_usd"] == -50_000
     assert await pt.cash_available() == 950_000.0
@@ -203,7 +203,7 @@ async def test_close_loss(tmp_db):
 @pytest.mark.asyncio
 async def test_summary_marks_to_market(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.5
@@ -219,7 +219,7 @@ async def test_summary_applies_exit_impact_decote_on_thin_pool(tmp_db):
     ne doit plus supposer une liquidation sans aucun glissement -- le prix spot
     seul (1.5) surestimerait la valeur réelle liquidable de cette position."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=50_000.0)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=50_000.0, wallet="swing")
 
     async def price_lookup(contract):
         return 1.5
@@ -239,7 +239,7 @@ async def test_summary_deep_pool_negligible_decote(tmp_db):
     """Sur un pool très profond par rapport à la position, la décote doit rester
     quasi imperceptible -- jamais une pénalité arbitraire hors de proportion."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=100_000_000.0)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=100_000, pool_liquidity_usd=100_000_000.0, wallet="swing")
 
     async def price_lookup(contract):
         return 1.5
@@ -381,7 +381,7 @@ async def test_reentry_allowed_after_prior_close_on_normal_signal(tmp_db):
     fois se rachète sur un signal simplement positif, même barre qu'une première
     entrée. Seule protection restante : jamais deux positions SIMULTANÉES (has_open)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")
 
     async def normal_signal(contract):
@@ -405,7 +405,7 @@ async def test_reentry_allowed_when_analyzer_omits_signal_strength(tmp_db):
     pilote VC-thesis) n'est plus bloqué : la barre de re-entrée est désormais
     identique à celle d'une première entrée, qui ne dépend pas de ces deux champs."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 1.2, reason="cible")
 
     async def these_only_signal(contract):
@@ -426,7 +426,7 @@ async def test_reentry_still_blocked_while_position_currently_open(tmp_db):
     deux positions simultanées sur le même contrat -- ce garde-fou n'a jamais
     dépendu du gate de re-entrée assoupli ci-dessus."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
 
     async def normal_signal(contract):
         return {"action": "BUY", "symbol": "AAA", "price": 1.1, "rr": 1.6, "align_score": 1}
@@ -475,9 +475,9 @@ class TestConsecutiveLossesForContract:
     @pytest.mark.asyncio
     async def test_two_losses_in_a_row(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 0.8, reason="stop suiveur")
-        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 0.6, reason="stop suiveur")
         assert await pt._consecutive_losses_for_contract(A) == 2
 
@@ -486,11 +486,11 @@ class TestConsecutiveLossesForContract:
         """Perte, puis gain, puis perte -- le compteur s'arrête au gain le plus
         récent (une seule perte comptée, pas deux)."""
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 0.8, reason="stop suiveur")  # perte
-        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 1.2, reason="cible")  # gain -- remet à zéro
-        await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 1.0, reason="stop suiveur")  # perte
         assert await pt._consecutive_losses_for_contract(A) == 1
 
@@ -499,9 +499,9 @@ class TestConsecutiveLossesForContract:
         """Une position encore OUVERTE n'a pas de pnl_usd définitif -- ignorée par le
         compteur (robuste même appelée avant le has_open() du chemin normal)."""
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
         await pt.close_position(A, 0.8, reason="stop suiveur")
-        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)  # encore ouverte
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")  # encore ouverte
         assert await pt._consecutive_losses_for_contract(A) == 1
 
 
@@ -512,9 +512,9 @@ async def test_reentry_blocked_after_max_consecutive_losses_on_same_contract(tmp
     MAX_CONSECUTIVE_LOSSES_PER_CONTRACT pertes d'affilée sur CE contrat, un nouveau
     signal BUY par ailleurs valide est rejeté."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")
-    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.6, reason="stop suiveur")
 
     async def normal_signal(contract):
@@ -538,9 +538,9 @@ async def test_scalping_mode_allows_reentry_after_2_losses_but_not_3(tmp_db):
     pur hasard ~25% du temps sur un contrat par ailleurs viable)."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.set_trading_mode("scalping")
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")
-    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.6, reason="stop suiveur")
 
     async def normal_signal(contract):
@@ -571,11 +571,11 @@ async def test_reentry_allowed_again_after_a_win_breaks_the_streak(tmp_db):
     """Non-régression : un gain entre deux pertes remet le compteur à zéro -- la
     garde ne se déclenche pas si la dernière perte est isolée."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")  # perte
-    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 1.2, reason="cible")  # gain -- casse la série
-    await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.2, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 1.0, reason="stop suiveur")  # perte isolée (1 seule)
 
     async def normal_signal(contract):
@@ -595,9 +595,9 @@ async def test_loss_streak_gate_scoped_to_one_contract_only(tmp_db):
     """Chirurgical : le blocage de A (2 pertes d'affilée) ne doit jamais affecter B,
     un contrat totalement différent, jamais touché."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")
-    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.6, reason="stop suiveur")
 
     async def both_signals(contract):
@@ -631,7 +631,7 @@ class TestLastInvalidationExitRR:
     @pytest.mark.asyncio
     async def test_most_recent_close_was_invalidation_returns_its_rr(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
         await pt.close_position(A, 0.8, reason="invalidation")
         assert await pt._last_invalidation_exit_rr(A) == 1.2
 
@@ -641,18 +641,18 @@ class TestLastInvalidationExitRR:
         clôture récente pour une autre raison (stop suiveur, cible) neutralise
         le signal, même si une invalidation existe plus loin dans l'historique."""
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
         await pt.close_position(A, 0.8, reason="invalidation")
-        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0)
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0, wallet="swing")
         await pt.close_position(A, 1.0, reason="stop suiveur")
         assert await pt._last_invalidation_exit_rr(A) is None
 
     @pytest.mark.asyncio
     async def test_open_position_ignored_never_counted(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
         await pt.close_position(A, 0.8, reason="invalidation")
-        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0)  # encore ouverte
+        await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, rr=2.0, wallet="swing")  # encore ouverte
         assert await pt._last_invalidation_exit_rr(A) == 1.2
 
 
@@ -661,7 +661,7 @@ async def test_reentry_after_invalidation_blocked_without_double_conviction(tmp_
     """Vente sur invalidation (rr=1.2), rachat immédiat avec un rr à peine plus
     haut (1.5, < 2x) -- doit être rejeté."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
     await pt.close_position(A, 0.8, reason="invalidation")
 
     async def weak_signal(contract):
@@ -682,7 +682,7 @@ async def test_reentry_after_invalidation_allowed_with_double_conviction(tmp_db)
     """Même scénario, mais le nouveau signal a EXACTEMENT 2x le rr invalidé
     (1.2 -> 2.4) -- autorisé (le seuil est inclusif, pas strictement supérieur)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
     await pt.close_position(A, 0.8, reason="invalidation")
 
     async def strong_signal(contract):
@@ -702,7 +702,7 @@ async def test_reentry_after_invalidation_blocked_when_new_rr_missing(tmp_db):
     """Un signal sans rr du tout ne peut jamais prouver une conviction double --
     dégradation sûre, jamais un OK par défaut."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
     await pt.close_position(A, 0.8, reason="invalidation")
 
     async def no_rr_signal(contract):
@@ -722,7 +722,7 @@ async def test_reentry_allowed_when_most_recent_close_was_not_invalidation(tmp_d
     """Non-régression : une clôture sur "cible" (jamais une invalidation) ne
     déclenche jamais ce garde-fou, même avec un rr faible sur le nouveau signal."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
     await pt.close_position(A, 1.5, reason="cible")
 
     async def weak_signal(contract):
@@ -742,7 +742,7 @@ async def test_invalidation_reentry_gate_scoped_to_one_contract_only(tmp_db):
     """Chirurgical : le blocage de A (invalidation récente, conviction insuffisante)
     ne doit jamais affecter B, un contrat totalement différent."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, rr=1.2, wallet="swing")
     await pt.close_position(A, 0.8, reason="invalidation")
 
     async def both_signals(contract):
@@ -766,7 +766,7 @@ async def test_all_tp_stages_hit_in_one_jump_closes_fully(tmp_db):
     """Un bond de prix qui dépasse TOUS les paliers d'un coup ne laisse jamais une
     position résiduelle ouverte -- le dernier palier clôture ce qui reste."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 3.5  # +250 % : dépasse les 3 paliers (+50/+100/+200 %) d'un coup
@@ -789,7 +789,7 @@ async def test_stop_before_any_rise_uses_original_invalidation_label(tmp_db):
     rester EN DESSOUS de l'invalidation d'origine -- c'est alors l'invalidation qui
     déclenche et doit être nommée comme telle, pas « stop suiveur »."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 0.89  # sous l'invalidation (0.9), au-dessus du stop suiveur pur (0.85)
@@ -808,7 +808,7 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     prise de profit partielle, un repli qui reste AU-DESSUS de l'invalidation d'origine
     mais SOUS le stop suiveur remonté doit quand même clôturer le reliquat."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.5}  # cycle 1 : +50 % -> palier 1, prise de profit partielle
 
@@ -1004,7 +1004,7 @@ async def test_wick_never_ratchets_the_confirmed_high_water(tmp_db):
     -- le stop suiveur reste donc calé sur l'entrée pendant toute la mèche, jamais sur
     un prix qui n'a existé qu'un instant."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.6}  # cycle 1 : mèche isolée, +60 % en un seul cycle
 
@@ -1031,7 +1031,7 @@ async def test_sustained_move_ratchets_the_full_peak_once_confirmed(tmp_db):
     une convergence progressive sur plusieurs cycles (contrairement à l'ancien clamp de
     vitesse du round 6)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     # +150 % -- massif mais sous le dernier palier de profit (+200%, TP_STAGES[2]) pour
     # que la position reste ouverte (2 prises de profit partielles, pas une clôture
@@ -1085,7 +1085,7 @@ async def test_breakeven_floor_single_touch_starts_candidacy_not_yet_locked(tmp_
     seulement la candidature, ne verrouille plus l'instant d'après."""
     await pt.reset_portfolio(1_000_000.0)
     # TP1 = +40% -> seuil flash = 50%*40% = +20% (prix 1.20), au-dessus du plancher 8%.
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.25}  # touche le seuil flash (+20%)
 
@@ -1105,7 +1105,7 @@ async def test_breakeven_floor_resets_if_price_drops_before_confirmation(tmp_db)
     pump-puis-dump rapide qui retombe AVANT la confirmation ne doit PLUS verrouiller
     le point mort (candidature abandonnée, preuve qu'elle n'était pas soutenue)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.25}
 
@@ -1129,7 +1129,7 @@ async def test_breakeven_floor_locks_after_sustained_touch_and_protects_against_
     seuil flash tenu au moins HIGH_WATER_CONFIRMATION_SECONDS, le point mort se
     verrouille pour de bon et protège malgré un crash qui suit."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.25}
 
@@ -1159,7 +1159,7 @@ async def test_breakeven_floor_never_triggers_when_price_never_touches_flash_thr
     """Non-régression : une position dont le prix ne dépasse jamais le seuil flash se
     comporte exactement comme avant ce correctif (stop suiveur classique)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.05}  # +5% -- sous le seuil flash (+20%)
 
@@ -1184,7 +1184,7 @@ async def test_breakeven_floor_does_not_override_a_higher_trailing_stop(tmp_db):
     Prix choisi sous TP1 (+40%) pour ne pas interférer avec la prise de profit par
     tiers (même piège déjà rencontré et corrigé sur d'autres tests de ce fichier)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.30}  # +30% -- au-dessus du seuil flash (+20%), sous TP1 (+40%)
 
@@ -1219,7 +1219,7 @@ async def test_breakeven_floor_stays_locked_across_multiple_cycles(tmp_db):
     cycles plus tard même si le prix reste au-dessus entre-temps (jamais réinitialisé
     par un cycle qui ne le retouche pas)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     prices = {"v": 1.25}
 
@@ -1344,7 +1344,7 @@ async def test_run_cycle_fear_exit_sells_everything_at_old_tp2_level(tmp_db, mon
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
-        entry_regime="peur",
+        entry_regime="peur", wallet="swing",
     )
     # TP1 (target technique) = +40%, TP2 = 2x cette distance = +80%.
     prices = {"v": 1.4}
@@ -1375,7 +1375,7 @@ async def test_run_cycle_euphoria_exit_never_force_closes_at_old_tp3(tmp_db, mon
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
-        entry_regime="euphorie",
+        entry_regime="euphorie", wallet="swing",
     )
     # TP1 = +40%, TP2 = +80% (2x) -- les deux prennent leur tiers normalement.
     prices = {"v": 1.4}
@@ -1411,7 +1411,7 @@ async def test_run_cycle_ratchet_keeps_fear_discipline_even_if_regime_later_impr
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         D, "DDD", 1.0, target_price=1.4, invalidation_price=0.5, alloc_usd=90_000,
-        entry_regime="peur",
+        entry_regime="peur", wallet="swing",
     )
 
     current["regime"] = "euphorie"  # le marché s'est retourné après l'ouverture
@@ -1436,7 +1436,7 @@ async def test_tp1_anchors_on_technical_target_not_fixed_percentage(tmp_db):
     profit -- sinon un retournement entre les deux fait manquer la cible qui avait
     justifié l'entrée."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, target_price=1.2, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, target_price=1.2, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.2  # exactement la cible technique -- +20 % seulement
@@ -1453,7 +1453,7 @@ async def test_tp1_without_target_price_falls_back_to_fixed_50pct(tmp_db):
     VC-thesis dormant) garde le comportement historique -- TP1 fixe +50%, donc un
     gain de seulement +20% ne déclenche encore rien."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.2  # +20 % -- sous le fixe +50%, ne doit rien déclencher
@@ -1473,7 +1473,7 @@ async def test_high_volatility_position_survives_a_retracement_that_would_stop_o
     l'ATR, alors qu'elle aurait clôturé sans lui."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.10,
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.10, wallet="swing",
     )
 
     prices = {"v": 2.0}
@@ -1505,7 +1505,7 @@ async def test_low_volatility_position_stops_out_tighter_than_flat(tmp_db):
     stop adaptatif (plus serré) alors que le stop fixe ne l'aurait pas fait."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.01,
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, entry_atr_pct=0.01, wallet="swing",
     )
 
     prices = {"v": 2.0}
@@ -1531,7 +1531,7 @@ async def test_low_volatility_position_stops_out_tighter_than_flat(tmp_db):
 @pytest.mark.asyncio
 async def test_open_position_persists_entry_atr_pct(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, entry_atr_pct=0.08)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, entry_atr_pct=0.08, wallet="swing")
     assert pos["entry_atr_pct"] == pytest.approx(0.08)
 
 
@@ -1542,7 +1542,7 @@ async def test_open_position_persists_golden_pocket_bounds(tmp_db):
     sortie") -- gp_low/gp_high doivent survivre la persistance, pas seulement
     exister dans le dict signal ephemere."""
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, gp_low=0.95, gp_high=1.05)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, gp_low=0.95, gp_high=1.05, wallet="swing")
     assert pos["gp_low"] == pytest.approx(0.95)
     assert pos["gp_high"] == pytest.approx(1.05)
 
@@ -1550,7 +1550,7 @@ async def test_open_position_persists_golden_pocket_bounds(tmp_db):
 @pytest.mark.asyncio
 async def test_open_position_golden_pocket_bounds_default_to_none(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["gp_low"] is None
     assert pos["gp_high"] is None
 
@@ -1560,7 +1560,7 @@ async def test_open_position_entry_atr_pct_defaults_to_none(tmp_db):
     """Non-régression : positions ouvertes sans ATR (ex. ancien pilote VC-thesis) --
     ``entry_atr_pct`` reste ``None``, comportement de stop suiveur inchangé."""
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["entry_atr_pct"] is None
 
 
@@ -1574,21 +1574,21 @@ async def test_scalping_mode_applies_real_dex_swap_fee_on_buy(tmp_db):
     swap DEX reel (1%, Uniswap v3 tier standard pour paire volatile) -- jamais
     applique en mode standard (comportement historique inchange)."""
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping", wallet="swing")
     assert pos["entry_price"] == pytest.approx(1.0 * (1.0 + DEX_SWAP_FEE_PCT))
 
 
 @pytest.mark.asyncio
 async def test_standard_mode_never_applies_dex_swap_fee_on_buy(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["entry_price"] == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
 async def test_scalping_mode_applies_real_dex_swap_fee_on_sell(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping", wallet="swing")
     closed = await pt.close_position(A, 1.5)
     assert closed["exit_price"] == pytest.approx(1.5 * (1.0 - DEX_SWAP_FEE_PCT))
 
@@ -1596,7 +1596,7 @@ async def test_scalping_mode_applies_real_dex_swap_fee_on_sell(tmp_db):
 @pytest.mark.asyncio
 async def test_standard_mode_never_applies_dex_swap_fee_on_sell(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     closed = await pt.close_position(A, 1.5)
     assert closed["exit_price"] == pytest.approx(1.5)
 
@@ -1604,7 +1604,7 @@ async def test_standard_mode_never_applies_dex_swap_fee_on_sell(tmp_db):
 @pytest.mark.asyncio
 async def test_scalping_mode_applies_real_dex_swap_fee_on_partial_sell(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping", wallet="swing")
     partial = await pt.reduce_position(A, 1.5, 10_000.0, stage=1)
     assert partial["exit_price"] == pytest.approx(1.5 * (1.0 - DEX_SWAP_FEE_PCT))
 
@@ -1641,7 +1641,7 @@ def _scalping_exit_pair_lookup(*, price):
 async def test_scalping_position_closes_on_bearish_divergence_when_target_not_reached(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
     await pt.set_trading_mode("scalping")
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping", wallet="swing")
     monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.2))
 
     async def fake_fetch_candles(*args, **kwargs):
@@ -1665,7 +1665,7 @@ async def test_scalping_position_stays_open_on_bearish_divergence_when_target_al
     gouverner seul."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.set_trading_mode("scalping")
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, mode="scalping", wallet="swing")
     monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.01))
 
     async def fake_fetch_candles(*args, **kwargs):
@@ -1689,7 +1689,7 @@ async def test_standard_mode_never_checks_bearish_divergence(tmp_db, monkeypatch
     """Non-régression : mode standard (défaut) ne déclenche jamais ce check,
     même face à une divergence baissière confirmée."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)  # mode="standard" implicite
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")  # mode="standard" implicite
     monkeypatch.setattr(pt, "_default_pair_lookup", _scalping_exit_pair_lookup(price=1.2))
 
     called = False
@@ -1757,7 +1757,7 @@ async def test_reduce_position_accounting(tmp_db):
     """Vérifie la base de coût réduite proportionnellement et le P&L partiel accumulé,
     indépendamment du cycle heartbeat."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(C, "CCC", 1.0, alloc_usd=90_000)  # qty = 90_000
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=90_000, wallet="swing")  # qty = 90_000
 
     partial = await pt.reduce_position(C, 1.5, 30_000, stage=1, reason="palier 1/3")
     assert partial is not None
@@ -1781,7 +1781,7 @@ async def test_close_position_includes_prior_partial_pnl(tmp_db):
     'open' -- une fois 'closed', le P&L des paliers déjà réalisés disparaissait
     silencieusement du capital agrégé pile au moment de la clôture finale."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(E, "EEE", 1.0, alloc_usd=90_000)  # qty = 90_000
+    await pt.open_position(E, "EEE", 1.0, alloc_usd=90_000, wallet="swing")  # qty = 90_000
 
     partial = await pt.reduce_position(E, 1.5, 30_000, stage=1, reason="palier 1/3")
     assert round(partial["pnl_usd"]) == 15_000  # (30000*1.5) - (90000*(30000/90000))
@@ -1832,7 +1832,7 @@ async def test_get_open_raises_on_ambiguous_contract_without_position_id(tmp_db)
     contract (one per pocket), a caller that forgets to pass ``position_id``
     must fail LOUDLY, never silently resolve to an arbitrary row."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
     second_id = await _duplicate_open_position_row(A)
 
     with pytest.raises(RuntimeError, match="ambiguity"):
@@ -1850,7 +1850,7 @@ async def test_close_position_by_id_closes_only_the_targeted_row(tmp_db):
     EXACTLY row X, leaving a second open position on the SAME contract
     completely untouched."""
     await pt.reset_portfolio(1_000_000.0)
-    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)
+    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
     first_id = opened["id"]
     second_id = await _duplicate_open_position_row(A)
     assert first_id != second_id
@@ -1876,7 +1876,7 @@ async def test_close_position_by_id_closes_only_the_targeted_row(tmp_db):
 @pytest.mark.asyncio
 async def test_reduce_position_by_id_reduces_only_the_targeted_row(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=90_000)
+    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=90_000, wallet="swing")
     first_id = opened["id"]
     second_id = await _duplicate_open_position_row(A)
 
@@ -1957,9 +1957,9 @@ async def test_max_positions_capped(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     for i in range(pt.MAX_POSITIONS):
         c = "0x" + f"{i:040x}"
-        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000) is not None
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, wallet="swing") is not None
     # au-delà du plafond, refus
-    assert await pt.open_position("0x" + "f" * 40, "OVER", 1.0, alloc_usd=1_000) is None
+    assert await pt.open_position("0x" + "f" * 40, "OVER", 1.0, alloc_usd=1_000, wallet="swing") is None
 
 
 @pytest.mark.asyncio
@@ -1970,7 +1970,7 @@ async def test_max_positions_never_capped_in_scalping_mode(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     for i in range(pt.MAX_POSITIONS + 5):
         c = "0x" + f"{i:040x}"
-        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, mode="scalping") is not None
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, mode="scalping", wallet="swing") is not None
 
 
 @pytest.mark.asyncio
@@ -2011,7 +2011,7 @@ def test_alerts_labeled_simulation():
 @pytest.mark.asyncio
 async def test_open_position_stores_category(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, category="clanker")
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, category="clanker", wallet="swing")
     assert pos["category"] == "clanker"
 
 
@@ -2023,9 +2023,9 @@ async def test_concentration_cap_shrinks_alloc_near_the_limit(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     for i in range(7):
         c = "0x" + f"{i:040x}"
-        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker") is not None
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker", wallet="swing") is not None
 
-    pos = await pt.open_position("0x" + "7" * 40, "T7", 1.0, alloc_usd=50_000, category="clanker")
+    pos = await pt.open_position("0x" + "7" * 40, "T7", 1.0, alloc_usd=50_000, category="clanker", wallet="swing")
     assert pos is not None
     assert pos["cost_usd"] == 50_000
 
@@ -2037,9 +2037,9 @@ async def test_concentration_cap_skips_when_room_too_small(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     for i in range(8):
         c = "0x" + f"{i:040x}"
-        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker") is not None
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker", wallet="swing") is not None
 
-    over = await pt.open_position("0x" + "8" * 40, "T8", 1.0, alloc_usd=50_000, category="clanker")
+    over = await pt.open_position("0x" + "8" * 40, "T8", 1.0, alloc_usd=50_000, category="clanker", wallet="swing")
     assert over is None
 
 
@@ -2049,7 +2049,7 @@ async def test_concentration_cap_does_not_affect_other_categories(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     for i in range(8):
         c = "0x" + f"{i:040x}"
-        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker") is not None
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=50_000, category="clanker", wallet="swing") is not None
 
 
 @pytest.mark.asyncio
@@ -2092,7 +2092,7 @@ async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypa
     assert total_deployed <= 400_000
     assert len(act["opened"]) <= 8
 
-    other = await pt.open_position("0x" + "9" * 40, "OTHER", 1.0, alloc_usd=50_000, category="virtuals_bonding")
+    other = await pt.open_position("0x" + "9" * 40, "OTHER", 1.0, alloc_usd=50_000, category="virtuals_bonding", wallet="swing")
     assert other is not None
     assert other["cost_usd"] == 50_000
 
@@ -2104,7 +2104,7 @@ async def test_run_cycle_closes_position_on_new_security_signal(tmp_db, monkeypa
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, alloc_usd=50_000,
-        entry_security_json=risk.EntrySecuritySnapshot(is_honeypot=False).to_json(),
+        entry_security_json=risk.EntrySecuritySnapshot(is_honeypot=False).to_json(), wallet="swing",
     )
 
     async def fake_rescan(position, *, pair=None):
@@ -2136,7 +2136,7 @@ async def test_run_cycle_closes_position_on_wash_trading_ratio_detected_post_ent
     proprement dont le pool bascule en wash-trading pendant la détention doit être fermé,
     pas suivi aveuglément par le stop suiveur."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)  # sans entry_security_json
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")  # sans entry_security_json
 
     async def fake_pair_lookup(contract, *, chain="base"):
         from aria_core.services.dexscreener import PairSnapshot
@@ -2165,7 +2165,7 @@ async def test_run_cycle_ignores_positions_without_security_signal(tmp_db, monke
     """Sans instantané d'entrée (position pré-#187), le re-scan réel ne fabrique jamais
     un signal -- la gestion normale (stop/TP) continue de s'appliquer."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)  # pas d'entry_security_json
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")  # pas d'entry_security_json
 
     async def price_lookup(contract):
         return 1.0  # ni stop ni TP déclenché
@@ -2202,7 +2202,7 @@ async def test_run_cycle_depeg_does_not_block_existing_position_management(tmp_d
     """Le dépeg bloque les NOUVELLES entrées -- les positions déjà ouvertes continuent
     d'être gérées normalement (stop/TP) ce même tour."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(B, "BBB", 1.0, invalidation_price=0.9, alloc_usd=50_000)
+    await pt.open_position(B, "BBB", 1.0, invalidation_price=0.9, alloc_usd=50_000, wallet="swing")
 
     async def price_lookup(contract):
         return 0.5  # sous l'invalidation -> doit fermer malgré le dépeg
@@ -2221,14 +2221,14 @@ async def test_run_cycle_depeg_does_not_block_existing_position_management(tmp_d
 @pytest.mark.asyncio
 async def test_open_position_stores_chain(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana")
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana", wallet="swing")
     assert pos["chain"] == "solana"
 
 
 @pytest.mark.asyncio
 async def test_open_position_defaults_chain_to_base(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["chain"] == "base"
 
 
@@ -2244,7 +2244,7 @@ SOL_MIXED_CASE = "Sol1111111111111111111111111111111111111"
 @pytest.mark.asyncio
 async def test_open_position_preserves_solana_case(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    pos = await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana", wallet="swing")
     assert pos["contract"] == SOL_MIXED_CASE  # jamais lowercased
 
 
@@ -2253,7 +2253,7 @@ async def test_open_position_still_lowercases_base_contract(tmp_db):
     """Comportement EVM inchangé -- seul Solana est exempté du lowercase."""
     await pt.reset_portfolio(1_000_000.0)
     mixed = "0x" + "A" * 40
-    pos = await pt.open_position(mixed, "AAA", 1.0, alloc_usd=50_000, chain="base")
+    pos = await pt.open_position(mixed, "AAA", 1.0, alloc_usd=50_000, chain="base", wallet="swing")
     assert pos["contract"] == mixed.lower()
 
 
@@ -2262,7 +2262,7 @@ async def test_has_open_finds_solana_position_case_insensitively(tmp_db):
     """_get_open (via has_open) n'a pas de paramètre chain -- doit retrouver une
     position Solana stockée en casse mixte même en cherchant en minuscules."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana", wallet="swing")
     assert await pt.has_open(SOL_MIXED_CASE) is True
     assert await pt.has_open(SOL_MIXED_CASE.lower()) is True
 
@@ -2270,7 +2270,7 @@ async def test_has_open_finds_solana_position_case_insensitively(tmp_db):
 @pytest.mark.asyncio
 async def test_list_positions_for_contract_finds_solana_case_insensitively(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana")
+    await pt.open_position(SOL_MIXED_CASE, "SOL", 1.0, alloc_usd=50_000, chain="solana", wallet="swing")
     found = await pt.list_positions_for_contract(SOL_MIXED_CASE.lower())
     assert len(found) == 1
     assert found[0]["contract"] == SOL_MIXED_CASE  # la valeur stockée garde sa vraie casse
@@ -2300,7 +2300,7 @@ async def test_run_cycle_prices_open_position_with_its_own_chain(tmp_db, monkeyp
     from aria_core.services.dexscreener import PairSnapshot
 
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, chain="solana", wallet="swing")
 
     seen_chains = []
 
@@ -2675,7 +2675,7 @@ async def test_run_cycle_unknown_fundamental_never_blocks_technical_bonus(tmp_db
 async def _reach_weekly_target(min_equity: float = 1_100_000.0) -> None:
     """Pousse l'équité du portefeuille au-dessus de l'objectif hebdo (+10 %) via un
     aller-retour gagnant réel -- pas un état fabriqué en base."""
-    await pt.open_position(C, "WIN", 1.0, alloc_usd=500_000.0)
+    await pt.open_position(C, "WIN", 1.0, alloc_usd=500_000.0, wallet="swing")
     await pt.close_position(C, 1.3, reason="test -- atteint l'objectif hebdo")
     summary = await pt.portfolio_summary()
     assert summary["equity"] >= min_equity
@@ -2768,14 +2768,14 @@ async def test_run_cycle_preserves_old_default_when_candidates_explicit(tmp_db, 
 @pytest.mark.asyncio
 async def test_open_position_persists_thesis(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, thesis="Bon momentum, holders sains.")
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, thesis="Bon momentum, holders sains.", wallet="swing")
     assert pos["thesis"] == "Bon momentum, holders sains."
 
 
 @pytest.mark.asyncio
 async def test_open_position_thesis_defaults_to_none(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["thesis"] is None
 
 
@@ -2790,7 +2790,7 @@ async def test_open_position_shrinks_alloc_on_thin_pool(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(
         A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9,
-        alloc_usd=50_000, pool_liquidity_usd=100_000.0,
+        alloc_usd=50_000, pool_liquidity_usd=100_000.0, wallet="swing",
     )
     assert pos["cost_usd"] == pytest.approx(10_000.0, rel=1e-6)
 
@@ -2802,7 +2802,7 @@ async def test_open_position_pool_liquidity_none_unchanged(tmp_db):
     prix."""
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(
-        A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9, alloc_usd=50_000,
+        A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9, alloc_usd=50_000, wallet="swing",
     )
     assert pos["cost_usd"] == 50_000.0
 
@@ -3097,7 +3097,7 @@ def test_format_position_tracking_alert_labels_each_position_individually():
 @pytest.mark.asyncio
 async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.1  # petit mouvement, aucun palier/stop franchi -- reste ouverte
@@ -3121,7 +3121,7 @@ async def test_run_cycle_tracking_alert_shows_real_equity_not_generic_1m(tmp_db)
     """Non-régression du bug réel (17/07) : le cycle doit calculer et transmettre le
     cash/equity RÉELS à l'alerte de suivi, jamais le libellé générique "1 M$"."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.1  # petit mouvement, position reste ouverte
@@ -3144,7 +3144,7 @@ async def test_run_cycle_tracking_alert_excludes_positions_closed_this_cycle(tmp
     """Une position fermée CE tour ne doit JAMAIS apparaître aussi dans le suivi
     périodique -- déjà couverte par l'alerte de vente, pas de doublon."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 0.89  # sous l'invalidation -> se ferme ce tour
@@ -3167,7 +3167,7 @@ async def test_run_cycle_tracking_alert_throttled_to_every_other_cycle(tmp_db):
     l'alerte de suivi -- un cycle qui suit de trop près le précédent (même position
     ouverte, rien d'autre ne change) ne renvoie pas l'alerte."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.1  # petit mouvement, aucun palier/stop franchi -- reste ouverte
@@ -3205,7 +3205,7 @@ async def test_skip_position_management_leaves_open_positions_untouched(tmp_db):
     qui ne doit gérer QUE les nouvelles entrées, jamais les positions déjà
     ouvertes (ça reste le rôle du cycle heartbeat normal)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 0.5  # bien sous l'invalidation -- se fermerait normalement ce tour
@@ -3274,7 +3274,7 @@ async def test_skip_new_entries_still_manages_open_positions(tmp_db):
     invalidation) continue de s'appliquer normalement, jamais ralentie sans
     décision explicite séparée."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
 
     async def price_lookup(contract):
         return 0.5  # bien sous l'invalidation -- doit se fermer ce tour
@@ -3295,7 +3295,7 @@ async def test_skip_new_entries_and_skip_position_management_together_is_a_noop(
     réel, mais un contrat d'appel doit rester sûr) : ni gestion de position, ni
     nouvelle entrée -- un cycle qui ne fait rien, jamais une erreur."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
 
     async def analyzer(contract):
         return {"action": "BUY", "symbol": "AAA", "price": 1.0, "target": 2.0, "invalidation": 0.5}
@@ -3386,7 +3386,7 @@ async def test_open_position_defaults_strategy_to_momentum(tmp_db):
     """Rétrocompatibilité : tout appelant qui ne précise pas ``strategy`` (positions déjà
     ouvertes, appels directs) reste "momentum" -- comportement historique inchangé."""
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["strategy"] == "momentum"
 
 
@@ -3394,7 +3394,7 @@ async def test_open_position_defaults_strategy_to_momentum(tmp_db):
 async def test_open_position_persists_vc_thesis_strategy_and_entry_liquidity(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0, wallet="swing",
     )
     assert pos["strategy"] == "vc_thesis"
     assert pos["entry_liquidity_usd"] == 80_000.0
@@ -3612,7 +3612,7 @@ def _vc_position_pair_lookup(*, price, liquidity_usd):
 async def test_vc_thesis_position_closes_on_absolute_liquidity_floor(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=80_000.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3631,7 +3631,7 @@ async def test_vc_thesis_position_closes_on_relative_liquidity_drop(tmp_db, monk
     pas juste 'encore au-dessus d'un seuil arbitraire')."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3648,7 +3648,7 @@ async def test_vc_thesis_position_survives_a_minor_liquidity_dip(tmp_db, monkeyp
     structurelle) ne doit jamais déclencher l'invalidation."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3664,7 +3664,7 @@ async def test_vc_thesis_position_closes_on_full_target(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, target_price=3.0, alloc_usd=50_000,
-        strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3685,7 +3685,7 @@ async def test_vc_thesis_position_closes_on_dev_wallet_recent_selling(tmp_db, mo
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
-        entry_dev_sold_pct=5.0,
+        entry_dev_sold_pct=5.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3710,7 +3710,7 @@ async def test_vc_thesis_position_survives_without_entry_dev_snapshot(tmp_db, mo
     lèverait si jamais atteint au-delà du garde `entry_sold_pct is None`)."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3730,7 +3730,7 @@ async def test_vc_thesis_position_closes_on_sudden_liquidity_drop_between_cycles
     tranches doit être détecté cycle par cycle, pas seulement en cumulé depuis l'entrée."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     # Cycle 1 : 190k$ (-5% depuis l'entrée) -- établit last_liquidity_usd=190k$, aucune
     # invalidation (ni absolue, ni cumulée, ni soudaine -- 1er cycle de gestion).
@@ -3758,7 +3758,7 @@ async def test_vc_thesis_position_survives_gradual_drop_no_sudden_trigger(tmp_db
     jamais >50% cumulé depuis l'entrée, ne déclenche aucune invalidation."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
-        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0,
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_thesis", pool_liquidity_usd=200_000.0, wallet="swing",
     )
     for liq in (185_000.0, 170_000.0, 155_000.0):
         monkeypatch.setattr(
@@ -3781,7 +3781,7 @@ async def test_vc_thesis_position_never_stopped_out_on_a_deep_pullback(tmp_db, m
     # fournir aurait dégradé entry_price loin de 1.0 et cassé le narratif "3x"/"-50%
     # depuis l'entrée" ci-dessous sans rien apporter à ce qui est réellement testé ici.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis", wallet="swing",
     )
     # Premier cycle : le prix monte à 3x (au-dessus du seuil Take Seed) -- laisse la
     # sortie partielle se déclencher pour isoler ensuite le seul comportement de
@@ -3812,7 +3812,7 @@ async def test_vc_thesis_take_seed_recovers_exactly_initial_cost(tmp_db, monkeyp
     # stopped_out_on_a_deep_pullback (le "exactement 2x" ci-dessous exige entry_price
     # non dégradé).
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis", wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3833,7 +3833,7 @@ async def test_vc_thesis_take_seed_never_fires_twice(tmp_db, monkeypatch):
     await pt.reset_portfolio(1_000_000.0)
     # #175 -- pool_liquidity_usd omis, même raison que ci-dessus.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis", wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3856,7 +3856,7 @@ async def test_vc_thesis_position_untouched_below_take_seed_threshold(tmp_db, mo
     await pt.reset_portfolio(1_000_000.0)
     # #175 -- pool_liquidity_usd omis, même raison que ci-dessus.
     await pt.open_position(
-        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis",
+        A, "AAA", 1.0, target_price=10.0, alloc_usd=50_000, strategy="vc_thesis", wallet="swing",
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
@@ -3876,7 +3876,7 @@ async def test_momentum_strategy_position_unaffected_by_vc_thesis_branch(tmp_db)
     à elle. Même patron que test_trailing_stop_tightens_then_closes_remainder (prix
     modéré, sous le premier palier TP, pour isoler le seul comportement de stop)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=50_000)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=50_000, wallet="swing")
 
     prices = {"v": 1.3}  # +30 %, sous le premier palier TP (+50 %) -- pas de prise de profit
 
@@ -4122,9 +4122,25 @@ def test_daily_floor_target_paces_across_the_day():
 @pytest.mark.asyncio
 async def test_count_positions_opened_today(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "A", 1.0, target_price=2.0, invalidation_price=0.5)
+    await pt.open_position(A, "A", 1.0, target_price=2.0, invalidation_price=0.5, wallet="swing")
     now = _dt.now(_tz.utc)
     assert await pt.count_positions_opened_today(now=now) == 1
+
+
+@pytest.mark.asyncio
+async def test_count_positions_opened_today_scopes_to_swing_by_default(tmp_db):
+    """27/07 -- 3-pocket architecture plan: this diagnostic floor only ever
+    books into "swing" -- positions opened the SAME day in a different pocket
+    (scalping/vc) must never inflate this count, or the floor would believe
+    today's target is already met while "swing" itself had zero trades."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "A", 1.0, target_price=2.0, invalidation_price=0.5, wallet="swing")
+    await pt.open_position(B, "B", 1.0, target_price=2.0, invalidation_price=0.5, wallet="scalping")
+    await pt.open_position(C, "C", 1.0, target_price=2.0, invalidation_price=0.5, wallet="vc")
+    now = _dt.now(_tz.utc)
+    assert await pt.count_positions_opened_today(now=now) == 1
+    assert await pt.count_positions_opened_today(now=now, wallet="scalping") == 1
+    assert await pt.count_positions_opened_today(now=now, wallet="vc") == 1
 
 
 def _floor_buy_sig(symbol="FL", price=1.0):
@@ -4311,11 +4327,60 @@ async def test_daily_floor_on_pace_opens_nothing(tmp_db, monkeypatch):
     for i in range(pt.DAILY_TRADE_FLOOR):
         addr = f"0x{i:040x}"
         await pt.open_position(
-            addr, f"T{i}", 1.0, target_price=2.0, invalidation_price=0.5, alloc_usd=1_000.0,
+            addr, f"T{i}", 1.0, target_price=2.0, invalidation_price=0.5, alloc_usd=1_000.0, wallet="swing",
         )
     res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 59, 0, tzinfo=_tz.utc))
     assert res["outcome"] == "on_pace"
     assert res["opened"] == []
+
+
+@pytest.mark.asyncio
+async def test_daily_floor_never_crashes_on_candidate_already_open_in_another_pocket(tmp_db, monkeypatch):
+    """27/07 -- 3-pocket architecture plan: this diagnostic floor always books
+    into "swing" (see wallet="swing" on its own open_position call) -- a
+    candidate that's ALREADY open in a DIFFERENT pocket (vc/scalping, entirely
+    plausible once multi-pocket sourcing is on) must never reach the
+    unscoped ``has_open``/``get_open_positions`` multi-pocket ambiguity guard
+    in ``_get_open`` (RuntimeError) -- both calls inside this loop are scoped
+    to wallet="swing" specifically for this reason. The candidate must still
+    be correctly skipped as a duplicate within "swing" once actually opened
+    there, and a genuinely fresh candidate must still open normally."""
+    monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
+    from aria_core import momentum_entry, risk_guard
+    from aria_core.skills import market_sentiment
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _not_blocked)
+
+    async def _neutral():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral)
+
+    async def _fake_sources(*, limit=20):
+        return [A, B], {A: "base", B: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        return _floor_buy_sig(symbol=contract[:4])
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    # A is already open in a DIFFERENT pocket -- 2 distinct open rows on this
+    # contract portfolio-wide (vc + whatever "swing" opens below), the exact
+    # condition that makes an UNSCOPED has_open(contract) raise.
+    await pt.open_position(A, "AAA", 1.0, target_price=2.0, invalidation_price=0.5, wallet="vc")
+
+    res = await pt.run_daily_trade_floor_cycle(now=_dt(2026, 7, 23, 23, 0, 0, tzinfo=_tz.utc))
+    assert res["outcome"] == "ok"
+    # Never crashed on the pre-existing "vc" position sharing contract A -- A
+    # is fresh for "swing" (this pocket never held it), so it's legitimately
+    # opened there too, same as B (fresh everywhere).
+    opened_contracts = {p["contract"] for p in res["opened"]}
+    assert opened_contracts == {A, B}
+    assert await pt.has_open(A, wallet="vc") is True
+    assert await pt.has_open(A, wallet="swing") is True
 
 
 @pytest.mark.asyncio
@@ -4678,3 +4743,325 @@ async def test_non_bonding_signal_unaffected_by_bonding_reduction(tmp_db, monkey
 
     assert len(act["opened"]) == 1
     assert captured["alloc_usd"] == pytest.approx(captured["pre_reduction_alloc"])
+
+
+# ── 27/07 -- 3-pocket architecture plan, Phase 2 (multi_pocket_sourcing_enabled) ──
+# Phase 1 (commit 1d6ba7c1) migrated the schema only (zero behavior change) --
+# these tests cover the REAL concurrent-sourcing loop this phase adds:
+# has_open/open_position/MAX_POSITIONS wallet-scoping, the gate itself (OFF
+# preserves today's single-"swing"-pocket behavior byte for byte, ON sources
+# scalping/swing/vc independently every cycle).
+
+@pytest.mark.asyncio
+async def test_open_position_requires_wallet_kwarg():
+    """``wallet`` is MANDATORY (no default) -- a caller that forgets it must get
+    a loud TypeError, never a silent fallback to some pocket."""
+    with pytest.raises(TypeError):
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)  # no wallet=
+
+
+@pytest.mark.asyncio
+async def test_same_contract_open_in_two_different_wallets_simultaneously(tmp_db):
+    """The whole point of 3 concurrent pockets: has_open/open_position scoped
+    per wallet let the SAME contract be legitimately held by 2 (or 3) pockets
+    at once -- neither blocks nor counts against the other."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos_swing = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
+    pos_scalping = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="scalping")
+    pos_vc = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="vc")
+
+    assert pos_swing is not None and pos_scalping is not None and pos_vc is not None
+    assert len({pos_swing["id"], pos_scalping["id"], pos_vc["id"]}) == 3  # 3 distinct rows
+
+    assert await pt.has_open(A, wallet="swing") is True
+    assert await pt.has_open(A, wallet="scalping") is True
+    assert await pt.has_open(A, wallet="vc") is True
+    # A 4th attempt on an ALREADY-occupied pocket is still refused -- per-wallet
+    # scoping doesn't weaken the existing single-position-per-pocket guard.
+    assert await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing") is None
+
+    # has_open(contract) with NO wallet filter (legacy, unscoped) now hits a
+    # GENUINE multi-pocket ambiguity (3 distinct open rows on this contract) --
+    # by design, already true since Phase 1 (see _get_open's own docstring),
+    # this raises loudly rather than silently picking one pocket arbitrarily.
+    # Any caller that must stay pocket-agnostic once multi-pocket sourcing is
+    # active has to pass wallet= explicitly, exactly as open_position and
+    # _open_new_entries_for_wallet both already do.
+    with pytest.raises(RuntimeError):
+        await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_get_open_positions_wallet_filter_isolates_pockets(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
+    await pt.open_position(B, "BBB", 1.0, alloc_usd=10_000, wallet="scalping")
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=10_000, wallet="vc")
+
+    assert [p["contract"] for p in await pt.get_open_positions(wallet="swing")] == [A]
+    assert [p["contract"] for p in await pt.get_open_positions(wallet="scalping")] == [B]
+    assert [p["contract"] for p in await pt.get_open_positions(wallet="vc")] == [C]
+    assert len(await pt.get_open_positions()) == 3  # unfiltered -- all pockets, unchanged
+
+
+@pytest.mark.asyncio
+async def test_open_position_max_positions_cap_stays_legacy_value_regardless_of_wallet(tmp_db):
+    """27/07 -- ``open_position``'s OWN inner defense-in-depth cap intentionally
+    stays the legacy portfolio-wide ``MAX_POSITIONS`` (30) for ANY wallet (a
+    safety net for any caller, e.g. a manual command) -- the REAL per-pocket
+    caps (5/15/unlimited) are enforced one level up, per cycle, by
+    ``_open_new_entries_for_wallet`` (see the dedicated tests below). Exercises
+    the "vc" pocket specifically (real cap would be 5) to prove this inner net
+    does NOT itself apply the tighter per-pocket number."""
+    await pt.reset_portfolio(1_000_000.0)
+    for i in range(pt.MAX_POSITIONS_VC + 2):  # well past the real per-pocket VC cap (5)
+        c = "0x" + f"{i:040x}"
+        assert await pt.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, wallet="vc") is not None
+    assert len(await pt.get_open_positions(wallet="vc")) == pt.MAX_POSITIONS_VC + 2
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_enforces_per_wallet_cap(tmp_db):
+    """``_open_new_entries_for_wallet`` (the real per-cycle chokepoint) stops at
+    ``max_positions_cap`` regardless of how many MORE candidates remain -- and
+    scopes its count to THIS pocket only (a full "scalping"/"swing" pocket
+    elsewhere must never block "vc")."""
+    from aria_core import risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "T", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    # Fill "swing" to its own cap (15) FIRST -- must have zero effect on "vc"'s
+    # own cap (5) below (independent pockets, independent counts).
+    swing_candidates = ["0x" + f"9{i:039x}" for i in range(pt.MAX_POSITIONS_SWING)]
+    swing_opened, swing_count = await pt._open_new_entries_for_wallet(
+        "swing", swing_candidates, _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=pt.MAX_POSITIONS_SWING,
+        funnel={},
+    )
+    assert swing_count == pt.MAX_POSITIONS_SWING == 15
+
+    vc_candidates = ["0x" + f"1{i:039x}" for i in range(10)]  # more than the VC cap (5)
+    funnel: dict = {}
+    vc_opened, vc_count = await pt._open_new_entries_for_wallet(
+        "vc", vc_candidates, _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=pt.MAX_POSITIONS_VC,
+        funnel=funnel,
+    )
+    assert vc_count == pt.MAX_POSITIONS_VC == 5
+    assert len(vc_opened) == 5
+    assert len(await pt.get_open_positions(wallet="vc")) == 5
+    assert len(await pt.get_open_positions(wallet="swing")) == pt.MAX_POSITIONS_SWING
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_unlimited_cap_never_breaks(tmp_db):
+    """``max_positions_cap=None`` (the scalping doctrine) never stops the loop on
+    a count check -- same unlimited philosophy as today's existing
+    "trading_mode == scalping" MAX_POSITIONS bypass. 10 candidates, comfortably
+    past ``MAX_POSITIONS_VC``(5) -- if the cap were mistakenly applied here too,
+    this would stop well short of 10. NOTE: alloc is a FIXED % of a wallet's
+    OWN starting capital (``ALLOC_PCT``/conviction tier), so inflating
+    ``reset_portfolio``'s amount does NOT buy room for more positions (it
+    scales both sides identically) -- real cash availability is the ONLY
+    other brake here, by design (never a numeric position-count ceiling in
+    scalping), so the candidate count is kept well within what ~5% positions
+    of the DEFAULT $1M naturally afford (well under 20)."""
+    from aria_core import risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "T", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            # "scalping" mode -- otherwise ``open_position``'s OWN inner
+            # defense-in-depth check (legacy MAX_POSITIONS=30, mode-gated,
+            # see its docstring) would apply too, muddying which cap this
+            # test is actually exercising.
+            "mode": "scalping",
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+    candidates = ["0x" + f"2{i:039x}" for i in range(10)]
+    opened, count = await pt._open_new_entries_for_wallet(
+        "scalping", candidates, _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="scalping", max_positions_cap=pt.MAX_POSITIONS_SCALPING,
+        funnel={},
+    )
+    assert pt.MAX_POSITIONS_SCALPING is None
+    assert count == 10  # all 10 opened -- never capped by count, past MAX_POSITIONS_VC(5)
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", raising=False)
+    assert pt.multi_pocket_sourcing_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_reads_env_var(monkeypatch):
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    assert pt.multi_pocket_sourcing_enabled() is True
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "false")
+    assert pt.multi_pocket_sourcing_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_off_default_sourcing_matches_pre_chantier_behavior(tmp_db, monkeypatch):
+    """Gate OFF (default, no env var) -- the REAL default-sourcing heartbeat path
+    (candidates=None, analyzer=None) must open positions ONLY into the "swing"
+    pocket, exactly as before this whole chantier. ``_momentum_candidates_and_
+    chain_map`` is stubbed WHOLESALE (not just its inner ``discover_momentum_
+    candidates`` dependency) so this test never touches the real (network-bound)
+    bonding-candidates discovery -- same safe pattern already used by the other
+    default-sourcing tests in this file (see ``test_run_cycle_fear_regime_
+    halves_new_entry_allocation`` above)."""
+    monkeypatch.delenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", raising=False)
+    from aria_core import momentum_entry
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["wallet"] == "swing"
+    assert len(await pt.get_open_positions(wallet="swing")) == 1
+    assert await pt.get_open_positions(wallet="scalping") == []
+    assert await pt.get_open_positions(wallet="vc") == []
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, monkeypatch):
+    """Gate ON: the SAME default-sourcing heartbeat call now opens into ALL 3
+    pockets independently in one cycle -- scalping+swing share the same
+    momentum discovery/contract (different analyzer ``mode``), vc sources from
+    the separate dormant ``candidate_ranking.top_candidates``/``_default_
+    analyzer`` path. The SAME contract (D) legitimately ends up open in BOTH
+    scalping and swing at once -- proof #1 of this chantier's whole point."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    from aria_core import momentum_entry
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_momentum_eval(
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+    ):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_momentum_eval)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(E)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_vc_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "EEE", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "strategy": "vc_thesis",
+        }
+
+    monkeypatch.setattr(pt, "_default_analyzer", _fake_vc_analyzer)
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert wallets_opened == {"scalping", "swing", "vc"}
+    assert len(act["opened"]) == 3
+
+    scalping_positions = await pt.get_open_positions(wallet="scalping")
+    swing_positions = await pt.get_open_positions(wallet="swing")
+    vc_positions = await pt.get_open_positions(wallet="vc")
+    assert len(scalping_positions) == 1 and scalping_positions[0]["contract"] == D
+    assert len(swing_positions) == 1 and swing_positions[0]["contract"] == D
+    assert len(vc_positions) == 1 and vc_positions[0]["contract"] == E
+    # Same contract (D), 2 legitimately distinct open positions (one per pocket).
+    assert scalping_positions[0]["id"] != swing_positions[0]["id"]
+    assert scalping_positions[0]["mode"] == "scalping"
+    assert swing_positions[0]["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_on_never_splits_an_explicit_caller(tmp_db, monkeypatch):
+    """Gate ON, but the caller provides its OWN candidates/analyzer (e.g.
+    momentum_websocket.py's real-time drain, or any test) -- multi-pocket
+    sourcing must NEVER override an explicit caller's choice, same scoping
+    precedent as the #194 momentum pivot itself. Always books into "swing"."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+
+    async def _analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "AAA", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=_analyzer, price_lookup=_price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["wallet"] == "swing"
+    assert await pt.get_open_positions(wallet="scalping") == []
+    assert await pt.get_open_positions(wallet="vc") == []

@@ -122,11 +122,11 @@ async def test_paper_ledger_returns_open_and_closed_positions_with_entry_exit_pl
     await paper_trader.open_position(
         "0xopen", "OPEN", 1.0,
         target_price=2.0, invalidation_price=0.8, chain="base", thesis="momentum + R/R 2.4",
-        entry_atr_pct=0.09, mode="scalping",
+        entry_atr_pct=0.09, mode="scalping", wallet="swing",
     )
     await paper_trader.open_position(
         "0xclosed", "CLOSED", 1.0,
-        target_price=1.5, invalidation_price=0.9, chain="base", thesis="golden pocket",
+        target_price=1.5, invalidation_price=0.9, chain="base", thesis="golden pocket", wallet="swing",
     )
     await paper_trader.close_position(
         "0xclosed", 1.5, reason="cible atteinte", notes="Cible atteinte : +50% vs entrée.",

@@ -38,7 +38,24 @@ ALLOC_PCT = 0.05          # 5% of starting capital per position (~$50,000) — t
 # (risk/ATR, see compute_entry_alloc) instead of a fixed 1%, real cash
 # availability becomes the natural brake before this count-based cap is ever
 # hit -- this just removes an artificial ceiling below that real brake.
-MAX_POSITIONS = 30        # cash cushion + diversification
+MAX_POSITIONS = 30        # cash cushion + diversification -- still read by the single-
+# pocket gate-OFF path below AND by limit_orders.py (its own defense-in-depth check,
+# a separate later chantier -- kept defined and unused-here rather than removed).
+
+# 27/07 -- 3-pocket architecture plan, Phase 2 (scalping/swing/VC, each an
+# independent $1M paper wallet, gated by ``multi_pocket_sourcing_enabled()``
+# below): per-POCKET position caps, replacing the single portfolio-wide
+# ``MAX_POSITIONS`` above for the new concurrent-sourcing loop. Natural caps
+# per pocket (operator-approved plan, not numerically enforced elsewhere):
+# VC is a low-conviction-count, high-conviction-per-position thesis (1-5
+# positions); swing (momentum, standard mode) sits between the two; scalping
+# stays UNCAPPED -- same doctrine as today's existing "trading_mode ==
+# scalping" MAX_POSITIONS bypass (Item #101, 26/07: "laisse libre, voyons
+# comment ARIA trade sans la force" -- real cash availability remains the
+# natural brake).
+MAX_POSITIONS_VC = 5
+MAX_POSITIONS_SWING = 15
+MAX_POSITIONS_SCALPING = None  # unlimited, same doctrine as the scalping bypass above
 MODE = "trading"
 
 # 07/18 -- explicit operator decision: replaces the 30d/7d/14d protocol. ARIA restarts at
@@ -1265,6 +1282,7 @@ async def list_positions_for_contract(contract: str, limit: int = 100) -> list[d
 
 async def _get_open(
     contract: str, *, strategy: str | None = None, position_id: int | None = None,
+    wallet: str | None = None,
 ) -> dict | None:
     """Case-insensitive search -- same reason as ``list_positions_for_contract``
     above (no ``chain`` parameter here to reconstruct the real normalization).
@@ -1277,17 +1295,25 @@ async def _get_open(
     ``vc_thesis`` position must never block the opening of a ``momentum``
     position on the SAME contract, and vice versa.
 
+    ``wallet`` (27/07, 3-pocket architecture plan, optional): same pattern as
+    ``strategy`` -- ``None`` (default) preserves historical behavior (any
+    pocket), provided when a caller means ONE specific pocket. This is what
+    lets 3 pockets legally hold the SAME contract simultaneously: pocket X
+    checking ``has_open(contract, wallet="swing")`` must never be blocked by
+    pocket Y already holding it under ``wallet="scalping"``.
+
     ``position_id`` (27/07, multi-pocket prerequisite): when provided, resolves
-    DIRECTLY by row id -- ``contract``/``strategy`` are ignored entirely for
-    the lookup (still validated as a sanity check below). This is the safe
-    path once the SAME contract can legally have multiple simultaneously-open
-    positions (one per pocket/wallet) -- a lookup by contract alone cannot
-    disambiguate which one the caller means. When ``position_id`` is absent
-    (legacy path, still used by external callers with no ambiguity today),
-    a SECOND open position sharing this contract now raises loudly instead of
-    silently resolving to an arbitrary one -- real bug class this closes: a
-    caller that forgot to pass ``position_id`` would otherwise corrupt
-    whichever position ``fetchone()`` happened to return first."""
+    DIRECTLY by row id -- ``contract``/``strategy``/``wallet`` are ignored
+    entirely for the lookup (still validated as a sanity check below). This is
+    the safe path once the SAME contract can legally have multiple
+    simultaneously-open positions (one per pocket/wallet) -- a lookup by
+    contract alone cannot disambiguate which one the caller means. When
+    ``position_id`` is absent (legacy path, still used by external callers with
+    no ambiguity today), a SECOND open position sharing this contract (AND the
+    same strategy/wallet filter, if any) now raises loudly instead of silently
+    resolving to an arbitrary one -- real bug class this closes: a caller that
+    forgot to pass ``position_id`` would otherwise corrupt whichever position
+    ``fetchone()`` happened to return first."""
     cols = ", ".join(_POS_FIELDS)
     if position_id is not None:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -1304,6 +1330,9 @@ async def _get_open(
     if strategy is not None:
         query += " AND strategy = ?"
         params.append(strategy)
+    if wallet is not None:
+        query += " AND wallet = ?"
+        params.append(wallet)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
@@ -1315,8 +1344,8 @@ async def _get_open(
     return _row_to_pos(rows[0]) if rows else None
 
 
-async def has_open(contract: str, *, strategy: str | None = None) -> bool:
-    return (await _get_open(contract, strategy=strategy)) is not None
+async def has_open(contract: str, *, strategy: str | None = None, wallet: str | None = None) -> bool:
+    return (await _get_open(contract, strategy=strategy, wallet=wallet)) is not None
 
 
 async def _has_prior_close(contract: str) -> bool:
@@ -1431,6 +1460,7 @@ async def open_position(
     symbol: str,
     entry_price: float,
     *,
+    wallet: str,
     target_price: float | None = None,
     invalidation_price: float | None = None,
     alloc_usd: float | None = None,
@@ -1471,13 +1501,36 @@ async def open_position(
     regardless of whether any notifier/topic is configured. Returns the
     position or None.
 
+    ``wallet`` (27/07, 3-pocket architecture plan): MANDATORY, no default --
+    every caller must now say explicitly which pocket ("swing"/"scalping"/
+    "vc") a new position belongs to. Deliberate: a silent default here would
+    be a real bug class (same doctrine as ``position_id`` on
+    ``close_position``/``reduce_position`` -- silent ambiguity once the SAME
+    contract can legally be open in several pockets at once). Persisted as-is;
+    its own ``has_open`` check below is scoped to THIS SAME pocket only (an
+    open position in a DIFFERENT pocket on the same contract never blocks
+    this one), and its own position-COUNT is likewise scoped to THIS pocket
+    (``get_open_positions(wallet=wallet)``, never the whole portfolio's). The
+    CAP VALUE this inner check compares against stays the legacy
+    ``MAX_POSITIONS`` (30) regardless of ``wallet`` -- it is a defense-in-depth
+    safety net for ANY caller (manual command, future real-capital pilot),
+    not the real per-pocket caps (``MAX_POSITIONS_VC``/``_SWING``/
+    ``_SCALPING``), which are enforced one level up, per cycle, by
+    ``_open_new_entries_for_wallet``.
+
     ``mode`` (Item #101, 26/07): the entry mode this signal was sourced under
     ("standard"/"scalping") -- persisted as-is. In "scalping" mode, the
     position-count cap (``MAX_POSITIONS``) is not enforced here either
     (operator's explicit decision: "laisse libre, voyons comment ARIA trade
     sans la force" -- observe the naturally-occurring behavior, real cash
     availability remains the brake). Default ``"standard"``, unchanged
-    behavior for any caller that doesn't provide it.
+    behavior for any caller that doesn't provide it. Distinct from ``wallet``
+    above: ``mode`` is the entry-signal flavor (used, among other things, to
+    decide the swap-fee simulation below); ``wallet`` is the pocket the
+    resulting position is booked under -- today's single-pocket gate-OFF path
+    always books "scalping"-mode signals into the "swing" wallet (Phase 2 of
+    the 3-pocket plan hasn't yet retired the old portfolio-wide ``trading_mode``
+    switch, see ``get_trading_mode``/``set_trading_mode``).
 
     ``gp_low``/``gp_high`` (Item #101, 26/07): the golden pocket's own bounds
     (0.618/0.786 retracement) -- persisted so the position's real entry ZONE
@@ -1522,9 +1575,22 @@ async def open_position(
     contract = normalize_contract_case(contract, chain)
     if not contract or not entry_price or entry_price <= 0:
         return None
-    if await has_open(contract):
+    # 27/07 -- scoped to THIS pocket only: an already-open position in a
+    # DIFFERENT wallet on the same contract must never block this one (that's
+    # the whole point of 3 concurrent pockets).
+    if await has_open(contract, wallet=wallet):
         return None
-    if mode != "scalping" and len(await get_open_positions()) >= MAX_POSITIONS:
+    # 27/07 -- count scoped to THIS pocket (``get_open_positions(wallet=wallet)``)
+    # rather than the whole portfolio, so pocket X's own count never blocks
+    # pocket Y's first position. The CAP VALUE itself stays the legacy
+    # portfolio-wide ``MAX_POSITIONS`` (30) here -- this is a defense-in-depth
+    # safety net for ANY caller (see docstring), not the real per-pocket
+    # 5/15/unlimited caps (``MAX_POSITIONS_VC``/``_SWING``/``_SCALPING``),
+    # which are enforced one level up by the cycle loop itself
+    # (``_open_new_entries_for_wallet``) -- keeping this inner net at the old
+    # value is what keeps ``test_max_positions_capped`` (wallet="swing", cap
+    # 30) passing unchanged.
+    if mode != "scalping" and len(await get_open_positions(wallet=wallet)) >= MAX_POSITIONS:
         return None
 
     # #186 -- defense-in-depth safety chokepoint: checked HERE (not just in
@@ -1538,8 +1604,8 @@ async def open_position(
         logger.info("open_position: refused by risk_guard (%s)", reason)
         return None
 
-    start = await starting_capital()
-    cash = await cash_available()
+    start = await starting_capital(wallet=wallet)
+    cash = await cash_available(wallet=wallet)
     alloc = alloc_usd if alloc_usd is not None else ALLOC_PCT * start
     # #186 -- risk cap: never reduces alloc beyond its entry value, never a
     # bonus. Without a known invalidation_price, unchanged (trailing stop is
@@ -1560,7 +1626,12 @@ async def open_position(
     if category:
         from aria_core import paper_trader_risk as risk
 
-        opens = await get_open_positions()
+        # 27/07 -- scoped to THIS pocket: each of the 3 pockets is its own
+        # independent $1M portfolio, so concentration is measured against its
+        # OWN deployed capital, never the whole cross-pocket total (a heavy
+        # scalping-pocket category exposure must never throttle a VC-pocket
+        # buy in the same category, and vice versa).
+        opens = await get_open_positions(wallet=wallet)
         already = risk.category_exposure_usd(category, opens)
         alloc = risk.fit_alloc_to_concentration_cap(
             category=category,
@@ -1605,8 +1676,8 @@ async def open_position(
                discovery_channel, conviction_process_trail,
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
-               liquidity_rotation_volume_ratio, mode, gp_low, gp_high)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1623,11 +1694,16 @@ async def open_position(
              conviction_posting_cadence,
              liquidity_rotation_score,
              None if liquidity_rotation_accelerating is None else int(liquidity_rotation_accelerating),
-             liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high),
+             liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high, wallet),
         )
         await db.commit()
         pid = cur.lastrowid
-    return await _get_open(contract) or {"id": pid, "contract": contract}
+    # 27/07 -- resolved by ROW ID, never by bare contract: once 3 pockets can
+    # legally hold the SAME contract at once, ``_get_open(contract)`` alone
+    # would raise (multi-pocket ambiguity guard, see its docstring) as soon as
+    # a 2nd pocket opens a position on a contract another pocket already
+    # holds open.
+    return await _get_open(contract, position_id=pid) or {"id": pid, "contract": contract, "wallet": wallet}
 
 
 async def close_position(
@@ -2459,6 +2535,26 @@ def _default_momentum_analyzer(
     return analyzer
 
 
+# ── 3-pocket architecture, Phase 2 (27/07) ───────────────────────────────────
+# Approved plan: scalping/swing/VC run as 3 PERMANENTLY CONCURRENT independent
+# $1M paper wallets (Phase 1, commit 1d6ba7c1, migrated the schema -- zero
+# behavior change). This gate turns on the real concurrent-sourcing loop.
+
+def multi_pocket_sourcing_enabled() -> bool:
+    """Dedicated gate, OFF by default (fail-closed) -- same idiom as
+    ``daily_trade_floor_enabled()`` below. While OFF, ``_run_paper_cycle_locked``
+    behaves EXACTLY as before this chantier: a single active pocket ("swing"),
+    driven by the existing ``trading_mode`` switch (``get_trading_mode``/
+    ``set_trading_mode``, still 'swing'-scoped -- Phase 2 doesn't retire it,
+    see their own docstrings). Once ON, all 3 pockets (scalping/swing/vc)
+    source new entries INDEPENDENTLY every cycle, each with its own
+    candidates/analyzer/position cap -- the SAME contract can legally be held
+    by 2 or 3 pockets simultaneously (see ``_open_new_entries_for_wallet``)."""
+    return os.environ.get("ARIA_MULTI_POCKET_SOURCING_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
 
 def daily_trade_floor_enabled() -> bool:
@@ -2469,19 +2565,29 @@ def daily_trade_floor_enabled() -> bool:
     )
 
 
-async def count_positions_opened_today(*, now: datetime | None = None) -> int:
+async def count_positions_opened_today(*, now: datetime | None = None, wallet: str = "swing") -> int:
     """Number of positions OPENED since 00:00 UTC today (live ``paper_position``
     table). ``opened_at`` is stored as an ISO-8601 string in the same
     ``+00:00`` format as ``day_start`` below, so the string comparison is a
     valid chronological one. A weekly reset (rare -- 7-day cadence) archives the
     live table, so right after one this could momentarily undercount; acceptable
-    for a soft diagnostic floor (never a hard invariant)."""
+    for a soft diagnostic floor (never a hard invariant).
+
+    ``wallet`` (27/07, 3-pocket architecture plan): defaults to ``"swing"`` --
+    the ONLY pocket this diagnostic floor ever books into (see
+    ``_run_daily_trade_floor_locked``'s own ``wallet="swing"`` comment on its
+    ``open_position`` call). Gate OFF: byte-for-byte unchanged (only "swing"
+    ever holds a position). Gate ON: without this scoping, scalping's
+    unlimited/high-frequency trades would inflate this count, making the floor
+    believe today's target is already met while "swing" itself had zero --
+    defeating the floor's entire diagnostic purpose."""
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT COUNT(*) FROM paper_position WHERE opened_at >= ?", (day_start,)
+            "SELECT COUNT(*) FROM paper_position WHERE opened_at >= ? AND wallet = ?",
+            (day_start, wallet),
         ) as cur:
             row = await cur.fetchone()
     return int(row[0]) if row and row[0] is not None else 0
@@ -2610,9 +2716,20 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
     for contract in candidates:
         if opened >= to_open:
             break
-        if len(await get_open_positions()) >= MAX_POSITIONS:
+        # 27/07 -- 3-pocket architecture plan: this diagnostic floor always books
+        # into "swing" (see the wallet="swing" comment on open_position() below),
+        # so both checks here must be scoped to "swing" too -- left unscoped,
+        # under gate ON a candidate legitimately already open in a DIFFERENT
+        # pocket (scalping/vc) would (a) silently inflate this count-based cap
+        # with positions this cycle never touches, and worse (b) make
+        # has_open(contract) hit the multi-pocket ambiguity guard in _get_open
+        # (RuntimeError) as soon as 2+ pockets happen to already hold the same
+        # contract -- crashing this cycle for a candidate it hasn't even
+        # evaluated yet. Gate OFF: byte-for-byte unchanged (only "swing" ever
+        # holds a position, get_open_positions(wallet="swing") == get_open_positions()).
+        if len(await get_open_positions(wallet="swing")) >= MAX_POSITIONS:
             break
-        if await has_open(contract):
+        if await has_open(contract, wallet="swing"):
             continue
         try:
             sig = await analyzer(contract)
@@ -2639,6 +2756,12 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             contract,
             sig.get("symbol", ""),
             price,
+            # 27/07 -- this diagnostic floor cycle is a wholly separate
+            # mechanism (see its own module docstring) never touched by the
+            # 3-pocket architecture plan -- always books into "swing" (the
+            # single pocket this cycle has ever traded into), regardless of
+            # ``multi_pocket_sourcing_enabled()``.
+            wallet="swing",
             target_price=sig.get("target"),
             invalidation_price=sig.get("invalidation"),
             alloc_usd=entry_alloc,
@@ -3061,6 +3184,325 @@ def compute_entry_alloc(
     regime_mult = risk_guard.regime_size_multiplier(sig.get("regime"))
     entry_alloc_usd = base_alloc_usd * risk_state.alloc_multiplier * pacing_mult * regime_mult
     return entry_alloc_usd, conviction_tier
+
+
+async def _open_new_entries_for_wallet(
+    wallet: str,
+    candidates: list[str],
+    analyzer,
+    *,
+    price_lookup,
+    notifier,
+    max_new: int,
+    using_default_price_lookup: bool,
+    closed_this_cycle: set[str],
+    weekly_context: dict | None,
+    risk_state,
+    discovery_channel: str | None,
+    trading_mode: str,
+    max_positions_cap: int | None,
+    funnel: dict[str, int],
+) -> tuple[list[dict], int]:
+    """Opens new positions for ONE pocket/wallet -- extracted (27/07, 3-pocket
+    architecture plan, Phase 2) from ``_run_paper_cycle_locked``'s inline "2)
+    Open new positions" block, UNCHANGED decision logic (loss-streak guard,
+    re-entry conviction multiplier, freshness re-check / limit-order fallback,
+    sizing via ``compute_entry_alloc``, bonding size reduction, funnel/
+    counterfactual tracking, position opening, buy alert) -- a pure extraction,
+    never a simplification, so the SAME loop can run once (gate OFF, today's
+    single-wallet behavior) or 3 times independently (gate ON, one call per
+    pocket -- never mixing candidates/analyzers across pockets).
+
+    ``wallet``: every ``get_open_positions``/``has_open``/``open_position``
+    call below is scoped to THIS pocket -- the same contract already open in
+    a DIFFERENT pocket never blocks or counts against this one.
+
+    ``max_positions_cap`` (``None`` = unlimited, same doctrine as today's
+    scalping-mode bypass): the CALLER decides which cap applies to THIS
+    wallet -- today's ``trading_mode``-driven ``MAX_POSITIONS``/unlimited
+    choice for the single legacy "swing" pocket under gate OFF, or one of
+    ``MAX_POSITIONS_VC``/``_SWING``/``_SCALPING`` per pocket under gate ON.
+    Decoupled from ``trading_mode`` on purpose (it used to be derived from it
+    inline) -- ``trading_mode`` here only still feeds the per-contract
+    loss-streak threshold below (unchanged), never the position-count cap.
+
+    ``funnel`` is mutated IN PLACE by the caller so that multiple calls
+    (multi-pocket, gate ON) merge into ONE combined report/persistence,
+    rather than 3 separate funnels -- the reason-code keys are shared, pocket
+    attribution is preserved on each individual opened position via its own
+    persisted ``wallet`` field instead.
+
+    Returns ``(opened_positions, opened_count)``."""
+    from aria_core import bonding_entry as _bonding_entry
+    from aria_core import counterfactual_tracker
+    from aria_core import limit_orders
+
+    start = await starting_capital(wallet=wallet)
+    opened_positions: list[dict] = []
+    opened = 0
+    for contract in candidates:
+        if opened >= max_new:
+            break
+        # Item #101 (26/07), operator explicit decision: no position-count cap
+        # in scalping mode -- "laisse libre, voyons comment ARIA trade sans la
+        # force" -- observe the naturally-occurring behavior rather than
+        # constraining it. Real cash availability (checked inside
+        # open_position) remains the natural brake. Unchanged for "standard".
+        if max_positions_cap is not None and len(await get_open_positions(wallet=wallet)) >= max_positions_cap:
+            break
+        if contract in closed_this_cycle:
+            continue
+        if await has_open(contract, wallet=wallet):
+            continue
+        try:
+            sig = await analyzer(contract)
+        except Exception as exc:  # noqa: BLE001 — a crashing analysis doesn't stop the cycle
+            logger.info("paper_cycle: analysis %s failed (%s)", contract, exc)
+            funnel["analyzer_error"] = funnel.get("analyzer_error", 0) + 1
+            continue
+        if not sig:
+            funnel["no_price_data"] = funnel.get("no_price_data", 0) + 1
+            continue
+        if sig.get("action") != "BUY":
+            reason_code = sig.get("hold_reason") or "unspecified"
+            funnel[reason_code] = funnel.get(reason_code, 0) + 1
+            # 07/20 -- #176 (learning track b): same choke point as the funnel
+            # above (already THE only place that sees every HOLD, momentum
+            # AND websocket -- momentum_websocket.py routes through this same
+            # run_paper_cycle). Filter/gate already applied INSIDE
+            # record_rejection (reasons with no useful counterfactual
+            # discarded, never gated here -- passive logging, no network call).
+            await counterfactual_tracker.record_rejection(
+                contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                reason_code, sig.get("price"),
+            )
+            continue
+
+        # 07/20 -- surgical guard BEFORE the informative re-entry note below:
+        # beyond MAX_CONSECUTIVE_LOSSES_PER_CONTRACT consecutive losses on
+        # THIS specific contract, the 07/19 relaxed re-entry is suspended for
+        # it (never for another token, never risk_guard's global circuit breaker).
+        # Item #101 (26/07): looser threshold in scalping mode -- see
+        # SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT's comment. 27/07 -- this
+        # threshold is intentionally NOT wallet-scoped (``_consecutive_losses_
+        # for_contract`` reads the contract's history across ALL pockets) --
+        # a repeated-failure pattern on a contract is a fact about the
+        # CONTRACT, not about which pocket happened to hold it.
+        loss_streak = await _consecutive_losses_for_contract(contract)
+        loss_streak_threshold = (
+            SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT if trading_mode == "scalping"
+            else MAX_CONSECUTIVE_LOSSES_PER_CONTRACT
+        )
+        if loss_streak >= loss_streak_threshold:
+            funnel["contract_loss_streak"] = funnel.get("contract_loss_streak", 0) + 1
+            await counterfactual_tracker.record_rejection(
+                contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                "contract_loss_streak", sig.get("price"),
+            )
+            continue
+
+        # 07/24 -- direct operator observation (real AERO position, sell then
+        # rebuy in quick succession, flagged as suspect): a fresh signal on a
+        # contract just exited on "invalidation" must show meaningfully HIGHER
+        # conviction (>= 2x the RR that was already invalidated), never just
+        # match or barely beat it -- otherwise this is the same weak setup
+        # re-entering on noise, not a genuinely new opportunity.
+        last_invalidation_rr = await _last_invalidation_exit_rr(contract)
+        if last_invalidation_rr is not None:
+            new_rr = sig.get("rr")
+            if new_rr is None or new_rr < last_invalidation_rr * REENTRY_INVALIDATION_CONVICTION_MULTIPLIER:
+                funnel["invalidation_reentry_insufficient_conviction"] = (
+                    funnel.get("invalidation_reentry_insufficient_conviction", 0) + 1
+                )
+                await counterfactual_tracker.record_rejection(
+                    contract, sig.get("chain") or "base", sig.get("symbol", ""),
+                    "invalidation_reentry_insufficient_conviction", sig.get("price"),
+                )
+                continue
+
+        # 07/19 -- relaxed (explicit operator decision, see comment on the old
+        # REENTRY_RR_MIN above): a contract already closed becomes a
+        # candidate like any other as soon as a new BUY signal comes up -- no
+        # extra bar. Informative note only (thesis traceability), never a filter.
+        if await _has_prior_close(contract):
+            sig.setdefault("reasons", []).append(
+                "re-entrée -- ce contrat a déjà eu une position clôturée précédemment"
+            )
+
+        price = sig.get("price")
+        if not price:
+            try:
+                if using_default_price_lookup:
+                    price = await price_lookup(contract, chain=sig.get("chain") or "base")
+                else:
+                    price = await price_lookup(contract)
+            except Exception:  # noqa: BLE001
+                price = None
+        if not price or price <= 0:
+            continue
+        # 07/18 -- explicit operator decision ("more aggressive" = bigger on
+        # the BEST setups, not bigger everywhere). 07/19 -- potential_score
+        # (conviction_research.py): None if fundamental diligence found
+        # nothing/is disabled -- fail-open on unknown, never blocks the
+        # technical bonus alone. volume_confirmed
+        # (momentum_entry._check_volume_confirmation, Gemini cross-review):
+        # False -> conviction penalty, None/True -> no effect.
+        #
+        # 07/20 -- HYBRID risk-target/ATR sizing (Gemini cross-review round
+        # 7): when ``entry_atr_pct`` is known, the conviction stage's risk
+        # budget (``conviction_risk_budget_pct``) is divided by the REAL width
+        # of the trailing stop for THIS token (same ``_effective_trail_pct``
+        # function as position management -- never a separately recomputed
+        # width, which could diverge). Falls back to the old fixed-stage
+        # system (``conviction_size_multiplier``) if ``entry_atr_pct`` is
+        # unknown (analyzer that doesn't provide it, e.g. the old dormant
+        # VC-thesis pilot) -- never a risk budget computed on an invented
+        # stop width.
+        #
+        # 07/20 (continued, real bug found while answering an operator
+        # question about market-cap proportionality): the cap must NOT be the
+        # absolute maximum (5%) for ALL stages -- a shared ceiling let a
+        # MODERATE or WEAK signal on a tight stop reach the same stake as a
+        # STRONG signal (as soon as the stop falls below ~20%/10%
+        # respectively), reversing the very intent of the conviction stages.
+        # EACH stage's cap must stay the one from the old fixed-stage system
+        # (5%/3.5%/2%) -- ``conviction_mult`` computed once below and reused
+        # for BOTH paths (risk/ATR sizing cap, AND the fallback's direct
+        # multiplier) guarantees the new system can never exceed what the old
+        # one would have given for this SAME stage -- only reduce below it,
+        # never level it up.
+        # 07/23 -- sizing extracted to ``compute_entry_alloc`` (limit-order
+        # mechanism, see below) -- same formula/thresholds as before
+        # extraction, reused as-is by a limit-order trigger with fresh
+        # context.
+        entry_alloc_usd, conviction_tier = compute_entry_alloc(sig, start, weekly_context, risk_state)
+        # 24/07, bonding-entry chantier: extra reduction on top of the
+        # standard risk/ATR sizing -- structurally higher risk on this path
+        # (no honeypot-class check exists for a bonding-curve token, see
+        # bonding_entry.py's own docstring), operator-requested caution.
+        if sig.get("chain") == _bonding_entry.CHAIN_MARKER:
+            entry_alloc_usd *= _bonding_entry.BONDING_SIZE_REDUCTION
+
+        # 07/20 -- freshness re-check right before execution (Gemini
+        # cross-review, see _fresh_rr/_execution_rr_still_valid above):
+        # ``price`` above was captured at the very start of the evaluation
+        # (before honeypot/holder concentration/OHLCV cascade/up to 2
+        # sequential LLM calls) -- on a volatile token, several seconds may
+        # have passed. R/R is recomputed at the REAL price rather than
+        # rejecting on a simple % move (root cause detailed in _fresh_rr's
+        # comment) -- a setup still good at the fresh price executes, a
+        # degraded setup passes to the next round (never forced on stale data
+        # or an R/R that no longer holds).
+        try:
+            if using_default_price_lookup:
+                fresh_price = await price_lookup(contract, chain=sig.get("chain") or "base")
+            else:
+                fresh_price = await price_lookup(contract)
+        except Exception:  # noqa: BLE001 — a network failure must never crash the cycle
+            fresh_price = None
+        fresh_rr = _fresh_rr(fresh_price, sig.get("target"), sig.get("invalidation"))
+        if not _execution_rr_still_valid(sig.get("rr"), fresh_rr):
+            funnel["price_stale_at_execution"] = funnel.get("price_stale_at_execution", 0) + 1
+            # 07/23 -- limit-order mechanism: a plain reject here silently
+            # drops a setup that only got MORE EXPENSIVE since the signal was
+            # detected (price drifted upward during honeypot/OHLCV/LLM
+            # analysis), not a DEAD one -- the exact CHECK case (0.038 signal
+            # price -> 0.044 execution price). ``should_place_limit_order``
+            # draws the line explicitly: a structure already broken (price
+            # through the invalidation) is still rejected outright below,
+            # never turned into a limit order on a dead setup.
+            if limit_orders.should_place_limit_order(price, fresh_price, sig.get("invalidation")):
+                try:
+                    # 27/07 -- 3-pocket architecture plan: scoped to THIS pocket,
+                    # same reasoning as has_open/open_position above -- a pending
+                    # limit order already placed by a DIFFERENT pocket on the same
+                    # contract must never block this one, and a triggered order
+                    # must remember (and later execute into) the SAME pocket that
+                    # detected it. wallet="swing" implicitly under gate OFF (this
+                    # function is only ever called with wallet="swing" there).
+                    if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
+                        order = await limit_orders.create_pending_order(
+                            contract, sig.get("chain") or "base", sig.get("symbol", ""), price, sig,
+                            wallet=wallet,
+                        )
+                        if notifier:
+                            await notifier(limit_orders.format_limit_order_placed_alert(order))
+                except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
+                    logger.info("paper_cycle: could not place limit order for %s (%s)", contract, exc)
+            continue
+        # ``fresh_price`` is guaranteed valid here in real operation
+        # (``_fresh_rr`` returns None on a missing/invalid price, so
+        # ``_execution_rr_still_valid`` would already have fail-closed above)
+        # -- this guard only protects against an explicitly neutralized
+        # ``_execution_rr_still_valid`` (tests dedicated to sizing, unrelated
+        # to this specific guard), never reached in production.
+        if fresh_price and fresh_price > 0:
+            price = fresh_price
+
+        pos = await open_position(
+            contract,
+            sig.get("symbol", ""),
+            price,
+            wallet=wallet,
+            target_price=sig.get("target"),
+            invalidation_price=sig.get("invalidation"),
+            alloc_usd=entry_alloc_usd,
+            category=sig.get("category", ""),
+            entry_security_json=sig.get("entry_security_json", ""),
+            chain=sig.get("chain") or "base",
+            # bug found on 07/17: ``sig.get("these")`` alone only covered the
+            # old VC-thesis analyzer (_default_analyzer, "these" key) -- the
+            # momentum analyzer (#194, evaluate_momentum_entry) builds a real
+            # "reasons" list (golden pocket/RSI setup, technical alignment,
+            # R/R) but never sets "these", so `thesis` silently stayed None on
+            # every momentum trade.
+            thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
+            pool_liquidity_usd=sig.get("liquidity_usd"),
+            entry_atr_pct=sig.get("entry_atr_pct"),
+            # 07/20 -- Formula B: the exit discipline applied depends on the
+            # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),
+            # never an independent flag. "momentum" by default -- unchanged
+            # behavior for any analyzer that doesn't provide this field.
+            strategy=sig.get("strategy") or "momentum",
+            # 07/20 -- Regime Switch: macro regime at entry, locked for the
+            # life of the position (ratcheted in management, see below).
+            entry_regime=sig.get("regime"),
+            # 07/22 -- task #4: snapshot of the deployer wallet at entry --
+            # None for any analyzer that doesn't provide it (e.g. momentum,
+            # which has no such concept), never an invented value.
+            entry_dev_sold_pct=sig.get("dev_sold_pct"),
+            # 07/23 -- performance-breakdown tracking (operator request):
+            # purely observational, never used to size or gate this position.
+            rr=sig.get("rr"),
+            align_score=sig.get("align_score"),
+            conviction_tier=conviction_tier,
+            rvol_multiple=sig.get("rvol_multiple"),
+            discovery_channel=discovery_channel,
+            conviction_process_trail=sig.get("conviction_process_trail"),
+            conviction_website_corroborated=sig.get("conviction_website_corroborated"),
+            conviction_posting_cadence=sig.get("conviction_posting_cadence"),
+            liquidity_rotation_score=sig.get("liquidity_rotation_score"),
+            liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
+            liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
+            # Item #101 (26/07): the entry mode the signal was sourced under
+            # ("standard"/"scalping") -- persisted on the position and used
+            # below to keep MAX_POSITIONS defense-in-depth check consistent
+            # with the cycle-level bypass above.
+            mode=sig.get("mode") or "standard",
+            # Item #101 (26/07): golden pocket bounds -- see open_position's docstring.
+            gp_low=sig.get("gp_low"),
+            gp_high=sig.get("gp_high"),
+        )
+        if pos:
+            opened += 1
+            opened_positions.append(pos)
+            if notifier:
+                try:
+                    await notifier(format_buy_alert(pos))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    return opened_positions, opened
 
 
 async def run_paper_cycle(
@@ -3766,327 +4208,174 @@ async def _run_paper_cycle_locked(
     # pipeline for THIS TEST -- explicit, reversible operator decision,
     # screened_pool/safety_screen untouched. Any caller providing ITS OWN
     # candidates or analyzer keeps unchanged historical behavior.
-    if candidates is None and analyzer is None:
-        candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
-        analyzer = _default_momentum_analyzer(
-            _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-            mode=trading_mode,
-        )
-    elif candidates is None:
+    #
+    # 27/07 -- 3-pocket architecture plan, Phase 2 (gate
+    # ``multi_pocket_sourcing_enabled()``): the 3-way split below ONLY replaces
+    # this SAME default heartbeat case (candidates=None AND analyzer=None) --
+    # same scoping precedent as the #194 pivot comment right above (a caller
+    # providing its own candidates/analyzer, e.g. momentum_websocket.py's
+    # real-time drain or any test, keeps its unchanged single-pocket
+    # behavior regardless of this gate, always booking into "swing" as
+    # before -- multi-pocket sourcing never overrides an explicit caller's
+    # own candidate/analyzer choice).
+    default_sourcing = candidates is None and analyzer is None
+    funnel: dict[str, int] = {}
+
+    if multi_pocket_sourcing_enabled() and default_sourcing:
+        # gate ON, default heartbeat case: 3 independent pockets (scalping/
+        # swing/vc), NEVER mixing candidates/analyzers across them. Momentum
+        # discovery (#194) is fetched ONCE and shared by scalping+swing (same
+        # real-world scan, only the analyzer's ``mode`` differs) -- never a
+        # duplicated network call for the same discovery pass.
+        momentum_candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
         from aria_core.skills.candidate_ranking import top_candidates
 
-        candidates = [c.contract for c in await top_candidates(20)]
+        vc_candidates = [c.contract for c in await top_candidates(20)]
 
-    # Nothing to buy -> no need to check the depeg (avoids a needless network
-    # call every cycle, including when no candidate is proposed this round).
-    depeg_pct = None
-    depegged = False
-    if candidates:
-        depeg_check = depeg_check or risk.usdc_depeg_pct
-        try:
-            depeg_pct = await depeg_check()
-        except Exception as exc:  # noqa: BLE001
-            logger.info("paper_cycle: USDC depeg check failed (%s)", exc)
-            depeg_pct = None
-        depegged = depeg_pct is not None and depeg_pct > risk.USDC_DEPEG_THRESHOLD_PCT
-    actions["usdc_depeg_pct"] = depeg_pct
-    actions["depeg_blocked"] = depegged
-
-    if depegged:
-        logger.warning(
-            "paper_cycle: USDC depegged %.2f%% (> threshold %.2f%%) -- new entries blocked this cycle",
-            (depeg_pct or 0.0) * 100, risk.USDC_DEPEG_THRESHOLD_PCT * 100,
-        )
-        return actions
-
-    analyzer = analyzer or _default_analyzer
-    # We don't re-enter a name we just EXITED this round (avoids churn: an
-    # exit on trailing stop/last stage requires a new signal on the next
-    # round, not an immediate rebuy).
-    closed_this_cycle = {c["contract"] for c in actions["closed"]}
-    start = await starting_capital()
-    # #186 -- soft threshold: halves the allocation of NEW entries (never
-    # already-open positions) via ``risk_state.alloc_multiplier``, composed
-    # further below with the risk/ATR sizing (or its fixed-stage fallback).
-    # open_position THEN applies its own per-trade risk cap (defense in
-    # depth, see size_position_by_risk).
-
-    # Per-cycle funnel (mandate #192, 07/16): aggregates WHY each evaluated
-    # candidate didn't lead to a buy. Without this, a prolonged outage of the
-    # sole hard guardrail (GoPlus, no fallback -- see momentum_entry.py)
-    # produces exactly the same observable symptom (zero new positions) as a
-    # market genuinely without a valid candidate -- indistinguishable without
-    # reading application logs one by one, which defeats the diagnostic
-    # purpose of the $1M test (understand HOW ARIA trades, not just WHETHER
-    # she trades). Purely additive: changes no decision behavior, only
-    # visibility. The ``hold_reason`` field (momentum_entry.py) feeds this
-    # counter; an analyzer that doesn't provide it (e.g. the historical
-    # VC-thesis pilot, ``_default_analyzer``) falls into the generic
-    # "unspecified" bucket, without error.
-    funnel: dict[str, int] = {}
-    opened = 0
-    for contract in candidates:
-        if opened >= max_new:
-            break
-        # Item #101 (26/07), operator explicit decision: no position-count cap
-        # in scalping mode -- "laisse libre, voyons comment ARIA trade sans la
-        # force" -- observe the naturally-occurring behavior rather than
-        # constraining it. Real cash availability (checked inside
-        # open_position) remains the natural brake. Unchanged for "standard".
-        if trading_mode != "scalping" and len(await get_open_positions()) >= MAX_POSITIONS:
-            break
-        if contract in closed_this_cycle:
-            continue
-        if await has_open(contract):
-            continue
-        try:
-            sig = await analyzer(contract)
-        except Exception as exc:  # noqa: BLE001 — a crashing analysis doesn't stop the cycle
-            logger.info("paper_cycle: analysis %s failed (%s)", contract, exc)
-            funnel["analyzer_error"] = funnel.get("analyzer_error", 0) + 1
-            continue
-        if not sig:
-            funnel["no_price_data"] = funnel.get("no_price_data", 0) + 1
-            continue
-        if sig.get("action") != "BUY":
-            reason_code = sig.get("hold_reason") or "unspecified"
-            funnel[reason_code] = funnel.get(reason_code, 0) + 1
-            # 07/20 -- #176 (learning track b): same choke point as the funnel
-            # above (already THE only place that sees every HOLD, momentum
-            # AND websocket -- momentum_websocket.py routes through this same
-            # run_paper_cycle). Filter/gate already applied INSIDE
-            # record_rejection (reasons with no useful counterfactual
-            # discarded, never gated here -- passive logging, no network call).
-            from aria_core import counterfactual_tracker
-
-            await counterfactual_tracker.record_rejection(
-                contract, sig.get("chain") or "base", sig.get("symbol", ""),
-                reason_code, sig.get("price"),
-            )
-            continue
-
-        # 07/20 -- surgical guard BEFORE the informative re-entry note below:
-        # beyond MAX_CONSECUTIVE_LOSSES_PER_CONTRACT consecutive losses on
-        # THIS specific contract, the 07/19 relaxed re-entry is suspended for
-        # it (never for another token, never risk_guard's global circuit breaker).
-        # Item #101 (26/07): looser threshold in scalping mode -- see
-        # SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT's comment.
-        loss_streak = await _consecutive_losses_for_contract(contract)
-        loss_streak_threshold = (
-            SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT if trading_mode == "scalping"
-            else MAX_CONSECUTIVE_LOSSES_PER_CONTRACT
-        )
-        if loss_streak >= loss_streak_threshold:
-            funnel["contract_loss_streak"] = funnel.get("contract_loss_streak", 0) + 1
-            from aria_core import counterfactual_tracker
-
-            await counterfactual_tracker.record_rejection(
-                contract, sig.get("chain") or "base", sig.get("symbol", ""),
-                "contract_loss_streak", sig.get("price"),
-            )
-            continue
-
-        # 07/24 -- direct operator observation (real AERO position, sell then
-        # rebuy in quick succession, flagged as suspect): a fresh signal on a
-        # contract just exited on "invalidation" must show meaningfully HIGHER
-        # conviction (>= 2x the RR that was already invalidated), never just
-        # match or barely beat it -- otherwise this is the same weak setup
-        # re-entering on noise, not a genuinely new opportunity.
-        last_invalidation_rr = await _last_invalidation_exit_rr(contract)
-        if last_invalidation_rr is not None:
-            new_rr = sig.get("rr")
-            if new_rr is None or new_rr < last_invalidation_rr * REENTRY_INVALIDATION_CONVICTION_MULTIPLIER:
-                funnel["invalidation_reentry_insufficient_conviction"] = (
-                    funnel.get("invalidation_reentry_insufficient_conviction", 0) + 1
-                )
-                from aria_core import counterfactual_tracker
-
-                await counterfactual_tracker.record_rejection(
-                    contract, sig.get("chain") or "base", sig.get("symbol", ""),
-                    "invalidation_reentry_insufficient_conviction", sig.get("price"),
-                )
-                continue
-
-        # 07/19 -- relaxed (explicit operator decision, see comment on the old
-        # REENTRY_RR_MIN above): a contract already closed becomes a
-        # candidate like any other as soon as a new BUY signal comes up -- no
-        # extra bar. Informative note only (thesis traceability), never a filter.
-        if await _has_prior_close(contract):
-            sig.setdefault("reasons", []).append(
-                "re-entrée -- ce contrat a déjà eu une position clôturée précédemment"
-            )
-
-        price = sig.get("price")
-        if not price:
+        # Nothing to buy anywhere -> no need to check the depeg (same
+        # avoidance of a needless network call as the single-pocket path
+        # below). A single depeg check/verdict applies to ALL 3 pockets --
+        # this whole portfolio's (all pockets') pricing assumes a stable USD.
+        depeg_pct = None
+        depegged = False
+        if momentum_candidates or vc_candidates:
+            depeg_check = depeg_check or risk.usdc_depeg_pct
             try:
-                if using_default_price_lookup:
-                    price = await price_lookup(contract, chain=sig.get("chain") or "base")
-                else:
-                    price = await price_lookup(contract)
-            except Exception:  # noqa: BLE001
-                price = None
-        if not price or price <= 0:
-            continue
-        # 07/18 -- explicit operator decision ("more aggressive" = bigger on
-        # the BEST setups, not bigger everywhere). 07/19 -- potential_score
-        # (conviction_research.py): None if fundamental diligence found
-        # nothing/is disabled -- fail-open on unknown, never blocks the
-        # technical bonus alone. volume_confirmed
-        # (momentum_entry._check_volume_confirmation, Gemini cross-review):
-        # False -> conviction penalty, None/True -> no effect.
-        #
-        # 07/20 -- HYBRID risk-target/ATR sizing (Gemini cross-review round
-        # 7): when ``entry_atr_pct`` is known, the conviction stage's risk
-        # budget (``conviction_risk_budget_pct``) is divided by the REAL width
-        # of the trailing stop for THIS token (same ``_effective_trail_pct``
-        # function as position management -- never a separately recomputed
-        # width, which could diverge). Falls back to the old fixed-stage
-        # system (``conviction_size_multiplier``) if ``entry_atr_pct`` is
-        # unknown (analyzer that doesn't provide it, e.g. the old dormant
-        # VC-thesis pilot) -- never a risk budget computed on an invented
-        # stop width.
-        #
-        # 07/20 (continued, real bug found while answering an operator
-        # question about market-cap proportionality): the cap must NOT be the
-        # absolute maximum (5%) for ALL stages -- a shared ceiling let a
-        # MODERATE or WEAK signal on a tight stop reach the same stake as a
-        # STRONG signal (as soon as the stop falls below ~20%/10%
-        # respectively), reversing the very intent of the conviction stages.
-        # EACH stage's cap must stay the one from the old fixed-stage system
-        # (5%/3.5%/2%) -- ``conviction_mult`` computed once below and reused
-        # for BOTH paths (risk/ATR sizing cap, AND the fallback's direct
-        # multiplier) guarantees the new system can never exceed what the old
-        # one would have given for this SAME stage -- only reduce below it,
-        # never level it up.
-        # 07/23 -- sizing extracted to ``compute_entry_alloc`` (limit-order
-        # mechanism, see below) -- same formula/thresholds as before
-        # extraction, reused as-is by a limit-order trigger with fresh
-        # context.
-        entry_alloc_usd, conviction_tier = compute_entry_alloc(sig, start, weekly_context, risk_state)
-        # 24/07, bonding-entry chantier: extra reduction on top of the
-        # standard risk/ATR sizing -- structurally higher risk on this path
-        # (no honeypot-class check exists for a bonding-curve token, see
-        # bonding_entry.py's own docstring), operator-requested caution.
-        from aria_core import bonding_entry as _bonding_entry
+                depeg_pct = await depeg_check()
+            except Exception as exc:  # noqa: BLE001
+                logger.info("paper_cycle: USDC depeg check failed (%s)", exc)
+                depeg_pct = None
+            depegged = depeg_pct is not None and depeg_pct > risk.USDC_DEPEG_THRESHOLD_PCT
+        actions["usdc_depeg_pct"] = depeg_pct
+        actions["depeg_blocked"] = depegged
 
-        if sig.get("chain") == _bonding_entry.CHAIN_MARKER:
-            entry_alloc_usd *= _bonding_entry.BONDING_SIZE_REDUCTION
+        if depegged:
+            logger.warning(
+                "paper_cycle: USDC depegged %.2f%% (> threshold %.2f%%) -- new entries blocked "
+                "this cycle (all pockets)",
+                (depeg_pct or 0.0) * 100, risk.USDC_DEPEG_THRESHOLD_PCT * 100,
+            )
+            return actions
 
-        # 07/20 -- freshness re-check right before execution (Gemini
-        # cross-review, see _fresh_rr/_execution_rr_still_valid above):
-        # ``price`` above was captured at the very start of the evaluation
-        # (before honeypot/holder concentration/OHLCV cascade/up to 2
-        # sequential LLM calls) -- on a volatile token, several seconds may
-        # have passed. R/R is recomputed at the REAL price rather than
-        # rejecting on a simple % move (root cause detailed in _fresh_rr's
-        # comment) -- a setup still good at the fresh price executes, a
-        # degraded setup passes to the next round (never forced on stale data
-        # or an R/R that no longer holds).
-        try:
-            if using_default_price_lookup:
-                fresh_price = await price_lookup(contract, chain=sig.get("chain") or "base")
-            else:
-                fresh_price = await price_lookup(contract)
-        except Exception:  # noqa: BLE001 — a network failure must never crash the cycle
-            fresh_price = None
-        fresh_rr = _fresh_rr(fresh_price, sig.get("target"), sig.get("invalidation"))
-        if not _execution_rr_still_valid(sig.get("rr"), fresh_rr):
-            funnel["price_stale_at_execution"] = funnel.get("price_stale_at_execution", 0) + 1
-            # 07/23 -- limit-order mechanism: a plain reject here silently
-            # drops a setup that only got MORE EXPENSIVE since the signal was
-            # detected (price drifted upward during honeypot/OHLCV/LLM
-            # analysis), not a DEAD one -- the exact CHECK case (0.038 signal
-            # price -> 0.044 execution price). ``should_place_limit_order``
-            # draws the line explicitly: a structure already broken (price
-            # through the invalidation) is still rejected outright below,
-            # never turned into a limit order on a dead setup.
-            from aria_core import limit_orders
+        # We don't re-enter a name we just EXITED this round (avoids churn: an
+        # exit on trailing stop/last stage requires a new signal on the next
+        # round, not an immediate rebuy) -- shared across all 3 pockets, same
+        # as the single-pocket path below.
+        closed_this_cycle = {c["contract"] for c in actions["closed"]}
 
-            if limit_orders.should_place_limit_order(price, fresh_price, sig.get("invalidation")):
-                try:
-                    if not await limit_orders.has_active_order(contract, sig.get("chain") or "base"):
-                        order = await limit_orders.create_pending_order(
-                            contract, sig.get("chain") or "base", sig.get("symbol", ""), price, sig,
-                        )
-                        if notifier:
-                            await notifier(limit_orders.format_limit_order_placed_alert(order))
-                except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
-                    logger.info("paper_cycle: could not place limit order for %s (%s)", contract, exc)
-            continue
-        # ``fresh_price`` is guaranteed valid here in real operation
-        # (``_fresh_rr`` returns None on a missing/invalid price, so
-        # ``_execution_rr_still_valid`` would already have fail-closed above)
-        # -- this guard only protects against an explicitly neutralized
-        # ``_execution_rr_still_valid`` (tests dedicated to sizing, unrelated
-        # to this specific guard), never reached in production.
-        if fresh_price and fresh_price > 0:
-            price = fresh_price
-
-        pos = await open_position(
-            contract,
-            sig.get("symbol", ""),
-            price,
-            target_price=sig.get("target"),
-            invalidation_price=sig.get("invalidation"),
-            alloc_usd=entry_alloc_usd,
-            category=sig.get("category", ""),
-            entry_security_json=sig.get("entry_security_json", ""),
-            chain=sig.get("chain") or "base",
-            # bug found on 07/17: ``sig.get("these")`` alone only covered the
-            # old VC-thesis analyzer (_default_analyzer, "these" key) -- the
-            # momentum analyzer (#194, evaluate_momentum_entry) builds a real
-            # "reasons" list (golden pocket/RSI setup, technical alignment,
-            # R/R) but never sets "these", so `thesis` silently stayed None on
-            # every momentum trade.
-            thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
-            pool_liquidity_usd=sig.get("liquidity_usd"),
-            entry_atr_pct=sig.get("entry_atr_pct"),
-            # 07/20 -- Formula B: the exit discipline applied depends on the
-            # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),
-            # never an independent flag. "momentum" by default -- unchanged
-            # behavior for any analyzer that doesn't provide this field.
-            strategy=sig.get("strategy") or "momentum",
-            # 07/20 -- Regime Switch: macro regime at entry, locked for the
-            # life of the position (ratcheted in management, see below).
-            entry_regime=sig.get("regime"),
-            # 07/22 -- task #4: snapshot of the deployer wallet at entry --
-            # None for any analyzer that doesn't provide it (e.g. momentum,
-            # which has no such concept), never an invented value.
-            entry_dev_sold_pct=sig.get("dev_sold_pct"),
-            # 07/23 -- performance-breakdown tracking (operator request):
-            # purely observational, never used to size or gate this position.
-            rr=sig.get("rr"),
-            align_score=sig.get("align_score"),
-            conviction_tier=conviction_tier,
-            rvol_multiple=sig.get("rvol_multiple"),
-            discovery_channel=discovery_channel,
-            conviction_process_trail=sig.get("conviction_process_trail"),
-            conviction_website_corroborated=sig.get("conviction_website_corroborated"),
-            conviction_posting_cadence=sig.get("conviction_posting_cadence"),
-            liquidity_rotation_score=sig.get("liquidity_rotation_score"),
-            liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
-            liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
-            # Item #101 (26/07): the entry mode the signal was sourced under
-            # ("standard"/"scalping") -- persisted on the position and used
-            # below to keep MAX_POSITIONS defense-in-depth check consistent
-            # with the cycle-level bypass above.
-            mode=sig.get("mode") or "standard",
-            # Item #101 (26/07): golden pocket bounds -- see open_position's docstring.
-            gp_low=sig.get("gp_low"),
-            gp_high=sig.get("gp_high"),
+        scalping_analyzer = _default_momentum_analyzer(
+            _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+            mode="scalping",
         )
-        if pos:
-            opened += 1
-            actions["opened"].append(pos)
-            if notifier:
-                try:
-                    await notifier(format_buy_alert(pos))
-                except Exception:  # noqa: BLE001
-                    pass
+        swing_analyzer = _default_momentum_analyzer(
+            _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+            mode="standard",
+        )
+
+        # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)
+        for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
+            ("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),
+            ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
+            ("vc", vc_candidates, _default_analyzer, "standard", MAX_POSITIONS_VC),
+        ):
+            opened_positions, _ = await _open_new_entries_for_wallet(
+                pocket_wallet, pocket_candidates, pocket_analyzer,
+                price_lookup=price_lookup, notifier=notifier, max_new=max_new,
+                using_default_price_lookup=using_default_price_lookup,
+                closed_this_cycle=closed_this_cycle, weekly_context=weekly_context,
+                risk_state=risk_state, discovery_channel=discovery_channel,
+                trading_mode=pocket_mode, max_positions_cap=pocket_cap,
+                funnel=funnel,
+            )
+            actions["opened"].extend(opened_positions)
+        # momentum_candidates is walked TWICE (once per pocket sharing it,
+        # scalping+swing) -- reflects the real evaluation count, not just the
+        # distinct-candidate count, for this purely informational log line.
+        total_candidates_evaluated = 2 * len(momentum_candidates) + len(vc_candidates)
+    else:
+        # gate OFF (default), OR a caller explicitly provided its own
+        # candidates/analyzer: EXACT historical single-pocket behavior --
+        # everything below is byte-for-byte unchanged from before this
+        # chantier, just now passing wallet="swing" explicitly to
+        # ``_open_new_entries_for_wallet`` (the only new wiring needed to
+        # keep working under ``open_position``'s new mandatory ``wallet`` param).
+        if candidates is None and analyzer is None:
+            candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
+            analyzer = _default_momentum_analyzer(
+                _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+                mode=trading_mode,
+            )
+        elif candidates is None:
+            from aria_core.skills.candidate_ranking import top_candidates
+
+            candidates = [c.contract for c in await top_candidates(20)]
+
+        # Nothing to buy -> no need to check the depeg (avoids a needless network
+        # call every cycle, including when no candidate is proposed this round).
+        depeg_pct = None
+        depegged = False
+        if candidates:
+            depeg_check = depeg_check or risk.usdc_depeg_pct
+            try:
+                depeg_pct = await depeg_check()
+            except Exception as exc:  # noqa: BLE001
+                logger.info("paper_cycle: USDC depeg check failed (%s)", exc)
+                depeg_pct = None
+            depegged = depeg_pct is not None and depeg_pct > risk.USDC_DEPEG_THRESHOLD_PCT
+        actions["usdc_depeg_pct"] = depeg_pct
+        actions["depeg_blocked"] = depegged
+
+        if depegged:
+            logger.warning(
+                "paper_cycle: USDC depegged %.2f%% (> threshold %.2f%%) -- new entries blocked this cycle",
+                (depeg_pct or 0.0) * 100, risk.USDC_DEPEG_THRESHOLD_PCT * 100,
+            )
+            return actions
+
+        analyzer = analyzer or _default_analyzer
+        # We don't re-enter a name we just EXITED this round (avoids churn: an
+        # exit on trailing stop/last stage requires a new signal on the next
+        # round, not an immediate rebuy).
+        closed_this_cycle = {c["contract"] for c in actions["closed"]}
+        # #186 -- soft threshold: halves the allocation of NEW entries (never
+        # already-open positions) via ``risk_state.alloc_multiplier``, composed
+        # further below with the risk/ATR sizing (or its fixed-stage fallback).
+        # open_position THEN applies its own per-trade risk cap (defense in
+        # depth, see size_position_by_risk).
+
+        # Per-cycle funnel (mandate #192, 07/16): aggregates WHY each evaluated
+        # candidate didn't lead to a buy. Without this, a prolonged outage of the
+        # sole hard guardrail (GoPlus, no fallback -- see momentum_entry.py)
+        # produces exactly the same observable symptom (zero new positions) as a
+        # market genuinely without a valid candidate -- indistinguishable without
+        # reading application logs one by one, which defeats the diagnostic
+        # purpose of the $1M test (understand HOW ARIA trades, not just WHETHER
+        # she trades). Purely additive: changes no decision behavior, only
+        # visibility. The ``hold_reason`` field (momentum_entry.py) feeds this
+        # counter; an analyzer that doesn't provide it (e.g. the historical
+        # VC-thesis pilot, ``_default_analyzer``) falls into the generic
+        # "unspecified" bucket, without error.
+        #
+        # 27/07 -- position-count cap decoupled from ``open_position``'s own
+        # inner defense-in-depth check: this is the REAL per-cycle chokepoint,
+        # unchanged from before this chantier (bypassed entirely in scalping
+        # mode, same doctrine as the scalping MAX_POSITIONS bypass).
+        max_positions_cap = None if trading_mode == "scalping" else MAX_POSITIONS
+        opened_positions, _ = await _open_new_entries_for_wallet(
+            "swing", candidates, analyzer,
+            price_lookup=price_lookup, notifier=notifier, max_new=max_new,
+            using_default_price_lookup=using_default_price_lookup,
+            closed_this_cycle=closed_this_cycle, weekly_context=weekly_context,
+            risk_state=risk_state, discovery_channel=discovery_channel,
+            trading_mode=trading_mode, max_positions_cap=max_positions_cap,
+            funnel=funnel,
+        )
+        actions["opened"].extend(opened_positions)
+        total_candidates_evaluated = len(candidates)
 
     if funnel:
         actions["momentum_funnel"] = funnel
-        logger.info("paper_cycle funnel (new entries, %d candidates): %s", len(candidates), funnel)
+        logger.info("paper_cycle funnel (new entries, %d candidates): %s", total_candidates_evaluated, funnel)
         # 07/19 -- persists this cycle for a queryable cumulative view over
         # time (momentum_funnel_log.py): without this, this funnel only
         # existed in application logs, never accumulated -- answers ARIA's

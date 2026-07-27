@@ -260,7 +260,7 @@ def test_format_breakdown_report_includes_global_and_dimensions():
 @pytest.mark.asyncio
 async def test_get_all_closed_trades_combines_current_and_archived():
     await paper_trader.reset_portfolio(1_000_000.0)
-    await paper_trader.open_position("0xcurrent", "CUR", 1.0, target_price=2.0, invalidation_price=0.5)
+    await paper_trader.open_position("0xcurrent", "CUR", 1.0, target_price=2.0, invalidation_price=0.5, wallet="swing")
     await paper_trader.close_position("0xcurrent", 1.5, reason="manuel")
 
     async with __import__("aiosqlite").connect(paper_trader.DB_PATH) as db:

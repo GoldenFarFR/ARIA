@@ -152,7 +152,7 @@ async def test_feedback_includes_open_position_detail_with_url(monkeypatch, tmp_
     await pt.open_position(
         "0x" + "a" * 40, "COBOT", 0.0001439,
         target_price=0.000165774, invalidation_price=0.000137165,
-        alloc_usd=50_000, thesis="honeypot clear; golden pocket + divergence RSI; R/R 2.5",
+        alloc_usd=50_000, thesis="honeypot clear; golden pocket + divergence RSI; R/R 2.5", wallet="swing",
     )
 
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)

@@ -658,7 +658,7 @@ class TestEvaluatePortfolioRisk:
     @pytest.mark.asyncio
     async def test_high_water_mark_tracks_new_peak(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000, wallet="swing")
 
         async def price_lookup(contract):
             return 2.0  # +100k de valeur latente -> équité 1.1M, nouveau plus haut
@@ -671,11 +671,11 @@ class TestEvaluatePortfolioRisk:
     @pytest.mark.asyncio
     async def test_soft_drawdown_halves_new_entry_alloc(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000, wallet="swing")
         await pt.close_position(A, 1.0)  # HWM = 1M, équité toujours 1M
 
         # Nouvelle perte qui creuse un drawdown de 12% depuis le plus haut (1M).
-        await pt.open_position(B, "BBB", 1.0, alloc_usd=120_000)
+        await pt.open_position(B, "BBB", 1.0, alloc_usd=120_000, wallet="swing")
         await pt.close_position(B, 0.001)  # quasi-perte totale des 120k -> équité ~880k, DD ~12%
 
         state = await risk_guard.evaluate_portfolio_risk()
@@ -692,7 +692,7 @@ class TestEvaluatePortfolioRisk:
     @pytest.mark.asyncio
     async def test_hard_drawdown_blocks_new_entries_until_manual_resume(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
         await pt.close_position(A, 0.2)  # perte de 200k sur 250k -> équité 800k, DD 20%
 
         state = await risk_guard.evaluate_portfolio_risk()
@@ -721,7 +721,7 @@ class TestEvaluatePortfolioRisk:
     async def test_five_consecutive_losses_blocks_regardless_of_drawdown_pct(self, tmp_db):
         await pt.reset_portfolio(10_000_000.0)  # capital large : le drawdown % reste faible
         for i, contract in enumerate([A, B, C, "0x" + "d" * 40, "0x" + "e" * 40]):
-            await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000)
+            await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000, wallet="swing")
             await pt.close_position(contract, 0.5, reason="perte")  # petite perte à chaque fois
 
         state = await risk_guard.evaluate_portfolio_risk()
@@ -733,11 +733,11 @@ class TestEvaluatePortfolioRisk:
     async def test_win_breaks_consecutive_loss_streak(self, tmp_db):
         await pt.reset_portfolio(10_000_000.0)
         for i, contract in enumerate([A, B, C]):
-            await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000)
+            await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000, wallet="swing")
             await pt.close_position(contract, 0.5, reason="perte")
         # Un gain interrompt la série -- plus récent en premier (ORDER BY closed_at DESC).
         win_contract = "0x" + "f" * 40
-        await pt.open_position(win_contract, "WIN", 1.0, alloc_usd=1_000)
+        await pt.open_position(win_contract, "WIN", 1.0, alloc_usd=1_000, wallet="swing")
         await pt.close_position(win_contract, 2.0, reason="gain")
 
         state = await risk_guard.evaluate_portfolio_risk()
@@ -753,14 +753,14 @@ class TestWiredIntoPaperTrader:
     async def test_open_position_refuses_when_blocked(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
         risk_guard.block_new_entries("test hard block")
-        pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)
+        pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
         assert pos is None
 
     @pytest.mark.asyncio
     async def test_open_position_applies_risk_cap(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
         # invalidation à 50% de l'entrée -> alloc 50k plafonnée à 40k (cf. TestSizePositionByRisk).
-        pos = await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=50_000)
+        pos = await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=50_000, wallet="swing")
         assert pos is not None
         assert round(pos["cost_usd"]) == 40_000
 
@@ -782,7 +782,7 @@ class TestWiredIntoPaperTrader:
     @pytest.mark.asyncio
     async def test_run_paper_cycle_notifies_on_hard_trigger(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
         await pt.close_position(A, 0.2, reason="perte")  # DD 20% -> déclenche le palier dur
 
         alerts: list[str] = []
@@ -802,7 +802,7 @@ class TestWiredIntoPaperTrader:
         """Coupe-circuit dur armé -> aucune NOUVELLE entrée, mais les positions déjà
         ouvertes continuent d'être gérées par leur propre stop/take-profit."""
         await pt.reset_portfolio(1_000_000.0)
-        await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000)
+        await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
         risk_guard.block_new_entries("test")
 
         async def price_lookup(contract):

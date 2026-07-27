@@ -377,6 +377,202 @@ async def test_process_active_orders_price_lookup_failure_never_raises(monkeypat
     assert actions["triggered"] == []
 
 
+# ── 3-pocket architecture plan, Phase 2 (27/07) ──────────────────────────────
+# Mirrors paper_trader.py's own multi_pocket_sourcing_enabled() gate: OFF
+# (default) keeps every order implicitly "swing" (byte-for-byte unchanged),
+# ON lets an order remember and execute into a specific pocket
+# (scalping/swing/vc), never blocking or counting against a DIFFERENT pocket
+# holding the same contract.
+
+
+@pytest.mark.asyncio
+async def test_migration_adds_wallet_column_defaults_to_swing(monkeypatch, tmp_path):
+    """A DB created BEFORE the ``wallet`` column existed must migrate without
+    crashing and without losing an already-pending order -- same hot-migration
+    contract as paper_trader.py's own test_migration_adds_position_management_columns."""
+    import aiosqlite
+
+    db_path = str(tmp_path / "legacy_limit_orders.db")
+    monkeypatch.setattr(lo, "DB_PATH", db_path)
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE pending_limit_order (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                symbol TEXT,
+                target_price REAL NOT NULL,
+                signal_json TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                watch_entered_at TEXT,
+                resolved_at TEXT,
+                cancel_reason TEXT
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO pending_limit_order (contract, chain, symbol, target_price, signal_json, "
+            "state, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            ("0xLEGACY", "base", "LEGACY", 0.038, "{}", "2026-01-01T00:00:00+00:00",
+             "2026-01-01T03:00:00+00:00"),
+        )
+        await db.commit()
+
+    await lo._ensure_table()  # must never crash, on a fresh OR a pre-existing DB
+
+    active = await lo.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["wallet"] == "swing"
+
+
+@pytest.mark.asyncio
+async def test_create_pending_order_defaults_wallet_to_swing():
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    assert order["wallet"] == "swing"
+    active = await lo.get_active_orders()
+    assert active[0]["wallet"] == "swing"
+
+
+@pytest.mark.asyncio
+async def test_create_pending_order_respects_explicit_wallet():
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    assert order["wallet"] == "vc"
+    active = await lo.get_active_orders()
+    assert active[0]["wallet"] == "vc"
+
+
+@pytest.mark.asyncio
+async def test_has_active_order_scoped_per_wallet_isolates_pockets():
+    """The whole point of 3 concurrent pockets: a pending order already placed
+    by ONE pocket must never be visible to a DIFFERENT pocket checking the
+    SAME contract."""
+    await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="scalping")
+
+    assert await lo.has_active_order("0xCHECK", "base", wallet="scalping") is True
+    assert await lo.has_active_order("0xCHECK", "base", wallet="swing") is False
+    assert await lo.has_active_order("0xCHECK", "base", wallet="vc") is False
+    # default (no wallet=) implicitly means "swing" -- unchanged behavior.
+    assert await lo.has_active_order("0xCHECK", "base") is False
+
+
+@pytest.mark.asyncio
+async def test_wallet_position_cap_gate_off_always_legacy_max_positions(monkeypatch):
+    monkeypatch.delenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", raising=False)
+    assert lo._wallet_position_cap(paper_trader, "vc") == paper_trader.MAX_POSITIONS
+    assert lo._wallet_position_cap(paper_trader, "swing") == paper_trader.MAX_POSITIONS
+    assert lo._wallet_position_cap(paper_trader, "scalping") == paper_trader.MAX_POSITIONS
+
+
+@pytest.mark.asyncio
+async def test_wallet_position_cap_gate_on_maps_to_real_per_pocket_caps(monkeypatch):
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    assert lo._wallet_position_cap(paper_trader, "vc") == paper_trader.MAX_POSITIONS_VC == 5
+    assert lo._wallet_position_cap(paper_trader, "swing") == paper_trader.MAX_POSITIONS_SWING == 15
+    assert lo._wallet_position_cap(paper_trader, "scalping") == paper_trader.MAX_POSITIONS_SCALPING is None
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_books_into_the_orders_own_wallet(monkeypatch):
+    """Gate ON: a triggered limit order must book into the SAME pocket it was
+    placed for, never a hardcoded "swing"."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037  # at/below target -- triggers
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert actions["triggered"][0]["wallet"] == "vc"
+    assert await paper_trader.has_open("0xCHECK", wallet="vc") is True
+    assert await paper_trader.has_open("0xCHECK", wallet="swing") is False
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_different_wallet_holding_same_contract_never_blocks(monkeypatch):
+    """A "swing" position already open on a contract must never block a
+    "scalping" pocket's own limit-order trigger on that SAME contract."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="scalping")
+    assert await paper_trader.open_position(
+        "0xCHECK", "CHECK", 1.0, alloc_usd=10_000, wallet="swing",
+    ) is not None
+
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="scalping")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert actions["triggered"][0]["wallet"] == "scalping"
+    assert await paper_trader.has_open("0xCHECK", wallet="swing") is True
+    assert await paper_trader.has_open("0xCHECK", wallet="scalping") is True
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_gate_on_stops_at_the_real_per_pocket_cap(monkeypatch):
+    """Gate ON: a "vc" order must not trigger once the REAL per-pocket cap
+    (MAX_POSITIONS_VC = 5) is already reached -- unlike gate OFF, which would
+    still allow it under the legacy flat MAX_POSITIONS (30)."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    for i in range(paper_trader.MAX_POSITIONS_VC):
+        c = "0x" + f"{i:040x}"
+        assert await paper_trader.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, wallet="vc") is not None
+    assert len(await paper_trader.get_open_positions(wallet="vc")) == paper_trader.MAX_POSITIONS_VC
+
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert actions["triggered"] == []  # cap reached -- never opened
+    assert await paper_trader.has_open("0xCHECK", wallet="vc") is False
+    # never lost -- stays "watching", may still fill on a later pass once room frees up.
+    active = await lo.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["state"] == "watching"
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_gate_off_ignores_per_pocket_cap_uses_legacy_value(monkeypatch):
+    """Gate OFF: the legacy flat MAX_POSITIONS (30) governs regardless of
+    ``wallet`` -- an order tagged "vc" (e.g. left over from a prior gate-ON
+    session) is NOT held to the tighter real per-pocket cap (5) while the
+    gate is off."""
+    monkeypatch.delenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", raising=False)
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    # past the REAL per-pocket VC cap (5), still well under the legacy flat one (30).
+    for i in range(paper_trader.MAX_POSITIONS_VC + 2):
+        c = "0x" + f"{i:040x}"
+        assert await paper_trader.open_position(c, f"T{i}", 1.0, alloc_usd=1_000, wallet="vc") is not None
+
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert await paper_trader.has_open("0xCHECK", wallet="vc") is True
+
+
 # ── format helpers ────────────────────────────────────────────────────────────
 
 

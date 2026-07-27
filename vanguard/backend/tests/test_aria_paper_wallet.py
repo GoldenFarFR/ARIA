@@ -10,13 +10,13 @@ async def test_paper_wallet_redacts_contract_and_exposes_aggregates(tmp_path, mo
 
     monkeypatch.setattr(paper_trader, "DB_PATH", str(tmp_path / "paper.db"))
 
-    await paper_trader.open_position("0xWinner", "WINR", 1.0, alloc_usd=1_000.0)
+    await paper_trader.open_position("0xWinner", "WINR", 1.0, alloc_usd=1_000.0, wallet="swing")
     await paper_trader.close_position("0xWinner", 2.0, reason="cible atteinte")
 
-    await paper_trader.open_position("0xLoser", "LOSR", 1.0, alloc_usd=1_000.0)
+    await paper_trader.open_position("0xLoser", "LOSR", 1.0, alloc_usd=1_000.0, wallet="swing")
     await paper_trader.close_position("0xLoser", 0.5, reason="invalidation")
 
-    await paper_trader.open_position("0xOpen", "OPEN", 1.0, alloc_usd=1_000.0)
+    await paper_trader.open_position("0xOpen", "OPEN", 1.0, alloc_usd=1_000.0, wallet="swing")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

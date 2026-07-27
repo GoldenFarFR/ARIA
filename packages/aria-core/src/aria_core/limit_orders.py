@@ -26,7 +26,19 @@ State machine: ``pending`` (just placed, price still far above target) ->
 re-analysis performed at this transition) -> ``triggered`` (bought) /
 ``cancelled`` (invalidation crossed, or the re-analysis failed) / ``expired``
 (silent, just logged -- never a Telegram alert for a setup that simply never
-came back)."""
+came back).
+
+27/07 -- 3-pocket architecture plan, Phase 2 (see paper_trader.py's own
+``multi_pocket_sourcing_enabled()``/``_open_new_entries_for_wallet``): every
+pending order now remembers which pocket ("swing"/"scalping"/"vc") placed it
+(``wallet`` column, additive hot migration -- default 'swing', same migration
+decision as ``paper_position.wallet``) and executes into that SAME pocket,
+never a hardcoded one. ``has_active_order``/``create_pending_order`` default
+to ``wallet="swing"`` -- unchanged behavior for any caller that doesn't pass
+it explicitly, i.e. every caller while ``paper_trader.
+multi_pocket_sourcing_enabled()`` is OFF (the only caller today,
+``paper_trader._open_new_entries_for_wallet``, always passes its own
+``wallet=`` explicitly)."""
 from __future__ import annotations
 
 import json
@@ -51,6 +63,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 27/07 -- 3-pocket architecture plan, Phase 2: additive hot-migration list,
+# same idempotent idiom as paper_trader.py's own ``_ADDED_COLUMNS`` (see its
+# comment for why -- SQLite doesn't add a column to an already-existing table
+# just because ``CREATE TABLE IF NOT EXISTS`` changed). Default 'swing' for
+# every order placed before this work, and for every order placed while
+# ``paper_trader.multi_pocket_sourcing_enabled()`` is OFF.
+_ADDED_COLUMNS = [
+    ("wallet", "TEXT NOT NULL DEFAULT 'swing'"),
+]
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -71,6 +94,13 @@ async def _ensure_table() -> None:
             )
             """
         )
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(pending_limit_order)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE pending_limit_order ADD COLUMN {name} {ddl}")
         await db.commit()
 
 
@@ -116,22 +146,30 @@ def check_watching_order(
     return "wait"
 
 
-async def has_active_order(contract: str, chain: str) -> bool:
+async def has_active_order(contract: str, chain: str, *, wallet: str = "swing") -> bool:
     """True if a ``pending`` or ``watching`` order already exists for this
-    contract -- never stacks a second limit order on the same candidate."""
+    contract IN THIS POCKET -- never stacks a second limit order on the same
+    candidate within the same pocket.
+
+    ``wallet`` (27/07, 3-pocket architecture plan): defaults to ``"swing"`` --
+    unchanged behavior for any caller that doesn't pass it (gate OFF, or any
+    caller predating this work). Scoped like ``paper_trader.has_open(...,
+    wallet=...)`` -- a pending order already placed by a DIFFERENT pocket on
+    the same contract must never block this one (the whole point of 3
+    concurrent pockets: each independently detects/watches its own setup)."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT 1 FROM pending_limit_order WHERE contract = ? AND chain = ? "
-            "AND state IN ('pending', 'watching') LIMIT 1",
-            (contract, chain),
+            "AND wallet = ? AND state IN ('pending', 'watching') LIMIT 1",
+            (contract, chain, wallet),
         ) as cur:
             row = await cur.fetchone()
     return row is not None
 
 
 async def create_pending_order(
-    contract: str, chain: str, symbol: str, target_price: float, sig: dict,
+    contract: str, chain: str, symbol: str, target_price: float, sig: dict, *, wallet: str = "swing",
 ) -> dict:
     """Places a new limit order at ``target_price`` (the signal's original
     price, before it drifted) -- ``sig`` is the FULL evaluated signal,
@@ -139,7 +177,14 @@ async def create_pending_order(
     Every field of the caller's real signal dicts is already a plain
     str/float/int/bool/None (verified against ``momentum_entry``'s BUY
     returns) -- ``default=str`` below is a defensive fallback only, never
-    relied on in practice."""
+    relied on in practice.
+
+    ``wallet`` (27/07, 3-pocket architecture plan): which pocket this order
+    belongs to -- persisted as-is, read back by ``_execute_trigger`` so the
+    eventual buy books into the SAME pocket that detected the setup, never a
+    hardcoded one. Defaults to ``"swing"`` -- unchanged behavior (implicit
+    single pocket) for any caller that doesn't pass it, i.e. every caller
+    while ``paper_trader.multi_pocket_sourcing_enabled()`` is OFF."""
     await _ensure_table()
     now = datetime.now(timezone.utc)
     expires_at = (now + timedelta(hours=LIMIT_ORDER_EXPIRY_HOURS)).isoformat()
@@ -148,10 +193,10 @@ async def create_pending_order(
         cur = await db.execute(
             """
             INSERT INTO pending_limit_order
-              (contract, chain, symbol, target_price, signal_json, state, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+              (contract, chain, symbol, target_price, signal_json, state, created_at, expires_at, wallet)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
             """,
-            (contract, chain, symbol or "", target_price, signal_json, now.isoformat(), expires_at),
+            (contract, chain, symbol or "", target_price, signal_json, now.isoformat(), expires_at, wallet),
         )
         await db.commit()
         order_id = cur.lastrowid
@@ -160,6 +205,7 @@ async def create_pending_order(
         "target_price": target_price, "signal_json": signal_json, "state": "pending",
         "created_at": now.isoformat(), "expires_at": expires_at,
         "watch_entered_at": None, "resolved_at": None, "cancel_reason": None,
+        "wallet": wallet,
     }
 
 
@@ -313,6 +359,29 @@ async def process_active_orders(price_lookup, notifier=None) -> dict:
     return actions
 
 
+def _wallet_position_cap(paper_trader_module, wallet: str) -> int | None:
+    """27/07 -- 3-pocket architecture plan, Phase 2: the position-count cap a
+    TRIGGERED limit order must respect, mirroring ``paper_trader.
+    _run_paper_cycle_locked``'s own multi-pocket branch (its "pocket_cap"
+    tuple). ``paper_trader_module`` is the already-imported module reference
+    from the caller (``_execute_trigger``'s own deferred import) -- avoids a
+    module-level import of ``paper_trader`` here, which would create a
+    circular import (``paper_trader.py`` itself imports this module locally).
+
+    Gate OFF: byte-for-byte unchanged legacy behavior -- the flat
+    ``MAX_POSITIONS`` (30) this function has always used, regardless of
+    wallet (always "swing" while the gate is off, see
+    ``create_pending_order``'s default). Gate ON: the REAL per-pocket cap
+    (5/15/unlimited)."""
+    if not paper_trader_module.multi_pocket_sourcing_enabled():
+        return paper_trader_module.MAX_POSITIONS
+    return {
+        "scalping": paper_trader_module.MAX_POSITIONS_SCALPING,
+        "swing": paper_trader_module.MAX_POSITIONS_SWING,
+        "vc": paper_trader_module.MAX_POSITIONS_VC,
+    }.get(wallet, paper_trader_module.MAX_POSITIONS)
+
+
 async def _execute_trigger(order: dict, sig: dict, current_price: float, notifier) -> dict | None:
     """Buys at the limit-order trigger -- same pipeline as a direct buy
     (``paper_trader.open_position``/``format_buy_alert``), sizing recomputed
@@ -324,33 +393,46 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     direct buy in ``_run_paper_cycle_locked``); computing them here too would
     apply the price-impact model TWICE on an already-degraded price, silently
     collapsing the allocation to zero (real bug found while testing this
-    function)."""
+    function).
+
+    ``order['wallet']`` (27/07, 3-pocket architecture plan): the pocket THIS
+    order was placed for (see ``create_pending_order``) -- every check below
+    (duplicate guard, position cap, starting capital, weekly pacing context)
+    is scoped to THIS SAME pocket, and the resulting buy books into it, never
+    a hardcoded "swing". Falls back to "swing" if absent (an order row from
+    before this work, or created while the gate was OFF)."""
     from aria_core import paper_trader, risk_guard
     from aria_core.skills import market_sentiment
 
-    if await paper_trader.has_open(order["contract"]):
+    wallet = order.get("wallet") or "swing"
+
+    if await paper_trader.has_open(order["contract"], wallet=wallet):
         return None  # already bought some other way in the meantime -- never a duplicate
 
-    if len(await paper_trader.get_open_positions()) >= paper_trader.MAX_POSITIONS:
+    max_positions_cap = _wallet_position_cap(paper_trader, wallet)
+    if (
+        max_positions_cap is not None
+        and len(await paper_trader.get_open_positions(wallet=wallet)) >= max_positions_cap
+    ):
         return None
 
     risk_state = await risk_guard.evaluate_portfolio_risk()
     if risk_state.blocked:
         return None  # portfolio-level circuit breaker armed since the order was placed
 
-    start = await paper_trader.starting_capital()
+    start = await paper_trader.starting_capital(wallet=wallet)
     weekly_context = None
     try:
         cap = start
         target = paper_trader.weekly_target_equity(cap)
-        started_dt = datetime.fromisoformat(await paper_trader.cycle_started_at())
+        started_dt = datetime.fromisoformat(await paper_trader.cycle_started_at(wallet=wallet))
         if started_dt.tzinfo is None:
             started_dt = started_dt.replace(tzinfo=timezone.utc)
         elapsed_days = (datetime.now(timezone.utc) - started_dt).total_seconds() / 86400.0
         progress_pct = (risk_state.equity / cap - 1.0) * 100.0 if cap else 0.0
         target_pct = (paper_trader.WEEKLY_TARGET_MULTIPLIER - 1.0) * 100.0
         weekly_context = {
-            "cycle_number": await paper_trader.get_current_cycle_number(),
+            "cycle_number": await paper_trader.get_current_cycle_number(wallet=wallet),
             "day": min(paper_trader.WEEKLY_CYCLE_DAYS, int(elapsed_days) + 1),
             "days_total": paper_trader.WEEKLY_CYCLE_DAYS,
             "equity": risk_state.equity,
@@ -381,6 +463,11 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
         order["contract"],
         order["symbol"],
         current_price,
+        # 27/07 -- 3-pocket architecture plan (Phase 2): books into the SAME
+        # pocket that placed this order (see docstring above) -- "swing" under
+        # gate OFF (unchanged historical behavior, every order created there
+        # implicitly belongs to "swing").
+        wallet=wallet,
         target_price=sig.get("target"),
         invalidation_price=sig.get("invalidation"),
         alloc_usd=entry_alloc_usd,

@@ -65,7 +65,7 @@ async def test_weekly_cycle_not_due_before_7_days(tmp_db):
 @pytest.mark.asyncio
 async def test_run_weekly_reset_force_closes_open_position(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
 
     async def price_lookup(contract):
         return 3.0  # +50 % latent au moment du reset
@@ -79,7 +79,7 @@ async def test_run_weekly_reset_force_closes_open_position(tmp_db):
 @pytest.mark.asyncio
 async def test_run_weekly_reset_validated_true_when_target_reached(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=500_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=500_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.25  # 500k -> 625k, +125k latent -> équité 1 125 000 >= objectif 1,1M
@@ -92,7 +92,7 @@ async def test_run_weekly_reset_validated_true_when_target_reached(tmp_db):
 @pytest.mark.asyncio
 async def test_run_weekly_reset_validated_false_when_below_target(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.0  # flat -- équité reste 1M, sous l'objectif 1,1M
@@ -105,7 +105,7 @@ async def test_run_weekly_reset_validated_false_when_below_target(tmp_db):
 @pytest.mark.asyncio
 async def test_run_weekly_reset_price_unavailable_falls_back_to_entry_price(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
 
     async def price_lookup(contract):
         return None  # prix indisponible -- jamais un prix inventé
@@ -118,9 +118,9 @@ async def test_run_weekly_reset_price_unavailable_falls_back_to_entry_price(tmp_
 @pytest.mark.asyncio
 async def test_run_weekly_reset_never_destroys_history(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 3.0, reason="cible")
-    await pt.open_position(B, "BBB", 1.0, alloc_usd=20_000)
+    await pt.open_position(B, "BBB", 1.0, alloc_usd=20_000, wallet="swing")
 
     async def price_lookup(contract):
         return 1.0
@@ -146,7 +146,7 @@ async def test_run_weekly_reset_never_destroys_history(tmp_db):
 async def test_run_weekly_reset_resets_capital_and_increments_cycle(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     start_cycle = await pt.get_current_cycle_number()
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
 
     async def price_lookup(contract):
         return 2.0
@@ -206,7 +206,7 @@ async def test_run_weekly_reset_default_price_lookup_signature(tmp_db, monkeypat
     -- un price_lookup INJECTÉ garde le contrat d'appel historique à un seul argument
     (même convention que run_paper_cycle, cf. paper_trader.py)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, chain="solana")
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, chain="solana", wallet="swing")
 
     calls = []
 
@@ -315,7 +315,7 @@ async def test_run_weekly_reset_uses_robust_median_over_raw_spot(tmp_db, monkeyp
     bougies récentes montrent un prix stable (~1.1$) -- le reset doit clôturer sur la
     médiane robuste, pas sur le tick de mèche."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
 
     async def fake_pair_lookup(contract, *, chain="base"):
         return PairSnapshot(pair_address="0xpool", price_usd=5.0, liquidity_usd=100_000.0, base_symbol="AAA")
@@ -343,7 +343,7 @@ async def test_run_weekly_reset_falls_back_to_spot_when_no_candles(tmp_db, monke
     """Non-régression : sans bougies exploitables, le reset retombe sur le prix spot
     déjà en main (comportement historique), jamais un échec bloquant."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
 
     async def fake_pair_lookup(contract, *, chain="base"):
         return PairSnapshot(pair_address="0xpool", price_usd=1.3, liquidity_usd=100_000.0, base_symbol="AAA")
@@ -368,7 +368,7 @@ async def test_run_weekly_reset_falls_back_to_entry_price_when_pair_unavailable(
     """Non-régression totale : aucune paire trouvée du tout -> comportement historique
     inchangé, repli sur le prix d'entrée (jamais un prix inventé)."""
     await pt.reset_portfolio(1_000_000.0)
-    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000)
+    await pt.open_position(A, "AAA", 2.0, alloc_usd=50_000, wallet="swing")
 
     async def fake_pair_lookup(contract, *, chain="base"):
         return None
@@ -473,7 +473,7 @@ async def test_satellite_eligible_position_promoted_and_survives_reset(tmp_db, m
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, target_price=3.0, invalidation_price=0.7,
-        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie",
+        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie", wallet="swing",
     )
 
     async def fake_resolve():
@@ -515,7 +515,7 @@ async def test_satellite_position_excluded_from_weekly_verdict(tmp_db, monkeypat
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, target_price=20.0, invalidation_price=0.5,
-        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie",
+        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie", wallet="swing",
     )
 
     async def fake_resolve():
@@ -543,14 +543,14 @@ async def test_satellite_pocket_capped_admits_best_rr_first(tmp_db, monkeypatch)
     # A : R/R restant = 4.0 (cf. TestSatellitePocketEligible).
     await pt.open_position(
         A, "AAA", 1.0, target_price=3.0, invalidation_price=0.7,
-        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie",
+        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie", wallet="swing",
     )
     # B : même profil mais cible plus proche -> R/R restant = 1.2/0.425 ≈ 2.82 (encore
     # éligible >= 1.5, mais moins bon que A=4.0). cost_usd 30_000 + 30_000 = 60_000 >
     # plafond 50_000 -- B doit être le rejeté (pas parce qu'inéligible, mais faute de place).
     await pt.open_position(
         B, "BBB", 1.0, target_price=2.5, invalidation_price=0.7,
-        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie",
+        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie", wallet="swing",
     )
 
     async def fake_resolve():
@@ -579,7 +579,7 @@ async def test_satellite_carried_over_position_never_reevaluated(tmp_db, monkeyp
     quelle -- jamais réévaluée ni reclôturée, même si son régime/R-R ne qualifierait
     plus aujourd'hui."""
     await pt.reset_portfolio(1_000_000.0)
-    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=30_000, strategy="momentum")
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=30_000, strategy="momentum", wallet="swing")
     async with aiosqlite.connect(pt.DB_PATH) as db:
         await db.execute("UPDATE paper_position SET pocket = 'satellite' WHERE id = ?", (pos["id"],))
         await db.commit()
@@ -610,7 +610,7 @@ async def test_satellite_ineligible_position_force_closed_as_before(tmp_db, monk
     await pt.reset_portfolio(1_000_000.0)
     await pt.open_position(
         A, "AAA", 1.0, target_price=3.0, invalidation_price=0.7,
-        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie",
+        alloc_usd=30_000, entry_atr_pct=0.05, strategy="momentum", entry_regime="euphorie", wallet="swing",
     )
 
     async def fake_resolve():
