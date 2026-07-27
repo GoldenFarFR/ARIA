@@ -4203,10 +4203,10 @@ def _floor_buy_sig(symbol="FL", price=1.0):
     }
 
 
-async def _not_blocked(*, price_lookup=None):
+async def _not_blocked(wallet="swing", *, price_lookup=None):
     from aria_core import risk_guard
     return risk_guard.PortfolioRiskState(
-        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        wallet=wallet, equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
         consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
     )
 
@@ -4224,9 +4224,9 @@ async def test_daily_floor_skipped_when_circuit_breaker_armed(tmp_db, monkeypatc
     monkeypatch.setenv("ARIA_DAILY_TRADE_FLOOR_ENABLED", "true")
     from aria_core import risk_guard
 
-    async def _blocked(*, price_lookup=None):
+    async def _blocked(wallet="swing", *, price_lookup=None):
         return risk_guard.PortfolioRiskState(
-            equity=800_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.2,
+            wallet=wallet, equity=800_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.2,
             consecutive_losses=5, alloc_multiplier=1.0, blocked=True,
         )
 
@@ -4874,7 +4874,7 @@ async def test_open_new_entries_for_wallet_enforces_per_wallet_cap(tmp_db):
     from aria_core import risk_guard
 
     risk_state = risk_guard.PortfolioRiskState(
-        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
         consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
     )
 
@@ -4933,7 +4933,7 @@ async def test_open_new_entries_for_wallet_unlimited_cap_never_breaks(tmp_db):
     from aria_core import risk_guard
 
     risk_state = risk_guard.PortfolioRiskState(
-        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
         consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
     )
 

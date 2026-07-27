@@ -124,13 +124,28 @@ def _render_closed(p: dict) -> str:
     return "\n".join(lines)
 
 
-async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
-    """Returns (readable text, JSON-able dict). ``closed_limit`` caps the number of
-    closed positions included (most recent first, see get_closed_positions)."""
-    starting = await paper_trader.starting_capital()
-    opens = await paper_trader.get_open_positions()
-    closed = await paper_trader.get_closed_positions(limit=closed_limit)
-    summary = await paper_trader.portfolio_summary()
+# 27/07 -- 3-pocket architecture plan, Phase 3 (real scope-mixing bug found and
+# fixed): before this, ``build_report`` read ``starting_capital()``/
+# ``portfolio_summary()`` scoped to the DEFAULT wallet ("swing" only) while
+# ``get_open_positions()``/``get_closed_positions()`` were called with NO
+# wallet filter at all -- silently aggregating ALL 3 pockets (scalping+swing+
+# vc). The result: a single report showing "swing"'s own equity/return %
+# right next to a winrate/PnL that actually blended in scalping+vc trades
+# too -- two different scopes on the same page, genuinely misleading once
+# more than one pocket trades. Every metric below is now computed ONE POCKET
+# AT A TIME (``_build_pocket_section``) and never cross-pocket-aggregated.
+_POCKETS = ("scalping", "swing", "vc")
+
+
+async def _build_pocket_section(wallet: str, closed_limit: int) -> tuple[list[str], dict]:
+    """One pocket's own header + open/closed detail -- entirely self-scoped
+    (starting capital, summary, winrate stats, open/closed lists all read
+    with the SAME ``wallet=`` filter, never mixed with another pocket's own
+    numbers)."""
+    starting = await paper_trader.starting_capital(wallet=wallet)
+    opens = await paper_trader.get_open_positions(wallet=wallet)
+    closed = await paper_trader.get_closed_positions(limit=closed_limit, wallet=wallet)
+    summary = await paper_trader.portfolio_summary(wallet=wallet)
 
     wins = [p for p in closed if (p.get("pnl_usd") or 0.0) > 0]
     losses = [p for p in closed if (p.get("pnl_usd") or 0.0) < 0]
@@ -138,32 +153,27 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     avg_loss = sum(p["pnl_usd"] for p in losses) / len(losses) if losses else None
     expectancy = sum((p.get("pnl_usd") or 0.0) for p in closed) / len(closed) if closed else None
 
-    now = datetime.now(timezone.utc).isoformat()
-    header = [
-        f"=== Registre paper-trading ARIA — {now} ===",
+    lines = [
+        f"### Poche {wallet.upper()} ###",
         f"Capital de départ {starting:,.0f} $ · Équité (au coût, sans prix live) {summary['equity']:,.0f} $"
         f" ({summary['return_pct']:+.2f} %)",
         f"Cash {summary['cash']:,.0f} $ · P&L réalisé {_fmt_money(summary['realized_pnl'])}"
         f" · P&L latent {_fmt_money(summary['unrealized_pnl'])}",
         "",
-        "--- Score de winrate (trades clôturés uniquement) ---",
+        "--- Score de winrate (trades clôturés uniquement, CETTE POCHE) ---",
         f"{len(closed)} trade(s) clôturé(s) · {len(wins)} gagnant(s) · {len(losses)} perdant(s)"
         + (f" · winrate {summary['win_rate']:.1f} %" if summary["win_rate"] is not None else " · winrate: n/a (0 clôture)"),
         f"Gain moyen {_fmt_money(avg_win) if avg_win is not None else 'n/a'}"
         f" · Perte moyenne {_fmt_money(avg_loss) if avg_loss is not None else 'n/a'}"
         f" · Espérance/trade {_fmt_money(expectancy) if expectancy is not None else 'n/a'}",
-    ]
-    open_section = [f"--- Positions ouvertes ({len(opens)}) ---"] + (
-        [_render_open(p) for p in opens] or ["  (aucune)"]
-    )
-    closed_section = [f"--- Positions clôturées ({len(closed)}) ---"] + (
-        [_render_closed(p) for p in closed] or ["  (aucune)"]
-    )
-
-    text = "\n".join(header + [""] + open_section + [""] + closed_section)
+        "",
+        f"--- Positions ouvertes ({len(opens)}) ---",
+    ] + ([_render_open(p) for p in opens] or ["  (aucune)"]) + [
+        "",
+        f"--- Positions clôturées ({len(closed)}) ---",
+    ] + ([_render_closed(p) for p in closed] or ["  (aucune)"])
 
     machine = {
-        "generated_at": now,
         "starting_capital": starting,
         "summary": summary,
         "winrate_stats": {
@@ -178,6 +188,30 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
         "open_positions": opens,
         "closed_positions": closed,
     }
+    return lines, machine
+
+
+async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
+    """Returns (readable text, JSON-able dict). ``closed_limit`` caps the number of
+    closed positions included PER POCKET (most recent first, see
+    get_closed_positions).
+
+    27/07, 3-pocket architecture plan, Phase 3: one self-contained section per
+    pocket (scalping/swing/vc) -- see ``_build_pocket_section``'s docstring for
+    the scope-mixing bug this replaces. ``machine["pockets"][wallet]`` mirrors
+    this module's pre-27/07 top-level shape (``starting_capital``/``summary``/
+    ``winrate_stats``/``open_positions``/``closed_positions``), just nested one
+    level under its own pocket now."""
+    now = datetime.now(timezone.utc).isoformat()
+    text_blocks = [f"=== Registre paper-trading ARIA — {now} ==="]
+    machine_pockets: dict[str, dict] = {}
+    for wallet in _POCKETS:
+        lines, pocket_machine = await _build_pocket_section(wallet, closed_limit)
+        text_blocks.append("\n".join(lines))
+        machine_pockets[wallet] = pocket_machine
+
+    text = "\n\n".join(text_blocks)
+    machine = {"generated_at": now, "pockets": machine_pockets}
     return text, machine
 
 

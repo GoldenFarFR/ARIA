@@ -711,9 +711,9 @@ async def test_drain_does_nothing_when_pending_empty(monkeypatch):
 # (_drain_multi_pocket), and prove the gate-OFF path never reaches it.
 
 
-def _fake_portfolio_risk_state(risk_guard_module, *, blocked=False):
+def _fake_portfolio_risk_state(risk_guard_module, *, wallet="swing", blocked=False):
     return risk_guard_module.PortfolioRiskState(
-        equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        wallet=wallet, equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
         consecutive_losses=0, alloc_multiplier=1.0, blocked=blocked,
     )
 
@@ -787,10 +787,23 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
 
     monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
 
-    async def _fake_evaluate(*, price_lookup=None):
-        return _fake_portfolio_risk_state(risk_guard)
+    async def _fake_evaluate(wallet="swing", *, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard, wallet=wallet)
 
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate)
+
+    # 27/07 -- Phase 3: a MACRO circuit breaker check now runs once before the
+    # per-pocket loop -- faked here to a clean "not triggered" state, same
+    # doctrine as the per-pocket fake above (this test isn't about the macro
+    # breaker itself, see test_momentum_websocket_macro_circuit_breaker.py-
+    # equivalent coverage further below).
+    async def _fake_macro(*, price_lookup=None):
+        return risk_guard.MacroRiskState(
+            total_equity=3_000_000.0, total_high_water_mark=3_000_000.0,
+            drawdown_pct=0.0, blocked=False, newly_triggered=False,
+        )
+
+    monkeypatch.setattr(risk_guard, "evaluate_macro_risk", _fake_macro)
 
     async def _fake_regime():
         return market_sentiment.META_REGIME_NEUTRAL
@@ -919,10 +932,21 @@ async def test_drain_multi_pocket_skips_all_pockets_when_risk_blocked(monkeypatc
 
     monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
 
-    async def _fake_evaluate_blocked(*, price_lookup=None):
-        return _fake_portfolio_risk_state(risk_guard, blocked=True)
+    async def _fake_evaluate_blocked(wallet="swing", *, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard, wallet=wallet, blocked=True)
 
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_blocked)
+
+    # 27/07 -- Phase 3: faked to "not triggered" so the drain reaches the
+    # per-pocket loop below (where EACH pocket independently sees itself
+    # blocked and is skipped -- the real behavior under test here).
+    async def _fake_macro(*, price_lookup=None):
+        return risk_guard.MacroRiskState(
+            total_equity=3_000_000.0, total_high_water_mark=3_000_000.0,
+            drawdown_pct=0.0, blocked=False, newly_triggered=False,
+        )
+
+    monkeypatch.setattr(risk_guard, "evaluate_macro_risk", _fake_macro)
 
     called = False
 

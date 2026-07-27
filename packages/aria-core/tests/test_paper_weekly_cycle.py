@@ -186,8 +186,8 @@ async def test_run_weekly_reset_records_permanent_cycle_row(tmp_db):
 @pytest.mark.asyncio
 async def test_run_weekly_reset_clears_circuit_breaker_for_fresh_week(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
-    risk_guard.block_new_entries("test -- palier dur simulé", by="test")
-    blocked_before, _ = risk_guard.blocks_new_entries()
+    risk_guard.block_new_entries("swing", "test -- palier dur simulé", by="test")
+    blocked_before, _ = risk_guard.blocks_new_entries("swing")
     assert blocked_before is True
 
     async def price_lookup(contract):
@@ -195,7 +195,7 @@ async def test_run_weekly_reset_clears_circuit_breaker_for_fresh_week(tmp_db):
 
     await pt.run_weekly_reset(price_lookup=price_lookup)
 
-    blocked_after, reason_after = risk_guard.blocks_new_entries()
+    blocked_after, reason_after = risk_guard.blocks_new_entries("swing")
     assert blocked_after is False, reason_after
 
 

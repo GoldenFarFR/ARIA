@@ -561,22 +561,26 @@ class MomentumWebsocketListener:
                     )
                     return
 
-            risk_state = await risk_guard.evaluate_portfolio_risk(
-                price_lookup=paper_trader._default_price_lookup,
-            )
-            if risk_state.newly_triggered_hard:
+            # 27/07 -- Phase 3: MACRO circuit breaker, same doctrine as
+            # paper_trader._run_paper_cycle_locked's own multi-pocket branch
+            # -- checked ONCE per drain, BEFORE any per-pocket risk check
+            # below. Best-effort: a failure here degrades to "not triggered",
+            # never blocks the drain on an unrelated error (same doctrine as
+            # the depeg check just above).
+            try:
+                macro_state = await risk_guard.evaluate_macro_risk(
+                    price_lookup=paper_trader._default_price_lookup,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info("momentum_websocket: macro circuit breaker check failed (%s)", exc)
+                macro_state = None
+            if macro_state is not None and macro_state.newly_triggered:
                 try:
                     await send_trading_notification(
-                        risk_guard.format_hard_circuit_breaker_alert(risk_state)
+                        risk_guard.format_macro_circuit_breaker_alert(macro_state)
                     )
                 except Exception:  # noqa: BLE001
                     pass
-            elif risk_state.newly_triggered_soft:
-                try:
-                    await send_trading_notification(risk_guard.format_soft_drawdown_alert(risk_state))
-                except Exception:  # noqa: BLE001
-                    pass
-            if risk_state.blocked:
                 return
 
             scalping_analyzer = paper_trader._default_momentum_analyzer(
@@ -595,12 +599,37 @@ class MomentumWebsocketListener:
                 ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
             ):
                 try:
+                    # 27/07 -- Phase 3: independent per-pocket risk state --
+                    # a drawdown/losing streak on ONE pocket alone must never
+                    # block the other two (mirrors paper_trader._run_paper_
+                    # cycle_locked's own multi-pocket loop). Skip THIS pocket
+                    # only (``continue``), never the whole drain.
+                    pocket_risk_state = await risk_guard.evaluate_portfolio_risk(
+                        pocket_wallet, price_lookup=paper_trader._default_price_lookup,
+                    )
+                    if pocket_risk_state.newly_triggered_hard:
+                        try:
+                            await send_trading_notification(
+                                risk_guard.format_hard_circuit_breaker_alert(pocket_risk_state, pocket_wallet)
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    elif pocket_risk_state.newly_triggered_soft:
+                        try:
+                            await send_trading_notification(
+                                risk_guard.format_soft_drawdown_alert(pocket_risk_state, pocket_wallet)
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if pocket_risk_state.blocked:
+                        continue
+
                     await paper_trader._open_new_entries_for_wallet(
                         pocket_wallet, pocket_candidates, pocket_analyzer,
                         price_lookup=paper_trader._default_price_lookup,
                         notifier=send_trading_notification, max_new=MAX_NEW_PER_DRAIN,
                         using_default_price_lookup=True, closed_this_cycle=closed_this_cycle,
-                        weekly_context=None, risk_state=risk_state, discovery_channel="websocket",
+                        weekly_context=None, risk_state=pocket_risk_state, discovery_channel="websocket",
                         trading_mode=pocket_mode, max_positions_cap=pocket_cap, funnel=funnel,
                     )
                 except Exception as exc:  # noqa: BLE001 -- a failed pocket never blocks the others

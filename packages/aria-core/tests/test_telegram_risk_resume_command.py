@@ -1,6 +1,11 @@
 """/riskresume -- lève le coupe-circuit dur du portefeuille paper (20/07, revue
 croisée externe). Owner-only, même gate que /stop /resume (test_telegram_fallback_
-notice.py) -- pas is_admin comme /funnel (test_telegram_funnel_command.py)."""
+notice.py) -- pas is_admin comme /funnel (test_telegram_funnel_command.py).
+
+27/07, 3-pocket architecture plan (Phase 3): risk_guard's circuit breaker is now
+one dedicated state PER POCKET (scalping/swing/vc) -- /riskresume without an
+argument checks/resumes all 3 in one confirmation, an explicit pocket name
+targets just that one."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -32,8 +37,8 @@ class FakeUpdate:
 
 
 class FakeContext:
-    def __init__(self):
-        self.args: list[str] = []
+    def __init__(self, args: list[str] | None = None):
+        self.args: list[str] = args or []
 
 
 def test_riskresume_registered_as_command_handler():
@@ -61,7 +66,7 @@ async def test_riskresume_rejects_non_owner(monkeypatch):
     calls = {"resume": 0}
     monkeypatch.setattr(
         telegram_bot.risk_guard, "resume_new_entries",
-        lambda **kw: calls.__setitem__("resume", calls["resume"] + 1),
+        lambda *a, **kw: calls.__setitem__("resume", calls["resume"] + 1),
     )
 
     update = FakeUpdate("/riskresume", user_id=123)
@@ -74,49 +79,99 @@ async def test_riskresume_rejects_non_owner(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_riskresume_when_not_blocked_says_nothing_to_resume(monkeypatch):
+    """27/07, Phase 3: without an explicit pocket name, all 3 pockets are
+    checked in one confirmation -- none blocked here, nothing to resume."""
     monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
     monkeypatch.setattr(
         telegram_bot.risk_guard, "new_entry_block_status",
-        lambda: {"blocked": False, "since": None, "reason": "", "readable": True},
+        lambda wallet: {"blocked": False, "since": None, "reason": "", "readable": True},
     )
     calls = {"resume": 0}
     monkeypatch.setattr(
         telegram_bot.risk_guard, "resume_new_entries",
-        lambda **kw: calls.__setitem__("resume", calls["resume"] + 1),
+        lambda *a, **kw: calls.__setitem__("resume", calls["resume"] + 1),
     )
 
     update = FakeUpdate("/riskresume", user_id=7)
     await telegram_bot._handle_risk_resume(update, FakeContext())
 
-    assert "rien à reprendre" in update.message.replies[0].lower()
+    reply = update.message.replies[0]
+    assert "rien à reprendre" in reply.lower()
+    assert "SCALPING" in reply and "SWING" in reply and "VC" in reply
     assert calls["resume"] == 0
 
 
 @pytest.mark.asyncio
-async def test_riskresume_when_blocked_lifts_and_reports_reason(monkeypatch):
+async def test_riskresume_when_blocked_lifts_only_the_blocked_pocket(monkeypatch):
+    """27/07, Phase 3: only the SWING pocket is blocked here -- scalping/vc
+    must never be touched (each pocket is its own independent circuit
+    breaker, the real gap this chantier closes)."""
     from datetime import datetime, timezone
 
     monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
     since = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(
-        telegram_bot.risk_guard, "new_entry_block_status",
-        lambda: {
-            "blocked": True, "since": since,
-            "reason": "5 pertes consécutives", "readable": True,
-        },
-    )
-    captured = {}
 
-    def fake_resume(**kw):
-        captured.update(kw)
+    def fake_status(wallet):
+        if wallet == "swing":
+            return {
+                "blocked": True, "since": since,
+                "reason": "5 pertes consécutives", "readable": True,
+            }
+        return {"blocked": False, "since": None, "reason": "", "readable": True}
+
+    monkeypatch.setattr(telegram_bot.risk_guard, "new_entry_block_status", fake_status)
+    captured: dict[str, dict] = {}
+
+    def fake_resume(wallet, **kw):
+        captured[wallet] = kw
 
     monkeypatch.setattr(telegram_bot.risk_guard, "resume_new_entries", fake_resume)
 
     update = FakeUpdate("/riskresume", user_id=7)
     await telegram_bot._handle_risk_resume(update, FakeContext())
 
-    assert captured["by"] == 7
+    assert set(captured) == {"swing"}  # scalping/vc never resumed -- not blocked
+    assert captured["swing"]["by"] == 7
     reply = update.message.replies[0]
     assert "levé" in reply.lower()
     assert "5 pertes consécutives" in reply
     assert "2026-07-20 10:00 UTC" in reply
+    assert "SWING" in reply
+
+
+@pytest.mark.asyncio
+async def test_riskresume_explicit_pocket_targets_only_that_one(monkeypatch):
+    """27/07, Phase 3: /riskresume scalping resumes ONLY the scalping pocket,
+    even though this fake reports every pocket as blocked."""
+    monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
+    monkeypatch.setattr(
+        telegram_bot.risk_guard, "new_entry_block_status",
+        lambda wallet: {"blocked": True, "since": None, "reason": "test", "readable": True},
+    )
+    captured: list[str] = []
+
+    def fake_resume(wallet, **kw):
+        captured.append(wallet)
+
+    monkeypatch.setattr(telegram_bot.risk_guard, "resume_new_entries", fake_resume)
+
+    update = FakeUpdate("/riskresume scalping", user_id=7)
+    await telegram_bot._handle_risk_resume(update, FakeContext(args=["scalping"]))
+
+    assert captured == ["scalping"]
+
+
+@pytest.mark.asyncio
+async def test_riskresume_unknown_pocket_name_rejected(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
+    calls = {"resume": 0}
+    monkeypatch.setattr(
+        telegram_bot.risk_guard, "resume_new_entries",
+        lambda *a, **kw: calls.__setitem__("resume", calls["resume"] + 1),
+    )
+
+    update = FakeUpdate("/riskresume notapocket", user_id=7)
+    await telegram_bot._handle_risk_resume(update, FakeContext(args=["notapocket"]))
+
+    assert "inconnue" in update.message.replies[0].lower()
+    assert calls["resume"] == 0

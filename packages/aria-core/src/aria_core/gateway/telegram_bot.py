@@ -3238,9 +3238,12 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 
+_RISK_RESUME_POCKETS = ("scalping", "swing", "vc")
+
+
 async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/riskresume — lifts the paper portfolio's hard circuit breaker (-20% drawdown
-    or 5 consecutive losses, owner only).
+    """/riskresume [poche] — lifts the paper portfolio's hard circuit breaker (-20%
+    drawdown or 5 consecutive losses, owner only).
 
     20/07, external cross-review (finding confirmed by reading the code): without
     this command, ``risk_guard.resume_new_entries()`` was only callable by the
@@ -3251,23 +3254,47 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
     command)" -- this command closes the gap between the documented intent and the
     actually exposed surface. Same gate as /stop /resume (kill-switch): the
     risk circuit breaker also protects capital (fictional here), same trust
-    bar."""
+    bar.
+
+    27/07 -- 3-pocket architecture plan, Phase 3: ``risk_guard``'s circuit
+    breaker is now one dedicated state PER POCKET (scalping/swing/vc), never
+    a single shared one. Without an explicit pocket name, resumes ALL THREE
+    in one confirmation -- the closest equivalent to this command's original
+    single-gesture behavior, from before the per-pocket split existed. An
+    explicit ``/riskresume scalping`` (or swing/vc) targets just that one
+    pocket, left untouched otherwise."""
     if not await _owner_only(update):
         return
-    status = risk_guard.new_entry_block_status()
-    if not status["blocked"]:
-        await _reply(update.message, "▶️ Coupe-circuit inactif — rien à reprendre.")
+    args = list(getattr(context, "args", None) or [])
+    requested = args[0].strip().lower() if args else None
+    if requested and requested not in _RISK_RESUME_POCKETS:
+        await _reply(
+            update.message,
+            f"Poche inconnue « {requested} » — utilise scalping, swing ou vc "
+            "(ou omets l'argument pour lever les 3 poches à la fois).",
+        )
         return
-    since = status["since"]
-    since_txt = since.strftime("%Y-%m-%d %H:%M UTC") if since else "date inconnue"
-    reason = status["reason"] or "raison non enregistrée"
+    wallets = [requested] if requested else list(_RISK_RESUME_POCKETS)
+
     user = update.effective_user
-    risk_guard.resume_new_entries(by=user.id if user else None)
-    await _reply(
-        update.message,
-        f"▶️ Coupe-circuit levé (était armé depuis {since_txt} — {reason}).\n"
-        "Les nouvelles entrées momentum reprennent au prochain cycle.",
-    )
+    lines: list[str] = []
+    any_resumed = False
+    for wallet in wallets:
+        status = risk_guard.new_entry_block_status(wallet)
+        if not status["blocked"]:
+            lines.append(f"▶️ Poche {wallet.upper()} : coupe-circuit inactif — rien à reprendre.")
+            continue
+        since = status["since"]
+        since_txt = since.strftime("%Y-%m-%d %H:%M UTC") if since else "date inconnue"
+        reason = status["reason"] or "raison non enregistrée"
+        risk_guard.resume_new_entries(wallet, by=user.id if user else None)
+        any_resumed = True
+        lines.append(
+            f"▶️ Poche {wallet.upper()} : coupe-circuit levé (était armé depuis {since_txt} — {reason})."
+        )
+    if any_resumed:
+        lines.append("Les nouvelles entrées momentum reprennent au prochain cycle pour la/les poche(s) concernée(s).")
+    await _reply(update.message, "\n".join(lines))
 
 
 def _register_handlers(app: Application) -> None:

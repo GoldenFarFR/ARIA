@@ -205,10 +205,10 @@ async def test_reanalyze_for_watching_network_failure_fails_closed(monkeypatch):
 # ── process_active_orders orchestration ──────────────────────────────────────
 
 
-def _fake_risk_state(*, blocked=False, alloc_multiplier=1.0, equity=1_000_000.0):
+def _fake_risk_state(*, wallet="swing", blocked=False, alloc_multiplier=1.0, equity=1_000_000.0):
     return risk_guard.PortfolioRiskState(
-        equity=equity, high_water_mark=equity, drawdown_pct=0.0, consecutive_losses=0,
-        alloc_multiplier=alloc_multiplier, blocked=blocked,
+        wallet=wallet, equity=equity, high_water_mark=equity, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=alloc_multiplier, blocked=blocked,
     )
 
 
@@ -314,14 +314,14 @@ async def test_process_active_orders_watching_triggers_buy(monkeypatch):
     assert len(notified) == 1  # format_buy_alert
 
 
-async def _fake_evaluate_portfolio_risk(*, price_lookup=None):
-    return _fake_risk_state()
+async def _fake_evaluate_portfolio_risk(wallet="swing", *, price_lookup=None):
+    return _fake_risk_state(wallet=wallet)
 
 
 @pytest.mark.asyncio
 async def test_process_active_orders_watching_trigger_skipped_if_portfolio_blocked(monkeypatch):
-    async def _blocked(*, price_lookup=None):
-        return _fake_risk_state(blocked=True)
+    async def _blocked(wallet="swing", *, price_lookup=None):
+        return _fake_risk_state(wallet=wallet, blocked=True)
 
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _blocked)
     await paper_trader.reset_portfolio(1_000_000.0)

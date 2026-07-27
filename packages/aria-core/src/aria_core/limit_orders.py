@@ -416,9 +416,13 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     ):
         return None
 
-    risk_state = await risk_guard.evaluate_portfolio_risk()
+    # 27/07 -- 3-pocket architecture plan, Phase 3: risk_guard's circuit
+    # breaker is now per-pocket -- checked against THIS order's OWN pocket
+    # (``wallet``, resolved above), never a stale unscoped call that would
+    # let a different pocket's drawdown wrongly block/allow this trigger.
+    risk_state = await risk_guard.evaluate_portfolio_risk(wallet)
     if risk_state.blocked:
-        return None  # portfolio-level circuit breaker armed since the order was placed
+        return None  # this pocket's circuit breaker armed since the order was placed
 
     start = await paper_trader.starting_capital(wallet=wallet)
     weekly_context = None

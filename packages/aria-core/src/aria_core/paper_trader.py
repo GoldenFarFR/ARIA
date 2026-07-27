@@ -1599,7 +1599,7 @@ async def open_position(
     # the current heartbeat cycle.
     from aria_core import risk_guard
 
-    blocked, reason = risk_guard.blocks_new_entries()
+    blocked, reason = risk_guard.blocks_new_entries(wallet)
     if blocked:
         logger.info("open_position: refused by risk_guard (%s)", reason)
         return None
@@ -2704,7 +2704,11 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
     # Risk circuit breaker (operator decision 07/23): the floor never forces a
     # trade past the drawdown / consecutive-loss hard stop -- observing her risk
     # management kick in is itself diagnostic.
-    risk_state = await risk_guard.evaluate_portfolio_risk()
+    # 27/07 -- 3-pocket architecture plan, Phase 3: this diagnostic floor always
+    # books into "swing" (see the wallet="swing" comment on open_position()
+    # below) -- its own risk check must stay scoped to that SAME pocket now
+    # that risk_guard's state is per-pocket, never a stale unscoped call.
+    risk_state = await risk_guard.evaluate_portfolio_risk(wallet="swing")
     if risk_state.blocked:
         actions["outcome"] = "skipped"
         actions["reason"] = "risk_circuit_breaker"
@@ -3125,7 +3129,12 @@ async def run_weekly_reset(*, price_lookup=None, wallet: str = "swing") -> dict:
     # paper_trader, never the reverse at module level, see open_position above).
     from aria_core import risk_guard
 
-    risk_guard.resume_new_entries(by="weekly_reset_auto")
+    # 27/07 -- 3-pocket architecture plan, Phase 3: risk_guard's circuit
+    # breaker is now per-pocket -- resumes ONLY the pocket THIS reset just
+    # ran for (``wallet``, already threaded through this whole function),
+    # never a hardcoded "swing" that would silently no-op for a future
+    # pocket that also adopts this weekly reset (Phase 4).
+    risk_guard.resume_new_entries(wallet, by="weekly_reset_auto")
 
     # 07/22 -- Task 2: full transparency on the satellite pocket, never a
     # silent mechanism (same doctrine as the rest of the project -- crossing a
@@ -4226,22 +4235,47 @@ async def _run_paper_cycle_locked(
     # breaker is armed) and BEFORE any opening attempt. Updates the persisted
     # equity high-water mark, arms the dedicated circuit breaker if a hard
     # threshold is crossed for the first time.
+    #
+    # 27/07 -- 3-pocket architecture plan, Phase 3 (real bug fixed):
+    # ``multi_pocket_mode`` is resolved HERE, moved up from its original spot
+    # at the ``if multi_pocket_sourcing_enabled() and default_sourcing:``
+    # branch further below -- ``candidates``/``analyzer`` are plain function
+    # parameters, never reassigned before this point, so this yields the
+    # exact same value the old ``default_sourcing`` check computed later.
+    # Needed HERE because risk_guard's circuit breaker is now per-pocket
+    # (``wallet`` mandatory): the snapshot below stays scoped to "swing" (it
+    # still feeds ``weekly_context`` a few lines down, and this pocket's own
+    # alert), but must NEVER return early in multi-pocket mode -- before this
+    # fix, a drawdown on the swing pocket ALONE silently returned before ever
+    # reaching the 3-pocket loop, blocking scalping+vc too, even though
+    # they're independent $1M portfolios with their OWN risk state.
     from aria_core import risk_guard
 
-    risk_state = await risk_guard.evaluate_portfolio_risk(price_lookup=price_lookup)
+    multi_pocket_mode = multi_pocket_sourcing_enabled() and candidates is None and analyzer is None
+
+    risk_state = await risk_guard.evaluate_portfolio_risk(wallet="swing", price_lookup=price_lookup)
     actions["risk_state"] = risk_state
     if risk_state.newly_triggered_hard and notifier:
         try:
-            await notifier(risk_guard.format_hard_circuit_breaker_alert(risk_state))
+            await notifier(risk_guard.format_hard_circuit_breaker_alert(risk_state, "swing"))
         except Exception:  # noqa: BLE001 — the alert doesn't break the cycle
             pass
     elif risk_state.newly_triggered_soft and notifier:
         try:
-            await notifier(risk_guard.format_soft_drawdown_alert(risk_state))
+            await notifier(risk_guard.format_soft_drawdown_alert(risk_state, "swing"))
         except Exception:  # noqa: BLE001
             pass
 
-    if risk_state.blocked:
+    # Single-pocket path (gate OFF, or an explicit caller-provided
+    # candidates/analyzer): unchanged historical behavior -- there IS only
+    # one pocket on this path, so a blocked swing snapshot stops this cycle's
+    # new entries entirely, exactly as before this chantier.
+    # Multi-pocket path: the swing snapshot above is still computed (feeds
+    # weekly_context below and the swing pocket's own alert) but must never
+    # return early here -- each of the 3 pockets gets its OWN
+    # risk_guard.evaluate_portfolio_risk(pocket_wallet) further down in the
+    # loop, and only THAT pocket is skipped (``continue``) if blocked.
+    if risk_state.blocked and not multi_pocket_mode:
         # Hard threshold (or global pause): no NEW entry this round -- already-open
         # positions have already been managed normally above (step 1).
         return actions
@@ -4309,10 +4343,13 @@ async def _run_paper_cycle_locked(
     # behavior regardless of this gate, always booking into "swing" as
     # before -- multi-pocket sourcing never overrides an explicit caller's
     # own candidate/analyzer choice).
-    default_sourcing = candidates is None and analyzer is None
+    # ``default_sourcing``/the gate check is now folded into ``multi_pocket_
+    # mode``, resolved earlier (right before the risk snapshot above) so that
+    # snapshot could decide whether to return early -- kept as the same
+    # boolean expression, just computed once instead of twice.
     funnel: dict[str, int] = {}
 
-    if multi_pocket_sourcing_enabled() and default_sourcing:
+    if multi_pocket_mode:
         # gate ON, default heartbeat case: 3 independent pockets (scalping/
         # swing/vc), NEVER mixing candidates/analyzers across them. Momentum
         # discovery (#194) is fetched ONCE and shared by scalping+swing (same
@@ -4348,6 +4385,29 @@ async def _run_paper_cycle_locked(
             )
             return actions
 
+        # 27/07 -- Phase 3: MACRO circuit breaker, checked ONCE per cycle,
+        # BEFORE any of the 3 per-pocket risk checks below (a correlated
+        # crash across all 3 pockets at once is a reason to stop EVERYTHING,
+        # not just let each pocket notice its own drawdown independently).
+        # ``newly_triggered`` arms ``outgoing_pause`` itself (the REAL global
+        # kill-switch) -- see ``evaluate_macro_risk``'s own docstring for why
+        # that's intentional here. Best-effort: a failure here degrades to
+        # "not triggered" (never blocks the cycle on an unrelated error),
+        # same doctrine as the depeg check just above.
+        try:
+            macro_state = await risk_guard.evaluate_macro_risk(price_lookup=price_lookup)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("paper_cycle: macro circuit breaker check failed (%s)", exc)
+            macro_state = None
+        actions["macro_risk_state"] = macro_state
+        if macro_state is not None and macro_state.newly_triggered:
+            if notifier:
+                try:
+                    await notifier(risk_guard.format_macro_circuit_breaker_alert(macro_state))
+                except Exception:  # noqa: BLE001
+                    pass
+            return actions
+
         # We don't re-enter a name we just EXITED this round (avoids churn: an
         # exit on trailing stop/last stage requires a new signal on the next
         # round, not an immediate rebuy) -- shared across all 3 pockets, same
@@ -4369,12 +4429,34 @@ async def _run_paper_cycle_locked(
             ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
             ("vc", vc_candidates, _default_analyzer, "standard", MAX_POSITIONS_VC),
         ):
+            # 27/07 -- Phase 3: independent per-pocket risk state -- SUPERSEDES
+            # the single ``risk_state`` snapshot computed above (that one
+            # stays "swing"-scoped, only used for weekly_context/its own
+            # alert). A drawdown/losing streak on ONE pocket alone must never
+            # block the other two: skip (``continue``) THIS pocket only,
+            # never a global ``return``.
+            pocket_risk_state = await risk_guard.evaluate_portfolio_risk(
+                pocket_wallet, price_lookup=price_lookup,
+            )
+            if pocket_risk_state.newly_triggered_hard and notifier:
+                try:
+                    await notifier(risk_guard.format_hard_circuit_breaker_alert(pocket_risk_state, pocket_wallet))
+                except Exception:  # noqa: BLE001
+                    pass
+            elif pocket_risk_state.newly_triggered_soft and notifier:
+                try:
+                    await notifier(risk_guard.format_soft_drawdown_alert(pocket_risk_state, pocket_wallet))
+                except Exception:  # noqa: BLE001
+                    pass
+            if pocket_risk_state.blocked:
+                continue
+
             opened_positions, _ = await _open_new_entries_for_wallet(
                 pocket_wallet, pocket_candidates, pocket_analyzer,
                 price_lookup=price_lookup, notifier=notifier, max_new=max_new,
                 using_default_price_lookup=using_default_price_lookup,
                 closed_this_cycle=closed_this_cycle, weekly_context=weekly_context,
-                risk_state=risk_state, discovery_channel=discovery_channel,
+                risk_state=pocket_risk_state, discovery_channel=discovery_channel,
                 trading_mode=pocket_mode, max_positions_cap=pocket_cap,
                 funnel=funnel,
             )

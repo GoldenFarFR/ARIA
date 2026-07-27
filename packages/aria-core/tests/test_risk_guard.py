@@ -589,34 +589,45 @@ class TestApplySwapFee:
 
 class TestNewEntryBlockState:
     def test_default_not_blocked(self, tmp_db):
-        blocked, reason = risk_guard.blocks_new_entries()
+        blocked, reason = risk_guard.blocks_new_entries("swing")
         assert blocked is False
         assert reason is None
 
     def test_block_then_resume(self, tmp_db):
-        risk_guard.block_new_entries("drawdown 22%", by=999)
-        blocked, reason = risk_guard.blocks_new_entries()
+        risk_guard.block_new_entries("swing", "drawdown 22%", by=999)
+        blocked, reason = risk_guard.blocks_new_entries("swing")
         assert blocked is True
         assert "drawdown 22%" in reason
 
-        risk_guard.resume_new_entries(by=999)
-        blocked, reason = risk_guard.blocks_new_entries()
+        risk_guard.resume_new_entries("swing", by=999)
+        blocked, reason = risk_guard.blocks_new_entries("swing")
         assert blocked is False
         assert reason is None
 
     def test_state_persists_on_disk_separate_file_from_outgoing_pause(self, tmp_db):
-        risk_guard.block_new_entries("test")
-        state_file = tmp_db / "risk_guard_state.json"
+        risk_guard.block_new_entries("swing", "test")
+        state_file = tmp_db / "risk_guard_state_swing.json"
         assert state_file.exists()
         assert not (tmp_db / "pause_state.json").exists()
         data = json.loads(state_file.read_text(encoding="utf-8"))
         assert data["blocked"] is True
 
+    def test_each_pocket_has_its_own_dedicated_state_file(self, tmp_db):
+        """27/07, Phase 3: arming ONE pocket's breaker must never touch the
+        other two pockets' own files -- the real bug this chantier fixes."""
+        risk_guard.block_new_entries("scalping", "test scalping only")
+        assert (tmp_db / "risk_guard_state_scalping.json").exists()
+        assert not (tmp_db / "risk_guard_state_swing.json").exists()
+        assert not (tmp_db / "risk_guard_state_vc.json").exists()
+        assert risk_guard.blocks_new_entries("scalping") == (True, "test scalping only")
+        assert risk_guard.blocks_new_entries("swing") == (False, None)
+        assert risk_guard.blocks_new_entries("vc") == (False, None)
+
     def test_corrupt_file_fails_closed(self, tmp_db):
         """Doctrine argent : contrairement à outgoing_pause (fail-open jobs), ce coupe-circuit
         est TOUJOURS money-adjacent -> fail-closed sur corruption, jamais fail-open."""
-        (tmp_db / "risk_guard_state.json").write_text("{ not valid json", encoding="utf-8")
-        blocked, reason = risk_guard.blocks_new_entries()
+        (tmp_db / "risk_guard_state_swing.json").write_text("{ not valid json", encoding="utf-8")
+        blocked, reason = risk_guard.blocks_new_entries("swing")
         assert blocked is True
         assert "illisible" in reason.lower() or "corrompu" in reason.lower()
 
@@ -624,17 +635,17 @@ class TestNewEntryBlockState:
         """outgoing_pause actif bloque aussi les nouvelles entrées paper (respecté), mais la
         raison rapportée distingue clairement les deux mécanismes -- jamais confondus."""
         outgoing_pause.pause(by=1, reason="stop opérateur")
-        blocked, reason = risk_guard.blocks_new_entries()
+        blocked, reason = risk_guard.blocks_new_entries("swing")
         assert blocked is True
         assert "pause globale" in reason.lower()
 
         outgoing_pause.resume(by=1)
-        assert risk_guard.blocks_new_entries() == (False, None)
+        assert risk_guard.blocks_new_entries("swing") == (False, None)
 
         # Le coupe-circuit dédié, lui, reste indépendant : l'armer ne touche jamais
         # l'état d'outgoing_pause (fichier séparé, jamais modifié par risk_guard).
         pause_before = (tmp_db / "pause_state.json").read_text(encoding="utf-8")
-        risk_guard.block_new_entries("drawdown")
+        risk_guard.block_new_entries("swing", "drawdown")
         assert (tmp_db / "pause_state.json").read_text(encoding="utf-8") == pause_before
         assert outgoing_pause.is_paused() is False
 
@@ -646,7 +657,7 @@ class TestEvaluatePortfolioRisk:
     @pytest.mark.asyncio
     async def test_no_drawdown_normal_state(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        state = await risk_guard.evaluate_portfolio_risk()
+        state = await risk_guard.evaluate_portfolio_risk("swing")
         assert state.equity == 1_000_000.0
         assert state.high_water_mark == 1_000_000.0
         assert state.drawdown_pct == 0.0
@@ -663,7 +674,7 @@ class TestEvaluatePortfolioRisk:
         async def price_lookup(contract):
             return 2.0  # +100k de valeur latente -> équité 1.1M, nouveau plus haut
 
-        state = await risk_guard.evaluate_portfolio_risk(price_lookup=price_lookup)
+        state = await risk_guard.evaluate_portfolio_risk("swing", price_lookup=price_lookup)
         assert round(state.equity) == 1_100_000
         assert state.high_water_mark == state.equity
         assert await pt.get_equity_high_water_mark() == state.equity
@@ -678,14 +689,14 @@ class TestEvaluatePortfolioRisk:
         await pt.open_position(B, "BBB", 1.0, alloc_usd=120_000, wallet="swing")
         await pt.close_position(B, 0.001)  # quasi-perte totale des 120k -> équité ~880k, DD ~12%
 
-        state = await risk_guard.evaluate_portfolio_risk()
+        state = await risk_guard.evaluate_portfolio_risk("swing")
         assert round(state.drawdown_pct, 2) == 0.12
         assert state.alloc_multiplier == risk_guard.SOFT_ALLOC_MULTIPLIER
         assert state.blocked is False
         assert state.newly_triggered_soft is True
 
         # Un second appel dans la même bande ne redéclenche pas la notif (évite le bruit).
-        state2 = await risk_guard.evaluate_portfolio_risk()
+        state2 = await risk_guard.evaluate_portfolio_risk("swing")
         assert state2.newly_triggered_soft is False
         assert state2.alloc_multiplier == risk_guard.SOFT_ALLOC_MULTIPLIER
 
@@ -695,13 +706,13 @@ class TestEvaluatePortfolioRisk:
         await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
         await pt.close_position(A, 0.2)  # perte de 200k sur 250k -> équité 800k, DD 20%
 
-        state = await risk_guard.evaluate_portfolio_risk()
+        state = await risk_guard.evaluate_portfolio_risk("swing")
         assert state.drawdown_pct >= risk_guard.HARD_DRAWDOWN_PCT
         assert state.blocked is True
         assert state.newly_triggered_hard is True
 
         # Persisté : un nouvel appel confirme toujours bloqué, sans re-déclencher la notif.
-        state2 = await risk_guard.evaluate_portfolio_risk()
+        state2 = await risk_guard.evaluate_portfolio_risk("swing")
         assert state2.blocked is True
         assert state2.newly_triggered_hard is False
 
@@ -710,11 +721,11 @@ class TestEvaluatePortfolioRisk:
         async def recovered_price(contract):
             return 10.0  # équité largement remontée
 
-        state3 = await risk_guard.evaluate_portfolio_risk(price_lookup=recovered_price)
+        state3 = await risk_guard.evaluate_portfolio_risk("swing", price_lookup=recovered_price)
         assert state3.blocked is True
 
-        risk_guard.resume_new_entries(by=1)
-        blocked, _ = risk_guard.blocks_new_entries()
+        risk_guard.resume_new_entries("swing", by=1)
+        blocked, _ = risk_guard.blocks_new_entries("swing")
         assert blocked is False
 
     @pytest.mark.asyncio
@@ -724,7 +735,7 @@ class TestEvaluatePortfolioRisk:
             await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000, wallet="swing")
             await pt.close_position(contract, 0.5, reason="perte")  # petite perte à chaque fois
 
-        state = await risk_guard.evaluate_portfolio_risk()
+        state = await risk_guard.evaluate_portfolio_risk("swing")
         assert state.consecutive_losses == 5
         assert state.blocked is True
         assert "pertes consécutives" in (state.blocked_reason or "")
@@ -740,7 +751,7 @@ class TestEvaluatePortfolioRisk:
         await pt.open_position(win_contract, "WIN", 1.0, alloc_usd=1_000, wallet="swing")
         await pt.close_position(win_contract, 2.0, reason="gain")
 
-        state = await risk_guard.evaluate_portfolio_risk()
+        state = await risk_guard.evaluate_portfolio_risk("swing")
         assert state.consecutive_losses == 0
         assert state.blocked is False
 
@@ -752,7 +763,7 @@ class TestWiredIntoPaperTrader:
     @pytest.mark.asyncio
     async def test_open_position_refuses_when_blocked(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        risk_guard.block_new_entries("test hard block")
+        risk_guard.block_new_entries("swing", "test hard block")
         pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000, wallet="swing")
         assert pos is None
 
@@ -767,7 +778,7 @@ class TestWiredIntoPaperTrader:
     @pytest.mark.asyncio
     async def test_run_paper_cycle_skips_new_entries_when_hard_blocked(self, tmp_db):
         await pt.reset_portfolio(1_000_000.0)
-        risk_guard.block_new_entries("test")
+        risk_guard.block_new_entries("swing", "test")
 
         async def analyzer(contract):
             return {"action": "BUY", "symbol": "X", "price": 1.0, "target": 2.0, "invalidation": 0.5}
@@ -803,7 +814,7 @@ class TestWiredIntoPaperTrader:
         ouvertes continuent d'être gérées par leur propre stop/take-profit."""
         await pt.reset_portfolio(1_000_000.0)
         await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
-        risk_guard.block_new_entries("test")
+        risk_guard.block_new_entries("swing", "test")
 
         async def price_lookup(contract):
             return 0.4  # sous l'invalidation -> doit se fermer normalement
@@ -811,3 +822,162 @@ class TestWiredIntoPaperTrader:
         act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
         assert len(act["closed"]) == 1
         assert not await pt.has_open(B)
+
+
+# ── 5. Isolation par poche (27/07, Phase 3) -- le vrai bug corrigé par ce chantier :
+#      avant, un seul état de coupe-circuit partagé faisait qu'un drawdown/une série de
+#      pertes sur UNE SEULE poche bloquait/contaminait les 3. ─────────────────────────
+
+
+class TestPerPocketDrawdownIsolation:
+    @pytest.mark.asyncio
+    async def test_drawdown_on_scalping_alone_never_blocks_swing_or_vc(self, tmp_db):
+        """LE bug corrigé par ce chantier : avant, un seul fichier d'état partagé
+        faisait qu'un drawdown dur sur UNE poche bloquait le sourcing des 3 à la
+        fois. Chaque poche a maintenant son propre fichier, entièrement indépendant."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+
+        # Creuse un drawdown DUR (-20%) sur "scalping" SEULE.
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="scalping")
+        await pt.close_position(A, 0.2, reason="perte")  # perte de 200k sur 250k -> DD 20%
+
+        scalping_state = await risk_guard.evaluate_portfolio_risk("scalping")
+        assert scalping_state.blocked is True
+        assert scalping_state.newly_triggered_hard is True
+
+        blocked_scalping, _ = risk_guard.blocks_new_entries("scalping")
+        blocked_swing, _ = risk_guard.blocks_new_entries("swing")
+        blocked_vc, _ = risk_guard.blocks_new_entries("vc")
+        assert blocked_scalping is True
+        assert blocked_swing is False
+        assert blocked_vc is False
+
+        # Confirmé aussi via un vrai evaluate_portfolio_risk sur les 2 autres poches :
+        # équité intacte, jamais un drawdown hérité de scalping.
+        swing_state = await risk_guard.evaluate_portfolio_risk("swing")
+        vc_state = await risk_guard.evaluate_portfolio_risk("vc")
+        assert swing_state.blocked is False
+        assert swing_state.drawdown_pct == 0.0
+        assert vc_state.blocked is False
+        assert vc_state.drawdown_pct == 0.0
+
+    @pytest.mark.asyncio
+    async def test_consecutive_losses_scoped_per_pocket(self, tmp_db):
+        """Le compteur de pertes consécutives ne doit JAMAIS mélanger les poches --
+        bug d'origine : ``get_closed_positions()`` sans ``wallet=`` comptait toutes
+        les poches ensemble."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(10_000_000.0, wallet=wallet)  # capital large : DD% reste faible
+
+        contracts = [A, B, C, "0x" + "d" * 40, "0x" + "e" * 40]
+        for i, contract in enumerate(contracts):
+            await pt.open_position(contract, f"T{i}", 1.0, alloc_usd=1_000, wallet="scalping")
+            await pt.close_position(contract, 0.5, reason="perte")
+
+        scalping_state = await risk_guard.evaluate_portfolio_risk("scalping")
+        assert scalping_state.consecutive_losses == 5
+        assert scalping_state.blocked is True
+
+        # "swing" et "vc" n'ont AUCUNE position clôturée -- leur propre compteur
+        # doit rester à 0, jamais contaminé par les 5 pertes de scalping.
+        swing_state = await risk_guard.evaluate_portfolio_risk("swing")
+        vc_state = await risk_guard.evaluate_portfolio_risk("vc")
+        assert swing_state.consecutive_losses == 0
+        assert swing_state.blocked is False
+        assert vc_state.consecutive_losses == 0
+        assert vc_state.blocked is False
+
+
+# ── 6. Coupe-circuit MACRO (27/07, Phase 3) -- agrège l'équité des 3 poches,
+#      backstop pour un krach CORRÉLÉ où chaque poche reste individuellement sous
+#      son propre seuil HARD_DRAWDOWN_PCT (20%). ────────────────────────────────
+
+
+class TestMacroCircuitBreaker:
+    @pytest.mark.asyncio
+    async def test_not_triggered_at_rest_no_false_positive(self, tmp_db):
+        """Comportement au repos, aucune perte -- jamais un faux positif basique
+        écriture/lecture du fichier d'état macro."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+
+        state = await risk_guard.evaluate_macro_risk()
+        assert state.blocked is False
+        assert state.newly_triggered is False
+        assert round(state.total_equity) == 3_000_000
+        assert round(state.total_high_water_mark) == 3_000_000
+        assert state.drawdown_pct == 0.0
+        assert outgoing_pause.is_paused() is False
+
+        # Un second appel, toujours au repos, ne déclenche rien non plus.
+        state2 = await risk_guard.evaluate_macro_risk()
+        assert state2.blocked is False
+        assert state2.newly_triggered is False
+        assert outgoing_pause.is_paused() is False
+
+    @pytest.mark.asyncio
+    async def test_triggers_on_aggregated_loss_below_each_pockets_own_hard_threshold(self, tmp_db):
+        """Chaque poche perd individuellement ~16% (SOUS son propre seuil HARD de
+        20%), mais la perte AGRÉGÉE des 3 poches dépasse le seuil MACRO de 15% --
+        le vrai angle mort que ce coupe-circuit comble."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+
+        # Établit le plus haut MACRO (3M) AVANT toute perte.
+        baseline = await risk_guard.evaluate_macro_risk()
+        assert baseline.newly_triggered is False
+        assert round(baseline.total_high_water_mark) == 3_000_000
+
+        # Perte de 160k (16%) sur CHACUNE des 3 poches -- individuellement sous
+        # HARD_DRAWDOWN_PCT (20%), jamais un déclenchement par poche.
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.open_position(A, "AAA", 1.0, alloc_usd=200_000, wallet=wallet)
+            await pt.close_position(A, 0.2, reason="perte")  # -160k sur 200k -> DD 16%
+            pocket_state = await risk_guard.evaluate_portfolio_risk(wallet)
+            assert pocket_state.drawdown_pct < risk_guard.HARD_DRAWDOWN_PCT
+            assert pocket_state.blocked is False
+
+        assert outgoing_pause.is_paused() is False  # pas encore déclenché côté macro
+
+        macro_state = await risk_guard.evaluate_macro_risk()
+        assert macro_state.drawdown_pct >= risk_guard.MACRO_CIRCUIT_BREAKER_LOSS_PCT
+        assert macro_state.newly_triggered is True
+        assert macro_state.blocked is True
+        assert outgoing_pause.is_paused() is True
+
+        # Un second appel, déjà déclenché : ne redéclenche pas (déjà armé), mais
+        # reste "blocked" tant que /resume n'a pas été appelé.
+        macro_state2 = await risk_guard.evaluate_macro_risk()
+        assert macro_state2.newly_triggered is False
+        assert macro_state2.blocked is True
+
+    @pytest.mark.asyncio
+    async def test_resume_allows_a_later_independent_retrigger(self, tmp_db):
+        """Un /resume opérateur explicite (jamais automatique) doit permettre au
+        coupe-circuit MACRO de se réarmer sur un krach LATER, indépendant --
+        jamais "consommé" une seule fois pour toujours."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+        await risk_guard.evaluate_macro_risk()  # établit le plus haut
+
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.open_position(A, "AAA", 1.0, alloc_usd=200_000, wallet=wallet)
+            await pt.close_position(A, 0.2, reason="perte")
+
+        first = await risk_guard.evaluate_macro_risk()
+        assert first.newly_triggered is True
+        assert outgoing_pause.is_paused() is True
+
+        outgoing_pause.resume(by=1)
+        assert outgoing_pause.is_paused() is False
+
+        # Nouvelle perte corrélée, plus tard : doit re-déclencher, pas rester
+        # silencieux à cause d'un flag "triggered" resté vrai dans le fichier macro.
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.open_position(B, "BBB", 1.0, alloc_usd=200_000, wallet=wallet)
+            await pt.close_position(B, 0.2, reason="perte")
+
+        second = await risk_guard.evaluate_macro_risk()
+        assert second.newly_triggered is True
+        assert outgoing_pause.is_paused() is True

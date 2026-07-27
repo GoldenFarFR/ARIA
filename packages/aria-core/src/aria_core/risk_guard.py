@@ -14,18 +14,30 @@ conservative than these extreme bounds (2%/20% rather than 1%/33%),
 consistent with capital that's still fictional but whose goal is to prove
 a discipline transposable to the real thing.
 
-Two distinct mechanisms, never to be confused:
+Three distinct mechanisms, never to be confused:
 1. Per-trade sizing (``size_position_by_risk``) -- a PURE function, no
    persisted state, caps an allocation based on the distance to
    invalidation. NEVER raises an allocation beyond its entry value -- a
    cap, never a bonus.
-2. Portfolio circuit breaker (``evaluate_portfolio_risk``/
-   ``blocks_new_entries``) -- persisted state (dedicated JSON file, NOT
-   ``outgoing_pause.py`` -- that global kill-switch also cuts cycles
-   unrelated to money, e.g. ``knowledge_inbox``). ``blocks_new_entries``
-   itself respects ``outgoing_pause`` (a global pause also blocks new paper
-   entries) WITHOUT ever being confused with it -- two separate state
-   files, two distinct reasons reported to the caller.
+2. Per-pocket portfolio circuit breaker (``evaluate_portfolio_risk``/
+   ``blocks_new_entries``, both take a mandatory ``wallet``) -- persisted
+   state, ONE dedicated JSON file PER POCKET (scalping/swing/vc -- 27/07,
+   3-pocket architecture plan Phase 3), NOT ``outgoing_pause.py`` -- that
+   global kill-switch also cuts cycles unrelated to money, e.g.
+   ``knowledge_inbox``. ``blocks_new_entries`` itself respects
+   ``outgoing_pause`` (a global pause also blocks new paper entries in
+   EVERY pocket at once) WITHOUT ever being confused with it -- separate
+   state files, distinct reasons reported to the caller. A drawdown/losing
+   streak on ONE pocket alone must never block the other two -- the real
+   gap this Phase 3 work closes (before it, a single shared, unscoped call
+   site silently made a scalping-only drawdown block swing+vc too).
+3. MACRO circuit breaker (``evaluate_macro_risk``, section 3 below) --
+   aggregates equity across all 3 pockets, checked once per cycle BEFORE
+   any per-pocket check. Deliberately coarser and more drastic: on first
+   breach it arms ``outgoing_pause`` itself (the real, portfolio-external
+   kill-switch), covering the blind spot the per-pocket split above
+   creates -- a genuinely correlated crash across all 3 pockets at once,
+   where each could individually sit just under its own hard threshold.
 """
 from __future__ import annotations
 
@@ -545,7 +557,8 @@ def simulated_exit_price(
     return price * max(0.0, 1.0 - _price_impact_pct(position_value_usd, pool_liquidity_usd))
 
 
-# ── 2. Portfolio circuit breaker (persisted state, dedicated file) ────────
+# ── 2. Per-pocket portfolio circuit breaker (persisted state, ONE dedicated
+# file PER POCKET) ──────────────────────────────────────────────────────────
 
 SOFT_DRAWDOWN_PCT = 0.10       # -10% from equity high -> alloc halved
 HARD_DRAWDOWN_PCT = 0.20       # -20% from the high -> blocks any new entry
@@ -556,44 +569,57 @@ _BAND_NONE = "none"
 _BAND_SOFT = "soft"
 _BAND_HARD = "hard"
 
+# 27/07 -- 3-pocket architecture plan, Phase 3 (real security gap closed --
+# see the module docstring's item 2). ``wallet`` below is a MANDATORY,
+# no-default parameter on every function in this section: it deliberately
+# forces every caller (including every existing test) to consciously pick
+# WHICH of the 3 independent $1M pockets (scalping/swing/vc) it's reading/
+# arming/resuming, rather than silently inheriting a stale implicit
+# "swing"/shared default -- exactly the class of bug this chantier fixes
+# (before it, a single unscoped circuit-breaker check made a drawdown on ONE
+# pocket alone block new entries in ALL 3).
 
-def _state_path() -> Path:
-    return data_dir() / "risk_guard_state.json"
+
+def _state_path(wallet: str) -> Path:
+    return data_dir() / f"risk_guard_state_{wallet}.json"
 
 
-def _read_raw() -> dict[str, Any] | None:
+def _read_raw(wallet: str) -> dict[str, Any] | None:
     """Same three-state semantics as ``outgoing_pause._read_raw``:
     ``{}`` (file absent -- never triggered, not a doubt), ``dict``
     (read correctly), ``None`` (corrupted -- UNKNOWN state)."""
-    path = _state_path()
+    path = _state_path(wallet)
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, ValueError) as exc:
-        logger.warning("risk_guard_state unreadable/corrupted (%s) -- UNKNOWN state", exc)
+        logger.warning("risk_guard_state[%s] unreadable/corrupted (%s) -- UNKNOWN state", wallet, exc)
         return None
     if not isinstance(raw, dict):
-        logger.warning("risk_guard_state has unexpected shape (%r) -- UNKNOWN state", type(raw).__name__)
+        logger.warning(
+            "risk_guard_state[%s] has unexpected shape (%r) -- UNKNOWN state", wallet, type(raw).__name__,
+        )
         return None
     return raw
 
 
-def _write(payload: dict[str, Any]) -> None:
-    path = _state_path()
+def _write(wallet: str, payload: dict[str, Any]) -> None:
+    path = _state_path(wallet)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
-def new_entry_block_status() -> dict[str, Any]:
-    """Current state of the DEDICATED circuit breaker (not ``outgoing_pause``):
+def new_entry_block_status(wallet: str) -> dict[str, Any]:
+    """Current state of THIS POCKET's dedicated circuit breaker (never
+    ``outgoing_pause``, never another pocket's own file):
     ``{blocked, since, reason, by, last_alert_band, readable}``.
     ``readable=False`` signals a corrupted file -- fail-closed on the
     caller's side (``blocks_new_entries``), same "money" doctrine as
     ``outgoing_pause.money_block_reason``."""
-    raw = _read_raw()
+    raw = _read_raw(wallet)
     readable = raw is not None
     data = raw or {}
     since: datetime | None = None
@@ -615,29 +641,32 @@ def new_entry_block_status() -> dict[str, Any]:
     }
 
 
-def block_new_entries(reason: str, *, by: int | str | None = None) -> dict[str, Any]:
-    """Arms the hard tier: no more NEW paper positions until
-    ``resume_new_entries`` has been called explicitly (never
-    automatic -- see the module docstring)."""
-    status = new_entry_block_status()
+def block_new_entries(wallet: str, reason: str, *, by: int | str | None = None) -> dict[str, Any]:
+    """Arms the hard tier for THIS POCKET ONLY: no more NEW paper positions in
+    this pocket until ``resume_new_entries(wallet, ...)`` has been called
+    explicitly for it (never automatic -- see the module docstring). The
+    other 2 pockets are entirely unaffected -- separate state file each."""
     _write(
+        wallet,
         {
             "blocked": True,
             "since": datetime.now(timezone.utc).isoformat(),
             "by": by,
             "reason": (reason or "").strip(),
             "last_alert_band": _BAND_HARD,
-        }
+        },
     )
-    logger.warning("risk_guard: circuit breaker ARMED (hard tier) -- reason=%s", reason)
-    return new_entry_block_status()
+    logger.warning("risk_guard[%s]: circuit breaker ARMED (hard tier) -- reason=%s", wallet, reason)
+    return new_entry_block_status(wallet)
 
 
-def resume_new_entries(*, by: int | str | None = None) -> dict[str, Any]:
-    """Lifts the circuit breaker. NEVER called automatically by
+def resume_new_entries(wallet: str, *, by: int | str | None = None) -> dict[str, Any]:
+    """Lifts THIS POCKET's circuit breaker. NEVER called automatically by
     ``evaluate_portfolio_risk`` -- reserved for an explicit human action
-    (e.g. operator command), even if the drawdown has since recovered."""
+    (e.g. operator command) or this pocket's own weekly reset, even if the
+    drawdown has since recovered. Never touches the other 2 pockets' files."""
     _write(
+        wallet,
         {
             "blocked": False,
             "since": None,
@@ -645,32 +674,35 @@ def resume_new_entries(*, by: int | str | None = None) -> dict[str, Any]:
             "reason": "",
             "last_alert_band": _BAND_NONE,
             "resumed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        },
     )
-    logger.warning("risk_guard: circuit breaker LIFTED (manual resume) -- by=%s", by)
-    return new_entry_block_status()
+    logger.warning("risk_guard[%s]: circuit breaker LIFTED (manual resume) -- by=%s", wallet, by)
+    return new_entry_block_status(wallet)
 
 
-def blocks_new_entries() -> tuple[bool, str | None]:
-    """``(blocked, reason)`` -- combines the dedicated circuit breaker AND
-    ``outgoing_pause`` (a global pause also blocks new paper entries)
-    WITHOUT ever confusing the two mechanisms in the reported reason.
-    Fail-closed on unreadable state ("money" doctrine)."""
+def blocks_new_entries(wallet: str) -> tuple[bool, str | None]:
+    """``(blocked, reason)`` -- combines THIS POCKET's dedicated circuit
+    breaker AND ``outgoing_pause`` (a global pause blocks new paper entries
+    in EVERY pocket at once -- the real kill-switch stays global by
+    construction, unlike the per-pocket breaker) WITHOUT ever confusing the
+    two mechanisms in the reported reason. Fail-closed on unreadable state
+    ("money" doctrine)."""
     from aria_core import outgoing_pause
 
     if outgoing_pause.is_paused():
         return True, "ARIA en pause globale (kill-switch sortant) — aucune nouvelle position paper tant que /start n'est pas donné."
 
-    status = new_entry_block_status()
+    status = new_entry_block_status(wallet)
     if not status["readable"]:
-        return True, "état du coupe-circuit portefeuille illisible/corrompu — fail-closed par sécurité"
+        return True, f"état du coupe-circuit portefeuille (poche {wallet}) illisible/corrompu — fail-closed par sécurité"
     if status["blocked"]:
-        return True, status["reason"] or "coupe-circuit portefeuille armé — reprise manuelle requise"
+        return True, status["reason"] or f"coupe-circuit portefeuille (poche {wallet}) armé — reprise manuelle requise"
     return False, None
 
 
 @dataclass
 class PortfolioRiskState:
+    wallet: str                     # which of the 3 pockets this snapshot describes
     equity: float
     high_water_mark: float
     drawdown_pct: float             # 0..1 from the high
@@ -682,24 +714,34 @@ class PortfolioRiskState:
     newly_triggered_hard: bool = False
 
 
-async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
-    """Snapshot of portfolio risk -- to be called ONCE per cycle, before
-    any attempt to open a new position (never before managing
-    already-open positions, which must continue normally even with the
-    circuit breaker armed). Updates the persisted equity high water mark and arms the
-    dedicated circuit breaker if a hard tier is crossed for the first time."""
+async def evaluate_portfolio_risk(wallet: str, *, price_lookup=None) -> PortfolioRiskState:
+    """Snapshot of THIS POCKET's risk -- to be called once per cycle PER
+    POCKET, before any attempt to open a new position in THIS pocket (never
+    before managing already-open positions, which must continue normally
+    even with this pocket's circuit breaker armed). Updates THIS pocket's
+    persisted equity high-water mark and arms THIS pocket's dedicated
+    circuit breaker if a hard tier is crossed for the first time --
+    entirely independent of the other 2 pockets' own state (27/07, Phase 3:
+    the real gap this closes -- a scalping-only drawdown/losing streak must
+    never block swing/vc, and vice versa)."""
     from aria_core import paper_trader
 
-    summary = await paper_trader.portfolio_summary(price_lookup=price_lookup)
+    summary = await paper_trader.portfolio_summary(wallet=wallet, price_lookup=price_lookup)
     equity = float(summary["equity"])
 
-    hwm = await paper_trader.get_equity_high_water_mark()
+    hwm = await paper_trader.get_equity_high_water_mark(wallet=wallet)
     if equity > hwm:
         hwm = equity
-        await paper_trader.set_equity_high_water_mark(hwm)
+        await paper_trader.set_equity_high_water_mark(hwm, wallet=wallet)
     drawdown_pct = max(0.0, (hwm - equity) / hwm) if hwm > 0 else 0.0
 
-    closed = await paper_trader.get_closed_positions(limit=HARD_CONSECUTIVE_LOSSES)
+    # 27/07 -- scoped to THIS pocket: without ``wallet=`` here, a losing streak
+    # in scalping and an unrelated losing streak in vc would be counted
+    # TOGETHER toward a single shared consecutive-loss counter -- the second,
+    # confirmed cross-pocket bug this chantier fixes (the first being the
+    # early-return bug in the callers, see paper_trader.py). Each pocket now
+    # has its own genuinely independent streak.
+    closed = await paper_trader.get_closed_positions(limit=HARD_CONSECUTIVE_LOSSES, wallet=wallet)
     consecutive_losses = 0
     for p in closed:
         if (p.get("pnl_usd") or 0.0) < 0:
@@ -707,7 +749,7 @@ async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
         else:
             break
 
-    status = new_entry_block_status()
+    status = new_entry_block_status(wallet)
     already_blocked = status["blocked"]
     hard_breach = drawdown_pct >= HARD_DRAWDOWN_PCT or consecutive_losses >= HARD_CONSECUTIVE_LOSSES
     newly_triggered_hard = False
@@ -717,7 +759,7 @@ async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
             if drawdown_pct >= HARD_DRAWDOWN_PCT
             else f"{consecutive_losses} pertes consécutives"
         )
-        block_new_entries(reason)
+        block_new_entries(wallet, reason)
         newly_triggered_hard = True
         already_blocked = True
 
@@ -727,22 +769,24 @@ async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
         last_band = status["last_alert_band"]
         if soft_breach and last_band != _BAND_SOFT:
             _write(
+                wallet,
                 {
                     "blocked": False,
                     "since": None,
                     "by": None,
                     "reason": "",
                     "last_alert_band": _BAND_SOFT,
-                }
+                },
             )
             newly_triggered_soft = True
         elif not soft_breach and last_band == _BAND_SOFT:
-            _write({"blocked": False, "since": None, "by": None, "reason": "", "last_alert_band": _BAND_NONE})
+            _write(wallet, {"blocked": False, "since": None, "by": None, "reason": "", "last_alert_band": _BAND_NONE})
 
-    blocked, blocked_reason = blocks_new_entries()
+    blocked, blocked_reason = blocks_new_entries(wallet)
     alloc_multiplier = SOFT_ALLOC_MULTIPLIER if (soft_breach and not blocked) else 1.0
 
     return PortfolioRiskState(
+        wallet=wallet,
         equity=equity,
         high_water_mark=hwm,
         drawdown_pct=drawdown_pct,
@@ -755,22 +799,174 @@ async def evaluate_portfolio_risk(*, price_lookup=None) -> PortfolioRiskState:
     )
 
 
-def format_soft_drawdown_alert(state: PortfolioRiskState) -> str:
+def format_soft_drawdown_alert(state: PortfolioRiskState, wallet: str) -> str:
+    pocket_label = wallet.upper()
     return "\n".join([
-        "🧪 SIMULATION — coupe-circuit portefeuille (palier SOUPLE)",
+        f"🧪 SIMULATION — coupe-circuit portefeuille (poche {pocket_label}, palier SOUPLE)",
         f"Drawdown {state.drawdown_pct:.1%} depuis le plus haut d'équité ({state.high_water_mark:,.0f} $).",
-        f"Allocation des NOUVELLES entrées réduite de moitié (×{SOFT_ALLOC_MULTIPLIER}) jusqu'à résorption.",
-        "Positions déjà ouvertes : gérées normalement (stop suiveur/prise de profit).",
+        f"Allocation des NOUVELLES entrées de la poche {pocket_label} réduite de moitié "
+        f"(×{SOFT_ALLOC_MULTIPLIER}) jusqu'à résorption.",
+        "Positions déjà ouvertes (toutes poches) : gérées normalement (stop suiveur/prise de profit).",
         "Aucun argent réel.",
     ])
 
 
-def format_hard_circuit_breaker_alert(state: PortfolioRiskState) -> str:
+def format_hard_circuit_breaker_alert(state: PortfolioRiskState, wallet: str) -> str:
+    pocket_label = wallet.upper()
     return "\n".join([
-        "🧪 SIMULATION — coupe-circuit portefeuille (palier DUR)",
+        f"🧪 SIMULATION — coupe-circuit portefeuille (poche {pocket_label}, palier DUR)",
         f"{state.blocked_reason or 'seuil de risque franchi'}.",
-        "Toute NOUVELLE position paper est bloquée jusqu'à reprise manuelle explicite.",
-        "Positions déjà ouvertes : gérées normalement (stop suiveur/prise de profit) — aucune n'est fermée de force.",
+        f"Toute NOUVELLE position paper dans la poche {pocket_label} est bloquée jusqu'à reprise manuelle explicite.",
+        "Les 2 autres poches et les positions déjà ouvertes (toutes poches) : gérées normalement "
+        "(stop suiveur/prise de profit) — rien n'est fermé de force.",
         "Reprise : action humaine explicite requise, jamais automatique.",
+        "Aucun argent réel.",
+    ])
+
+
+# ── 3. MACRO circuit breaker (aggregated across all 3 pockets) ─────────────
+# 27/07 -- 3-pocket architecture plan, Phase 3 ("Ajout de robustesse retenu",
+# operator-approved). The 3 per-pocket breakers above are now fully
+# independent -- correct BY DESIGN (a scalping-only drawdown must never block
+# swing/vc) -- but that independence opens a new blind spot: a genuinely
+# CORRELATED, portfolio-wide crash (all 3 pockets losing together, e.g. a
+# broad crypto-market crash) could see each pocket sit just under its OWN
+# hard threshold while the combined book has, in truth, capitulated. This
+# mechanism is the backstop for exactly that scenario -- deliberately
+# coarser (one aggregate % drawdown against a dedicated MACRO high-water
+# mark, its own persisted file, never one of the 3 per-pocket files) and
+# deliberately more drastic on trigger: it arms ``outgoing_pause`` itself,
+# the REAL global kill-switch (tweets/X replies/ACP spend/scheduled jobs --
+# not just these 3 paper pockets, see outgoing_pause.py's own docstring).
+# This module still NEVER reimplements/modifies outgoing_pause.py -- it only
+# ever CALLS it, exactly like any other caller (module docstring's "never
+# recoded" doctrine, unchanged).
+MACRO_CIRCUIT_BREAKER_LOSS_PCT = 0.15  # -15% of the COMBINED 3-pocket equity vs its own macro HWM
+
+_MACRO_POCKETS = ("scalping", "swing", "vc")
+
+
+def _macro_state_path() -> Path:
+    return data_dir() / "risk_guard_state_macro.json"
+
+
+def _read_macro_raw() -> dict[str, Any] | None:
+    """Same three-state semantics as ``_read_raw`` above -- its own dedicated
+    file, never one of the 3 per-pocket files (the macro HWM tracks a
+    DIFFERENT quantity -- the sum of all 3 -- never to be confused with any
+    single pocket's own high-water mark)."""
+    path = _macro_state_path()
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        logger.warning("risk_guard_state_macro unreadable/corrupted (%s) -- UNKNOWN state", exc)
+        return None
+    if not isinstance(raw, dict):
+        logger.warning(
+            "risk_guard_state_macro has unexpected shape (%r) -- UNKNOWN state", type(raw).__name__,
+        )
+        return None
+    return raw
+
+
+def _write_macro(payload: dict[str, Any]) -> None:
+    path = _macro_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+@dataclass
+class MacroRiskState:
+    total_equity: float
+    total_high_water_mark: float
+    drawdown_pct: float
+    blocked: bool
+    newly_triggered: bool = False
+
+
+async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
+    """Snapshot of the COMBINED risk across all 3 pockets (scalping+swing+vc)
+    -- call ONCE per cycle, BEFORE any of the 3 per-pocket
+    ``evaluate_portfolio_risk`` calls (a correlated, portfolio-wide crash is
+    a reason to stop EVERYTHING at once, not just let each pocket notice its
+    own drawdown independently, possibly several cycles apart).
+
+    Deliberately more drastic than the per-pocket breaker: a first-time
+    breach (``newly_triggered``) also calls ``outgoing_pause.pause()`` -- see
+    this module's own docstring for why that's intentional here, unlike the
+    per-pocket breaker above (which only blocks NEW paper entries in its own
+    pocket). ``blocked`` reflects the state AFTER this call -- true if
+    ``outgoing_pause`` is ALREADY paused for any reason (this call, a manual
+    /stop, or anything else), reusing ``outgoing_pause.is_paused()`` rather
+    than a second, diverging notion of "paused".
+
+    The persisted ``triggered`` flag is considered live only while
+    ``outgoing_pause`` is STILL actually paused: once an operator explicitly
+    resumes (``/resume``/``/start``), this breaker is free to re-arm on a
+    LATER, independent correlated crash -- never permanently "used up" by a
+    single historical trigger."""
+    from aria_core import outgoing_pause, paper_trader
+
+    total_equity = 0.0
+    for wallet in _MACRO_POCKETS:
+        summary = await paper_trader.portfolio_summary(wallet=wallet, price_lookup=price_lookup)
+        total_equity += float(summary["equity"])
+
+    raw = _read_macro_raw()
+    hwm = float(raw.get("high_water_mark") or 0.0) if raw else 0.0
+    if total_equity > hwm:
+        hwm = total_equity
+    drawdown_pct = max(0.0, (hwm - total_equity) / hwm) if hwm > 0 else 0.0
+
+    currently_paused = outgoing_pause.is_paused()
+    persisted_triggered = bool(raw.get("triggered")) if raw else False
+    # See docstring above: a stale "triggered" flag left over from a
+    # previous breach that the operator has since manually resumed from
+    # must never permanently suppress a LATER, independent re-trigger.
+    already_triggered = persisted_triggered and currently_paused
+
+    hard_breach = drawdown_pct >= MACRO_CIRCUIT_BREAKER_LOSS_PCT
+    newly_triggered = hard_breach and not already_triggered
+
+    _write_macro({
+        "high_water_mark": hwm,
+        "triggered": already_triggered or hard_breach,
+        "last_checked_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    if newly_triggered:
+        outgoing_pause.pause(
+            by="macro_circuit_breaker",
+            reason=(
+                f"coupe-circuit MACRO : drawdown {drawdown_pct:.1%} sur l'équité combinée des "
+                f"3 poches (scalping+swing+vc) depuis le plus haut ({hwm:,.0f} $) -- krach "
+                "corrélé, toutes les poches arrêtées par sécurité."
+            ),
+        )
+
+    blocked = outgoing_pause.is_paused()
+
+    return MacroRiskState(
+        total_equity=total_equity,
+        total_high_water_mark=hwm,
+        drawdown_pct=drawdown_pct,
+        blocked=blocked,
+        newly_triggered=newly_triggered,
+    )
+
+
+def format_macro_circuit_breaker_alert(state: MacroRiskState) -> str:
+    return "\n".join([
+        "🧪 SIMULATION — coupe-circuit MACRO (portefeuille combiné, 3 poches)",
+        f"Drawdown {state.drawdown_pct:.1%} sur l'équité combinée (scalping+swing+vc) "
+        f"depuis le plus haut ({state.total_high_water_mark:,.0f} $).",
+        "TOUTES les poches sont arrêtées -- coupe-circuit MACRO déclenché, pas seulement un "
+        "palier par poche.",
+        "ARIA est mise en pause globale (kill-switch sortant) -- reprise manuelle explicite "
+        "requise (/resume).",
         "Aucun argent réel.",
     ])
