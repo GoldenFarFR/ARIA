@@ -2770,6 +2770,7 @@ async def score_wallets(
     llm=None,
     goplus=None,
     max_tokens: int | None = None,
+    skip_thesis: bool = False,
 ) -> WalletScoringReport:
     """Wallet-centric entry point (#157): 1 to 3 addresses -> hard
     disqualifiers, composite score, suspect-positive flag, LLM thesis.
@@ -2800,7 +2801,20 @@ async def score_wallets(
     independent, unlinked FIFO events (cf. "cross-chain bridges" limitation
     above) -- consolidation of METRICS per wallet, never cost-basis
     continuity across bridges.
-    """
+
+    ``skip_thesis`` (27/07, real cost bug found via an x.ai/OpenRouter usage
+    audit, operator budget request of $0.30/day LLM spend total): the
+    background catch-up loop in ``wallet_scan_queue.py`` calls this function
+    repeatedly (up to every ~20-30s for up to 4 minutes straight,
+    ``CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS``) while progressively covering ONE
+    wallet's token history -- each intermediate call was regenerating a full
+    LLM narrative thesis on a still-PARTIAL score, discarded a few seconds
+    later by the next iteration (only the numeric progress counter is ever
+    shown/used before ``full_coverage``, see ``format_wallet_scoring_report``'s
+    ``report.synthesis`` usage, only reached on the FINAL report). Default
+    ``False`` -- unchanged behavior for every existing caller (``/walletscore``
+    manual command still gets its thesis immediately, even on partial
+    coverage, as before)."""
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
     if len(addresses) > 3:
@@ -3123,7 +3137,7 @@ async def score_wallets(
     convergence_pairs = _pairwise_convergence(addresses, funding_sources)
 
     synthesis = None
-    if any(c.available for c in cards):
+    if not skip_thesis and any(c.available for c in cards):
         synthesis = await _generate_thesis(cards, convergence_pairs, llm=llm)
 
     for card in cards:

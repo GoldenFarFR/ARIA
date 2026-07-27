@@ -326,11 +326,15 @@ async def test_catchup_wallet_loops_multiple_subbatches_until_full_coverage(monk
         _FakeCard(address=A, tokens_scanned_cumulative=20, tokens_found=30, full_coverage=False, tokens_analyzed=10),
         _FakeCard(address=A, tokens_scanned_cumulative=30, tokens_found=30, full_coverage=True, tokens_analyzed=10),
     ]
-    calls: list[str] = []
+    calls: list[tuple] = []
 
     async def _fake_score_wallets(addresses, **kwargs):
-        calls.append(addresses[0])
-        return _FakeReport(wallets=[cards[len(calls) - 1]])
+        calls.append((addresses[0], kwargs.get("skip_thesis")))
+        # 27/07 (LLM cost fix): the loop makes exactly len(cards) sub-batch
+        # calls (skip_thesis=True each), then ONE final call (skip_thesis
+        # absent/False) once full_coverage is reached -- reuses the last
+        # card for that extra call rather than requiring a 4th fixture.
+        return _FakeReport(wallets=[cards[min(len(calls) - 1, len(cards) - 1)]])
 
     monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
 
@@ -340,7 +344,9 @@ async def test_catchup_wallet_loops_multiple_subbatches_until_full_coverage(monk
         notified.append(text)
 
     result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
-    assert len(calls) == 3  # all 3 sub-batches ran within this single cycle call
+    # 3 sub-batches (skip_thesis=True) + 1 final thesis-bearing call.
+    assert len(calls) == 4
+    assert [c[1] for c in calls] == [True, True, True, None]
     assert result["completed_first_time"] == [A]
     # Only the FINAL state is reported -- no per-sub-batch progress spam.
     assert len(notified) == 1

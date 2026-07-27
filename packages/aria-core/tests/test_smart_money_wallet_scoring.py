@@ -1174,6 +1174,62 @@ class TestScoreWalletsEndToEnd:
         assert report.synthesis == "synthèse test"
 
     @pytest.mark.asyncio
+    async def test_skip_thesis_never_calls_the_llm(self, tmp_path, monkeypatch):
+        """27/07, real LLM cost bug (x.ai usage audit, operator $0.30/day
+        budget request): wallet_scan_queue.py's catch-up loop was
+        regenerating a full narrative thesis on every intermediate sub-batch.
+        ``skip_thesis=True`` must skip the LLM call entirely (never even
+        invoked) while the deterministic composite score is computed exactly
+        as before -- same fixtures as test_profitable_wallet_scored_and_
+        thesis_attached, only skip_thesis differs."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        pool_created = _dt(-1)
+        buy_ts = _dt(0)
+        sell_ts = _dt(2)
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0),
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=TOKEN_X, ts=buy_ts, amount=5.0),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=TOKEN_X, ts=sell_ts, amount=10.0),
+            ],
+            available=True,
+        )
+        step_candles = [
+            Candle(ts=int(_dt(-2).timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+            Candle(ts=int(buy_ts.timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=1000.0),
+            Candle(ts=int(_dt(1).timestamp()), open=2.0, high=2.0, low=2.0, close=2.0, volume=1000.0),
+            Candle(ts=int(sell_ts.timestamp()), open=2.0, high=2.0, low=2.0, close=2.0, volume=1000.0),
+        ]
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={TOKEN_X: POOL_X},
+            pool_created_at={TOKEN_X: pool_created},
+            ohlcv={POOL_X: OHLCVResult(candles=step_candles, available=True)},
+        )
+
+        llm_calls = []
+
+        async def _counting_llm(prompt, system, *, max_tokens=800, model=None, depth=None, **kwargs):
+            llm_calls.append(prompt)
+            return await _fake_llm(prompt, system, max_tokens=max_tokens, model=model, depth=depth, **kwargs)
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_counting_llm, goplus=_clean_goplus(),
+            skip_thesis=True,
+        )
+
+        card = report.wallets[0]
+        # Deterministic scoring is entirely unaffected by skip_thesis.
+        assert card.available is True
+        assert card.closed_trades_count == 2
+        assert card.win_rate == pytest.approx(1.0)
+        # The LLM is never invoked, and no thesis/synthesis is fabricated.
+        assert llm_calls == []
+        assert card.thesis is None
+        assert report.synthesis is None
+
+    @pytest.mark.asyncio
     async def test_pool_lookup_errors_surfaced_on_card(self, tmp_path, monkeypatch):
         # #157, 14/07 : distingue "pool jamais trouvé sur GeckoTerminal" (token
         # trop obscur/mort) d'un autre problème de valorisation -- jamais un

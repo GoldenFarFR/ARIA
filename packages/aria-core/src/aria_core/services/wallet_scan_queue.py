@@ -457,17 +457,39 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
             # one heartbeat tick, instead of just one, until it's fully
             # covered or the soft deadline is reached (see
             # CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS above for why this is safe).
+            #
+            # 27/07 -- real LLM cost bug found via an x.ai usage audit
+            # (operator budget request, $0.30/day total LLM spend): every
+            # sub-batch iteration was regenerating a full narrative thesis
+            # (score_wallets -> smart_money._generate_thesis) on a still-
+            # PARTIAL score -- discarded a few seconds later by the next
+            # iteration, since only the numeric progress counter is shown
+            # before full_coverage (see the milestone notification below).
+            # `skip_thesis=True` on every intermediate call; a single final
+            # call WITH the thesis right after the loop exits on real full
+            # coverage (never on a timeout/stall exit, see below) -- same
+            # net LLM calls as a single-shot scan, instead of one per
+            # sub-batch (observed: several calls within ~4 minutes straight).
             deadline = _monotonic() + CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
             while True:
                 report = await score_wallets(
                     [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
-                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
+                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET, skip_thesis=True,
                 )
                 if not report.available or not report.wallets:
                     break
                 card = report.wallets[0]
                 if card.full_coverage or card.tokens_analyzed == 0 or _monotonic() >= deadline:
                     break
+            # Only worth a final thesis-bearing call when the loop actually
+            # reached full coverage this pass -- a stall (tokens_analyzed==0)
+            # or a deadline timeout means the NEXT cycle will still be
+            # catching up, so the thesis would just be discarded again.
+            if report.available and report.wallets and report.wallets[0].full_coverage:
+                report = await score_wallets(
+                    [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
+                )
 
         if not report.available or not report.wallets:
             await mark_attempt(queued.wallet, next_check_at=now)
