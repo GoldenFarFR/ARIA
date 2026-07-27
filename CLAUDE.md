@@ -379,6 +379,14 @@ x402 payer en premier — Cybercentry, 0,02$/appel, reste le candidat le plus co
 pas tranchée par l'opérateur ; Base Batches/CDP Builder Grants restent à revérifier
 périodiquement (voir aussi `docs/aria-learning-inbox/2026-07-16-veille-base-198-jesse-pollak-leadership-grants.md`
 et `2026-07-17-veille-base-198-request-for-builders-ai-agents.md`, déjà à jour au 17/07).
+- **Diligence launchpads pour une future tokenisation d'ARIA (27/07, aucune action engagée)** :
+  déclenchée par l'incident de compromission du compte X de Bankr.bot. 6 candidats évalués
+  (Bankr, Virtuals, Clanker, Flaunch, Robinhood Chain/Noxa, Coinbase/Base) sur tokenomics
+  anti-dump/sécurité/traction réelle/investissement direct — **Clanker recommandé** (LP
+  verrouillée jusqu'en 2100, croissance +37%/mois, audit réel, racheté par Farcaster/Neynar) ;
+  Bankr et Virtuals écartés (incidents sécurité récurrents / déclin structurel -95% revenus
+  malgré Virtuals Ventures comme piste alternative d'investissement). Détail complet :
+  `docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md`.
 
 ## Plan momentum mi-juillet — exécuté intégralement (archivé)
 Le plan de bataille posé le 15/07 pour lancer le pipeline momentum (#194 pivot,
