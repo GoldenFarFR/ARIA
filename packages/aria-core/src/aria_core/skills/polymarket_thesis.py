@@ -69,6 +69,20 @@ logger = logging.getLogger(__name__)
 EXTREME_PRICE_FLOOR = 0.05
 EXTREME_PRICE_CEIL = 0.95
 
+# 27/07 -- Item #133 diagnosis, real bug found: skip_reason values reached
+# WITHOUT ever calling research/LLM (a free, synchronous check on data
+# already in hand) -- the caller (polymarket_paper_trader.run_polymarket_
+# paper_cycle) must NOT count these against CANDIDATES_PER_CYCLE, or a
+# market that's always first in the volume-sorted list (a live prod case:
+# a Fed-decision market pinned at yes_price=0.0015) permanently starves
+# every other candidate every single cycle, forever, with CANDIDATES_PER_
+# CYCLE=1 -- confirmed live: 0 Tavily calls from this module in the ~25h
+# since the gate's activation despite the heartbeat cycle running on
+# schedule. The other skip_reason values (insufficient_votes/no_consensus/
+# win_probability_too_low/no_edge) only happen AFTER research+VOTE_COUNT
+# LLM calls already ran, so those DO count against the budget.
+FREE_SKIP_REASONS = frozenset({"market_price_unavailable", "market_price_already_extreme"})
+
 # Minimum probability-point gap between ARIA's own estimate and the market's
 # price to act -- below this, the gap is more likely estimation noise (LLM
 # calibration is not perfect) than a real edge. Secondary guard on top of

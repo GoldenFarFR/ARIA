@@ -387,3 +387,82 @@ async def test_format_portfolio_report_empty_portfolio(tmp_db):
     report = await ppt.format_portfolio_report()
     assert "Portefeuille Polymarket" in report
     assert "Positions ouvertes : 0" in report
+
+
+@pytest.mark.asyncio
+async def test_cycle_free_skip_never_starves_the_next_candidate(tmp_db, monkeypatch):
+    """27/07 -- Item #133, real bug found live: a market ALWAYS first in the
+    volume-sorted list (a live prod case: a Fed-decision market pinned at
+    yes_price=0.0015) permanently starved every other candidate every single
+    cycle with CANDIDATES_PER_CYCLE=1 -- confirmed live via 0 Tavily calls in
+    ~25h since the gate's activation. A free skip (extreme price/missing
+    price, decided before any research/LLM call) must never consume the
+    CANDIDATES_PER_CYCLE budget."""
+    monkeypatch.setenv("ARIA_POLYMARKET_PAPER_ENABLED", "true")
+    monkeypatch.setattr(ppt, "CANDIDATES_PER_CYCLE", 1)
+    _patch_order_book(monkeypatch, best_ask=0.5)
+
+    always_extreme = _market(event_slug="fed-decision", yes_price=0.0015)
+    real_candidate = _market(event_slug="gta-vi", yes_price=0.5)
+
+    async def fake_list_liquid_events(self, **kwargs):
+        return [always_extreme, real_candidate]
+
+    judged = []
+
+    async def fake_estimate(market):
+        judged.append(market.event_slug)
+        if market.event_slug == "fed-decision":
+            return PolymarketJudgment(
+                market_question=market.question,
+                market_probability=market.yes_price,
+                action="SKIP",
+                skip_reason="market_price_already_extreme",
+            )
+        return _judgment()
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.list_liquid_events", fake_list_liquid_events)
+    monkeypatch.setattr(ppt, "estimate_market_probability", fake_estimate)
+
+    result = await ppt.run_polymarket_paper_cycle()
+
+    # Both markets got judged (the free skip didn't stop the loop early)...
+    assert judged == ["fed-decision", "gta-vi"]
+    # ...and the real candidate behind it actually got booked.
+    assert len(result["opened"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_cycle_paid_skip_does_consume_the_budget(tmp_db, monkeypatch):
+    """Counterpart to the test above: a skip that only happens AFTER research/
+    LLM votes already ran (e.g. no_consensus) must still count against
+    CANDIDATES_PER_CYCLE -- only the free, pre-research skips are exempt."""
+    monkeypatch.setenv("ARIA_POLYMARKET_PAPER_ENABLED", "true")
+    monkeypatch.setattr(ppt, "CANDIDATES_PER_CYCLE", 1)
+    _patch_order_book(monkeypatch, best_ask=0.5)
+
+    first = _market(event_slug="first", yes_price=0.5)
+    second = _market(event_slug="second", yes_price=0.5)
+
+    async def fake_list_liquid_events(self, **kwargs):
+        return [first, second]
+
+    judged = []
+
+    async def fake_estimate(market):
+        judged.append(market.event_slug)
+        return PolymarketJudgment(
+            market_question=market.question,
+            market_probability=market.yes_price,
+            action="SKIP",
+            skip_reason="no_consensus",
+        )
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.list_liquid_events", fake_list_liquid_events)
+    monkeypatch.setattr(ppt, "estimate_market_probability", fake_estimate)
+
+    result = await ppt.run_polymarket_paper_cycle()
+
+    # Budget of 1 -- the second candidate is never even reached.
+    assert judged == ["first"]
+    assert result["opened"] == []

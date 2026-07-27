@@ -26,7 +26,7 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 from aria_core.services.polymarket import PolymarketCandidateMarket, polymarket_client
-from aria_core.skills.polymarket_thesis import PolymarketJudgment, estimate_market_probability
+from aria_core.skills.polymarket_thesis import FREE_SKIP_REASONS, PolymarketJudgment, estimate_market_probability
 
 logger = logging.getLogger(__name__)
 
@@ -505,8 +505,18 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
                     break
                 if await has_open_position(market.event_slug, market.question):
                     continue
-                evaluated += 1
                 judgment = await estimate_market_probability(market)
+                # 27/07 -- Item #133, real bug found live: counting a FREE skip
+                # (extreme price / missing price -- decided before any research/
+                # LLM call) against CANDIDATES_PER_CYCLE let a market that's
+                # ALWAYS first in the volume-sorted list (a live prod case: a
+                # Fed-decision market pinned at yes_price=0.0015) permanently
+                # starve every other candidate every cycle -- confirmed live:
+                # zero Tavily calls from this module in ~25h since the gate's
+                # activation. Only count a candidate that actually consumed the
+                # paid research/vote budget.
+                if judgment.skip_reason not in FREE_SKIP_REASONS:
+                    evaluated += 1
                 if judgment.action != "BET":
                     continue
                 position = await open_bet(market, judgment, alloc_multiplier=risk_state.alloc_multiplier)
