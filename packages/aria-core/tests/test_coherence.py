@@ -487,36 +487,30 @@ def test_pulse_endpoint_public_and_present():
 
 def test_token_dossier_operator_gated_and_read_only():
     """Dossier par token : gaté OPÉRATEUR (expose le pipeline de candidats, jamais public/membre)
-    et strictement en LECTURE (agrégateur pur, aucun write, aucun client réseau propre)."""
+    et strictement en LECTURE (agrégateur pur, aucun write, aucun client réseau propre).
+
+    27/07 -- la page cockpit web (et sa route FastAPI /aria/dossier/{contract}, jamais
+    appelée que par elle) a été entièrement supprimée sur demande opérateur explicite ;
+    le seul point d'accès restant au dossier est la commande Telegram (aria_core.dossier
+    importé depuis gateway/telegram_bot.py), déjà gatée admin par _handle_message
+    (redirige tout non-admin vers _handle_public_message avant d'atteindre ce chemin)."""
     import inspect
 
     from aria_core import dossier
 
+    bot_src = _read("packages/aria-core/src/aria_core/gateway/telegram_bot.py")
+    assert "from aria_core.dossier import build_dossier" in bot_src, "le dossier Telegram doit rester câblé"
+    handler_src = bot_src.split("async def _handle_message(", 1)[1][:1200]
+    assert "is_admin(user.id)" in handler_src and "_handle_public_message" in handler_src, (
+        "le dossier doit rester derrière le gate admin de _handle_message"
+    )
+    # Never re-exposed via an HTTP route (the cockpit's own route was removed, never re-add it).
     aria_route = _read("vanguard/backend/app/api/routes/aria.py")
-    assert '@router.get("/dossier/{contract}")' in aria_route, "route dossier manquante"
-    # La route doit exiger l'opérateur (le détail des candidats n'est jamais public ni membre).
-    route_seg = aria_route.split('@router.get("/dossier/{contract}")', 1)[1][:600]
-    assert "require_operator(request)" in route_seg, "le dossier doit être gaté opérateur"
-    # Jamais dans les allowlists publiques du middleware.
-    mw = _read("vanguard/backend/app/auth/middleware.py")
-    assert "/api/aria/dossier" not in mw, "le dossier ne doit JAMAIS être exposé en public"
+    assert '"/dossier/{contract}"' not in aria_route, "le dossier ne doit plus être exposé en route HTTP"
     # Agrégateur en lecture seule : aucune écriture SQL, aucun accès DB/réseau direct.
     src = inspect.getsource(dossier)
     for forbidden in ("INSERT", "UPDATE ", "DELETE", "aiosqlite", "httpx"):
         assert forbidden not in src, f"le dossier doit rester une lecture pure (trouvé: {forbidden})"
-
-
-def test_cockpit_operator_secret_never_persistent():
-    """Le cockpit web (secret opérateur saisi côté navigateur) doit rester SESSION-only :
-    jamais localStorage (persisterait le secret sur l'appareil), jamais dans une URL."""
-    auth = _read("vanguard/src/lib/operator-auth.ts")
-    for forbidden in ("localStorage.setItem", "localStorage.getItem"):
-        assert forbidden not in auth, "le secret opérateur ne doit JAMAIS toucher localStorage"
-    assert "sessionStorage" in auth, "le secret opérateur doit être session-only (sessionStorage)"
-
-    api = _read("vanguard/src/api.ts")
-    dossier_call = api.split("export async function getDossier", 1)[1][:400]
-    assert "operatorHeaders()" in dossier_call, "le dossier doit envoyer le secret en HEADER, jamais en query-string"
 
 
 def test_vc_report_pdf_secured_and_email_body_never_leaks_full_report():
