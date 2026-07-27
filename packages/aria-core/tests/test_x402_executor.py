@@ -15,7 +15,10 @@ from aria_core.x402_executor import HttpResult
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(budget, "DB_PATH", str(tmp_path / "x402_budget_test.db"))
+    # 27/07: DB_PATH stopped being a module-level constant (fixed in 71ceaa37
+    # -- froze at import time, before per-test isolation ever ran) -- patch
+    # the imported aria_db_path name instead, same pattern as test_x402_budget.py.
+    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "x402_budget_test.db")
     yield
 
 

@@ -31,9 +31,13 @@ def _isolated_cursor_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_budget_db(tmp_path, monkeypatch):
+    # 27/07: DB_PATH stopped being a module-level constant on this module
+    # (fixed in 71ceaa37 -- froze at import time, before per-test isolation
+    # ever ran) -- patch the imported aria_db_path name instead, same pattern
+    # as test_tavily_budget.py.
     from aria_core.services import tavily_budget
 
-    monkeypatch.setattr(tavily_budget, "DB_PATH", str(tmp_path / "tavily_budget_test.db"))
+    monkeypatch.setattr(tavily_budget, "aria_db_path", lambda: tmp_path / "tavily_budget_test.db")
     yield
 
 

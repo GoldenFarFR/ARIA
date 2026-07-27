@@ -11,7 +11,12 @@ from aria_core import x402_budget, x402_ledger, x402_revenue_ledger
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(x402_budget, "DB_PATH", str(tmp_path / "spend_test.db"))
+    # 27/07: x402_budget.DB_PATH stopped being a module-level constant (fixed
+    # in 71ceaa37 -- froze at import time, before per-test isolation ever
+    # ran) -- patch the imported aria_db_path name instead, same pattern as
+    # test_x402_budget.py. x402_revenue_ledger keeps its own module-level
+    # DB_PATH unchanged (not part of that fix).
+    monkeypatch.setattr(x402_budget, "aria_db_path", lambda: tmp_path / "spend_test.db")
     monkeypatch.setattr(x402_revenue_ledger, "DB_PATH", str(tmp_path / "revenue_test.db"))
     yield
 
