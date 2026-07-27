@@ -274,7 +274,37 @@ dna:
       status: pending
       text: >
         Utility token alignée rôle ARIA (skills, signaux, gouvernance optionnelle) —
-        après traction produit, pas avant.
+        après traction produit, pas avant. **Diligence launchpad/chaîne faite le
+        27/07/2026 (aucune action engagée, statut pending inchangé)** : sur Base,
+        Clanker ressort recommandé après correction du registre SSOT
+        (knowledge/base_launchpads.py) — liquidité verrouillée jusqu'en 2100 (le
+        mécanisme anti-dump le plus solide trouvé), audit réel (0xMacro), racheté
+        par Farcaster puis Neynar, croissance de frais +37%/mois confirmée. Écarté
+        sur Base : Bankr (2 incidents de sécurité réels en 2026, dont 1,5 milliard
+        $BNKR drainé le 25/07 via un compte X compromis), Virtuals (déclin
+        structurel confirmé -95% revenus/-60% utilisateurs actifs malgré un rebond
+        de prix récent jugé spéculatif), Zora ($ZORA -95%, Base elle-même a
+        abandonné ce narratif en février 2026). Autres chaînes évaluées et
+        écartées pour l'instant : Solana (volume énorme mais PVP mortel — 95,5%
+        des tokens meurent avant 3 mois, taux de "graduation" à 0,26%), Hyperliquid
+        (équipe jugée pas assez expérimentée par l'opérateur — 3 incidents
+        financiers en 18 mois + une intervention manuelle de l'équipe qui a
+        outrepassé les smart contracts), Monad (chaîne bien financée et sérieuse
+        mais ses launchpads de tokens propres — Nad.fun, Alloca, MonadStarter —
+        restent trop jeunes/peu documentés pour l'instant), Ethereum mainnet (le
+        narratif "vrais builders" le plus fort de tous, frais désormais
+        raisonnables, mais aucune infrastructure de lancement dédiée équivalente à
+        Clanker). Détail complet et sourcé :
+        docs/base-blockchain-launchpads.md (fiche vivante, à reprendre) et
+        docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md
+        (même contenu synthétisé dans la mémoire vectorielle d'ARIA, entrée
+        "launchpad_tokenisation", récupérable en conversation). **Ce verdict est un
+        instantané daté, jamais une décision pré-mâchée** : le jour où une
+        tokenisation réelle est envisagée, c'est ARIA elle-même qui doit trancher en
+        direct avec ses propres recherches fraîches (le marché crypto bouge vite —
+        un incident de sécurité, un nouveau launchpad ou un changement d'équipe peut
+        rendre ce résumé faux entretemps), jamais réciter ce texte de mémoire comme
+        une conclusion figée.
 
     - id: qi_1000
       title: Indice capacité QI → 1000
