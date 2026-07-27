@@ -406,6 +406,82 @@ async def test_rate_limit_gives_up_after_three_attempts(monkeypatch):
     assert "rate limit" in info.error
 
 
+# ── circuit breaker (Item #124/#129, 27/07) -- same pattern as DexScreener's,
+#    reusing the previously log-only _consecutive_failures counter ──────────
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_threshold_consecutive_failures(monkeypatch):
+    """3 distinct high-level calls that each fail (500, retried once then
+    given up per the existing error policy) must open the breaker -- a 4th
+    call is rejected immediately, WITHOUT touching the network at all (no
+    response queued for it -- would raise if the breaker didn't intervene)."""
+    _patch_no_sleep(monkeypatch)
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc"
+    _patch_client(
+        monkeypatch,
+        {url: [FakeResponse(500), FakeResponse(500)] * 3},
+    )
+
+    for _ in range(3):
+        info = await client.get_address_info("0xabc")
+        assert info.available is False
+
+    assert client._in_cooldown() is True
+    info = await client.get_address_info("0xabc")
+    assert info.available is False
+    assert "disjoncteur" in info.error
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_recovers_after_success(monkeypatch):
+    """2 failures then a success must reset the counter -- 2 more failures
+    right after must NOT open the breaker (2+1+2 never reaches the threshold)."""
+    _patch_no_sleep(monkeypatch)
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc"
+    _patch_client(
+        monkeypatch,
+        {
+            url: [
+                FakeResponse(500), FakeResponse(500),
+                FakeResponse(500), FakeResponse(500),
+                FakeResponse(200, {"is_contract": False}),
+                FakeResponse(500), FakeResponse(500),
+                FakeResponse(500), FakeResponse(500),
+            ]
+        },
+    )
+
+    await client.get_address_info("0xabc")
+    await client.get_address_info("0xabc")
+    ok = await client.get_address_info("0xabc")
+    assert ok.available is True
+    await client.get_address_info("0xabc")
+    await client.get_address_info("0xabc")
+
+    assert client._in_cooldown() is False
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_expires_after_cooldown(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc"
+    _patch_client(
+        monkeypatch,
+        {url: [FakeResponse(500), FakeResponse(500)] * 3 + [FakeResponse(200, {"is_contract": False})]},
+    )
+
+    for _ in range(3):
+        await client.get_address_info("0xabc")
+    assert client._in_cooldown() is True
+
+    client._circuit_open_until = 0.0  # simulate cooldown elapsed
+    info = await client.get_address_info("0xabc")
+    assert info.available is True
+
+
 @pytest.mark.asyncio
 async def test_get_address_info_parses_ens_domain_name(monkeypatch):
     """#157 -- ens_domain_name couvre ENS mainnet ET Basenames (vérifié en direct

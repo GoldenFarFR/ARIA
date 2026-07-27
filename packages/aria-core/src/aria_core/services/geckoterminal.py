@@ -179,6 +179,15 @@ class OHLCVResult:
     candles: list[Candle] = field(default_factory=list)
     available: bool = True
     error: str | None = None
+    # 27/07 -- Item #126: True only for a REAL network/rate-limit/server error
+    # (429, timeout, 5xx) as opposed to a clean response with too few/no
+    # candles. Default False keeps every existing caller's behavior
+    # unchanged (they never read this field). Lets a multi-timeframe caller
+    # (e.g. momentum_entry's Mobula 15m/30m scalping loop) stop escalating
+    # immediately on a real error instead of retrying a doomed request at
+    # the next timeframe -- same "stop, don't compound" principle already
+    # applied inside OHLCVClient.get_ohlcv's own 1D/4H/1H ladder (Item #121).
+    network_error: bool = False
 
 
 class GeckoTerminalClient:

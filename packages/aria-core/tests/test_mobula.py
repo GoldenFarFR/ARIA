@@ -139,6 +139,9 @@ async def test_get_ohlcv_unavailable_on_empty_data(monkeypatch):
     result = await get_ohlcv(CONTRACT, blockchain="base")
     assert result.available is False
     assert result.candles == []
+    # Item #126, 27/07: a clean empty response is NOT a network error --
+    # a multi-timeframe caller should still escalate to the next timeframe.
+    assert result.network_error is False
 
 
 @pytest.mark.asyncio
@@ -152,6 +155,7 @@ async def test_get_ohlcv_unavailable_on_malformed_rows(monkeypatch):
 
     result = await get_ohlcv(CONTRACT, blockchain="base")
     assert result.available is False
+    assert result.network_error is False  # Item #126: clean response, no candles -- not a network error
 
 
 @pytest.mark.asyncio
@@ -166,6 +170,10 @@ async def test_get_ohlcv_unavailable_on_network_failure(monkeypatch):
     result = await get_ohlcv(CONTRACT, blockchain="base")
     assert result.available is False
     assert result.candles == []
+    # Item #126, 27/07: a real rate-limit failure IS a network error -- a
+    # multi-timeframe caller (momentum_entry's scalping loop) must stop
+    # escalating rather than retry a doomed request at the next timeframe.
+    assert result.network_error is True
 
 
 @pytest.mark.asyncio

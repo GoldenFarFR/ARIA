@@ -128,7 +128,11 @@ async def get_ohlcv(contract: str, *, blockchain: str = "base", period: str = "1
         params={"address": contract, "blockchain": blockchain, "period": period, "amount": amount},
     )
     if error is not None:
-        return OHLCVResult(candles=[], available=False, error=error)
+        # 27/07 -- Item #126: this error comes straight from _get_json, i.e.
+        # a real network/rate-limit/server failure (429 after 3 attempts,
+        # timeout, 5xx after retry) -- never a "no candles" case, which is
+        # only detected further below AFTER a successful HTTP response.
+        return OHLCVResult(candles=[], available=False, error=error, network_error=True)
 
     raw_candles = data.get("data") if isinstance(data, dict) else None
     if not isinstance(raw_candles, list) or not raw_candles:

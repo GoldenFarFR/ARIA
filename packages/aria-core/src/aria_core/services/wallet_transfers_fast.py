@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 import httpx
 
@@ -47,6 +48,36 @@ from aria_core.services.blockscout import TokenTransfer, TokenTransfersResult
 logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "donnée indisponible"
+
+# 27/07 -- Item #125: adaptive circuit breaker, one entry per provider
+# ("alchemy"/"moralis") since each can fail independently -- same
+# threshold/cooldown as the other breakers in this codebase (DexScreener,
+# Blockscout, the OHLCV cascade) for consistency, not a separately-tuned
+# pair of values. Real gap this closes: without it, a sustained Alchemy
+# outage made every wallet-scoring candidate retry the full backoff loop on
+# Alchemy before falling through to Moralis, every single time.
+_CIRCUIT_FAIL_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 180.0
+_consecutive_failures: dict[str, int] = {}
+_circuit_open_until: dict[str, float] = {}
+
+
+def _in_cooldown(provider: str) -> bool:
+    return time.monotonic() < _circuit_open_until.get(provider, 0.0)
+
+
+def _record_outcome(provider: str, *, ok: bool) -> None:
+    if ok:
+        _consecutive_failures[provider] = 0
+        return
+    failures = _consecutive_failures.get(provider, 0) + 1
+    _consecutive_failures[provider] = failures
+    if failures >= _CIRCUIT_FAIL_THRESHOLD:
+        _circuit_open_until[provider] = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+        logger.warning(
+            "wallet_transfers_fast: %s -- %s consecutive failures, circuit "
+            "breaker opened, pausing %ss", provider, failures, _CIRCUIT_COOLDOWN_SECONDS,
+        )
 
 ALCHEMY_BASE_URL = "https://base-mainnet.g.alchemy.com/v2"
 MORALIS_BASE_URL = "https://deep-index.moralis.io/api/v2.2"
@@ -309,14 +340,31 @@ async def get_fast_token_transfers(
     if chain != "base" or not wallet_transfers_fast_provider_enabled():
         return TokenTransfersResult(available=False, error=f"{UNAVAILABLE} (fournisseur rapide non applicable)")
 
-    alchemy_result = await _alchemy_get_token_transfers(address, limit=limit, max_pages=max_pages)
-    if alchemy_result.available:
-        return alchemy_result
+    last_error = f"{UNAVAILABLE} (Alchemy et Moralis en pause, disjoncteur ouvert)"
 
-    logger.info("wallet_transfers_fast: Alchemy unavailable (%s) -- falling back to Moralis", alchemy_result.error)
-    moralis_result = await _moralis_get_token_transfers(address, limit=limit, max_pages=max_pages)
-    if moralis_result.available:
-        return moralis_result
+    if not _in_cooldown("alchemy"):
+        alchemy_result = await _alchemy_get_token_transfers(address, limit=limit, max_pages=max_pages)
+        # A missing key is a static config condition, never transient -- it
+        # would never "heal" after a cooldown, so it must never count toward
+        # the breaker (only a REAL network attempt does).
+        if _alchemy_api_key():
+            _record_outcome("alchemy", ok=alchemy_result.available)
+        if alchemy_result.available:
+            return alchemy_result
+        last_error = alchemy_result.error
+        logger.info("wallet_transfers_fast: Alchemy unavailable (%s) -- falling back to Moralis", alchemy_result.error)
+    else:
+        logger.info("wallet_transfers_fast: Alchemy paused (adaptive circuit breaker), falling back directly to Moralis")
 
-    logger.info("wallet_transfers_fast: Moralis unavailable (%s) -- falling back to Blockscout (caller)", moralis_result.error)
-    return TokenTransfersResult(available=False, error=moralis_result.error)
+    if not _in_cooldown("moralis"):
+        moralis_result = await _moralis_get_token_transfers(address, limit=limit, max_pages=max_pages)
+        if _moralis_api_key():
+            _record_outcome("moralis", ok=moralis_result.available)
+        if moralis_result.available:
+            return moralis_result
+        last_error = moralis_result.error
+        logger.info("wallet_transfers_fast: Moralis unavailable (%s) -- falling back to Blockscout (caller)", moralis_result.error)
+    else:
+        logger.info("wallet_transfers_fast: Moralis paused (adaptive circuit breaker), falling back directly to Blockscout (caller)")
+
+    return TokenTransfersResult(available=False, error=last_error)

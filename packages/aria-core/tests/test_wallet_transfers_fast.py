@@ -233,6 +233,99 @@ async def test_non_base_chain_unavailable_no_network_call(monkeypatch):
     assert calls == []
 
 
+# ── circuit breaker (Item #125, 27/07) -- one entry per provider since
+#    Alchemy/Moralis can fail independently ─────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breaker():
+    wtf._consecutive_failures.clear()
+    wtf._circuit_open_until.clear()
+    yield
+    wtf._consecutive_failures.clear()
+    wtf._circuit_open_until.clear()
+
+
+def _patch_no_sleep(monkeypatch):
+    async def _fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(wtf.asyncio, "sleep", _fake_sleep)
+
+
+@pytest.mark.asyncio
+async def test_alchemy_circuit_breaker_opens_and_skips_directly_to_moralis(monkeypatch):
+    """3 distinct Alchemy failures must open its breaker -- a 4th candidate
+    skips Alchemy entirely (no HTTP call queued for it -- would raise if the
+    breaker didn't intervene) and goes straight to Moralis. MORALIS_API_KEY
+    intentionally absent during the 3 failures (Moralis degrades before
+    touching the network, so it never consumes the shared fake response
+    queue meant for Alchemy) -- only set once the breaker is confirmed open."""
+    _patch_no_sleep(monkeypatch)
+    monkeypatch.setenv("ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED", "1")
+    monkeypatch.setenv("ALCHEMY_API_KEY", "k")
+    monkeypatch.delenv("MORALIS_API_KEY", raising=False)
+
+    for _ in range(3):
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+        result = await wtf.get_fast_token_transfers(WALLET, "base")
+        assert result.available is False
+
+    assert wtf._in_cooldown("alchemy") is True
+
+    monkeypatch.setenv("MORALIS_API_KEY", "k")
+    calls = _patch_client(monkeypatch, [
+        FakeResponse(200, {"result": [
+            {"transaction_hash": "0x1", "from_address": "0xa", "to_address": "0xb",
+             "address": "0xt", "token_symbol": "USDC", "value_decimal": "1.0"},
+        ]}),
+    ])
+    result = await wtf.get_fast_token_transfers(WALLET, "base")
+    assert result.available is True
+    assert len(calls) == 1  # only the Moralis call -- Alchemy skipped entirely
+    assert calls[0][0] == "GET"  # Moralis uses GET, Alchemy uses POST
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_recovers_after_success(monkeypatch):
+    """2 failures then a success must reset the counter -- 2+1+2 never opens it."""
+    _patch_no_sleep(monkeypatch)
+    monkeypatch.setenv("ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED", "1")
+    monkeypatch.setenv("ALCHEMY_API_KEY", "k")
+    monkeypatch.delenv("MORALIS_API_KEY", raising=False)
+
+    for _ in range(2):
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500), FakeResponse(500)])
+        await wtf.get_fast_token_transfers(WALLET, "base")
+
+    _patch_client(monkeypatch, [FakeResponse(200, {"result": {"transfers": []}})])
+    ok = await wtf.get_fast_token_transfers(WALLET, "base")
+    assert ok.available is True
+
+    for _ in range(2):
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500), FakeResponse(500)])
+        await wtf.get_fast_token_transfers(WALLET, "base")
+
+    assert wtf._in_cooldown("alchemy") is False
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_expires_after_cooldown(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    monkeypatch.setenv("ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED", "1")
+    monkeypatch.setenv("ALCHEMY_API_KEY", "k")
+    monkeypatch.delenv("MORALIS_API_KEY", raising=False)
+
+    for _ in range(3):
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500), FakeResponse(500)])
+        await wtf.get_fast_token_transfers(WALLET, "base")
+    assert wtf._in_cooldown("alchemy") is True
+
+    wtf._circuit_open_until["alchemy"] = 0.0  # simulate cooldown elapsed
+    _patch_client(monkeypatch, [FakeResponse(200, {"result": {"transfers": []}})])
+    result = await wtf.get_fast_token_transfers(WALLET, "base")
+    assert result.available is True
+
+
 @pytest.mark.asyncio
 async def test_cascade_uses_alchemy_when_available(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED", "1")

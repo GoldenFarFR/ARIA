@@ -1218,6 +1218,15 @@ async def _fetch_candles(
                                 "(15m unavailable) %s/%s", period, chain, pool_address[:10],
                             )
                         return mobula_result.candles
+                    # 27/07 -- Item #126: same "stop, don't compound" principle
+                    # as ohlcv.py's Item #121 fix -- a REAL network error at
+                    # 15m (429/timeout/5xx) applies to the whole endpoint for
+                    # THIS contract regardless of period, escalating to 30m
+                    # only wastes a doomed retry. Only "no candles at 15m"
+                    # (network_error=False, a clean empty response) still
+                    # escalates to 30m as before.
+                    if mobula_result is not None and mobula_result.network_error:
+                        break
                 _record_provider_outcome("mobula", ok=False)
 
         # 26/07 -- DexPaprika, last-resort tier even in scalping mode (Item

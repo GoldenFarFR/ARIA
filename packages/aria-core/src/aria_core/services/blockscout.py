@@ -6,7 +6,12 @@ AGENTS.md:
 - Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
 - Missing data is never replaced by a guess — the `error` field (and
   `available=False`) carries the absence of data.
-- Repeated consecutive failures (>3): logged, never blocking, never Telegram spam.
+- Repeated consecutive failures (>=3): logged AND a temporary circuit breaker
+  opens (Item #124/#129, 27/07) -- every call skips straight to a graceful
+  degradation for _CIRCUIT_COOLDOWN_SECONDS, never blocking the pipeline,
+  never Telegram spam. A fail-open guardrail (holder concentration) simply
+  degrades faster during the cooldown instead of burning retries/timeouts on
+  a provider already known to be down.
 
 Multi-chain EVM (14/07, wallet-scoring #157 only -- the rest of ARIA stays
 Base): Blockscout migrated its legacy "keyless" access to the Pro API (a
@@ -23,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -80,6 +86,10 @@ _SENSITIVE_FUNCTION_NAMES = {
 }
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
+# 27/07 -- Item #124/#129: same threshold/cooldown as the DexScreener/OHLCV
+# breakers (services/dexscreener.py, momentum_entry._PROVIDER_COOLDOWN_SECONDS)
+# for consistency, not a separately-tuned value.
+_CIRCUIT_COOLDOWN_SECONDS = 180.0
 
 
 @dataclass
@@ -271,6 +281,7 @@ class BlockscoutClient:
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
         # 20/07 -- found under real conditions (Pro credits exhausted
         # mid-session, "Out of credits" as HTTP 402): a Pro key that's
         # CONFIGURED but DRAINED is not equivalent to a key that's ABSENT in
@@ -293,22 +304,32 @@ class BlockscoutClient:
 
     def _record_success(self) -> None:
         self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
         if self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
+            self._circuit_open_until = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
             logger.warning(
-                "blockscout: %s consecutive failures (last: %s) — no blocking, no escalation",
+                "blockscout: %s consecutive failures (last: %s) — circuit breaker "
+                "opened, pausing %ss",
                 self._consecutive_failures,
                 detail,
+                _CIRCUIT_COOLDOWN_SECONDS,
             )
         else:
             logger.info("blockscout: call failed (%s/%s) — %s", self._consecutive_failures, _FAIL_STREAK_WARN_THRESHOLD, detail)
+
+    def _in_cooldown(self) -> bool:
+        return time.monotonic() < self._circuit_open_until
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
         """GET with the AGENTS.md error policy. Returns (data, error)."""
         if not self.base_url:
             return None, f"{UNAVAILABLE} (clé Blockscout Pro requise pour la chaîne '{self.chain}')"
+
+        if self._in_cooldown():
+            return None, f"{UNAVAILABLE} (Blockscout en pause, disjoncteur ouvert)"
 
         attempt_429 = 0
         timeout_retried = False

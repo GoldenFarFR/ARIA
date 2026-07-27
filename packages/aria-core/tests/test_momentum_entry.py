@@ -1273,6 +1273,38 @@ async def test_fetch_candles_scalping_degrades_to_30m_when_15m_empty(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_fetch_candles_scalping_stops_on_real_network_error_at_15m(monkeypatch):
+    """Item #126, 27/07: a REAL network error at 15m (network_error=True,
+    e.g. a confirmed rate limit) must NOT escalate to 30m -- same "stop,
+    don't compound" principle as ohlcv.py's Item #121 fix. Only a clean
+    empty response (previous test) still escalates."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    received_periods = []
+
+    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
+        received_periods.append(period)
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit", network_error=True)
+
+    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
+        return gt.OHLCVResult(candles=[], available=False, error="aucune bougie")
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
+    assert result == []
+    assert received_periods == ["15m"]  # never escalated to 30m
+
+
+@pytest.mark.asyncio
 async def test_fetch_candles_scalping_returns_empty_when_mobula_fails_both_periods(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import mobula
