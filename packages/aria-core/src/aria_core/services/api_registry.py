@@ -184,7 +184,6 @@ def _static_entries() -> list[ApiEntry]:
         ApiEntry("DeepSeek", "LLM", "https://api.deepseek.com", _env_present("DEEPSEEK_API_KEY")),
         ApiEntry("OpenAI", "LLM", "https://api.openai.com", _env_present("OPENAI_API_KEY")),
         ApiEntry("Gemini (Google)", "LLM", "https://generativelanguage.googleapis.com", _env_present("GEMINI_API_KEY")),
-        ApiEntry("Mistral", "LLM", "https://api.mistral.ai", _env_present("MISTRAL_API_KEY")),
         ApiEntry("Anthropic (natif)", "LLM", "https://api.anthropic.com", _env_present("ANTHROPIC_API_KEY"), note="0 crédit au 17/07 — prêt, pas encore financé"),
         ApiEntry("Virtuals / Spark", "LLM", "https://compute.virtuals.io", _env_present("VIRTUALS_API_KEY"), note="clé vidée le 17/07 (bascule Grok), infra conservée"),
     ]

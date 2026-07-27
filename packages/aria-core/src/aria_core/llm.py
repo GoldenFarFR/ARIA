@@ -23,9 +23,6 @@ PROVIDER_URLS = {
     # docs/openai), verified at the source before wiring -- same Bearer token format as
     # the other direct providers, no custom parser needed.
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    # 17/07 -- verified at the source (docs.mistral.ai/api): natively OpenAI-compatible,
-    # same Bearer header.
-    "mistral": "https://api.mistral.ai/v1/chat/completions",
     # 17/07 -- Anthropic direct, native Messages API endpoint (NOT /chat/completions,
     # NOT OpenAI-compatible) -- see the dedicated branch in _post_chat/_headers_for_route.
     "anthropic": "https://api.anthropic.com/v1/messages",
@@ -45,10 +42,6 @@ DEFAULT_MODELS = {
     # 17/07 -- Flash confirmed "Free of charge" on the official pricing page verified
     # tonight (unlike Gemini 3.1 Pro Preview, explicitly "Not available" for free).
     "gemini": "gemini-3.5-flash",
-    # 17/07 -- dated ID (not the "-latest" alias) for stable, reproducible behavior over
-    # time, same doctrine as the rest of this file -- verified for real via OpenRouter/
-    # Mistral docs (released March 2026, hybrid configurable reasoning).
-    "mistral": "mistral-small-2603",
     # 17/07 -- dated ID verified live against /v1/models (api.anthropic.com) --
     # "claude-sonnet-5" itself has no dated suffix on Anthropic's side (canonical alias).
     "anthropic": "claude-haiku-4-5-20251001",
@@ -134,8 +127,6 @@ def _auth_key_for_provider(provider: str) -> str:
         return _setting_str("deepseek_api_key") or _setting_str("llm_api_key")
     if p == "gemini":
         return _setting_str("gemini_api_key") or _setting_str("llm_api_key")
-    if p == "mistral":
-        return _setting_str("mistral_api_key") or _setting_str("llm_api_key")
     if p == "openai":
         return _setting_str("openai_api_key") or _setting_str("llm_api_key")
     if p == "openrouter":
@@ -343,15 +334,6 @@ async def _post_chat(
         num_ctx = int(getattr(settings, "aria_ollama_num_ctx", 0) or 0)
         if num_ctx > 0:
             payload["options"] = {"num_ctx": num_ctx}
-    if route.provider == "mistral":
-        # 17/07 -- Mistral Small 4 is hybrid (configurable reasoning, verified at the
-        # source docs.mistral.ai/api). Forced to "none" by default: without this, same
-        # trap as observed tonight with Gemini 3.5 Flash (token budget entirely consumed
-        # by invisible reasoning, empty reply). Unlike Gemini, Mistral exposes a real
-        # documented lever to avoid it -- applied systematically, not just for this
-        # specific use case.
-        payload["reasoning_effort"] = "none"
-
     async with httpx.AsyncClient(timeout=timeout) as client:
         # 17/07 -- explicit operator request: arbitrate Grok vs Gemini (and any future
         # provider) on REALLY measured latency, not a guess. Times only the network

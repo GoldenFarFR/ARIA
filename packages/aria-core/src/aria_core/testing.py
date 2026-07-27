@@ -47,7 +47,6 @@ class AriaRuntimeSettings(BaseSettings):
     xai_management_key: str = ""  # 18/07 -- parity with app.config.Settings (x.ai balance, distinct key)
     xai_team_id: str = ""  # 18/07 -- parity with app.config.Settings
     gemini_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=gemini)
-    mistral_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=mistral)
     openai_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=openai)
     openrouter_api_key: str = ""  # 17/07 -- parity with app.config.Settings (LLM_PROVIDER=openrouter)
     anthropic_api_key: str = ""  # 17/07 -- parity with app.config.Settings (Anthropic direct, native)

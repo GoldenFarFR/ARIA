@@ -126,11 +126,6 @@ class Settings(BaseSettings):
     # LLM_PROVIDER=gemini. Palier gratuit Flash/Flash-Lite vérifié à la source
     # (ai.google.dev/gemini-api/docs/pricing) avant tout câblage.
     gemini_api_key: str = ""
-    # 17/07 -- Mistral Small 4 direct (api.mistral.ai, vérifié compatible OpenAI à la
-    # source docs.mistral.ai/api) -- LLM_PROVIDER=mistral. reasoning_effort forcé "none"
-    # dans llm.py (évite le piège Gemini du soir même : budget de tokens englouti par un
-    # raisonnement invisible).
-    mistral_api_key: str = ""
     # 17/07 -- OpenAI direct (api.openai.com) -- LLM_PROVIDER=openai. Clé dédiée, jamais
     # llm_api_key générique (même doctrine que les autres providers directs -- éviter la
     # confusion de clé déjà constatée sur grok_api_key ce soir).
@@ -247,7 +242,11 @@ class Settings(BaseSettings):
     aria_llm_enabled: bool = False
     aria_llm_temperature: float = 0.2
     aria_llm_enhance_skills: bool = False
-    aria_proactive_ideas: bool = True
+    # 27/07 -- disabled: founder_ping promised follow-through ("si tu valides, je...")
+    # that no mechanism ever executed (validating did nothing, the next message
+    # fell into the normal conversation with zero memory of the proposal) --
+    # pure noise/confusion, operator decision after a real confusing exchange.
+    aria_proactive_ideas: bool = False
     aria_curriculum_notify_operator: bool = False
     # ACP v2 — provider poll via acp-cli (local PC / sidecar with keychain)
     aria_acp_provider_enabled: bool = False
