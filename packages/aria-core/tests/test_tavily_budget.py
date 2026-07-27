@@ -11,7 +11,11 @@ from aria_core.services import tavily_budget as budget
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(budget, "DB_PATH", str(tmp_path / "tavily_budget_test.db"))
+    # 27/07: DB_PATH stopped being a module-level constant (real bug found --
+    # it froze at import time, before per-test isolation ever ran, see
+    # tavily_budget.py's own comment) -- patch the imported aria_db_path name
+    # instead, resolved dynamically on every call now.
+    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "tavily_budget_test.db")
     yield
 
 
@@ -21,6 +25,30 @@ async def test_empty_log_starts_with_full_budget():
     assert status["cap_credits"] == 900
     assert status["spent_credits"] == 0
     assert status["remaining_credits"] == 900
+
+
+@pytest.mark.asyncio
+async def test_db_path_resolved_dynamically_not_cached_at_import(tmp_path, monkeypatch):
+    """27/07 -- regression test for the real cost bug: DB_PATH used to be a
+    module-level constant computed ONCE at import time, so a SECOND test-like
+    reconfiguration of aria_db_path within the same process never took
+    effect -- every test in the suite silently shared the FIRST resolved
+    path (in production, this meant every test run accumulated real spend
+    in one persistent `.aria-test-data/aria.db`, eventually exhausting the
+    900-credit cap and failing unrelated tests non-deterministically).
+    Proves the fix: spending recorded under one path must NEVER be visible
+    once aria_db_path is reconfigured to a different path."""
+    first_path = tmp_path / "first.db"
+    second_path = tmp_path / "second.db"
+
+    monkeypatch.setattr(budget, "aria_db_path", lambda: first_path)
+    await budget.record_spend(caller="test", query="first db", credits=500)
+    assert await budget.spent_this_month() == 500
+
+    monkeypatch.setattr(budget, "aria_db_path", lambda: second_path)
+    # A fresh path must start at zero spend -- the 500 credits above must
+    # never leak across, proving DB_PATH is resolved fresh on every call.
+    assert await budget.spent_this_month() == 0
 
 
 @pytest.mark.asyncio

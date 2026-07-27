@@ -34,7 +34,18 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-DB_PATH = str(aria_db_path())
+# 27/07 -- real bug found via a live test failure ("budget mensuel épuisé" on
+# a mocked-network test): a MODULE-LEVEL ``DB_PATH = str(aria_db_path())``
+# resolves ONCE at import time, before the per-test isolation fixture
+# (``tests/conftest.py``'s autouse ``_isolated_runtime``, Item #149, 13/07)
+# ever runs -- so every test in the session shared ONE frozen path
+# (``.aria-test-data/aria.db``, conftest's own pre-fixture default),
+# accumulating spend across EVERY suite run since 22/07 until it hit the
+# real 900-credit cap and started failing non-deterministically. Same root
+# cause already fixed for release_pipeline.py's manifest (Item #149) --
+# reintroduced here because this module (added 22/07, after that fix)
+# never adopted the dynamic-resolution pattern. Resolved on every call now,
+# never cached in a module global.
 
 # Sourced (22/07, real Tavily billing dashboard, "Researcher" plan): 1000
 # credits/month, use-it-or-lose-it. 90% margin, CLAUDE.md doctrine.
@@ -83,7 +94,7 @@ def estimate_crawl_worst_case(extract_depth: str, page_limit: int) -> int:
 
 
 async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS tavily_search_log (
@@ -113,7 +124,7 @@ async def spent_this_month(now: datetime | None = None) -> int:
     of the current calendar month."""
     await _ensure_table()
     start = month_start(now).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         row = await (
             await db.execute(
                 "SELECT COALESCE(SUM(credits), 0) FROM tavily_search_log WHERE created_at >= ?",
@@ -144,7 +155,7 @@ async def record_spend(*, caller: str = "", query: str = "", credits: int = COST
     traceability, not just budget computation."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             "INSERT INTO tavily_search_log (caller, query, credits, created_at) VALUES (?, ?, ?, ?)",
             (caller[:60], query[:300], credits, now),
@@ -168,7 +179,7 @@ async def recent_searches(limit: int = 20) -> list[dict]:
     truncated, caller, cost, timestamp) -- answers "what is ARIA
     searching for on Tavily", not just the budget consumed."""
     await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         cursor = await db.execute(
             "SELECT caller, query, credits, created_at FROM tavily_search_log "
             "ORDER BY id DESC LIMIT ?",

@@ -52,7 +52,10 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-DB_PATH = str(aria_db_path())
+# 27/07 -- same fix as tavily_budget.py (real bug found via a live test
+# failure): a module-level ``DB_PATH`` froze at import time, before the
+# per-test isolation fixture ever ran, so every test shared one persistent
+# path across every suite run. Resolved dynamically now.
 
 # Sourced (22/07): blog.blockscout.com, authenticated free tier = 100,000
 # credits/day. 90% margin, same doctrine as the other clients calibrated
@@ -86,7 +89,7 @@ _COLUMNS = ["id", "endpoint", "credits", "created_at"]
 
 
 async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS blockscout_credit_log (
@@ -114,7 +117,7 @@ async def spent_today(now: datetime | None = None) -> int:
     UTC midnight."""
     await _ensure_table()
     start = day_start(now).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         row = await (
             await db.execute(
                 "SELECT COALESCE(SUM(credits), 0) FROM blockscout_credit_log "
@@ -147,7 +150,7 @@ async def record_spend(*, endpoint: str = "", credits: int = DEFAULT_COST_PER_CA
     Blockscout's side, recording it would fabricate data."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             "INSERT INTO blockscout_credit_log (endpoint, credits, created_at) VALUES (?, ?, ?)",
             (endpoint, credits, now),

@@ -23,7 +23,10 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-DB_PATH = str(aria_db_path())
+# 27/07 -- same fix as tavily_budget.py (real bug found via a live test
+# failure): a module-level ``DB_PATH`` froze at import time, before the
+# per-test isolation fixture ever ran, so every test shared one persistent
+# path across every suite run. Resolved dynamically now.
 
 WEEKLY_REQUEST_CAP = 100
 
@@ -31,7 +34,7 @@ _COLUMNS = ["id", "purpose", "contract", "status", "reason", "created_at"]
 
 
 async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS x_research_request_log (
@@ -64,7 +67,7 @@ async def used_this_week(now: datetime | None = None) -> int:
     calendar week. 'blocked' attempts never count against the cap."""
     await _ensure_table()
     start = week_start(now).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         row = await (
             await db.execute(
                 "SELECT COUNT(*) FROM x_research_request_log WHERE status = 'ok' AND created_at >= ?",
@@ -90,7 +93,7 @@ async def record_request(*, purpose: str, contract: str = "", status: str, reaso
     only the successes, a cap refusal must remain traced."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             "INSERT INTO x_research_request_log (purpose, contract, status, reason, created_at) "
             "VALUES (?, ?, ?, ?, ?)",

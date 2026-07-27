@@ -12,7 +12,10 @@ from aria_core import x_research_budget as budget
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(budget, "DB_PATH", str(tmp_path / "x_research_budget_test.db"))
+    # 27/07: DB_PATH stopped being a module-level constant (real bug found --
+    # it froze at import time, before per-test isolation ever ran) -- patch
+    # the imported aria_db_path name instead, resolved dynamically now.
+    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "x_research_budget_test.db")
     yield
 
 
@@ -63,7 +66,7 @@ async def test_weekly_reset_on_new_calendar_week():
     last_week = datetime.now(timezone.utc) - timedelta(days=8)
     import aiosqlite
 
-    async with aiosqlite.connect(budget.DB_PATH) as db:
+    async with aiosqlite.connect(str(budget.aria_db_path())) as db:
         await db.execute(
             "UPDATE x_research_request_log SET created_at = ? WHERE purpose = 'buzz_search'",
             (last_week.isoformat(),),

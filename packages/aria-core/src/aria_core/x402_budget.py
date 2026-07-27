@@ -32,7 +32,10 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-DB_PATH = str(aria_db_path())
+# 27/07 -- same fix as tavily_budget.py (real bug found via a live test
+# failure): a module-level ``DB_PATH`` froze at import time, before the
+# per-test isolation fixture ever ran, so every test shared one persistent
+# path across every suite run. Resolved dynamically now.
 
 WEEKLY_CAP_USD = 5.0
 
@@ -74,7 +77,7 @@ _ADDED_COLUMNS = [
 
 
 async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS x402_spend_log (
@@ -114,7 +117,7 @@ async def spent_this_week(now: datetime | None = None) -> float:
     the cap -- only a payment actually settled consumes the budget."""
     await _ensure_table()
     start = week_start(now).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         row = await (
             await db.execute(
                 "SELECT COALESCE(SUM(amount_usd), 0) FROM x402_spend_log "
@@ -160,7 +163,7 @@ async def record_spend(
     specific token."""
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
             """
             INSERT INTO x402_spend_log
@@ -187,7 +190,7 @@ async def weekly_status(now: datetime | None = None) -> dict:
 
 async def list_spends(limit: int = 200) -> list[dict]:
     await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
         rows = await (
             await db.execute(
                 "SELECT * FROM x402_spend_log ORDER BY id DESC LIMIT ?",
