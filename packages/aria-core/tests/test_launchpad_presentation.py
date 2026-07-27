@@ -24,7 +24,14 @@ def test_verdict_investor_format_fr():
 def test_table_columns_aligned():
     body = recommendation_verdict(lang="en", holding_context=True)
     assert "Launchpad       Score" in body
-    assert " 89." in body or " 90." in body or " 85." in body
+    # 27/07/2026 -- scores corrected after sourced diligence (see
+    # base_launchpads.py's per-launchpad comments); Clanker's composite score
+    # moved from ~89.65 to 91.9 after Bankr/Virtuals/Zora were marked down for
+    # real, sourced incidents (Bankr wallet+X hacks, Virtuals' confirmed usage
+    # decline, Zora's product abandonment by Base itself). This assertion just
+    # checks a decimal-formatted score renders somewhere in the table -- not
+    # tied to one specific launchpad's exact value.
+    assert " 91." in body or " 92." in body or " 77." in body
     assert "Vol" in body and " 95" in body
 
 

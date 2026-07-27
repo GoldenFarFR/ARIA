@@ -47,9 +47,16 @@ LAUNCHPADS: tuple[Launchpad, ...] = (
         volume=95,
         builders=92,
         community=88,
-        exposure=90,
-        holding_fit=82,
+        exposure=93,
+        holding_fit=91,
         tags=("permissionless", "farcaster", "agents", "fees-leader"),
+        # 27/07/2026 -- operator-led multi-round diligence (WebSearch, sourced):
+        # real audit (0xMacro, June-July 2025), acquired by Farcaster (Oct 2025)
+        # then Neynar (Jan 2026), LP locked until 2100 (strongest anti-dump
+        # mechanism found across every candidate evaluated), real recent growth
+        # (avg daily fees +37% June->July 2026). exposure/holding_fit raised
+        # from the prior 90/82 to reflect this -- see
+        # docs/base-blockchain-launchpads.md for the full sourced writeup.
         summary="Dominant BASE launchpad by fees/volume. Farcaster + agent launches at scale.",
         best_for="Maximum volume, builder velocity, and long-term discoverability on Base.",
     ),
@@ -57,27 +64,49 @@ LAUNCHPADS: tuple[Launchpad, ...] = (
         id="bankr",
         name="Bankr",
         url="https://bankr.bot",
-        volume=72,
+        volume=60,
         builders=96,
-        community=78,
-        exposure=84,
-        holding_fit=98,
+        community=60,
+        exposure=55,
+        holding_fit=30,
         tags=("ai-agents", "api", "cli", "x-deploy", "uniswap-v4"),
+        # 27/07/2026 -- CORRECTED after 2 real, sourced security incidents:
+        # (1) May 2026, prompt-injection wallet hack via Grok<->Bankrbot, >$440k
+        # stolen, 14 wallets compromised; (2) July 25 2026, official X account
+        # compromised, drained 1.5 BILLION $BNKR in 22 seconds via a fake
+        # airdrop. holding_fit dropped from 98 (the highest of all candidates
+        # before this correction) to 30 -- a corporate/holding token cannot be
+        # associated with a platform that just lost control of its own wallet
+        # and social account in the same 2-3 months. builders/tags (API/CLI/
+        # Uniswap v4 tooling) left unchanged -- the underlying deploy
+        # infrastructure itself was not the point of failure.
         summary="Agent-native launches on Base. NL/CLI/API + @bankrbot X deploy. Fee claims built-in.",
-        best_for="AI operators (ARIA-style): API deploy, social proof, self-funding via trading fees.",
+        best_for="AI operators (ARIA-style): API deploy, social proof, self-funding via trading fees. CAUTION: 2 real security incidents in 2026 (see holding_fit note) -- verify no further incidents before relying on this pick.",
     ),
     Launchpad(
         id="virtuals",
         name="Virtuals Protocol",
         url="https://virtuals.io",
-        volume=68,
-        builders=86,
-        community=96,
-        exposure=92,
-        holding_fit=94,
+        volume=45,
+        builders=84,
+        community=55,
+        exposure=80,
+        holding_fit=50,
         tags=("ai-agents", "genesis", "curated", "capital-formation"),
+        # 27/07/2026 -- CORRECTED after sourced diligence found a confirmed
+        # structural decline, not a cyclical price dip: revenue down 95% since
+        # January 2025 ($3.5M/mo -> <$200k/mo), daily active users down from
+        # ~30,000 to <12,000, 24h trading volume near-zero ($174k on a $382M
+        # mcap token). A real recent rebound exists (Robinhood Chain
+        # integration, peaqOS agent-pairing launch, +121% volume) but daily
+        # active users KEPT FALLING during that same rebound (2,000 -> 1,000 in
+        # days) -- the rebound looks speculative/narrative-driven, not a
+        # reversal of real usage. Virtuals Ventures (a real accelerator fund)
+        # is a genuine plus but publishes no public amounts/criteria -- kept
+        # holding_fit from collapsing further, not high enough to offset the
+        # usage decline. Scores dropped from 68/86/96/92/94 accordingly.
         summary="AI agent capital-formation layer. Genesis launches, strong community, Base-native.",
-        best_for="AI agent narrative with curated genesis exposure and large holder community.",
+        best_for="AI agent narrative with curated genesis exposure and large holder community. CAUTION: confirmed structural decline in usage as of mid-2026 (see holding_fit note) -- re-verify daily active users before relying on this pick.",
     ),
     Launchpad(
         id="flaunch",
@@ -97,13 +126,25 @@ LAUNCHPADS: tuple[Launchpad, ...] = (
         name="ZORA Coins",
         url="https://zora.co",
         volume=58,
-        builders=76,
-        community=86,
-        exposure=91,
-        holding_fit=62,
+        builders=55,
+        community=30,
+        exposure=35,
+        holding_fit=12,
         tags=("creators", "social", "onchain-media"),
-        summary="Creator coins on Base. Social distribution via Zora network.",
-        best_for="Creator/social distribution — less ideal for corporate holding utility tokens.",
+        # 27/07/2026 -- CORRECTED after sourced diligence: this is not just a
+        # weaker competitor, it's a confirmed product failure ACKNOWLEDGED BY
+        # BASE ITSELF. $ZORA token down 95% from peak. In February 2026 Base
+        # discontinued "Creator Rewards" and removed the social feed entirely,
+        # pivoting product focus to trading/stablecoin payments -- the chain's
+        # OWN founding team walked away from this narrative, not a third-party
+        # competitor failing. Earlier incident: tokens auto-generated from the
+        # official Base account's posts crashed 95% within hours (users
+        # couldn't distinguish publication from endorsement). Structural
+        # issues noted: volume concentrated on a small share of
+        # creators/hype events, sybil/wash-trading pressure described as
+        # "structural" to this model. Scores dropped from 58/76/86/91/62.
+        summary="Creator coins on Base. Social distribution via Zora network -- but Base itself abandoned this product direction in Feb 2026.",
+        best_for="Avoid for a holding/corporate token -- confirmed product failure, acknowledged by Base's own team.",
     ),
     Launchpad(
         id="aerodrome-ignition",
@@ -200,8 +241,18 @@ LAUNCHPADS: tuple[Launchpad, ...] = (
 
 _LAST_REFRESH: datetime | None = None
 _DEFILLAMA_NOTE = (
-    "DeFiLlama BASE launchpads (ref. mid-2026): Clanker leads 7d fees (~$88k); "
-    "flaunch ~$1.5m TVL; Aerodrome Ignition ~$24m TVL (liquidity, not launch fees)."
+    "Sourced multi-round diligence, 27/07/2026 (see docs/base-blockchain-launchpads.md "
+    "and docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md "
+    "for full write-up with citations): Clanker -- real security audit (0xMacro), "
+    "acquired by Farcaster then Neynar, LP locked until 2100, avg daily fees +37% "
+    "June->July 2026 ($65k->$89k). Bankr -- 2 real security incidents in 2026 "
+    "(wallet hack >$440k in May, 1.5B $BNKR drained via a compromised X account "
+    "on July 25). Virtuals -- confirmed structural decline (revenue -95% since "
+    "Jan 2025, daily active users 30k->12k), a recent price/volume rebound looks "
+    "speculative since daily active users kept falling during it. Zora -- $ZORA "
+    "down 95%, Base itself discontinued Creator Rewards and the social feed in "
+    "Feb 2026 (product abandoned by its own founding team, not a third-party "
+    "failure). Flaunch TVL ~$2.0M, ~$2.8M annual revenue (DeFiLlama)."
 )
 
 
@@ -509,12 +560,19 @@ def registry_markdown() -> str:
         lines.append(f"- {lp.summary}")
         lines.append(f"- Best for: {lp.best_for}")
         lines.append("")
-    pick = primary_pick(holding_context=True)
+    ranked_holding = rank_launchpads(holding_context=True)
+    pick = ranked_holding[0][0]
     vol = primary_pick(holding_context=False)
+    # 27/07/2026 -- computed from live scores rather than a hard-coded list:
+    # a hard-coded runner-up list is exactly the kind of drift this file's own
+    # doctrine warns against (scores move, a static sentence doesn't).
+    runner_ups = [lp for lp, _ in ranked_holding[1:4]]
     lines.append("## Current picks")
     lines.append(f"- **Vanguard token (balanced)**: {pick.name}")
     lines.append(f"- **Raw volume leader**: {vol.name}")
-    lines.append("- **Runner-ups**: Bankr (AI/API), Virtuals (genesis community), Flaunch (buybacks/SDK)")
+    lines.append(
+        "- **Runner-ups**: " + ", ".join(f"{lp.name} ({lp.tags[0]})" for lp in runner_ups),
+    )
     return "\n".join(lines)
 
 
