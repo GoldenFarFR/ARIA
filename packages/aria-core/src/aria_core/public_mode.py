@@ -85,18 +85,6 @@ def is_operator_request(request: Request) -> bool:
     if not secret:
         return False
     provided = (request.headers.get("X-Admin-Secret") or "").strip()
-    # 27/07 -- TEMPORARY diagnostic (never logs the value itself, only lengths
-    # and a same-first/last-char check) -- remove once the cockpit login bug
-    # is confirmed fixed.
-    import logging as _diag_logging
-
-    _diag_logging.getLogger(__name__).warning(
-        "TEMP DIAG admin secret check: expected_len=%d provided_len=%d "
-        "same_first_char=%s same_last_char=%s",
-        len(secret), len(provided),
-        bool(provided) and provided[0] == secret[0],
-        bool(provided) and provided[-1] == secret[-1],
-    )
     if not (provided and _secrets.compare_digest(provided, secret)):
         return False
 
