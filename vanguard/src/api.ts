@@ -1,11 +1,7 @@
 import { authHeaders } from './lib/auth'
-import { operatorHeaders } from './lib/operator-auth'
 import { PRODUCT_API_URL } from './lib/site'
 import { getVisitorId, visitorHeaders } from './lib/visitor'
 import type { AgentSetup, HoldingStructure } from './types'
-
-/** Le secret opérateur fourni est absent, invalide, ou le TOTP requis manque/est faux. */
-export class OperatorAuthError extends Error {}
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = { ...visitorHeaders(), ...authHeaders(), ...init?.headers }
@@ -142,43 +138,6 @@ export async function getHoldingStructure(): Promise<HoldingStructure> {
   return res.json()
 }
 
-export interface CalibrationBucket {
-  bucket: string
-  count: number
-  avg_pnl: number
-}
-
-export interface StrategyStats {
-  buy_count: number
-  hit_rate: number | null
-  avg_pnl_buy: number | null
-}
-
-export interface TrackRecord {
-  wallet_index: number
-  wallet_return_pct: number
-  vc_return_pct: number
-  spec_return_pct: number
-  positions: number
-  verdicts_total: number
-  verdicts_closed: number
-  hit_rate: number | null
-  avoid_count: number
-  calibration: CalibrationBucket[]
-  by_strategy: Record<string, StrategyStats>
-  pool_active: number
-  pool_rejected: number
-  disclaimer: string
-}
-
-// Track-record public (teaser FOMO) : valeur du wallet suivi + calibration agrégée.
-// Le détail des positions reste réservé aux abonnés.
-export async function getTrackRecord(): Promise<TrackRecord> {
-  const res = await fetch(`${PRODUCT_API_URL}/aria/track-record`)
-  if (!res.ok) throw new Error('Track record unavailable')
-  return res.json()
-}
-
 export interface PaperWalletTrade {
   symbol: string
   closed_at: string
@@ -204,158 +163,6 @@ export interface PaperWallet {
 export async function getPaperWallet(): Promise<PaperWallet> {
   const res = await fetch(`${PRODUCT_API_URL}/aria/paper-wallet`)
   if (!res.ok) throw new Error('Paper wallet unavailable')
-  return res.json()
-}
-
-export interface PulseHeartbeat {
-  alive: boolean
-  last_tick: string | null
-  cycles: Record<string, string>
-}
-
-export interface Pulse {
-  status: string
-  commit: string
-  heartbeat: PulseHeartbeat
-  paper_trading: boolean
-  real_execution: boolean
-  onchain: { anchor_ready: boolean; anchored: boolean }
-}
-
-// Pouls public (aucune auth) : signal coarse pour le suivi live du cockpit.
-export async function getPulse(): Promise<Pulse> {
-  const res = await fetch(`${PRODUCT_API_URL}/pulse`, { signal: AbortSignal.timeout(12_000) })
-  if (!res.ok) throw new Error('Pulse unavailable')
-  return res.json()
-}
-
-export interface ExamDaySummary {
-  day: number
-  answered: number
-  avg_score: number | null
-}
-
-export interface ExamStatus {
-  enabled: boolean
-  program_days: number
-  current_day: number
-  today: ExamDaySummary
-  cumulative: { total_questions: number; answered: number; avg_score: number | null }
-}
-
-// Examen trading ARIA (rehearsal pédagogique, 20 jours) — public, chiffres agrégés seulement.
-export async function getExamStatus(): Promise<ExamStatus> {
-  const res = await fetch(`${PRODUCT_API_URL}/aria/exam-status`)
-  if (!res.ok) throw new Error('Exam status unavailable')
-  return res.json()
-}
-
-export interface SepoliaLastDecision {
-  at: string | null
-  symbol: string | null
-  decision: string
-  outcome: string
-  tx_hash: string | null
-}
-
-export interface SepoliaStatus {
-  enabled: boolean
-  cycles_total: number
-  tx_count: number
-  error_count: number
-  hesitation_count: number
-  circuit_breaker_open: boolean
-  last: SepoliaLastDecision | null
-  wallet_address: string | null
-  wallet_balance_eth: number | null
-}
-
-// Rehearsal Sepolia autonome (testnet, aucune valeur réelle) — public, chiffres agrégés
-// + dernière décision seulement (jamais une clé, jamais un montant réel).
-export async function getSepoliaStatus(): Promise<SepoliaStatus> {
-  const res = await fetch(`${PRODUCT_API_URL}/aria/sepolia-status`)
-  if (!res.ok) throw new Error('Sepolia status unavailable')
-  return res.json()
-}
-
-export interface DossierEvent {
-  at: string | null
-  kind: string
-  source: string
-  summary: string
-  data: Record<string, unknown>
-}
-
-export interface Dossier {
-  contract: string
-  valid: boolean
-  error?: string
-  symbol?: string | null
-  screened_status?: string | null
-  counts?: Record<string, number>
-  events?: DossierEvent[]
-  generated_at?: string
-}
-
-// Dossier par token (opérateur uniquement) : chronologie complète des analyses
-// ARIA sur un contrat. Lance une OperatorAuthError sur secret manquant/invalide,
-// pour que l'appelant efface la session opérateur et re-propose le formulaire.
-export async function getDossier(contract: string): Promise<Dossier> {
-  const res = await apiFetch(`/aria/dossier/${contract}`, {
-    headers: operatorHeaders(),
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (res.status === 401 || res.status === 403) {
-    throw new OperatorAuthError('Operator secret invalid or missing')
-  }
-  if (!res.ok) throw new Error('Dossier unavailable')
-  return res.json()
-}
-
-export interface MarketCyclePhase {
-  label: string
-  since: string
-  change_pct: number
-  cycle_name: string
-}
-
-export interface MarketCycle {
-  available: boolean
-  phase: MarketCyclePhase | null
-  disclaimer: string
-}
-
-// Cycle macro Bitcoin PUBLIC (halving à halving) -- déterministe, aucun LLM, cache 1h.
-export async function getMarketCycle(): Promise<MarketCycle> {
-  const res = await fetch(`${PRODUCT_API_URL}/aria/market-cycle`, { signal: AbortSignal.timeout(12_000) })
-  if (!res.ok) throw new Error('Market cycle unavailable')
-  return res.json()
-}
-
-export interface SentimentReading {
-  pair: string
-  regime: string
-  detail: string
-  rsi: number | null
-  bollinger_position: number | null
-  momentum_pct: number | null
-  drawdown_from_high_pct: number | null
-  rally_from_low_pct: number | null
-  trend_up: boolean | null
-  computed_at: string
-}
-
-export interface MarketSentiment {
-  readings: SentimentReading[]
-  regime_labels: Record<string, string>
-  disclaimer: string
-}
-
-// Sentiment de marché PUBLIC (RSI/Bollinger/momentum -> régimes) -- lit la dernière
-// lecture déjà calculée par le cycle heartbeat, aucun recalcul synchrone.
-export async function getMarketSentiment(): Promise<MarketSentiment> {
-  const res = await fetch(`${PRODUCT_API_URL}/aria/sentiment`, { signal: AbortSignal.timeout(12_000) })
-  if (!res.ok) throw new Error('Sentiment unavailable')
   return res.json()
 }
 

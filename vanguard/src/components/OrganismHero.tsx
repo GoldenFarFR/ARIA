@@ -52,8 +52,8 @@ function getSpeechRecognitionCtor(): (new () => MinimalSpeechRecognition) | null
  *    has a real backend source yet, so none is fabricated for those
  *  - the portfolio panel shows the real paper-trading aggregate (getPaperWallet),
  *    never a fake position list
- *  - branch-tip labels route to real destinations (/cockpit, the member
- *    sign-in button, in-page modals) instead of demo-only handlers
+ *  - branch-tip labels route to real destinations (the member sign-in
+ *    button, in-page modals) instead of demo-only handlers
  *  - the ask-input at the bottom (`.ao-ask`) IS the real ARIA chat: it posts
  *    to `agentChat()` (POST /aria/chat, same client the old standalone chat
  *    section used) and renders the reply in `.ao-ask-reply` -- there is no
@@ -153,15 +153,13 @@ const FINANCE_COLORS: Record<MarketCategory, string> = {
 const AMBIENT = { rgb: [143, 227, 211], hot: [201, 255, 176], vg: '20,30,28' }
 
 const NAV_NODES: NavNodeDef[] = [
-  { label: 'Cockpit', angle: -62 },
-  { label: 'Track record', angle: 14 },
   { label: 'Événements', angle: 53 },
   { label: 'Méthodologie', angle: 92 },
   { label: 'Accès membre', angle: 166 },
   { label: 'Telegram', angle: 234 },
 ]
 
-const NORTH_LABELS = new Set(['Telegram', 'Cockpit', 'Track record', 'Accès membre'])
+const NORTH_LABELS = new Set(['Telegram', 'Accès membre'])
 
 const CAPTURE_RADIUS = 191.25
 const UI_FADE_PAD = 60
@@ -1001,8 +999,7 @@ const CSS = `
   text-decoration:none; cursor:pointer;
 }
 /* Événements/Méthodologie/Accès membre/Telegram are real <button> (a11y audit
-   #156.1) sharing .ao-node with the <a> nodes (Cockpit/Track record) --
-   strip the browser's default button chrome so both render identically. */
+   #156.1) -- strip the browser's default button chrome. */
 .aria-organism button.ao-node{
   background:none; border:0; margin:0; padding:0; font:inherit; color:inherit;
   appearance:none; -webkit-appearance:none;
@@ -1617,18 +1614,6 @@ export function OrganismHero() {
               <span className="ao-lbl">{tip.label}</span>
             </>
           )
-          // Track record's own in-page section (#track-record) is gone --
-          // the real data now lives on /cockpit, same destination and same
-          // plain-anchor wiring as the Cockpit branch (deliberately identical
-          // right now; left as two labels rather than merged pending an
-          // operator call on whether to consolidate them).
-          if (tip.label === 'Cockpit' || tip.label === 'Track record') {
-            return (
-              <a key={tip.label} href="/cockpit" className={className} style={{ left: tip.x, top: tip.y }}>
-                {content}
-              </a>
-            )
-          }
           // Événements/Méthodologie/Accès membre/Telegram never navigate --
           // they preventDefault() and open a modal (or pulse the sign-in
           // button). A real <button> (not <a href="#">) so Space activates
