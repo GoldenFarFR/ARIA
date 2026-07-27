@@ -22,6 +22,13 @@
 #
 # Scope, deliberately narrow (never blocks a legitimate `grep -q`/`grep -c`
 # existence check, only the read side of a value):
+#   0. An exact, unchained call to `scripts/show-env-safe.sh` -- the ONE
+#      allowlisted way to read a .env file's raw content (27/07, explicit
+#      operator design: every line in full except secret-looking names,
+#      masked to first-4+last-4 chars -- see that script's own header).
+#      Matched strictly (whole command, nothing chained via ;/&&/||/|/
+#      backticks/$()) so this exception can't be smuggled inside a longer,
+#      more dangerous command.
 #   1. `printenv`/`env` NOT combined with `grep -q`/`grep -c` anywhere in the
 #      same command -- covers the bare form AND the piped form
 #      (`printenv | grep X`), which is exactly the incident's shape.
@@ -48,6 +55,15 @@ block() {
   echo "Fix: use 'grep -q <pattern> <file>' (silent, exit-code only) to check existence, never a form that prints the value." >&2
   exit 2
 }
+
+# 0) Allowlist: a lone, unchained call to show-env-safe.sh. Any chaining
+# character anywhere in the command disqualifies it from this exception
+# (falls through to rules 1-4 below, same as before this rule existed).
+if ! printf '%s' "$COMMAND" | grep -qE '[;&|`]|\$\('; then
+  if printf '%s' "$COMMAND" | grep -qE '^[[:space:]]*(bash[[:space:]]+|sh[[:space:]]+)?/opt/aria/scripts/show-env-safe\.sh[[:space:]]+[^[:space:]]+[[:space:]]*$'; then
+    exit 0
+  fi
+fi
 
 # A "safe" grep -q/-c is present ANYWHERE in the command -- not just as the
 # first option token right after "grep" (grep -i -q FOO must count too).
