@@ -57,21 +57,27 @@ MAX_OPEN_POSITIONS = 15
 # per cycle -- caps the real cost of a single pass, independent of how many
 # liquid markets exist.
 #
-# 26/07 -- calibrated against the REAL shared Tavily monthly budget (never
-# guessed): checked live, `tavily_budget.monthly_status()` reports a 900
-# credits/month cap shared across EVERY Tavily caller in this codebase (X/
-# Website/Docs substance, conviction research, operator/visitor web_verify
-# questions) -- 110 spent so far this month, 790 remaining at calibration
-# time. The FIRST value tried here (8, at heartbeat's 240min cadence = 6
-# cycles/day) would cost up to 8*6=48 credits/day = ~1440/month for THIS
-# chantier ALONE -- more than the entire system's shared cap, before
-# counting anything else. Recalibrated to 3 (paired with a 720min/12h cycle
-# in heartbeat.py, 2 cycles/day) = up to 6 credits/day = ~180/month (~20% of
-# the shared cap) -- a deliberately small, non-dominant share since this is
-# one exploratory consumer among several already-established ones. Same
-# "start conservative, measure, loosen later" doctrine as MIN_EDGE_
-# PROBABILITY/MIN_WIN_PROBABILITY above.
-CANDIDATES_PER_CYCLE = 3
+# 27/07 -- TEMPORARY burn-in value (1, paired with heartbeat.py's 60min
+# accelerated cadence) right after the gate's first-ever activation --
+# operator explicit request, new standing doctrine (see heartbeat.py's
+# comment on this same task): detect a real technical failure within hours,
+# never sit on the calibrated nominal cadence for days before the first
+# signal. MUST REVERT to 3 once a few cycles have run cleanly -- Item #133.
+#
+# Nominal value once confirmed (restore this, not a guess), calibrated
+# 26/07 against the REAL shared Tavily monthly budget (never guessed):
+# checked live, `tavily_budget.monthly_status()` reports a 900 credits/month
+# cap shared across EVERY Tavily caller in this codebase (X/Website/Docs
+# substance, conviction research, operator/visitor web_verify questions) --
+# 110 spent so far this month, 790 remaining at calibration time. The FIRST
+# value tried here (8, at heartbeat's 240min cadence = 6 cycles/day) would
+# cost up to 8*6=48 credits/day = ~1440/month for THIS chantier ALONE -- more
+# than the entire system's shared cap, before counting anything else.
+# Recalibrated to 3 (paired with a 720min/12h cycle in heartbeat.py, 2
+# cycles/day) = up to 6 credits/day = ~180/month (~20% of the shared cap) --
+# a deliberately small, non-dominant share since this is one exploratory
+# consumer among several already-established ones.
+CANDIDATES_PER_CYCLE = 1
 
 
 # 26/07 -- Item #109, drawdown circuit breaker (polymarket_risk_guard.py):

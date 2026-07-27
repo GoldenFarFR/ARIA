@@ -301,9 +301,23 @@ HEARTBEAT_TASKS = [
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
-        # 720min (12h, 2 cycles/day): prediction markets move far slower than
-        # momentum crypto (resolution is often days/weeks away, not minutes)
-        # -- no need for a fast cadence. Paired DELIBERATELY with
+        # 27/07 -- TEMPORARY accelerated burn-in cadence (60min, paired with
+        # CANDIDATES_PER_CYCLE dropped to 1, see polymarket_paper_trader.py)
+        # right after the gate's first-ever activation -- operator explicit
+        # request: "juger rapidement si des échecs apparaissent tôt" (new
+        # standing doctrine, CLAUDE.md "Normes permanentes" -- a fresh
+        # deployment should run a fast observation cadence first, never sit
+        # for hours before the first real signal). Cost at this cadence: 1
+        # candidate x 24 cycles/day = up to 24 Tavily credits/day, acceptable
+        # for a short burn-in window, never left running for weeks.
+        # MUST REVERT to the calibrated nominal cadence below once a few
+        # cycles have run cleanly (no exception, no silent no-op) --
+        # tracked as Item #133 in the backlog.
+        #
+        # Nominal cadence once confirmed (restore this, not a guess):
+        # 720min (12h, 2 cycles/day) -- prediction markets move far slower
+        # than momentum crypto (resolution is often days/weeks away, not
+        # minutes). Paired DELIBERATELY with
         # polymarket_paper_trader.CANDIDATES_PER_CYCLE=3 -- calibrated
         # together (26/07) against the REAL shared Tavily monthly budget
         # (checked live: 900 credits/month cap, 790 remaining at calibration
@@ -312,11 +326,8 @@ HEARTBEAT_TASKS = [
         # of the shared cap) -- a deliberately small, non-dominant share of a
         # budget already used by several other established consumers (X/
         # Website/Docs substance, conviction research, operator/visitor
-        # web_verify questions). A starting value, not set in stone --
-        # loosen only after measuring real spend under this cadence (same
-        # "start conservative, measure, loosen later" doctrine as every
-        # other threshold in this chantier).
-        interval_minutes=720,
+        # web_verify questions).
+        interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
