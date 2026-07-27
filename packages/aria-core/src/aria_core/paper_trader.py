@@ -1147,7 +1147,9 @@ async def list_positions_for_contract(contract: str, limit: int = 100) -> list[d
     return [_row_to_pos(r) for r in rows]
 
 
-async def _get_open(contract: str, *, strategy: str | None = None) -> dict | None:
+async def _get_open(
+    contract: str, *, strategy: str | None = None, position_id: int | None = None,
+) -> dict | None:
     """Case-insensitive search -- same reason as ``list_positions_for_contract``
     above (no ``chain`` parameter here to reconstruct the real normalization).
 
@@ -1157,19 +1159,44 @@ async def _get_open(contract: str, *, strategy: str | None = None) -> dict | Non
     provided, filters on THIS specific strategy -- needed to allow the VC+Swing
     combination (explicit operator decision, 07/22): an already-open
     ``vc_thesis`` position must never block the opening of a ``momentum``
-    position on the SAME contract, and vice versa."""
-    contract = (contract or "").lower()
+    position on the SAME contract, and vice versa.
+
+    ``position_id`` (27/07, multi-pocket prerequisite): when provided, resolves
+    DIRECTLY by row id -- ``contract``/``strategy`` are ignored entirely for
+    the lookup (still validated as a sanity check below). This is the safe
+    path once the SAME contract can legally have multiple simultaneously-open
+    positions (one per pocket/wallet) -- a lookup by contract alone cannot
+    disambiguate which one the caller means. When ``position_id`` is absent
+    (legacy path, still used by external callers with no ambiguity today),
+    a SECOND open position sharing this contract now raises loudly instead of
+    silently resolving to an arbitrary one -- real bug class this closes: a
+    caller that forgot to pass ``position_id`` would otherwise corrupt
+    whichever position ``fetchone()`` happened to return first."""
     cols = ", ".join(_POS_FIELDS)
+    if position_id is not None:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                f"SELECT {cols} FROM paper_position WHERE id = ? AND status = 'open'",
+                (position_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return _row_to_pos(row) if row else None
+
+    contract = (contract or "").lower()
     query = f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? AND status = 'open'"
     params: list = [contract]
     if strategy is not None:
         query += " AND strategy = ?"
         params.append(strategy)
-    query += " LIMIT 1"
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(query, params) as cur:
-            row = await cur.fetchone()
-    return _row_to_pos(row) if row else None
+            rows = await cur.fetchall()
+    if len(rows) > 1:
+        raise RuntimeError(
+            f"_get_open: {len(rows)} open positions share contract {contract!r} -- "
+            "pass position_id explicitly to disambiguate (multi-pocket ambiguity)"
+        )
+    return _row_to_pos(rows[0]) if rows else None
 
 
 async def has_open(contract: str, *, strategy: str | None = None) -> bool:
@@ -1482,11 +1509,21 @@ async def open_position(
 
 async def close_position(
     contract: str, exit_price: float, *, reason: str = "manuel", notes: str | None = None,
+    position_id: int | None = None,
 ) -> dict | None:
     """Closes a FICTITIOUS position at the real exit price and records the P&L.
     ``reason`` stays a stable short tag (compared by equality elsewhere/in
     tests); ``notes`` (07/17) carries the full numeric justification --
     separated so as to never break a caller that depends on the exact tag.
+
+    ``position_id`` (27/07, multi-pocket prerequisite): pass the specific
+    row's id whenever it's already known (every internal caller inside
+    ``_run_paper_cycle_locked`` iterates ``get_open_positions()`` and already
+    has ``p["id"]``) -- resolves that EXACT row via ``_get_open``, never
+    re-resolving by contract. Without it, ``contract`` alone now raises if
+    more than one position shares it (see ``_get_open``) rather than silently
+    picking one -- external callers with no ambiguity today (single position
+    per contract) are unaffected.
 
     Final ``pnl_usd`` = P&L of the last leg + ``realized_pnl_partial`` already
     accumulated by any partial profit-takes (07/19, real bug found on position
@@ -1497,7 +1534,7 @@ async def close_position(
     final close. ``realized_pnl_partial`` stays unchanged on the row (the share
     of total P&L that came from earlier stages, still visible separately)."""
     await _ensure_tables()
-    pos = await _get_open(contract)
+    pos = await _get_open(contract, position_id=position_id)
     if not pos or not exit_price or exit_price <= 0:
         return None
     # Item #101 (26/07): real DEX swap fee on the sell leg -- read from the
@@ -1532,6 +1569,7 @@ async def close_position(
 async def reduce_position(
     contract: str, exit_price: float, sell_qty: float, *, stage: int,
     reason: str = "prise de profit", notes: str | None = None,
+    position_id: int | None = None,
 ) -> dict | None:
     """PARTIAL profit-take: sells a fraction of the position and keeps the rest
     open with a proportionally reduced cost basis (same ``entry_price``, less
@@ -1540,9 +1578,12 @@ async def reduce_position(
     ``cash_available``/``portfolio_summary`` without waiting for the position's
     full close. ``notes`` (07/17): numeric justification of THIS partial take,
     persisted on the still-open row (replaces the previous one -- latest note,
-    not a cumulative history)."""
+    not a cumulative history).
+
+    ``position_id`` (27/07, multi-pocket prerequisite): same reasoning as
+    ``close_position`` -- pass it whenever already known."""
     await _ensure_tables()
-    pos = await _get_open(contract)
+    pos = await _get_open(contract, position_id=position_id)
     if not pos or not exit_price or exit_price <= 0 or sell_qty <= 0:
         return None
     # Item #101 (26/07): same real DEX swap fee as close_position, applied to
@@ -2687,6 +2728,7 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
                 f"Clôture forcée -- fin du cycle #{cycle_number} ({_duration_phrase(pos.get('opened_at'))}), "
                 f"prix {price_source if (price and price > 0) else 'indisponible, valorisé au coût d’entrée'}."
             ),
+            position_id=pos["id"],
         )
         if closed:
             force_closed.append(closed)
@@ -3068,6 +3110,7 @@ async def _run_paper_cycle_locked(
                 )
                 closed = await close_position(
                     p["contract"], exit_price, reason="sécurité re-scan", notes=sec_notes,
+                    position_id=p["id"],
                 )
                 if closed:
                     actions["closed"].append(closed)
@@ -3127,6 +3170,7 @@ async def _run_paper_cycle_locked(
                     closed = await close_position(
                         p["contract"], price,
                         reason="divergence RSI baissière (scalping)", notes=exit_notes,
+                        position_id=p["id"],
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -3179,6 +3223,7 @@ async def _run_paper_cycle_locked(
                     )
                     closed = await close_position(
                         p["contract"], price, reason="vente déployeur détectée", notes=exit_notes,
+                        position_id=p["id"],
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -3237,7 +3282,7 @@ async def _run_paper_cycle_locked(
                     )
                     closed = await close_position(
                         p["contract"], price, reason="invalidation fondamentale (liquidité)",
-                        notes=exit_notes,
+                        notes=exit_notes, position_id=p["id"],
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -3258,6 +3303,7 @@ async def _run_paper_cycle_locked(
                     )
                     closed = await close_position(
                         p["contract"], price, reason="cible thèse VC", notes=exit_notes,
+                        position_id=p["id"],
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -3286,7 +3332,7 @@ async def _run_paper_cycle_locked(
                         )
                         partial = await reduce_position(
                             p["contract"], price, sell_qty, stage=1,
-                            reason="take seed 2x", notes=seed_notes,
+                            reason="take seed 2x", notes=seed_notes, position_id=p["id"],
                         )
                         if partial:
                             actions["partial"].append(partial)
@@ -3370,6 +3416,7 @@ async def _run_paper_cycle_locked(
                     p["contract"], price,
                     reason=close_reason,
                     notes=exit_notes,
+                    position_id=p["id"],
                 )
                 if closed:
                     actions["closed"].append(closed)
@@ -3416,6 +3463,7 @@ async def _run_paper_cycle_locked(
                     closed = await close_position(
                         p["contract"], price,
                         reason=f"palier {stage_hit}/{len(stages)} (clôture)", notes=tp_notes,
+                        position_id=p["id"],
                     )
                     if closed:
                         actions["closed"].append(closed)
@@ -3437,6 +3485,7 @@ async def _run_paper_cycle_locked(
                 partial = await reduce_position(
                     p["contract"], price, sell_qty, stage=stage_hit,
                     reason=f"palier {stage_hit}/{len(stages)}", notes=partial_notes,
+                    position_id=p["id"],
                 )
                 if partial:
                     actions["partial"].append(partial)

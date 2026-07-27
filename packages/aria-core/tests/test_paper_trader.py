@@ -1797,6 +1797,99 @@ async def test_close_position_includes_prior_partial_pnl(tmp_db):
     assert round(s["realized_pnl"]) == 75_000
 
 
+# ── multi-position-per-contract prerequisite (27/07, multi-pocket plan) ──────
+# ``open_position`` still refuses a 2nd position on the same contract today
+# (has_open(contract) with no strategy/wallet filter, Phase 2 will relax
+# this) -- these tests insert a 2nd open row DIRECTLY via SQL to simulate the
+# future multi-pocket state before Phase 2 lands, proving close_position/
+# reduce_position already behave correctly once that state exists.
+
+async def _duplicate_open_position_row(contract: str) -> int:
+    """Test-only helper: clones the sole open row for ``contract`` into a
+    second open row (different id, same contract) -- simulates 2 pockets
+    holding the same token simultaneously, ahead of Phase 2's real sourcing
+    change."""
+    import aiosqlite
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        cols = ", ".join(c for c in pt._POS_FIELDS if c != "id")
+        async with db.execute(
+            f"SELECT {cols} FROM paper_position WHERE LOWER(contract) = ? AND status = 'open'",
+            (contract.lower(),),
+        ) as cur:
+            row = await cur.fetchone()
+        placeholders = ", ".join("?" for _ in row)
+        cur2 = await db.execute(
+            f"INSERT INTO paper_position ({cols}) VALUES ({placeholders})", row,
+        )
+        await db.commit()
+        return cur2.lastrowid
+
+
+@pytest.mark.asyncio
+async def test_get_open_raises_on_ambiguous_contract_without_position_id(tmp_db):
+    """Real bug class this closes: once 2 positions can legally share a
+    contract (one per pocket), a caller that forgets to pass ``position_id``
+    must fail LOUDLY, never silently resolve to an arbitrary row."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)
+    second_id = await _duplicate_open_position_row(A)
+
+    with pytest.raises(RuntimeError, match="ambiguity"):
+        await pt._get_open(A)
+
+    # sanity: the duplicated row is genuinely open, resolvable by id
+    duplicated = await pt._get_open(A, position_id=second_id)
+    assert duplicated is not None
+    assert duplicated["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_close_position_by_id_closes_only_the_targeted_row(tmp_db):
+    """The core fix: close_position(contract, ..., position_id=X) must close
+    EXACTLY row X, leaving a second open position on the SAME contract
+    completely untouched."""
+    await pt.reset_portfolio(1_000_000.0)
+    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=10_000)
+    first_id = opened["id"]
+    second_id = await _duplicate_open_position_row(A)
+    assert first_id != second_id
+
+    closed = await pt.close_position(A, 2.0, reason="cible", position_id=first_id)
+    assert closed is not None
+    assert closed["id"] == first_id
+
+    # the first row is now closed...
+    async with __import__("aiosqlite").connect(pt.DB_PATH) as db:
+        async with db.execute(
+            "SELECT status FROM paper_position WHERE id = ?", (first_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    assert row[0] == "closed"
+
+    # ...but the SECOND row on the same contract is untouched (still open)
+    still_open = await pt._get_open(A, position_id=second_id)
+    assert still_open is not None
+    assert still_open["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_reduce_position_by_id_reduces_only_the_targeted_row(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    opened = await pt.open_position(A, "AAA", 1.0, alloc_usd=90_000)
+    first_id = opened["id"]
+    second_id = await _duplicate_open_position_row(A)
+
+    partial = await pt.reduce_position(A, 1.5, 30_000, stage=1, position_id=first_id)
+    assert partial is not None
+
+    reduced = await pt._get_open(A, position_id=first_id)
+    assert reduced["qty"] == 60_000  # 90_000 - 30_000
+
+    untouched = await pt._get_open(A, position_id=second_id)
+    assert untouched["qty"] == 90_000  # the OTHER position never touched
+
+
 @pytest.mark.asyncio
 async def test_migration_adds_position_management_columns(tmp_db):
     """Une DB créée AVANT ces colonnes (ancien schéma) doit migrer sans planter et sans
