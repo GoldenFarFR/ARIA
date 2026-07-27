@@ -33,7 +33,7 @@ async def _age_cycle(days: float) -> None:
     started = datetime.now(timezone.utc) - timedelta(days=days)
     async with aiosqlite.connect(pt.DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_state SET created_at = ? WHERE id = 1", (started.isoformat(),),
+            "UPDATE paper_state SET created_at = ? WHERE wallet = 'swing'", (started.isoformat(),),
         )
         await db.commit()
 

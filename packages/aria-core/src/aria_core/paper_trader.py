@@ -561,7 +561,7 @@ _POS_FIELDS = (
     "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
-    "mode", "gp_low", "gp_high",
+    "mode", "gp_low", "gp_high", "wallet",
 )
 
 _ADDED_COLUMNS = [
@@ -708,6 +708,12 @@ _ADDED_COLUMNS = [
     # them (e.g. the old VC-thesis pilot), never an invented value.
     ("gp_low", "REAL"),
     ("gp_high", "REAL"),
+    # 27/07 -- 3-pocket architecture plan (scalping/swing/VC, each an
+    # independent $1M paper wallet): which pocket this position belongs to.
+    # Default 'swing' for every position opened before this work -- the
+    # existing $1M portfolio's full history becomes the swing pocket
+    # (migration decision, see paper_state's own migration comment below).
+    ("wallet", "TEXT NOT NULL DEFAULT 'swing'"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -744,6 +750,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("mode", "TEXT NOT NULL DEFAULT 'standard'"),
     ("gp_low", "REAL"),
     ("gp_high", "REAL"),
+    # 27/07 -- kept in parity with _ADDED_COLUMNS above.
+    ("wallet", "TEXT NOT NULL DEFAULT 'swing'"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -856,10 +864,42 @@ async def _ensure_tables() -> None:
         for name, ddl in _ADDED_COLUMNS:
             if name not in existing:
                 await db.execute(f"ALTER TABLE paper_position ADD COLUMN {name} {ddl}")
+
+        # 27/07 -- paper_state migration: from a single-row schema
+        # (id INTEGER PRIMARY KEY CHECK(id=1)) to one row PER WALLET (wallet
+        # TEXT PRIMARY KEY) -- Phase 1 of the 3-pocket architecture plan
+        # (scalping/swing/VC, each an independent $1M paper wallet, see
+        # docs/HANDOFF_PAPER_TRADING.md). SQLite can't ALTER a PRIMARY KEY in
+        # place, so a DB still on the old schema (has an `id` column, no
+        # `wallet` column) is renamed aside, the new schema is created fresh,
+        # and the single legacy row is copied forward under wallet='swing'
+        # (migration decision: the existing $1M portfolio's full history/
+        # identity becomes the swing pocket) before the legacy table is
+        # dropped. Idempotent -- a DB already on the new schema has no `id`
+        # column left to detect, so the migration branch below is skipped.
+        legacy_state_cols = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(paper_state)")).fetchall()
+        }
+        legacy_row: dict | None = None
+        if legacy_state_cols and "wallet" not in legacy_state_cols:
+            legacy_col_order = [
+                row[1]
+                for row in await (await db.execute("PRAGMA table_info(paper_state)")).fetchall()
+            ]
+            raw = await (
+                await db.execute(
+                    f"SELECT {', '.join(legacy_col_order)} FROM paper_state WHERE id = 1"
+                )
+            ).fetchone()
+            if raw is not None:
+                legacy_row = dict(zip(legacy_col_order, raw))
+            await db.execute("ALTER TABLE paper_state RENAME TO paper_state_legacy_migrated")
+
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS paper_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                wallet TEXT PRIMARY KEY,
                 starting_capital REAL NOT NULL,
                 created_at TEXT NOT NULL
             )
@@ -872,10 +912,33 @@ async def _ensure_tables() -> None:
         for name, ddl in _STATE_ADDED_COLUMNS:
             if name not in state_existing:
                 await db.execute(f"ALTER TABLE paper_state ADD COLUMN {name} {ddl}")
-        await db.execute(
-            "INSERT OR IGNORE INTO paper_state (id, starting_capital, created_at) VALUES (1, ?, ?)",
-            (STARTING_CAPITAL_USD, _now()),
-        )
+
+        if legacy_row is not None:
+            # Copy every column the legacy row actually had (starting_capital/
+            # created_at plus whichever hot-migrated columns already existed
+            # on THIS database -- equity_high_water_mark/cycle_number/
+            # trading_mode/etc.), never just starting_capital/created_at alone
+            # -- otherwise a live prod portfolio's real risk/cycle state would
+            # be silently reset by this migration.
+            cols_to_copy = [c for c in legacy_row if c != "id"]
+            await db.execute(
+                f"INSERT OR IGNORE INTO paper_state (wallet, {', '.join(cols_to_copy)}) "
+                f"VALUES ('swing', {', '.join('?' for _ in cols_to_copy)})",
+                tuple(legacy_row[c] for c in cols_to_copy),
+            )
+            await db.execute("DROP TABLE paper_state_legacy_migrated")
+
+        # Seed the 2 new pockets fresh at STARTING_CAPITAL_USD (migration
+        # decision: scalping/VC start empty -- only 'swing' carries the
+        # existing portfolio's history forward). INSERT OR IGNORE also covers
+        # the 'swing' row itself on a DB that was already on the new schema
+        # (no legacy row to copy -- e.g. a fresh test DB).
+        for wallet_name in ("swing", "scalping", "vc"):
+            await db.execute(
+                "INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at) "
+                "VALUES (?, ?, ?)",
+                (wallet_name, STARTING_CAPITAL_USD, _now()),
+            )
         # 07/18 -- weekly verdict (one row per cycle closed by run_weekly_reset).
         # Never a destructive DELETE/UPDATE anywhere other than the reset's own
         # upsert -- this is the real track record of the weekly protocol, must
@@ -959,17 +1022,25 @@ async def _ensure_tables() -> None:
         await db.commit()
 
 
-async def starting_capital() -> float:
+async def starting_capital(wallet: str = "swing") -> float:
+    """``wallet`` (27/07, 3-pocket architecture plan): which pocket's $1M
+    portfolio to read -- 'swing' (default, the existing/only actively-traded
+    portfolio as of this work), 'scalping', or 'vc'. Defaulted rather than
+    made mandatory since only 'swing' has any real trading loop wired to it
+    today (Phase 2 of the plan wires the other two) -- every current caller
+    keeps working unchanged."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT starting_capital FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT starting_capital FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     return float(row[0]) if row else STARTING_CAPITAL_USD
 
 
 async def reset_portfolio(
     starting: float = STARTING_CAPITAL_USD, *, created_at: str | None = None,
-    cycle_duration_days: float | None = None,
+    cycle_duration_days: float | None = None, wallet: str = "swing",
 ) -> None:
     """Starts fresh (new proof run). DESTRUCTIVE: to be triggered explicitly by
     the operator, never by an automatic loop.
@@ -986,85 +1057,109 @@ async def reset_portfolio(
 
     ``cycle_duration_days`` (25/07, operator request: "passe le test de 7 jours
     a 24h"): one-off override of WEEKLY_CYCLE_DAYS for THIS cycle only -- see
-    _STATE_ADDED_COLUMNS for why this is never a permanent doctrine change."""
+    _STATE_ADDED_COLUMNS for why this is never a permanent doctrine change.
+
+    ``wallet`` (27/07, 3-pocket architecture plan): scopes the reset to a
+    SINGLE pocket -- ``paper_position``/``paper_state`` are shared tables
+    across all 3 pockets, so a reset must never touch rows belonging to a
+    DIFFERENT wallet than the one requested."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await (await db.execute("SELECT cycle_number FROM paper_state WHERE id = 1")).fetchone()
+        row = await (
+            await db.execute("SELECT cycle_number FROM paper_state WHERE wallet = ?", (wallet,))
+        ).fetchone()
         cycle_number = row[0] if row else 0
         cols = ", ".join(_POS_FIELDS)
         await db.execute(
             f"INSERT INTO paper_position_archive (cycle_number, {cols}) "
-            f"SELECT ?, {cols} FROM paper_position",
-            (cycle_number,),
+            f"SELECT ?, {cols} FROM paper_position WHERE wallet = ?",
+            (cycle_number, wallet),
         )
-        await db.commit()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DROP TABLE IF EXISTS paper_position")
-        await db.execute("DROP TABLE IF EXISTS paper_state")
+        await db.execute("DELETE FROM paper_position WHERE wallet = ?", (wallet,))
         await db.commit()
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
+        # Full reset back to a fresh pocket -- matches the pre-27/07 behavior
+        # (DROP + recreate the whole table), now done as a scoped UPDATE since
+        # paper_state is shared across all 3 wallets and a DROP would wipe the
+        # other 2 pockets' state too. Every field a fresh row would otherwise
+        # get from its column DEFAULT is reset explicitly here (cycle_number
+        # back to 1, last_tracking_alert_at/trading_mode back to their
+        # defaults) -- not just the 4 fields the old code set post-recreate.
         await db.execute(
             "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
-            "equity_high_water_mark = ?, cycle_duration_days = ? WHERE id = 1",
-            (starting, created_at or _now(), starting, cycle_duration_days),
+            "equity_high_water_mark = ?, cycle_duration_days = ?, cycle_number = 1, "
+            "last_tracking_alert_at = NULL, trading_mode = 'standard' WHERE wallet = ?",
+            (starting, created_at or _now(), starting, cycle_duration_days, wallet),
         )
         await db.commit()
 
 
-async def get_equity_high_water_mark() -> float:
+async def get_equity_high_water_mark(wallet: str = "swing") -> float:
     """Highest equity ever reached (#186, drawdown circuit breaker). Initialized
     to the starting capital as long as no higher equity has been observed yet
-    -- never NULL after this call (migrated DBs have the column but not the value)."""
+    -- never NULL after this call (migrated DBs have the column but not the
+    value). ``wallet`` (27/07): see ``starting_capital``'s docstring."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT equity_high_water_mark FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT equity_high_water_mark FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     if row and row[0] is not None:
         return float(row[0])
-    return await starting_capital()
+    return await starting_capital(wallet=wallet)
 
 
-async def set_equity_high_water_mark(value: float) -> None:
+async def set_equity_high_water_mark(value: float, *, wallet: str = "swing") -> None:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_state SET equity_high_water_mark = ? WHERE id = 1", (value,),
+            "UPDATE paper_state SET equity_high_water_mark = ? WHERE wallet = ?", (value, wallet),
         )
         await db.commit()
 
 
-async def get_last_tracking_alert_at() -> str | None:
+async def get_last_tracking_alert_at(wallet: str = "swing") -> str | None:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT last_tracking_alert_at FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT last_tracking_alert_at FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
 
 
-async def set_last_tracking_alert_at(value: str) -> None:
+async def set_last_tracking_alert_at(value: str, *, wallet: str = "swing") -> None:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE paper_state SET last_tracking_alert_at = ? WHERE id = 1", (value,),
+            "UPDATE paper_state SET last_tracking_alert_at = ? WHERE wallet = ?", (value, wallet),
         )
         await db.commit()
 
 
-async def get_trading_mode() -> str:
+async def get_trading_mode(wallet: str = "swing") -> str:
     """Portfolio-wide entry mode ("standard"/"scalping", Item #101, 26/07) --
     "standard" (unchanged behavior) until the operator explicitly switches the
     Milly test to scalping via ``set_trading_mode``. A single switch, never a
     per-position blend (operator's explicit decision: scalping REPLACES
-    swing/momentum and the VC pocket on this portfolio, not a mix)."""
+    swing/momentum and the VC pocket on this portfolio, not a mix).
+
+    ``wallet`` (27/07): kept on the 'swing' pocket for now -- this switch
+    predates the 3-pocket split and still governs the one and only actively-
+    traded portfolio (Phase 2 of the plan will retire it once the scalping
+    pocket becomes its own independent wallet with its own sourcing loop)."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT trading_mode FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT trading_mode FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     return row[0] if row and row[0] else "standard"
 
 
-async def set_trading_mode(mode: str) -> None:
+async def set_trading_mode(mode: str, *, wallet: str = "swing") -> None:
     """Operator-only switch (Item #101) -- no automatic promotion from within
     the codebase; the code observes the naturally-occurring trade volume, it
     never imposes or targets one."""
@@ -1072,54 +1167,75 @@ async def set_trading_mode(mode: str) -> None:
         raise ValueError(f"trading_mode must be 'standard' or 'scalping', got {mode!r}")
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE paper_state SET trading_mode = ? WHERE id = 1", (mode,))
+        await db.execute(
+            "UPDATE paper_state SET trading_mode = ? WHERE wallet = ?", (mode, wallet),
+        )
         await db.commit()
 
 
-async def get_open_positions() -> list[dict]:
+async def get_open_positions(wallet: str | None = None) -> list[dict]:
+    """``wallet`` (27/07, 3-pocket architecture plan): optional filter, ``None``
+    (default) returns open positions across ALL pockets -- unchanged behavior
+    for every existing caller, since only the 'swing' pocket has ever traded
+    as of this work (Phase 2 wires the other two). Pass it explicitly once a
+    caller genuinely means ONE specific pocket (e.g. counting a wallet's own
+    MAX_POSITIONS)."""
     await _ensure_tables()
     cols = ", ".join(_POS_FIELDS)
+    query = f"SELECT {cols} FROM paper_position WHERE status = 'open'"
+    params: list = []
+    if wallet is not None:
+        query += " AND wallet = ?"
+        params.append(wallet)
+    query += " ORDER BY id"
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            f"SELECT {cols} FROM paper_position WHERE status = 'open' ORDER BY id"
-        ) as cur:
+        async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
     return [_row_to_pos(r) for r in rows]
 
 
-async def get_closed_positions(limit: int = 500) -> list[dict]:
+async def get_closed_positions(limit: int = 500, *, wallet: str | None = None) -> list[dict]:
+    """``wallet``: see ``get_open_positions``'s docstring -- same optional filter,
+    same default (``None`` = all pockets, unchanged behavior)."""
     await _ensure_tables()
     cols = ", ".join(_POS_FIELDS)
+    query = f"SELECT {cols} FROM paper_position WHERE status = 'closed'"
+    params: list = []
+    if wallet is not None:
+        query += " AND wallet = ?"
+        params.append(wallet)
+    # `id DESC` as tie-break (#186): `closed_at` (microsecond resolution) can
+    # coincide between two closes that happen close together in the same
+    # tick/test -- insertion order remains the reliable recency signal in that
+    # case, notably for risk_guard.evaluate_portfolio_risk's consecutive-loss
+    # counting.
+    query += " ORDER BY closed_at DESC, id DESC LIMIT ?"
+    params.append(limit)
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            # `id DESC` as tie-break (#186): `closed_at` (microsecond resolution)
-            # can coincide between two closes that happen close together in the
-            # same tick/test -- insertion order remains the reliable recency
-            # signal in that case, notably for risk_guard.evaluate_portfolio_risk's
-            # consecutive-loss counting.
-            f"SELECT {cols} FROM paper_position WHERE status = 'closed' ORDER BY closed_at DESC, id DESC LIMIT ?",
-            (limit,),
-        ) as cur:
+        async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
     return [_row_to_pos(r) for r in rows]
 
 
-async def get_archived_closed_positions(limit: int = 5000) -> list[dict]:
+async def get_archived_closed_positions(limit: int = 5000, *, wallet: str | None = None) -> list[dict]:
     """Every closed position already archived by a past ``run_weekly_reset``
     (07/23, performance-breakdown tracking: the full track record spans many
     weekly cycles, not just the one in progress -- ``get_closed_positions``
     above only covers the current cycle). Same ``_POS_FIELDS`` shape as an
     open/closed position (``archive_id``/``cycle_number`` deliberately
     excluded -- not needed by any caller so far, easy to add later without
-    breaking this shape)."""
+    breaking this shape). ``wallet``: see ``get_open_positions``'s docstring."""
     await _ensure_tables()
     cols = ", ".join(_POS_FIELDS)
+    query = f"SELECT {cols} FROM paper_position_archive WHERE status = 'closed'"
+    params: list = []
+    if wallet is not None:
+        query += " AND wallet = ?"
+        params.append(wallet)
+    query += " ORDER BY closed_at DESC, archive_id DESC LIMIT ?"
+    params.append(limit)
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            f"SELECT {cols} FROM paper_position_archive WHERE status = 'closed' "
-            "ORDER BY closed_at DESC, archive_id DESC LIMIT ?",
-            (limit,),
-        ) as cur:
+        async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
     return [_row_to_pos(r) for r in rows]
 
@@ -1283,21 +1399,28 @@ async def _last_invalidation_exit_rr(contract: str, *, limit: int = 20) -> float
     return None
 
 
-async def cash_available() -> float:
+async def cash_available(wallet: str = "swing") -> float:
     """Cash = starting capital - cost of open positions + realized P&L of closed
     ones + realized P&L of PARTIAL profit-takes on still-open positions (the
     remaining ``cost_usd`` is already proportionally reduced by
     ``reduce_position``, so only the profit beyond the cost basis needs to be
-    added back here)."""
-    start = await starting_capital()
+    added back here).
+
+    ``wallet`` (27/07, 3-pocket architecture plan): scopes every sum to ONE
+    pocket's own positions -- defaulted to 'swing' (the only actively-traded
+    pocket as of this work) rather than made mandatory, so every existing
+    caller keeps working unchanged until Phase 2 wires the other two."""
+    start = await starting_capital(wallet=wallet)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(realized_pnl_partial), 0) "
-            "FROM paper_position WHERE status = 'open'"
+            "FROM paper_position WHERE status = 'open' AND wallet = ?",
+            (wallet,),
         ) as cur:
             open_cost, open_partial = await cur.fetchone()
         async with db.execute(
-            "SELECT COALESCE(SUM(pnl_usd), 0) FROM paper_position WHERE status = 'closed'"
+            "SELECT COALESCE(SUM(pnl_usd), 0) FROM paper_position WHERE status = 'closed' AND wallet = ?",
+            (wallet,),
         ) as cur:
             realized = (await cur.fetchone())[0] or 0.0
     return float(start) - float(open_cost or 0.0) + float(realized) + float(open_partial or 0.0)
@@ -1730,12 +1853,17 @@ async def _set_position_pocket(position_id: int, pocket: str) -> None:
         await db.commit()
 
 
-async def portfolio_summary(*, price_lookup=None) -> dict:
+async def portfolio_summary(*, price_lookup=None, wallet: str = "swing") -> dict:
     """Portfolio snapshot: cash, total value (marked to market if price_lookup),
-    % return, realized/unrealized P&L, win rate. ``price_lookup(contract)`` async -> price."""
-    start = await starting_capital()
-    opens = await get_open_positions()
-    closed = await get_closed_positions(limit=100_000)
+    % return, realized/unrealized P&L, win rate. ``price_lookup(contract)`` async -> price.
+
+    ``wallet`` (27/07, 3-pocket architecture plan): scopes the ENTIRE snapshot
+    to ONE pocket -- defaulted to 'swing' (the only actively-traded pocket as
+    of this work), never mixing pockets (starting_capital/opens/closed must
+    always agree on which portfolio they describe)."""
+    start = await starting_capital(wallet=wallet)
+    opens = await get_open_positions(wallet=wallet)
+    closed = await get_closed_positions(limit=100_000, wallet=wallet)
     realized = (
         sum((p["pnl_usd"] or 0.0) for p in closed)
         + sum((p.get("realized_pnl_partial") or 0.0) for p in opens)
@@ -2546,18 +2674,22 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
 
 # ── Weekly training cycle (07/18, replaces the 30d/7d/14d protocol) ──────
 
-async def get_current_cycle_number() -> int:
+async def get_current_cycle_number(wallet: str = "swing") -> int:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT cycle_number FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT cycle_number FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     return int(row[0]) if row and row[0] is not None else 1
 
 
-async def cycle_started_at() -> str:
+async def cycle_started_at(wallet: str = "swing") -> str:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT created_at FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT created_at FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     return row[0] if row and row[0] else _now()
 
@@ -2566,27 +2698,29 @@ def weekly_target_equity(start_capital: float) -> float:
     return start_capital * WEEKLY_TARGET_MULTIPLIER
 
 
-async def _effective_cycle_days() -> float:
+async def _effective_cycle_days(wallet: str = "swing") -> float:
     """25/07, operator one-off ("passe le test de 7 jours a 24h"):
     ``paper_state.cycle_duration_days`` overrides ``WEEKLY_CYCLE_DAYS`` for
     THIS cycle only when set (via ``reset_portfolio``) -- NULL (the default
     for any normal reset) falls back to the standard 7-day doctrine."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT cycle_duration_days FROM paper_state WHERE id = 1") as cur:
+        async with db.execute(
+            "SELECT cycle_duration_days FROM paper_state WHERE wallet = ?", (wallet,),
+        ) as cur:
             row = await cur.fetchone()
     if row and row[0]:
         return float(row[0])
     return float(WEEKLY_CYCLE_DAYS)
 
 
-async def weekly_cycle_due() -> bool:
+async def weekly_cycle_due(wallet: str = "swing") -> bool:
     """True if the effective cycle duration (see ``_effective_cycle_days``,
     ``WEEKLY_CYCLE_DAYS`` by default) has elapsed since the start of the
     current cycle (``paper_state.created_at``). Never brought forward, even if
     the target is already reached -- a REPEATED training loop, not an exit
     gate crossed once."""
-    started = await cycle_started_at()
+    started = await cycle_started_at(wallet=wallet)
     try:
         started_dt = datetime.fromisoformat(started)
     except ValueError:
@@ -2594,18 +2728,18 @@ async def weekly_cycle_due() -> bool:
     if started_dt.tzinfo is None:
         started_dt = started_dt.replace(tzinfo=timezone.utc)
     elapsed = datetime.now(timezone.utc) - started_dt
-    cycle_days = await _effective_cycle_days()
+    cycle_days = await _effective_cycle_days(wallet=wallet)
     return elapsed.total_seconds() >= cycle_days * 86400
 
 
-async def run_weekly_reset(*, price_lookup=None) -> dict:
+async def run_weekly_reset(*, price_lookup=None, wallet: str = "swing") -> dict:
     """Weekly cycle review + reset (explicit operator decision, 07/18) --
     fully replaces the 30d/7d/14d protocol as the TRAINING and DECISION method
     toward real capital: ARIA restarts at $1M EVERY week, +10% target ($1.1M)
     VALIDATED every week, whether the previous one succeeded or not.
 
-    Unlike ``reset_portfolio`` (DROP TABLE, destructive by design, reserved
-    for an explicit operator trigger), this function NEVER destroys history:
+    Unlike ``reset_portfolio`` (destructive by design, reserved for an
+    explicit operator trigger), this function NEVER destroys history:
     1. evaluates each open position for the SATELLITE POCKET (07/22, Task 2,
        option 3 explicitly confirmed by the operator): a position whose
        potential is still intact (see ``_satellite_pocket_eligible`` --
@@ -2646,13 +2780,20 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
     Deliberately low cap (5% by default) to bound this impact; separating the
     two pockets in ``risk_guard`` would remain a distinct project if the need
     is confirmed under real conditions.
+
+    ``wallet`` (27/07, 3-pocket architecture plan): scopes the ENTIRE weekly
+    review to ONE pocket -- defaulted to 'swing' (the only pocket this
+    training loop has ever run against). ``paper_position``/``paper_state``
+    are now shared across all 3 pockets, so every query below is filtered by
+    ``wallet`` -- a reset must never archive/close/reset a DIFFERENT pocket's
+    positions or state.
     """
     await _ensure_tables()
     price_lookup = price_lookup or _default_price_lookup
     using_default_price_lookup = price_lookup is _default_price_lookup
-    cycle_number = await get_current_cycle_number()
-    started_at = await cycle_started_at()
-    start_capital = await starting_capital()
+    cycle_number = await get_current_cycle_number(wallet=wallet)
+    started_at = await cycle_started_at(wallet=wallet)
+    start_capital = await starting_capital(wallet=wallet)
     target_equity = weekly_target_equity(start_capital)
 
     from aria_core.skills import market_sentiment
@@ -2663,7 +2804,7 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         logger.info("run_weekly_reset: meta-regime unavailable (%s) -- defaulting to neutral", exc)
         current_regime = market_sentiment.META_REGIME_NEUTRAL
 
-    open_positions = await get_open_positions()
+    open_positions = await get_open_positions(wallet=wallet)
     existing_satellite = [p for p in open_positions if (p.get("pocket") or "main") == "satellite"]
     already_satellite_cost = sum(p["cost_usd"] for p in existing_satellite)
     satellite_room = max(
@@ -2738,7 +2879,7 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
     # snapshot, to neutralize its effect on the MAIN pocket's verdict (see below).
     satellite_reserved_usd = already_satellite_cost + sum(a["cost_usd"] for a in satellite_added)
 
-    summary = await portfolio_summary()
+    summary = await portfolio_summary(wallet=wallet)
     # The week's verdict judges ONLY the MAIN pocket. ``summary["cash"]``
     # subtracts the cost of ANY still-open position -- at this point, only the
     # satellite pocket (everything else was just force-closed above) -- so this
@@ -2758,13 +2899,23 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         cols = ", ".join(_POS_FIELDS)
         # Archives + clears the live table -- EXCEPT the satellite pocket
         # (position still OPEN by construction, managed on its own schedule,
-        # never wiped here).
+        # never wiped here). Scoped to THIS wallet only -- paper_position is
+        # now shared across all 3 pockets (27/07).
         await db.execute(
             f"INSERT INTO paper_position_archive (cycle_number, {cols}) "
-            f"SELECT ?, {cols} FROM paper_position WHERE pocket != 'satellite'",
-            (cycle_number,),
+            f"SELECT ?, {cols} FROM paper_position WHERE pocket != 'satellite' AND wallet = ?",
+            (cycle_number, wallet),
         )
-        await db.execute("DELETE FROM paper_position WHERE pocket != 'satellite'")
+        await db.execute(
+            "DELETE FROM paper_position WHERE pocket != 'satellite' AND wallet = ?", (wallet,),
+        )
+        # 27/07 -- known limitation, out of scope for this work: paper_weekly_
+        # cycle's cycle_number is a GLOBAL primary key, not yet scoped per
+        # wallet -- a future pocket that also adopts this weekly reset (Phase
+        # 4 of the 3-pocket plan) could collide on the same cycle_number as
+        # 'swing'. Harmless today (only 'swing' ever calls run_weekly_reset),
+        # deliberately deferred rather than widening this table's schema
+        # ahead of actual need.
         await db.execute(
             """
             INSERT INTO paper_weekly_cycle
@@ -2784,8 +2935,8 @@ async def run_weekly_reset(*, price_lookup=None) -> dict:
         await db.execute(
             "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
             "equity_high_water_mark = ?, cycle_number = ?, last_tracking_alert_at = NULL, "
-            "cycle_duration_days = NULL WHERE id = 1",
-            (STARTING_CAPITAL_USD, ended_at, STARTING_CAPITAL_USD, next_cycle),
+            "cycle_duration_days = NULL WHERE wallet = ?",
+            (STARTING_CAPITAL_USD, ended_at, STARTING_CAPITAL_USD, next_cycle, wallet),
         )
         await db.commit()
 
