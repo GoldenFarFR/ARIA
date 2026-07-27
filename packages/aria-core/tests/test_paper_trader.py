@@ -2942,6 +2942,65 @@ def test_format_buy_alert_shows_pct_of_starting_capital():
     assert "2.5%" in buy  # 25 000 $ / 1 000 000 $ de capital de départ
 
 
+# ── _strategy_label (26/07, demande opérateur explicite : le header disait
+#    toujours "(mode trading)" quel que soit scalping/standard/vc_thesis) ──────
+
+def test_strategy_label_scalping():
+    assert pt._strategy_label({"mode": "scalping", "strategy": "momentum"}) == "scalping"
+
+
+def test_strategy_label_standard_momentum_is_swing_trading():
+    assert pt._strategy_label({"mode": "standard", "strategy": "momentum"}) == "swing trading"
+
+
+def test_strategy_label_vc_thesis_wins_regardless_of_mode():
+    """vc_thesis est un pipeline totalement séparé (safety_screen/vc_analysis,
+    jamais le switch scalping/standard) -- il prime toujours."""
+    assert pt._strategy_label({"mode": "scalping", "strategy": "vc_thesis"}) == "venture capital"
+    assert pt._strategy_label({"mode": "standard", "strategy": "vc_thesis"}) == "venture capital"
+
+
+def test_strategy_label_missing_fields_defaults_to_swing_trading():
+    assert pt._strategy_label({}) == "swing trading"
+
+
+def test_format_buy_alert_shows_scalping_label():
+    buy = pt.format_buy_alert(
+        {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000, "mode": "scalping"}
+    )
+    assert "(scalping)" in buy
+    assert "mode trading" not in buy
+
+
+def test_format_sell_alert_shows_venture_capital_label():
+    sell = pt.format_sell_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 2.0, "pnl_usd": 100.0, "pnl_pct": 1.0, "strategy": "vc_thesis"}
+    )
+    assert "(venture capital)" in sell
+
+
+def test_format_partial_exit_alert_shows_swing_trading_label():
+    partial = pt.format_partial_exit_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 2.0, "pnl_usd": 100.0, "pnl_pct": 1.0, "remaining_qty": 5.0}
+    )
+    assert "(swing trading)" in partial
+
+
+def test_format_position_tracking_alert_labels_each_position_individually():
+    """Deux positions ouvertes de modes DIFFÉRENTS en même temps (un vrai cas
+    rencontré : une position standard/swing encore ouverte pendant que le
+    switch portefeuille-entier est déjà passé en scalping) -- chacune doit
+    porter SON PROPRE label, jamais un seul label partagé dans le header."""
+    msg = pt.format_position_tracking_alert([
+        {"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0,
+         "cost_usd": 1000.0, "mode": "standard", "strategy": "momentum"},
+        {"contract": D, "symbol": "DDD", "entry_price": 1.0, "price": 1.1, "qty": 1000.0,
+         "cost_usd": 1000.0, "mode": "scalping", "strategy": "momentum"},
+    ])
+    assert "AAA (swing trading)" in msg
+    assert "DDD (scalping)" in msg
+
+
 @pytest.mark.asyncio
 async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
     await pt.reset_portfolio(1_000_000.0)

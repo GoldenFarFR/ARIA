@@ -1749,6 +1749,22 @@ async def portfolio_summary(*, price_lookup=None) -> dict:
 
 # ── FICTITIOUS alerts (operator) — always stamped SIMULATION ──────────────────
 
+def _strategy_label(pos: dict) -> str:
+    """Short strategy label for Telegram alerts -- distinguishes what actually
+    produced this position (26/07, operator request: every alert used to say
+    a fixed "mode trading" header regardless of scalping/standard/vc_thesis,
+    making it impossible to tell at a glance which discipline governs a given
+    position). ``vc_thesis`` checked first since it's a fully separate pipeline
+    (safety_screen/vc_analysis, never the momentum mode switch); otherwise
+    falls back to the portfolio-wide scalping/standard switch persisted on
+    the position itself (``mode``, never rétroactif -- see get_trading_mode)."""
+    if pos.get("strategy") == "vc_thesis":
+        return "venture capital"
+    if pos.get("mode") == "scalping":
+        return "scalping"
+    return "swing trading"
+
+
 def format_buy_alert(pos: dict) -> str:
     name = pos.get("symbol") or (pos.get("contract") or "")[:10]
     # 07/17 -- explicit operator request: show the % of starting capital
@@ -1758,7 +1774,7 @@ def format_buy_alert(pos: dict) -> str:
     cost = pos.get("cost_usd") or 0.0
     pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
     lines = [
-        "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
+        f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(pos)})",
         f"ACHAT FICTIF {name}",
         f"Contrat {pos.get('contract', '')}",
         f"Entrée {pos['entry_price']:.6g} · taille {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)",
@@ -1805,8 +1821,12 @@ def _format_tracked_position_line(t: dict) -> str:
     # afterward and no longer faithfully represent the size decided AT THE
     # TIME of the buy).
     pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
+    # 26/07 -- per-position label, not a single header one: this alert can
+    # list positions opened under DIFFERENT strategies/modes at once (a
+    # standard/swing position still open while the portfolio-wide switch has
+    # since moved to scalping, mode is never rétroactif -- see get_trading_mode).
     line = (
-        f"{name} : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
+        f"{name} ({_strategy_label(t)}) : {price:.6g} ({sign}{pnl_pct:.1f}%) · P&L latent {sign}{pnl:,.0f} $ · "
         f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
     )
     if t.get("contract"):
@@ -1839,6 +1859,8 @@ async def build_open_positions_tracking_lines(*, price_lookup=None) -> list[str]
             "price": price if price and price > 0 else p.get("entry_price"),
             "qty": p.get("qty"),
             "cost_usd": p.get("cost_usd"),
+            "mode": p.get("mode"),
+            "strategy": p.get("strategy"),
         })
     return [_format_tracked_position_line(t) for t in tracked]
 
@@ -1883,7 +1905,7 @@ def format_sell_alert(closed: dict) -> str:
     pct = closed.get("pnl_pct") or 0.0
     sign = "+" if pnl >= 0 else ""
     lines = [
-        "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
+        f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(closed)})",
         f"VENTE FICTIVE {name} ({closed.get('close_reason', '')})",
         f"Sortie {closed['exit_price']:.6g} · P&L {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%)",
     ]
@@ -1902,7 +1924,7 @@ def format_partial_exit_alert(partial: dict) -> str:
     pct = partial.get("pnl_pct") or 0.0
     sign = "+" if pnl >= 0 else ""
     lines = [
-        "🧪 SIMULATION — portefeuille papier 1 M$ (mode trading)",
+        f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(partial)})",
         f"PRISE DE PROFIT PARTIELLE FICTIVE {name} ({partial.get('close_reason', '')})",
         f"Sortie {partial['exit_price']:.6g} · {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%) sur la tranche vendue",
         f"Position restante : {partial.get('remaining_qty', 0):.6g} unités",
@@ -3066,6 +3088,7 @@ async def _run_paper_cycle_locked(
             tracked.append({
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
+                "mode": p.get("mode"), "strategy": p.get("strategy"),
             })
 
             # Item #105 (26/07): scalping-mode exit signal -- a confirmed
