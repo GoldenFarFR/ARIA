@@ -80,6 +80,22 @@ def test_book_instruction_not_routed_as_claim():
     assert is_injected_factual_claim("la nouvelle version est livrée depuis ce matin")
 
 
+def test_ranking_question_not_routed_as_claim():
+    """27/07 -- incident réel (capture opérateur, Telegram) : "Non je veux
+    connaître le classement en cours" (demande normale du classement
+    /topwallets) partait dans le pipeline verify_external_claim, produisant une
+    réponse absurde "FAIT: INCERTAIN -- Aucune preuve". class[ée] non ancré
+    matchait "classement" via le simple substring "classe". Frontière de mot
+    rendue obligatoire des deux côtés -- "classé/classée/classés/classées"
+    toujours détectés, "classement/classer/classeur" ne le sont plus jamais."""
+    assert not is_injected_factual_claim("Non je veux connaître le classement en cours")
+    assert not is_injected_factual_claim("tu peux m'afficher le classement des wallets")
+    assert not is_injected_factual_claim("comment fonctionne le classement des scores")
+    # Le vrai motif visé (participe passé "classé/classée") doit rester détecté.
+    assert is_injected_factual_claim("l'application a été classée numéro 1 sur le store hier")
+    assert is_injected_factual_claim("le repo a été classé 5 étoiles ce matin par la communauté")
+
+
 def test_injected_claim_multi_sentence_question_not_misrouted():
     # Incident réel (12/07) : un scénario trading multi-phrases contenant "2%"/"15%"
     # (matche _INJECTED_CLAIM_RE) et une vraie question au milieu ("... Short ?")

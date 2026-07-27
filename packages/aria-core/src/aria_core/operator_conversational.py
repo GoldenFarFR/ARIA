@@ -23,7 +23,18 @@ _INJECTED_CLAIM_RE = re.compile(
     # conversation, never lost, a cost judged far lower than the risk of
     # reproducing this incident on every mention of the book.
     r"tweets?\s+automatiques|\blivré(?:e|s|ment)?\b|usdc|2fa|catalogue\s+spark|reste\s+dispo|"
-    r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|class[ée]|"
+    # 27/07 -- real incident: "Non je veux connaître le classement en cours"
+    # (operator asking for the /topwallets ranking, a plain conversational
+    # follow-up) was wrongly routed to verify_external_claim, producing a
+    # nonsensical "FAIT: INCERTAIN" reply. Same bug class as the 20/07 livré/
+    # livre incident above: the un-anchored class[ée] (meant to catch
+    # "classé/classée", e.g. "l'app a été classée 5 étoiles") also matched as
+    # a bare substring inside "classement" (class+e). Word boundary now
+    # REQUIRED on both ends, with the feminine/plural inflections made
+    # explicit (e?s?) instead of relying on the substring match to cover them
+    # -- "classé/classée/classés/classées" still always captured,
+    # "classement/classer/classeur" never match anymore.
+    r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|\bclass[ée]e?s?\b|"
     r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
     r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"
     r"septembre|octobre|novembre|décembre|decembre)\s+\d{4}"
