@@ -586,20 +586,6 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
     }
 
 
-@router.get("/dossier/{contract}")
-async def token_dossier(contract: str, request: Request):
-    """Dossier par token (opérateur) : chronologie de TOUT ce qu'ARIA a consigné sur un CA.
-
-    Réservé opérateur — expose le détail du pipeline de candidats (analyses,
-    thèses, suivis, paper), donc jamais public ni membre. Lecture seule, facts-only :
-    un token jamais analysé renvoie un dossier vide (aucune donnée inventée).
-    """
-    require_operator(request)
-    from aria_core.dossier import build_dossier
-
-    return await build_dossier(contract)
-
-
 @router.get("/repertoire", response_model=list[RepertoireItem])
 async def list_repertoire():
     return await repertoire_db.get_all()
