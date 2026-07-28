@@ -1,5 +1,7 @@
 from aria_core.llm_economy import (
     LlmDepth,
+    anthropic_depth_override,
+    anthropic_routing_enabled,
     calibrated_action_label,
     detect_depth,
     fallback_notice_line,
@@ -58,7 +60,9 @@ def test_brief_budget_uses_mini_model_and_small_context(tmp_path):
     assert budget.context_max_chars <= 4000
     assert budget.history_turns == 3
     assert budget.include_context_conversations is False
-    assert budget.model_override == "grok-3-mini"
+    # #118, 27/07 -- aria_llm_model_brief is legacy, no longer surfaced as an
+    # override; dormant by default (see the dedicated #118 tests below).
+    assert budget.model_override is None
 
 
 def test_develop_budget_full_context(tmp_path):
@@ -77,126 +81,89 @@ def test_develop_budget_full_context(tmp_path):
     assert budget.history_turns == 10
 
 
-def test_standard_model_override_honored_off_virtuals_when_explicitly_configured(tmp_path):
-    # #201 : dès que Groq/DeepSeek devient le provider actif, standard/develop
-    # doivent quand même différer si l'opérateur a configuré un vrai modèle pour
-    # CE provider -- avant le correctif, _spark_model_for_depth() était gaté
-    # _spark_active() et renvoyait toujours None hors Virtuals.
+# ── #118 (27/07) -- rebuilt SSOT: replaces the #201 ARIA_LLM_MODEL_<DEPTH> /
+# Virtuals-catalog mechanism (confirmed broken in prod: its guard rejected any
+# operator value that numerically matched the old catalog default, even a real
+# Anthropic model ID -- ARIA_LLM_MODEL_DEVELOP was silently inert). The new
+# mechanism never reads a free-form provider string from .env: it hardcodes
+# Haiku (trading + brief/standard) and Sonnet (develop), dormant behind
+# ARIA_LLM_ANTHROPIC_ROUTING_ENABLED (off by default, as long as
+# OpenRouter/Grok remain the active providers -- operator decision).
+
+def test_anthropic_routing_disabled_by_default():
+    assert anthropic_routing_enabled() is False
+    assert anthropic_depth_override(LlmDepth.BRIEF) == (None, None)
+    assert anthropic_depth_override(LlmDepth.STANDARD) == (None, None)
+    assert anthropic_depth_override(LlmDepth.DEVELOP) == (None, None)
+
+
+def test_model_override_dormant_by_default_regardless_of_legacy_settings(tmp_path):
+    # Even with the legacy ARIA_LLM_MODEL_<DEPTH> settings still populated
+    # (untouched .env from before #118), resolve_budget must never surface them
+    # as an override while the new gate is off -- zero behavior change.
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     configure_test_runtime(
         data_dir=tmp_path / "data",
         settings=AriaRuntimeSettings(
-            llm_provider="groq",
-            aria_llm_model_standard="llama-3.3-70b-versatile",
+            llm_provider="grok",
+            aria_llm_model_standard="x-ai-grok-4-3",
+            aria_llm_model_develop="anthropic-claude-opus-4-8",
+            aria_llm_model_brief="deepseek-deepseek-v4-flash",
         ),
     )
-    budget = resolve_budget(LlmDepth.STANDARD, public=False)
-    assert budget.model_override == "llama-3.3-70b-versatile"
+    for depth in (LlmDepth.BRIEF, LlmDepth.STANDARD, LlmDepth.DEVELOP):
+        budget = resolve_budget(depth, public=False)
+        assert budget.model_override is None
+        assert budget.model_provider_override is None
 
 
-def test_develop_model_override_honored_off_virtuals_when_explicitly_configured(tmp_path):
+def test_anthropic_routing_maps_haiku_for_brief_and_standard_when_enabled(tmp_path):
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     configure_test_runtime(
         data_dir=tmp_path / "data",
         settings=AriaRuntimeSettings(
-            llm_provider="deepseek",
-            aria_llm_model_develop="deepseek-reasoner",
+            llm_provider="grok",
+            aria_llm_anthropic_routing_enabled=True,
+        ),
+    )
+    for depth in (LlmDepth.BRIEF, LlmDepth.STANDARD):
+        budget = resolve_budget(depth, public=False)
+        assert budget.model_provider_override == "anthropic"
+        assert budget.model_override == "claude-haiku-4-5-20251001"
+
+
+def test_anthropic_routing_maps_sonnet_for_develop_when_enabled(tmp_path):
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="grok",
+            aria_llm_anthropic_routing_enabled=True,
         ),
     )
     budget = resolve_budget(LlmDepth.DEVELOP, public=False)
-    assert budget.model_override == "deepseek-reasoner"
+    assert budget.model_provider_override == "anthropic"
+    assert budget.model_override == "claude-sonnet-5"
 
 
-def test_standard_and_develop_differ_off_virtuals_when_both_configured(tmp_path):
-    # Le coeur du bug #201 : standard ET develop utilisaient le MEME modele (aucun
-    # override, silence complet) des que le provider actif n'etait pas "virtuals".
+def test_self_context_model_override_uses_same_ssot(tmp_path):
+    # self_context (repertoire/skills internes) doit rester sur la MÊME SSOT
+    # partagée, jamais une copie divergente.
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     configure_test_runtime(
         data_dir=tmp_path / "data",
         settings=AriaRuntimeSettings(
-            llm_provider="groq",
-            aria_llm_model_standard="llama-3.3-70b-versatile",
-            aria_llm_model_develop="llama-3.3-70b-specdec",
-        ),
-    )
-    std_budget = resolve_budget(LlmDepth.STANDARD, public=False)
-    dev_budget = resolve_budget(LlmDepth.DEVELOP, public=False)
-    assert std_budget.model_override != dev_budget.model_override
-    assert std_budget.model_override == "llama-3.3-70b-versatile"
-    assert dev_budget.model_override == "llama-3.3-70b-specdec"
-
-
-def test_standard_model_override_none_off_virtuals_when_still_catalog_default(tmp_path):
-    # Garde-fou #201 : si l'opérateur n'a JAMAIS surchargé aria_llm_model_standard
-    # pour le nouveau provider (valeur encore le défaut catalogue Virtuals
-    # "x-ai-grok-4-3"), ne jamais l'envoyer tel quel à une vraie API tierce --
-    # mieux vaut aucun override (le provider résout son propre défaut) qu'un ID
-    # de modèle invalide.
-    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
-
-    configure_test_runtime(
-        data_dir=tmp_path / "data",
-        settings=AriaRuntimeSettings(
-            llm_provider="groq",
-            aria_llm_model_standard="x-ai-grok-4-3",
-        ),
-    )
-    budget = resolve_budget(LlmDepth.STANDARD, public=False)
-    assert budget.model_override is None
-    assert budget.model_override != "x-ai-grok-4-3"
-
-
-def test_develop_model_override_none_off_virtuals_when_still_catalog_default(tmp_path):
-    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
-
-    configure_test_runtime(
-        data_dir=tmp_path / "data",
-        settings=AriaRuntimeSettings(
-            llm_provider="deepseek",
-            aria_llm_model_develop="anthropic-claude-opus-4-8",
-        ),
-    )
-    budget = resolve_budget(LlmDepth.DEVELOP, public=False)
-    assert budget.model_override is None
-    assert budget.model_override != "anthropic-claude-opus-4-8"
-
-
-def test_standard_and_develop_models_differ_on_virtuals(tmp_path):
-    # Non-régression : le comportement historique sur Virtuals (catalogue Spark)
-    # reste inchangé par le correctif #201.
-    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
-
-    configure_test_runtime(
-        data_dir=tmp_path / "data",
-        settings=AriaRuntimeSettings(
-            llm_provider="virtuals",
-            aria_llm_model_standard="x-ai-grok-4-3",
-            aria_llm_model_develop="anthropic-claude-opus-4-8",
-        ),
-    )
-    std_budget = resolve_budget(LlmDepth.STANDARD, public=False)
-    dev_budget = resolve_budget(LlmDepth.DEVELOP, public=False)
-    assert std_budget.model_override == "x-ai-grok-4-3"
-    assert dev_budget.model_override == "anthropic-claude-opus-4-8"
-
-
-def test_self_context_model_override_also_fixed_off_virtuals(tmp_path):
-    # self_context (repertoire/skills internes) passait par le même _brief_model_if
-    # -- même bug, même correctif requis.
-    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
-
-    configure_test_runtime(
-        data_dir=tmp_path / "data",
-        settings=AriaRuntimeSettings(
-            llm_provider="groq",
-            aria_llm_model_standard="llama-3.3-70b-versatile",
+            llm_provider="grok",
+            aria_llm_anthropic_routing_enabled=True,
         ),
     )
     budget = resolve_budget(LlmDepth.STANDARD, public=False, self_context=True)
-    assert budget.model_override == "llama-3.3-70b-versatile"
+    assert budget.model_provider_override == "anthropic"
+    assert budget.model_override == "claude-haiku-4-5-20251001"
 
 
 def test_develop_enhance_budget_not_too_low(tmp_path):

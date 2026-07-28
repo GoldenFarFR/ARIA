@@ -105,16 +105,19 @@ async def run_vc_intelligence_cycle(
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    from aria_core.runtime import settings
-    from aria_core.spark_config import DEFAULT_MODEL_DEVELOP
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
-    develop_model = (
-        getattr(settings, "aria_llm_model_develop", None) or ""
-    ).strip() or DEFAULT_MODEL_DEVELOP
+    # #118, 27/07 -- was reading aria_llm_model_develop with a Virtuals-catalog
+    # fallback and passing it bare (no provider=) to chat_with_context; llm.py's
+    # own anti-Virtuals-catalog guard then silently discarded it (matched the
+    # catalog default), so this call always ran on the global provider's
+    # default model regardless. Now uses the shared SSOT (dormant by default).
+    develop_provider, develop_model = anthropic_depth_override(LlmDepth.DEVELOP)
 
     prompt = _format_vc_items_for_prompt(items)
     raw = await llm(
-        prompt, _VC_SYNTHESIS_SYSTEM, max_tokens=500, model=develop_model, depth="vc_intelligence",
+        prompt, _VC_SYNTHESIS_SYSTEM, max_tokens=500,
+        model=develop_model, provider=develop_provider, depth="vc_intelligence",
     )
     if not raw:
         return {"outcome": "llm_unavailable"}

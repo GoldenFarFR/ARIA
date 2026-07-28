@@ -137,7 +137,7 @@ async def test_concentration_gate_neutralized_below_min_holders(monkeypatch):
         return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
@@ -157,7 +157,7 @@ async def test_concentration_gate_neutralized_when_holder_count_unknown(monkeypa
         return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
@@ -253,7 +253,7 @@ async def test_hold_when_rr_below_direct_threshold(monkeypatch):
         return EntrySignal(present=True, reasons=["setup faible"], rr=1.2, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (0, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (0, [], {}))
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
 
@@ -270,7 +270,7 @@ async def test_hold_when_usd_rate_unavailable(monkeypatch):
         return EntrySignal(present=True, reasons=["setup fort"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, ["EMA/MACD"]))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, ["EMA/MACD"], {}))
     _patch_usd_rate(monkeypatch, None)
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
@@ -299,7 +299,7 @@ async def test_buy_converts_price_target_invalidation_to_usd(monkeypatch):
         )
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, ["EMA/MACD"]))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, ["EMA/MACD"], {}))
     _patch_usd_rate(monkeypatch, 0.6055)
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc", current_regime="neutre")
@@ -327,7 +327,7 @@ async def test_buy_defaults_regime_to_neutre_when_absent(monkeypatch):
         return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
 
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
@@ -347,7 +347,7 @@ def _setup_buy_mocks(monkeypatch, *, holder_count=20, top10_holder_pct=40.0):
         return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
     return token
 
@@ -492,7 +492,7 @@ async def test_bonding_score_matches_the_validated_worked_example(monkeypatch):
         return EntrySignal(present=True, reasons=["setup"], rr=3.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
 
     async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
@@ -521,7 +521,7 @@ async def test_hold_when_composite_score_below_threshold(monkeypatch):
         return EntrySignal(present=True, reasons=["setup faible"], rr=2.0, target=0.002, invalidation=0.0009)
 
     monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
     _patch_usd_rate(monkeypatch, 0.5)
 
     async def fake_research(contract, symbol, chain, *, known_links=None, **kwargs):
@@ -563,7 +563,7 @@ async def test_bonding_score_rewards_strong_conviction_over_weak_dev_security(mo
         token = _bonding_token(**base_kwargs)
         _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
         monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-        monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, []))
+        monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
         monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
         _patch_usd_rate(monkeypatch, 0.5)
         results[label] = await bonding_entry.evaluate_bonding_entry("0xabc")

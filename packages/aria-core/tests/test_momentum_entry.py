@@ -1636,20 +1636,27 @@ def _flat_candles(n: int = 40) -> list[Candle]:
 
 
 def test_technical_alignment_scores_rising_series():
-    score, reasons = me._technical_alignment(_rising_candles())
+    score, reasons, detail = me._technical_alignment(_rising_candles())
     assert score >= 1
     assert any("EMA12" in r for r in reasons)
+    assert detail["ema_above"] is True
 
 
 def test_technical_alignment_zero_on_flat_series():
-    score, _reasons = me._technical_alignment(_flat_candles())
+    score, _reasons, detail = me._technical_alignment(_flat_candles())
     assert score == 0
+    # A perfectly flat series has no EMA/MACD crossover and no bullish pattern --
+    # each detail signal resolves to a definite False, not an insufficient-data None.
+    assert detail == {"ema_above": False, "macd_above": False, "bullish_pattern": False}
 
 
 def test_technical_alignment_never_crashes_on_short_series():
-    score, reasons = me._technical_alignment([Candle(ts=0, open=1, high=1, low=1, close=1)])
+    score, reasons, detail = me._technical_alignment([Candle(ts=0, open=1, high=1, low=1, close=1)])
     assert score == 0
     assert reasons == []
+    # 27/07 -- too few candles for any indicator to compute -- every signal
+    # stays None (insufficient data), never a fabricated False.
+    assert detail == {"ema_above": None, "macd_above": None, "bullish_pattern": None}
 
 
 # ── evaluate_momentum_entry (bout en bout, tout mocké) ───────────────────────────────
@@ -1711,7 +1718,12 @@ def _patch_pipeline(
     monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
     monkeypatch.setattr(me, "_fetch_candles", fake_candles)
     monkeypatch.setattr(me, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr(me, "_technical_alignment", lambda candles_arg: align)
+    # 27/07 -- _technical_alignment now returns a 3rd element (per-signal
+    # detail dict) -- this file's ~50 callers only ever assert on score/
+    # reasons, never the detail breakdown (covered by its own dedicated
+    # tests), so an empty dict here is sufficient and keeps every existing
+    # `align=(score, reasons)` call site unchanged.
+    monkeypatch.setattr(me, "_technical_alignment", lambda candles_arg: (*align, {}))
     # 19/07 -- RVOL mocké "confirmed" par défaut (aucun rejet, aucun malus de sizing) :
     # ce fichier teste le pipeline déterministe/R-R en amont, pas ce garde (couvert par
     # ses propres tests dédiés plus bas).
@@ -3357,8 +3369,11 @@ async def test_llm_confirm_uses_global_provider_no_openrouter_override(monkeypat
     """19/07 -- décision opérateur explicite ("bascule sur spark et quand spark sera
     vide en valeur on passera sur anthropique comme prévu") : l'override Haiku/
     OpenRouter (retenu le 17/07 après une batterie de tests réels contre 200+
-    modèles) a été retiré -- ce départage utilise désormais le provider/fallback
-    global (Spark), comme tout le reste d'ARIA."""
+    modèles) a été retiré -- ce départage a alors utilisé le provider/fallback
+    global (Spark), comme tout le reste d'ARIA. #118, 27/07 -- routage désormais
+    porté par la SSOT partagée (llm_economy.anthropic_depth_override), dormante par
+    défaut (ARIA_LLM_ANTHROPIC_ROUTING_ENABLED=false) -- (None, None), donc toujours
+    le provider/fallback global tant que ce gate n'est pas activé."""
     captured = {}
 
     async def fake_chat_with_context(*args, **kwargs):
@@ -3367,8 +3382,8 @@ async def test_llm_confirm_uses_global_provider_no_openrouter_override(monkeypat
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
-    assert "provider" not in captured
-    assert "model" not in captured
+    assert captured.get("provider") is None
+    assert captured.get("model") is None
 
 
 # ── garde de sécurité final (17/07, réponse à l'incident BRIAN) ─────────────────────
@@ -3423,7 +3438,7 @@ async def test_security_gate_fails_closed_on_exception(monkeypatch):
 async def test_security_gate_uses_global_provider_at_zero_temperature(monkeypatch):
     """19/07 -- même retrait d'override que _llm_confirm ci-dessus (décision opérateur
     explicite), la température 0.0 reste inchangée (toujours voulue pour la
-    cohérence du verdict)."""
+    cohérence du verdict). #118, 27/07 -- même SSOT dormante que _llm_confirm."""
     captured = {}
 
     async def fake_chat_with_context(*args, **kwargs):
@@ -3432,8 +3447,8 @@ async def test_security_gate_uses_global_provider_at_zero_temperature(monkeypatc
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
     await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
-    assert "provider" not in captured
-    assert "model" not in captured
+    assert captured.get("provider") is None
+    assert captured.get("model") is None
     assert captured.get("temperature") == 0.0
 
 
@@ -4629,6 +4644,30 @@ async def test_result_includes_mode_field(monkeypatch, test_settings):
 
     result2 = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result2["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_result_includes_per_signal_alignment_breakdown(monkeypatch, test_settings):
+    """27/07 -- operator request, real gap found while investigating why
+    every recent losing position had align_score=1 with no queryable way to
+    tell WHICH of the 3 signals (EMA/MACD/bullish pattern) was the one
+    present. align_ema/align_macd/align_pattern must reach the final dict,
+    not just the aggregate align_score."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong)
+    # Override the default {}-detail lambda from _patch_pipeline with a real
+    # per-signal breakdown, to confirm evaluate_momentum_entry copies it
+    # through rather than dropping it.
+    monkeypatch.setattr(
+        me, "_technical_alignment",
+        lambda candles_arg: (1, ["EMA12 > EMA26"], {"ema_above": True, "macd_above": False, "bullish_pattern": None}),
+    )
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["align_ema"] is True
+    assert result["align_macd"] is False
+    assert result["align_pattern"] is None
 
 
 @pytest.mark.asyncio

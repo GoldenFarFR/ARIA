@@ -1043,6 +1043,7 @@ class AriaBrain:
                 temperature=0.1,
                 max_tokens=budget.enhance_max_tokens,
                 model=budget.model_override,
+                provider=budget.model_provider_override,
                 depth=depth.value,
             )
         context = await build_llm_context(
@@ -1065,6 +1066,7 @@ class AriaBrain:
             system,
             max_tokens=budget.enhance_max_tokens,
             model=budget.model_override,
+            provider=budget.model_provider_override,
             depth=depth.value,
         )
 
@@ -1518,6 +1520,7 @@ class AriaBrain:
                 temperature=0.1,
                 max_tokens=budget.max_tokens,
                 model=budget.model_override,
+                provider=budget.model_provider_override,
                 depth=depth.value,
             )
 
@@ -1644,6 +1647,7 @@ class AriaBrain:
             temperature=temp,
             max_tokens=budget.max_tokens,
             model=budget.model_override,
+            provider=budget.model_provider_override,
             depth=depth.value,
             image_data_uri=image_data_uri,
         )

@@ -334,7 +334,7 @@ async def evaluate_bonding_entry(
             "price": execution_price_virtual, "reasons": reasons, "hold_reason": "no_entry_signal",
         }
 
-    align_score, align_reasons = _technical_alignment(candles)
+    align_score, align_reasons, _align_detail = _technical_alignment(candles)
     reasons.extend(align_reasons)
 
     if signal.rr < _RR_MIN_FOR_DIRECT_BUY or align_score < _ALIGN_SCORE_MIN_FOR_DIRECT_BUY:

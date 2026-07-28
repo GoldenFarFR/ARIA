@@ -163,6 +163,13 @@ class Settings(BaseSettings):
     aria_llm_model_develop: str = "anthropic-claude-opus-4-8"
     aria_llm_model_standard: str = "x-ai-grok-4-3"
     aria_llm_model_brief: str = "deepseek-deepseek-v4-flash"
+    # #118, 27/07 -- target end-state ("haiku pour le trading et sonnet pour la
+    # profondeur"), replaces the 3 fields above (now dead once this gate is on --
+    # kept only as the historical Virtuals-catalog record, see llm_economy.py).
+    # Off by default: dormant as long as OpenRouter/Grok remain the active
+    # providers, per explicit operator decision -- flipping this is the ONLY
+    # step needed to switch over, no further code change.
+    aria_llm_anthropic_routing_enabled: bool = False
     image_api_key: str = ""  # xAI Imagine — scènes portrait (/avatar scene)
     image_api_model: str = "grok-imagine-image"  # 0.02$/img — quality = 0.05$/img
     aria_operator_tz: str = "Europe/Paris"  # GMT+2 — planification tweets (/x compose)

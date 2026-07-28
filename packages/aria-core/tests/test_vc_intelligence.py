@@ -21,7 +21,7 @@ class _FakeGitHubClient:
 
 def _good_llm(summary="Les VC observés convergent sur les agents onchain.",
               durable=False, title="", body=""):
-    async def llm(prompt, system, *, max_tokens=500, model=None, depth=None):
+    async def llm(prompt, system, *, max_tokens=500, model=None, provider=None, depth=None):
         return json.dumps({
             "summary": summary, "durable": durable,
             "proposal_title": title, "proposal_body": body,

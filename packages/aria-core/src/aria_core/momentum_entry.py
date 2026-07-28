@@ -1339,39 +1339,54 @@ async def _fetch_candles(
     return []
 
 
-def _technical_alignment(candles: list[Candle]) -> tuple[int, list[str]]:
+def _technical_alignment(candles: list[Candle]) -> tuple[int, list[str], dict]:
     """Technical alignment score (0-3): fast EMA > slow EMA, MACD > signal,
     bullish candlestick pattern on the last candle. ADDITIONAL signals (never
     individual gates) -- ``None`` (warm-up period) counts neither for nor
-    against, never treated as bearish by default."""
+    against, never treated as bearish by default.
+
+    27/07 -- operator request, real gap found while investigating why every
+    recent losing position had align_score=1: the aggregate score alone
+    doesn't say WHICH of the 3 signals was the one present -- only the free-
+    text ``reasons`` did, not queryable at scale. The new ``detail`` dict
+    (True/False/None per signal, None = warm-up/insufficient data, never
+    treated as False) is persisted per-position (paper_trader.py's
+    align_ema/align_macd/align_pattern columns) so a future analysis can
+    aggregate which signal correlates with wins/losses without parsing
+    free-text theses."""
     closes = [c.close for c in candles]
     reasons: list[str] = []
     score = 0
+    detail: dict = {"ema_above": None, "macd_above": None, "bullish_pattern": None}
 
     ema_fast = ema_series(closes, 12)
     ema_slow = ema_series(closes, 26)
     if ema_fast and ema_slow and ema_fast[-1] is not None and ema_slow[-1] is not None:
-        if ema_fast[-1] > ema_slow[-1]:
+        detail["ema_above"] = ema_fast[-1] > ema_slow[-1]
+        if detail["ema_above"]:
             score += 1
             reasons.append("EMA12 > EMA26 (tendance courte au-dessus de la longue)")
 
     macd_line, macd_signal, _hist = macd_series(closes)
     if macd_line and macd_signal and macd_line[-1] is not None and macd_signal[-1] is not None:
-        if macd_line[-1] > macd_signal[-1]:
+        detail["macd_above"] = macd_line[-1] > macd_signal[-1]
+        if detail["macd_above"]:
             score += 1
             reasons.append("MACD au-dessus de sa ligne de signal")
 
-    patterns = detect_patterns(candles[-3:]) if len(candles) >= 3 else []
-    if any(p.direction == "bullish" for p in patterns):
-        score += 1
-        names = ", ".join(p.name for p in patterns if p.direction == "bullish")
-        reasons.append(f"pattern de bougie bullish récent ({names})")
+    if len(candles) >= 3:
+        patterns = detect_patterns(candles[-3:])
+        detail["bullish_pattern"] = any(p.direction == "bullish" for p in patterns)
+        if detail["bullish_pattern"]:
+            score += 1
+            names = ", ".join(p.name for p in patterns if p.direction == "bullish")
+            reasons.append(f"pattern de bougie bullish récent ({names})")
 
     _mid, upper, _lower = bollinger_bands(closes)
     if upper and upper[-1] is not None and closes[-1] >= upper[-1]:
         reasons.append("prix déjà au-dessus de la bande de Bollinger haute (extension avancée)")
 
-    return score, reasons
+    return score, reasons, detail
 
 
 def _weekly_pacing_line(weekly_context: dict | None) -> str:
@@ -1522,6 +1537,7 @@ async def _llm_confirm(
     system rule) -- fixed here by reusing EXACTLY the same pattern, never a new
     parallel mechanism."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     system = (
@@ -1571,13 +1587,20 @@ async def _llm_confirm(
         # chosen after a battery of real tests against 200+ models, independent
         # of the global ``LLM_PROVIDER``. 19/07 -- explicit operator decision
         # ("switch to spark and once spark's value runs out we'll move to
-        # anthropic as planned"): override removed, this tie-break now uses the
-        # global provider/fallback like the rest of ARIA. max_tokens=20 (not
-        # 10) -- verified live: the verdict always arrives FIRST (so 10 would
-        # have sufficed for the decision itself), but a systematic justification
-        # gets cut off (finish_reason=length, a noisy warning log for nothing)
-        # -- a safety margin, not a fix to an underlying bug.
-        reply = await chat_with_context(user, system, max_tokens=20, temperature=0.0)
+        # anthropic as planned"): override removed, this tie-break now used the
+        # global provider/fallback like the rest of ARIA. #118, 27/07 -- target
+        # end-state ("haiku pour le trading"): routes through the same shared
+        # SSOT as the conversational path, dormant (None, None) until the
+        # operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on. max_tokens=20
+        # (not 10) -- verified live: the verdict always arrives FIRST (so 10
+        # would have sufficed for the decision itself), but a systematic
+        # justification gets cut off (finish_reason=length, a noisy warning log
+        # for nothing) -- a safety margin, not a fix to an underlying bug.
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        reply = await chat_with_context(
+            user, system, max_tokens=20, temperature=0.0,
+            model=trading_model, provider=trading_provider,
+        )
     except Exception as exc:  # noqa: BLE001 — never blocking, degrades to HOLD
         logger.info("_llm_confirm: LLM call failed (%s)", exc)
         return False
@@ -1623,6 +1646,7 @@ async def _llm_security_gate(
     verdict. This filter detects traps, never a performance trade-off: a trap
     remains a trap even if the week is behind its target."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     system = (
@@ -1672,8 +1696,14 @@ async def _llm_security_gate(
         # 19/07 -- explicit operator decision ("switch to spark and once
         # spark's value runs out we'll move to anthropic as planned"): Haiku/
         # OpenRouter override removed (same reason as _llm_confirm above), now
-        # uses the global provider/fallback.
-        reply = await chat_with_context(user, system, max_tokens=20, temperature=0.0)
+        # used the global provider/fallback. #118, 27/07 -- routes through the
+        # same shared SSOT as the conversational path, dormant until the
+        # operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        reply = await chat_with_context(
+            user, system, max_tokens=20, temperature=0.0,
+            model=trading_model, provider=trading_provider,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.info("_llm_security_gate: LLM call failed (%s) -- fail-closed, rejecting", exc)
         return False, "security_gate_unavailable"
@@ -1718,6 +1748,7 @@ async def _llm_confirm_and_gate(
     fail-closed (unavailable/error -> HOLD_WEAK, never a fabricated BUY for
     lack of a response)."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     system = (
@@ -1770,7 +1801,14 @@ async def _llm_confirm_and_gate(
         + "BUY, HOLD_WEAK ou HOLD_TRAP ?"
     )
     try:
-        reply = await chat_with_context(user, system, max_tokens=20, temperature=0.0)
+        # #118, 27/07 -- routes through the same shared SSOT as the
+        # conversational path and the other 2 trading call sites above,
+        # dormant until the operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        reply = await chat_with_context(
+            user, system, max_tokens=20, temperature=0.0,
+            model=trading_model, provider=trading_provider,
+        )
     except Exception as exc:  # noqa: BLE001 — never blocking, degrades to HOLD
         logger.info("_llm_confirm_and_gate: LLM call failed (%s) -- fail-closed, HOLD", exc)
         return "HOLD_WEAK", "llm_not_confirmed"
@@ -2199,7 +2237,7 @@ async def evaluate_momentum_entry(
             "hold_reason": "holder_concentration",
         }
 
-    align_score, align_reasons = _technical_alignment(candles)
+    align_score, align_reasons, align_detail = _technical_alignment(candles)
     reasons.extend(align_reasons)
 
     action = "HOLD"
@@ -2457,6 +2495,14 @@ async def evaluate_momentum_entry(
         # module doesn't know the portfolio's history, only the strength of the
         # technical signal belongs to it.
         "align_score": align_score,
+        # 27/07 -- per-signal breakdown of align_score (True/False/None per
+        # signal, None = warm-up/insufficient data) -- operator-requested
+        # after finding every recent losing position had align_score=1 with
+        # no queryable way to tell WHICH signal was the one present, only
+        # free-text theses. persisted verbatim, never derived after the fact.
+        "align_ema": align_detail.get("ema_above"),
+        "align_macd": align_detail.get("macd_above"),
+        "align_pattern": align_detail.get("bullish_pattern"),
         # 19/07 -- None if conviction diligence found nothing/is disabled
         # (never a fabricated score) -- risk_guard.conviction_size_multiplier
         # treats this as "unknown", never as "weak" (fail-open on unknown).

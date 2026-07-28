@@ -2688,10 +2688,14 @@ async def _generate_thesis(
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    from aria_core.runtime import settings
-    from aria_core.spark_config import DEFAULT_MODEL_DEVELOP
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
-    develop_model = (getattr(settings, "aria_llm_model_develop", None) or "").strip() or DEFAULT_MODEL_DEVELOP
+    # #118, 27/07 -- same fix as vc_intelligence.py: this used to read
+    # aria_llm_model_develop with a Virtuals-catalog fallback and pass it bare
+    # (no provider=) to chat_with_context, which llm.py's own guard then
+    # silently discarded (matched the catalog default) -- always ran on the
+    # global provider's default model. Now uses the shared SSOT (dormant by default).
+    develop_provider, develop_model = anthropic_depth_override(LlmDepth.DEVELOP)
 
     prompt_parts = [_format_card_for_prompt(c) for c in cards]
     if convergence_pairs:
@@ -2702,7 +2706,10 @@ async def _generate_thesis(
         )
     prompt = "\n\n".join(prompt_parts)
 
-    raw = await llm(prompt, _WALLET_THESIS_SYSTEM, max_tokens=800, model=develop_model, depth="wallet_scoring")
+    raw = await llm(
+        prompt, _WALLET_THESIS_SYSTEM, max_tokens=800,
+        model=develop_model, provider=develop_provider, depth="wallet_scoring",
+    )
     if not raw:
         return None
 

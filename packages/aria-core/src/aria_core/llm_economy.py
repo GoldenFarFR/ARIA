@@ -48,6 +48,7 @@ class LlmEconomyBudget:
     collegue_max_chars: int
     model_override: str | None
     enhance_max_tokens: int
+    model_provider_override: str | None = None
 
 
 def _founder_mode() -> bool:
@@ -165,6 +166,7 @@ def resolve_budget(
             enhance_max_tokens=300,
         )
     if self_context:
+        self_provider, self_model = anthropic_depth_override(depth)
         return LlmEconomyBudget(
             depth=depth,
             max_tokens=480 if depth != LlmDepth.BRIEF else 220,
@@ -174,8 +176,9 @@ def resolve_budget(
             include_context_conversations=False,
             include_context_extras=False,
             collegue_max_chars=0,
-            model_override=_spark_model_for_depth(depth),
+            model_override=self_model,
             enhance_max_tokens=300,
+            model_provider_override=self_provider,
         )
 
     brief_ctx = int(getattr(settings, "aria_llm_context_max_brief", 3500) or 3500)
@@ -185,6 +188,7 @@ def resolve_budget(
     std_tok = int(getattr(settings, "aria_llm_max_tokens_standard", 400) or 400)
     dev_tok = int(getattr(settings, "aria_llm_max_tokens_develop", 900) or 900)
 
+    brief_provider, brief_model = anthropic_depth_override(LlmDepth.BRIEF)
     if depth == LlmDepth.BRIEF:
         return LlmEconomyBudget(
             depth=depth,
@@ -195,12 +199,13 @@ def resolve_budget(
             include_context_conversations=False,
             include_context_extras=False,
             collegue_max_chars=900,
-            model_override=_spark_model_for_depth(depth),
+            model_override=brief_model,
             enhance_max_tokens=280,
+            model_provider_override=brief_provider,
         )
     spark_boost = _spark_aggressive() or _founder_mode()
-    std_model = _spark_model_for_depth(LlmDepth.STANDARD)
-    dev_model = _spark_model_for_depth(LlmDepth.DEVELOP)
+    std_provider, std_model = anthropic_depth_override(LlmDepth.STANDARD)
+    dev_provider, dev_model = anthropic_depth_override(LlmDepth.DEVELOP)
     if depth == LlmDepth.STANDARD:
         return LlmEconomyBudget(
             depth=depth,
@@ -213,6 +218,7 @@ def resolve_budget(
             collegue_max_chars=4000 if spark_boost else 2500,
             model_override=std_model,
             enhance_max_tokens=600 if spark_boost else 400,
+            model_provider_override=std_provider,
         )
     return LlmEconomyBudget(
         depth=depth,
@@ -230,6 +236,7 @@ def resolve_budget(
         # cap), independent of ARIA_LLM_MAX_TOKENS_DEVELOP (literal here,
         # never configured via an environment variable).
         enhance_max_tokens=3000 if spark_boost else 2000,
+        model_provider_override=dev_provider,
     )
 
 
@@ -237,45 +244,33 @@ def _spark_active() -> bool:
     return (settings.llm_provider or "").strip().lower() == "virtuals"
 
 
-def _virtuals_catalog_default(depth: LlmDepth) -> str:
-    """SSOT spark_config — the 3 default values from the Virtuals catalog, never
-    valid model IDs for a third-party provider (Groq, direct DeepSeek, xAI...)."""
-    from aria_core.spark_config import (
-        DEFAULT_MODEL_BRIEF,
-        DEFAULT_MODEL_DEVELOP,
-        DEFAULT_MODEL_STANDARD,
-    )
+# Target end-state (#118, operator decision 27/07, "supprime tous et
+# reconstruit avec haiku et sonnet en sommeil tant que openrouter et grok
+# sont actifs") -- replaces the old ARIA_LLM_MODEL_<DEPTH> / Virtuals-catalog
+# mechanism (_virtuals_catalog_default/_spark_model_for_depth, deleted),
+# confirmed broken in prod (18/07 audit): its guard rejected any
+# operator-configured value that numerically matched the old Virtuals-catalog
+# default, even a real, routable Anthropic model ID (ARIA_LLM_MODEL_DEVELOP was
+# silently inert for that reason). This new mechanism never reads a free-form
+# provider string from .env -- it hardcodes the two real target models and
+# stays fully dormant (returns (None, None), zero behavior change) until the
+# operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
+_ANTHROPIC_MODEL_HAIKU = "claude-haiku-4-5-20251001"  # Haiku 4.5 -- trading + brief/standard
+_ANTHROPIC_MODEL_SONNET = "claude-sonnet-5"  # Sonnet 5 -- develop depth
 
+
+def anthropic_routing_enabled() -> bool:
+    return bool(getattr(settings, "aria_llm_anthropic_routing_enabled", False))
+
+
+def anthropic_depth_override(depth: LlmDepth) -> tuple[str | None, str | None]:
+    """(provider, model) override for this depth. Dormant by default -- see
+    the module comment above for the rationale and the incident this replaces."""
+    if not anthropic_routing_enabled():
+        return (None, None)
     if depth == LlmDepth.DEVELOP:
-        return DEFAULT_MODEL_DEVELOP
-    if depth == LlmDepth.STANDARD:
-        return DEFAULT_MODEL_STANDARD
-    return DEFAULT_MODEL_BRIEF
-
-
-def _spark_model_for_depth(depth: LlmDepth) -> str | None:
-    """Model per depth (#201, 16/07) -- read independently of the active
-    provider, not just on Virtuals: as soon as the Groq fallback or a direct
-    provider (DeepSeek, xAI...) becomes the active provider,
-    standard/develop/brief must still be able to differ if the operator
-    configured them for THIS provider.
-
-    Guard rail: if the value read is still the Virtuals catalog default
-    (never overridden for the new provider) AND Virtuals isn't active, reject
-    it rather than send it as-is to a real third-party API -- an ID like
-    "x-ai-grok-4-3" only exists in the Spark catalog, never on
-    api.groq.com/api.deepseek.com/api.x.ai."""
-    if depth == LlmDepth.DEVELOP:
-        raw = (getattr(settings, "aria_llm_model_develop", None) or "").strip()
-    elif depth == LlmDepth.STANDARD:
-        raw = (getattr(settings, "aria_llm_model_standard", None) or "").strip()
-    else:
-        raw = (getattr(settings, "aria_llm_model_brief", None) or "").strip()
-    if not raw:
-        return None
-    if not _spark_active() and raw == _virtuals_catalog_default(depth):
-        return None
-    return raw
+        return ("anthropic", _ANTHROPIC_MODEL_SONNET)
+    return ("anthropic", _ANTHROPIC_MODEL_HAIKU)
 
 
 def _spark_aggressive() -> bool:
@@ -292,6 +287,10 @@ def provider_display_name(provider: str | None = None) -> str:
         return "Virtuals Spark"
     if p == "ollama":
         return "Ollama"
+    if p == "anthropic":
+        return "Anthropic"
+    if p == "openrouter":
+        return "OpenRouter"
     return p or "cloud"
 
 

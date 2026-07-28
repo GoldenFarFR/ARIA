@@ -578,7 +578,7 @@ _POS_FIELDS = (
     "rr", "align_score", "conviction_tier", "rvol_multiple", "discovery_channel",
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
-    "mode", "gp_low", "gp_high", "wallet",
+    "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
 )
 
 _ADDED_COLUMNS = [
@@ -731,6 +731,18 @@ _ADDED_COLUMNS = [
     # existing $1M portfolio's full history becomes the swing pocket
     # (migration decision, see paper_state's own migration comment below).
     ("wallet", "TEXT NOT NULL DEFAULT 'swing'"),
+    # 27/07 -- per-signal breakdown of align_score (operator request, real gap
+    # found while investigating why every recent losing position had
+    # align_score=1 with no queryable way to tell WHICH of the 3 signals
+    # (EMA/MACD/bullish pattern) was the one present -- only the free-text
+    # thesis did, unusable at scale). 1/0/NULL (SQLite has no real boolean) --
+    # NULL means the signal was in its warm-up period (insufficient candles),
+    # never treated as "absent"/False. NULL for any position opened before
+    # this work or by an analyzer that doesn't provide it (e.g. bonding_entry.py,
+    # which computes its own composite score and never calls this path).
+    ("align_ema", "INTEGER"),
+    ("align_macd", "INTEGER"),
+    ("align_pattern", "INTEGER"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -769,6 +781,18 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("gp_high", "REAL"),
     # 27/07 -- kept in parity with _ADDED_COLUMNS above.
     ("wallet", "TEXT NOT NULL DEFAULT 'swing'"),
+    # 27/07 -- per-signal breakdown of align_score (operator request, real gap
+    # found while investigating why every recent losing position had
+    # align_score=1 with no queryable way to tell WHICH of the 3 signals
+    # (EMA/MACD/bullish pattern) was the one present -- only the free-text
+    # thesis did, unusable at scale). 1/0/NULL (SQLite has no real boolean) --
+    # NULL means the signal was in its warm-up period (insufficient candles),
+    # never treated as "absent"/False. NULL for any position opened before
+    # this work or by an analyzer that doesn't provide it (e.g. bonding_entry.py,
+    # which computes its own composite score and never calls this path).
+    ("align_ema", "INTEGER"),
+    ("align_macd", "INTEGER"),
+    ("align_pattern", "INTEGER"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1525,6 +1549,9 @@ async def open_position(
     mode: str = "standard",
     gp_low: float | None = None,
     gp_high: float | None = None,
+    align_ema: bool | None = None,
+    align_macd: bool | None = None,
+    align_pattern: bool | None = None,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1575,6 +1602,16 @@ async def open_position(
     stays queryable in real time (relay conversation, thesis), not just the
     derived invalidation/target. ``None`` for any analyzer that doesn't
     provide them, never an invented value.
+
+    ``align_ema``/``align_macd``/``align_pattern`` (27/07, operator request):
+    per-signal breakdown of ``momentum_entry._technical_alignment``'s
+    aggregate ``align_score`` (0-3) -- True/False/None per signal, None = the
+    signal's own warm-up period (insufficient candles), never treated as
+    "absent". Found missing while investigating why every recent losing
+    position had align_score=1 with no queryable way to tell WHICH signal was
+    the one present -- only the free-text thesis did. ``None`` for any
+    analyzer that doesn't provide them (e.g. bonding_entry.py's own composite
+    score), never an invented value.
 
     Contract case (07/18, real bug): preserved for Solana (base58, case is part
     of the value), lowercased for Base/Robinhood (EVM hex, as before) --
@@ -1714,8 +1751,9 @@ async def open_position(
                discovery_channel, conviction_process_trail,
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
-               liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet,
+               align_ema, align_macd, align_pattern)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1732,7 +1770,10 @@ async def open_position(
              conviction_posting_cadence,
              liquidity_rotation_score,
              None if liquidity_rotation_accelerating is None else int(liquidity_rotation_accelerating),
-             liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high, wallet),
+             liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high, wallet,
+             None if align_ema is None else int(align_ema),
+             None if align_macd is None else int(align_macd),
+             None if align_pattern is None else int(align_pattern)),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -2878,6 +2919,9 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             entry_regime=sig.get("regime"),
             rr=sig.get("rr"),
             align_score=sig.get("align_score"),
+            align_ema=sig.get("align_ema"),
+            align_macd=sig.get("align_macd"),
+            align_pattern=sig.get("align_pattern"),
             conviction_tier=conviction_tier or "floor",
             rvol_multiple=sig.get("rvol_multiple"),
             discovery_channel="floor",
@@ -3585,6 +3629,9 @@ async def _open_new_entries_for_wallet(
             # purely observational, never used to size or gate this position.
             rr=sig.get("rr"),
             align_score=sig.get("align_score"),
+            align_ema=sig.get("align_ema"),
+            align_macd=sig.get("align_macd"),
+            align_pattern=sig.get("align_pattern"),
             conviction_tier=conviction_tier,
             rvol_multiple=sig.get("rvol_multiple"),
             discovery_channel=discovery_channel,

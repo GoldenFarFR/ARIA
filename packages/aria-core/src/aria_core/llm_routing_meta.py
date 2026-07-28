@@ -43,21 +43,34 @@ def is_llm_routing_question(message: str) -> bool:
 
 
 def _model_for_depth(message: str) -> str:
+    """#118, 27/07 -- used to duplicate llm_economy's own (then-broken) per-depth
+    guard behind a `if settings.llm_provider == "virtuals":` branch that's never
+    true anymore (provider is "grok") -- silently fell back to reporting a flat
+    settings.llm_model regardless of depth, diverging from what resolve_budget()
+    actually resolves. Now calls the same SSOT (anthropic_depth_override) so this
+    diagnostic can never drift from the real routing again."""
+    from aria_core.llm import DEFAULT_MODELS
+    from aria_core.llm_economy import anthropic_depth_override
+
     depth = detect_depth(message) or LlmDepth.STANDARD
-    if (settings.llm_provider or "").strip().lower() == "virtuals":
-        if depth == LlmDepth.DEVELOP:
-            return (getattr(settings, "aria_llm_model_develop", None) or "").strip() or "anthropic-claude-opus-4-8"
-        if depth == LlmDepth.BRIEF:
-            return (getattr(settings, "aria_llm_model_brief", None) or "").strip() or "deepseek-deepseek-v4-flash"
-        return (getattr(settings, "aria_llm_model_standard", None) or "").strip() or "x-ai-grok-4-3"
-    return (settings.llm_model or "").strip() or "(défaut provider)"
+    _, model = anthropic_depth_override(depth)
+    if model:
+        return model
+    explicit = (settings.llm_model or "").strip()
+    if explicit:
+        return explicit
+    provider = (settings.llm_provider or "").strip().lower()
+    return DEFAULT_MODELS.get(provider, "(défaut provider)")
 
 
 def llm_routing_reply(lang: str, message: str = "") -> str:
+    from aria_core.llm_economy import anthropic_routing_enabled
+
     provider = (settings.llm_provider or "none").strip().lower()
     depth = (detect_depth(message) or LlmDepth.STANDARD).value
     model = _model_for_depth(message)
     spark = provider == "virtuals"
+    anthropic_routing = anthropic_routing_enabled()
     key_len = len((settings.virtuals_api_key or "").strip()) if spark else len((settings.llm_api_key or "").strip())
     endpoint = "https://compute.virtuals.io/v1/chat/completions" if spark else "(provider natif)"
     skip_groq = (os.environ.get("ARIA_OUVRIER_SKIP_GROQ_FALLBACK") or "").strip().lower() in (
@@ -74,6 +87,7 @@ def llm_routing_reply(lang: str, message: str = "") -> str:
             f"• Modèle pour ce tour : {model}",
             f"• Endpoint : {endpoint}",
             f"• Clé configurée : {'oui (' + str(key_len) + ' car.)' if key_len >= 10 else 'NON — corriger coffre'}",
+            f"• Routage Anthropic (Haiku/Sonnet, #118) : {'ACTIF' if anthropic_routing else 'dormant (OpenRouter/Grok actifs)'}",
         ]
         if spark:
             lines.append("• Fallback Groq : " + ("désactivé" if skip_groq else "actif si Spark échoue"))
@@ -87,6 +101,7 @@ def llm_routing_reply(lang: str, message: str = "") -> str:
         f"• Model this turn: {model}",
         f"• Endpoint: {endpoint}",
         f"• Key configured: {'yes (' + str(key_len) + ' chars)' if key_len >= 10 else 'NO — fix vault'}",
+        f"• Anthropic routing (Haiku/Sonnet, #118): {'ON' if anthropic_routing else 'dormant (OpenRouter/Grok active)'}",
     ]
     if spark:
         lines.append("• Groq fallback: " + ("off" if skip_groq else "on if Spark fails"))
