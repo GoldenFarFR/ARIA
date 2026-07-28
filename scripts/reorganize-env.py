@@ -3,14 +3,27 @@
 (true/false), then everything else -- operator-requested (27/07): "ranger
 les cle dun cote et les valeur false true de lautre".
 
-Never touches the file's actual values -- pure line reordering. Always
-writes a timestamped backup (.env.bak.<UTC ISO 8601 timestamp, colons
-stripped for filesystem safety>) before overwriting, same doctrine as every
-other .env-touching operation in this project (never overwrite without a
-backup). Meant to be run by the OPERATOR directly on their own terminal --
-not yet whitelisted in block-secret-display.sh, so a Claude Code session
-cannot invoke it itself (same restriction as any other .env write); add it
-there first if a future session needs to run it.
+27/07 -- also normalizes 0/1 to false/true for gate variables (operator
+request: "remplace 0 et 1 par les valeur true false"), so they land in the
+"gates" section instead of "other". Scoped to names ending in "_ENABLED"
+(the established naming convention for every gate in this project, e.g.
+ARIA_SEPOLIA_WALLET_ENABLED/ARIA_MARKET_SENTIMENT_ENABLED/
+ARIA_VISION_ENABLED) -- deliberately NOT a blanket 0/1 rewrite, which could
+silently corrupt an unrelated numeric variable that happens to be 0 or 1
+(a port, a count, an ID). Verified live against the actual code before
+building this (sepolia_wallet.py/market_sentiment.py/telegram_bot.py's own
+gate readers already accept "1"/"true"/"yes"/"on" interchangeably) --
+this rewrite is a pure cosmetic normalization, never changes what the gate
+resolves to.
+
+Never touches any other value -- pure line reordering + this one narrow
+normalization. Always writes a timestamped backup (.env.bak.<UTC ISO 8601
+timestamp, colons stripped for filesystem safety>) before overwriting, same
+doctrine as every other .env-touching operation in this project (never
+overwrite without a backup). Meant to be run by the OPERATOR directly on
+their own terminal -- not yet whitelisted in block-secret-display.sh, so a
+Claude Code session cannot invoke it itself (same restriction as any other
+.env write); add it there first if a future session needs to run it.
 
 Same sensitive-name keyword list as show-env-safe.sh/block-secret-display.sh
 (rule 2) -- keep in sync if either changes.
@@ -26,6 +39,18 @@ SENSITIVE_RE = re.compile(
     r"(TOKEN|SECRET|KEY|PASSWORD|PASS|AUTH|CREDENTIAL|PRIVATE|MNEMONIC|SIGNATURE|CERT)",
     re.IGNORECASE,
 )
+
+_GATE_NAME_RE = re.compile(r"_ENABLED$", re.IGNORECASE)
+
+
+def _normalize_gate_value(name: str, value: str) -> str:
+    stripped = value.strip()
+    if _GATE_NAME_RE.search(name.strip()):
+        if stripped == "1":
+            return "true"
+        if stripped == "0":
+            return "false"
+    return value
 
 
 def _categorize(name: str, value: str) -> str:
@@ -65,7 +90,9 @@ def main() -> None:
             continue
         name, _, value = line.partition("=")
         name = name.strip()
-        bucket = _categorize(name, value)
+        normalized_value = _normalize_gate_value(name, value)
+        line = f"{name}={normalized_value}" if normalized_value != value else line
+        bucket = _categorize(name, normalized_value)
         entry = "\n".join(pending_comment + [line]) if pending_comment else line
         {"secrets": secrets, "gates": gates, "other": other}[bucket].append(entry)
         pending_comment = []
