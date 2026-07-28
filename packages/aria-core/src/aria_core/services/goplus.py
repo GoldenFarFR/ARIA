@@ -478,6 +478,17 @@ class GoPlusClient:
                 return cached_security
             del self._security_cache[cache_key]
 
+        # #127, 28/07 -- one address per call, deliberately: the plural param
+        # name (`contract_addresses`) looks like it should accept a real
+        # comma-separated batch, but 4 real live calls (2 orderings on Base
+        # chain_id=8453, 1 with the comma URL-encoded as %2C, 1 on Ethereum
+        # chain_id=1 to rule out a Base-specific quirk) all confirmed GoPlus
+        # silently returns data for ONLY the first address in the list --
+        # code=1 "OK", no error, no truncation warning, the rest just vanish.
+        # The official docs don't claim batch support either (single-address
+        # wording, no max-addresses note). Do not add a batch path here
+        # without re-verifying live first -- this was already tried and
+        # falsified once.
         data, error = await self._get_json(
             f"/token_security/{chain_id}", params={"contract_addresses": addr}
         )

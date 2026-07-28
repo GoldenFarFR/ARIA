@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from aria_core import momentum_entry as me
+from aria_core import momentum_timing
 from aria_core.services.coingecko import TokenFundamentals
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.skills.entry_signals import EntrySignal
@@ -277,6 +278,60 @@ async def test_discover_tolerates_source_failure(monkeypatch):
 
     # Casse préservée pour Solana (18/07) -- "Sol222" reste "Sol222", jamais "sol222".
     assert candidates == [{"contract": "Sol222", "chain": "solana"}]
+
+
+# -- Item #128, 28/07: skip a candidate the WebSocket path just evaluated ---
+
+@pytest.fixture(autouse=True)
+def _reset_recent_evaluations():
+    momentum_timing._recent_evaluations.clear()
+    yield
+    momentum_timing._recent_evaluations.clear()
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_a_candidate_recently_evaluated_by_the_websocket_path(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    momentum_timing.record_evaluation(CONTRACT, "base", "HOLD")
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+
+    assert candidates == []  # the WebSocket already judged this candidate moments ago
+
+
+@pytest.mark.asyncio
+async def test_discover_still_includes_a_candidate_once_its_window_expired(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    old_ts = time.time() - momentum_timing._RECENT_EVALUATION_WINDOW_SECONDS - 1
+    momentum_timing.record_evaluation(CONTRACT, "base", "HOLD", now=old_ts)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+
+    assert candidates == [{"contract": CONTRACT, "chain": "base"}]
 
 
 @pytest.mark.asyncio

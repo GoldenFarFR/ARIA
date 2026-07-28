@@ -691,6 +691,17 @@ def _add_candidate(
     if key in seen:
         return
     seen.add(key)
+    # #128, 28/07 -- this periodic discovery (heartbeat, ~30min cadence) polls
+    # the SAME 4 DexScreener endpoints as the WebSocket drain (~30s cadence,
+    # momentum_websocket.py) -- a trending token surfaces on both around the
+    # same real-world time. Skip re-running the ENTIRE expensive pipeline
+    # (honeypot/OHLCV/up to 2 LLM calls) on a candidate the WebSocket already
+    # judged moments ago -- see momentum_timing.py's module comment for why
+    # this is a one-way check (never consulted by the WebSocket path itself).
+    from aria_core import momentum_timing
+
+    if momentum_timing.recently_evaluated_action(contract, chain) is not None:
+        return
     out.append({"contract": contract, "chain": chain})
 
 

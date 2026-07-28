@@ -46,6 +46,34 @@ static research snippets. `services.polymarket.get_price_history`/
 `probability_velocity_7d` into the judgment -- purely informational, never a
 gate or a side-decider on its own (same "the signal wakes up attention, real
 judgment still arbitrates" doctrine as `radar_x.py`).
+
+28/07 (Item #146) -- the "N=3 independent votes" design above turned out not
+to be independent in practice: all 3 calls fired the SAME prompt (including
+the market's own price, shown up front) at temperature=0.3 -- low-temperature
+resampling of one prompt clusters tightly by construction, so convergence
+(spread <= MAX_VOTE_SPREAD) was close to guaranteed regardless of whether the
+underlying reasoning was actually sound, and showing the market price before
+any vote risked anchoring every vote toward the crowd's own number (exactly
+what the system prompt's "don't just copy the market price" instruction was
+fighting against, the hard way). Two changes: (1) `market.yes_price` no longer
+appears in the vote prompt at all -- it is used only afterward, in code, to
+compute `edge` against ARIA's independently-formed estimate; (2) the 3 votes
+now each argue from a genuinely distinct analytical lens (`_VOTE_LENSES`: base
+rate / recent catalysts / devil's advocate) instead of firing the identical
+prompt 3 times -- convergence is now a real signal about the estimate's
+robustness, not a low-temperature sampling artifact.
+
+28/07 (Item #148) -- a 7h-to-resolution market and a 29-day one were being
+judged with the exact same bar (`MAX_VOTE_SPREAD`/`MIN_EDGE_PROBABILITY`).
+Research finding (27/07 workflow audit): real edge concentrates at LONG
+horizons (macro/political questions ARIA's research can genuinely get ahead
+of); a SHORT-horizon market is already saturated with live information --
+an apparent edge there is closer to estimation noise than a real advantage.
+`_horizon_thresholds()` now returns a STRICTER pair of thresholds
+(`MAX_VOTE_SPREAD_SHORT_HORIZON`/`MIN_EDGE_PROBABILITY_SHORT_HORIZON`) for
+any market with `days_left < SHORT_HORIZON_DAYS` -- graduated, never a blunt
+exclusion (a real edge on a short-horizon market, while rarer, isn't
+impossible, it just needs stronger evidence).
 """
 from __future__ import annotations
 
@@ -93,6 +121,32 @@ FREE_SKIP_REASONS = frozenset({"market_price_unavailable", "market_price_already
 # before tightening" doctrine as `liquidity_rotation.py`).
 MIN_EDGE_PROBABILITY = 0.12
 
+# #148, 28/07 -- research finding (27/07 workflow audit): a market with 7h
+# left to resolve and one with 29 days left were being judged with EXACTLY
+# the same bar. Real edge concentrates at LONG horizons (macro/political
+# questions ARIA's research can genuinely get ahead of, before the crowd
+# catches up); a SHORT-horizon market is already saturated with live
+# information -- an apparent edge there is more likely estimation noise than
+# a real information advantage, closer to a coin flip. Rather than excluding
+# short-horizon markets outright (a real edge there, while rarer, isn't
+# impossible), the bar gets STRICTER as the horizon shortens -- graduated,
+# same doctrine as the momentum pipeline's Regime Switch (adaptive
+# thresholds, never a blunt on/off cutoff).
+SHORT_HORIZON_DAYS = 3.0
+MIN_EDGE_PROBABILITY_SHORT_HORIZON = 0.20  # vs 0.12 baseline
+MAX_VOTE_SPREAD_SHORT_HORIZON = 0.10  # vs 0.15 baseline -- demand tighter vote convergence
+
+
+def _horizon_thresholds(market: PolymarketCandidateMarket) -> tuple[float, float]:
+    """Returns ``(max_vote_spread, min_edge_probability)`` for this market's
+    time-to-resolution. Unknown horizon (``days_left`` missing/unparseable
+    upstream) falls back to the baseline thresholds -- fail-open on missing
+    data, never assumes the stricter short-horizon bar without real evidence
+    the market actually IS short-horizon."""
+    if market.days_left is not None and market.days_left < SHORT_HORIZON_DAYS:
+        return MAX_VOTE_SPREAD_SHORT_HORIZON, MIN_EDGE_PROBABILITY_SHORT_HORIZON
+    return MAX_VOTE_SPREAD, MIN_EDGE_PROBABILITY
+
 # Explicit operator decision, precise wording: "ses recherches avant de
 # parier doivent lui permettre de dire oui je suis sur a 85% que le parie
 # mise va reussir" -- floor on ARIA's own estimated probability of winning
@@ -108,22 +162,53 @@ MIN_WIN_PROBABILITY = 0.85
 # candidate market (LLM calls are near-free compared to Tavily's metered
 # budget, which is spent ONCE per market regardless of vote count -- see
 # `_research_context`).
-VOTE_COUNT = 3
-MAX_VOTE_SPREAD = 0.15
-
 _SYSTEM_PROMPT = (
     "Tu es une analyste de marchés de prédiction, rigoureuse et bien calibrée. "
-    "On te donne une question d'événement réel, son prix de marché actuel "
-    "(la probabilité implicite déjà pariée par d'autres traders) et un "
-    "contexte de recherche récent. Ta tâche : estimer TA PROPRE probabilité "
-    "réelle de l'événement, indépendamment du prix de marché affiché -- ne "
-    "recopie jamais simplement le prix de marché comme ta réponse, sinon il "
-    "n'y a aucun edge à trouver. Sois honnête sur l'incertitude : une vraie "
-    "probabilité calibrée est presque toujours entre 0.02 et 0.98, jamais "
-    "exactement 0 ou 1 sauf certitude totale et vérifiable. "
+    "On te donne une question d'événement réel et un contexte de recherche "
+    "récent -- JAMAIS le prix de marché actuel, volontairement : ton rôle est "
+    "de former TA PROPRE estimation avant qu'elle soit comparée au prix du "
+    "marché, jamais influencée par lui. Sois honnête sur l'incertitude : une "
+    "vraie probabilité calibrée est presque toujours entre 0.02 et 0.98, "
+    "jamais exactement 0 ou 1 sauf certitude totale et vérifiable. "
     "Réponds STRICTEMENT en JSON avec ce schéma : "
     '{"probability": 0.0-1.0, "reasoning": "2-3 phrases expliquant ton estimation"}'
 )
+
+# #146, 28/07 -- real bug found: VOTE_COUNT identical prompts fired at
+# temperature=0.3 sample from nearly the same distribution -- convergence
+# (spread <= MAX_VOTE_SPREAD) was almost guaranteed by construction (low-temp
+# resampling of one prompt), not the genuine quality signal the operator asked
+# for ("systeme de probabilite de qualite", 26/07). Each vote now argues from a
+# distinct analytical lens -- same "perspective-diverse verify" doctrine already
+# used elsewhere in this codebase (wallet-scoring Sybil convergence, judge
+# panels): convergence across genuinely different reasoning paths is real
+# evidence of a robust estimate, divergence is real evidence of uncertainty --
+# neither is sampling noise dressed up as consensus.
+_LENS_BASE_RATE = _SYSTEM_PROMPT + (
+    "\nAngle imposé pour CETTE estimation : ancre-toi D'ABORD sur le taux de "
+    "base historique de ce type d'événement (fréquence typique, précédents "
+    "connus) avant d'ajuster avec le contexte de recherche -- ne laisse pas "
+    "une seule actualité récente dominer si elle contredit la fréquence de base."
+)
+_LENS_CATALYST = _SYSTEM_PROMPT + (
+    "\nAngle imposé pour CETTE estimation : concentre-toi sur les éléments les "
+    "PLUS RÉCENTS du contexte de recherche, les plus susceptibles de changer "
+    "l'issue avant l'échéance -- le taux de base historique compte moins ici "
+    "que ce qui est en train de se passer maintenant."
+)
+_LENS_SKEPTIC = _SYSTEM_PROMPT + (
+    "\nAngle imposé pour CETTE estimation : joue l'avocat du diable -- cherche "
+    "activement les raisons pour lesquelles la lecture la plus évidente du "
+    "contexte de recherche pourrait être fausse ou incomplète, avant de donner "
+    "ton estimation finale."
+)
+_VOTE_LENSES = (_LENS_BASE_RATE, _LENS_CATALYST, _LENS_SKEPTIC)
+
+# Kept as an explicit constant (rather than inlining len(_VOTE_LENSES)) since
+# the convergence math below (spread across "VOTE_COUNT" votes) reads more
+# clearly against a named constant -- must stay equal to len(_VOTE_LENSES).
+VOTE_COUNT = len(_VOTE_LENSES)
+MAX_VOTE_SPREAD = 0.15
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -212,14 +297,21 @@ async def _research_context(question: str) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-async def _single_probability_vote(user_message: str) -> tuple[float | None, str | None]:
+async def _single_probability_vote(
+    user_message: str, system_prompt: str = _SYSTEM_PROMPT
+) -> tuple[float | None, str | None]:
     """One independent LLM estimate -- ``(probability, reasoning)``, ``(None,
     None)`` on any failure (LLM outage, unparseable JSON, missing/non-numeric
-    probability). Never raises."""
+    probability). Never raises.
+
+    ``system_prompt`` defaults to the bare ``_SYSTEM_PROMPT`` for direct/unit-
+    test callers, but the real pipeline (``_estimate_market_probability_
+    uncached``) always passes one of ``_VOTE_LENSES`` (#146, 28/07) -- see the
+    comment above ``_VOTE_LENSES`` for why."""
     try:
         raw = await chat_with_context(
             user_message,
-            _SYSTEM_PROMPT,
+            system_prompt,
             max_tokens=400,
             temperature=0.3,
             depth="develop",
@@ -338,9 +430,13 @@ async def _estimate_market_probability_uncached(market: PolymarketCandidateMarke
             "signale souvent qu'un événement récent a changé la lecture du marché. "
             "Vérifie si le contexte de recherche explique ce mouvement avant de conclure.\n"
         )
+    # #146, 28/07 -- market.yes_price deliberately NEVER enters this prompt.
+    # It is used ONLY below, after the vote, to compute `edge` against ARIA's
+    # own independently-formed estimate (`edge = aria_probability - market.
+    # yes_price`, further down). Showing it here would anchor all VOTE_COUNT
+    # votes on the very number they exist to be tested against.
     user_message = (
         f"Question : {market.question}\n"
-        f"Prix de marché actuel (probabilité implicite du \"Oui\") : {market.yes_price:.1%}\n"
         + velocity_line
         + (
             f"\nContexte de recherche récent :\n{context}\n"
@@ -349,8 +445,12 @@ async def _estimate_market_probability_uncached(market: PolymarketCandidateMarke
         )
     )
 
-    votes = await asyncio.gather(*(_single_probability_vote(user_message) for _ in range(VOTE_COUNT)))
+    votes = await asyncio.gather(*(_single_probability_vote(user_message, lens) for lens in _VOTE_LENSES))
     valid = [(p, r) for p, r in votes if p is not None]
+
+    # #148, 28/07: stricter bar on a short-horizon market (see _horizon_
+    # thresholds) -- baseline MAX_VOTE_SPREAD/MIN_EDGE_PROBABILITY otherwise.
+    max_vote_spread, min_edge_probability = _horizon_thresholds(market)
 
     # Convergence requires a real majority (>= 2 of VOTE_COUNT=3), not merely
     # "at least 2 calls didn't error" -- same threshold shape as the
@@ -360,7 +460,7 @@ async def _estimate_market_probability_uncached(market: PolymarketCandidateMarke
 
     probabilities = [p for p, _ in valid]
     spread = max(probabilities) - min(probabilities)
-    if spread > MAX_VOTE_SPREAD:
+    if spread > max_vote_spread:
         return _judgment(vote_spread=spread, action="SKIP", skip_reason="no_consensus")
 
     aria_probability = sum(probabilities) / len(probabilities)
@@ -380,7 +480,7 @@ async def _estimate_market_probability_uncached(market: PolymarketCandidateMarke
 
     if win_probability < MIN_WIN_PROBABILITY:
         return _judgment(**common_fields, action="SKIP", skip_reason="win_probability_too_low")
-    if abs(edge) < MIN_EDGE_PROBABILITY:
+    if abs(edge) < min_edge_probability:
         return _judgment(**common_fields, action="SKIP", skip_reason="no_edge")
 
     return _judgment(**common_fields, action="BET")

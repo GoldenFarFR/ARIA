@@ -389,6 +389,128 @@ async def test_format_portfolio_report_empty_portfolio(tmp_db):
     assert "Positions ouvertes : 0" in report
 
 
+# -- compute_calibration_buckets / format_calibration_report (Item #147, 28/07) --
+
+@pytest.mark.asyncio
+async def test_compute_calibration_buckets_empty_when_nothing_resolved(tmp_db):
+    calibration = await ppt.compute_calibration_buckets()
+    assert calibration == {"n": 0, "overall_brier": None, "buckets": []}
+
+
+@pytest.mark.asyncio
+async def test_compute_calibration_buckets_groups_by_decile_and_scores_brier(tmp_db, monkeypatch):
+    _patch_order_book(monkeypatch, best_ask=0.5)
+
+    async def resolve_yes_wins(self, event_slug, yes_token_id):
+        return True, 1.0
+
+    async def resolve_yes_loses(self, event_slug, yes_token_id):
+        return True, 0.0
+
+    # Bet A: win_probability=0.90, wins -- decile 9 ([0.9, 1.0]).
+    await ppt.open_bet(_market(event_slug="a", yes_token="yes-a"), _judgment(side="YES", win_probability=0.90))
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.get_market_resolution", resolve_yes_wins)
+    await ppt.check_resolutions()
+
+    # Bet B: win_probability=0.90, loses -- same decile 9.
+    await ppt.open_bet(_market(event_slug="b", yes_token="yes-b"), _judgment(side="YES", win_probability=0.90))
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.get_market_resolution", resolve_yes_loses)
+    await ppt.check_resolutions()
+
+    # Bet C: win_probability=0.88, wins -- decile 8 ([0.8, 0.9)).
+    await ppt.open_bet(_market(event_slug="c", yes_token="yes-c"), _judgment(side="YES", win_probability=0.88))
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.get_market_resolution", resolve_yes_wins)
+    await ppt.check_resolutions()
+
+    calibration = await ppt.compute_calibration_buckets()
+
+    assert calibration["n"] == 3
+    assert calibration["overall_brier"] == pytest.approx(((0.90 - 1.0) ** 2 + (0.90 - 0.0) ** 2 + (0.88 - 1.0) ** 2) / 3)
+
+    by_decile = {b["decile_low"]: b for b in calibration["buckets"]}
+    assert set(by_decile) == {0.8, 0.9}
+
+    bucket_9 = by_decile[0.9]
+    assert bucket_9["n"] == 2
+    assert bucket_9["avg_predicted_probability"] == pytest.approx(0.90)
+    assert bucket_9["actual_win_rate"] == pytest.approx(0.5)  # 1 win, 1 loss, both predicted 90%
+    assert bucket_9["brier_score"] == pytest.approx(((0.90 - 1.0) ** 2 + (0.90 - 0.0) ** 2) / 2)
+
+    bucket_8 = by_decile[0.8]
+    assert bucket_8["n"] == 1
+    assert bucket_8["actual_win_rate"] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_compute_calibration_buckets_ignores_positions_missing_win_probability(tmp_db, monkeypatch):
+    """A legacy closed position from before ``win_probability_at_entry``
+    existed (NULL after the additive schema migration) must never crash the
+    calibration report -- excluded, not a fabricated 0.0 that would corrupt
+    the Brier score. ``open_bet`` itself always sets this field for a real
+    bet, so a direct SQL update simulates the legacy-row case."""
+    import aiosqlite
+
+    _patch_order_book(monkeypatch, best_ask=0.5)
+    await ppt.open_bet(_market(), _judgment())
+
+    async def fake_resolution(self, event_slug, yes_token_id):
+        return True, 1.0
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.get_market_resolution", fake_resolution)
+    await ppt.check_resolutions()
+
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        await db.execute("UPDATE polymarket_paper_position SET win_probability_at_entry = NULL")
+        await db.commit()
+
+    calibration = await ppt.compute_calibration_buckets()
+    assert calibration == {"n": 0, "overall_brier": None, "buckets": []}
+
+
+def test_format_calibration_report_empty():
+    report = ppt.format_calibration_report({"n": 0, "overall_brier": None, "buckets": []})
+    assert "indisponible" in report
+
+
+def test_format_calibration_report_with_data():
+    calibration = {
+        "n": 2,
+        "overall_brier": 0.41,
+        "buckets": [
+            {
+                "decile_low": 0.9, "decile_high": 1.0, "n": 2,
+                "avg_predicted_probability": 0.9, "actual_win_rate": 0.5, "brier_score": 0.41,
+            }
+        ],
+    }
+    report = ppt.format_calibration_report(calibration)
+    assert "0.410" in report
+    assert "2 pari" in report
+    assert "90%-100%" in report
+    assert "50% réel" in report
+
+
+@pytest.mark.asyncio
+async def test_format_portfolio_report_includes_calibration_after_a_resolution(tmp_db, monkeypatch):
+    _patch_order_book(monkeypatch, best_ask=0.5)
+    await ppt.open_bet(_market(yes_token="yes-tok"), _judgment(side="YES", win_probability=0.9))
+
+    async def fake_resolution(self, event_slug, yes_token_id):
+        return True, 1.0
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.get_market_resolution", fake_resolution)
+    await ppt.check_resolutions()
+
+    report = await ppt.format_portfolio_report()
+    assert "Calibrage" in report
+
+
+@pytest.mark.asyncio
+async def test_format_portfolio_report_omits_calibration_when_nothing_resolved(tmp_db):
+    report = await ppt.format_portfolio_report()
+    assert "Calibrage" not in report
+
+
 @pytest.mark.asyncio
 async def test_cycle_free_skip_never_starves_the_next_candidate(tmp_db, monkeypatch):
     """27/07 -- Item #133, real bug found live: a market ALWAYS first in the

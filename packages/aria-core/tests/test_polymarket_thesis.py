@@ -8,7 +8,7 @@ from aria_core.services.polymarket import PolymarketCandidateMarket
 from aria_core.skills import polymarket_thesis as pt
 
 
-def _market(*, yes_price=0.5, question="Will X happen?") -> PolymarketCandidateMarket:
+def _market(*, yes_price=0.5, question="Will X happen?", days_left=None) -> PolymarketCandidateMarket:
     return PolymarketCandidateMarket(
         event_title="Some Event",
         event_slug="some-event",
@@ -20,6 +20,7 @@ def _market(*, yes_price=0.5, question="Will X happen?") -> PolymarketCandidateM
         liquidity_usd=50_000.0,
         end_date="2026-08-15T00:00:00Z",
         tags=["macro"],
+        days_left=days_left,
     )
 
 
@@ -378,6 +379,124 @@ async def test_estimate_does_not_highlight_small_velocity(monkeypatch):
     await pt.estimate_market_probability(_market(yes_price=0.5))
 
     assert "Signal de marché" not in captured["message"]
+
+
+# ── vote lens diversity + delayed price display (#146, 28/07) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_estimate_never_shows_market_price_in_the_vote_prompt(monkeypatch):
+    """The market's own price must never leak into the prompt the 3 votes see
+    -- it is used only afterward (in code) to compute `edge`. A price value
+    distinctive enough (0.63) to show up as a false positive if leaked."""
+    _patch_tavily(monkeypatch, _TavilyUnavailable())
+    captured = []
+
+    async def fake_chat_with_context(user_message, *args, **kwargs):
+        captured.append(user_message)
+        return _vote_json(0.9)
+
+    monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+
+    await pt.estimate_market_probability(_market(yes_price=0.63))
+
+    assert len(captured) == pt.VOTE_COUNT
+    for message in captured:
+        assert "63" not in message
+        assert "Prix de marché" not in message
+
+
+@pytest.mark.asyncio
+async def test_estimate_fires_each_vote_with_a_distinct_lens(monkeypatch):
+    """Real fix for the monoculture bug: VOTE_COUNT identical prompts at low
+    temperature converge almost by construction. Each vote must now argue
+    from a genuinely different system prompt (`_VOTE_LENSES`)."""
+    _patch_tavily(monkeypatch, _TavilyUnavailable())
+    captured_system_prompts = []
+
+    async def fake_chat_with_context(user_message, system_prompt, *args, **kwargs):
+        captured_system_prompts.append(system_prompt)
+        return _vote_json(0.9)
+
+    monkeypatch.setattr(pt, "chat_with_context", fake_chat_with_context)
+
+    await pt.estimate_market_probability(_market(yes_price=0.5))
+
+    assert len(captured_system_prompts) == pt.VOTE_COUNT == len(pt._VOTE_LENSES)
+    assert captured_system_prompts == list(pt._VOTE_LENSES)
+    assert len(set(captured_system_prompts)) == pt.VOTE_COUNT  # genuinely distinct, not repeated
+
+
+def test_single_probability_vote_defaults_to_bare_system_prompt():
+    """Direct callers (unit tests, any future ad-hoc use) that don't pass a
+    lens still get a sane, unbiased default rather than an error."""
+    import inspect
+
+    sig = inspect.signature(pt._single_probability_vote)
+    assert sig.parameters["system_prompt"].default == pt._SYSTEM_PROMPT
+
+
+# ── horizon-differentiated thresholds (#148, 28/07) ─────────────────────────────────
+
+def test_horizon_thresholds_baseline_when_days_left_unknown():
+    assert pt._horizon_thresholds(_market(days_left=None)) == (pt.MAX_VOTE_SPREAD, pt.MIN_EDGE_PROBABILITY)
+
+
+def test_horizon_thresholds_baseline_for_long_horizon():
+    assert pt._horizon_thresholds(_market(days_left=29.0)) == (pt.MAX_VOTE_SPREAD, pt.MIN_EDGE_PROBABILITY)
+
+
+def test_horizon_thresholds_stricter_for_short_horizon():
+    days_left = 7.0 / 24.0  # 7 hours
+    assert pt._horizon_thresholds(_market(days_left=days_left)) == (
+        pt.MAX_VOTE_SPREAD_SHORT_HORIZON, pt.MIN_EDGE_PROBABILITY_SHORT_HORIZON,
+    )
+
+
+def test_horizon_thresholds_boundary_is_exclusive():
+    """Exactly SHORT_HORIZON_DAYS is NOT short-horizon (`<`, not `<=`) --
+    matches the boundary style of the rest of this module's numeric gates."""
+    assert pt._horizon_thresholds(_market(days_left=pt.SHORT_HORIZON_DAYS)) == (
+        pt.MAX_VOTE_SPREAD, pt.MIN_EDGE_PROBABILITY,
+    )
+
+
+@pytest.mark.asyncio
+async def test_estimate_rejects_on_short_horizon_spread_that_would_pass_long_horizon(monkeypatch):
+    """A vote spread of 0.12 clears the baseline MAX_VOTE_SPREAD (0.15) but
+    must be rejected on a short-horizon (7h) market, whose stricter spread
+    cap (0.10) it fails."""
+    _patch_tavily(monkeypatch, _TavilyUnavailable())
+    # spread = 0.12 (between the short-horizon 0.10 cap and baseline 0.15);
+    # mean = 0.8533, clears MIN_WIN_PROBABILITY=0.85 so the win-probability
+    # gate doesn't interfere with isolating the spread check.
+    _patch_votes(monkeypatch, [_vote_json(0.90), _vote_json(0.88), _vote_json(0.78)])
+
+    long_horizon_result = await pt.estimate_market_probability(_market(yes_price=0.5, days_left=29.0))
+    assert long_horizon_result.action == "BET"
+
+    pt._judgment_cache.clear()
+    _patch_votes(monkeypatch, [_vote_json(0.90), _vote_json(0.88), _vote_json(0.78)])  # re-arm: 1 call = 3 votes
+    short_horizon_result = await pt.estimate_market_probability(_market(yes_price=0.5, days_left=7.0 / 24.0))
+    assert short_horizon_result.action == "SKIP"
+    assert short_horizon_result.skip_reason == "no_consensus"
+
+
+@pytest.mark.asyncio
+async def test_estimate_rejects_on_short_horizon_edge_that_would_pass_long_horizon(monkeypatch):
+    """Converged votes at 0.90 (win_probability clears MIN_WIN_PROBABILITY=
+    0.85) against a 0.75 market -- edge 0.15 clears the baseline
+    MIN_EDGE_PROBABILITY (0.12) but not the short-horizon one (0.20)."""
+    _patch_tavily(monkeypatch, _TavilyUnavailable())
+
+    _patch_votes(monkeypatch, [_vote_json(0.90), _vote_json(0.91), _vote_json(0.89)])
+    long_horizon_result = await pt.estimate_market_probability(_market(yes_price=0.75, days_left=29.0))
+    assert long_horizon_result.action == "BET"
+
+    pt._judgment_cache.clear()
+    _patch_votes(monkeypatch, [_vote_json(0.90), _vote_json(0.91), _vote_json(0.89)])  # re-arm: 1 call = 3 votes
+    short_horizon_result = await pt.estimate_market_probability(_market(yes_price=0.75, days_left=7.0 / 24.0))
+    assert short_horizon_result.action == "SKIP"
+    assert short_horizon_result.skip_reason == "no_edge"  # same 0.15 edge fails the stricter 0.20 short-horizon floor
 
 
 # ── cache TTL (26/07, full-pipeline audit -- gaspillage Tavily/LLM réel) ────────────

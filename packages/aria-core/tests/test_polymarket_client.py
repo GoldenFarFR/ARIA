@@ -285,6 +285,21 @@ async def test_list_liquid_events_parses_a_real_shaped_market(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_liquid_events_carries_days_left_onto_the_candidate(monkeypatch):
+    """#148, 28/07: days_left was already computed for the time-to-resolution
+    filter but discarded rather than carried onto the candidate -- needed by
+    polymarket_thesis.py to apply a stricter bar on short-horizon markets."""
+    end_date = _far_future_end_date(days=10)
+    _patch_client(monkeypatch, FakeResponse(200, _liquid_event_payload(end_date=end_date)))
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events()
+
+    assert len(markets) == 1
+    assert markets[0].days_left == pytest.approx(10.0, abs=0.01)
+
+
+@pytest.mark.asyncio
 async def test_list_liquid_events_filters_below_min_volume(monkeypatch):
     _patch_client(monkeypatch, FakeResponse(200, _liquid_event_payload(volume=1_000.0)))
 

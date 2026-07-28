@@ -470,6 +470,79 @@ async def portfolio_summary() -> dict:
     }
 
 
+# #147, 28/07 -- MIN_WIN_PROBABILITY=0.85 (polymarket_thesis.py) is a claim
+# ("when ARIA says 85%, she's really right ~85% of the time") never checked
+# against real outcomes. Classic calibration-curve method (reliability
+# diagram): bucket resolved bets by DECILE of their predicted win_probability,
+# compare the bucket's average prediction to its ACTUAL win rate -- a
+# well-calibrated model has the two numbers close in every populated bucket.
+# Also reports the overall Brier score (mean squared error between predicted
+# probability and the 0/1 outcome, 0=perfect, 0.25=the "always guess 50%"
+# baseline, 1=maximally wrong) -- the single scalar to watch trend over time.
+async def compute_calibration_buckets(*, limit: int = 10_000) -> dict:
+    """Groups CLOSED positions by decile of ``win_probability_at_entry`` vs
+    the real outcome (won/lost). Returns ``{"n": int, "overall_brier": float |
+    None, "buckets": [...]}`` -- ``overall_brier`` is ``None`` only when there
+    is literally nothing resolved yet to score (never a fabricated number)."""
+    closed = await get_closed_positions(limit=limit)
+    scored = [
+        p for p in closed
+        if p.get("win_probability_at_entry") is not None and p.get("pnl_usd") is not None
+    ]
+    if not scored:
+        return {"n": 0, "overall_brier": None, "buckets": []}
+
+    by_decile: dict[int, list[tuple[float, bool]]] = {}
+    for p in scored:
+        prob = float(p["win_probability_at_entry"])
+        won = (p["pnl_usd"] or 0.0) > 0
+        # prob == 1.0 would compute decile 10 -- clamped into the top bucket
+        # (9) rather than creating an 11th, out-of-range bucket.
+        decile = min(9, int(prob * 10))
+        by_decile.setdefault(decile, []).append((prob, won))
+
+    buckets: list[dict] = []
+    squared_errors: list[float] = []
+    for decile in sorted(by_decile):
+        entries = by_decile[decile]
+        n = len(entries)
+        errors = [(prob - (1.0 if won else 0.0)) ** 2 for prob, won in entries]
+        squared_errors.extend(errors)
+        buckets.append({
+            "decile_low": decile / 10.0,
+            "decile_high": (decile + 1) / 10.0,
+            "n": n,
+            "avg_predicted_probability": sum(prob for prob, _ in entries) / n,
+            "actual_win_rate": sum(1 for _, won in entries if won) / n,
+            "brier_score": sum(errors) / n,
+        })
+
+    return {
+        "n": len(scored),
+        "overall_brier": sum(squared_errors) / len(squared_errors),
+        "buckets": buckets,
+    }
+
+
+def format_calibration_report(calibration: dict) -> str:
+    """Human-readable rendering of ``compute_calibration_buckets()`` --
+    separate from the computation so `/polymarket` and any future surface can
+    reuse either independently (same split as the rest of this module's
+    format_*/compute_* pairs)."""
+    if calibration["n"] == 0:
+        return "Calibrage : indisponible (aucun pari résolu pour l'instant)"
+    lines = [
+        f"Calibrage (Brier {calibration['overall_brier']:.3f}, 0=parfait / 0.25=hasard pur) "
+        f"sur {calibration['n']} pari(s) résolu(s) :"
+    ]
+    for bucket in calibration["buckets"]:
+        lines.append(
+            f"  {bucket['decile_low']:.0%}-{bucket['decile_high']:.0%} prédit -> "
+            f"{bucket['actual_win_rate']:.0%} réel ({bucket['n']} pari(s))"
+        )
+    return "\n".join(lines)
+
+
 async def get_equity_high_water_mark() -> float:
     """Highest equity ever reached (Item #109, drawdown circuit breaker) --
     initialized to the starting capital as long as no higher equity has been
@@ -554,6 +627,11 @@ async def format_portfolio_report(*, recent_closed_limit: int = 5) -> str:
         for pos in closed:
             outcome = "GAGNÉ" if (pos["pnl_usd"] or 0.0) > 0 else "PERDU"
             lines.append(f"- {pos['question'][:70]} | {outcome} ({pos['pnl_usd']:+,.2f}$)")
+
+    # #147, 28/07 -- is MIN_WIN_PROBABILITY=0.85 actually true empirically?
+    calibration = await compute_calibration_buckets()
+    if calibration["n"] > 0:
+        lines.append("\n" + format_calibration_report(calibration))
 
     return "\n".join(lines)
 

@@ -96,6 +96,12 @@ class PolymarketCandidateMarket:
     liquidity_usd: float | None
     end_date: str | None  # ISO 8601, e.g. "2026-07-29T00:00:00Z"
     tags: list[str] = field(default_factory=list)
+    # #148, 28/07: already computed by list_liquid_events (time-to-resolution
+    # filter) but previously discarded rather than carried onto the
+    # candidate -- needed by polymarket_thesis.py to tell a 7h market from a
+    # 29-day one apart (real edge concentrates at long horizons per research,
+    # see that module's own comment). None when end_date is missing/unparseable.
+    days_left: float | None = None
 
 
 @dataclass
@@ -419,6 +425,7 @@ class PolymarketClient:
                         liquidity_usd=m_liquidity_f,
                         end_date=str(end_date_raw) if end_date_raw else None,
                         tags=tags,
+                        days_left=days_left,
                     )
                 )
 

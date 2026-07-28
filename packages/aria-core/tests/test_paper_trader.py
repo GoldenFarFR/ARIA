@@ -4539,6 +4539,48 @@ async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(m
 
 
 @pytest.mark.asyncio
+async def test_default_momentum_analyzer_records_verdict_for_cross_path_dedup(monkeypatch):
+    """Item #128, 28/07: this closure is the ONE place both the periodic
+    heartbeat cycle and the WebSocket drain evaluate a candidate -- recording
+    here (rather than inside evaluate_momentum_entry's many internal early
+    returns) covers both callers with a single write site."""
+    from aria_core import momentum_entry, momentum_timing
+
+    momentum_timing._recent_evaluations.clear()
+
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_momentum_eval)
+
+    analyzer = pt._default_momentum_analyzer({B: "base"})
+    await analyzer(B)
+
+    assert momentum_timing.recently_evaluated_action(B, "base") == "HOLD"
+
+
+@pytest.mark.asyncio
+async def test_default_momentum_analyzer_records_none_verdict_without_crashing(monkeypatch):
+    """``evaluate_momentum_entry`` returns ``None`` on no usable price data --
+    the analyzer must still record (a None verdict, not a crash) rather than
+    calling ``.get`` on ``None``."""
+    from aria_core import momentum_entry, momentum_timing
+
+    momentum_timing._recent_evaluations.clear()
+
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        return None
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_momentum_eval)
+
+    analyzer = pt._default_momentum_analyzer({B: "base"})
+    result = await analyzer(B)
+
+    assert result is None
+    assert (B.lower(), "base") in momentum_timing._recent_evaluations
+
+
+@pytest.mark.asyncio
 async def test_bonding_pair_lookup_converts_price_to_usd(monkeypatch):
     from aria_core.services.virtuals import VirtualToken, VirtualTrade
 

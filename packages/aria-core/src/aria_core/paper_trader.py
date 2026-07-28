@@ -2659,8 +2659,17 @@ def _default_momentum_analyzer(
     docstring for why). ``relaxed`` (daily-trade-floor) is NOT forwarded to
     it -- V1, deliberately out of scope (see ``evaluate_bonding_entry``'s own
     docstring on why its gates are already simpler/fewer than the standard
-    pipeline's)."""
-    from aria_core import bonding_entry, momentum_entry
+    pipeline's).
+
+    #128, 28/07: this closure is the ONE place both the periodic heartbeat
+    cycle and the WebSocket drain (``momentum_websocket.py``) actually
+    evaluate a candidate -- every real evaluation is recorded in
+    ``momentum_timing`` (verdict + timestamp) regardless of which path called
+    it, so the (much slower) periodic discovery can skip re-running this
+    same expensive pipeline on a token the WebSocket just judged (see
+    ``momentum_entry._add_candidate`` and ``momentum_timing``'s own module
+    comment for why the WebSocket path never reads this state back)."""
+    from aria_core import bonding_entry, momentum_entry, momentum_timing
 
     async def analyzer(contract: str) -> dict | None:
         chain = chain_by_contract.get(contract, "base")
@@ -2668,10 +2677,12 @@ def _default_momentum_analyzer(
             return await bonding_entry.evaluate_bonding_entry(
                 contract, weekly_context=weekly_context, current_regime=current_regime,
             )
-        return await momentum_entry.evaluate_momentum_entry(
+        result = await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
             relaxed=relaxed, mode=mode,
         )
+        momentum_timing.record_evaluation(contract, chain, result.get("action") if result else None)
+        return result
 
     return analyzer
 
