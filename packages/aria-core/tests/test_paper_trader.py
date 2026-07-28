@@ -15,6 +15,7 @@ from aria_core.skills import market_sentiment
 # dédiés à la re-vérification de fraîcheur (cf. plus bas) de restaurer le VRAI
 # comportement pour eux-mêmes, malgré le bypass autouse ci-dessous.
 _REAL_EXECUTION_RR_STILL_VALID = pt._execution_rr_still_valid
+_REAL_BONDING_CANDIDATES = pt._bonding_candidates
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +29,41 @@ def _bypass_price_staleness_check(monkeypatch):
     -> R/R frais impossible à calculer -> position jamais ouverte, un faux négatif,
     pas un vrai bug."""
     monkeypatch.setattr(pt, "_execution_rr_still_valid", lambda *_a, **_kw: True)
+
+
+@pytest.fixture(autouse=True)
+def _bypass_bonding_candidates_network_call(monkeypatch):
+    """Pre-existing gap, not introduced by this session's changes but found
+    while verifying them: `_momentum_candidates_and_chain_map` ALWAYS calls
+    `_bonding_candidates()` (real network call to the Virtuals API,
+    `services/launchpad_discovery.discover_bonding_candidates`, since the
+    24/07 bonding chantier) even when a test only mocks `momentum_entry.
+    discover_momentum_candidates` -- this can hang for a long time (TCP
+    connect timeout) rather than failing fast, depending on sandbox network
+    conditions. Neutral mock (empty list, unchanged historical default for
+    any test that doesn't care about bonding sourcing) -- tests dedicated to
+    bonding discovery (e.g. Item #157's own tests) override this locally."""
+    async def _fake_bonding_candidates(*, limit=20):
+        return []
+
+    monkeypatch.setattr(pt, "_bonding_candidates", _fake_bonding_candidates)
+
+
+@pytest.fixture(autouse=True)
+def _bypass_btc_cycles_network_call(monkeypatch):
+    """Item #165, 28/07: the bonding sizing path now calls btc_cycles.
+    fetch_current_macro_phase() (real network call, module-level 1h cache) --
+    without this default mock, any test exercising that path would either
+    hit the real network (slow/flaky in a sandbox) or silently share a
+    cached value across test runs. Neutral by default (None -> 1.0x
+    multiplier, unchanged historical sizing) -- tests dedicated to Item #165
+    itself override this locally to exercise the late-cycle reduction."""
+    from aria_core.skills import btc_cycles
+
+    async def _fake_fetch_current_macro_phase(*, client=None, force_refresh=False):
+        return None
+
+    monkeypatch.setattr(btc_cycles, "fetch_current_macro_phase", _fake_fetch_current_macro_phase)
 
 
 async def _backdate_pending_since(contract: str, seconds: float) -> None:
@@ -4466,6 +4502,12 @@ async def test_daily_floor_never_forces_a_non_floor_or_hold_signal(tmp_db, monke
 async def test_bonding_candidates_sources_from_launchpad_discovery(monkeypatch):
     from aria_core.services import launchpad_discovery
 
+    # This test exercises _bonding_candidates ITSELF -- undo the file-wide
+    # autouse mock (see _bypass_bonding_candidates_network_call) for this
+    # test only, same restore-the-real-thing pattern as
+    # _REAL_EXECUTION_RR_STILL_VALID above.
+    monkeypatch.setattr(pt, "_bonding_candidates", _REAL_BONDING_CANDIDATES)
+
     async def fake_discover(*, limit_per_launchpad=50):
         return {"virtuals_bonding": [A, B], "clanker": [C]}
 
@@ -4479,6 +4521,8 @@ async def test_bonding_candidates_sources_from_launchpad_discovery(monkeypatch):
 @pytest.mark.asyncio
 async def test_bonding_candidates_degrades_to_empty_on_error(monkeypatch):
     from aria_core.services import launchpad_discovery
+
+    monkeypatch.setattr(pt, "_bonding_candidates", _REAL_BONDING_CANDIDATES)
 
     async def fake_discover(*, limit_per_launchpad=50):
         raise RuntimeError("Virtuals down")
@@ -4536,6 +4580,89 @@ async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(m
 
     assert bonding_called_with["contract"] == A
     assert momentum_called_with == {"contract": B, "chain": "base"}
+
+
+@pytest.mark.asyncio
+async def test_vc_analyzer_with_bonding_routes_bonding_chain_to_bonding_entry(monkeypatch):
+    """Item #157, 28/07: the VC pocket's own analyzer must route a bonding-
+    tagged contract to evaluate_bonding_entry (never _default_analyzer, which
+    depends on DexScreener/GoPlus and can't process a bonding-curve token),
+    while a plain Base contract still goes through the historical VC-thesis
+    path unchanged."""
+    from aria_core import bonding_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    bonding_called_with = {}
+    vc_called_with = {}
+
+    async def fake_bonding_eval(contract):
+        bonding_called_with["contract"] = contract
+        return {"action": "HOLD", "chain": CHAIN_MARKER, "hold_reason": "test"}
+
+    async def fake_default_analyzer(contract):
+        vc_called_with["contract"] = contract
+        return {"action": "HOLD", "chain": "base", "hold_reason": "test"}
+
+    monkeypatch.setattr(bonding_entry, "evaluate_bonding_entry", fake_bonding_eval)
+    monkeypatch.setattr(pt, "_default_analyzer", fake_default_analyzer)
+
+    analyzer = pt._vc_analyzer_with_bonding({A: CHAIN_MARKER, B: "base"})
+
+    await analyzer(A)
+    await analyzer(B)
+
+    assert bonding_called_with["contract"] == A
+    assert vc_called_with["contract"] == B
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_on_vc_pocket_sources_bonding_candidates(tmp_db, monkeypatch):
+    """Item #157: a bonding-tagged contract found by the shared momentum
+    discovery is ALSO appended to the VC pocket's own candidate list and
+    analyzed via evaluate_bonding_entry, opening a wallet="vc" position on it
+    -- the SAME contract can legitimately end up open in scalping/swing (via
+    momentum discovery) AND vc (via this new wiring) at once, same accepted
+    cross-pocket overlap already proven for D/E above. strategy stays
+    "momentum" (bonding_entry.py's own dict), never "vc_thesis" -- only the
+    capital pool/reset eligibility changes with the wallet, never the exit
+    discipline."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    from aria_core import bonding_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [], {F: CHAIN_MARKER}  # no scalping/swing candidates this cycle, F is bonding-only
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_bonding_eval(contract):
+        return {
+            "action": "BUY", "chain": CHAIN_MARKER, "symbol": "BOND", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "strategy": "momentum",
+        }
+
+    monkeypatch.setattr(bonding_entry, "evaluate_bonding_entry", _fake_bonding_eval)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return []  # the classic VC-thesis source is empty this cycle
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _price_lookup(contract, chain="base"):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["contract"] == F
+    assert act["opened"][0]["wallet"] == "vc"
+    assert act["opened"][0]["strategy"] == "momentum"  # never vc_thesis for a bonding position
 
 
 @pytest.mark.asyncio
@@ -4791,6 +4918,61 @@ async def test_bonding_signal_gets_extra_size_reduction(tmp_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bonding_signal_reduced_further_in_late_btc_cycle(tmp_db, monkeypatch):
+    """Item #165: a late-cycle BTC macro backdrop ("distribution") applies an
+    ADDITIONAL tighten-only reduction on top of BONDING_SIZE_REDUCTION."""
+    from aria_core import bonding_entry
+    from aria_core.skills import btc_cycles
+
+    async def _fake_late_cycle(*, client=None, force_refresh=False):
+        return {"label": "distribution", "since": "2026-01-01", "change_pct": -5.0, "cycle_name": "test"}
+
+    monkeypatch.setattr(btc_cycles, "fetch_current_macro_phase", _fake_late_cycle)
+
+    captured: dict = {}
+    real_compute_entry_alloc = pt.compute_entry_alloc
+
+    def spy_compute_entry_alloc(sig, start, weekly_context, risk_state):
+        alloc, tier = real_compute_entry_alloc(sig, start, weekly_context, risk_state)
+        captured["pre_reduction_alloc"] = alloc
+        return alloc, tier
+
+    monkeypatch.setattr(pt, "compute_entry_alloc", spy_compute_entry_alloc)
+
+    real_open_position = pt.open_position
+
+    async def spy_open_position(*args, **kwargs):
+        captured["alloc_usd"] = kwargs.get("alloc_usd")
+        return await real_open_position(*args, **kwargs)
+
+    monkeypatch.setattr(pt, "open_position", spy_open_position)
+
+    async def fake_price_lookup(contract, *, chain: str = "base"):
+        return 1.0
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "chain": bonding_entry.CHAIN_MARKER, "symbol": "BOND",
+            "price": 1.0, "target": 2.0, "invalidation": 0.5, "rr": 3.0,
+            "align_score": 2, "entry_atr_pct": 0.2, "strategy": "momentum",
+            "reasons": ["setup bonding"],
+        }
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=fake_analyzer, price_lookup=fake_price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert len(act["opened"]) == 1
+    expected = (
+        captured["pre_reduction_alloc"]
+        * bonding_entry.BONDING_SIZE_REDUCTION
+        * bonding_entry._BTC_LATE_CYCLE_SIZE_MULTIPLIER
+    )
+    assert captured["alloc_usd"] == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
 async def test_non_bonding_signal_unaffected_by_bonding_reduction(tmp_db, monkeypatch):
     """Regression guard: a standard momentum ("base") BUY must NOT be
     affected by the bonding-only reduction."""
@@ -4830,6 +5012,318 @@ async def test_non_bonding_signal_unaffected_by_bonding_reduction(tmp_db, monkey
 
     assert len(act["opened"]) == 1
     assert captured["alloc_usd"] == pytest.approx(captured["pre_reduction_alloc"])
+
+
+# ── #154, 28/07 -- bonding 4-tier exit design (Take-Seed/Tier2/Tier3/moonbag) ──
+
+@pytest.mark.asyncio
+async def test_bonding_position_take_seed_tier_sells_the_bonding_fraction(tmp_db):
+    """A bonding position must use BONDING_TP_STAGE_FRACTIONS (front-loaded,
+    unequal), never the generic equal-thirds TP_STAGE_FRACTION."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    from aria_core import bonding_entry
+
+    async def analyzer(contract):
+        # rr=None matches the real bonding_entry.py fallback (#152): no
+        # technical signal -> honestly reports rr=None, which routes the
+        # fresh-price re-check to the ambiguous floor (1.0) rather than the
+        # stricter direct-buy floor (2.0) a declared rr>=2.0 would demand.
+        return {
+            "action": "BUY", "chain": bonding_entry.CHAIN_MARKER, "symbol": "BOND",
+            "price": 1.0, "target": 2.0, "invalidation": 0.35, "rr": None,
+            "align_score": 0, "entry_atr_pct": 0.2, "strategy": "momentum",
+            "reasons": ["setup bonding"],
+        }
+
+    prices = {"v": 1.0}
+
+    async def price_lookup(contract, *, chain: str = "base"):
+        return prices["v"]
+
+    await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    pos_before = await pt._get_open(A)
+    initial_qty = pos_before["qty"]
+
+    prices["v"] = 2.0  # +100% -- BONDING_TP_STAGES[0], the Take-Seed tier
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert act["closed"] == []
+    assert len(act["partial"]) == 1
+    pos_after = await pt._get_open(A)
+    assert pos_after["tp_stage_hit"] == 1
+    sold = initial_qty - pos_after["qty"]
+    assert sold == pytest.approx(initial_qty * pt.BONDING_TP_STAGE_FRACTIONS[0])
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_survives_tier3_as_a_real_moonbag(tmp_db):
+    """The core behavior change of #154: unlike the generic system (whose
+    last configured stage always fully closes), bonding's 3rd tier is STILL
+    a partial sell -- ~10% of the initial qty survives as a moonbag, managed
+    by the trailing stop alone, never force-closed by the TP mechanism."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    from aria_core import bonding_entry
+
+    async def analyzer(contract):
+        # rr=None matches the real bonding_entry.py fallback (#152): no
+        # technical signal -> honestly reports rr=None, which routes the
+        # fresh-price re-check to the ambiguous floor (1.0) rather than the
+        # stricter direct-buy floor (2.0) a declared rr>=2.0 would demand.
+        return {
+            "action": "BUY", "chain": bonding_entry.CHAIN_MARKER, "symbol": "BOND",
+            "price": 1.0, "target": 2.0, "invalidation": 0.35, "rr": None,
+            "align_score": 0, "entry_atr_pct": 0.2, "strategy": "momentum",
+            "reasons": ["setup bonding"],
+        }
+
+    prices = {"v": 1.0}
+
+    async def price_lookup(contract, *, chain: str = "base"):
+        return prices["v"]
+
+    await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    pos_before = await pt._get_open(A)
+    initial_qty = pos_before["qty"]
+
+    # Jump straight past all 3 bonding tiers in one cycle (12.5x price).
+    prices["v"] = 12.5
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert act["closed"] == []  # NOT fully closed -- the moonbag survives
+    pos_after = await pt._get_open(A)
+    assert pos_after is not None
+    assert pos_after["tp_stage_hit"] == 3
+    expected_remaining_fraction = 1.0 - sum(pt.BONDING_TP_STAGE_FRACTIONS)
+    assert pos_after["qty"] == pytest.approx(initial_qty * expected_remaining_fraction, rel=1e-6)
+
+
+# ── #155, 28/07 -- bonding 3-volet stop-loss (velocity + liquidity floor) ──
+
+def test_advance_velocity_window_triggers_on_fast_crash():
+    """A drop >= BONDING_VELOCITY_DROP_PCT from the still-active reference
+    triggers immediately, even well inside the window."""
+    from datetime import datetime, timezone
+
+    ref_since = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+    now = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)  # 10 min later
+    new_ref_price, new_ref_since, triggered = pt._advance_velocity_window(1.0, ref_since, 0.55, now)
+    assert triggered is True
+    assert new_ref_price == 1.0  # reference preserved, never rolled forward on a trigger
+    assert new_ref_since == ref_since
+
+
+def test_advance_velocity_window_survives_a_minor_dip():
+    from datetime import datetime, timezone
+
+    ref_since = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+    now = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
+    new_ref_price, new_ref_since, triggered = pt._advance_velocity_window(1.0, ref_since, 0.9, now)
+    assert triggered is False
+    assert new_ref_price == 1.0
+    assert new_ref_since == ref_since
+
+
+def test_advance_velocity_window_rolls_forward_after_expiry_without_trigger():
+    from datetime import datetime, timezone
+
+    ref_since = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+    now = datetime(2026, 1, 1, 0, 31, tzinfo=timezone.utc)  # past the 30-min window
+    new_ref_price, new_ref_since, triggered = pt._advance_velocity_window(1.0, ref_since, 0.9, now)
+    assert triggered is False
+    assert new_ref_price == 0.9  # fresh anchor
+    assert new_ref_since == now.isoformat()
+
+
+def test_advance_velocity_window_initializes_with_no_prior_reference():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new_ref_price, new_ref_since, triggered = pt._advance_velocity_window(None, None, 1.0, now)
+    assert triggered is False
+    assert new_ref_price == 1.0
+    assert new_ref_since == now.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_closes_on_velocity_crash(tmp_db, monkeypatch):
+    """A fast crash (>= BONDING_VELOCITY_DROP_PCT within the rolling window)
+    must close a bonding position outright, independent of the ATR trailing
+    stop/invalidation. Requires 2 management cycles: the first anchors the
+    velocity reference (never triggers on a brand-new reference), the second
+    measures the drop against it."""
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=50_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=50_000.0))
+    act1 = await pt.run_paper_cycle(candidates=[])
+    assert act1["closed"] == []  # anchors the reference, no trigger yet
+    assert await pt.has_open(A)
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=0.55, liquidity_usd=50_000.0))
+    act2 = await pt.run_paper_cycle(candidates=[])
+    assert len(act2["closed"]) == 1
+    assert act2["closed"][0]["close_reason"] == "stop bonding (vélocité)"
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_survives_a_minor_velocity_dip(tmp_db, monkeypatch):
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=50_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=50_000.0))
+    await pt.run_paper_cycle(candidates=[])
+
+    # 10% dip -- below BONDING_VELOCITY_DROP_PCT (40%) and comfortably above
+    # the generic ATR-less trailing stop's own boundary (TRAIL_STOP_PCT=15%,
+    # active_stop=0.85 here), so this position must survive on BOTH counts.
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=0.90, liquidity_usd=50_000.0))
+    act2 = await pt.run_paper_cycle(candidates=[])
+    assert act2["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_closes_on_absolute_liquidity_floor(tmp_db, monkeypatch):
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=50_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=8_000.0),  # < BONDING_LIQUIDITY_FLOOR_USD
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "stop bonding (liquidité)"
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_closes_on_relative_liquidity_drop(tmp_db, monkeypatch):
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=100_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=40_000.0),  # 60% de chute, > plancher absolu
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "stop bonding (liquidité)"
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_closes_on_sudden_liquidity_drop_between_cycles(tmp_db, monkeypatch):
+    """Two cycles, each dip alone stays under BOTH the absolute floor and the
+    cumulative-since-entry threshold, but the SUDDEN drop between them (30%)
+    must still invalidate."""
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=100_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=80_000.0))
+    act1 = await pt.run_paper_cycle(candidates=[])
+    assert act1["closed"] == []
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=55_000.0))
+    act2 = await pt.run_paper_cycle(candidates=[])
+    assert len(act2["closed"]) == 1
+    assert act2["closed"][0]["close_reason"] == "stop bonding (liquidité)"
+
+
+@pytest.mark.asyncio
+async def test_bonding_position_survives_a_minor_liquidity_dip(tmp_db, monkeypatch):
+    """Regression guard: a modest liquidity dip (normal noise) must never
+    trigger the bonding volet-3 stop."""
+    from aria_core import bonding_entry
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "BOND", 1.0, alloc_usd=100, strategy="momentum",
+        chain=bonding_entry.CHAIN_MARKER, pool_liquidity_usd=100_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=85_000.0),  # -15%, bruit normal
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_non_bonding_position_never_touched_by_bonding_volet23(tmp_db, monkeypatch):
+    """Regression guard: a regular (non-bonding) momentum position must never
+    be affected by the volet-3 liquidity floor, even at a liquidity profile
+    that WOULD trigger it on a bonding position (BONDING_LIQUIDITY_FLOOR_USD).
+    Price held constant across cycles so the (unrelated) generic ATR trailing
+    stop never fires and confounds the assertion."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=100, strategy="momentum",
+        chain="base", pool_liquidity_usd=100_000.0, wallet="swing",
+    )
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=100_000.0))
+    await pt.run_paper_cycle(candidates=[])
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=5_000.0))
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_non_bonding_position_still_fully_closes_on_last_stage(tmp_db):
+    """Regression guard: the generic momentum system's existing behavior
+    (last stage = full close) must stay untouched for non-bonding positions."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def analyzer(contract):
+        return {"action": "BUY", "chain": "base", "symbol": "BASE", "price": 1.0, "target": 2.0, "invalidation": 0.5}
+
+    prices = {"v": 1.0}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    prices["v"] = 100.0  # far past every generic TP stage in one jump
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=analyzer, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+
+    assert len(act["closed"]) == 1
+    assert not await pt.has_open(A)
 
 
 # ── 27/07 -- 3-pocket architecture plan, Phase 2 (multi_pocket_sourcing_enabled) ──

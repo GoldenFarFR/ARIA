@@ -61,14 +61,30 @@
 | Constante | Fichier:ligne | Valeur | Source/date | Revisiter si |
 |---|---|---|---|---|
 | `_MAX_DEV_HOLDING_PCT` | bonding_entry.py:129 | 5% | 24/07 | — |
-| `_MAX_TOP10_HOLDER_PCT` | bonding_entry.py:134 | 80% | 24/07 | — |
-| `_MIN_HOLDERS_FOR_CONCENTRATION_CHECK` | bonding_entry.py:163 | 50 | Relevé de 15→50 le 28/07 (échantillon 50 tokens + recherche, ratio jugé non-informatif avant ce seuil) | — |
-| `_MIN_LIQUIDITY_USD` (bonding) | bonding_entry.py:179 | 10 000 $ | 24/07 | Workflow du 28/07 : Item #163 propose des signaux avant-coureurs de crash post-graduation qui pourraient affiner ce plancher |
-| `_WEIGHT_DEV_SECURITY`/`_WEIGHT_PRODUCT_CONVICTION`/`_WEIGHT_TECHNICAL_SETUP`/`_WEIGHT_HOLDER_CONCENTRATION` | bonding_entry.py:207-210 | 35/35/15/15 | 24/07, "valeurs de départ à recalibrer une fois des résultats réels accumulés" (dixit le commentaire d'origine) | Une fois un vrai échantillon de trades bonding clôturés accumulé |
-| `_SCORE_THRESHOLD` | bonding_entry.py:240 | 60/100 | 24/07 | Idem |
-| `BONDING_SIZE_REDUCTION` | bonding_entry.py:123 | 0.5x | 24/07 | — |
-| `_FALLBACK_TARGET_MULTIPLE` | bonding_entry.py:231 | 2.0x | 28/07, Item #152 (fallback target/invalidation pour permettre un achat sans signal technique) | — |
-| `_FALLBACK_INVALIDATION_MULTIPLE` | bonding_entry.py:231 | 0.35 (perte max 65%) | 28/07, Item #152 pour le fallback ; élargi comme plancher volet 1 de l'Item #155 (le cas réel HOLO a montré des swings -55%/+122% comme bruit normal, justifiant cette largeur) | Un cas réel montrant que 65% est encore trop serré ou trop large |
+| `_MAX_TOP10_HOLDER_PCT` | bonding_entry.py:156 | 100% (score-scale ceiling) | **Corrigé 28/07, Item #167** : était 80% (un seuil de rejet dur) jusqu'à ce qu'un workflow empirique (~380 candidats réels) trouve que top10_holder_pct ne descend JAMAIS sous ~93,8% même à 1000+ holders réels — le gate rejetait 100% des candidats qui atteignaient le seuil d'échantillon. Retiré comme gate dur, devenu le plafond (0 point) d'une échelle de score continue | — |
+| `_TOP10_HOLDER_PCT_SCORE_FLOOR` | bonding_entry.py:177 | 90% (score plein) | **Nouveau 28/07, Item #167** — marge de sécurité sous le meilleur cas empirique observé (93,8%) | Une fois plus de résultats réels accumulés sur cette échelle |
+| `_MIN_HOLDERS_FOR_CONCENTRATION_CHECK` | bonding_entry.py:185 | 50 | Relevé de 15→50 le 28/07 (échantillon 50 tokens + recherche, ratio jugé non-informatif avant ce seuil) | — |
+| `_MIN_LIQUIDITY_USD` (bonding) | bonding_entry.py:214 | 5 000 $ | **Corrigé 28/07, Item #167** : était 10 000 $ (24/07) jusqu'à ce qu'un workflow empirique (50 lancements Base récents) trouve que la liquidité à ce stade est BIMODALE (92,7% des tokens à ~9 591 $, 7,3% à ~20 311 $, artefacts de config de lancement, pas un signal de marché) — l'ancien plancher rejetait 98% du flux réel sur un chiffre qui ne mesure rien | Workflow du 28/07 : Item #163 propose des signaux avant-coureurs de crash post-graduation qui pourraient affiner ce plancher |
+| `_WEIGHT_DEV_SECURITY`/`_WEIGHT_PRODUCT_CONVICTION`/`_WEIGHT_TECHNICAL_SETUP`/`_WEIGHT_HOLDER_CONCENTRATION` | bonding_entry.py:242-245 | 35/35/15/15 | 24/07, "valeurs de départ à recalibrer une fois des résultats réels accumulés" (dixit le commentaire d'origine) | Une fois un vrai échantillon de trades bonding clôturés accumulé |
+| `_SCORE_THRESHOLD` | bonding_entry.py:275 | 60/100 | 24/07 | Idem |
+| `BONDING_SIZE_REDUCTION` | bonding_entry.py:142 | 0.5x | 24/07 | — |
+| `_FALLBACK_TARGET_MULTIPLE` | bonding_entry.py:266 | 2.0x | 28/07, Item #152 (fallback target/invalidation pour permettre un achat sans signal technique) | — |
+| `_FALLBACK_INVALIDATION_MULTIPLE` | bonding_entry.py:267 | 0.35 (perte max 65%) | 28/07, Item #152 pour le fallback ; élargi comme plancher volet 1 de l'Item #155 (le cas réel HOLO a montré des swings -55%/+122% comme bruit normal, justifiant cette largeur) | Un cas réel montrant que 65% est encore trop serré ou trop large |
+| `_MAX_SUPPLY_PCT_BY_TIER` | bonding_entry.py:284 | 5%/2,5%/1% (strong/moderate/weak) | **Nouveau 28/07, Item #156** — plafond de sizing additionnel : jamais une part disproportionnée de la supply fixe d'un token en bonding, peu importe le budget-risque/impact-prix déjà appliqués génériquement | Une fois des résultats réels accumulés sur ce plafond |
+| `_MAX_SUPPLY_PCT_DEFAULT` | bonding_entry.py:290 | 1% (le plus conservateur) | 28/07, Item #156 — fail-closed si le palier de conviction est inconnu | — |
+| `_STALENESS_DAYS_THRESHOLD` | bonding_entry.py | 30 jours | **Nouveau 28/07, Item #161** — début de la décote "déclin organique" (un bonding non-gradué au-delà de ce délai est statistiquement moins susceptible de décoller) | Une fois des résultats réels accumulés |
+| `_STALENESS_MAX_DAYS` | bonding_entry.py | 45 jours | 28/07, Item #161 — décote maximale atteinte à ce délai | Idem |
+| `_STALENESS_MAX_PENALTY_PCT` | bonding_entry.py | 50% | 28/07, Item #161 — jamais plus qu'une réduction de moitié du score composite, quel que soit l'âge | Idem |
+| `_STALENESS_WAIVER_POSTING_CADENCE` | bonding_entry.py | "active" | 28/07, Item #162 — un catalyseur daté réel (cadence de publication X active, `conviction_research.py`) annule la décote entièrement | — |
+| `_BTC_LATE_CYCLE_SIZE_MULTIPLIER` | bonding_entry.py | 0.7x | **Nouveau 28/07, Item #165** — levier macro long terme (cycles de halving, `skills/btc_cycles.py`), distinct du Regime Switch court terme déjà appliqué génériquement ; jamais un bonus en début de cycle, seulement une réduction en phase distribution/baisse | Une fois des résultats réels accumulés sur ce levier |
+
+## Bonding — mécanisme d'ordre limite (Item #158, `limit_orders.py`)
+
+| Constante | Fichier:ligne | Valeur | Source/date | Revisiter si |
+|---|---|---|---|---|
+| `LIMIT_ORDER_WATCH_TRIGGER_MULT` | limit_orders.py:58 | 1.10x | 23/07 | — |
+| `LIMIT_ORDER_EXPIRY_HOURS` | limit_orders.py:59 | 3h | 23/07 | — |
+| `BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD` | limit_orders.py:70 | 20 000 $ | 28/07, Item #158 — proxy de market cap (même doctrine que `bonding_entry._MIN_LIQUIDITY_USD`), plus haut que le plancher d'entrée (5 000 $) : un ordre en attente sur un bonding tout juste au-dessus du plancher est trop instable pour qu'attendre une réversion de prix ait du sens | Une fois des résultats réels accumulés sur des ordres limites bonding |
 
 ## Bonding — stop de perte 3 volets et sortie (Item #154/#155, `paper_trader.py`)
 
@@ -78,7 +94,7 @@
 | `BONDING_TP_STAGE_FRACTIONS` | (0.45, 0.25, 0.20), ~10% moonbag jamais vendu | 28/07 | — |
 | `BONDING_VELOCITY_DROP_PCT` | 40% | 28/07, Item #155 volet 2 | **Pas encore vérifié empiriquement** — le workflow empirique en cours (28/07) doit confronter ce chiffre à des cas réels |
 | `BONDING_VELOCITY_WINDOW_MINUTES` | 30 min | 28/07, Item #155 volet 2 | Idem |
-| `BONDING_LIQUIDITY_FLOOR_USD` | 10 000 $ | 28/07, miroir volontaire de `_MIN_LIQUIDITY_USD` (jamais un plancher de sortie sous le plancher d'entrée) | Si `_MIN_LIQUIDITY_USD` bonding change |
+| `BONDING_LIQUIDITY_FLOOR_USD` | 10 000 $ | 28/07 ; **n'est plus un miroir exact depuis l'Item #167** (`_MIN_LIQUIDITY_USD` d'entrée est descendu à 5 000 $, ce plancher de sortie a été délibérément laissé inchangé, toujours strictement AU-DESSUS de l'entrée — jamais l'inverse) | Si ce plancher de sortie doit lui aussi bouger |
 | `BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT` | 50% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_DROP_INVALIDATION_PCT`) | — |
 | `BONDING_LIQUIDITY_SUDDEN_DROP_PCT` | 30% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_SUDDEN_DROP_PCT`) | — |
 

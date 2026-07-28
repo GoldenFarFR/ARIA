@@ -721,3 +721,140 @@ def test_aria_directive_log_is_append_only():
     assert "UPDATE aria_directive_log" not in src
     assert "DELETE FROM aria_directive_log" not in src
     assert "DROP TABLE aria_directive_log" not in src
+
+
+# Décision opérateur explicite (28/07) : pendant de _EXTERNAL_WRITE_ALLOWLIST mais pour
+# les SEUILS DE TRADING -- chaque constante listée ici doit avoir une entrée à jour dans
+# docs/trading-thresholds-calibration.md. Un changement de valeur sans mise à jour du
+# doc casse la CI plutôt que de dériver silencieusement (même doctrine que le registre
+# des actions externes ci-dessus). Quand tu changes VOLONTAIREMENT une de ces valeurs,
+# mets à jour LES DEUX dans le même commit : ce dict ET le tableau markdown correspondant.
+_TRADING_THRESHOLDS = {
+    "aria_core.momentum_entry": {
+        "_MIN_LIQUIDITY_USD": 50_000.0,
+        "_MIN_LIQUIDITY_USD_FEAR": 100_000.0,
+        "_MIN_LIQUIDITY_USD_SCALPING": 15_000.0,
+        "_RR_MIN_FOR_DIRECT_BUY": 2.0,
+        "_RR_AMBIGUOUS_FLOOR": 1.0,
+        "_ALIGN_SCORE_MIN_FOR_DIRECT_BUY": 2,
+        "MAX_VOLUME_TO_LIQUIDITY_RATIO": 20.0,
+        "_MAX_PRICE_CHANGE_24H_PCT": 200.0,
+        "_PARABOLIC_RESCUE_MAX_PCT": 350.0,
+        "_MIN_VOLUME_24H_USD": 500.0,
+        "_MIN_VOLUME_TO_LIQUIDITY_RATIO": 0.01,
+        "_MAX_TOP_HOLDERS_CONCENTRATION_PCT": 80.0,
+        "_RVOL_CONFIRMATION_MULTIPLIER": 3.0,
+    },
+    "aria_core.risk_guard": {
+        "RISK_CAP_PCT": 0.02,
+        "CONVICTION_RR_THRESHOLD": 2.5,
+        "MIN_ALLOC_MULTIPLIER": 0.4,
+        "MODERATE_ALLOC_MULTIPLIER": 0.7,
+        "MAX_ALLOC_MULTIPLIER": 1.0,
+        "FUNDAMENTAL_WEAK_THRESHOLD": 4.0,
+        "FUNDAMENTAL_REJECT_THRESHOLD": 2.5,
+        "REGIME_FEAR_SIZE_MULTIPLIER": 0.5,
+        "PRICE_IMPACT_RATIO": 2.0,
+        "SOFT_DRAWDOWN_PCT": 0.10,
+        "HARD_DRAWDOWN_PCT": 0.20,
+        "HARD_CONSECUTIVE_LOSSES": 5,
+        "MACRO_CIRCUIT_BREAKER_LOSS_PCT": 0.15,
+    },
+    "aria_core.skills.market_sentiment": {
+        "_RSI_EUPHORIA": 75.0,
+        "_RSI_OVERSOLD": 30.0,
+        "_DRAWDOWN_CAPITULATION_PCT": -35.0,
+    },
+    "aria_core.bonding_entry": {
+        "_MAX_DEV_HOLDING_PCT": 5.0,
+        # #167, 28/07 -- 80.0 (a reject threshold) -> 100.0 (score-scale
+        # ceiling): the hard gate was removed, see _TOP10_HOLDER_PCT_SCORE_
+        # FLOOR below for the new best-case reference.
+        "_MAX_TOP10_HOLDER_PCT": 100.0,
+        "_TOP10_HOLDER_PCT_SCORE_FLOOR": 90.0,
+        "_MIN_HOLDERS_FOR_CONCENTRATION_CHECK": 50,
+        # #167, 28/07 -- 10,000$ -> 5,000$ (sat just above a bimodal
+        # launch-config artifact, see bonding_entry.py's own comment).
+        "_MIN_LIQUIDITY_USD": 5_000.0,
+        "_WEIGHT_DEV_SECURITY": 35.0,
+        "_WEIGHT_PRODUCT_CONVICTION": 35.0,
+        "_WEIGHT_TECHNICAL_SETUP": 15.0,
+        "_WEIGHT_HOLDER_CONCENTRATION": 15.0,
+        "_SCORE_THRESHOLD": 60.0,
+        "BONDING_SIZE_REDUCTION": 0.5,
+        "_FALLBACK_TARGET_MULTIPLE": 2.0,
+        "_FALLBACK_INVALIDATION_MULTIPLE": 0.35,
+        # Item #156, 28/07 -- supply-proportion sizing cap (paper_trader.py
+        # applies this on top of BONDING_SIZE_REDUCTION); _MAX_SUPPLY_PCT_BY_
+        # TIER is a dict, not tracked here (this registry only tracks scalar
+        # constants), documented in the markdown table directly instead.
+        "_MAX_SUPPLY_PCT_DEFAULT": 0.01,
+        # Items #161/#162, 28/07 -- organic-decline (staleness) penalty.
+        "_STALENESS_DAYS_THRESHOLD": 30.0,
+        "_STALENESS_MAX_DAYS": 45.0,
+        "_STALENESS_MAX_PENALTY_PCT": 0.5,
+        "_STALENESS_WAIVER_POSTING_CADENCE": "active",
+        # Item #165, 28/07 -- BTC long-cycle sizing lever.
+        "_BTC_LATE_CYCLE_SIZE_MULTIPLIER": 0.7,
+    },
+    "aria_core.limit_orders": {
+        "LIMIT_ORDER_WATCH_TRIGGER_MULT": 1.10,
+        "LIMIT_ORDER_EXPIRY_HOURS": 3.0,
+        "BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD": 20_000.0,
+    },
+    "aria_core.paper_trader": {
+        "TRAIL_STOP_PCT": 0.15,
+        "ATR_TRAIL_MULTIPLIER": 2.5,
+        "MIN_ATR_TRAIL_PCT": 0.05,
+        "MAX_ATR_TRAIL_PCT": 0.40,
+        "VC_MIN_LIQUIDITY_FLOOR_USD": 30_000.0,
+        "VC_LIQUIDITY_DROP_INVALIDATION_PCT": 0.5,
+        "VC_TAKE_SEED_MULTIPLE": 2.0,
+        "VC_LIQUIDITY_SUDDEN_DROP_PCT": 0.3,
+        "MAX_CONSECUTIVE_LOSSES_PER_CONTRACT": 2,
+        "SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT": 3,
+        "BONDING_TP_STAGES": (1.0, 4.0, 11.5),
+        "BONDING_TP_STAGE_FRACTIONS": (0.45, 0.25, 0.20),
+        "BONDING_VELOCITY_DROP_PCT": 0.40,
+        "BONDING_VELOCITY_WINDOW_MINUTES": 30,
+        "BONDING_LIQUIDITY_FLOOR_USD": 10_000.0,
+        "BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT": 0.5,
+        "BONDING_LIQUIDITY_SUDDEN_DROP_PCT": 0.3,
+    },
+}
+
+
+def test_trading_thresholds_match_calibration_doc():
+    """Garde-fou mécanique (28/07) : chaque constante de _TRADING_THRESHOLDS doit (1)
+    exister dans son module avec EXACTEMENT la valeur attendue, et (2) être mentionnée
+    par son nom dans docs/trading-thresholds-calibration.md. Casse si une valeur dérive
+    silencieusement du doc, ou si le doc perd la trace d'une constante encore vérifiée
+    ici -- objectif explicite de l'opérateur : pouvoir recalibrer proprement, à
+    répétition, sans jamais perdre le fil de ce qui a déjà été tranché et pourquoi."""
+    import importlib
+
+    doc_path = REPO / "docs" / "trading-thresholds-calibration.md"
+    assert doc_path.is_file(), "docs/trading-thresholds-calibration.md manquant"
+    doc_text = doc_path.read_text(encoding="utf-8", errors="replace")
+
+    mismatches: list[str] = []
+    undocumented: list[str] = []
+    for module_name, constants in _TRADING_THRESHOLDS.items():
+        module = importlib.import_module(module_name)
+        for const_name, expected in constants.items():
+            actual = getattr(module, const_name, None)
+            if actual != expected:
+                mismatches.append(f"{module_name}.{const_name} = {actual!r} (attendu {expected!r})")
+            if const_name not in doc_text:
+                undocumented.append(f"{module_name}.{const_name}")
+
+    assert not mismatches, (
+        "Constante(s) de trading ayant dérivé du registre documenté (docs/"
+        f"trading-thresholds-calibration.md) sans mise à jour du même commit : {mismatches}. "
+        "Si le changement est volontaire, mets à jour _TRADING_THRESHOLDS ET le tableau "
+        "markdown correspondant (valeur + date/source + critère de révision)."
+    )
+    assert not undocumented, (
+        f"Constante(s) vérifiée(s) ici mais absente(s) du registre markdown : {undocumented}. "
+        "Ajoute une ligne dans docs/trading-thresholds-calibration.md."
+    )

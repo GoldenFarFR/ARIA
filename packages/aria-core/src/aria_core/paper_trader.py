@@ -127,6 +127,60 @@ TP_STAGES = (0.5, 1.0, 2.0)   # gain thresholds vs entry (+50%, +100%, +200%)
 TP_STAGE_FRACTION = 1.0 / 3.0  # fraction of the INITIAL quantity sold at each stage
 TP_QTY_EPSILON = 1e-9         # negligible remainder after the last stage -> full close
 
+# #154, 28/07 (bonding research finding, docs/HANDOFF_PIPELINE_MOMENTUM.md):
+# a bonding-curve position's R/R is structurally enormous if the team
+# succeeds (real cases found in research ranged 100x to ~11,900x), but every
+# single "good team" case studied ALSO gave back 92-99.8% of its peak within
+# about a year -- exit discipline matters more than conviction, exactly the
+# operator's own instinct ("elle peut vendre en plusieurs paliers pour
+# sécuriser"). Distinct 4-tier design from the generic momentum TP_STAGES
+# above, for two structural reasons: (1) fixed PRICE MULTIPLES of entry, not
+# a technical target -- a bonding position may have none (see
+# bonding_entry.py's own fallback target/invalidation, anchored on the FIRST
+# of these multiples so the two designs stay internally consistent); (2) a
+# REAL moonbag -- unlike the generic system (whose 3rd stage always fully
+# closes UNLESS the Euphoria regime happens to neutralize it), bonding's 3rd
+# tier is deliberately always a partial sell, the un-sold remainder
+# (~10-15% of the INITIAL quantity) is never mechanically sold at all,
+# managed by the ATR trailing stop alone -- the tail case this asset class
+# exists to capture (see BONDING_TP_STAGE_FRACTIONS below, deliberately
+# summing to ~0.90, not 1.0).
+BONDING_TP_STAGES = (1.0, 4.0, 11.5)  # +100%/+400%/+1150% gain = 2x/5x/12.5x price (Take-Seed/Tier2/Tier3)
+BONDING_TP_STAGE_FRACTIONS = (0.45, 0.25, 0.20)  # of INITIAL qty -- ~10% left as the moonbag
+
+# #155, 28/07 -- 3-volet bonding stop-loss (operator: exit discipline matters
+# more than conviction on this asset class, see BONDING_TP_STAGES above).
+# Volet 1 is bonding_entry.py's own fallback target/invalidation clamp (a
+# STATIC level, anchored once at entry) -- fine against a slow bleed, but a
+# bonding-curve crash can fall far faster than the generic ATR trailing stop
+# reacts (that stop only ratchets on a NEW high, it does nothing special for
+# a fast drop from a level already below the last confirmed high). Volet 2
+# (velocity) is a rolling reference price/timestamp
+# (velocity_ref_price/velocity_ref_price_at, re-anchored every
+# BONDING_VELOCITY_WINDOW_MINUTES) -- a drop of BONDING_VELOCITY_DROP_PCT or
+# more from that reference forces an immediate exit, independent of the ATR
+# stop. Volet 3 (liquidity floor) reuses the EXACT same defense-in-depth
+# pattern already proven for the VC pocket (VC_MIN_LIQUIDITY_FLOOR_USD/
+# VC_LIQUIDITY_DROP_INVALIDATION_PCT/VC_LIQUIDITY_SUDDEN_DROP_PCT above,
+# absolute floor + cumulative drop + sudden between-cycle drop) -- a bonding
+# reserve draining is the same "retrait" signal a DEX pool draining is.
+# BONDING_LIQUIDITY_FLOOR_USD is deliberately independent of
+# bonding_entry._MIN_LIQUIDITY_USD (the entry gate) rather than importing
+# that private constant directly -- keeps bonding_entry.py's own constants
+# private to its own gating logic, AND lets the exit-side floor stay more
+# conservative than the entry gate on purpose (an already-open position
+# degrading below 10,000$ is a real signal to leave, independent of how
+# permissive the entry gate is at any given time). #167, 28/07: the entry
+# gate was lowered to 5,000$ (a real empirical finding, see its own comment)
+# -- this exit floor was deliberately NOT lowered in lockstep, so it's no
+# longer an exact mirror, just never allowed to sit BELOW the entry gate
+# (self-contradictory), which it still comfortably isn't.
+BONDING_VELOCITY_DROP_PCT = 0.40
+BONDING_VELOCITY_WINDOW_MINUTES = 30
+BONDING_LIQUIDITY_FLOOR_USD = 10_000.0
+BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT = 0.5
+BONDING_LIQUIDITY_SUDDEN_DROP_PCT = 0.3
+
 # 07/19 -- volatility-adaptive trailing stop (Gemini cross-review, confirmed "100%
 # yes" by the operator): replaces the fixed percentage (TRAIL_STOP_PCT) with a width
 # calibrated on each token's REAL volatility (ATR, ``entry_atr_pct`` computed once at
@@ -545,6 +599,35 @@ def _advance_breakeven_pending(
         return pending_since, True
     return pending_since, False
 
+
+def _advance_velocity_window(
+    ref_price: float | None, ref_since: str | None, price: float, now: datetime,
+) -> tuple[float, str, bool]:
+    """#155, 28/07 -- rolling reference point for the bonding "volet 2"
+    velocity guard. ``(ref_price, ref_since)`` starts fresh (anchored on the
+    position's CURRENT ``price``/``now``) whenever there is no reference yet
+    OR the previous window has fully elapsed (``BONDING_VELOCITY_WINDOW_
+    MINUTES``) without triggering -- keeps the reference anchored at "price
+    ~30 minutes ago", never a single fixed origin from position open.
+
+    Returns ``(new_ref_price, new_ref_since, triggered)`` -- ``triggered`` is
+    ``True`` the instant ``price`` has fallen ``BONDING_VELOCITY_DROP_PCT`` or
+    more below the STILL-ACTIVE reference, checked BEFORE any window
+    roll-forward below (a crash detected right as the window is about to
+    expire must still fire, never silently reset away)."""
+    if ref_price is None or ref_since is None:
+        return price, now.isoformat(), False
+    try:
+        elapsed = (now - datetime.fromisoformat(ref_since)).total_seconds()
+    except ValueError:
+        return price, now.isoformat(), False
+    drop_pct = (1.0 - price / ref_price) if ref_price > 0 else 0.0
+    if drop_pct >= BONDING_VELOCITY_DROP_PCT:
+        return ref_price, ref_since, True
+    if elapsed >= BONDING_VELOCITY_WINDOW_MINUTES * 60:
+        return price, now.isoformat(), False
+    return ref_price, ref_since, False
+
 # 07/17 -- explicit operator request: halve the Telegram noise from the periodic
 # tracking alert (#197, one per heartbeat cycle -- ~15 min -- as long as a
 # position stays open). Sliding window by ELAPSED TIME (not a cycle counter):
@@ -579,6 +662,7 @@ _POS_FIELDS = (
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
+    "velocity_ref_price", "velocity_ref_price_at",
 )
 
 _ADDED_COLUMNS = [
@@ -743,6 +827,15 @@ _ADDED_COLUMNS = [
     ("align_ema", "INTEGER"),
     ("align_macd", "INTEGER"),
     ("align_pattern", "INTEGER"),
+    # #155, 28/07 -- bonding velocity stop (see BONDING_VELOCITY_DROP_PCT/
+    # BONDING_VELOCITY_WINDOW_MINUTES): a rolling reference (price, timestamp)
+    # reset every BONDING_VELOCITY_WINDOW_MINUTES -- a >40% drop from this
+    # reference WITHIN the current window triggers an immediate exit,
+    # independent of the total-drawdown invalidation_price (which alone would
+    # tolerate a fast crash for a while before triggering). NULL for any
+    # non-bonding position or one opened before this work -- unused there.
+    ("velocity_ref_price", "REAL"),
+    ("velocity_ref_price_at", "TEXT"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -793,6 +886,9 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("align_ema", "INTEGER"),
     ("align_macd", "INTEGER"),
     ("align_pattern", "INTEGER"),
+    # #155, 28/07 -- kept in parity with _ADDED_COLUMNS above.
+    ("velocity_ref_price", "REAL"),
+    ("velocity_ref_price_at", "TEXT"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1980,6 +2076,18 @@ async def _update_high_water(
         await db.commit()
 
 
+async def _update_velocity_ref(position_id: int, ref_price: float, ref_since: str) -> None:
+    """Persists the bonding "volet 2" velocity reference (see
+    ``_advance_velocity_window``) -- called only when the window has just
+    rolled forward (fresh anchor), never on every cycle."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET velocity_ref_price = ?, velocity_ref_price_at = ? WHERE id = ?",
+            (ref_price, ref_since, position_id),
+        )
+        await db.commit()
+
+
 async def _update_breakeven_pending(position_id: int, pending_since: str | None) -> None:
     """Persists the breakeven-lock candidacy (see ``_advance_breakeven_pending``)
     -- ``None`` clears any candidacy in progress (price fell back below the
@@ -2683,6 +2791,35 @@ def _default_momentum_analyzer(
         )
         momentum_timing.record_evaluation(contract, chain, result.get("action") if result else None)
         return result
+
+    return analyzer
+
+
+def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
+    """Item #157, 28/07: the VC pocket's own analyzer, routing a contract
+    tagged ``bonding_entry.CHAIN_MARKER`` to ``evaluate_bonding_entry``
+    (same routing idiom as ``_default_momentum_analyzer`` above) instead of
+    ``_default_analyzer`` (safety_screen/vc_analysis -- structurally
+    inapplicable to a bonding-curve token, no DexScreener/GoPlus pool yet,
+    see bonding_entry.py's own docstring).
+
+    Why the VC pocket specifically: a bonding position's Take-Seed exit
+    design (2x/5x/12-15x/moonbag, #154/#155) assumes a potentially long
+    holding horizon -- the VC pocket is the only one of the 3 NEVER
+    force-closed by a weekly reset (scalping resets every 7 days, swing's
+    satellite carve-out still hard-caps at 12 weeks), a much better fit than
+    either. The resulting position still gets ``strategy="momentum"`` from
+    bonding_entry.py's own dict (never ``"vc_thesis"``/Formula B) -- the
+    ``wallet`` a position lives in only decides its capital pool and reset
+    eligibility, never its exit discipline, which dispatches on ``strategy``/
+    ``chain`` regardless of wallet (see paper_trader.py's position-management
+    loop)."""
+    from aria_core import bonding_entry
+
+    async def analyzer(contract: str) -> dict | None:
+        if chain_by_contract.get(contract) == bonding_entry.CHAIN_MARKER:
+            return await bonding_entry.evaluate_bonding_entry(contract)
+        return await _default_analyzer(contract)
 
     return analyzer
 
@@ -3547,6 +3684,31 @@ async def _open_new_entries_for_wallet(
         # bonding_entry.py's own docstring), operator-requested caution.
         if sig.get("chain") == _bonding_entry.CHAIN_MARKER:
             entry_alloc_usd *= _bonding_entry.BONDING_SIZE_REDUCTION
+            # Item #156, 28/07: additional plausibility cap so a paper
+            # position never claims an unrealistically large slice of a
+            # bonding token's (fixed, often thin) total supply -- on top of,
+            # never a replacement for, the $-risk/price-impact caps already
+            # applied generically to every analyzer in open_position() below.
+            entry_alloc_usd = _bonding_entry.cap_alloc_to_supply_pct(
+                entry_alloc_usd, price, sig.get("total_supply"), conviction_tier,
+            )
+            # Item #165, 28/07: tighten-only long-cycle macro lever (BTC
+            # halving-cycle lens, distinct from the short-term Regime Switch
+            # applied generically elsewhere) -- best-effort, degrades to no
+            # change (1.0x) on any failure, same doctrine as every other
+            # macro overlay in this pipeline. btc_cycles.py caches its own
+            # network call for 1h internally -- calling it here (up to once
+            # per bonding candidate per cycle) never adds real network load
+            # beyond the first call in that window.
+            try:
+                from aria_core.skills import btc_cycles
+
+                btc_phase = await btc_cycles.fetch_current_macro_phase()
+                btc_phase_label = btc_phase.get("label") if btc_phase else None
+            except Exception as exc:  # noqa: BLE001 -- never blocking
+                logger.info("paper_cycle: btc_cycles macro phase unavailable (%s)", exc)
+                btc_phase_label = None
+            entry_alloc_usd *= _bonding_entry.late_cycle_size_multiplier(btc_phase_label)
 
         # 07/20 -- freshness re-check right before execution (Gemini
         # cross-review, see _fresh_rr/_execution_rr_still_valid above):
@@ -3576,7 +3738,10 @@ async def _open_new_entries_for_wallet(
             # draws the line explicitly: a structure already broken (price
             # through the invalidation) is still rejected outright below,
             # never turned into a limit order on a dead setup.
-            if limit_orders.should_place_limit_order(price, fresh_price, sig.get("invalidation")):
+            if limit_orders.should_place_limit_order(
+                price, fresh_price, sig.get("invalidation"),
+                chain=sig.get("chain"), liquidity_usd=sig.get("liquidity_usd"),
+            ):
                 try:
                     # 27/07 -- 3-pocket architecture plan: scoped to THIS pocket,
                     # same reasoning as has_open/open_position above -- a pending
@@ -4130,6 +4295,114 @@ async def _run_paper_cycle_locked(
                                     pass
                 continue
 
+            # #155, 28/07 -- bonding "volet 2/3" stop-loss (see BONDING_
+            # VELOCITY_DROP_PCT/BONDING_LIQUIDITY_FLOOR_USD's own comment
+            # above for the full reasoning). ADDITIVE, never a replacement
+            # for the generic ATR trailing stop/breakeven/invalidation logic
+            # below (unlike the vc_thesis branch above, this one never
+            # unconditionally ``continue``s at the end) -- a bonding position
+            # still falls through into that same generic management, volet 1
+            # (bonding_entry.py's fallback target/invalidation clamp) already
+            # feeds it real levels to work with.
+            from aria_core import bonding_entry as _bonding_entry_vol23
+
+            is_bonding_position = p.get("chain") == _bonding_entry_vol23.CHAIN_MARKER
+            if is_bonding_position:
+                entry_price = p["entry_price"]
+                entry_liq = p.get("entry_liquidity_usd")
+                last_liq = p.get("last_liquidity_usd")
+                current_liq = pair.liquidity_usd if pair is not None else None
+
+                if current_liq is not None:
+                    try:
+                        await _update_vc_liquidity_watermark(p["id"], current_liq)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                liquidity_invalidated = False
+                liq_reason = ""
+                if current_liq is not None:
+                    if current_liq < BONDING_LIQUIDITY_FLOOR_USD:
+                        liquidity_invalidated = True
+                        liq_reason = (
+                            f"liquidité (réserve de la courbe) tombée sous le plancher absolu "
+                            f"({current_liq:,.0f}$ < {BONDING_LIQUIDITY_FLOOR_USD:,.0f}$)"
+                        )
+                    elif (
+                        entry_liq and entry_liq > 0
+                        and current_liq < entry_liq * BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT
+                    ):
+                        liquidity_invalidated = True
+                        drop_pct = (1 - current_liq / entry_liq) * 100.0
+                        liq_reason = (
+                            f"liquidité en chute de {drop_pct:.0f}% depuis l'entrée "
+                            f"({entry_liq:,.0f}$ -> {current_liq:,.0f}$)"
+                        )
+                    elif (
+                        last_liq and last_liq > 0
+                        and current_liq < last_liq * (1 - BONDING_LIQUIDITY_SUDDEN_DROP_PCT)
+                    ):
+                        liquidity_invalidated = True
+                        sudden_drop_pct = (1 - current_liq / last_liq) * 100.0
+                        liq_reason = (
+                            f"chute SOUDAINE de liquidité entre deux cycles "
+                            f"({sudden_drop_pct:.0f}%, {last_liq:,.0f}$ -> {current_liq:,.0f}$)"
+                        )
+
+                if liquidity_invalidated:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Stop de perte bonding (volet 3, liquidité) : {liq_reason} -- "
+                        f"sortie complète ({exit_gain_pct:+.1f}% vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="stop bonding (liquidité)",
+                        notes=exit_notes, position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                new_ref_price, new_ref_since, velocity_triggered = _advance_velocity_window(
+                    p.get("velocity_ref_price"), p.get("velocity_ref_price_at"),
+                    price, datetime.now(timezone.utc),
+                )
+                if velocity_triggered:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    ref_drop_pct = (1 - price / new_ref_price) * 100.0 if new_ref_price else 0.0
+                    exit_notes = (
+                        f"Stop de perte bonding (volet 2, vélocité) : chute de {ref_drop_pct:.0f}% "
+                        f"en moins de {BONDING_VELOCITY_WINDOW_MINUTES} min ({new_ref_price:.6g} -> "
+                        f"{price:.6g}) -- sortie complète ({exit_gain_pct:+.1f}% vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="stop bonding (vélocité)",
+                        notes=exit_notes, position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+                if (
+                    new_ref_price != p.get("velocity_ref_price")
+                    or new_ref_since != p.get("velocity_ref_price_at")
+                ):
+                    try:
+                        await _update_velocity_ref(p["id"], new_ref_price, new_ref_since)
+                    except Exception:  # noqa: BLE001
+                        pass
+
             trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
             prev_high_water = p.get("high_water_price") or p["entry_price"]
             prev_pending = p.get("pending_high_water")
@@ -4224,22 +4497,43 @@ async def _run_paper_cycle_locked(
             remaining_qty = p["qty"]
             entry_price = p["entry_price"]
             gain_pct = (price / entry_price - 1.0) if entry_price else 0.0
-            # 07/20 -- Regime Switch: the EFFECTIVE exit regime ratchets toward
-            # the more cautious of the one observed at entry and the one
-            # observed now -- never a relaxation, even if the market has since
-            # become more optimistic (see docstring of
-            # _apply_regime_to_tp_stages/more_cautious_meta_regime).
-            effective_exit_regime = market_sentiment.more_cautious_meta_regime(
-                p.get("entry_regime"), current_regime,
-            )
-            stages = _apply_regime_to_tp_stages(
-                _effective_tp_stages(p.get("target_price"), entry_price), effective_exit_regime,
-            )
+            # #154, 28/07 -- a bonding position uses its OWN fixed-multiple,
+            # unequal-fraction, real-moonbag exit design (BONDING_TP_STAGES/
+            # BONDING_TP_STAGE_FRACTIONS) instead of the generic momentum
+            # system below -- see those constants' own comment for why.
+            from aria_core import bonding_entry as _bonding_entry
+
+            is_bonding_position = p.get("chain") == _bonding_entry.CHAIN_MARKER
+            if is_bonding_position:
+                stages = BONDING_TP_STAGES
+            else:
+                # 07/20 -- Regime Switch: the EFFECTIVE exit regime ratchets toward
+                # the more cautious of the one observed at entry and the one
+                # observed now -- never a relaxation, even if the market has since
+                # become more optimistic (see docstring of
+                # _apply_regime_to_tp_stages/more_cautious_meta_regime).
+                effective_exit_regime = market_sentiment.more_cautious_meta_regime(
+                    p.get("entry_regime"), current_regime,
+                )
+                stages = _apply_regime_to_tp_stages(
+                    _effective_tp_stages(p.get("target_price"), entry_price), effective_exit_regime,
+                )
 
             while stage_hit < len(stages) and gain_pct >= stages[stage_hit]:
                 stage_hit += 1
-                sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
-                is_last_stage = stage_hit >= len(stages) or remaining_qty - sell_qty <= TP_QTY_EPSILON
+                if is_bonding_position:
+                    sell_qty = min(initial_qty * BONDING_TP_STAGE_FRACTIONS[stage_hit - 1], remaining_qty)
+                else:
+                    sell_qty = min(initial_qty * TP_STAGE_FRACTION, remaining_qty)
+                # #154, 28/07 -- a bonding position's LAST configured stage is
+                # STILL a partial sell, never the generic system's automatic
+                # full close (see BONDING_TP_STAGES/BONDING_TP_STAGE_FRACTIONS'
+                # own comment for why) -- the epsilon check on the right still
+                # protects against a negligible dust remainder either way.
+                is_last_stage = (
+                    (not is_bonding_position and stage_hit >= len(stages))
+                    or remaining_qty - sell_qty <= TP_QTY_EPSILON
+                )
                 stage_target_pct = stages[stage_hit - 1] * 100.0
                 if is_last_stage:
                     tp_notes = (
@@ -4460,6 +4754,24 @@ async def _run_paper_cycle_locked(
         from aria_core.skills.candidate_ranking import top_candidates
 
         vc_candidates = [c.contract for c in await top_candidates(20)]
+        # Item #157, 28/07: a bonding-curve conviction bet (Take-Seed 2x/5x/
+        # 12-15x/moonbag, see bonding_entry.py's own exit design, #154/#155)
+        # structurally assumes a LONG holding horizon -- a much better fit for
+        # the VC pocket (never force-closed by a weekly reset) than scalping
+        # (reset every 7 days) or even swing (satellite-eligibility carve-out
+        # only, hard-capped at 12 weeks). Reuses the SAME bonding discovery
+        # already fetched for scalping/swing above (never a duplicated
+        # Virtuals API call) -- cross-pocket overlap on the same contract is
+        # an accepted, tracked feature of this architecture (see the 3-pocket
+        # plan's own "concentration croisée" decision), not a bug to dedup
+        # away. ``_momentum_chain_by_contract`` already tags every bonding
+        # contract with ``CHAIN_MARKER`` -- reused as-is, never recomputed.
+        from aria_core import bonding_entry as _bonding_entry_vc
+
+        for addr, addr_chain in _momentum_chain_by_contract.items():
+            if addr_chain == _bonding_entry_vc.CHAIN_MARKER and addr not in vc_candidates:
+                vc_candidates.append(addr)
+        vc_analyzer = _vc_analyzer_with_bonding(_momentum_chain_by_contract)
 
         # Nothing to buy anywhere -> no need to check the depeg (same
         # avoidance of a needless network call as the single-pocket path
@@ -4528,7 +4840,7 @@ async def _run_paper_cycle_locked(
         for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
             ("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),
             ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
-            ("vc", vc_candidates, _default_analyzer, "standard", MAX_POSITIONS_VC),
+            ("vc", vc_candidates, vc_analyzer, "standard", MAX_POSITIONS_VC),
         ):
             # 27/07 -- Phase 3: independent per-pocket risk state -- SUPERSEDES
             # the single ``risk_state`` snapshot computed above (that one

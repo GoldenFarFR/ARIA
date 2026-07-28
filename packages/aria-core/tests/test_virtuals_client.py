@@ -875,6 +875,7 @@ def test_parse_virtual_bonding_entry_native_fields():
             walletAddress="0x58f6e271043ae673bbb3b24defef86f63df17669",
             liquidityUsd=13792.21,
             launchedAt="2026-02-25T04:04:05.000Z",
+            totalSupply=1_000_000_000.0,
         )
     )
     assert token.dev_holding_pct == pytest.approx(0.08)
@@ -883,6 +884,9 @@ def test_parse_virtual_bonding_entry_native_fields():
     assert token.creator_wallet == "0x58f6e271043ae673bbb3b24defef86f63df17669"
     assert token.liquidity_usd == pytest.approx(13792.21)
     assert token.launched_at == "2026-02-25T04:04:05.000Z"
+    # Item #156, 28/07 -- fixed supply on a bonding curve, feeds
+    # bonding_entry.cap_alloc_to_supply_pct's plausibility sizing cap.
+    assert token.total_supply == pytest.approx(1_000_000_000.0)
 
 
 def test_parse_virtual_bonding_entry_native_fields_absent_is_none():
@@ -893,6 +897,7 @@ def test_parse_virtual_bonding_entry_native_fields_absent_is_none():
     assert token.creator_wallet is None
     assert token.liquidity_usd is None
     assert token.launched_at is None
+    assert token.total_supply is None
 
 
 # ----------------------------------------------------------------------

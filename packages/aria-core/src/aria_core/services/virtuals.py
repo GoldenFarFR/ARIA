@@ -309,6 +309,11 @@ class VirtualToken:
     creator_wallet: str | None = None  # "walletAddress" -- the real deployer, confirmed == UI's "Launch by:"
     liquidity_usd: float | None = None  # "liquidityUsd" -- bonding-pool liquidity, already in USD
     launched_at: str | None = None  # "launchedAt"
+    # Item #156, 28/07 -- real API field, confirmed present on the same
+    # payload as the fields above, never captured until now (fixed token
+    # supply on a bonding curve -- used by bonding_entry.cap_alloc_to_supply_
+    # pct to keep a paper position's size a plausible fraction of the float).
+    total_supply: float | None = None  # "totalSupply"
 
 
 # ----------------------------------------------------------------------
@@ -647,6 +652,7 @@ def parse_virtual(raw: dict) -> VirtualToken | None:
         creator_wallet=_sanitize(_first(attrs, "walletAddress", "wallet_address"), 80),
         liquidity_usd=_safe_float(_first(attrs, "liquidityUsd", "liquidity_usd")),
         launched_at=_sanitize(_first(attrs, "launchedAt", "launched_at"), 40),
+        total_supply=_safe_float(_first(attrs, "totalSupply", "total_supply")),
     )
 
 

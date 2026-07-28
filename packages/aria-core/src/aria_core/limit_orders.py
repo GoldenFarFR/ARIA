@@ -58,6 +58,18 @@ DB_PATH = str(aria_db_path())
 LIMIT_ORDER_WATCH_TRIGGER_MULT = 1.10  # enters "watching" once price <= target * 1.10
 LIMIT_ORDER_EXPIRY_HOURS = 3.0  # short-lived -- momentum setups go stale fast
 
+# Item #158, 28/07: a bonding-curve token still sitting near
+# bonding_entry._MIN_LIQUIDITY_USD (5,000$, #167) moves too erratically for a
+# "wait for the price to come back down" mechanism to mean anything -- the
+# whole premise of a limit order (a pullback to a still-valid original setup)
+# assumes some baseline stability this thin a market doesn't have yet.
+# liquidity_usd is used as the market-cap proxy here, same doctrine already
+# established in bonding_entry.py ("liquidité quasiment 1 pour 1 avec le
+# market cap" on a bonding curve) -- never a separate $VIRTUAL->USD mcap
+# conversion just for this gate. Starting value, to recalibrate once real
+# bonding limit orders accumulate outcomes.
+BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD = 20_000.0
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -106,17 +118,30 @@ async def _ensure_table() -> None:
 
 def should_place_limit_order(
     signal_price: float | None, fresh_price: float | None, invalidation_price: float | None,
+    *, chain: str | None = None, liquidity_usd: float | None = None,
 ) -> bool:
     """True only for case (b): the setup drifted upward since the signal
     (``fresh_price`` above ``signal_price``) but the structure is still
     intact (``fresh_price`` still above ``invalidation_price``). False for
     case (a) -- the structure already broke (price at or below the
     invalidation) -- a dead setup is rejected outright, never turned into a
-    limit order. Fail-closed (``False``) on any missing input."""
+    limit order. Fail-closed (``False``) on any missing input.
+
+    ``chain``/``liquidity_usd`` (Item #158, 28/07): for a bonding-curve
+    candidate specifically (``chain == bonding_entry.CHAIN_MARKER``), an
+    ADDITIONAL market-cap-proxy floor applies (``BONDING_LIMIT_ORDER_MIN_
+    LIQUIDITY_USD``) -- see that constant's own comment for why. Both
+    ``None`` (the default, every non-bonding caller) -- unchanged behavior."""
+    from aria_core.bonding_entry import CHAIN_MARKER
+
     if not signal_price or not fresh_price or not invalidation_price:
         return False
     if fresh_price <= invalidation_price:
         return False  # structure already broken -- dead setup
+    if chain == CHAIN_MARKER and (
+        liquidity_usd is None or liquidity_usd < BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD
+    ):
+        return False
     return fresh_price > signal_price
 
 
@@ -275,6 +300,36 @@ async def sweep_expired() -> list[dict]:
     return rows
 
 
+async def _reanalyze_bonding_for_watching(order: dict) -> bool:
+    """Item #158, 28/07: GoPlus (the standard honeypot re-check below) is
+    structurally inapplicable to a bonding-curve token -- no separate DEX
+    pool/token contract to exploit beyond the protocol's own, see
+    bonding_entry.py's own docstring. This is the bonding-native equivalent:
+    re-checks the SAME structural hard gates ``evaluate_bonding_entry``
+    itself enforces at signal time (dev-rug guard + liquidity floor) -- never
+    the composite score itself (already judged once, this is a structural
+    safety re-check before committing to watch closely, same scope/intent as
+    the honeypot re-check it mirrors). Fail-closed on any missing/unresolved
+    data, same doctrine as the rest of this module."""
+    from aria_core import bonding_entry
+    from aria_core.services.virtuals import virtuals_client
+
+    try:
+        token = await virtuals_client.fetch_by_address(order["contract"], chain="BASE")
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, never an unguarded watch
+        logger.info(
+            "limit_orders: bonding re-analysis failed for %s (%s) -- cancelling", order["contract"], exc,
+        )
+        return False
+    if token is None:
+        return False
+    if token.dev_holding_pct is None or token.dev_holding_pct > bonding_entry._MAX_DEV_HOLDING_PCT:
+        return False
+    if token.liquidity_usd is None or token.liquidity_usd < bonding_entry._MIN_LIQUIDITY_USD:
+        return False
+    return True
+
+
 async def reanalyze_for_watching(order: dict) -> bool:
     """Single re-analysis performed ONCE, at the ``pending`` -> ``watching``
     transition (never repeated on every tick while watching -- see module
@@ -282,7 +337,17 @@ async def reanalyze_for_watching(order: dict) -> bool:
     pipeline enforces) since it's been up to ``LIMIT_ORDER_EXPIRY_HOURS``
     since the original scan. ``True`` -> safe to start watching closely,
     ``False`` -> cancel immediately (a newly-appeared trap is worse than a
-    missed entry)."""
+    missed entry).
+
+    Item #158, 28/07: a bonding-curve order (``order["chain"] ==
+    bonding_entry.CHAIN_MARKER``) is routed to ``_reanalyze_bonding_for_
+    watching`` instead -- calling GoPlus with this marker as a "chain" would
+    either error out or silently check the wrong thing."""
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    if order["chain"] == CHAIN_MARKER:
+        return await _reanalyze_bonding_for_watching(order)
+
     from aria_core.momentum_entry import check_honeypot
 
     try:
@@ -401,7 +466,7 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     is scoped to THIS SAME pocket, and the resulting buy books into it, never
     a hardcoded "swing". Falls back to "swing" if absent (an order row from
     before this work, or created while the gate was OFF)."""
-    from aria_core import paper_trader, risk_guard
+    from aria_core import bonding_entry, paper_trader, risk_guard
     from aria_core.skills import market_sentiment
 
     wallet = order.get("wallet") or "swing"
@@ -451,6 +516,28 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     entry_alloc_usd, conviction_tier = paper_trader.compute_entry_alloc(
         sig, start, weekly_context, risk_state,
     )
+    # Item #158, 28/07: a bonding trigger must go through the SAME extra
+    # sizing steps as a direct bonding buy in paper_trader.py's own
+    # _open_new_entries_for_wallet (BONDING_SIZE_REDUCTION + the #156
+    # supply-proportion cap) -- without this, a limit-order trigger on a
+    # bonding candidate would silently skip both, a real gap this closes.
+    if order["chain"] == bonding_entry.CHAIN_MARKER:
+        entry_alloc_usd *= bonding_entry.BONDING_SIZE_REDUCTION
+        entry_alloc_usd = bonding_entry.cap_alloc_to_supply_pct(
+            entry_alloc_usd, current_price, sig.get("total_supply"), conviction_tier,
+        )
+        # Item #165, 28/07: same tighten-only long-cycle macro lever as the
+        # direct-buy path (paper_trader.py) -- best-effort, degrades to no
+        # change on any failure.
+        try:
+            from aria_core.skills import btc_cycles
+
+            btc_phase = await btc_cycles.fetch_current_macro_phase()
+            btc_phase_label = btc_phase.get("label") if btc_phase else None
+        except Exception as exc:  # noqa: BLE001 -- never blocking
+            logger.info("limit_orders: btc_cycles macro phase unavailable (%s)", exc)
+            btc_phase_label = None
+        entry_alloc_usd *= bonding_entry.late_cycle_size_multiplier(btc_phase_label)
 
     try:
         current_regime = await market_sentiment.resolve_meta_regime()

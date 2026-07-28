@@ -20,6 +20,20 @@ def _isolated_db(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _bypass_btc_cycles_network_call(monkeypatch):
+    """Item #165, 28/07: a bonding-tagged trigger now calls btc_cycles.
+    fetch_current_macro_phase() (real network call) -- neutral mock by
+    default so no test here hits the real network. Tests dedicated to Item
+    #165 itself override this locally."""
+    from aria_core.skills import btc_cycles
+
+    async def _fake_fetch_current_macro_phase(*, client=None, force_refresh=False):
+        return None
+
+    monkeypatch.setattr(btc_cycles, "fetch_current_macro_phase", _fake_fetch_current_macro_phase)
+
+
 def _sig(**overrides) -> dict:
     base = {
         "price": 0.038, "target": 0.06, "invalidation": 0.03, "rr": 3.9,
@@ -95,6 +109,41 @@ def test_check_watching_order_wait():
 
 def test_check_watching_order_missing_price_waits():
     assert lo.check_watching_order(0.038, 0.03, None) == "wait"
+
+
+# ── Item #158, 28/07: bonding-specific market-cap-proxy floor ───────────────
+
+
+def test_should_place_limit_order_bonding_below_floor_rejects():
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    assert lo.should_place_limit_order(
+        0.038, 0.044, 0.03, chain=CHAIN_MARKER, liquidity_usd=10_000.0,
+    ) is False
+
+
+def test_should_place_limit_order_bonding_above_floor_allows():
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    assert lo.should_place_limit_order(
+        0.038, 0.044, 0.03, chain=CHAIN_MARKER, liquidity_usd=25_000.0,
+    ) is True
+
+
+def test_should_place_limit_order_bonding_unknown_liquidity_fails_closed():
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    assert lo.should_place_limit_order(
+        0.038, 0.044, 0.03, chain=CHAIN_MARKER, liquidity_usd=None,
+    ) is False
+
+
+def test_should_place_limit_order_non_bonding_ignores_the_bonding_floor():
+    # A non-bonding candidate is never subject to the bonding-only floor,
+    # even with a low liquidity_usd value.
+    assert lo.should_place_limit_order(
+        0.038, 0.044, 0.03, chain="base", liquidity_usd=1_000.0,
+    ) is True
 
 
 # ── DB CRUD ───────────────────────────────────────────────────────────────────
@@ -199,6 +248,110 @@ async def test_reanalyze_for_watching_network_failure_fails_closed(monkeypatch):
 
     monkeypatch.setattr(momentum_entry, "check_honeypot", _boom)
     order = {"contract": "0xCHECK", "chain": "base"}
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+# ── Item #158, 28/07: bonding-native re-analysis (never GoPlus honeypot) ─────
+
+
+def _fake_bonding_token(**overrides):
+    from aria_core.services.virtuals import VirtualToken
+
+    defaults = dict(
+        name="Bonding Token", symbol="BOND", status="UNDERGRAD", chain="BASE",
+        pre_token_address="0xPRE0000000000000000000000000000000000abcd",
+        dev_holding_pct=0.5, liquidity_usd=25_000.0,
+    )
+    defaults.update(overrides)
+    return VirtualToken(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_routes_away_from_goplus(monkeypatch):
+    """A bonding order must NEVER call GoPlus (momentum_entry.check_honeypot)
+    -- structurally inapplicable, see bonding_entry.py's own docstring."""
+    from aria_core import momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    called = {"goplus": False}
+
+    async def _boom_if_called(contract, chain):
+        called["goplus"] = True
+        return True, "should never be reached", "honeypot_clear"
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _boom_if_called)
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            return _fake_bonding_token()
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await lo.reanalyze_for_watching(order) is True
+    assert called["goplus"] is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_dev_holding_too_high_cancels(monkeypatch):
+    from aria_core import bonding_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            return _fake_bonding_token(dev_holding_pct=bonding_entry._MAX_DEV_HOLDING_PCT + 1.0)
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_liquidity_drained_cancels(monkeypatch):
+    from aria_core import bonding_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            return _fake_bonding_token(liquidity_usd=bonding_entry._MIN_LIQUIDITY_USD - 1.0)
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_token_unresolved_fails_closed(monkeypatch):
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            return None
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_network_failure_fails_closed(monkeypatch):
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
     assert await lo.reanalyze_for_watching(order) is False
 
 
