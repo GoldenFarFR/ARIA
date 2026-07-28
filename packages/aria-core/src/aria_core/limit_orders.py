@@ -357,6 +357,10 @@ async def _reanalyze_dex_quality_for_watching(order: dict) -> bool:
         )
         return False
     if not clear:
+        logger.info(
+            "limit_orders: golden-pocket re-analysis cancelling %s -- honeypot no longer clear (%s)",
+            order["contract"], _reason,
+        )
         return False
 
     try:
@@ -368,8 +372,18 @@ async def _reanalyze_dex_quality_for_watching(order: dict) -> bool:
         )
         return False
     if dex_score is None or dex_score.score is None:
+        logger.info(
+            "limit_orders: golden-pocket re-analysis cancelling %s -- score unresolved on re-check "
+            "(fail-closed, this order's only reason to exist was the score)", order["contract"],
+        )
         return False
-    return dex_score.score >= risk_guard.DEX_QUALITY_WATCH_THRESHOLD
+    ok = dex_score.score >= risk_guard.DEX_QUALITY_WATCH_THRESHOLD
+    logger.info(
+        "limit_orders: golden-pocket re-analysis for %s -- fresh score=%.1f threshold=%.1f -> %s",
+        order["contract"], dex_score.score, risk_guard.DEX_QUALITY_WATCH_THRESHOLD,
+        "confirmed, entering watching" if ok else "degraded, cancelling",
+    )
+    return ok
 
 
 async def reanalyze_for_watching(order: dict) -> bool:

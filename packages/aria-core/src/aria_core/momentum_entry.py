@@ -753,7 +753,21 @@ async def discover_momentum_candidates(
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
 
+    # 28/07 -- operator request ("ajoute pleins de log ... que l'on sache
+    # pourquoi sa marche ou pourquoi sa marche pas"): per-source NET
+    # contribution (candidates this source added that no earlier source had
+    # already brought in this same pass, not its raw count -- a source that
+    # only re-surfaces already-known tokens looks empty here even if its own
+    # payload was large). Lets a future session see at a glance whether a
+    # given source (e.g. Birdeye's bulk-by-threshold scan) is genuinely
+    # widening the candidate pool or just duplicating the others.
+    source_contributions: dict[str, int] = {}
+
+    def _source_snapshot() -> int:
+        return len(out)
+
     if "base" in chains:
+        before = _source_snapshot()
         try:
             from aria_core.base_crawler import discover_base_tokens
 
@@ -763,7 +777,9 @@ async def discover_momentum_candidates(
             base_contracts = []
         for addr in base_contracts:
             _add_candidate(out, seen, chains, addr, "base")
+        source_contributions["base_crawler(new+trending_pools)"] = _source_snapshot() - before
 
+        before = _source_snapshot()
         try:
             birdeye_contracts = await _discover_birdeye_base_tokens()
         except Exception as exc:  # noqa: BLE001
@@ -771,6 +787,11 @@ async def discover_momentum_candidates(
             birdeye_contracts = []
         for addr in birdeye_contracts:
             _add_candidate(out, seen, chains, addr, "base")
+        source_contributions["birdeye(bulk_volume_threshold)"] = _source_snapshot() - before
+        logger.info(
+            "discover_momentum_candidates: birdeye raw=%d net_new=%d",
+            len(birdeye_contracts), source_contributions["birdeye(bulk_volume_threshold)"],
+        )
 
     # Freshness first (created/updated profiles, recent boosts), "top" ranking
     # last -- consistent with the operator's preference for signals that are
@@ -778,6 +799,7 @@ async def discover_momentum_candidates(
     for fetch in (
         token_profiles_latest, token_profiles_recent_updates, token_boosts_latest, token_boosts_top,
     ):
+        before = _source_snapshot()
         try:
             listings = await fetch()
         except Exception as exc:  # noqa: BLE001
@@ -785,11 +807,19 @@ async def discover_momentum_candidates(
             listings = []
         for listing in listings[:limit_per_chain]:
             _add_candidate(out, seen, chains, listing.token_address, listing.chain_id)
+        source_contributions[fetch.__name__] = _source_snapshot() - before
 
+    total_before_prefilter = len(out)
     try:
         out = await _batch_liquidity_prefilter(out)
     except Exception as exc:  # noqa: BLE001 — the pre-filter must never make sourcing fail
         logger.info("discover_momentum_candidates: liquidity pre-filter failed (%s)", exc)
+
+    logger.info(
+        "discover_momentum_candidates: per-source net contribution %s -- total %d before "
+        "liquidity pre-filter, %d after",
+        source_contributions, total_before_prefilter, len(out),
+    )
 
     return out
 
@@ -2133,12 +2163,26 @@ async def _golden_pocket_watch_candidate(
     from aria_core import risk_guard
 
     if signal.range_low is None:
+        logger.info(
+            "momentum_entry: golden-pocket watch skipped for %s -- no range_low (unreachable "
+            "given the caller's own gp_high/gp_high checks, defensive only)", contract,
+        )
         return None
     span = signal.range_high - signal.range_low
     if span <= 0:
+        logger.info(
+            "momentum_entry: golden-pocket watch skipped for %s -- flat range (high=%.6g low=%.6g)",
+            contract, signal.range_high, signal.range_low,
+        )
         return None
     retracement = (signal.range_high - price) / span
     if retracement < _GOLDEN_POCKET_WATCH_MIN_RETRACEMENT:
+        logger.info(
+            "momentum_entry: golden-pocket watch skipped for %s -- retracement %.2f < %.2f "
+            "(price=%.6g range=%.6g-%.6g, still too close to the recent high, no real pullback yet)",
+            contract, retracement, _GOLDEN_POCKET_WATCH_MIN_RETRACEMENT,
+            price, signal.range_low, signal.range_high,
+        )
         return None
 
     try:
@@ -2153,8 +2197,25 @@ async def _golden_pocket_watch_candidate(
     except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
         logger.info("momentum_entry: golden-pocket watch scoring failed for %s (%s)", contract, exc)
         return None
-    if dex_score.score is None or dex_score.score < risk_guard.DEX_QUALITY_WATCH_THRESHOLD:
+    if dex_score.score is None:
+        logger.info(
+            "momentum_entry: golden-pocket watch skipped for %s -- dex_composite_score unresolved "
+            "(retracement %.2f was OK, but no score to confirm quality)", contract, retracement,
+        )
         return None
+    if dex_score.score < risk_guard.DEX_QUALITY_WATCH_THRESHOLD:
+        logger.info(
+            "momentum_entry: golden-pocket watch skipped for %s -- dex_composite_score %.1f < "
+            "%.1f threshold (retracement %.2f was OK)",
+            contract, dex_score.score, risk_guard.DEX_QUALITY_WATCH_THRESHOLD, retracement,
+        )
+        return None
+    logger.info(
+        "momentum_entry: golden-pocket watch CREATED for %s -- retracement=%.2f score=%.1f "
+        "target_price(entry)=%.6g invalidation=%.6g target=%.6g",
+        contract, retracement, dex_score.score, signal.gp_high,
+        signal.gp_low * (1 - 0.02), signal.range_high,
+    )
 
     entry = signal.gp_high
     invalidation = signal.gp_low * (1 - 0.02)
@@ -2415,6 +2476,12 @@ async def evaluate_momentum_entry(
                 watch = None
             if watch:
                 hold["limit_order_candidate"] = watch
+        else:
+            logger.info(
+                "momentum_entry: golden-pocket watch not even attempted for %s -- mode=%s chain=%s "
+                "in_gp=%s gp_high=%s price=%s (entry gate not met)",
+                contract, mode, chain, signal.in_golden_pocket, signal.gp_high, best.price_usd,
+            )
         return hold
 
     # 26/07 -- deferred from evaluate_hard_gates (defer_holder_concentration=True
