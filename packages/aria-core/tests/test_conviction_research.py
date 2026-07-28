@@ -1796,3 +1796,221 @@ async def test_get_research_history_empty_when_never_researched():
         history = await cr.get_research_history(CONTRACT, "base")
 
     assert history == []
+
+
+# ── Item #171, 28/07: X-bio launchpad-link corroboration ─────────────────────
+
+
+def _setup_common_mocks(monkeypatch, *, tavily_snippets=None, tavily_available=True, chat_reply=None):
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(available=tavily_available, snippets=tavily_snippets or [])
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        # Skips the official X path entirely -- keeps these tests focused on
+        # the bio-corroboration logic, not the buzz/cadence machinery already
+        # covered elsewhere in this file.
+        pass
+
+    async def _fake_search_recent_tweets(query, **kwargs):
+        return []
+
+    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
+    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _fake_search_recent_tweets)
+
+    async def _fake_chat(user, system, **kwargs):
+        return chat_reply or "SCORE: 5\nRAISON: neutre."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    return _fake_chat
+
+
+def _fake_profile(bio="", bio_urls=None):
+    from datetime import datetime, timezone
+
+    from aria_core.services.twitterapi_io import TwitterApiIoProfile
+
+    return TwitterApiIoProfile(
+        followers=100, following=10, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        bio=bio, bio_urls=bio_urls or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_known_launchpad_id_never_calls_twitterapi_io(test_settings, monkeypatch):
+    """Unchanged behavior for every caller that doesn't pass known_launchpad_id
+    (e.g. momentum_entry.py on a non-Virtuals token) -- a real gap here would
+    mean an unnecessary network call/cost on every single candidate."""
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    called = {"fetch": False}
+
+    async def _fake_fetch_user_profile(handle):
+        called["fetch"] = True
+        return _fake_profile()
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    await cr.research_project_potential(CONTRACT, "TOK", "base", known_links=known_links)
+
+    assert called["fetch"] is False
+
+
+@pytest.mark.asyncio
+async def test_twitterapi_io_not_configured_skips_bio_check(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    called = {"fetch": False}
+
+    async def _fake_fetch_user_profile(handle):
+        called["fetch"] = True
+        return _fake_profile()
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: False)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert called["fetch"] is False
+    assert result.contract_corroborated is None
+
+
+@pytest.mark.asyncio
+async def test_matching_launchpad_id_in_bio_sets_strong_corroboration(test_settings, monkeypatch):
+    """The core fix of Item #171 -- the token's own X bio confirming its
+    launchpad page is a stronger, more direct signal than the raw-EVM-address
+    web search, and must win: contract_corroborated ends up True."""
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    async def _fake_fetch_user_profile(handle):
+        assert handle == "some_handle"
+        return _fake_profile(
+            bio="Backed by @virtuals_io -- $TOK https://app.virtuals.io/virtuals/47656",
+            bio_urls=["https://app.virtuals.io/virtuals/47656"],
+        )
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert result.contract_corroborated is True
+    assert any("Corroboration forte" in note for note in result.process_trail)
+
+
+@pytest.mark.asyncio
+async def test_mismatched_launchpad_id_in_bio_leaves_corroboration_unchanged(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    async def _fake_fetch_user_profile(handle):
+        return _fake_profile(bio_urls=["https://app.virtuals.io/virtuals/99999"])
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert result.contract_corroborated is None
+    assert any("ne correspond pas" in note for note in result.process_trail)
+
+
+@pytest.mark.asyncio
+async def test_strong_corroboration_drops_contradicting_website_snippet(test_settings, monkeypatch):
+    """Real bug found on HOLO: a website found earlier via Tavily that
+    mentions a DIFFERENT contract (likely an unrelated homonym) must not be
+    left in the LLM's context once the bio confirms strong corroboration --
+    otherwise the LLM keeps a low score despite contract_corroborated=True."""
+    test_settings.aria_conviction_research_enabled = True
+    other_contract_mention = f"Official ERC20 contract: {OTHER_CONTRACT}"
+    _setup_common_mocks(monkeypatch, tavily_snippets=[
+        (other_contract_mention, "https://unrelated-homonym.example", None),
+    ])
+
+    async def _fake_fetch_user_profile(handle):
+        return _fake_profile(bio_urls=["https://app.virtuals.io/virtuals/47656"])
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    async def _fake_site_snapshot(url):
+        return "Some unrelated homonym project content mentioning a different contract."
+
+    monkeypatch.setattr("aria_core.services.site_snapshot.fetch_site_text_snapshot", _fake_site_snapshot)
+
+    known_links = [
+        {"label": "Site officiel", "url": "https://unrelated-homonym.example"},
+        {"label": "X (Twitter)", "url": "https://x.com/some_handle"},
+    ]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert result.contract_corroborated is True
+    assert not any("contenu réel du site officiel" in note.lower() for note in result.process_trail if False)
+    assert any("écarté du contexte" in note for note in result.process_trail)
+
+
+@pytest.mark.asyncio
+async def test_strong_corroboration_passed_to_llm_prompt(test_settings, monkeypatch):
+    """The LLM prompt itself must reflect the strong-corroboration wording,
+    not the generic True/False/None corrob_line -- the exact real bug found
+    on HOLO (the LLM kept scoring low despite contract_corroborated=True
+    because the wording wasn't emphatic enough against contradicting content)."""
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    captured = {}
+
+    async def _fake_chat(user, system, **kwargs):
+        captured["user"] = user
+        return "SCORE: 8\nRAISON: corroboration forte confirmée."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    async def _fake_fetch_user_profile(handle):
+        return _fake_profile(bio_urls=["https://app.virtuals.io/virtuals/47656"])
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert "preuve la plus fiable possible" in captured["user"]
+    assert result.potential_score == pytest.approx(8.0)
+
+
+@pytest.mark.asyncio
+async def test_bio_fetch_failure_never_blocks_research(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    _setup_common_mocks(monkeypatch)
+
+    async def _fake_fetch_user_profile(handle):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.fetch_user_profile", _fake_fetch_user_profile)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    known_links = [{"label": "X (Twitter)", "url": "https://x.com/some_handle"}]
+    result = await cr.research_project_potential(
+        CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
+    )
+
+    assert result.available is True  # never a raised exception, never a blocked cycle

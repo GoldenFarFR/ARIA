@@ -556,6 +556,28 @@ async def test_buy_forwards_socials_as_known_links_to_conviction_research(monkey
 
 
 @pytest.mark.asyncio
+async def test_buy_forwards_virtual_id_as_known_launchpad_id(monkeypatch):
+    """Item #171, 28/07: the token's own numeric Virtuals id must reach
+    conviction_research so it can corroborate against a launchpad link the
+    project's own X bio may declare (real false positive found and fixed on
+    HOLO -- see conviction_research.py's own docstring)."""
+    token = _setup_buy_mocks(monkeypatch)
+    token.virtual_id = 47656
+
+    captured = {}
+
+    async def fake_research(contract, symbol, chain, *, known_launchpad_id=None, **kwargs):
+        captured["known_launchpad_id"] = known_launchpad_id
+        return bonding_entry.ConvictionResearch(available=False)
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert captured["known_launchpad_id"] == 47656
+
+
+@pytest.mark.asyncio
 async def test_buy_uses_conviction_score_for_sizing_when_available(monkeypatch):
     """potential_score/conviction_* must reach the returned dict as-is --
     paper_trader.compute_entry_alloc already reads potential_score from it,

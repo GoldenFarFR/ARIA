@@ -255,6 +255,13 @@ _MAX_EXTERNAL_CONTENT_CHARS = 2000
 
 _EVM_ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 _X_HANDLE_RE = re.compile(r"(?:twitter\.com|x\.com)/(\w{1,15})", re.IGNORECASE)
+# Item #171, 28/07: a Virtuals-launched token's OWN X bio commonly declares
+# its launchpad page directly (e.g. "app.virtuals.io/virtuals/47656") -- a
+# far stronger corroboration signal than searching for the raw EVM address
+# on the open web (which rarely appears verbatim outside an explorer), real
+# case found (HOLO) where this was the ONLY place the real corroboration
+# lived.
+_VIRTUALS_LINK_RE = re.compile(r"app\.virtuals\.io/virtuals/(\d+)")
 _SOCIAL_OR_EXPLORER_DOMAINS = (
     "twitter.com", "x.com", "dexscreener.com", "basescan.org", "etherscan.io",
     "solscan.io", "coingecko.com", "coinmarketcap.com", "t.me", "discord.gg",
@@ -421,6 +428,7 @@ async def research_project_potential(
     contract: str, symbol: str, chain: str, *,
     cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
     known_links: list[dict] | None = None,
+    known_launchpad_id: int | str | None = None,
 ) -> ConvictionResearch:
     """Orchestrates website (Tavily) + X (buzz + cadence) + contract
     corroboration -> bounded potential score. Single entry point called by
@@ -445,7 +453,21 @@ async def research_project_potential(
     other known link (GitHub/Discord/Telegram/Farcaster/Reddit -- operator
     feedback: almost always present on DexScreener, their absence is the
     exception) isn't ignored either: passed as extra context to the synthesis
-    LLM (never a new field persisted per platform)."""
+    LLM (never a new field persisted per platform).
+
+    ``known_launchpad_id`` (Item #171, 28/07 -- real false positive found on
+    HOLO, a legitimate token wrongly scored "usurpation probable"): the
+    token's own numeric id on its launchpad of origin (e.g.
+    ``VirtualToken.virtual_id`` for a Virtuals bonding candidate), if the
+    caller has one. Once ``x_handle`` is resolved, its X BIO (fetched via
+    ``services/twitterapi_io.py``, already-expanded links, no unshortening
+    needed) is checked for a matching launchpad link
+    (``app.virtuals.io/virtuals/<id>``) -- an EXACT id match is treated as
+    strong, explicit corroboration (``contract_corroborated=True``),
+    overriding the weaker raw-EVM-address heuristic below, which rarely finds
+    a bonding-stage token's address verbatim anywhere on the open web. Never
+    a hard requirement -- absent/unconfigured/no-match degrades to the
+    existing EVM-address-based corroboration, unchanged."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
 
@@ -562,6 +584,69 @@ async def research_project_potential(
         else:
             _trail_note(trail, "Site officiel injoignable ou contenu non exploitable")
 
+    # Item #171, 28/07: check the X bio's OWN declared launchpad link before
+    # falling further back on the weaker raw-EVM-address heuristic already
+    # computed above -- a bonding-stage token's contract rarely appears
+    # verbatim anywhere on the open web, but its own X bio commonly declares
+    # "app.virtuals.io/virtuals/<id>" directly (real case: HOLO). Only
+    # attempted when the caller actually has an id to match against --
+    # otherwise this is a silent no-op, unchanged behavior.
+    strong_bio_corroboration = False
+    if x_handle and known_launchpad_id is not None:
+        from aria_core.services.twitterapi_io import fetch_user_profile, is_twitterapi_io_configured
+
+        if is_twitterapi_io_configured():
+            try:
+                profile = await fetch_user_profile(x_handle)
+            except Exception as exc:  # noqa: BLE001 -- never blocking
+                logger.info("conviction_research: twitterapi_io profile fetch failed (%s)", exc)
+                profile = None
+            if profile is not None and profile.bio_urls:
+                bio_launchpad_ids = {
+                    m.group(1) for url in profile.bio_urls for m in [_VIRTUALS_LINK_RE.search(url)] if m
+                }
+                if str(known_launchpad_id) in bio_launchpad_ids:
+                    strong_bio_corroboration = True
+                    if contract_corroborated is False:
+                        # Item #171: a website found earlier (Tavily) that
+                        # mentions a DIFFERENT contract is, in this case, very
+                        # likely an unrelated homonym project -- not a genuine
+                        # impersonation of THIS token, which has just been
+                        # confirmed via a much stronger, direct signal (its
+                        # own X bio citing its own launchpad page). Drop the
+                        # misleading website snippet from what the synthesis
+                        # LLM sees, rather than leaving two contradictory
+                        # signals for it to arbitrate -- real bug found on
+                        # HOLO, where the LLM kept the low score anyway
+                        # despite `contract_corroborated=True` because the
+                        # homonym's site content was still in its context.
+                        snippet_lines = [
+                            line for line in snippet_lines
+                            if "(contenu réel du site officiel)" not in line
+                        ]
+                        _trail_note(
+                            trail,
+                            "Site web trouvé plus tôt écarté du contexte -- contredit la corroboration "
+                            "forte de la bio X, probable projet homonyme sans rapport",
+                        )
+                    contract_corroborated = True
+                    _trail_note(
+                        trail,
+                        f"Corroboration forte : la bio X (@{x_handle}) déclare elle-même le lien "
+                        f"launchpad correspondant (id {known_launchpad_id})",
+                    )
+                    if profile.bio:
+                        snippet_lines.append(
+                            f"- (bio X officielle @{x_handle}) "
+                            f"{sanitize_untrusted_text(profile.bio, _MAX_SNIPPET_CHARS)}"
+                        )
+                elif bio_launchpad_ids:
+                    _trail_note(
+                        trail,
+                        f"Bio X (@{x_handle}) déclare un autre lien launchpad ({sorted(bio_launchpad_ids)}) "
+                        f"-- ne correspond pas à l'id attendu ({known_launchpad_id})",
+                    )
+
     buzz_lines: list[str] = []
     posting_cadence = "unknown"
     query = f"from:{x_handle}" if x_handle else f"{safe_symbol} {contract[:10]}"
@@ -670,7 +755,7 @@ async def research_project_potential(
 
     score, rationale = await _synthesize_potential(
         safe_symbol, chain, snippet_lines, buzz_lines, posting_cadence, contract_corroborated,
-        other_known_link_lines,
+        other_known_link_lines, strong_bio_corroboration=strong_bio_corroboration,
     )
     result = ConvictionResearch(
         available=True, website_url=website_url, website_snapshot=website_snapshot,
@@ -691,6 +776,8 @@ async def _synthesize_potential(
     posting_cadence: str,
     contract_corroborated: bool | None,
     other_known_link_lines: list[str] | None = None,
+    *,
+    strong_bio_corroboration: bool = False,
 ) -> tuple[float | None, str]:
     """A single lightweight LLM call (same model/provider as ``_llm_confirm`` --
     Haiku 4.5 via OpenRouter, already validated against real injection
@@ -703,15 +790,33 @@ async def _synthesize_potential(
     (already extracted, never a new field persisted per platform): one
     additional legitimacy signal weighed by the LLM the same as a website
     snippet, never a fact verified in itself -- a link can be declared
-    without ever being authentic."""
+    without ever being authentic.
+
+    ``strong_bio_corroboration`` (Item #171, 28/07): True when the token's
+    own X bio directly confirmed its launchpad link (see
+    ``research_project_potential`` docstring) -- a real bug found on HOLO:
+    even with ``contract_corroborated=True``, the LLM kept a low score
+    because a still-present, unrelated homonym website snippet contradicted
+    it in its own context. The corrob_line wording for this case is made
+    explicit that this specific signal is the STRONGEST kind of evidence
+    (the project's own account, not a third party), so it must win over any
+    other contradictory web content still present."""
     from aria_core.llm import chat_with_context
     from aria_core.sanitize import sanitize_untrusted_text
 
-    corrob_line = {
-        True: "Le contrat scanné CORRESPOND au contrat annoncé par le projet lui-même.",
-        False: "ATTENTION : un contrat DIFFÉRENT est annoncé par le projet -- signal d'usurpation possible.",
-        None: "Aucun contrat officiel trouvé dans les sources -- corroboration impossible.",
-    }[contract_corroborated]
+    if strong_bio_corroboration:
+        corrob_line = (
+            "Le contrat scanné est CONFIRMÉ par la preuve la plus fiable possible : le compte X "
+            "OFFICIEL du projet lui-même cite ce token précis dans sa propre biographie. Ceci prime "
+            "sur tout autre contenu web contradictoire encore présent ci-dessous (probablement un "
+            "projet homonyme sans rapport, jamais une usurpation de CE token)."
+        )
+    else:
+        corrob_line = {
+            True: "Le contrat scanné CORRESPOND au contrat annoncé par le projet lui-même.",
+            False: "ATTENTION : un contrat DIFFÉRENT est annoncé par le projet -- signal d'usurpation possible.",
+            None: "Aucun contrat officiel trouvé dans les sources -- corroboration impossible.",
+        }[contract_corroborated]
 
     external = "\n".join(
         ["Extraits site web :"] + (snippet_lines or ["(aucun)"])

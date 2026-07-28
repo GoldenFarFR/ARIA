@@ -29,6 +29,22 @@ def _isolated_blacklist_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_virtuals_launchpad_lookup_unresolved(monkeypatch):
+    """Item #171, 28/07: the conviction-diligence step now tries to resolve
+    a Base candidate's Virtuals launchpad id (real network call) before
+    calling research_project_potential -- without this stub, EVERY test in
+    this file that reaches a BUY on "base" would hit the real Virtuals API.
+    None by default (the common case: not a Virtuals token) -- tests
+    dedicated to this lookup itself override it locally."""
+    from aria_core.services import virtuals as virtuals_mod
+
+    async def _unresolved(self, token_address, chain="BASE"):
+        return None
+
+    monkeypatch.setattr(type(virtuals_mod.virtuals_client), "fetch_by_address", _unresolved)
+
+
+@pytest.fixture(autouse=True)
 def _stub_polymarket_unavailable(monkeypatch):
     """``_polymarket_lines`` (19/07) appelle un VRAI client HTTP (``polymarket_client``,
     aucun gate/DB avant l'appel réseau, contrairement à ``_sentiment_lines`` qui ne lit
@@ -4259,7 +4275,7 @@ async def test_potential_score_threaded_into_result_when_buy_confirmed(monkeypat
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(
             available=True, website_url="https://x.example", posting_cadence="active",
             contract_corroborated=True, potential_score=8.5, rationale="Projet réel actif.",
@@ -4285,7 +4301,7 @@ async def test_potential_score_critical_rejects_the_buy_outright(monkeypatch, te
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(
             available=True, website_url="https://x.example", posting_cadence="active",
             contract_corroborated=False, potential_score=2.0,
@@ -4312,7 +4328,7 @@ async def test_potential_score_merely_weak_still_buys(monkeypatch, test_settings
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(
             available=True, website_url="https://x.example", posting_cadence="calme",
             contract_corroborated=True, potential_score=3.5, rationale="Equipe discrete.",
@@ -4335,7 +4351,7 @@ async def test_potential_score_none_never_rejects(monkeypatch, test_settings):
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(available=True, potential_score=None, reason="aucune source trouvée")
 
     monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
@@ -4356,7 +4372,7 @@ async def test_process_trail_included_in_thesis_reasons(monkeypatch, test_settin
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(
             available=True, website_url="https://x.example", posting_cadence="active",
             contract_corroborated=True, potential_score=8.5, rationale="Projet réel actif.",
@@ -4388,7 +4404,7 @@ async def test_process_trail_included_even_without_potential_score(monkeypatch, 
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(
             available=True, potential_score=None, reason="aucune source externe trouvée",
             process_trail=["Recherche web Tavily tentée", "Tavily indisponible (pas de clé)"],
@@ -4411,7 +4427,7 @@ async def test_no_diligence_line_when_process_trail_empty(monkeypatch, test_sett
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(available=True, potential_score=8.5, rationale="ok")
 
     monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
@@ -4427,7 +4443,7 @@ async def test_conviction_research_never_called_when_action_stays_hold(monkeypat
     test_settings.aria_conviction_research_enabled = True
     called = False
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         nonlocal called
         called = True
         return None
@@ -4446,7 +4462,7 @@ async def test_conviction_research_never_called_when_security_gate_rejects(monke
     test_settings.aria_conviction_research_enabled = True
     called = False
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         nonlocal called
         called = True
         return None
@@ -4470,7 +4486,7 @@ async def test_potential_score_none_when_research_unavailable(monkeypatch, test_
 
     from aria_core.conviction_research import ConvictionResearch
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         return ConvictionResearch(available=True, potential_score=None, reason="aucune source externe trouvée")
 
     monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
@@ -4650,7 +4666,7 @@ async def test_scalping_mode_never_calls_conviction_research_even_on_confirmed_b
 
     called = False
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         nonlocal called
         called = True
         return None
@@ -4676,7 +4692,7 @@ async def test_standard_mode_still_calls_conviction_research(monkeypatch, test_s
 
     called = False
 
-    async def fake_research(contract, symbol, chain, known_links=None):
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
         nonlocal called
         called = True
         return ConvictionResearch(available=False)
@@ -4686,7 +4702,96 @@ async def test_standard_mode_still_calls_conviction_research(monkeypatch, test_s
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
 
     assert result["action"] == "BUY"
-    assert called is True
+    assert called
+
+
+@pytest.mark.asyncio
+async def test_resolved_virtual_id_forwarded_as_known_launchpad_id(monkeypatch, test_settings):
+    """Item #171, 28/07: a Base candidate that resolves to a real Virtuals
+    token (bonding OR already-graduated) must forward its virtual_id to
+    conviction_research, so a genuine project can be corroborated via its own
+    X bio instead of relying only on the weaker raw-EVM-address web search
+    (real false positive found and fixed on HOLO)."""
+    from aria_core.services import virtuals as virtuals_mod
+
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    async def _resolved(self, token_address, chain="BASE"):
+        assert token_address == CONTRACT
+        return virtuals_mod.VirtualToken(symbol="TOK", virtual_id=47656, token_address=CONTRACT)
+
+    monkeypatch.setattr(type(virtuals_mod.virtuals_client), "fetch_by_address", _resolved)
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    captured = {}
+
+    async def fake_research(contract, symbol, chain, known_links=None, **kwargs):
+        captured["known_launchpad_id"] = kwargs.get("known_launchpad_id")
+        return ConvictionResearch(available=False)
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert captured["known_launchpad_id"] == 47656
+
+
+@pytest.mark.asyncio
+async def test_non_base_chain_never_attempts_virtuals_lookup(monkeypatch, test_settings):
+    """Virtuals has no presence outside Base -- the lookup must never even be
+    attempted on another chain, never a wasted network call."""
+    from aria_core.services import virtuals as virtuals_mod
+
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    called = {"fetch": False}
+
+    async def _fail_if_called(self, token_address, chain="BASE"):
+        called["fetch"] = True
+        return None
+
+    monkeypatch.setattr(type(virtuals_mod.virtuals_client), "fetch_by_address", _fail_if_called)
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
+        return ConvictionResearch(available=False)
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+    await me.evaluate_momentum_entry(CONTRACT, "ethereum")
+
+    assert called["fetch"] is False
+
+
+@pytest.mark.asyncio
+async def test_virtuals_lookup_failure_never_blocks_conviction_research(monkeypatch, test_settings):
+    from aria_core.services import virtuals as virtuals_mod
+
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    async def _boom(self, token_address, chain="BASE"):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(type(virtuals_mod.virtuals_client), "fetch_by_address", _boom)
+
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
+        return ConvictionResearch(available=False)
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"  # never blocked by the failed lookup
 
 
 @pytest.mark.asyncio

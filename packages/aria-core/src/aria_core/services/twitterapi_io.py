@@ -47,7 +47,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
@@ -70,6 +70,15 @@ class TwitterApiIoProfile:
     followers: int
     following: int
     created_at: datetime
+    # Item #171, 28/07 -- real gap found: a project's own declared launchpad
+    # link (e.g. "app.virtuals.io/virtuals/<id>") often lives ONLY in the X
+    # bio, never in a tweet or a crawlable website -- verified live on a real
+    # case (HOLO) where the bio's `entities.description.urls` already
+    # contains the link fully EXPANDED (no t.co unshortening needed).
+    # Empty list when the field is absent/unparsable -- never None, so a
+    # caller can always safely iterate.
+    bio: str = ""
+    bio_urls: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -149,7 +158,24 @@ async def fetch_user_profile(username: str) -> TwitterApiIoProfile | None:
     if created_at is None or not isinstance(followers, int) or not isinstance(following, int):
         return None
 
-    return TwitterApiIoProfile(followers=followers, following=following, created_at=created_at)
+    # Item #171, 28/07: `entities.description.urls[].expanded_url` is the
+    # bio's t.co-shortened links ALREADY expanded by the API itself -- never
+    # needs a second unshortening round-trip. Best-effort: any malformed
+    # shape here degrades to an empty list, never a crash on an otherwise
+    # valid profile.
+    bio = data.get("description") if isinstance(data.get("description"), str) else ""
+    bio_urls: list[str] = []
+    try:
+        for entry in data.get("entities", {}).get("description", {}).get("urls", []):
+            expanded = entry.get("expanded_url")
+            if isinstance(expanded, str) and expanded:
+                bio_urls.append(expanded)
+    except (AttributeError, TypeError):
+        bio_urls = []
+
+    return TwitterApiIoProfile(
+        followers=followers, following=following, created_at=created_at, bio=bio, bio_urls=bio_urls,
+    )
 
 
 async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[TwitterApiIoTweet] | None:

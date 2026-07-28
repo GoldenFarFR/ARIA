@@ -677,6 +677,14 @@ async def evaluate_bonding_entry(
         # with the standard momentum pipeline's own diligence on this same
         # contract once it graduates -- never a redundant re-search.
         token_address, symbol, "base", known_links=_socials_to_known_links(token.socials),
+        # Item #171, 28/07: the token's own numeric Virtuals id -- lets
+        # conviction_research corroborate directly against the launchpad
+        # link the project's own X bio commonly declares
+        # ("app.virtuals.io/virtuals/<id>"), far more reliable than searching
+        # for the raw bonding-stage contract address on the open web (real
+        # false positive found and fixed on HOLO: wrongly flagged
+        # "usurpation probable" against an unrelated homonym site).
+        known_launchpad_id=token.virtual_id,
     )
     if research.available:
         if research.process_trail:

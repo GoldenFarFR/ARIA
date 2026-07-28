@@ -2421,8 +2421,34 @@ async def evaluate_momentum_entry(
     if action == "BUY" and mode != "scalping":
         from aria_core.conviction_research import research_project_potential
 
+        # Item #171, 28/07 (extended from the bonding-only fix to the
+        # standard pipeline, operator go-ahead): a token that ever launched
+        # via Virtuals (bonding OR already-graduated -- fetch_by_address
+        # tries the graduated "tokenAddress" lookup FIRST) commonly declares
+        # its launchpad page directly in its own X bio -- a real false
+        # positive was found and fixed on a bonding candidate (HOLO) where
+        # Tavily's generic web search landed on an unrelated homonym site
+        # and wrongly flagged "usurpation probable", while the token's own
+        # bio already confirmed it unambiguously. Base-only (Virtuals has no
+        # presence on the other DEFAULT_CHAINS) and best-effort: only
+        # attempted on a candidate that's ALREADY about to be bought (same
+        # "after everything else" placement as conviction_research itself,
+        # never slows down mass triage) -- a non-Virtuals token (the common
+        # case) just gets `None` back, no different from today.
+        known_launchpad_id = None
+        if chain == "base":
+            try:
+                from aria_core.services.virtuals import virtuals_client
+
+                virtuals_token = await virtuals_client.fetch_by_address(contract, chain="BASE")
+                if virtuals_token is not None:
+                    known_launchpad_id = virtuals_token.virtual_id
+            except Exception as exc:  # noqa: BLE001 -- never blocking
+                logger.info("momentum_entry: Virtuals launchpad-id lookup failed (%s)", exc)
+
         research = await research_project_potential(
             contract, best.base_symbol, chain, known_links=best.project_links,
+            known_launchpad_id=known_launchpad_id,
         )
         if research.available:
             # 19/07 -- explicit operator feedback: "even if it used x402, even

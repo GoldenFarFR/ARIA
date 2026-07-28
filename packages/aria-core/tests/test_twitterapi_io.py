@@ -95,6 +95,63 @@ async def test_fetch_success_real_shape(_fresh):
 
 
 @pytest.mark.asyncio
+async def test_fetch_success_extracts_bio_and_expanded_urls(_fresh):
+    """Item #171, 28/07 -- reproduit fidèlement la vraie réponse observée sur
+    @HoloStudio_AI : la bio et ses liens t.co DÉJÀ dépliés par l'API elle-même
+    (entities.description.urls[].expanded_url), aucun déchiffrement de lien
+    raccourci nécessaire côté client."""
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success", "msg": "success",
+            "data": {
+                "id": "123", "userName": "HoloStudio_AI",
+                "followers": 213, "following": 83,
+                "createdAt": "2026-02-01T00:00:00.000000Z",
+                "description": "Backed by @playartsdotai & @virtuals_io\n\n↬ $HOLO - https://t.co/eeRI9JY4dC",
+                "entities": {
+                    "description": {
+                        "urls": [
+                            {
+                                "display_url": "app.virtuals.io/virtuals/47656",
+                                "expanded_url": "https://app.virtuals.io/virtuals/47656",
+                                "url": "https://t.co/eeRI9JY4dC",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    )
+    result = await tw.fetch_user_profile("HoloStudio_AI")
+    assert result is not None
+    assert "Backed by" in result.bio
+    assert result.bio_urls == ["https://app.virtuals.io/virtuals/47656"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_success_no_entities_defaults_bio_fields_empty(_fresh):
+    """A profile with no `entities.description.urls` (or the field entirely
+    absent) degrades to empty bio/bio_urls -- never a crash on an otherwise
+    valid profile, same doctrine as every other field here."""
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success", "msg": "success",
+            "data": {
+                "id": "1717791336018120704", "userName": "crynuxio",
+                "followers": 3676, "following": 242,
+                "createdAt": "2023-10-27T06:32:29.000000Z",
+            },
+        },
+    )
+    result = await tw.fetch_user_profile("crynuxio")
+    assert result is not None
+    assert result.bio == ""
+    assert result.bio_urls == []
+
+
+@pytest.mark.asyncio
 async def test_fetch_http_error_returns_none(_fresh):
     _FakeAsyncClient._response = _FakeResponse(401, {})
     assert await tw.fetch_user_profile("crynuxio") is None
