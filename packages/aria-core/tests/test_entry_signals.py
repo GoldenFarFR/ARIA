@@ -271,6 +271,39 @@ def test_detect_entry_short_series_safe():
     assert sig.present is False
 
 
+def test_detect_entry_exposes_zone_bounds_even_absent_when_computable():
+    """Item #182 (28/07), golden-pocket liberation: gp_low/gp_high/range_high/
+    range_low are geometric facts derived from fibonacci_zone(), independent
+    of whether RSI has confirmed a divergence -- a caller building a
+    watch-and-wait limit order for a "not there yet" setup needs them even
+    when present=False, as long as a real zone is computable (a monotonic
+    uptrend still has a well-defined high/low leg)."""
+    sig = detect_entry(_candles([100 + i for i in range(30)]), lookback=25)
+    assert sig.present is False
+    assert sig.gp_low is not None and sig.gp_high is not None
+    assert sig.gp_low < sig.gp_high
+    assert sig.range_high is not None and sig.range_low is not None
+    assert sig.range_low < sig.gp_low < sig.gp_high < sig.range_high
+
+
+def test_detect_entry_zone_bounds_none_when_no_computable_zone():
+    """Too short a series never reaches fibonacci_zone() at all -- gp_low/
+    gp_high/range_high/range_low must stay None, never a fabricated level."""
+    sig = detect_entry(_candles([100, 101, 102]), lookback=25)
+    assert sig.gp_low is None and sig.gp_high is None
+    assert sig.range_high is None and sig.range_low is None
+
+
+def test_detect_entry_confirmed_setup_also_exposes_range_bounds():
+    """range_high/range_low are populated on the confirmed (present=True)
+    path too, consistent with the absent-but-computable path above."""
+    sig = detect_entry(_candles(_setup_series()), lookback=25)
+    assert sig.present is True
+    assert sig.range_high is not None and sig.range_low is not None
+    assert sig.range_low < sig.gp_low < sig.gp_high < sig.range_high
+    assert sig.range_high == sig.target  # same value, same source (fib["high"])
+
+
 # ── execution_price (19/07, trouvaille réelle en vérifiant la légitimité d'un trade
 #    GITLAWB à la demande de l'opérateur) : le R/R doit refléter le prix RÉELLEMENT
 #    exécutable (DexScreener temps réel), pas le close d'une AUTRE source (OHLCV) qui

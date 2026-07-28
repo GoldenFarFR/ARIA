@@ -4155,6 +4155,84 @@ async def test_run_cycle_never_places_limit_order_when_structure_already_broken(
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_places_limit_order_on_golden_pocket_watch_candidate(tmp_db, monkeypatch):
+    """Item #182, 28/07, golden-pocket liberation: a HOLD/no_entry_signal
+    result alongside a limit_order_candidate (momentum_entry.py, price still
+    above a computable golden-pocket zone but the DEX composite score already
+    confirms high quality) places a watch-and-wait limit order -- distinct
+    origin from the price-drift case above (a HOLD, never an already-decided
+    BUY), same underlying mechanism."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "HOLD", "symbol": "WATCH", "price": 1.5, "chain": "base",
+            "reasons": ["pas de setup golden pocket + divergence RSI avec R/R positif"],
+            "hold_reason": "no_entry_signal",
+            "limit_order_candidate": {
+                "target_price": 1.382, "target": 2.0, "invalidation": 1.18972,
+                "rr": 1.7, "symbol": "WATCH", "dex_security_score": 75.0,
+                "dex_security_breakdown": {}, "reason": "score DEX fort, golden pocket pas encore formé",
+            },
+        }
+
+    async def price_lookup(contract):
+        return 1.5
+
+    notified = []
+
+    async def notifier(msg):
+        notified.append(msg)
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup, notifier=notifier,
+    )
+    assert act["opened"] == []
+    assert not await pt.has_open(A)
+
+    import json
+
+    from aria_core import limit_orders
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["contract"] == A
+    assert active[0]["target_price"] == pytest.approx(1.382)
+    sig = json.loads(active[0]["signal_json"])
+    assert sig["limit_order_reason"] == "golden_pocket_pending"
+    assert sig["invalidation"] == pytest.approx(1.18972)
+    assert sig["dex_security_score"] == 75.0
+    assert any("score DEX fort" in r for r in sig["reasons"])
+    assert len(notified) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_no_limit_order_on_plain_no_entry_signal_without_watch_candidate(tmp_db, monkeypatch):
+    """The vast majority of no_entry_signal HOLDs never carry a
+    limit_order_candidate (score unresolved/below threshold, retracement
+    insufficient, etc.) -- must behave exactly as before this chantier, no
+    limit order placed."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "HOLD", "symbol": "PLAIN", "price": 1.5, "chain": "base",
+            "reasons": ["pas de setup golden pocket + divergence RSI avec R/R positif"],
+            "hold_reason": "no_entry_signal",
+        }
+
+    async def price_lookup(contract):
+        return 1.5
+
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+
+    from aria_core import limit_orders
+
+    assert await limit_orders.get_active_orders() == []
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_rejects_when_fresh_price_lookup_fails(tmp_db, monkeypatch):
     """Fail-closed : une panne réseau sur la re-vérification ne doit jamais forcer
     une exécution sur l'ancien prix du signal."""

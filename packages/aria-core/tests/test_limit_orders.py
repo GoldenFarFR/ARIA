@@ -355,6 +355,132 @@ async def test_reanalyze_for_watching_bonding_network_failure_fails_closed(monke
     assert await lo.reanalyze_for_watching(order) is False
 
 
+# ── Item #182, 28/07: golden-pocket liberation re-analysis (DEX quality, not
+#    an already-confirmed golden pocket) ─────────────────────────────────────
+
+
+def _golden_pocket_pending_order():
+    sig = {"limit_order_reason": "golden_pocket_pending"}
+    return {"contract": "0xCHECK", "chain": "base", "signal_json": json.dumps(sig)}
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_routes_golden_pocket_pending_to_dex_quality(monkeypatch):
+    """A golden_pocket_pending order must be routed to the DEX-quality
+    re-check, never the plain honeypot-only path -- verified by making the
+    plain path explode if it were ever reached."""
+    from aria_core import momentum_entry, risk_guard
+
+    async def _boom_if_plain_path_reached(contract, chain):
+        raise AssertionError("plain reanalyze_for_watching path must not run")
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _fresh_score(contract, chain):
+        from aria_core import dex_composite_score as dcs
+
+        return dcs.DexSecurityScore(score=risk_guard.DEX_QUALITY_WATCH_THRESHOLD + 5.0)
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _fresh_score)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is True
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_dex_quality_cancels_on_honeypot_failure(monkeypatch):
+    """The one hard guardrail this pipeline always enforces -- never skipped
+    for a golden-pocket-pending order either."""
+    from aria_core import momentum_entry
+
+    called = {"score": False}
+
+    async def _honeypot_confirmed(contract, chain):
+        return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
+
+    async def _fresh_score(contract, chain):
+        called["score"] = True
+        from aria_core import dex_composite_score as dcs
+
+        return dcs.DexSecurityScore(score=100.0)
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_confirmed)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _fresh_score)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is False
+    assert called["score"] is False  # short-circuits before spending the extra call
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_dex_quality_cancels_when_score_degraded(monkeypatch):
+    """The order's whole premise was the DEX composite score -- if it no
+    longer clears the bar, cancel, even though honeypot is still clear."""
+    from aria_core import momentum_entry, risk_guard
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _degraded_score(contract, chain):
+        from aria_core import dex_composite_score as dcs
+
+        return dcs.DexSecurityScore(score=risk_guard.DEX_QUALITY_WATCH_THRESHOLD - 1.0)
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _degraded_score)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_dex_quality_fails_closed_when_score_unresolved(monkeypatch):
+    """Unlike the additive-signal doctrine elsewhere (unresolved never
+    rejects a BUY), THIS order's only reason to exist is the score -- an
+    unresolved re-check must cancel, never default to watching blind."""
+    from aria_core import momentum_entry
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _unresolved(contract, chain):
+        return None
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _unresolved)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_dex_quality_fails_closed_on_network_error(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _boom(contract, chain):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _boom)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_plain_order_unaffected_by_golden_pocket_routing(monkeypatch):
+    """A standard order (no limit_order_reason, or signal_json missing
+    entirely) keeps the exact pre-#182 behavior -- honeypot-only re-check."""
+    from aria_core import momentum_entry
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    order = {"contract": "0xCHECK", "chain": "base", "signal_json": json.dumps({"target": 1.0})}
+    assert await lo.reanalyze_for_watching(order) is True
+
+
 # ── process_active_orders orchestration ──────────────────────────────────────
 
 

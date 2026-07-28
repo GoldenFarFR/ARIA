@@ -5203,3 +5203,148 @@ async def test_standard_ambiguous_hold_weak_cites_correct_weak_point(monkeypatch
     line = next(r for r in result["reasons"] if "non confirmé" in r)
     assert "alignement technique insuffisant (1/3)" in line
     assert "R/R faible" not in line
+
+
+# ── golden-pocket liberation (Item #182, 28/07) -- watch-and-wait limit order
+#    when the golden pocket/RSI gate itself is unmet but the DEX composite
+#    score independently confirms high quality ────────────────────────────
+
+def _pending_zone_signal(**overrides) -> EntrySignal:
+    """A "not there yet" setup: no golden pocket/RSI confirmed, but a real
+    Fibonacci zone is geometrically computable (gp_low=1.214, gp_high=1.382,
+    range_low=1.0, range_high=2.0 -- same construction as fibonacci_zone()'s
+    own 0.618/0.786 ratios on a 1.0-2.0 swing). ``_pair()``'s default
+    price_usd (1.5) sits ABOVE gp_high (1.382, structure intact, not yet in
+    the zone) with a retracement of exactly 0.5 ((2.0-1.5)/(2.0-1.0)) --
+    right at ``_GOLDEN_POCKET_WATCH_MIN_RETRACEMENT``."""
+    base = dict(
+        present=False, in_golden_pocket=False, rsi_divergence=False,
+        reasons=["setup non réuni"], gp_low=1.214, gp_high=1.382,
+        range_high=2.0, range_low=1.0,
+    )
+    base.update(overrides)
+    return EntrySignal(**base)
+
+
+def _stub_dex_score(monkeypatch, score):
+    from aria_core import dex_composite_score as dcs
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        return dcs.DexSecurityScore(
+            score=score, score_contract_risk=score * 0.35, score_dev_behavior=score * 0.2,
+            score_smart_money=score * 0.25, score_liquidity_depth=score * 0.2,
+        )
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    return fake_compute
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_created_when_score_confirmed_high(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal())
+    _stub_dex_score(monkeypatch, 75.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_entry_signal"
+    watch = result["limit_order_candidate"]
+    assert watch is not None
+    assert watch["target_price"] == pytest.approx(1.382)
+    assert watch["invalidation"] == pytest.approx(1.214 * 0.98)
+    assert watch["target"] == pytest.approx(2.0)
+    assert watch["dex_security_score"] == 75.0
+    assert watch["rr"] is not None and watch["rr"] > 0
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_absent_when_score_below_threshold(monkeypatch, test_settings):
+    from aria_core import risk_guard
+
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal())
+    _stub_dex_score(monkeypatch, risk_guard.DEX_QUALITY_WATCH_THRESHOLD - 1.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_absent_on_insufficient_retracement(monkeypatch, test_settings):
+    """Operator-raised concern (28/07): a token still close to its recent
+    high (barely retraced) must never be watched -- only a real pullback in
+    progress toward the zone is a legitimate candidate. Price (1.5, _pair()'s
+    default) stays above gp_high (1.073, structure intact) but the
+    retracement from range_high=2.0/range_low=0.5 is only 0.33 -- below
+    _GOLDEN_POCKET_WATCH_MIN_RETRACEMENT (0.5)."""
+    signal = _pending_zone_signal(gp_high=1.073, gp_low=0.821, range_low=0.5, range_high=2.0)
+    _patch_pipeline(monkeypatch, signal=signal)
+    _stub_dex_score(monkeypatch, 90.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_absent_when_price_already_below_zone(monkeypatch, test_settings):
+    """A price that already broke BELOW the zone is a dead/invalidated setup,
+    never a watch candidate -- distinct from "hasn't reached it yet"."""
+    signal = _pending_zone_signal(gp_low=1.6, gp_high=1.7, range_low=1.4, range_high=2.2)
+    _patch_pipeline(monkeypatch, signal=signal)  # _pair() price_usd=1.5, below gp_low=1.6
+    _stub_dex_score(monkeypatch, 90.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_never_in_scalping_mode(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal())
+    fake_compute = _stub_dex_score(monkeypatch, 90.0)
+    called = {"n": 0}
+
+    async def wrapped(*a, **kw):
+        called["n"] += 1
+        return await fake_compute(*a, **kw)
+
+    from aria_core import dex_composite_score as dcs
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", wrapped)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result.get("limit_order_candidate") is None
+    assert called["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_never_off_base(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal())
+    _stub_dex_score(monkeypatch, 90.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "ethereum")
+
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_failure_never_blocks_hold(monkeypatch, test_settings):
+    """Fail-open: a crash while scoring the watch candidate must never
+    surface as an error, just no watch (same HOLD as before this chantier)."""
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal())
+
+    from aria_core import dex_composite_score as dcs
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result.get("limit_order_candidate") is None

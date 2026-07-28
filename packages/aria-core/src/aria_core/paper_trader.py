@@ -3578,6 +3578,38 @@ async def _open_new_entries_for_wallet(
                 contract, sig.get("chain") or "base", sig.get("symbol", ""),
                 reason_code, sig.get("price"),
             )
+            # Item #182 (28/07), golden-pocket liberation: a "no_entry_signal"
+            # HOLD alongside a limit_order_candidate (momentum_entry.py, price
+            # still above a computable golden-pocket zone but the DEX
+            # composite score already confirms high quality) places a
+            # watch-and-wait limit order rather than discarding the candidate
+            # -- same mechanism, same notifier, as the existing "price drifted
+            # at execution" case above, just reached from a different origin
+            # (a HOLD, never an already-decided BUY). ``limit_order_reason``
+            # tags it so ``limit_orders.reanalyze_for_watching`` routes the
+            # pending->watching re-check to the DEX-quality re-verification
+            # (never the plain honeypot-only re-check the price-drift case
+            # uses -- there's no already-confirmed setup here to fall back on).
+            watch = sig.get("limit_order_candidate")
+            if watch:
+                try:
+                    if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
+                        order_sig = {**sig, **watch, "limit_order_reason": "golden_pocket_pending"}
+                        # watch["reason"] is a single string (the DEX-quality
+                        # thesis) -- appended to the reasons LIST (never
+                        # overwriting it) so the thesis persisted at trigger
+                        # time (limit_orders._execute_trigger builds it from
+                        # sig["reasons"]) actually mentions why this order was
+                        # placed, not just the original no_entry_signal text.
+                        order_sig["reasons"] = list(sig.get("reasons") or []) + [watch.get("reason", "")]
+                        order = await limit_orders.create_pending_order(
+                            contract, sig.get("chain") or "base", watch.get("symbol") or sig.get("symbol", ""),
+                            watch["target_price"], order_sig, wallet=wallet,
+                        )
+                        if notifier:
+                            await notifier(limit_orders.format_limit_order_placed_alert(order))
+                except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
+                    logger.info("paper_cycle: could not place golden-pocket watch order for %s (%s)", contract, exc)
             continue
 
         # 07/20 -- surgical guard BEFORE the informative re-entry note below:

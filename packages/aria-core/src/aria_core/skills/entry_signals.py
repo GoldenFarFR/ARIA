@@ -64,6 +64,20 @@ class EntrySignal:
     # actual entry ZONE, only the derived invalidation/target levels.
     gp_low: float | None = None
     gp_high: float | None = None
+    # Item #182 (28/07), golden-pocket liberation: the window's swing-high --
+    # same value ``detect_entry`` uses as ``target`` once a setup IS
+    # confirmed -- exposed even when ``present=False`` (as long as a
+    # Fibonacci zone is geometrically computable), so a caller can build a
+    # hypothetical entry/target/invalidation for a "not there yet" setup
+    # (limit-order watch-and-wait) without re-deriving fibonacci_zone() itself.
+    range_high: float | None = None
+    # Item #182 (28/07), same rationale as range_high -- the window's
+    # swing-low, needed to compute a retracement RATIO (how far price has
+    # already pulled back from the high toward the zone) rather than a bare
+    # above/below check, which can't distinguish "just starting a fresh
+    # uptrend, still far from any pullback" from "already retracing toward
+    # the zone" -- both look identical as a plain "price > gp_high" test.
+    range_low: float | None = None
 
 
 def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | None]:
@@ -262,6 +276,16 @@ def detect_entry(
         return EntrySignal(
             present=False, reasons=reasons or ["setup non réuni"],
             in_golden_pocket=in_gp, rsi_divergence=div, lookback_used=len(window),
+            # Item #182 (28/07): the zone itself is a fact derived from the
+            # real candles (fibonacci_zone), independent of whether RSI has
+            # confirmed a divergence yet -- exposing it here invents nothing,
+            # it only surfaces a value already computed above. None when no
+            # zone is geometrically computable (``fib is None``, flat/too-short
+            # window), never a fabricated level.
+            gp_low=fib["gp_low"] if fib is not None else None,
+            gp_high=fib["gp_high"] if fib is not None else None,
+            range_high=fib["high"] if fib is not None else None,
+            range_low=fib["low"] if fib is not None else None,
         )
 
     # Zone derived from the real levels: invalidation below the deep support,
@@ -290,4 +314,6 @@ def detect_entry(
         lookback_used=len(window),
         gp_low=gp_low,
         gp_high=gp_high,
+        range_high=target,
+        range_low=fib["low"],
     )

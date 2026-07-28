@@ -183,6 +183,21 @@ FUNDAMENTAL_REJECT_THRESHOLD = 2.5
 DEX_SECURITY_WEAK_THRESHOLD = 40.0
 DEX_SECURITY_REJECT_THRESHOLD = 15.0
 
+# Item #182 (28/07), golden-pocket liberation -- operator-confirmed
+# ("l'objectif d'avoir un score plus strict c'est de liberer le golden pocket
+# un peu car il filtre trop"): the golden pocket/RSI gate in momentum_entry.py
+# is NEVER softened as a criterion (still required, unchanged, to buy
+# outright) -- but when the price hasn't reached the zone YET (never when it
+# already broke below it, a dead setup) and this independently-computed DEX
+# composite score already confirms high quality, a limit order watches and
+# waits for the setup to actually form rather than discarding the candidate.
+# Starting value, explicit operator decision (28/07): "pour l'instant met 70
+# pour voir combien de signaux on va entrer et enssuite on ajustera" -- to be
+# revisited once real signal volume is observed (same "first pass, not yet
+# calibrated" doctrine as the two thresholds above, dex_score_log.py records
+# every scan for exactly this future recalibration).
+DEX_QUALITY_WATCH_THRESHOLD = 70.0
+
 
 def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *,

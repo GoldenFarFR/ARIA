@@ -2093,6 +2093,131 @@ def _diagnose_weak_point(rr: float, align_score: int) -> str:
     return f"alignement technique insuffisant ({align_score}/3) malgré un R/R correct ({rr:.1f})"
 
 
+# Item #182 (28/07), operator-raised concern ("il faudrait peut-être ajouter
+# un pillier sur le repli non pour éviter d'avoir un signal sur un range ou
+# une hausse ?"): a plain "price still above gp_high" test can't tell a token
+# that JUST started a fresh uptrend (far from any pullback, would likely
+# never come back down within the order's lifetime) apart from one ALREADY
+# retracing toward the zone (a real candidate). Requiring the price to have
+# already given back at least this fraction of the window's high->low range
+# before watching filters out the former -- 0.5 (the Fibonacci midpoint,
+# already one of entry_signals._FIB_RATIOS) picked as a reasonable "a real
+# pullback is underway" bar, not yet calibrated against real outcomes (same
+# first-pass doctrine as DEX_QUALITY_WATCH_THRESHOLD).
+_GOLDEN_POCKET_WATCH_MIN_RETRACEMENT = 0.5
+
+
+async def _golden_pocket_watch_candidate(
+    contract: str, chain: str, pair, signal, symbol: str, price: float,
+) -> dict | None:
+    """Item #182 (28/07), golden-pocket liberation: builds the payload for a
+    watch-and-wait limit order when the golden pocket/RSI setup hasn't formed
+    YET (price still above the zone, never when it already broke below it --
+    see the caller's own guard) but the DEX composite score independently
+    confirms high quality (``risk_guard.DEX_QUALITY_WATCH_THRESHOLD``).
+
+    Returns ``None`` on any unresolved signal (network failure, score not
+    confirmed, no computable zone, insufficient retracement) -- fail-open,
+    exactly like the BUY-path dex_composite_score block above: an unresolved
+    additive signal never creates a candidate, it simply means "no watch,
+    same as before this chantier existed" -- the plain HOLD/no_entry_signal
+    reject the caller already returns is unaffected.
+
+    Levels are derived from the SAME Fibonacci zone ``detect_entry`` uses once
+    a setup IS confirmed (``signal.gp_low``/``gp_high``/``range_high``, see
+    ``entry_signals.EntrySignal``'s own comment) -- never invented: entry =
+    zone's shallow bound (``gp_high``, the earliest point a real golden pocket
+    could form), invalidation = 2% below the zone's deep bound (identical
+    formula to ``detect_entry``'s own ``invalidation = fib["gp_low"] * (1 -
+    0.02)``), target = the window's swing-high (``range_high``)."""
+    from aria_core import risk_guard
+
+    if signal.range_low is None:
+        return None
+    span = signal.range_high - signal.range_low
+    if span <= 0:
+        return None
+    retracement = (signal.range_high - price) / span
+    if retracement < _GOLDEN_POCKET_WATCH_MIN_RETRACEMENT:
+        return None
+
+    try:
+        from aria_core.dex_composite_score import compute_dex_composite_score
+
+        # security may be None (cache miss/expired) -- passed through as-is,
+        # same as the BUY-path block above: compute_dex_composite_score
+        # itself degrades to an unresolved contract-risk pillar, never a crash.
+        dex_score = await compute_dex_composite_score(
+            contract, chain, pair=pair, security=_get_cached_security(chain, contract),
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
+        logger.info("momentum_entry: golden-pocket watch scoring failed for %s (%s)", contract, exc)
+        return None
+    if dex_score.score is None or dex_score.score < risk_guard.DEX_QUALITY_WATCH_THRESHOLD:
+        return None
+
+    entry = signal.gp_high
+    invalidation = signal.gp_low * (1 - 0.02)
+    target = signal.range_high
+    rr = None
+    if entry > invalidation and target > entry:
+        rr = round((target - entry) / (entry - invalidation), 1)
+
+    return {
+        "target_price": entry,
+        "target": target,
+        "invalidation": invalidation,
+        "rr": rr,
+        "symbol": symbol,
+        "dex_security_score": dex_score.score,
+        "dex_security_breakdown": {
+            "score_contract_risk": dex_score.score_contract_risk,
+            "score_dev_behavior": dex_score.score_dev_behavior,
+            "score_smart_money": dex_score.score_smart_money,
+            "score_liquidity_depth": dex_score.score_liquidity_depth,
+        },
+        "reason": (
+            f"golden pocket pas encore formé (prix au-dessus de la zone "
+            f"{signal.gp_low:.6g}–{signal.gp_high:.6g}) mais score DEX composite "
+            f"confirmé fort ({dex_score.score:.0f}/100 >= "
+            f"{risk_guard.DEX_QUALITY_WATCH_THRESHOLD:.0f}) -- ordre limite posé, "
+            "surveillance d'un repli vers la zone plutôt qu'un rejet"
+        ),
+    }
+
+
+async def refresh_dex_composite_score(contract: str, chain: str):
+    """Item #182 (28/07), golden-pocket liberation: re-fetches a FRESH pair
+    snapshot and recomputes the DEX composite score -- used by
+    ``limit_orders._reanalyze_dex_quality_for_watching`` at the pending ->
+    watching transition, where the order's entire premise (the score, not an
+    already-confirmed golden pocket) must still hold up before committing to
+    watch closely.
+
+    Reuses the ``TokenSecurity`` already cached by a just-performed
+    ``check_honeypot()`` call in the same short TTL window (never a second
+    GoPlus call) -- callers MUST call ``check_honeypot`` first; ``None`` here
+    (no cached security) means it wasn't, or the cache already expired.
+    Returns ``None`` on any unresolved step (no cached security, pair
+    unreachable, no liquid pool) -- fail-closed for this caller's purposes,
+    same doctrine as the rest of the limit-order re-analysis machinery."""
+    security = _get_cached_security(chain, contract)
+    if security is None:
+        return None
+    try:
+        pairs = await fetch_token_pairs(contract, chain=chain)
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, caller cancels on None
+        logger.info("momentum_entry: pair refresh failed for %s (%s)", contract, exc)
+        return None
+    pair = _best_pair(pairs, contract)
+    if pair is None:
+        return None
+
+    from aria_core.dex_composite_score import compute_dex_composite_score
+
+    return await compute_dex_composite_score(contract, chain, pair=pair, security=security)
+
+
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
@@ -2259,10 +2384,38 @@ async def evaluate_momentum_entry(
     reasons.extend(signal.reasons)
     if not signal.present or signal.rr is None or signal.rr <= 0:
         reasons.append("pas de setup golden pocket + divergence RSI avec R/R positif")
-        return {
+        hold = {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons, "hold_reason": "no_entry_signal",
         }
+        # Item #182 (28/07), golden-pocket liberation (operator-confirmed,
+        # "l'objectif d'avoir un score plus strict c'est de liberer le golden
+        # pocket un peu car il filtre trop"): the gate itself is NEVER
+        # softened -- still a hard requirement to buy outright, exactly as
+        # above. Only when price hasn't reached the zone YET (never when it
+        # already broke below it -- ``in_golden_pocket is False`` alone can't
+        # tell the two apart, see the explicit ``> signal.gp_high`` check) and
+        # a real Fibonacci zone is computable, a watch-and-wait limit order is
+        # considered instead of a plain discard. Never in scalping mode
+        # (timeframes too short for a multi-hour watch to mean anything) or
+        # off Base (dex_composite_score is Base-only).
+        if (
+            mode != "scalping" and chain == "base"
+            and signal.in_golden_pocket is False
+            and signal.gp_high is not None and signal.gp_low is not None
+            and signal.range_high is not None
+            and best.price_usd is not None and best.price_usd > signal.gp_high
+        ):
+            try:
+                watch = await _golden_pocket_watch_candidate(
+                    contract, chain, best, signal, best.base_symbol, best.price_usd,
+                )
+            except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
+                logger.info("momentum_entry: golden-pocket watch candidate failed for %s (%s)", contract, exc)
+                watch = None
+            if watch:
+                hold["limit_order_candidate"] = watch
+        return hold
 
     # 26/07 -- deferred from evaluate_hard_gates (defer_holder_concentration=True
     # above): the full-pipeline audit found real x402 money (paid Blockscout

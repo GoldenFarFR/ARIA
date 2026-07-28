@@ -744,6 +744,10 @@ _TRADING_THRESHOLDS = {
         "_MIN_VOLUME_TO_LIQUIDITY_RATIO": 0.01,
         "_MAX_TOP_HOLDERS_CONCENTRATION_PCT": 80.0,
         "_RVOL_CONFIRMATION_MULTIPLIER": 3.0,
+        # Item #182, 28/07 -- golden-pocket liberation: minimum retracement
+        # fraction (window high->low) required before a "not there yet"
+        # setup is even considered for a watch-and-wait limit order.
+        "_GOLDEN_POCKET_WATCH_MIN_RETRACEMENT": 0.5,
     },
     "aria_core.risk_guard": {
         "RISK_CAP_PCT": 0.02,
@@ -757,6 +761,10 @@ _TRADING_THRESHOLDS = {
         # 2-tier doctrine as FUNDAMENTAL_WEAK/REJECT_THRESHOLD above.
         "DEX_SECURITY_WEAK_THRESHOLD": 40.0,
         "DEX_SECURITY_REJECT_THRESHOLD": 15.0,
+        # Item #182, 28/07 -- golden-pocket liberation: minimum confirmed DEX
+        # composite score to place a watch-and-wait limit order when the
+        # golden pocket/RSI gate itself isn't met yet.
+        "DEX_QUALITY_WATCH_THRESHOLD": 70.0,
         "REGIME_FEAR_SIZE_MULTIPLIER": 0.5,
         "PRICE_IMPACT_RATIO": 2.0,
         "SOFT_DRAWDOWN_PCT": 0.10,

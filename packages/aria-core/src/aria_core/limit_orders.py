@@ -330,6 +330,48 @@ async def _reanalyze_bonding_for_watching(order: dict) -> bool:
     return True
 
 
+async def _reanalyze_dex_quality_for_watching(order: dict) -> bool:
+    """Item #182, 28/07: golden-pocket liberation -- an order placed because
+    ``momentum_entry._golden_pocket_watch_candidate`` confirmed a high DEX
+    composite score while the golden pocket zone hadn't formed yet rests
+    ENTIRELY on that score, unlike the standard price-drift case (an
+    already-confirmed golden pocket + RSI setup, where only the honeypot
+    needs a fresh look) -- there is no already-validated technical setup to
+    fall back on here. Re-checks honeypot FIRST (the one hard guardrail this
+    pipeline always enforces, never skipped for any order type), then
+    recomputes the composite score fresh via
+    ``momentum_entry.refresh_dex_composite_score`` -- cancels if either
+    degrades. Fail-closed on any missing/unresolved data (score no longer
+    computable, security/pair no longer resolvable), same doctrine as the
+    rest of this module: a newly-appeared weakness is worse than a missed
+    entry."""
+    from aria_core import risk_guard
+    from aria_core.momentum_entry import check_honeypot, refresh_dex_composite_score
+
+    try:
+        clear, _reason, _code = await check_honeypot(order["contract"], order["chain"])
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, never an unguarded watch
+        logger.info(
+            "limit_orders: golden-pocket re-analysis (honeypot) failed for %s (%s) -- cancelling",
+            order["contract"], exc,
+        )
+        return False
+    if not clear:
+        return False
+
+    try:
+        dex_score = await refresh_dex_composite_score(order["contract"], order["chain"])
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, this order's whole premise is the score
+        logger.info(
+            "limit_orders: golden-pocket re-analysis (composite score) failed for %s (%s) -- cancelling",
+            order["contract"], exc,
+        )
+        return False
+    if dex_score is None or dex_score.score is None:
+        return False
+    return dex_score.score >= risk_guard.DEX_QUALITY_WATCH_THRESHOLD
+
+
 async def reanalyze_for_watching(order: dict) -> bool:
     """Single re-analysis performed ONCE, at the ``pending`` -> ``watching``
     transition (never repeated on every tick while watching -- see module
@@ -342,11 +384,24 @@ async def reanalyze_for_watching(order: dict) -> bool:
     Item #158, 28/07: a bonding-curve order (``order["chain"] ==
     bonding_entry.CHAIN_MARKER``) is routed to ``_reanalyze_bonding_for_
     watching`` instead -- calling GoPlus with this marker as a "chain" would
-    either error out or silently check the wrong thing."""
+    either error out or silently check the wrong thing.
+
+    Item #182, 28/07: an order tagged ``limit_order_reason ==
+    "golden_pocket_pending"`` (``signal_json``) is routed to
+    ``_reanalyze_dex_quality_for_watching`` instead -- its premise is the DEX
+    composite score, not an already-confirmed golden pocket, so honeypot
+    alone isn't enough."""
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
         return await _reanalyze_bonding_for_watching(order)
+
+    # .get(..., "{}") rather than a strict [] index: real rows always carry
+    # signal_json (NOT NULL), but several existing unit tests build a minimal
+    # order dict by hand without it -- never a reason to fail this guardrail.
+    sig = json.loads(order.get("signal_json") or "{}")
+    if sig.get("limit_order_reason") == "golden_pocket_pending":
+        return await _reanalyze_dex_quality_for_watching(order)
 
     from aria_core.momentum_entry import check_honeypot
 
@@ -607,7 +662,11 @@ def format_limit_order_cancelled_alert(order: dict, reason: str) -> str:
     name = order.get("symbol") or (order.get("contract") or "")[:10]
     reason_label = {
         "invalidation_crossed": "le prix a cassé l'invalidation pendant l'attente",
-        "reanalysis_failed": "re-vérification sécurité échouée (honeypot)",
+        # Item #182, 28/07: generalized wording -- this code now also covers a
+        # golden-pocket-pending order whose DEX composite score no longer
+        # confirms high quality (_reanalyze_dex_quality_for_watching), not
+        # just a honeypot re-check (reanalyze_for_watching's standard path).
+        "reanalysis_failed": "re-vérification échouée (sécurité ou qualité DEX)",
     }.get(reason, reason)
     return (
         f"❌ Ordre limite annulé {name} -- {reason_label}. "

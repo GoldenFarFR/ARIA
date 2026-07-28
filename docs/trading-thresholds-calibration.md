@@ -32,6 +32,7 @@
 | `_MIN_VOLUME_TO_LIQUIDITY_RATIO` | momentum_entry.py:445 | 1% | 21/07, coordonné avec `_MIN_LIQUIDITY_USD` (jonction exacte à 500$) | Si `_MIN_LIQUIDITY_USD` change, vérifier que la jonction reste cohérente |
 | `_MAX_TOP_HOLDERS_CONCENTRATION_PCT` | momentum_entry.py:458 | 80% (top 10) | 19/07, revue croisée Gemini, "seuil extrême assumé, pas une calibration fine" | — |
 | `_RVOL_CONFIRMATION_MULTIPLIER` | momentum_entry.py:515 | 3.0x | — | — |
+| `_GOLDEN_POCKET_WATCH_MIN_RETRACEMENT` | momentum_entry.py | 0.5 (Fibonacci midpoint) | **Nouveau 28/07, Item #182** — golden-pocket liberation, opérateur ("il faudrait peut-être ajouter un pillier sur le repli non pour éviter d'avoir un signal sur un range ou une hausse ?") : plancher de repli (fraction du range haut->bas de la fenêtre) exigé avant de considérer un ordre limite watch-and-wait sur un setup "pas encore là" | Une fois des résultats réels accumulés (`dex_score_log.py`) |
 
 ## Risk guard — sizing, coupe-circuits, régimes (`risk_guard.py`)
 
@@ -44,6 +45,7 @@
 | `FUNDAMENTAL_REJECT_THRESHOLD` | risk_guard.py:153 | 2.5/10 | 25/07, incident réel CHECK (-27,3%, -7 374$, score fondamental 2.0 acheté quand même) | Un nouveau cas limite trouvé entre 2.5 et 4.0 |
 | `DEX_SECURITY_WEAK_THRESHOLD` | risk_guard.py | 40/100 | **Nouveau 28/07, Item #179** — même doctrine à 2 paliers que FUNDAMENTAL_WEAK/REJECT_THRESHOLD, pour le nouveau signal additif `dex_composite_score.py` | Une fois des résultats réels accumulés (`dex_score_log.py`) |
 | `DEX_SECURITY_REJECT_THRESHOLD` | risk_guard.py | 15/100 | 28/07, Item #179 | Idem |
+| `DEX_QUALITY_WATCH_THRESHOLD` | risk_guard.py | 70/100 | **Nouveau 28/07, Item #182** — golden-pocket liberation, décision opérateur explicite ("pour l'instant met 70 pour voir combien de signaux on va entrer et enssuite on ajustera") : score composite DEX minimum pour poser un ordre limite watch-and-wait quand le golden pocket/RSI n'est pas encore formé | Une fois le volume de signaux observé (décision opérateur explicite d'ajuster ensuite) |
 | `REGIME_FEAR_SIZE_MULTIPLIER` | risk_guard.py:362 | 0.5x | Regime Switch 20/07 | — |
 | `PRICE_IMPACT_RATIO` | risk_guard.py:420 | 2.0 | Règle AMM standard | — |
 | `SOFT_DRAWDOWN_PCT`/`HARD_DRAWDOWN_PCT` | risk_guard.py:563-564 | -10% / -20% | — | — |
