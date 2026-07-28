@@ -530,6 +530,8 @@ restent privés, dans `aria-ops`** — cette procédure est volontairement gén�
 ## Lecture requise (le cerveau détaillé)
 `docs/etat-systeme-cable.md` (état câblé, faits établis) · `docs/architecture-extensibilite.md` (d'abord) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **Si une migration VPS (changement de machine physique) est en cours ou envisagée : lire `docs/runbook-migration-vps.md` D'ABORD** — checklist dans l'ordre + 6 pièges déjà rencontrés et leur cause précise (20/07), pour ne pas retomber dedans.
 
+**`docs/codex-aria-2026-07-22.md`** — instantané complet et chiffré (13 parties : cerveau, argent réel, smart money, VC, momentum, risque, mémoire, infra, index des variables, stress-test) relu directement dans le code le 22/07. Retrouvé et committé le 28/07 (n'existait pas dans le repo jusque-là — reçu de l'opérateur). Contient sa propre correction en tête (divergences déjà connues au 28/07 : adresse de transfert pilote périmée, `ARIA_BONDING_DISCOVERY_ENABLED`, section bonding largement retravaillée depuis). Un instantané figé, jamais une autorité au-delà de sa date — revérifier contre le code avant de citer un chiffre précis.
+
 ## Index des HANDOFF par composant (à consulter dès qu'un problème "déjà vu" pourrait revenir)
 Format de chaque fichier : `[STATUT] Sujet` puis `Date : AAAA.MM.JJ / Probleme : ...` puis
 `Solution : ... — fichier.py (hash court)`. `[STATUT]` ∈ `DEPLOYE` / `CODE` (testé, pas encore
