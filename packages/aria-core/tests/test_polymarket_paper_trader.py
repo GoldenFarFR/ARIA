@@ -466,3 +466,114 @@ async def test_cycle_paid_skip_does_consume_the_budget(tmp_db, monkeypatch):
     # Budget of 1 -- the second candidate is never even reached.
     assert judged == ["first"]
     assert result["opened"] == []
+
+
+# ── #151 -- judgment log + anti-monoculture rotation ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_save_judgment_log_then_recently_judged_true(tmp_db):
+    market = _market(event_slug="fed-decision")
+    judgment = _judgment(action="SKIP")
+    await ppt.save_judgment_log(market, judgment)
+    assert await ppt.recently_judged("fed-decision") is True
+
+
+@pytest.mark.asyncio
+async def test_recently_judged_false_for_unknown_market(tmp_db):
+    assert await ppt.recently_judged("never-seen") is False
+
+
+@pytest.mark.asyncio
+async def test_recently_judged_false_after_cooldown_expires(tmp_db):
+    import aiosqlite
+    from datetime import datetime, timedelta, timezone
+
+    market = _market(event_slug="fed-decision")
+    await ppt.save_judgment_log(market, _judgment(action="SKIP"))
+    stale = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        await db.execute(
+            "UPDATE polymarket_judgment_log SET judged_at = ? WHERE event_slug = ?", (stale, "fed-decision"),
+        )
+        await db.commit()
+    assert await ppt.recently_judged("fed-decision", cooldown_hours=24) is False
+
+
+@pytest.mark.asyncio
+async def test_save_judgment_log_upserts_latest_verdict_only(tmp_db):
+    """One row per market, not a history -- a market's real probability keeps
+    moving, and answering "why didn't ARIA bet" only ever needs the latest
+    verdict."""
+    import aiosqlite
+
+    market = _market(event_slug="fed-decision")
+    await ppt.save_judgment_log(market, _judgment(action="SKIP", aria_probability=0.5))
+    await ppt.save_judgment_log(market, _judgment(action="SKIP", aria_probability=0.84))
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*), aria_probability FROM polymarket_judgment_log") as cur:
+            count, aria_probability = await cur.fetchone()
+    assert count == 1
+    assert aria_probability == pytest.approx(0.84)
+
+
+@pytest.mark.asyncio
+async def test_cycle_persists_a_judgment_log_row_even_on_skip(tmp_db, monkeypatch):
+    """The real gap this item closes: before #151, only a booked bet left any
+    trace -- a rejected candidate vanished with no way to know it was ever
+    evaluated, short of forcing a manual cycle."""
+    monkeypatch.setenv("ARIA_POLYMARKET_PAPER_ENABLED", "true")
+    monkeypatch.setattr(ppt, "CANDIDATES_PER_CYCLE", 1)
+    _patch_order_book(monkeypatch, best_ask=0.5)
+
+    market = _market(event_slug="fed-decision")
+
+    async def fake_list_liquid_events(self, **kwargs):
+        return [market]
+
+    async def fake_estimate(m):
+        return PolymarketJudgment(
+            market_question=m.question, market_probability=0.75, aria_probability=0.84,
+            vote_spread=0.06, edge=0.09, side="YES", win_probability=0.84,
+            action="SKIP", skip_reason="win_probability_too_low",
+        )
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.list_liquid_events", fake_list_liquid_events)
+    monkeypatch.setattr(ppt, "estimate_market_probability", fake_estimate)
+
+    await ppt.run_polymarket_paper_cycle()
+
+    assert await ppt.recently_judged("fed-decision") is True
+
+
+@pytest.mark.asyncio
+async def test_cycle_skips_recently_judged_market_letting_next_candidate_through(tmp_db, monkeypatch):
+    """The anti-monoculture fix itself: the highest-volume market, already
+    judged last cycle, must not monopolize this one too -- the next candidate
+    (a different topic) gets its turn instead, for free (no estimate_
+    market_probability call, no budget consumed)."""
+    monkeypatch.setenv("ARIA_POLYMARKET_PAPER_ENABLED", "true")
+    monkeypatch.setattr(ppt, "CANDIDATES_PER_CYCLE", 1)
+    _patch_order_book(monkeypatch, best_ask=0.5)
+
+    fed = _market(event_slug="fed-decision", yes_price=0.75)
+    sports = _market(event_slug="world-cup-final", yes_price=0.5)
+    await ppt.save_judgment_log(fed, _judgment(action="SKIP"))
+
+    async def fake_list_liquid_events(self, **kwargs):
+        return [fed, sports]  # fed still sorts first by volume
+
+    judged = []
+
+    async def fake_estimate(m):
+        judged.append(m.event_slug)
+        return _judgment()
+
+    monkeypatch.setattr("aria_core.services.polymarket.PolymarketClient.list_liquid_events", fake_list_liquid_events)
+    monkeypatch.setattr(ppt, "estimate_market_probability", fake_estimate)
+
+    result = await ppt.run_polymarket_paper_cycle()
+
+    # fed-decision was skipped for free (cooldown) -- never reached estimate_market_probability.
+    assert judged == ["world-cup-final"]
+    assert len(result["opened"]) == 1

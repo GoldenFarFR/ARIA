@@ -138,6 +138,36 @@ async def _ensure_tables() -> None:
             )
             """
         )
+        # #151, 28/07 -- real gap found live: no judgment was ever persisted for
+        # a SKIPped candidate (only a booked bet left a trace), so answering
+        # "why didn't ARIA bet" required forcing a manual cycle. One row per
+        # market (INSERT OR REPLACE, latest verdict only -- a full history
+        # isn't needed to answer "why", and a market's real probability keeps
+        # moving) doubles as the anti-monoculture memory below: `list_liquid_
+        # events()` always sorts by volume descending with no progression
+        # state, so the same 2-3 highest-volume markets (a live case: Fed-rate
+        # markets) were re-judged EVERY cycle while the other ~170 liquid
+        # candidates were never reached -- `recently_judged` reads this same
+        # table to skip a market judged within the cooldown window, for free
+        # (no network/LLM cost), letting the cycle progress to markets on
+        # other topics instead of starving on the same handful.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS polymarket_judgment_log (
+                event_slug TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                judged_at TEXT NOT NULL,
+                market_probability REAL,
+                aria_probability REAL,
+                vote_spread REAL,
+                edge REAL,
+                side TEXT,
+                win_probability REAL,
+                action TEXT NOT NULL,
+                skip_reason TEXT
+            )
+            """
+        )
         await db.commit()
 
 
@@ -151,6 +181,64 @@ def polymarket_paper_enabled() -> bool:
     ARIA_PAPER_TRADING_ENABLED (the momentum/VC-thesis $1M test): this is its
     own diagnostic run on a structurally different asset class."""
     return os.environ.get("ARIA_POLYMARKET_PAPER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# #151, 28/07 -- how long a market judged (BET or SKIP, any reason) is exempt
+# from re-evaluation, letting the cycle progress to other topics instead of
+# re-judging the same highest-volume handful every pass. Deliberately a FIXED
+# wall-clock duration, not tied to the heartbeat's own cadence (temporarily
+# accelerated to 60min for the burn-in observation phase, item #133 will
+# eventually restore the nominal 12h) -- at either cadence this still lets the
+# ~176-candidate pool get covered within days rather than never, and a market
+# is never permanently excluded (its real price keeps moving).
+JUDGMENT_COOLDOWN_HOURS = 24
+
+
+async def save_judgment_log(market: PolymarketCandidateMarket, judgment: PolymarketJudgment) -> None:
+    """Persists the LATEST verdict for this market (INSERT OR REPLACE, no
+    history) -- doubles as (1) honest observability for "why didn't ARIA bet"
+    without forcing a manual cycle, and (2) the anti-monoculture memory
+    `recently_judged` reads below. Never raises on a write failure (best-
+    effort, same doctrine as this module's other logging helpers) -- a
+    missed log entry must never abort the cycle."""
+    await _ensure_tables()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO polymarket_judgment_log (
+                    event_slug, question, judged_at, market_probability, aria_probability,
+                    vote_spread, edge, side, win_probability, action, skip_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    market.event_slug, judgment.market_question, _now(), judgment.market_probability,
+                    judgment.aria_probability, judgment.vote_spread, judgment.edge, judgment.side,
+                    judgment.win_probability, judgment.action, judgment.skip_reason,
+                ),
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001 -- logging must never block the cycle
+        logger.warning("polymarket_paper_trader: failed to persist judgment log for %s", market.event_slug)
+
+
+async def recently_judged(event_slug: str, *, cooldown_hours: float = JUDGMENT_COOLDOWN_HOURS) -> bool:
+    """True if this market was judged (any verdict) within the cooldown --
+    free (no network/LLM call) skip, never counted against
+    ``CANDIDATES_PER_CYCLE``, same doctrine as the existing FREE_SKIP_REASONS."""
+    await _ensure_tables()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT judged_at FROM polymarket_judgment_log WHERE event_slug = ?", (event_slug,)
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return False
+    try:
+        judged_at = datetime.fromisoformat(row[0])
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - judged_at).total_seconds() < cooldown_hours * 3600
 
 
 async def starting_capital() -> float:
@@ -505,6 +593,16 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
                     break
                 if await has_open_position(market.event_slug, market.question):
                     continue
+                # #151, 28/07 -- real gap found live: list_liquid_events() always
+                # sorts by volume descending with no progression memory, so the
+                # same 2-3 highest-volume markets (a live case: Fed-rate markets)
+                # got RE-JUDGED every single cycle while ~170 other liquid
+                # candidates were never reached -- ARIA effectively only ever bet
+                # on a handful of topics, never the full Polymarket surface.
+                # Free skip (no network/LLM cost), same doctrine as FREE_SKIP_
+                # REASONS below -- never counted against CANDIDATES_PER_CYCLE.
+                if await recently_judged(market.event_slug):
+                    continue
                 judgment = await estimate_market_probability(market)
                 # 27/07 -- Item #133, real bug found live: counting a FREE skip
                 # (extreme price / missing price -- decided before any research/
@@ -517,6 +615,11 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
                 # paid research/vote budget.
                 if judgment.skip_reason not in FREE_SKIP_REASONS:
                     evaluated += 1
+                # #151 -- persisted for EVERY real judgment (BET or SKIP), not
+                # just booked bets -- the only way to honestly answer "why
+                # didn't ARIA bet" without forcing a manual cycle, and the
+                # memory recently_judged() reads above.
+                await save_judgment_log(market, judgment)
                 if judgment.action != "BET":
                     continue
                 position = await open_bet(market, judgment, alloc_multiplier=risk_state.alloc_multiplier)
