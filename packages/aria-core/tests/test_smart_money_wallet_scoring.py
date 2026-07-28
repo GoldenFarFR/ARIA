@@ -1365,6 +1365,59 @@ class TestScoreWalletsEndToEnd:
         assert any("cap of" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_coverage_target_declares_full_coverage_before_exhaustive_scan(self, tmp_path, monkeypatch):
+        """#149, 27/07 -- operator request: the background queue was chasing
+        EXHAUSTIVE coverage (every token ever found) before switching a
+        wallet to weekly monitoring, up to ~19h+ per active wallet in the
+        worst case. `coverage_target` lets min(total_found, coverage_target)
+        count as "enough" instead -- same cap/selection already trusted for
+        the interactive /walletscore command."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=f"0x{i:040d}", ts=_dt(i))
+                for i in range(25)
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+            max_tokens=10, coverage_target=10,
+        )
+        card = report.wallets[0]
+        assert card.tokens_found == 25
+        assert card.tokens_analyzed == 10
+        # Only 10/25 real tokens scanned, yet coverage_target=10 was reached.
+        assert card.full_coverage is True
+
+    @pytest.mark.asyncio
+    async def test_coverage_target_none_preserves_exhaustive_default(self, tmp_path, monkeypatch):
+        """Backward compatibility: omitting coverage_target keeps the
+        historical behavior unchanged (full_coverage requires the REAL
+        total, never a plafond) -- every existing caller, including
+        /walletscore, is unaffected."""
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=f"0x{i:040d}", ts=_dt(i))
+                for i in range(25)
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient()
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(), max_tokens=10,
+        )
+        card = report.wallets[0]
+        assert card.tokens_found == 25
+        assert card.full_coverage is False
+
+    @pytest.mark.asyncio
     async def test_tokens_found_total_never_regresses_across_scans(self, tmp_path, monkeypatch):
         """16/07 : `get_token_transfers` est plafonné (2000 transferts/10 pages) --
         pour un wallet très actif, la fenêtre des N derniers transferts capturée à

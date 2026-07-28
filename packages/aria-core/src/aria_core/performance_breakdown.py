@@ -24,6 +24,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Callable
 
+from aria_core.financial_stats import sortino_ratio
 from aria_core.paper_trader import get_archived_closed_positions, get_closed_positions
 
 
@@ -79,6 +80,16 @@ def compute_metrics(trades: list[dict]) -> dict:
         traded" figure, still useful to compare segments' volatility, but not
         the actual capital drawdown experienced (other segments' trades
         happened interleaved in real time).
+      - ``sortino``: same ratio/formula/threshold already trusted for
+        third-party wallet-scoring (#150, 27/07, operator request -- "je veux
+        que aria est aussi sortino... sur le wallet test... et un score
+        sortino en temps réel"), computed here on ``pnl_pct`` (persisted per
+        closed position) instead of ``return_pct`` -- SSOT in
+        ``financial_stats.sortino_ratio``, never a second implementation.
+        Recomputed fresh from the full track record on every call (no cache,
+        no stale value) -- ``None`` below 5 closed trades with ``pnl_pct``
+        data, same doctrine as the rest of this function (never an
+        unreliable number presented as reliable).
 
     Missing/unparsable ``pnl_usd``/``closed_at`` on a trade excludes it from
     the relevant calculation rather than crashing or inventing a value."""
@@ -87,6 +98,7 @@ def compute_metrics(trades: list[dict]) -> dict:
         return {
             "n_trades": 0, "winrate": 0.0, "pnl_total": 0.0, "profit_factor": None,
             "avg_win": None, "avg_loss": None, "expectancy": None, "max_drawdown_usd": 0.0,
+            "sortino": None,
         }
 
     pnls = [t.get("pnl_usd") for t in trades if t.get("pnl_usd") is not None]
@@ -123,6 +135,9 @@ def compute_metrics(trades: list[dict]) -> dict:
         peak = max(peak, cumulative)
         max_dd = max(max_dd, peak - cumulative)
 
+    pct_returns = [t.get("pnl_pct") for t in trades if t.get("pnl_pct") is not None]
+    sortino = sortino_ratio(pct_returns)
+
     return {
         "n_trades": n,
         "winrate": winrate,
@@ -132,6 +147,7 @@ def compute_metrics(trades: list[dict]) -> dict:
         "avg_loss": avg_loss,
         "expectancy": expectancy,
         "max_drawdown_usd": max_dd,
+        "sortino": sortino,
     }
 
 
@@ -315,6 +331,8 @@ def format_breakdown_report(trades: list[dict]) -> str:
         f"PnL total : {_fmt_money(g['pnl_total'])} · Profit factor : {_fmt_ratio(g['profit_factor'])}",
         f"Gain moyen : {_fmt_money(g['avg_win'])} · Perte moyenne : {_fmt_money(g['avg_loss'])}",
         f"Espérance/trade : {_fmt_money(g['expectancy'])} · Drawdown max : {_fmt_money(g['max_drawdown_usd'])}",
+        f"Sortino : {_fmt_ratio(g['sortino'])}"
+        + (" (indisponible sous 5 trades clôturés)" if g["sortino"] is None and g["n_trades"] < 5 else ""),
     ]
 
     for label, key_fn in ALL_BREAKDOWNS.items():
@@ -329,9 +347,17 @@ def format_breakdown_report(trades: list[dict]) -> str:
             reverse=True,
         )
         for group_key, m in ranked:
-            lines.append(
+            line = (
                 f"  {group_key} : {m['n_trades']} trades · winrate {_fmt_pct(m['winrate'])}"
                 f" · PnL {_fmt_money(m['pnl_total'])} · espérance {_fmt_money(m['expectancy'])}"
             )
+            if label == "Poche":
+                # #150, 27/07 -- operator request: "je veux que le paper test
+                # ait son propre sortino par wallet (scalping, swing et vc)...
+                # quand les 3 auront un bon sortino alors je pourrai dire
+                # qu'il trade bien" -- the per-pocket Sortino is the explicit
+                # bar, not just the portfolio-wide one in the summary above.
+                line += f" · Sortino {_fmt_ratio(m['sortino'])}"
+            lines.append(line)
 
     return "\n".join(lines)

@@ -23,7 +23,45 @@ def test_compute_metrics_empty_input():
     assert m == {
         "n_trades": 0, "winrate": 0.0, "pnl_total": 0.0, "profit_factor": None,
         "avg_win": None, "avg_loss": None, "expectancy": None, "max_drawdown_usd": 0.0,
+        "sortino": None,
     }
+
+
+# ── sortino (#150, 27/07 -- operator request: same ratio ARIA's paper-trading
+# track record already trusts for third-party wallet-scoring) ──────────────
+
+
+def test_compute_metrics_sortino_unavailable_below_five_trades():
+    trades = [{"pnl_usd": 10.0, "pnl_pct": 5.0} for _ in range(4)]
+    m = pb.compute_metrics(trades)
+    assert m["sortino"] is None
+
+
+def test_compute_metrics_sortino_unavailable_with_no_losses():
+    trades = [{"pnl_usd": 10.0, "pnl_pct": p} for p in (5.0, 10.0, 3.0, 8.0, 2.0)]
+    m = pb.compute_metrics(trades)
+    assert m["sortino"] is None
+
+
+def test_compute_metrics_sortino_computed_on_mixed_returns():
+    import math
+
+    pcts = [20.0, -10.0, 30.0, -20.0, 10.0]
+    trades = [{"pnl_usd": 1.0, "pnl_pct": p} for p in pcts]
+    m = pb.compute_metrics(trades)
+    assert m["sortino"] is not None
+    expected = 6.0 / math.sqrt((100.0 + 400.0) / 2)
+    assert m["sortino"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_compute_metrics_sortino_ignores_trades_missing_pnl_pct():
+    """Old trades pre-dating the pnl_pct column must not silently crash or
+    invent a value -- excluded from the Sortino sample, same doctrine as
+    pnl_usd/closed_at elsewhere in this function."""
+    trades = [{"pnl_usd": 1.0, "pnl_pct": p} for p in (20.0, -10.0, 30.0, -20.0)]
+    trades.append({"pnl_usd": 1.0})  # no pnl_pct at all
+    m = pb.compute_metrics(trades)
+    assert m["sortino"] is None  # only 4 usable returns, below the 5-trade floor
 
 
 def test_compute_metrics_simple_mix():
@@ -233,6 +271,27 @@ def test_key_day_of_week():
 def test_format_breakdown_report_empty():
     text = pb.format_breakdown_report([])
     assert "Aucun trade" in text
+
+
+def test_format_breakdown_report_shows_sortino_per_pocket():
+    """#150, 27/07 -- operator request: "je veux que le paper test ait son
+    propre sortino par wallet (scalping, swing et vc)... quand les 3 auront
+    un bon sortino alors je pourrai dire qu'il trade bien" -- the "Poche"
+    dimension's per-group line must show its own Sortino, not just the
+    portfolio-wide one in the global summary."""
+    pcts = [20.0, -10.0, 30.0, -20.0, 10.0]
+    trades = [
+        {"pnl_usd": 1.0, "pnl_pct": p, "closed_at": f"2026-07-{20 + i}T10:00:00", "wallet": "scalping"}
+        for i, p in enumerate(pcts)
+    ]
+    trades += [{"pnl_usd": 5.0, "closed_at": "2026-07-20T10:00:00", "wallet": "vc"}]
+    text = pb.format_breakdown_report(trades)
+    assert "— Poche —" in text
+    assert "scalping" in text
+    scalping_line = next(line for line in text.splitlines() if "scalping" in line)
+    assert "Sortino" in scalping_line
+    vc_line = next(line for line in text.splitlines() if "vc" in line)
+    assert "Sortino ?" in vc_line  # below the 5-trade floor, honestly unavailable
 
 
 def test_format_breakdown_report_includes_global_and_dimensions():

@@ -1166,16 +1166,16 @@ def _sortino_ratio(returns: list[float]) -> float | None:
     `WEIGHTS.min_closed_trades_for_sortino`, judged too noisy for an
     individual wallet (cf. research doc #157) -- unavailable, never an
     unreliable number presented as reliable. No loss observed -> ratio
-    undefined (not an artificial infinity)."""
-    if len(returns) < WEIGHTS.min_closed_trades_for_sortino:
-        return None
-    downside = [r for r in returns if r < 0]
-    if not downside:
-        return None
-    downside_deviation = math.sqrt(fmean([r * r for r in downside]))
-    if downside_deviation == 0:
-        return None
-    return fmean(returns) / downside_deviation
+    undefined (not an artificial infinity).
+
+    #150, 27/07 -- the actual formula now lives in `financial_stats.
+    sortino_ratio` (SSOT shared with ARIA's own paper-trading track record,
+    `performance_breakdown.py`) -- this thin wrapper only supplies the
+    wallet-scoring-specific threshold and preserves the existing call sites/
+    tests in this module unchanged."""
+    from aria_core.financial_stats import sortino_ratio
+
+    return sortino_ratio(returns, min_trades=WEIGHTS.min_closed_trades_for_sortino)
 
 
 def _max_drawdown_pct(closed_trades: list[ClosedTrade]) -> float | None:
@@ -2428,10 +2428,17 @@ def format_wallet_score_card_lines(card: WalletScoreCard) -> list[str]:
     # "118/806" in the thesis text just below), with no way to know which to trust.
     # Always displayed (not only when capped) so the cumulative count is visible
     # from the very first pass.
-    lines.append(
-        f"  Couverture cumulée : {card.tokens_scanned_cumulative}/{card.tokens_found}"
-        + (" (complète)" if card.full_coverage else "")
-    )
+    # #149, 27/07 -- coverage_target lets full_coverage become true before
+    # every token is scanned (background queue: 50 most representative trades
+    # judged "enough"). Never label it "complète" in that case -- distinct,
+    # honest wording from the real 100% case.
+    if card.full_coverage and card.tokens_scanned_cumulative < card.tokens_found:
+        coverage_suffix = " (jugée suffisante -- pas la totalité de l'historique)"
+    elif card.full_coverage:
+        coverage_suffix = " (complète)"
+    else:
+        coverage_suffix = ""
+    lines.append(f"  Couverture cumulée : {card.tokens_scanned_cumulative}/{card.tokens_found}{coverage_suffix}")
     if card.unpriced_legs or card.pool_lookup_errors:
         lines.append(
             f"  Diagnostic prix : {card.unpriced_legs} jambe(s) sans prix, "
@@ -2531,11 +2538,23 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         + (f", plafond de {WEIGHTS.max_tokens_analyzed} atteint -- {card.tokens_scanned_cumulative}/{card.tokens_found} couverts au total" if card.tokens_skipped_capped else "")
         + ")"
     )
-    lines.append(
-        "Couverture complète du portefeuille atteinte." if card.full_coverage
-        else f"Scan progressif en cours ({card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts à ce jour) -- "
-             "relancer /walletscore plus tard pour poursuivre et affiner la note."
-    )
+    if card.full_coverage and card.tokens_scanned_cumulative < card.tokens_found:
+        # #149, 27/07 -- coverage_target lets full_coverage become true before
+        # every token is scanned (background queue: 50 most representative
+        # trades judged "enough" rather than chasing an exhaustive history up
+        # to 1067 tokens). Never say "complete" in that case -- honest wording
+        # distinct from the real 100% case just below.
+        lines.append(
+            f"Couverture jugée suffisante ({card.tokens_scanned_cumulative} trades les plus représentatifs "
+            f"analysés, round-trip clos + récents en priorité) -- {card.tokens_found - card.tokens_scanned_cumulative} "
+            "restants dans l'historique jamais analysés en profondeur."
+        )
+    else:
+        lines.append(
+            "Couverture complète du portefeuille atteinte." if card.full_coverage
+            else f"Scan progressif en cours ({card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts à ce jour) -- "
+                 "relancer /walletscore plus tard pour poursuivre et affiner la note."
+        )
     if card.transfer_history_truncated:
         lines.append(
             "ATTENTION : historique de transferts tronqué par le plafond de pagination -- ce wallet est très "
@@ -2778,6 +2797,7 @@ async def score_wallets(
     goplus=None,
     max_tokens: int | None = None,
     skip_thesis: bool = False,
+    coverage_target: int | None = None,
 ) -> WalletScoringReport:
     """Wallet-centric entry point (#157): 1 to 3 addresses -> hard
     disqualifiers, composite score, suspect-positive flag, LLM thesis.
@@ -2821,7 +2841,19 @@ async def score_wallets(
     ``report.synthesis`` usage, only reached on the FINAL report). Default
     ``False`` -- unchanged behavior for every existing caller (``/walletscore``
     manual command still gets its thesis immediately, even on partial
-    coverage, as before)."""
+    coverage, as before).
+
+    ``coverage_target`` (27/07, operator request -- background queue was
+    taking up to ~19h+ per active wallet chasing EXHAUSTIVE coverage, up to
+    1067 tokens, before switching to weekly monitoring): when set, treats
+    ``min(total_found, coverage_target)`` as "enough" for ``full_coverage``
+    instead of always requiring every token ever found. Default ``None``
+    preserves the historical behavior (always the real total) for every
+    existing caller, including ``/walletscore``. The selection itself
+    (``_select_tokens_for_deep_analysis``) already prioritizes closed
+    round-trips by recency, so the first ``coverage_target`` tokens covered
+    are already the most representative ones -- this only changes WHEN
+    "enough data" is declared, never WHICH tokens are analyzed first."""
     if not addresses:
         return WalletScoringReport(available=False, error="aucune adresse fournie")
     if len(addresses) > 3:
@@ -3012,7 +3044,8 @@ async def score_wallets(
         # scar in the archives (a leg never re-priced, never retried).
         new_scanned = checkpoint.scanned_tokens | (set(selected_tokens) - multi.transient_pricing_error_tokens)
         full_coverage_at = checkpoint.full_coverage_at
-        if full_coverage_at is None and len(new_scanned) >= total_found:
+        coverage_goal = min(total_found, coverage_target) if coverage_target is not None else total_found
+        if full_coverage_at is None and len(new_scanned) >= coverage_goal:
             full_coverage_at = now
 
         # Permanent tracking (15/07, #157 follow-up 2): max of the

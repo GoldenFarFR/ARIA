@@ -47,15 +47,48 @@ DB_PATH = str(aria_db_path())
 # coupling: the two constants live in different modules).
 PROGRESS_NOTIFY_STEP = 50
 
-# Wallets processed per heartbeat pass (sobriety -- avoid saturating external
-# APIs in a single cycle if several wallets are queued). Lowered from 2 to 1
-# on 15/07 (operator observation): ARIA's heartbeat processes its tasks in
-# SEQUENCE, never in parallel -- a cycle with 2 wallets x 50 tokens x ~2.1s
-# GeckoTerminal throttle can block ALL other enabled automations for up to
-# ~50 minutes. At 1 wallet, the worst case drops to ~25 minutes. Operator
-# explicitly not in a hurry -- prefers the safety margin on the rest of the
-# heartbeat over the coverage speed of this particular cycle.
-MAX_WALLETS_PER_CYCLE = 1
+# 26/07 -- raised from 1, explicit operator pushback ("il faut maximum 4h par
+# wallet") after a real state check found only 2/298 queued wallets had ever
+# reached full_coverage, each after ~10 DAYS of exclusively monopolizing the
+# cycle in turn -- the other 296 received ZERO passes the entire time. Root
+# cause: at MAX_WALLETS_PER_CYCLE=1, whichever wallet is selected keeps
+# looping sub-batches (up to CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS) until it
+# finishes or the deadline hits, then immediately becomes eligible again
+# next cycle -- a wallet with hundreds of tokens (measured average: 577,
+# max 1067) can occupy MANY consecutive cycles before ever yielding the
+# queue to anyone else.
+#
+# The real 15/07 concern this constant was originally calibrated against
+# (2 wallets run SEQUENTIALLY could block the rest of the heartbeat for
+# ~50 minutes) no longer applies now that `run_wallet_scan_queue_cycle`
+# processes its selected wallets CONCURRENTLY (asyncio.gather, see below) --
+# wall-clock time stays bounded by CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
+# regardless of how many wallets run at once (they share it, they don't
+# each add to it), and GeckoTerminal's own throttle is a single process-wide
+# shared lock (wait_for_shared_rate_limit) that already serializes the real
+# network calls no matter how many coroutines are waiting on it -- so
+# concurrency here changes WHO gets a share of the existing throttled
+# bandwidth, never the total bandwidth itself.
+#
+# Value chosen to make the operator's "4h max" bound on how long a wallet
+# can go without a SINGLE pass (not full coverage -- see the module-level
+# physical-limit note further down) a real guarantee at the current queue
+# size: 298 queued wallets / (240min / 20min per cycle) ~= 25. Deliberately
+# a FIXED constant, not derived from the live queue size at runtime -- a
+# growing queue degrades gracefully (each wallet's rotation slows down
+# proportionally) rather than silently raising concurrency further with no
+# upper bound.
+#
+# Physical limit, never solved by concurrency alone (documented honestly
+# rather than promised away): reaching full_coverage for EVERY queued
+# wallet is bounded by GeckoTerminal's real shared throughput
+# (_AUTHENTICATED_MIN_INTERVAL=2.857s/call) -- covering all ~577 tokens/
+# wallet average across 298 wallets takes a real minimum of ~136h (~5.7
+# days) of network time, REGARDLESS of how the work is scheduled
+# (sequential or concurrent) -- concurrency fixes the INEQUITY (one wallet
+# monopolizing 100% of the throttled bandwidth while 296 others get 0%),
+# not the total physical throughput ceiling.
+MAX_WALLETS_PER_CYCLE = 25
 
 # 07/23 -- real diagnosed cause of a wallet staying permanently stuck at the
 # front of the queue: heartbeat.py bounds every task at 300s
@@ -400,9 +433,199 @@ async def _reject_wallet_permanently_best_effort(wallet: str, card) -> None:
         logger.warning("wallet_scan_queue: permanent rejection failed for %s", wallet)
 
 
+async def _process_one_queued_wallet(queued: "QueuedWallet", now: datetime, notifier) -> dict:
+    """One wallet's full advancement logic for this cycle -- extracted from
+    `run_wallet_scan_queue_cycle` (26/07) so it can be run CONCURRENTLY
+    across every wallet selected this cycle (`asyncio.gather`) instead of
+    monopolizing the queue sequentially. Returns a small summary dict
+    (`processed`/`completed_first_time`/`dropped_inactive`/`rejected`,
+    each `str | None`) that the caller aggregates -- never raises: any
+    unexpected failure on ONE wallet must never abort the others running
+    concurrently (see the caller's `return_exceptions=True`)."""
+    from aria_core.services.geckoterminal import geckoterminal_client
+    from aria_core.services.goplus import goplus_client
+    from aria_core.services.smart_money import format_wallet_scoring_report, score_wallets
+    from aria_core.services.wallet_scoring_weights import WEIGHTS
+
+    result: dict = {"processed": None, "completed_first_time": None, "dropped_inactive": None, "rejected": None}
+
+    # #149, 27/07 -- operator request: the background queue used to chase
+    # EXHAUSTIVE coverage (up to 1067 tokens, ~19h+ per active wallet in the
+    # worst case) before switching a wallet to weekly monitoring. Reuses the
+    # SAME cap already trusted for the interactive /walletscore command
+    # (WEIGHTS.max_tokens_analyzed, 50) as the "enough data" target instead --
+    # the selection itself (round-trip + recency, see
+    # _select_tokens_for_deep_analysis) already prioritizes the most
+    # representative trades first, so this only changes WHEN "enough" is
+    # declared, never WHICH tokens are analyzed.
+    coverage_target = WEIGHTS.max_tokens_analyzed
+
+    if queued.is_monitoring:
+        report = await score_wallets(
+            [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+            max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET, coverage_target=coverage_target,
+        )
+    else:
+        # Catch-up wallet (07/24, operator request) -- keep advancing THIS
+        # SAME wallet across several small sub-batches within its own
+        # deadline, instead of just one, until it's fully covered or the
+        # soft deadline is reached (see CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
+        # for why this stays safe even now that several wallets share this
+        # same deadline window concurrently -- wall-clock time is bounded by
+        # the deadline regardless of how many coroutines are mid-loop at
+        # once, only the REAL network throughput each gets is reduced by
+        # concurrency, via GeckoTerminal's own shared throttle).
+        #
+        # 27/07 -- real LLM cost bug found via an x.ai usage audit (operator
+        # budget request, $0.30/day total LLM spend): every sub-batch
+        # iteration was regenerating a full narrative thesis (score_wallets
+        # -> smart_money._generate_thesis) on a still-PARTIAL score --
+        # discarded a few seconds later by the next iteration, since only
+        # the numeric progress counter is shown before full_coverage (see
+        # the milestone notification below). `skip_thesis=True` on every
+        # intermediate call; a single final call WITHOUT it right after the
+        # loop exits, but ONLY when it exited on real full coverage (never
+        # on a stall/deadline timeout, which just means the next cycle is
+        # still catching up and a thesis now would be discarded again) --
+        # same net LLM calls as a single-shot scan, instead of one per
+        # sub-batch. This preservation was lost once already during the
+        # 26/07 concurrency refactor (extraction predated this fix and was
+        # never rebased onto it) -- re-verify this stays intact if this
+        # function is touched again.
+        deadline = _monotonic() + CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
+        while True:
+            report = await score_wallets(
+                [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+                max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET, skip_thesis=True,
+                coverage_target=coverage_target,
+            )
+            if not report.available or not report.wallets:
+                break
+            card = report.wallets[0]
+            if card.full_coverage or card.tokens_analyzed == 0 or _monotonic() >= deadline:
+                break
+        if report.available and report.wallets and report.wallets[0].full_coverage:
+            report = await score_wallets(
+                [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
+                max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET, coverage_target=coverage_target,
+            )
+
+    if not report.available or not report.wallets:
+        await mark_attempt(queued.wallet, next_check_at=now)
+        return result
+
+    card = report.wallets[0]
+    result["processed"] = queued.wallet
+
+    if not card.full_coverage:
+        new_milestone = (card.tokens_scanned_cumulative // PROGRESS_NOTIFY_STEP) * PROGRESS_NOTIFY_STEP
+        if new_milestone > queued.last_notified_milestone:
+            await mark_attempt(queued.wallet, next_check_at=now, last_notified_milestone=new_milestone)
+            if notifier is not None:
+                counts = await queue_counts()
+                await notifier(
+                    f"📊 Scan en arrière-plan -- {queued.wallet}\n"
+                    f"{card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts.\n"
+                    f"File d'attente : {counts['catching_up']} en rattrapage, "
+                    f"{counts['monitoring']} en surveillance."
+                )
+        else:
+            await mark_attempt(queued.wallet, next_check_at=now)
+        return result
+
+    if not queued.is_monitoring:
+        if _is_confirmed_underperformer(card):
+            # Measured percentile confirmed bad right from the 1st full
+            # coverage -- removed ENTIRELY (never permanent monitoring)
+            # and rejected forever, not just evicted from the
+            # leaderboard (21/07, explicit operator request).
+            await remove_from_queue(queued.wallet)
+            await _reject_wallet_permanently_best_effort(queued.wallet, card)
+            result["rejected"] = queued.wallet
+            if notifier is not None:
+                await notifier(
+                    f"🚫 {queued.wallet} confirmé sous-performant (percentile "
+                    f"{card.composite_percentile:.0f}e) -- retiré définitivement, "
+                    "ne sera plus jamais re-scanné ni redécouvert."
+                )
+            return result
+
+        # First time this wallet reaches 100% -- full report, switches
+        # to permanent monitoring (never removed here again).
+        result["completed_first_time"] = queued.wallet
+        await mark_attempt(
+            queued.wallet,
+            next_check_at=now + timedelta(days=MONITORING_INTERVAL_DAYS),
+            monitoring_since=now,
+        )
+        await _update_leaderboard_best_effort(queued.wallet, card)
+        if notifier is not None:
+            # #149, 27/07 -- coverage_target (50) can reach full_coverage before
+            # the real total is scanned -- never claim "complète" in that case.
+            coverage_label = (
+                "couverture jugée suffisante"
+                if card.tokens_scanned_cumulative < card.tokens_found
+                else "couverture complète"
+            )
+            await notifier(
+                f"✅ Scan en arrière-plan terminé ({coverage_label}) -- "
+                f"surveillance hebdomadaire activée\n{format_wallet_scoring_report(report)}"
+            )
+        return result
+
+    # Already in permanent monitoring -- check inactivity before
+    # rescheduling (never before, never based on time spent in queue).
+    if (
+        card.last_activity_at is not None
+        and (now - card.last_activity_at) > timedelta(days=INACTIVITY_CUTOFF_DAYS)
+    ):
+        await remove_from_queue(queued.wallet)
+        result["dropped_inactive"] = queued.wallet
+        await _remove_from_leaderboard_best_effort(
+            queued.wallet, f"inactive wallet (>{INACTIVITY_CUTOFF_DAYS}d without on-chain activity)",
+        )
+        if notifier is not None:
+            await notifier(
+                f"💤 Surveillance arrêtée -- {queued.wallet} inactif depuis plus de "
+                f"{INACTIVITY_CUTOFF_DAYS} jours (aucune activité on-chain détectée)."
+            )
+        return result
+
+    if _is_confirmed_underperformer(card):
+        # A wallet already in monitoring can degrade over time -- same
+        # handling as the 1st full coverage: removed ENTIRELY and
+        # rejected forever, not just evicted from the leaderboard
+        # (21/07, explicit operator request).
+        await remove_from_queue(queued.wallet)
+        await _reject_wallet_permanently_best_effort(queued.wallet, card)
+        result["rejected"] = queued.wallet
+        if notifier is not None:
+            await notifier(
+                f"🚫 {queued.wallet} confirmé sous-performant (percentile "
+                f"{card.composite_percentile:.0f}e) -- retiré définitivement de la "
+                "surveillance, ne sera plus jamais re-scanné ni redécouvert."
+            )
+        return result
+
+    next_check = now + timedelta(days=MONITORING_INTERVAL_DAYS)
+    await mark_attempt(queued.wallet, next_check_at=next_check)
+    await _update_leaderboard_best_effort(queued.wallet, card)
+    if card.tokens_analyzed > 0 and notifier is not None:
+        # New activity spotted during monitoring -- never a silent
+        # weekly noise if nothing new was found.
+        await notifier(
+            f"🔄 Nouvelle activité détectée en surveillance -- {queued.wallet} "
+            f"({card.tokens_analyzed} nouveau(x) token(s) couvert(s)). "
+            f"Prochaine vérification dans {MONITORING_INTERVAL_DAYS}j."
+        )
+    return result
+
+
 async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
-    """Advances each DUE wallet by one pass (up to
-    `MAX_WALLETS_PER_CYCLE`):
+    """Advances every DUE wallet by one pass (up to `MAX_WALLETS_PER_CYCLE`),
+    CONCURRENTLY (26/07 -- see the module comment above `MAX_WALLETS_PER_
+    CYCLE` for why sequential processing let a single wallet monopolize the
+    queue for days while every other queued wallet got zero passes):
 
     - Still catching up (`full_coverage=False`): notifies progress every
       `PROGRESS_NOTIFY_STEP` covered tokens, always due next cycle
@@ -421,9 +644,9 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     effect anyway if the wallet evaluator itself
     (`ARIA_WALLET_SCORING_ENABLED`) is disabled (fail-closed, not a
     duplicate gate)."""
-    from aria_core.services.geckoterminal import geckoterminal_client
-    from aria_core.services.goplus import goplus_client
-    from aria_core.services.smart_money import format_wallet_scoring_report, score_wallets, wallet_scoring_enabled
+    import asyncio
+
+    from aria_core.services.smart_money import wallet_scoring_enabled
 
     if not wallet_scan_queue_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
@@ -439,159 +662,31 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     if not pending:
         return {"outcome": "empty_queue"}
 
+    now = datetime.now(timezone.utc)
+    results = await asyncio.gather(
+        *(_process_one_queued_wallet(queued, now, notifier) for queued in pending),
+        return_exceptions=True,
+    )
+
     processed: list[str] = []
     completed_first_time: list[str] = []
     dropped_inactive: list[str] = []
     rejected_wallets: list[str] = []
-    now = datetime.now(timezone.utc)
-
-    for queued in pending:
-        if queued.is_monitoring:
-            report = await score_wallets(
-                [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
-                max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
-            )
-        else:
-            # Catch-up wallet (07/24, operator request) -- keep advancing
-            # THIS SAME wallet across several small sub-batches within the
-            # one heartbeat tick, instead of just one, until it's fully
-            # covered or the soft deadline is reached (see
-            # CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS above for why this is safe).
-            #
-            # 27/07 -- real LLM cost bug found via an x.ai usage audit
-            # (operator budget request, $0.30/day total LLM spend): every
-            # sub-batch iteration was regenerating a full narrative thesis
-            # (score_wallets -> smart_money._generate_thesis) on a still-
-            # PARTIAL score -- discarded a few seconds later by the next
-            # iteration, since only the numeric progress counter is shown
-            # before full_coverage (see the milestone notification below).
-            # `skip_thesis=True` on every intermediate call; a single final
-            # call WITH the thesis right after the loop exits on real full
-            # coverage (never on a timeout/stall exit, see below) -- same
-            # net LLM calls as a single-shot scan, instead of one per
-            # sub-batch (observed: several calls within ~4 minutes straight).
-            deadline = _monotonic() + CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
-            while True:
-                report = await score_wallets(
-                    [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
-                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET, skip_thesis=True,
-                )
-                if not report.available or not report.wallets:
-                    break
-                card = report.wallets[0]
-                if card.full_coverage or card.tokens_analyzed == 0 or _monotonic() >= deadline:
-                    break
-            # Only worth a final thesis-bearing call when the loop actually
-            # reached full coverage this pass -- a stall (tokens_analyzed==0)
-            # or a deadline timeout means the NEXT cycle will still be
-            # catching up, so the thesis would just be discarded again.
-            if report.available and report.wallets and report.wallets[0].full_coverage:
-                report = await score_wallets(
-                    [queued.wallet], gecko=geckoterminal_client, goplus=goplus_client,
-                    max_tokens=BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET,
-                )
-
-        if not report.available or not report.wallets:
-            await mark_attempt(queued.wallet, next_check_at=now)
+    for queued, res in zip(pending, results):
+        if isinstance(res, BaseException):
+            # One wallet's own failure must never break the others running
+            # concurrently -- this cycle simply retries it next time (its
+            # next_check_at was never advanced past `now`).
+            logger.warning("wallet_scan_queue: processing %s failed (%s)", queued.wallet, res)
             continue
-
-        card = report.wallets[0]
-        processed.append(queued.wallet)
-
-        if not card.full_coverage:
-            new_milestone = (card.tokens_scanned_cumulative // PROGRESS_NOTIFY_STEP) * PROGRESS_NOTIFY_STEP
-            if new_milestone > queued.last_notified_milestone:
-                await mark_attempt(queued.wallet, next_check_at=now, last_notified_milestone=new_milestone)
-                if notifier is not None:
-                    counts = await queue_counts()
-                    await notifier(
-                        f"📊 Scan en arrière-plan -- {queued.wallet}\n"
-                        f"{card.tokens_scanned_cumulative}/{card.tokens_found} tokens couverts.\n"
-                        f"File d'attente : {counts['catching_up']} en rattrapage, "
-                        f"{counts['monitoring']} en surveillance."
-                    )
-            else:
-                await mark_attempt(queued.wallet, next_check_at=now)
-            continue
-
-        if not queued.is_monitoring:
-            if _is_confirmed_underperformer(card):
-                # Measured percentile confirmed bad right from the 1st full
-                # coverage -- removed ENTIRELY (never permanent monitoring)
-                # and rejected forever, not just evicted from the
-                # leaderboard (21/07, explicit operator request).
-                await remove_from_queue(queued.wallet)
-                await _reject_wallet_permanently_best_effort(queued.wallet, card)
-                rejected_wallets.append(queued.wallet)
-                if notifier is not None:
-                    await notifier(
-                        f"🚫 {queued.wallet} confirmé sous-performant (percentile "
-                        f"{card.composite_percentile:.0f}e) -- retiré définitivement, "
-                        "ne sera plus jamais re-scanné ni redécouvert."
-                    )
-                continue
-
-            # First time this wallet reaches 100% -- full report, switches
-            # to permanent monitoring (never removed here again).
-            completed_first_time.append(queued.wallet)
-            await mark_attempt(
-                queued.wallet,
-                next_check_at=now + timedelta(days=MONITORING_INTERVAL_DAYS),
-                monitoring_since=now,
-            )
-            await _update_leaderboard_best_effort(queued.wallet, card)
-            if notifier is not None:
-                await notifier(
-                    "✅ Scan en arrière-plan terminé (couverture complète) -- "
-                    f"surveillance hebdomadaire activée\n{format_wallet_scoring_report(report)}"
-                )
-            continue
-
-        # Already in permanent monitoring -- check inactivity before
-        # rescheduling (never before, never based on time spent in queue).
-        if (
-            card.last_activity_at is not None
-            and (now - card.last_activity_at) > timedelta(days=INACTIVITY_CUTOFF_DAYS)
-        ):
-            await remove_from_queue(queued.wallet)
-            dropped_inactive.append(queued.wallet)
-            await _remove_from_leaderboard_best_effort(
-                queued.wallet, f"inactive wallet (>{INACTIVITY_CUTOFF_DAYS}d without on-chain activity)",
-            )
-            if notifier is not None:
-                await notifier(
-                    f"💤 Surveillance arrêtée -- {queued.wallet} inactif depuis plus de "
-                    f"{INACTIVITY_CUTOFF_DAYS} jours (aucune activité on-chain détectée)."
-                )
-            continue
-
-        if _is_confirmed_underperformer(card):
-            # A wallet already in monitoring can degrade over time -- same
-            # handling as the 1st full coverage: removed ENTIRELY and
-            # rejected forever, not just evicted from the leaderboard
-            # (21/07, explicit operator request).
-            await remove_from_queue(queued.wallet)
-            await _reject_wallet_permanently_best_effort(queued.wallet, card)
-            rejected_wallets.append(queued.wallet)
-            if notifier is not None:
-                await notifier(
-                    f"🚫 {queued.wallet} confirmé sous-performant (percentile "
-                    f"{card.composite_percentile:.0f}e) -- retiré définitivement de la "
-                    "surveillance, ne sera plus jamais re-scanné ni redécouvert."
-                )
-            continue
-
-        next_check = now + timedelta(days=MONITORING_INTERVAL_DAYS)
-        await mark_attempt(queued.wallet, next_check_at=next_check)
-        await _update_leaderboard_best_effort(queued.wallet, card)
-        if card.tokens_analyzed > 0 and notifier is not None:
-            # New activity spotted during monitoring -- never a silent
-            # weekly noise if nothing new was found.
-            await notifier(
-                f"🔄 Nouvelle activité détectée en surveillance -- {queued.wallet} "
-                f"({card.tokens_analyzed} nouveau(x) token(s) couvert(s)). "
-                f"Prochaine vérification dans {MONITORING_INTERVAL_DAYS}j."
-            )
+        if res["processed"]:
+            processed.append(res["processed"])
+        if res["completed_first_time"]:
+            completed_first_time.append(res["completed_first_time"])
+        if res["dropped_inactive"]:
+            dropped_inactive.append(res["dropped_inactive"])
+        if res["rejected"]:
+            rejected_wallets.append(res["rejected"])
 
     return {
         "outcome": "ok",
