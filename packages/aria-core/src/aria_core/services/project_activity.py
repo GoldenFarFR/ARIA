@@ -258,6 +258,14 @@ async def fetch_github_diligence_snapshot(
         "age_days": _days_since(created_at, now=now) if created_at else None,
         "archived": bool(data.get("archived")),
         "fork": bool(data.get("fork")),
+        # #153, 28/07 (bonding research finding): already in the SAME
+        # /repos/{owner}/{repo} response fetched above, no new network call
+        # -- "forked_count" (real forks BY OTHER developers) is the
+        # hardest-to-fake conviction signal found in the research (other
+        # teams actually building on the code), unlike stars/followers which
+        # can be bought or farmed. Distinct from ``fork`` above (whether THIS
+        # repo IS a fork of another one).
+        "forked_count": data.get("forks_count"),
     }
 
 
@@ -277,6 +285,8 @@ def format_github_diligence(snapshot: dict | None) -> str:
         parts.append(f"dernière activité il y a {snapshot['days_since_push']}j")
     if snapshot.get("stars") is not None:
         parts.append(f"{snapshot['stars']} étoiles")
+    if snapshot.get("forked_count") is not None:
+        parts.append(f"{snapshot['forked_count']} forks par d'autres devs")
     if snapshot.get("open_issues") is not None:
         parts.append(f"{snapshot['open_issues']} issues ouvertes")
     if snapshot.get("fork"):

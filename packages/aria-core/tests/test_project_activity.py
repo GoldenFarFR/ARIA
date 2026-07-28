@@ -7,6 +7,7 @@ import aria_core.thesis_journal as tj
 import pytest
 from aria_core.services.project_activity import (
     fetch_github_diligence_snapshot,
+    format_github_diligence,
     github_days_since_commit,
     is_github_link,
     parse_github_repo,
@@ -256,7 +257,24 @@ async def test_github_diligence_snapshot_returns_structured_facts():
     assert snap == {
         "description": "A cool repo", "stars": 42, "open_issues": 3,
         "days_since_push": 6, "archived": False, "fork": False, "age_days": None,
+        "forked_count": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_github_diligence_snapshot_captures_forked_count():
+    """#153, 28/07 (bonding research finding): forks BY OTHER developers is
+    the hardest-to-fake conviction signal found -- already in the SAME
+    /repos response, no new network call."""
+    async def fetch(path):
+        return {
+            "id": 1, "description": "", "stargazers_count": 10, "open_issues_count": 0,
+            "forks_count": 137, "pushed_at": "2026-07-01T00:00:00Z", "archived": False, "fork": False,
+        }
+
+    snap = await fetch_github_diligence_snapshot("https://github.com/o/r", fetch=fetch, now=NOW)
+    assert snap["forked_count"] == 137
+    assert "137 forks" in format_github_diligence(snap)
 
 
 @pytest.mark.asyncio
