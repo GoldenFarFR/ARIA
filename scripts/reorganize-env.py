@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Reorganizes a .env file into 3 sections: secrets/API keys, boolean gates
 (true/false), then everything else -- operator-requested (27/07): "ranger
-les cle dun cote et les valeur false true de lautre".
+les cle dun cote et les valeur false true de lautre". Each section is then
+sorted alphabetically by variable name (operator request: "trier aussi le
+.env por ordre alphabithque") -- a comment block attached to a variable
+(via ``pending_comment``) travels with it, sorted by the variable's own name,
+never by its comment text.
 
 27/07 -- also normalizes 0/1 to false/true for gate variables (operator
 request: "remplace 0 et 1 par les valeur true false"), so they land in the
@@ -82,9 +86,9 @@ def main() -> None:
     with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
 
-    secrets: list[str] = []
-    gates: list[str] = []
-    other: list[str] = []
+    secrets: list[tuple[str, str]] = []
+    gates: list[tuple[str, str]] = []
+    other: list[tuple[str, str]] = []
     leading_comments: list[str] = []
     pending_comment: list[str] = []
 
@@ -102,7 +106,9 @@ def main() -> None:
             continue
         if "=" not in line:
             # Malformed line -- preserve as-is in "other" rather than drop it.
-            other.append(line)
+            # No real variable name to sort by -- use the raw line itself so
+            # it still gets a stable (if arbitrary) position, never crashes.
+            other.append((line, line))
             pending_comment = []
             continue
         name, _, value = line.partition("=")
@@ -111,7 +117,7 @@ def main() -> None:
         line = f"{name}={normalized_value}" if normalized_value != value else line
         bucket = _categorize(name, normalized_value)
         entry = "\n".join(pending_comment + [line]) if pending_comment else line
-        {"secrets": secrets, "gates": gates, "other": other}[bucket].append(entry)
+        {"secrets": secrets, "gates": gates, "other": other}[bucket].append((name, entry))
         pending_comment = []
 
     # Any trailing comments with no following KEY=VALUE line (e.g. a
@@ -132,8 +138,12 @@ def main() -> None:
     for header, entries in sections:
         if not entries:
             continue
+        # Alphabetical by variable name, case-insensitive -- a comment block
+        # attached to a variable (pending_comment) travels with it, sorted by
+        # the variable's own name, never by the comment's own text.
+        sorted_entries = sorted(entries, key=lambda pair: pair[0].lower())
         out_lines.append(header)
-        out_lines.extend(entries)
+        out_lines.extend(entry for _name, entry in sorted_entries)
         out_lines.append("")
     if leading_comments:
         out_lines.extend(leading_comments)
