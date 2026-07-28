@@ -2451,6 +2451,7 @@ async def evaluate_momentum_entry(
     # can't be resolved), same fail-open doctrine as `potential_score`.
     dex_security_score: float | None = None
     dex_security_breakdown: dict | None = None
+    dex_security_reasons: list[str] | None = None
     # Item #101 (26/07): skipped entirely in scalping mode -- confirmed by the
     # operator-requested workflow research to carry no predictive value on a
     # 15-30min horizon, and purely informational here (zero veto power in this
@@ -2556,6 +2557,7 @@ async def evaluate_momentum_entry(
                         "score_smart_money": dex_score.score_smart_money,
                         "score_liquidity_depth": dex_score.score_liquidity_depth,
                     }
+                    dex_security_reasons = list(dex_score.reasons)
                 reasons.extend(dex_score.reasons)
                 # 25/07 doctrine reused verbatim for this new signal (real
                 # CHECK loss, -27.3%/-$7374): a CONFIRMED catastrophic score
@@ -2582,6 +2584,16 @@ async def evaluate_momentum_entry(
             # performance_breakdown.py later check whether the score
             # actually correlates with real outcomes). Never blocking, never
             # gates the decision above.
+            # 28/07 audit finding: the pillar-scoped ``dex_security_reasons``
+            # (dex_score.reasons, NOT the whole-evaluation ``reasons``
+            # accumulator, which would bury this under unrelated gate text)
+            # is now persisted alongside the numeric breakdown -- without it,
+            # a future calibration pass reading this log cannot tell "pillar
+            # unresolved (real outage)" apart from "pillar resolved to a
+            # neutral/common-case value" (e.g. the smart-money pillar's
+            # <2-convergent-wallets case, the majority outcome on real
+            # tokens) from the number alone, even though both can land on the
+            # exact same neutral half-weight score.
             if dex_security_score is not None:
                 try:
                     import json as _json
@@ -2591,7 +2603,11 @@ async def evaluate_momentum_entry(
                     await record_dex_score(
                         contract,
                         _json.dumps(
-                            {"score": dex_security_score, "breakdown": dex_security_breakdown},
+                            {
+                                "score": dex_security_score,
+                                "breakdown": dex_security_breakdown,
+                                "reasons": dex_security_reasons,
+                            },
                             ensure_ascii=False,
                         ),
                     )

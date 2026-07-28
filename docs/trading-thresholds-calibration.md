@@ -114,15 +114,79 @@ calibration une fois assez d'observations accumulées.
 | Constante | Valeur | Source/date | Revisiter si |
 |---|---|---|---|
 | `_WEIGHT_CONTRACT_RISK` / `_WEIGHT_DEV_BEHAVIOR` / `_WEIGHT_SMART_MONEY` / `_WEIGHT_LIQUIDITY_DEPTH` | 35/20/25/20 | 28/07, poids proposés par le workflow de conception (comparaison directe avec le 35/35/15/15 bonding, adapté aux signaux réellement disponibles côté DEX) | Une fois un vrai échantillon de trades avec score calculé accumulé (`dex_score_log.py`) |
-| `_TAX_PENALTY_MAX` / `_TAX_PENALTY_REFERENCE_PCT` | 8 pts / 25% | 28/07 — pénalité proportionnelle à la taxe combinée achat+vente, plafonnée | Idem |
-| `_HIDDEN_OWNER_PENALTY` | 7 pts | 28/07 | Idem |
-| `_CAN_TAKE_BACK_OWNERSHIP_PENALTY` | 7 pts | 28/07 | Idem |
-| `_SLIPPAGE_MODIFIABLE_PENALTY` | 6 pts | 28/07 | Idem |
-| `_IS_BLACKLISTED_PENALTY` | 4 pts | 28/07 | Idem |
-| `_NOT_OPEN_SOURCE_PENALTY` | 6 pts | 28/07 | Idem |
-| `_MINT_EOA_PENALTY` | 6 pts | 28/07 — mint contrôlé par un wallet externe (pas renounced/launchpad/contract) | Idem |
-| `_MINT_UNKNOWN_PENALTY` | 2 pts | 28/07 | Idem |
+| `_NEUTRAL_BASE_FRACTION` | 0.35 | **28/07 2nd pass, décision opérateur** — remplace un point neutre à 50% (pilier 2/3/4) et un pilier 1 qui démarrait à son MAX ; but explicite : "favoriser les meilleurs et alimenter negativement les plus mauvais", un token sans AUCUN signal positif confirmé nulle part doit tomber sous `DEX_SECURITY_WEAK_THRESHOLD` (40) par défaut | Une fois des résultats réels accumulés (`dex_score_log.py`) |
+| `_CONTRACT_RISK_BASE` | 12.25 pts (= 35 × 0.35) | 28/07 2nd pass — base neutre du pilier 1, désormais BINAIRE (voir ci-dessous) | Idem |
+| `_CONTRACT_RISK_BAD_SCORE` | 0.0 | 28/07 2nd pass — tout signal GoPlus/mint confirmé mauvais (peu importe lequel/combien) écrase le pilier entier à cette valeur, remplace les anciennes pénalités graduées par champ | Idem |
+| `_TAX_BAD_THRESHOLD_PCT` | 10% | 28/07 2nd pass — taxe combinée achat+vente au-delà de laquelle la taxe seule compte comme signal confirmé mauvais ; en-dessous mais non-nulle = ambigu, ne compte ni bon ni mauvais ; exactement 0% = confirmé bon | Idem |
 | `_MAX_SMART_MONEY_WALLETS` | 4 | 28/07 — délibérément plus bas que `_MAX_WALLETS_DEFAULT` (8) de `smart_money.py` : ce pilier tourne sur TOUT candidat BUY (volume bien plus élevé que le cas rare de sauvetage parabolique pour lequel 8 avait été calibré) | Une fois le vrai débit Blockscout observé en conditions réelles à ce volume |
+
+**Pilier 1 (contract risk) devenu BINAIRE, 28/07 2nd pass, décision opérateur explicite
+("aucun malus, soit c'est bon soit c'est mauvais")** — remplace les anciennes pénalités
+graduées par champ (`_TAX_PENALTY_MAX`/`_TAX_PENALTY_REFERENCE_PCT`, `_HIDDEN_OWNER_PENALTY`,
+`_CAN_TAKE_BACK_OWNERSHIP_PENALTY`, `_SLIPPAGE_MODIFIABLE_PENALTY`, `_IS_BLACKLISTED_PENALTY`,
+`_NOT_OPEN_SOURCE_PENALTY`, `_MINT_EOA_PENALTY`, `_MINT_UNKNOWN_PENALTY` — toutes supprimées) :
+si AU MOINS UN des 6 champs GoPlus (tax/hidden_owner/can_take_back_ownership/
+slippage_modifiable/is_blacklisted/is_open_source) OU l'autorité du mint est confirmé
+mauvais, le pilier entier tombe à `_CONTRACT_RISK_BAD_SCORE` (0.0) — sinon, le score peut
+monter au-dessus de `_CONTRACT_RISK_BASE` (12.25) uniquement grâce à des signaux
+POSITIVEMENT confirmés bons (jamais depuis un champ simplement `None`/inconnu), scalé
+proportionnellement (`bonus = (good_count / resolved_count) × (35 − 12.25)`, où
+`resolved_count` ne compte que les champs classés sans ambiguïté bon/mauvais). Un mint
+d'autorité indéterminable ("unknown") n'est plus traité comme mauvais (c'était −2 pts
+avant) — doctrine fail-open : ne pas savoir n'est pas la même chose que confirmer un
+danger, reste non-résolu (ni bonus ni malus).
+
+**Nouveau plancher structurel "rien de confirmé nulle part"** : `_NEUTRAL_BASE_FRACTION`
+étant identique (35%) sur les 4 piliers, la somme neutre est exactement
+`0.35 × (35+20+25+20) = 35.0/100` — volontairement juste EN DESSOUS de
+`DEX_SECURITY_WEAK_THRESHOLD` (40), donc un candidat totalement sans preuve est
+désormais signalé faible par construction (contre ~67.5/100 avant cette 2e passe, un
+plancher qui ne descendait jamais sous le seuil WEAK). `DEX_SECURITY_WEAK_THRESHOLD`/
+`DEX_SECURITY_REJECT_THRESHOLD` (40/15) reconfirmés cohérents SANS être changés — voir
+le commentaire dédié dans `risk_guard.py` à côté des deux constantes.
+
+**Audit empirique 28/07 (14 tokens Base réels et vivants, commit qui suit `7fde01be`)** —
+vérification honnête, PAS une recalibration statistique (échantillon bien trop petit pour ça,
+survivant qui plus est : tous des tokens déjà tradés/liquides ayant passé le hard-gate
+honeypot, aucun vrai candidat dangereux dans le lot).
+- **Bug de câblage réel trouvé et corrigé** (pas un problème de poids/seuil) : le pilier
+  smart-money (25 pts) retournait le texte "signal indisponible (neutre)" aussi bien pour une
+  vraie panne réseau QUE pour le cas résolu-mais-neutre (`quality_signal is None`, càd <2
+  wallets convergents — le cas normal/majoritaire sur un vrai token, doctrine "1 wallet seul ne
+  prouve rien" de `smart_money.py`, 22/07). Confirmé sur l'échantillon : `score_smart_money`
+  valait exactement 12.5 (neutre) dans 12/14 cas (86%) — corrigé pour distinguer clairement les
+  deux textes (`dex_composite_score._score_smart_money`), et `dex_score_log.py` persiste
+  désormais aussi les `reasons` du composite (avant : seulement `score`+`breakdown` numériques),
+  pour que la future calibration puisse relire POURQUOI un score neutre a été produit, pas
+  seulement QUEL score.
+- **Poids/seuils (`_WEIGHT_*`, `DEX_SECURITY_WEAK_THRESHOLD`, `DEX_SECURITY_REJECT_THRESHOLD`)
+  volontairement PAS touchés** — l'échantillon montre un score minimum de 56.5/100 sur ces 14
+  tokens (tous déjà sains), donc les deux seuils (40/15) ne sont jamais franchis PAR LE BAS sur
+  cet échantillon. Contrairement au bug bonding du 28/07 (0/380 candidats n'atteignait JAMAIS le
+  seuil, y compris des candidats objectivement bons — un vrai plafond structurel), ici un calcul
+  manuel montre qu'un token réellement à risque (taxe confirmée + owner caché + blacklist +
+  dev-behavior "concern") peut descendre sous 15 sans problème — l'absence de score bas dans cet
+  échantillon reflète le biais de sélection (tokens déjà vivants/liquides), pas un plafond
+  algorithmique inatteignable. Recalibrer les poids sur 14 observations biaisées serait une
+  fausse précision, pas une vraie correction — à refaire une fois `dex_score_log.py` (actif
+  après déploiement) aura accumulé un échantillon réel incluant de vrais rejets/positions
+  perdantes, même ordre de grandeur que les ~380 candidats bonding avant leur recalibration.
+- **Trouvailles mineures documentées, pas corrigées (faible sévérité, module premier jet pas
+  encore déployé)** : pilier 2 (dev-behavior) lit `security.owner_address` (GoPlus) comme proxy
+  du déployeur — correct si le contrat est renoncé (fallback Blockscout `creator_address`
+  déjà en place) mais peut diverger du vrai déployeur sur un contrat non-renoncé dont l'ownership
+  a été transféré (multisig/équipe, pattern OpenZeppelin `transferOwnership` courant) ; pilier 3
+  et `_check_parabolic_smart_money_rescue` (`momentum_entry.py`) appellent chacun
+  `analyze_smart_money` indépendamment (max_wallets 4 vs 8, jamais partagé) — sur le cas rare où
+  un même candidat est à la fois en zone de sauvetage parabolique (200-350%) ET validé BUY, ça
+  double le coût réseau Blockscout pour ce candidat précis ; aucun des deux ne cause de rejet
+  erroné ni de risque de sécurité, à revisiter si le volume réel observé le justifie.
+- **Cet audit (min 56.5/100 sur 14 tokens sains) précède la recalibration du 28/07 2e passe
+  ci-dessus** — sous la nouvelle formule (base neutre 35% + pilier 1 binaire), ce même
+  échantillon produirait des scores plus bas par construction (le plancher "tout neutre" est
+  passé de ~67.5 à 35.0/100), cohérent avec l'objectif explicite de la 2e passe. Pas re-testé
+  empiriquement sur ces 14 tokens précis — à confirmer une fois `dex_score_log.py` réactif en
+  prod avec la nouvelle formule.
 
 ## Position management générique (`paper_trader.py`)
 

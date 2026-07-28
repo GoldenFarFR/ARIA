@@ -813,15 +813,13 @@ _TRADING_THRESHOLDS = {
         "_WEIGHT_DEV_BEHAVIOR": 20.0,
         "_WEIGHT_SMART_MONEY": 25.0,
         "_WEIGHT_LIQUIDITY_DEPTH": 20.0,
-        "_TAX_PENALTY_MAX": 8.0,
-        "_TAX_PENALTY_REFERENCE_PCT": 0.25,
-        "_HIDDEN_OWNER_PENALTY": 7.0,
-        "_CAN_TAKE_BACK_OWNERSHIP_PENALTY": 7.0,
-        "_SLIPPAGE_MODIFIABLE_PENALTY": 6.0,
-        "_IS_BLACKLISTED_PENALTY": 4.0,
-        "_NOT_OPEN_SOURCE_PENALTY": 6.0,
-        "_MINT_EOA_PENALTY": 6.0,
-        "_MINT_UNKNOWN_PENALTY": 2.0,
+        # 28/07 2nd pass, operator decision -- neutral base lowered from 50%
+        # to 35% of each pillar's weight; pillar 1 (contract risk) made
+        # BINARY, replacing the old per-field graduated penalties entirely.
+        "_NEUTRAL_BASE_FRACTION": 0.35,
+        "_CONTRACT_RISK_BASE": 12.25,
+        "_CONTRACT_RISK_BAD_SCORE": 0.0,
+        "_TAX_BAD_THRESHOLD_PCT": 0.10,
         "_MAX_SMART_MONEY_WALLETS": 4,
     },
     "aria_core.paper_trader": {

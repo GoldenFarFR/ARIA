@@ -163,6 +163,23 @@ FUNDAMENTAL_REJECT_THRESHOLD = 2.5
 # outright. First-pass thresholds, not yet calibrated against real outcomes
 # (dex_score_log.py records every scan precisely so this can be revisited via
 # performance_breakdown.py once enough observations accumulate).
+#
+# 28/07 (2nd pass, operator decision) -- dex_composite_score.py's neutral
+# base was lowered from 50% to 35% of each pillar's weight (pillar 1 also
+# made binary), moving the "nothing confirmed anywhere" structural floor
+# from ~67.5/100 down to exactly 35.0/100 (0.35 * 100, since every pillar's
+# neutral share is now 35% of its own weight). Reconfirmed rather than
+# changed: 35.0 sits deliberately just BELOW WEAK_THRESHOLD (40) -- a
+# candidate with zero positive evidence anywhere is now flagged weak BY
+# DEFAULT, exactly the operator's stated goal, without needing to touch this
+# threshold itself. REJECT_THRESHOLD (15) remains reachable on a genuinely
+# bad combination (e.g. one confirmed-bad contract signal, contract_risk=0,
+# stacked with a confirmed-weak smart-money/liquidity read) but is no longer
+# triggered by a single bad flag alone when every other pillar stays neutral
+# (0 + 7.0 + 8.75 + 7.0 = 22.75, still above 15) -- consistent with the
+# existing doctrine that an outright reject requires more than one weak
+# signal, while a single one already downgrades the conviction tier via
+# WEAK_THRESHOLD.
 DEX_SECURITY_WEAK_THRESHOLD = 40.0
 DEX_SECURITY_REJECT_THRESHOLD = 15.0
 

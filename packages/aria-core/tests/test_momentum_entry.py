@@ -4496,7 +4496,10 @@ async def test_dex_security_score_writes_to_dex_score_log_when_resolved(monkeypa
     from aria_core import dex_score_log
 
     async def fake_compute(contract, chain, *, pair, security, mode="standard"):
-        return dcs.DexSecurityScore(score=55.0, reasons=["score composite DEX 55.0/100"])
+        return dcs.DexSecurityScore(
+            score=55.0,
+            reasons=["smart money : pas de convergence confirmée (<2 wallets qualifiés, neutre -- cas normal/majoritaire, pas une panne)"],
+        )
 
     recorded = {}
 
@@ -4510,6 +4513,10 @@ async def test_dex_security_score_writes_to_dex_score_log_when_resolved(monkeypa
 
     assert recorded["contract"] == CONTRACT
     assert "55.0" in recorded["score_json"] or "55" in recorded["score_json"]
+    # 28/07 audit finding: reasons must now be persisted too (not just the
+    # numeric score/breakdown) -- otherwise a future calibration pass can't
+    # tell "pillar unresolved" apart from "pillar resolved to neutral".
+    assert "pas de convergence confirmée" in recorded["score_json"]
 
 
 @pytest.mark.asyncio
