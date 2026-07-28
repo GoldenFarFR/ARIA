@@ -42,6 +42,18 @@ SENSITIVE_RE = re.compile(
 
 _GATE_NAME_RE = re.compile(r"_ENABLED$", re.IGNORECASE)
 
+# 27/07 -- real bug found live (operator screenshot): running this script a
+# 2nd time on an already-reorganized file duplicated these exact headers,
+# because they were treated as ordinary preserved comments (attached to
+# whatever KEY=VALUE line came next) instead of being recognized as this
+# script's OWN section markers from a prior run. Must be kept in sync with
+# the `sections` header strings in main() below.
+_OWN_SECTION_HEADERS = frozenset({
+    "# --- Secrets / API keys ---",
+    "# --- Gates (true/false) ---",
+    "# --- Other values ---",
+})
+
 
 def _normalize_gate_value(name: str, value: str) -> str:
     stripped = value.strip()
@@ -81,6 +93,11 @@ def main() -> None:
         if not stripped:
             continue
         if stripped.startswith("#"):
+            if stripped in _OWN_SECTION_HEADERS:
+                # Idempotency: drop a section header from a prior run rather
+                # than re-preserving it as a plain comment (see comment above
+                # _OWN_SECTION_HEADERS for the real bug this fixes).
+                continue
             pending_comment.append(line)
             continue
         if "=" not in line:
