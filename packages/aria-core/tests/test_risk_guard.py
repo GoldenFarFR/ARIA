@@ -216,6 +216,54 @@ class TestConvictionSizeMultiplierVolume:
         assert mult_volume_only == risk_guard.MODERATE_ALLOC_MULTIPLIER
 
 
+# ── 1sexies. dex_security_score (28/07, Item #179 -- signal additif
+#             dex_composite_score.py, 3e drapeau, même doctrine que fundamental_score/
+#             volume_confirmed ci-dessus) ──────────────────────────────────────────────
+
+
+class TestConvictionSizeMultiplierDexSecurity:
+    def test_backward_compatible_no_dex_security_arg(self):
+        assert risk_guard.conviction_size_multiplier(2.5, 3) == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_unknown_dex_security_never_downgrades(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, dex_security_score=None)
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_strong_dex_security_keeps_technical_bonus(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, dex_security_score=90.0)
+        assert mult == risk_guard.MAX_ALLOC_MULTIPLIER
+
+    def test_confirmed_weak_dex_security_downgrades_to_moderate(self):
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, dex_security_score=10.0)
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
+
+    def test_dex_security_exactly_at_threshold_still_downgrades(self):
+        below = risk_guard.DEX_SECURITY_WEAK_THRESHOLD - 0.01
+        mult = risk_guard.conviction_size_multiplier(2.5, 3, dex_security_score=below)
+        assert mult == risk_guard.MODERATE_ALLOC_MULTIPLIER
+
+    def test_weak_dex_security_never_creates_a_bonus_on_mediocre_technical(self):
+        mult = risk_guard.conviction_size_multiplier(1.0, 1, dex_security_score=5.0)
+        assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_composes_with_fundamental_veto_stacks_to_weak_tier(self):
+        """Deux drapeaux (fondamental faible ET dex_security faible) cumulent au
+        palier FAIBLE -- même doctrine de cumul que fundamental+volume."""
+        mult = risk_guard.conviction_size_multiplier(
+            2.5, 3, fundamental_score=1.0, dex_security_score=10.0,
+        )
+        assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_all_three_vetoes_still_only_reach_weak_tier_never_below(self):
+        """Les TROIS drapeaux en même temps ne créent jamais un 4e palier sous le
+        plancher FAIBLE déjà atteint par deux drapeaux -- MIN_ALLOC_MULTIPLIER reste
+        le vrai plancher quel que soit le nombre de vétos."""
+        mult = risk_guard.conviction_size_multiplier(
+            2.5, 3, fundamental_score=1.0, volume_confirmed=False, dex_security_score=5.0,
+        )
+        assert mult == risk_guard.MIN_ALLOC_MULTIPLIER
+
+
 # ── 1quater. sizing HYBRIDE risque-cible/ATR (20/07, revue croisée Gemini round 7,
 #             go explicite opérateur) -- même tiering/cumul de vétos que
 #             conviction_size_multiplier ci-dessus, mais en BUDGET DE RISQUE %,
@@ -253,6 +301,44 @@ class TestConvictionRiskBudgetPct:
             2.5, 3, fundamental_score=1.0, volume_confirmed=False,
         )
         assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+
+    def test_dex_security_score_alone_downgrades_to_moderate_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(2.5, 3, dex_security_score=10.0)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_MODERATE_PCT
+
+    def test_dex_security_score_unknown_never_downgrades_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(2.5, 3, dex_security_score=None)
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_STRONG_PCT
+
+    def test_dex_security_stacks_with_fundamental_to_weak_budget(self):
+        budget = risk_guard.conviction_risk_budget_pct(
+            2.5, 3, fundamental_score=1.0, dex_security_score=10.0,
+        )
+        assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+
+
+class TestConvictionTierLabel:
+    def test_none_signal_returns_none(self):
+        assert risk_guard.conviction_tier_label(None, None) is None
+
+    def test_strong_setup_labeled_strong(self):
+        assert risk_guard.conviction_tier_label(2.5, 3) == "strong"
+
+    def test_moderate_setup_labeled_moderate(self):
+        assert risk_guard.conviction_tier_label(2.0, 3) == "moderate"
+
+    def test_weak_setup_labeled_weak(self):
+        assert risk_guard.conviction_tier_label(1.0, 1) == "weak"
+
+    def test_confirmed_weak_dex_security_downgrades_label_to_moderate(self):
+        label = risk_guard.conviction_tier_label(2.5, 3, dex_security_score=10.0)
+        assert label == "moderate"
+
+    def test_two_vetoes_stack_label_to_weak(self):
+        label = risk_guard.conviction_tier_label(
+            2.5, 3, fundamental_score=1.0, dex_security_score=10.0,
+        )
+        assert label == "weak"
 
 
 class TestSizeByRiskBudget:

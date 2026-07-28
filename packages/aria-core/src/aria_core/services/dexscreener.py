@@ -148,6 +148,12 @@ class PairSnapshot:
     # skills/image_token_curiosity.py) -- previously silently discarded since every
     # OTHER caller of `_parse_pair` already knows its chain ahead of the call.
     chain_id: str = ""
+    # 28/07 -- `marketCap`/`fdv` are already present on every real DexScreener pair
+    # object (verified live, XOE/REPLY pairs) but were never captured -- needed by
+    # dex_composite_score.py's liquidity-depth pillar (liquidity/market-cap ratio),
+    # zero extra network call. `fdv` (fully diluted valuation) as a fallback when
+    # circulating `marketCap` isn't reported, never a fabricated number.
+    market_cap_usd: float | None = None
 
 
 def _extract_project_links(raw: dict) -> list[dict]:
@@ -180,6 +186,16 @@ def _extract_project_links(raw: dict) -> list[dict]:
         links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url})
 
     return links
+
+
+def _safe_float(value: object) -> float | None:
+    """``None`` for missing/zero/non-numeric -- distinct from ``float(x or 0)``
+    elsewhere in this module, which conflates "unknown" with a real 0.0."""
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed or None
 
 
 def _parse_pair(raw: dict) -> PairSnapshot:
@@ -217,6 +233,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         quote_symbol=str(quote.get("symbol") or ""),
         project_links=_extract_project_links(raw),
         chain_id=str(raw.get("chainId") or ""),
+        market_cap_usd=_safe_float(raw.get("marketCap")) or _safe_float(raw.get("fdv")),
     )
 
 

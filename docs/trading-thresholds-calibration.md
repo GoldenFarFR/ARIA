@@ -42,6 +42,8 @@
 | `MIN_ALLOC_MULTIPLIER`/`MODERATE_ALLOC_MULTIPLIER`/`MAX_ALLOC_MULTIPLIER` | risk_guard.py:124-126 | 0.4 / 0.7 / 1.0 (paliers faible/modéré/fort, base 5%) | — | — |
 | `FUNDAMENTAL_WEAK_THRESHOLD` | risk_guard.py:138 | 4.0/10 | — | — |
 | `FUNDAMENTAL_REJECT_THRESHOLD` | risk_guard.py:153 | 2.5/10 | 25/07, incident réel CHECK (-27,3%, -7 374$, score fondamental 2.0 acheté quand même) | Un nouveau cas limite trouvé entre 2.5 et 4.0 |
+| `DEX_SECURITY_WEAK_THRESHOLD` | risk_guard.py | 40/100 | **Nouveau 28/07, Item #179** — même doctrine à 2 paliers que FUNDAMENTAL_WEAK/REJECT_THRESHOLD, pour le nouveau signal additif `dex_composite_score.py` | Une fois des résultats réels accumulés (`dex_score_log.py`) |
+| `DEX_SECURITY_REJECT_THRESHOLD` | risk_guard.py | 15/100 | 28/07, Item #179 | Idem |
 | `REGIME_FEAR_SIZE_MULTIPLIER` | risk_guard.py:362 | 0.5x | Regime Switch 20/07 | — |
 | `PRICE_IMPACT_RATIO` | risk_guard.py:420 | 2.0 | Règle AMM standard | — |
 | `SOFT_DRAWDOWN_PCT`/`HARD_DRAWDOWN_PCT` | risk_guard.py:563-564 | -10% / -20% | — | — |
@@ -97,6 +99,30 @@
 | `BONDING_LIQUIDITY_FLOOR_USD` | 10 000 $ | 28/07 ; **n'est plus un miroir exact depuis l'Item #167** (`_MIN_LIQUIDITY_USD` d'entrée est descendu à 5 000 $, ce plancher de sortie a été délibérément laissé inchangé, toujours strictement AU-DESSUS de l'entrée — jamais l'inverse) | Si ce plancher de sortie doit lui aussi bouger |
 | `BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT` | 50% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_DROP_INVALIDATION_PCT`) | — |
 | `BONDING_LIQUIDITY_SUDDEN_DROP_PCT` | 30% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_SUDDEN_DROP_PCT`) | — |
+
+## DEX composite score — signal additif momentum (Item #177/#179, `dex_composite_score.py`)
+
+Score 0-100 pour un token DEX déjà gradué, conçu (workflow 2 agents, 28/07) en comparaison
+directe avec la formule bonding ci-dessus mais JAMAIS un gate — signal additif uniquement
+(sizing + rejet catastrophique + observabilité), même patron que `potential_score`.
+Vérifié pilier par pilier pour ne jamais re-noter un signal déjà gate ailleurs dans
+`momentum_entry.py` (honeypot GoPlus, concentration holders 80%, R/R+align_score, RVOL,
+wash-trading). Premier jet, jamais calibré empiriquement — `dex_score_log.py` enregistre
+chaque scan (y compris les candidats jamais achetés) précisément pour permettre cette
+calibration une fois assez d'observations accumulées.
+
+| Constante | Valeur | Source/date | Revisiter si |
+|---|---|---|---|
+| `_WEIGHT_CONTRACT_RISK` / `_WEIGHT_DEV_BEHAVIOR` / `_WEIGHT_SMART_MONEY` / `_WEIGHT_LIQUIDITY_DEPTH` | 35/20/25/20 | 28/07, poids proposés par le workflow de conception (comparaison directe avec le 35/35/15/15 bonding, adapté aux signaux réellement disponibles côté DEX) | Une fois un vrai échantillon de trades avec score calculé accumulé (`dex_score_log.py`) |
+| `_TAX_PENALTY_MAX` / `_TAX_PENALTY_REFERENCE_PCT` | 8 pts / 25% | 28/07 — pénalité proportionnelle à la taxe combinée achat+vente, plafonnée | Idem |
+| `_HIDDEN_OWNER_PENALTY` | 7 pts | 28/07 | Idem |
+| `_CAN_TAKE_BACK_OWNERSHIP_PENALTY` | 7 pts | 28/07 | Idem |
+| `_SLIPPAGE_MODIFIABLE_PENALTY` | 6 pts | 28/07 | Idem |
+| `_IS_BLACKLISTED_PENALTY` | 4 pts | 28/07 | Idem |
+| `_NOT_OPEN_SOURCE_PENALTY` | 6 pts | 28/07 | Idem |
+| `_MINT_EOA_PENALTY` | 6 pts | 28/07 — mint contrôlé par un wallet externe (pas renounced/launchpad/contract) | Idem |
+| `_MINT_UNKNOWN_PENALTY` | 2 pts | 28/07 | Idem |
+| `_MAX_SMART_MONEY_WALLETS` | 4 | 28/07 — délibérément plus bas que `_MAX_WALLETS_DEFAULT` (8) de `smart_money.py` : ce pilier tourne sur TOUT candidat BUY (volume bien plus élevé que le cas rare de sauvetage parabolique pour lequel 8 avait été calibré) | Une fois le vrai débit Blockscout observé en conditions réelles à ce volume |
 
 ## Position management générique (`paper_trader.py`)
 

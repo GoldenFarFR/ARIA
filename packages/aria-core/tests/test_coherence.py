@@ -753,6 +753,10 @@ _TRADING_THRESHOLDS = {
         "MAX_ALLOC_MULTIPLIER": 1.0,
         "FUNDAMENTAL_WEAK_THRESHOLD": 4.0,
         "FUNDAMENTAL_REJECT_THRESHOLD": 2.5,
+        # Item #179, 28/07 -- dex_composite_score.py's additive signal, same
+        # 2-tier doctrine as FUNDAMENTAL_WEAK/REJECT_THRESHOLD above.
+        "DEX_SECURITY_WEAK_THRESHOLD": 40.0,
+        "DEX_SECURITY_REJECT_THRESHOLD": 15.0,
         "REGIME_FEAR_SIZE_MULTIPLIER": 0.5,
         "PRICE_IMPACT_RATIO": 2.0,
         "SOFT_DRAWDOWN_PCT": 0.10,
@@ -801,6 +805,24 @@ _TRADING_THRESHOLDS = {
         "LIMIT_ORDER_WATCH_TRIGGER_MULT": 1.10,
         "LIMIT_ORDER_EXPIRY_HOURS": 3.0,
         "BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD": 20_000.0,
+    },
+    "aria_core.dex_composite_score": {
+        # Item #177, 28/07 -- additive DEX security/conviction score, first
+        # pass (never yet calibrated against real outcomes).
+        "_WEIGHT_CONTRACT_RISK": 35.0,
+        "_WEIGHT_DEV_BEHAVIOR": 20.0,
+        "_WEIGHT_SMART_MONEY": 25.0,
+        "_WEIGHT_LIQUIDITY_DEPTH": 20.0,
+        "_TAX_PENALTY_MAX": 8.0,
+        "_TAX_PENALTY_REFERENCE_PCT": 0.25,
+        "_HIDDEN_OWNER_PENALTY": 7.0,
+        "_CAN_TAKE_BACK_OWNERSHIP_PENALTY": 7.0,
+        "_SLIPPAGE_MODIFIABLE_PENALTY": 6.0,
+        "_IS_BLACKLISTED_PENALTY": 4.0,
+        "_NOT_OPEN_SOURCE_PENALTY": 6.0,
+        "_MINT_EOA_PENALTY": 6.0,
+        "_MINT_UNKNOWN_PENALTY": 2.0,
+        "_MAX_SMART_MONEY_WALLETS": 4,
     },
     "aria_core.paper_trader": {
         "TRAIL_STOP_PCT": 0.15,

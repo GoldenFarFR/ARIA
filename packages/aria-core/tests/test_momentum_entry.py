@@ -45,6 +45,26 @@ def _stub_virtuals_launchpad_lookup_unresolved(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_dex_composite_score_unavailable(monkeypatch):
+    """Item #179, 28/07: a BUY on "base" now also computes dex_composite_score.py's
+    additive signal (real GoPlus/Blockscout calls) and appends to dex_score_log.py --
+    without this stub, EVERY test in this file that reaches a BUY on "base" would hit
+    the real network AND write to the real aria.db. ``score=None`` by default (the
+    fail-open case: chain resolution/data unavailable) -- tests dedicated to this
+    signal itself override it locally."""
+    from aria_core import dex_composite_score, dex_score_log
+
+    async def _unavailable(contract, chain, *, pair, security, mode="standard"):
+        return dex_composite_score.DexSecurityScore()
+
+    async def _noop_record(contract, score_json):
+        return None
+
+    monkeypatch.setattr(dex_composite_score, "compute_dex_composite_score", _unavailable)
+    monkeypatch.setattr(dex_score_log, "record_dex_score", _noop_record)
+
+
+@pytest.fixture(autouse=True)
 def _stub_polymarket_unavailable(monkeypatch):
     """``_polymarket_lines`` (19/07) appelle un VRAI client HTTP (``polymarket_client``,
     aucun gate/DB avant l'appel réseau, contrairement à ``_sentiment_lines`` qui ne lit
@@ -4358,6 +4378,159 @@ async def test_potential_score_none_never_rejects(monkeypatch, test_settings):
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
 
     assert result["action"] == "BUY"
+
+
+# ── dex_composite_score.py (28/07, Item #179 -- signal additif) ────────────────────
+
+def _neutral_research_stub(monkeypatch):
+    """Common setup: conviction research passes cleanly (never the point of
+    these tests), so only the dex-security signal below decides the outcome."""
+    from aria_core.conviction_research import ConvictionResearch
+
+    async def fake_research(contract, symbol, chain, known_links=None, **_kwargs):
+        return ConvictionResearch(available=True, potential_score=8.0, rationale="Projet solide.")
+
+    monkeypatch.setattr("aria_core.conviction_research.research_project_potential", fake_research)
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_threaded_into_result_when_buy_confirmed(monkeypatch, test_settings):
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    _neutral_research_stub(monkeypatch)
+
+    from aria_core import dex_composite_score as dcs
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        return dcs.DexSecurityScore(
+            score=72.0, score_contract_risk=35.0, score_dev_behavior=15.0,
+            score_smart_money=15.0, score_liquidity_depth=7.0, reasons=["score composite DEX 72.0/100"],
+        )
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert result["dex_security_score"] == 72.0
+    assert result["dex_security_breakdown"] == {
+        "score_contract_risk": 35.0, "score_dev_behavior": 15.0,
+        "score_smart_money": 15.0, "score_liquidity_depth": 7.0,
+    }
+    assert any("score composite DEX" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_critical_rejects_the_buy_outright(monkeypatch, test_settings):
+    """Same doctrine as fundamental_score_critical (25/07, real CHECK loss): a
+    CONFIRMED catastrophic dex_security_score rejects outright, never just a
+    sizing downgrade."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    _neutral_research_stub(monkeypatch)
+
+    from aria_core import dex_composite_score as dcs
+    from aria_core import risk_guard
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        below = risk_guard.DEX_SECURITY_REJECT_THRESHOLD - 1.0
+        return dcs.DexSecurityScore(score=below, reasons=["score composite DEX critique"])
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "dex_security_score_critical"
+    assert any("critique" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_none_never_rejects(monkeypatch, test_settings):
+    """Fail-open doctrine: an unresolved dex_security_score must never reject
+    a candidate -- only a CONFIRMED catastrophic score does."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    _neutral_research_stub(monkeypatch)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert result["dex_security_score"] is None
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_never_computed_in_scalping_mode(monkeypatch, test_settings):
+    """Same skip doctrine as conviction_research itself (Item #101, 26/07):
+    the extra Blockscout calls aren't worth it on a 15-30min horizon."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core import dex_composite_score as dcs
+
+    called = False
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        nonlocal called
+        called = True
+        return dcs.DexSecurityScore(score=90.0)
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result["action"] == "BUY"
+    assert result["dex_security_score"] is None
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_writes_to_dex_score_log_when_resolved(monkeypatch, test_settings):
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    _neutral_research_stub(monkeypatch)
+
+    from aria_core import dex_composite_score as dcs
+    from aria_core import dex_score_log
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        return dcs.DexSecurityScore(score=55.0, reasons=["score composite DEX 55.0/100"])
+
+    recorded = {}
+
+    async def fake_record(contract, score_json):
+        recorded["contract"] = contract
+        recorded["score_json"] = score_json
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    monkeypatch.setattr(dex_score_log, "record_dex_score", fake_record)
+    await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert recorded["contract"] == CONTRACT
+    assert "55.0" in recorded["score_json"] or "55" in recorded["score_json"]
+
+
+@pytest.mark.asyncio
+async def test_dex_composite_score_failure_never_blocks_the_buy(monkeypatch, test_settings):
+    """Best-effort, additive signal only -- a crash inside dex_composite_score.py
+    must never turn a valid BUY into a HOLD."""
+    test_settings.aria_conviction_research_enabled = True
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    _neutral_research_stub(monkeypatch)
+
+    from aria_core import dex_composite_score as dcs
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert result["dex_security_score"] is None
 
 
 @pytest.mark.asyncio

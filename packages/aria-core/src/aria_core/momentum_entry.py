@@ -825,6 +825,34 @@ def _best_pair(pairs: list[PairSnapshot], contract: str) -> PairSnapshot | None:
 # pipeline's speed (a single attempt, never looped).
 _HONEYPOT_NO_DATA_RETRY_DELAY_S = 8.0
 
+# 28/07 -- short-TTL cache of the TokenSecurity object ALREADY fetched by
+# _check_honeypot below, so dex_composite_score.py's contract-risk pillar can
+# read the residual GoPlus fields (tax/hidden_owner/can_take_back_ownership/
+# slippage_modifiable/is_blacklisted/is_open_source/is_mintable) it needs
+# WITHOUT a second GoPlus call for the same contract -- same short-TTL pattern
+# as _pair_snapshot_cache just above (a few seconds within the SAME
+# evaluation, never a long-lived cache).
+_SECURITY_CACHE_TTL_SECONDS = 60.0
+_security_cache: dict[tuple[str, str], tuple[float, object]] = {}
+
+
+def _cache_security(chain: str, contract: str, security: object) -> None:
+    now = time.monotonic()
+    _security_cache[(chain, contract.lower())] = (now, security)
+    expired = [k for k, (ts, _s) in _security_cache.items() if (now - ts) >= _SECURITY_CACHE_TTL_SECONDS]
+    for k in expired:
+        del _security_cache[k]
+
+
+def _get_cached_security(chain: str, contract: str):
+    cached = _security_cache.get((chain, contract.lower()))
+    if cached is None:
+        return None
+    ts, security = cached
+    if (time.monotonic() - ts) >= _SECURITY_CACHE_TTL_SECONDS:
+        return None
+    return security
+
 
 async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     """The only HARD guardrail in this pipeline. ``(clear, reason, code)`` --
@@ -868,6 +896,11 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     if not security.available and security.no_data:
         await asyncio.sleep(_HONEYPOT_NO_DATA_RETRY_DELAY_S)
         security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+
+    # 28/07 -- cache the TokenSecurity object itself (not just the boolean
+    # gate result) so dex_composite_score.py's contract-risk pillar can reuse
+    # it later in the SAME evaluation without a second GoPlus call.
+    _cache_security(chain, contract, security)
 
     if not security.available:
         if chain == "solana" and security.no_data:
@@ -2412,6 +2445,12 @@ async def evaluate_momentum_entry(
     conviction_process_trail: str | None = None
     conviction_website_corroborated: bool | None = None
     conviction_posting_cadence: str | None = None
+    # 28/07 -- dex_composite_score.py's additive signal (contract/dev residual
+    # risk, dev-wallet behavior, generalized smart money, liquidity/mcap
+    # depth) -- ``None`` until the BUY branch below computes it (or if it
+    # can't be resolved), same fail-open doctrine as `potential_score`.
+    dex_security_score: float | None = None
+    dex_security_breakdown: dict | None = None
     # Item #101 (26/07): skipped entirely in scalping mode -- confirmed by the
     # operator-requested workflow research to carry no predictive value on a
     # 15-30min horizon, and purely informational here (zero veto power in this
@@ -2493,6 +2532,72 @@ async def evaluate_momentum_entry(
                         "rejet direct, pas seulement une reduction de taille"
                     )
 
+        # 28/07 -- dex_composite_score.py's additive signal (28/07, operator
+        # go-ahead: "ajouter comme signal supplémentaire") -- NEVER a
+        # replacement for the R/R decision or the hard gates above. Only
+        # computed if the candidate is STILL a BUY after the fundamental-score
+        # check above (no point spending Blockscout calls on a candidate
+        # already rejected). Reuses the TokenSecurity already cached by
+        # _check_honeypot earlier in this same evaluation -- zero extra
+        # GoPlus call.
+        if action == "BUY":
+            from aria_core.dex_composite_score import compute_dex_composite_score
+
+            try:
+                dex_score = await compute_dex_composite_score(
+                    contract, chain, pair=best,
+                    security=_get_cached_security(chain, contract), mode=mode,
+                )
+                if dex_score.score is not None:
+                    dex_security_score = dex_score.score
+                    dex_security_breakdown = {
+                        "score_contract_risk": dex_score.score_contract_risk,
+                        "score_dev_behavior": dex_score.score_dev_behavior,
+                        "score_smart_money": dex_score.score_smart_money,
+                        "score_liquidity_depth": dex_score.score_liquidity_depth,
+                    }
+                reasons.extend(dex_score.reasons)
+                # 25/07 doctrine reused verbatim for this new signal (real
+                # CHECK loss, -27.3%/-$7374): a CONFIRMED catastrophic score
+                # rejects outright, never just a sizing downgrade -- below
+                # DEX_SECURITY_WEAK_THRESHOLD only downgrades the conviction
+                # tier (see risk_guard.py), matched by design.
+                if (
+                    dex_security_score is not None
+                    and dex_security_score < risk_guard.DEX_SECURITY_REJECT_THRESHOLD
+                ):
+                    action = "HOLD"
+                    hold_reason = "dex_security_score_critical"
+                    reasons.append(
+                        f"score DEX composite critique (< "
+                        f"{risk_guard.DEX_SECURITY_REJECT_THRESHOLD:.0f}/100) -- "
+                        "rejet direct, pas seulement une reduction de taille"
+                    )
+            except Exception as exc:  # noqa: BLE001 -- never blocking, additive signal only
+                logger.info("momentum_entry: dex composite score failed for %s (%s)", contract, exc)
+
+            # 28/07 -- best-effort append to dex_score_log.py's timestamped
+            # history (dex_composite_score.py's weights/thresholds are a
+            # first pass, not yet calibrated -- this is what lets
+            # performance_breakdown.py later check whether the score
+            # actually correlates with real outcomes). Never blocking, never
+            # gates the decision above.
+            if dex_security_score is not None:
+                try:
+                    import json as _json
+
+                    from aria_core.dex_score_log import record_dex_score
+
+                    await record_dex_score(
+                        contract,
+                        _json.dumps(
+                            {"score": dex_security_score, "breakdown": dex_security_breakdown},
+                            ensure_ascii=False,
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001 -- never blocking
+                    logger.info("momentum_entry: dex_score_log write failed for %s (%s)", contract, exc)
+
     return {
         "action": action,
         # Item #101 (26/07) -- lets paper_trader.py/the thesis text know
@@ -2544,6 +2649,13 @@ async def evaluate_momentum_entry(
         # (never a fabricated score) -- risk_guard.conviction_size_multiplier
         # treats this as "unknown", never as "weak" (fail-open on unknown).
         "potential_score": potential_score,
+        # 28/07 -- dex_composite_score.py's additive signal -- None if
+        # unresolved/scalping/non-Base (never fabricated). Consumed by
+        # risk_guard.conviction_size_multiplier/conviction_risk_budget_pct/
+        # conviction_tier_label as a THIRD conviction-tier flag, same
+        # fail-open-on-unknown doctrine as `potential_score`.
+        "dex_security_score": dex_security_score,
+        "dex_security_breakdown": dex_security_breakdown,
         # 07/23 -- performance-breakdown tracking (operator request: segment
         # winrate/PnL by decision factor). Purely observational, never used
         # here to gate or size the decision -- consumed downstream by

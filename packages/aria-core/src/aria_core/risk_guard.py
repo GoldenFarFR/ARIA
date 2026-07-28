@@ -152,10 +152,25 @@ FUNDAMENTAL_WEAK_THRESHOLD = 4.0
 # which had no equivalent until now.
 FUNDAMENTAL_REJECT_THRESHOLD = 2.5
 
+# 28/07 -- dex_composite_score.py's additive signal for an already-graduated
+# DEX candidate (contract/dev residual risk beyond the honeypot class, dev
+# wallet behavior, generalized smart money, liquidity/mcap depth -- see that
+# module's docstring). Same fail-open/fail-closed doctrine and same 2-tier
+# structure as FUNDAMENTAL_WEAK_THRESHOLD/FUNDAMENTAL_REJECT_THRESHOLD above:
+# a CONFIRMED (not None) score below the WEAK threshold becomes a THIRD
+# conviction-tier flag, alongside weak_fundamentals/unconfirmed_volume; below
+# the stricter REJECT threshold, momentum_entry.py rejects the candidate
+# outright. First-pass thresholds, not yet calibrated against real outcomes
+# (dex_score_log.py records every scan precisely so this can be revisited via
+# performance_breakdown.py once enough observations accumulate).
+DEX_SECURITY_WEAK_THRESHOLD = 40.0
+DEX_SECURITY_REJECT_THRESHOLD = 15.0
+
 
 def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
+    dex_security_score: float | None = None,
 ) -> float:
     """Multiplier applied to ``ALLOC_PCT`` (5%, ``paper_trader.py``) -- never
     beyond ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5% of capital, the hard cap requested
@@ -189,19 +204,25 @@ def conviction_size_multiplier(
     a hard rejection upstream (``hold_reason="volume_not_confirmed"``), never a matter
     of size.
 
-    Stacking of the two vetoes (07/19, Gemini cross-review, round 5 -- fixes a real
-    risk-management flaw: composing both flags into the SAME MODERATE tier treated a
-    setup with TWO independent warning signals (weak fundamentals AND unverified
-    volume) as equivalent to a setup with only one -- underestimating the cumulative risk)
-    -- one flag alone -> MODERATE tier (3.5%); BOTH at once -> direct drop
-    to the WEAK tier (2%), never a 3rd tier below (the ``MIN_ALLOC_
-    MULTIPLIER`` floor remains the true floor, regardless of the number of vetoes)."""
+    ``dex_security_score`` (28/07, optional, ``dex_composite_score.py``): same veto
+    doctrine as ``fundamental_score`` -- a CONFIRMED score below ``DEX_SECURITY_WEAK_
+    THRESHOLD`` downgrades the tier (see stacking below). ``None`` (chain not Base,
+    scalping mode, or resolution failed) never downgrades.
+
+    Stacking of the (now up to three) vetoes (07/19, Gemini cross-review, round 5 --
+    fixes a real risk-management flaw: composing every flag into the SAME MODERATE
+    tier treated a setup with several independent warning signals as equivalent to a
+    setup with only one -- underestimating the cumulative risk) -- one flag alone ->
+    MODERATE tier (3.5%); two or more at once -> direct drop to the WEAK tier (2%),
+    never a 4th tier below (the ``MIN_ALLOC_MULTIPLIER`` floor remains the true floor,
+    regardless of the number of vetoes)."""
     if rr is None or align_score is None:
         return MAX_ALLOC_MULTIPLIER
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
-        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
+        flags = int(weak_fundamentals) + int(unconfirmed_volume) + int(weak_dex_security)
         if flags >= 2:
             return MIN_ALLOC_MULTIPLIER
         if flags == 1:
@@ -239,12 +260,13 @@ CONVICTION_RISK_BUDGET_WEAK_PCT = 0.005      # 0.5% -- WEAK tier
 def conviction_risk_budget_pct(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
+    dex_security_score: float | None = None,
 ) -> float | None:
     """Risk budget (fraction of capital) for the conviction tier of THIS
-    signal -- same tiering and same stacking of the two vetoes as ``conviction_size_
-    multiplier`` above (identical word for word, only the OUTPUT tiers
-    change: a risk budget in %, not a multiplier on a flat allocation). ``None`` if
-    ``rr``/``align_score`` are missing -- signals to the caller to fall back
+    signal -- same tiering and same stacking of the (now up to three) vetoes as
+    ``conviction_size_multiplier`` above (identical word for word, only the OUTPUT
+    tiers change: a risk budget in %, not a multiplier on a flat allocation). ``None``
+    if ``rr``/``align_score`` are missing -- signals to the caller to fall back
     on ``conviction_size_multiplier`` (historical behavior), never an invented
     budget for lack of a signal."""
     if rr is None or align_score is None:
@@ -252,7 +274,8 @@ def conviction_risk_budget_pct(
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
-        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
+        flags = int(weak_fundamentals) + int(unconfirmed_volume) + int(weak_dex_security)
         if flags >= 2:
             return CONVICTION_RISK_BUDGET_WEAK_PCT
         if flags == 1:
@@ -275,6 +298,7 @@ def conviction_risk_budget_pct(
 def conviction_tier_label(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
+    dex_security_score: float | None = None,
 ) -> str | None:
     """Conviction tier label for THIS signal -- ``None`` if ``rr``/``align_score``
     are missing (never an invented tier for lack of a signal, e.g. the old
@@ -284,7 +308,8 @@ def conviction_tier_label(
     if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
-        flags = int(weak_fundamentals) + int(unconfirmed_volume)
+        weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
+        flags = int(weak_fundamentals) + int(unconfirmed_volume) + int(weak_dex_security)
         if flags >= 2:
             return "weak"
         if flags == 1:

@@ -145,6 +145,7 @@ async def gather_dev_wallet_facts(
     *,
     lp_address: str | None = None,
     client=None,
+    holders=None,
 ) -> DevWalletFacts:
     """Best-effort collection of on-chain facts about the deployer (defensive, never blocking).
 
@@ -154,8 +155,14 @@ async def gather_dev_wallet_facts(
       (or the Uniswap V4 PoolManager, cf. `_UNISWAP_V4_POOL_MANAGER_BASE`) = bought;
       sent to either of the two = sold.
 
-    Injectable ``client`` (default: blockscout_client) for offline tests. Any
-    unavailability -> ``available=False`` (the judge will return 'unknown'). The classification
+    Injectable ``client`` (default: blockscout_client) for offline tests.
+    ``holders`` (28/07, dex_composite_score.py): a ``TokenHoldersResult``
+    ALREADY fetched by the caller (e.g. via momentum_entry's own TTL cache) --
+    skips this function's own ``get_token_holders`` call entirely when
+    provided, zero extra network cost. ``None`` (default, unchanged
+    behavior): fetches it here exactly like before.
+
+    Any unavailability -> ``available=False`` (the judge will return 'unknown'). The classification
     remains a heuristic — calibrated live on 23/07 against a real case (CNX, V4 pool)."""
     if not creator:
         return DevWalletFacts(creator=None, available=False, error="déployeur inconnu")
@@ -169,7 +176,8 @@ async def gather_dev_wallet_facts(
 
     holds_pct: float | None = None
     try:
-        holders = await client.get_token_holders(contract)
+        if holders is None:
+            holders = await client.get_token_holders(contract)
         if holders.available:
             for h in holders.holders:
                 if (h.address or "").lower() == dev:

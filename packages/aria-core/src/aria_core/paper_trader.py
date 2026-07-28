@@ -3453,11 +3453,11 @@ def compute_entry_alloc(
     else:
         risk_budget_pct = risk_guard.conviction_risk_budget_pct(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-            volume_confirmed=sig.get("volume_confirmed"),
+            volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
         )
         conviction_mult = risk_guard.conviction_size_multiplier(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-            volume_confirmed=sig.get("volume_confirmed"),
+            volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
         )
         entry_atr_pct = sig.get("entry_atr_pct")
         if risk_budget_pct is not None and entry_atr_pct:
@@ -3470,7 +3470,7 @@ def compute_entry_alloc(
             base_alloc_usd = ALLOC_PCT * start * conviction_mult
     conviction_tier = risk_guard.conviction_tier_label(
         sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
-        volume_confirmed=sig.get("volume_confirmed"),
+        volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
     )
     # 07/18 (continued, "handbrake" validated after review) -- once the
     # weekly target is already reached, halves NEW entries (never to zero):
