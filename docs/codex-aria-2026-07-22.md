@@ -2,22 +2,44 @@
 > externe, jamais committé au repo jusqu'ici — retrouvé sur demande opérateur le 28/07). Il
 > s'auto-qualifie déjà comme un instantané figé ("si le code a bougé depuis, il peut avoir
 > dérivé... revérifier plutôt que de citer cette page indéfiniment") — le contenu ci-dessous est
-> donc conservé TEL QUEL (fidélité historique), avec seulement les divergences déjà connues
-> signalées ici plutôt que corrigées dans le corps du texte :
-> - **Partie 2.3** : l'adresse de transfert autorisée citée (`0x33783cCb...`) est PÉRIMÉE —
->   vérifiée dans le code réel le 28/07, la vraie valeur actuelle est
->   `0x584b2B35dac347B2317da0d21b95063de51257Ef` (déjà notée dans CLAUDE.md depuis le 23/07,
->   "a déjà changé une fois").
-> - **Partie 10** : `ARIA_BONDING_DISCOVERY_ENABLED` — le document dit "resté OFF (sourcing jugé
+> donc conservé TEL QUEL pour les parties non encore rafraîchies (fidélité historique), avec
+> seulement les divergences déjà connues signalées ici plutôt que corrigées dans leur corps de
+> texte :
+> - **Partie 2.3** : corrigée directement dans le corps du texte (passe du 28/07 sur les Parties
+>   1-3, voir plus bas) — l'adresse de transfert autorisée est désormais à jour
+>   (`0x584b2B35dac347B2317da0d21b95063de51257Ef`, vérifiée en direct dans `agent_wallet_pilot.py`).
+> - **Partie 10** (non rafraîchie dans cette passe) : `ARIA_BONDING_DISCOVERY_ENABLED` — le document dit "resté OFF (sourcing jugé
 >   de mauvaise qualité)". CLAUDE.md a depuis corrigé ce point (24/07, audit 5-agents) : le gate
 >   est en réalité `true` en prod.
-> - **Section bonding (Parties 4/5, momentum/VC)** : le pipeline bonding a été largement retravaillé
->   entre le 24/07 et le 28/07 (retrait des gates techniques durs, score composite 35/35/15/15,
->   paliers de sortie Take-Seed, stop de perte 3 volets) — voir `docs/HANDOFF_PIPELINE_MOMENTUM.md`
->   et `docs/trading-thresholds-calibration.md` pour l'état à jour, ce document ne le reflète pas.
-> - Une vérification empirique du 28/07 a aussi trouvé que le crible bonding décrit ici ne laisse
->   passer aucun candidat réel sur un échantillon de ~380 tokens (voir Item #167 du backlog) —
->   trou non connu au moment de la rédaction de ce Codex.
+> - **Parties 4, 5, 6 et nouvelle 5bis — RAFRAÎCHIES le 28/07/2026** (cette même session) : chaque
+>   constante/formule reverrifiée directement contre le code réel (`safety_screen.py`,
+>   `acp_onchain_scan.py`, `momentum_entry.py`, `risk_guard.py`, `paper_trader.py`,
+>   `bonding_entry.py`). Corrige notamment l'ordre réel des garde-fous durs momentum (honeypot
+>   déplacé en dernier le 21/07, concentration holders déplacée après le calcul R/R le 26/07), la
+>   plage RSI absolue [20,40] (25/07), le plancher RVOL 2 500$, l'architecture à 3 poches
+>   (scalping/swing/vc, 27/07) avec son coupe-circuit par poche + macro (-15%), et ajoute la
+>   nouvelle Partie 5bis dédiée au pipeline bonding (score composite 35/35/15/15, paliers de sortie
+>   Take-Seed/Tier2/Tier3/moonbag, stop de perte 3 volets) — y compris la trouvaille empirique du
+>   28/07 non encore corrigée (Item #167 : le crible bonding ne laisse passer quasiment aucun
+>   candidat réel sur un échantillon d'environ 380 tokens).
+> - **Parties 1, 2 et 3 — RAFRAÎCHIES le 28/07/2026** (session distincte, même journée) : chaque
+>   constante/formule/gate/cadence reverrifiée directement contre le code réel (`brain.py`,
+>   `grounding.py`, `llm.py`, `heartbeat.py`, `gateway/telegram_bot.py`, `wallet_guard.py`,
+>   `outgoing_pause.py`, `agent_wallet_pilot.py`/`agent_wallet_pilot_cycle.py`, `x402_budget.py`,
+>   `x402_executor.py`, `onchain/sepolia_autonomous.py`, `onchain/attestation.py`,
+>   `services/smart_money.py`, `services/smart_money_leaderboard.py`, `skills/candidate_ranking.py`).
+>   Principales corrections : Mistral retiré comme provider LLM (code mort supprimé le 27/07) ; un
+>   6e ancrage anti-confabulation (refus de fermeture manuelle de position, 24/07) s'intercale dans
+>   la cascade `AriaBrain.process` ; le verrouillage par défaut de la conversation Telegram publique
+>   (24/07 — un non-admin reçoit désormais un message figé, plus un accès grounded au LLM, sauf gate
+>   explicite) ; plusieurs cadences heartbeat déplacées depuis le 22/07 (découverte momentum
+>   60→30min, surveillance agent-wallet 10→30min, `aria_brain_cycle` devenu une cadence organique
+>   16-24h) ; trois cycles dont le déclenchement réel était resté cassé jusqu'au 24/07
+>   (`smart_money_leaderboard_discovery_cycle`, `token_holder_extraction_cycle`,
+>   `trade_devils_advocate_cycle` — le gate existait mais n'était jamais lu par le tick heartbeat) ;
+>   trois nouveaux cycles apparus depuis (plancher quotidien de trades, Polymarket paper-trading,
+>   sourcing CabalSpy). Corrections annotées inline (⚠️) aux endroits concernés dans les Parties 1-3
+>   ci-dessous plutôt que regroupées en fin de section.
 >
 > Pour toute décision qui compte, revérifier contre le code réel plutôt que de citer cette page —
 > exactement la norme que ce document énonce lui-même en conclusion.
@@ -149,16 +171,22 @@ première étape qui matche court-circuite toutes les suivantes :
    incident réel : identité du modèle, méthodologie d'analyse, "pourquoi pas acheté", périmètre
    du scan, statut d'aria-brain.
 2. Suivi de la dernière analyse `/vc` (opérateur).
-3. Questions langage naturel sur l'état d'un trade.
-4. Workflows conversationnels (composition de tweet, auto-maintenance, préparation matinale).
-5. Affirmation externe injectée → vérification web/GitHub plutôt que refus aveugle.
-6. Message de bienvenue (template).
-7. Classifieur d'intention (regex à score) → route vers l'un des ~17 skills (portefeuille,
+3. **Refus de fermeture manuelle de position** (`is_manual_position_close_command`, ajouté le
+   24/07 après un incident réel : "ferme la position autono" était mal classé par le routeur
+   d'intention générique et répondait à côté de la plaque). Réponse déterministe fixe — le
+   protocole hebdomadaire (§ plus bas) est un test délibérément sans intervention humaine, y
+   compris pour les sorties ; redirige vers `/feedback`/`/ledger` et vers les mécanismes de
+   correction existants (Devil's Advocate, revue par lot des trades perdants).
+4. Questions langage naturel sur l'état d'un trade.
+5. Workflows conversationnels (composition de tweet, auto-maintenance, préparation matinale).
+6. Affirmation externe injectée → vérification web/GitHub plutôt que refus aveugle.
+7. Message de bienvenue (template).
+8. Classifieur d'intention (regex à score) → route vers l'un des ~16 skills (portefeuille,
    répertoire, launchpad, FAQ, marketing, entrepreneur...).
-8. Si un skill répond → reformulation LLM (sauf skills strictement factuels, jamais reformulés
+9. Si un skill répond → reformulation LLM (sauf skills strictement factuels, jamais reformulés
    pour ne pas risquer une dérive).
-9. Sinon → réponse générale : FAQ directe → vérité déjà établie → recherche web calibrée → LLM en
-   dernier recours.
+10. Sinon → réponse générale : FAQ directe → vérité déjà établie → recherche web calibrée → LLM en
+    dernier recours.
 
 Post-traitement systématique sur toute réponse : correction du texte, détection de "faux succès
 technique", vérification épistémique (opérateur), journalisation dans le registre de vérité, note
@@ -179,19 +207,26 @@ ARIA peut parler à plusieurs fournisseurs de modèles de langage, jamais un seu
 | virtuals (Spark) | configuré séparément |
 | deepseek | deepseek-chat |
 | gemini | gemini-3.5-flash |
-| mistral | mistral-small-2603 |
 | anthropic | claude-haiku-4-5-20251001 |
 
+⚠️ **Mistral retiré le 27/07** (commit `6c7df9f8`, "remove Mistral provider support") — provider
+jamais réellement utilisé en prod, supprimé comme code mort (URL, modèle par défaut, clé d'auth
+dédiée, tout le câblage associé). La ligne du tableau ci-dessus a disparu en conséquence.
+
 Un appel essaie d'abord le provider primaire, puis un éventuel fallback fixé par l'appelant, puis
-un fallback global — le premier qui répond gagne, et si c'est un fallback qui a servi, c'est
-journalisé pour que l'opérateur seul le sache. Chaque provider a sa propre clé API (aucun repli
-croisé pour virtuals/anthropic, pour éviter un rejet d'authentification).
+un fallback global (Groq) — le premier qui répond gagne, et si c'est un fallback qui a servi,
+c'est journalisé pour que l'opérateur seul le sache. Depuis le 18/07, un disjoncteur dédié
+(`llm_circuit_breaker.py`) peut aussi basculer le routage PAR DÉFAUT (aucun provider explicite
+fourni par l'appelant) vers OpenRouter si le provider primaire échoue en série — mécanisme
+distinct de ce fallback générique, non détaillé ici. Chaque provider a sa propre clé API (aucun
+repli croisé pour virtuals/anthropic, pour éviter un rejet d'authentification) — vérifié inchangé
+dans `_auth_key_for_provider`.
 
 Paramètres par défaut d'un appel (`chat_with_context`) : `max_tokens = 400`, historique de
 conversation tronqué aux 12 derniers messages, timeout HTTP 90 secondes (120s pour un modèle
-local). Sur Mistral, le "budget de raisonnement" invisible est explicitement désactivé — un piège
-déjà rencontré sur un autre fournisseur où ce budget invisible consommait tout le quota de tokens
-sans laisser de place à la vraie réponse.
+local). Le piège du "budget de raisonnement" invisible consommant tout le quota de tokens sans
+laisser de place à la vraie réponse (documenté ici à l'origine sur Mistral, désormais retiré) reste
+une leçon actionnable pour tout futur fournisseur qui présenterait le même comportement.
 
 ### 1.3 Anti-hallucination
 ```
@@ -224,10 +259,12 @@ tout premier : aucune tâche ne tourne en pause.
 |---|---|---|
 | portfolio_scan | 30 min | actif, aucun gate |
 | paper_trade_cycle | 15 min | `ARIA_PAPER_TRADING_ENABLED` — surveillance des positions ouvertes |
-| momentum_discovery_cycle | 60 min | même gate — découverte de nouveaux candidats |
+| momentum_discovery_cycle | 30 min ⚠️ | même gate — découverte de nouveaux candidats (abaissé de 60 à 30 min le 23/07, le WebSocket #196 couvre déjà la détection ~30s) |
 | paper_weekly_review_cycle | 60 min | même gate — reset hebdomadaire (agit si 7j écoulés) |
+| daily_trade_floor_cycle **(nouveau, 23/07)** | 60 min | gate maître `ARIA_PAPER_TRADING_ENABLED` + `ARIA_DAILY_TRADE_FLOOR_ENABLED` — force jusqu'à 2 ouvertures/passage si <5 trades ouverts ce jour civil, gardes de sécurité intacts |
+| polymarket_paper_cycle **(nouveau, 26/07)** | 60 min ⚠️ | `ARIA_POLYMARKET_PAPER_ENABLED` — cadence d'observation TEMPORAIRE (burn-in, 1 candidat/passage) ; cadence nominale prévue 720 min/12h une fois quelques cycles propres confirmés (Item #133) |
 | agent_wallet_pilot_cycle | 60 min | `ARIA_AGENT_WALLET_PILOT_ENABLED` — capital réel |
-| agent_wallet_monitor_cycle | 10 min | `ARIA_AGENT_WALLET_MONITOR_ENABLED` |
+| agent_wallet_monitor_cycle | 30 min ⚠️ | `ARIA_AGENT_WALLET_MONITOR_ENABLED` — remonté de 10 à 30 min le 23/07 (passage à 8h puis retour à 30 min le même jour, décision opérateur) |
 | sepolia_autonomous_cycle | 60 min | `ARIA_SEPOLIA_AUTONOMOUS_ENABLED` |
 | vc_crawl | 6h | actif |
 | vc_resolve | 24h | actif |
@@ -237,20 +274,21 @@ tout premier : aucune tâche ne tourne en pause.
 | vc_thesis_review | 24h | actif |
 | wallet_scan_queue_cycle | 20 min | `ARIA_WALLET_SCAN_QUEUE_ENABLED` + `ARIA_WALLET_SCORING_ENABLED` |
 | wallet_candidate_sourcing_cycle | 3h | triple gate wallet-scoring |
-| smart_money_leaderboard_discovery_cycle | 3h | triple gate wallet-scoring |
-| token_holder_extraction_cycle | 3h | `ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED` |
+| cabalspy_candidate_sourcing_cycle **(nouveau, 23/07)** | 3h | triple gate wallet-scoring (+ `ARIA_CABALSPY_SOURCING_ENABLED`) — sourcing des wallets KOL labellisés CabalSpy, resynchronisation complète au plus 1×/semaine |
+| smart_money_leaderboard_discovery_cycle | 3h | triple gate wallet-scoring ⚠️ resté un no-op silencieux jusqu'au 24/07 (gate lu mais jamais appliqué à `task.enabled` — corrigé, commit `fbad4842`) |
+| token_holder_extraction_cycle | 3h | `ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED` ⚠️ même bug, même correctif 24/07 |
 | market_sentiment_cycle | 60 min | `ARIA_MARKET_SENTIMENT_ENABLED` |
 | market_alerts_cycle | 60 min | `ARIA_MARKET_ALERTS_ENABLED` (Otto AI, OFF) |
 | relay_conversation_cycle | 15 min | relais ARIA ↔ Claude Code |
 | knowledge_inbox_cycle | 6h | `ARIA_KNOWLEDGE_INBOX_ENABLED` |
 | claude_mentor_cycle | 60 min | revue de performance par Claude |
 | pump_dump_autopsy_cycle | 3h | `ARIA_PUMP_DUMP_AUTOPSY_ENABLED` |
-| aria_brain_cycle | 24h | une page/jour, mémoire libre |
-| trade_devils_advocate_cycle | 3h | jamais activé (statique) |
+| aria_brain_cycle | organique 16-24h ⚠️ | une page/jour visée, mémoire libre — plus une horloge fixe 24h depuis le 24/07 : centre 20h ±4h de jitter déterministe (seedé par le dernier passage réel) |
+| trade_devils_advocate_cycle | 3h | `ARIA_TRADE_DEVILS_ADVOCATE_ENABLED` ⚠️ jusqu'au 24/07 le gate existait mais n'était jamais lu par le tick heartbeat (`enabled=False` figé en dur) — corrigé le même commit que les deux lignes ci-dessus |
 | canonical_facts_sync_cycle | 3h | `ARIA_CANONICAL_FACTS_SYNC_ENABLED` |
 | x_curiosity / x_mentions_learn / x_profile_sync / tweet_schedule | 3h / 90 min / 24h / 1 min | publication X, gatée séparément |
-| bonding_discovery_cycle | 3h | `ARIA_BONDING_DISCOVERY_ENABLED` — OFF (sourcing jugé de mauvaise qualité) ⚠️ voir note de tête, périmé |
-| … (~35 autres cycles) | — | showcase PR, ACP (dormant), exam pédagogique, mémoire consolidée, X balance monitor, directive proposal, exposition/culture — chacun avec son propre gate étroit |
+| bonding_discovery_cycle | 3h | `ARIA_BONDING_DISCOVERY_ENABLED` — **OFF par défaut dans le code**, mais confirmé `true` en prod (audit 5-agents du 24/07, via le conteneur réel) ; pipeline lui-même largement retravaillé depuis (score composite, paliers de sortie Take-Seed) — hors du périmètre de cette Partie, voir Partie 5bis et `docs/HANDOFF_PIPELINE_MOMENTUM.md` |
+| … (~32 autres cycles, sur 66 tâches déclarées au total) | — | showcase PR, ACP (dormant), exam pédagogique, mémoire consolidée, X balance monitor + disjoncteur LLM, directive proposal, exposition/culture — chacun avec son propre gate étroit |
 
 ### 1.5 Commandes Telegram
 Trois niveaux d'accès : public (aucune vérification), admin (ID Telegram dans la liste des
@@ -263,7 +301,7 @@ kill-switch).
 | `/whoami` | public | Identité Telegram (jamais la liste admin à un non-admin) |
 | `/stop` | propriétaire | Coupe toute action sortante (kill-switch) |
 | `/resume` | propriétaire | Relève la pause |
-| `/riskresume` | propriétaire | Lève le coupe-circuit portefeuille (drawdown/pertes) |
+| `/riskresume [poche]` | propriétaire | Lève le coupe-circuit portefeuille (drawdown/pertes) — depuis le 27/07 (plan à 3 poches), sans argument lève les 3 poches (scalping/swing/vc) à la fois, ou cible une poche précise en argument |
 | `/vc <contrat>` | admin | Analyse VC complète d'un contrat |
 | `/walletscore` | admin | Note un wallet, analyse immédiate |
 | `/topwallets` | admin | Classement des meilleurs investisseurs |
@@ -276,10 +314,20 @@ kill-switch).
 | `/sentiment` | admin | Dernière lecture de sentiment marché |
 | `/watchlist` | admin | Top candidats du pool VC screené |
 | `/feuvert` | admin | Scorecard avant argent réel (8 cases) |
-| … (~22 autres) | admin | langue, thèses, calibration, X, avatar, répertoire, GitHub, canal directives… |
+| `/mode [standard\|scalping]` **(nouveau, 26/07)** | admin | Bascule le mode d'entrée du test Milly ($1M) — sans argument, affiche le mode courant ; scalping remplace entièrement swing/VC sur ce portefeuille, jamais un mélange, jamais automatique |
+| `/polymarket` **(nouveau, 26/07)** | admin | Aperçu du portefeuille papier dédié (100k$) sur les marchés de prédiction Polymarket |
+| … (~25 autres, sur 44 commandes enregistrées au total) | admin | langue, thèses, calibration, X, avatar, répertoire, GitHub, canal directives… |
 
-En texte libre (hors commande), un non-admin passe par une réponse publique rate-limitée. Un
-admin traverse une cascade de détecteurs déterministes en langage naturel (approbation/rejet de
+⚠️ **Correction 28/07** : en texte libre (hors commande) sur Telegram, un non-admin ne passe plus
+par une réponse publique "rate-limitée" du cerveau — depuis le 24/07 (décision opérateur
+explicite, "verrouille aria"), l'espace est verrouillé par défaut : un visiteur non-admin reçoit un
+message figé ("cet espace est réservé à l'équipe") et ne déclenche plus du tout d'appel LLM,
+sauf si l'opérateur réactive `ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED` (OFF par défaut). `/start`
+et `/whoami` restent inchangés (zéro coût LLM, jamais concernés par ce verrou). Ce verrou est
+strictement scopé à la surface Telegram : le mode "grounded" public décrit plus haut (§1.1) reste
+pleinement actif sur le widget de chat du site web (`vanguard/backend`, visiteur ET membre connecté
+via Privy), qui appelle toujours `aria_brain.process(public_mode=True)` sans ce gate. Un admin
+traverse une cascade de détecteurs déterministes en langage naturel (approbation/rejet de
 connaissance, vote, questions de statut) avant de retomber sur le cerveau général si rien ne
 matche.
 
@@ -328,11 +376,14 @@ chaîne           = Base uniquement
 ```
 
 La détection de position déjà ouverte se fait en lisant les vrais tokens détenus (pas un seuil de
-solde ambigu qui confondrait un token réel avec de la poussière de frais). ⚠️ Adresse de transfert
-autorisée gravée en dur dans le code, jamais une variable modifiable sans revue — **voir note de
-tête : la valeur ci-dessous est PÉRIMÉE**, valeur réelle au 28/07 = `0x584b2B35dac347B2317da0d21b95063de51257Ef`.
-Ce chemin n'importe jamais `wallet_guard` — c'est une séparation structurelle, vérifiée par un
-test automatique dédié.
+solde ambigu qui confondrait un token réel avec de la poussière de frais). Adresse de transfert
+autorisée gravée en dur dans le code (`ALLOWED_TRANSFER_ADDRESS`, `agent_wallet_pilot.py`), jamais
+une variable modifiable sans revue de code — valeur vérifiée en direct le 28/07 :
+`0x584b2B35dac347B2317da0d21b95063de51257Ef` (a déjà changé une fois, cf. CLAUDE.md 23/07 —
+revérifier dans le code avant de la citer à nouveau plutôt que de la recopier de mémoire). Ce
+chemin n'importe jamais `wallet_guard` — c'est une séparation structurelle, vérifiée par des tests
+automatiques dédiés (`test_agent_wallet_pilot_never_uses_wallet_guard_and_gated_off` et deux autres
+dans `test_coherence.py`).
 
 Le pilote réutilise le pipeline momentum déjà construit pour le paper-trading (§5) comme moteur
 de décision — même honeypot, même R/R, même alignement technique — appliqué ici à un montant sans
@@ -531,7 +582,15 @@ capacité maximale = 600 wallets
 
 Structurellement différent du momentum (§5) : ici le LLM juge sur des faits riches, un seul veto
 déterministe (danger confirmé) peut annuler sa décision. Ce pipeline reste dormant sur le test
-1M$ en cours (100% momentum), mais reste actif pour toute analyse manuelle `/vc`.
+1M$ historique 100% momentum (15/07), mais reste actif pour toute analyse manuelle `/vc`.
+
+⚠️ **Mise à jour 28/07** : le sourcing VC réel existe désormais dans le code (plan à 3 poches,
+27/07) — une poche `"vc"` dédiée est câblée dans `paper_trader._run_paper_cycle_locked` et source
+ses candidats via `candidate_ranking.top_candidates` avec `_default_analyzer` (ce même pipeline
+`safety_screen`/`vc_analysis`), en parallèle des poches `scalping`/`swing` (momentum). Gate
+dédié `ARIA_MULTI_POCKET_SOURCING_ENABLED`, OFF par défaut dans le code au 28/07 — à VÉRIFIER en
+direct (pas supposer) avant de considérer que la poche VC ouvre réellement des positions en prod.
+Détail : `docs/HANDOFF_PAPER_TRADING.md`.
 
 ### 4.1 Le crible de découverte (safety_screen)
 ```
@@ -576,9 +635,24 @@ Ajustements FONDAMENTAUX (CoinGecko, si demandés) :
   ratio valorisation-diluée/capitalisation ≥3.0 → −10
 
 Ajustements HONEYPOT (GoPlus, si demandés) :
-  honeypot confirmé −60 | vente totale impossible −40
+  honeypot confirmé −60 | vente totale impossible −40 | achat impossible −40 (24/07, symétrique
+    de cannot_sell_all — aucun émetteur légitime, même stablecoin réglementé, n'a besoin de
+    bloquer l'achat)
   taxe de vente ≥10% −20 | taxe d'achat ≥10% −10
   owner caché −20 | reprise de propriété possible −20
+  taxe/slippage modifiable après coup −15 (22/07, pouvoir dissimulé distinct de l'owner caché)
+  owner peut modifier le solde d'un wallet −40 (22/07, vecteur de perte totale, trouvé sur la
+    position momentum réelle CNX — distinct du honeypot classique qui ne bloque que la revente)
+
+Verdict forcé à DANGER, quel que soit le score, si l'un de ces 4 signaux est CONFIRMÉ : honeypot,
+vente totale impossible, achat impossible, owner peut modifier le solde d'un wallet.
+
+Quatre autres signaux GoPlus (contrat proxy upgradeable, mint actif, capacité blacklist,
+transferts pausables) sont CONTEXTUALISÉS (24/07) plutôt que pénalisés mécaniquement dans un
+sens ou l'autre : normaux et attendus chez un émetteur stablecoin réglementé déjà reconnu
+(Circle/Tether — ex. USDC/USDT sont légitimement proxy + mintable + blacklist-capable), un vrai
+point d'attention chez un déployeur anonyme/inconnu. Jamais de malus/bonus automatique — seul
+`cannot_buy` (ci-dessus) reste un véto dur sans exception, aucun cas légitime trouvé.
 
 score final = borné entre 5 et 95
 
@@ -662,25 +736,39 @@ BUY — DANGER→AVOID, SAFE→WATCH, sinon WATCH également.
 
 ## Partie 5 — Le pipeline momentum — le test 1M$ en cours
 
-C'est le pipeline qui tourne réellement à 100% sur le portefeuille papier de 1 000 000 $.
+C'est le pipeline qui tourne réellement sur le portefeuille papier de 1 000 000 $ (poche
+"swing" depuis le passage à une architecture à 3 poches, voir note en fin de section).
 Contrairement au VC (des seuils déterministes décident presque seuls, le LLM n'intervenant qu'en
 second avis), c'est un pari technique sur un token déjà liquide et en mouvement.
 
-**Garde-fous durs à l'entrée** (rejet immédiat, sans exception)
+**Garde-fous durs à l'entrée, dans l'ordre RÉEL d'exécution** (21/07, du plus rapide/gratuit au
+plus rare/coûteux — l'ordre a bougé depuis, honeypot et concentration se sont tous deux déplacés,
+voir les notes sur chaque ligne) :
 ```
-liquidité minimum        = 50 000 $  (doublée à 100 000 $ en régime macro Peur)
+liste noire (contrat déjà confirmé piégeux)   → rejet immédiat, aucun appel réseau
+liquidité minimum        = 50 000 $  (doublée à 100 000 $ en régime macro Peur,
+                             15 000 $ en mode scalping)
 volume 24h minimum       = max(500 $, 1% de la liquidité du pool)
 ratio volume/liquidité   = rejet si >20× de façon SOUTENUE (≥75 secondes)
-mouvement 24h déjà fait  = rejet si >+200% (levé en régime Euphorie confirmé)
-concentration holders    = rejet si les 10 plus gros (hors pool/burn/contrats vérifiés) ≥80%
+mouvement 24h déjà fait  = rejet si >+200% (levé en régime Euphorie confirmé) — entre 200% et
+                             350%, une convergence smart money CONFIRMÉE peut "sauver" le rejet
+                             (task #3, 22/07) ; au-delà de 350%, rejet dur sans exception
 profil projet établi     = DexScreener payant OU listing CoinGecko, sinon rejet
-honeypot (GoPlus)        = SEUL garde-fou fail-closed sur panne — jamais un pari sans lui
+honeypot (GoPlus)        = déplacé EN DERNIER parmi les garde-fous durs (21/07) — c'est la
+                             ressource la plus RARE de tout le pipeline (~55 requêtes/min
+                             soutenues, cf. `docs/api-rate-limit-calibration.md`), jamais dépensée
+                             sur un candidat qui allait de toute façon être rejeté gratuitement
+                             plus haut ; reste le SEUL garde-fou fail-closed sur panne réseau
 ```
 
 **Signal technique et décision**
 ```
 Setup recherché : golden pocket Fibonacci (retracement 0.618-0.786)
-                   + divergence haussière RSI, sur ≤25 bougies
+                   + divergence haussière RSI, sur ≤25 bougies — le pivot RSI récent doit lui-même
+                   tomber dans la plage ABSOLUE [20, 40] (25/07, incident réel ZEN : un achat sur
+                   "RSI remonte 39 → 40" avait été validé par le seul critère relatif — prix plus
+                   bas + RSI plus haut que le creux précédent, sans aucun plancher/plafond sur le
+                   RSI lui-même — hors de toute vraie zone de survente)
 
 R/R franc ≥2.0 ET alignement technique ≥2/3 signaux  → achat DIRECT
 R/R entre 1.0 et 2.0                                  → un seul appel LLM tranche
@@ -688,9 +776,29 @@ R/R entre 1.0 et 2.0                                  → un seul appel LLM tran
 sinon                                                 → HOLD
 ```
 
+Concentration des holders (top 10 hors pool/burn/contrats vérifiés ≥80%) : déplacée APRÈS ce
+calcul de R/R (26/07, audit du pipeline complet — 333 paiements x402 Blockscout réels/0,666$
+trouvés depuis le 21/07, dont 31% de purs doublons sur des candidats déjà rejetés gratuitement à
+l'étape R/R juste au-dessus). Le seuil (80%) reste inchangé, seul le MOMENT du check a bougé —
+il ne se déclenche plus qu'une fois un vrai setup golden pocket + RSI confirmé.
+
 Volume relatif (RVOL) de la bougie déclenchante : rejet dur si un vrai volume est disponible et
-confirme <3× la moyenne des 10 bougies précédentes ; si la donnée est structurellement absente,
-jamais de rejet mais un malus de conviction s'applique à la taille.
+confirme <3× la moyenne des 10 bougies précédentes ; rejet aussi si le ratio atteint 3× mais que
+la bougie déclenchante représente <2 500$ en valeur absolue (un ratio élevé sur une moyenne
+effondrée n'est pas un vrai flux de capital) ; si la donnée est structurellement absente, jamais
+de rejet mais un malus de conviction s'applique à la taille.
+
+**Plancher quotidien de trades (diagnostique, 23/07 → 27/07)** : un cycle heartbeat additif et
+indépendant force jusqu'à 5 ouvertures par passage pour atteindre `DAILY_TRADE_FLOOR` = 30
+positions ouvertes par jour civil (relevé depuis un chiffre initial de 5 — le texte de CLAUDE.md
+n'a pas encore été recalé sur cette valeur, écart noté dans `docs/trading-thresholds-calibration.md`)
+sur des candidats qui échouent SEULEMENT les gates de QUALITÉ (volume, profil projet, R/R, RVOL)
+— jamais les gates de SÉCURITÉ (liste noire, honeypot, liquidité, wash-trading, concentration,
+plafond parabolique), qui restent tous appliqués intégralement. Le coupe-circuit de risque reste
+vérifié en premier, prioritaire sur cet objectif de volume. Sizing désormais identique à un trade
+normal (formule risque/ATR ci-dessous, plus de taille fixe à 1% du capital — décision opérateur
+du 25/07, "enlève le truc qui force les positions avec 1% du capital", pour ne plus plafonner
+artificiellement l'upside d'un candidat réellement fort).
 
 **Sizing — composition complète**
 1. Budget de risque par palier de conviction : FORT 1.5% / MODÉRÉ 1.0% / FAIBLE 0.5%
@@ -719,11 +827,165 @@ Régime Euphorie  : le 3e palier est neutralisé (moon bag pur, guidé par le st
 Reset hebdomadaire : clôture forcée au prix médian des 5 dernières bougies (anti-mèche),
 archivage complet, verdict contre l'objectif +10%, remise à 1 000 000 $ chaque semaine — que la
 précédente ait réussi ou non. C'est une boucle d'entraînement répétée, jamais une porte de sortie
-unique.
+unique. Fonctions désormais scopées par poche (`weekly_cycle_due(wallet=...)`/
+`run_weekly_reset(wallet=...)`, défaut `"swing"`, 27/07) — voir la note ci-dessous.
 
-⚠️ **Voir note de tête** : cette Partie 5 (bonding non couvert ici, momentum standard OK) a été
-largement retravaillée depuis le 24/07 côté bonding (Items #152-167) — se référer à
-`docs/HANDOFF_PIPELINE_MOMENTUM.md`/`docs/trading-thresholds-calibration.md` pour l'état à jour.
+⚠️ **Architecture à 3 poches (27/07, en cours de déploiement)** : le portefeuille 1M$ décrit
+ci-dessus devient progressivement 3 poches indépendantes de 1M$ chacune (scalping/swing/vc),
+sourcées et gérées séparément — la poche `"swing"` correspond à ce qui est décrit dans cette
+Partie 5, `"scalping"` reprend la même discipline avec les paramètres dédiés déjà notés dans
+CLAUDE.md (bougies 15-30min, RSI period=10, golden pocket [20,40]), `"vc"` source désormais
+réellement le pipeline VC de la Partie 4 (voir sa note de mise à jour). Gate dédié
+`ARIA_MULTI_POCKET_SOURCING_ENABLED`, OFF par défaut dans le code au 28/07 — état réel en prod à
+vérifier en direct, jamais supposer. Le reset hebdomadaire ET le coupe-circuit de risque (Partie
+6) sont désormais tous les deux PAR POCHE, plus un coupe-circuit MACRO agrégé sur les 3 poches
+combinées (voir Partie 6). Détail complet : `docs/HANDOFF_PAPER_TRADING.md`.
+
+Le pipeline bonding (Virtuals, tokens pré-graduation) tourne sur ce même test 1M$ mais suit des
+règles entièrement différentes, largement retravaillées entre le 24/07 et le 28/07 (Items
+#152-167) — voir la Partie 5bis ci-dessous plutôt que de chercher cette information ici.
+
+### 5bis. Le pipeline bonding (Virtuals)
+
+Moteur de décision SÉPARÉ (`bonding_entry.py`) pour un token Virtuals encore sur sa courbe de
+bonding (aucun pool DEX n'existe encore) — branché sur le même test 1M$ actif (feu vert
+opérateur, 24/07), mais qui ne partage presque aucune règle avec le momentum standard ci-dessus :
+ni DexScreener ni GeckoTerminal n'existent encore pour ce token, donc toute la mécanique
+liquidité-DEX/OHLCV classique est structurellement inapplicable.
+
+**Ce qui a été retiré du pipeline standard, et pourquoi** :
+- Le check honeypot GoPlus (orienté DEX/Base) — pas de logique de contrat séparée à exploiter ici
+  au-delà du contrat protocole Virtuals lui-même, déjà utilisé par tous les tokens Virtuals.
+- Le plancher de liquidité 50 000$ — protège contre un retrait de LP externe, qui ne s'applique
+  pas à une réserve de bonding détenue par le PROTOCOLE, jamais un dev individuel.
+- Le golden pocket/RSI calculé sur des bougies DexScreener/GeckoTerminal (inexistantes) —
+  reconstruit à la place depuis l'historique RÉEL de trades individuels
+  (`services/virtuals.py::fetch_recent_trades`, endpoint `vp-api.virtuals.io`, confirmé en direct
+  et sans authentification) agrégé en bougies par NOMBRE FIXE de trades (5 trades/bougie, jamais
+  un intervalle de temps fixe — la densité de trading varie trop sur une bonding curve).
+
+**Champs natifs Virtuals repris comme garde-fous durs** (trouvés dans le même endpoint déjà
+appelé pour lister les tokens, jamais captés avant) :
+```
+détention équipe (dev_holding_pct)     ≤ 5%   — inconnue ou dépassée = rejet (fail-closed)
+concentration top10 (top10_holder_pct) ≤ 80%  — appliquée SEULEMENT si ≥50 holders réels
+                                                  (relevé de 15→50 le 28/07 : un échantillon réel
+                                                  de 50 tokens en bonding n'a trouvé qu'1/50 avec
+                                                  ≥15 holders, et celui-là restait à 100% de
+                                                  concentration — 15 n'était jamais un vrai seuil
+                                                  d'échantillon suffisant)
+liquidité de la réserve de bonding     ≥ 10 000$  — proxy de market cap (les deux suivent de très
+                                                      près sur une bonding curve, observation
+                                                      opérateur)
+prix réellement convertible en USD     — sinon HOLD (jamais un prix inventé)
+```
+Sous le seuil de 50 holders, la concentration n'est plus neutre (moitié du poids du pilier) mais
+quasi nulle (20% du poids, 28/07) — un signal jugé non informatif à ce stade, pas un bénéfice du
+doute mécanique.
+
+**Le score composite (24/07, remanié 28/07)** — remplace ce qui était au départ des rejets durs
+sur dev_holding/concentration : testé en direct contre les 100 vrais prototypes disponibles le
+jour du lancement, TOUS rejetés sur la concentration (même le token avec le plus de holders,
+NISTIC, 33 holders, encore à 100% de concentration). Cause racine vérifiée contre le whitepaper
+officiel Virtuals ET le vrai formulaire de lancement (`app.virtuals.io/create`) : le module de
+vesting d'équipe est désactivé par défaut et, même activé, verrouillé 1 an post-TGE — donc
+`dev_holding_pct=0%` et une concentration mécaniquement écrasée par un petit pool d'acheteurs
+sont des faits STRUCTURELS de ce stade de marché, pas des signaux de risque. Conclusion opérateur
+(revue croisée LLM externe confirmée avant codage) : sur un token aussi jeune, le vrai edge est un
+pari sur le PRODUIT/ÉQUIPE/adoption, pas sur des métriques on-chain qui ne veulent encore rien
+dire.
+
+```
+score composite = poids_dev_sécurité + poids_produit_conviction
+                   + poids_setup_technique + poids_concentration
+
+poids_dev_sécurité (35 pts max)       = 35 × (1 − dev_holding_pct / 5%)
+poids_produit_conviction (35 pts max) = potentiel/10 × 35
+                                          (potentiel=None -- équipe discrète mais réelle -- reste
+                                          neutre à 17,5/35, jamais pénalisé pour manque de buzz)
+poids_setup_technique (15 pts max)    = 0 si pas de setup golden pocket/RSI (28/07, item #152 --
+                                          N'EST PLUS un rejet dur, voir plus bas) ; sinon marge de
+                                          R/R (9 pts, référence R/R=5.0) + marge d'alignement
+                                          technique (6 pts)
+poids_concentration (15 pts max)      = 15 × (1 − top10_holder_pct / 80%) si ≥50 holders réels,
+                                          sinon 15 × 0,2 (quasi nul, non informatif)
+
+BUY si score composite ≥ 60/100 (seuil de départ, choix opérateur explicite -- "on commence à
+soixante sur cent et on la laisse trader, si mauvais résultats on ajustera")
+```
+
+**28/07 — le setup technique n'est plus un rejet dur (item #152)** : jusqu'à cette date,
+l'absence de golden pocket/divergence RSI rejetait AVANT même que le score composite soit
+calculé — un cas réel (HOLO) a été rejeté uniquement pour cette raison, son équipe/produit
+jamais évalués. Un token aussi jeune manque structurellement d'historique de trades pour qu'un
+setup Fibonacci/RSI veuille dire quelque chose ; recherche du 28/07 en accord avec l'instruction
+opérateur explicite ("les tokens en bonding sont tradés par potentiel, grâce au facteur équipe,
+produit, fondamentaux"). Un setup absent note désormais simplement 0/15 sur ce pilier, le score
+composite tranche seul, même doctrine déjà appliquée à la concentration/dev security.
+
+**R/R et fallback (28/07, item #152)** : sans setup technique détecté, la cible/l'invalidation
+retombent sur des multiples fixes du prix d'entrée — cible ×2.0, invalidation ×0.35 (perte max
+65%), ancrés directement sur le design de sortie ci-dessous (Take-Seed / stop total) plutôt
+qu'inventés séparément, pour que le R/R affiché reste cohérent avec la gestion réelle de la
+position.
+
+**Devise** : un trade bonding est coté en $VIRTUAL par token, jamais en USD directement — chaque
+niveau de prix renvoyé (entrée/cible/invalidation) est converti via `virtuals.virtual_usd_rate()`
+juste avant d'être remis au portefeuille (100% USD). `entry_atr_pct` (un ratio ATR/prix, dans la
+même unité $VIRTUAL des deux côtés) reste volontairement NON converti — le facteur d'échange
+s'annule algébriquement, le convertir serait un point de défaillance en plus pour rien.
+
+**Sizing** : même formule risque/ATR que le momentum standard (`paper_trader.compute_entry_alloc`),
+plus une réduction supplémentaire dédiée `BONDING_SIZE_REDUCTION = 0.5×` — risque structurellement
+plus élevé (pas de check honeypot, marché plus mince), demande explicite opérateur pour une taille
+plus prudente que le palier momentum standard.
+
+**Sortie — paliers de prise de profit dédiés (item #154, 28/07)**, distincts du système momentum
+générique ci-dessus (multiples de PRIX fixes, jamais une cible technique — une position bonding
+peut ne pas en avoir) et avec un VRAI reliquat jamais vendu mécaniquement :
+```
+BONDING_TP_STAGES          = (+100%, +400%, +1150%)  = 2×/5×/12,5× le prix d'entrée
+                              (Take-Seed / Tier2 / Tier3)
+BONDING_TP_STAGE_FRACTIONS = (45%, 25%, 20%) de la quantité INITIALE — ~10% jamais vendu
+                              mécaniquement (moonbag pur, géré uniquement par le stop suiveur ATR)
+```
+Recherche à l'origine de ces paliers (28/07) : des cas réels de lancements bonding gagnants vont
+de 100× à ~11 900× au pic, mais TOUS ont ensuite rendu 92% à 99,8% de ce pic dans l'année qui a
+suivi — la discipline de sortie compte plus que la conviction sur cette classe d'actif, intuition
+opérateur ("elle peut vendre en plusieurs paliers pour sécuriser") directement confirmée par la
+recherche.
+
+**Stop de perte à 3 volets (item #155, 28/07)**, ADDITIF — jamais un remplacement du stop suiveur
+ATR générique, qui continue de s'appliquer en parallèle sur une position bonding :
+```
+Volet 1 (statique)  : le clamp cible/invalidation du fallback ci-dessus (×0.35, perte max 65%) --
+                       élargi (jamais resserré) si un niveau technique existait et était plus
+                       serré. Un cas réel (HOLO, projet actif non-fantôme) a montré des swings
+                       -55%/+122% comme du bruit NORMAL sur cette classe d'actif -- un stop
+                       technique plus serré sortirait sur ce bruit, pas sur un vrai échec.
+Volet 2 (vélocité)  : référence de prix glissante, réancrée toutes les 30 min
+                       (BONDING_VELOCITY_WINDOW_MINUTES) -- une chute de 40%
+                       (BONDING_VELOCITY_DROP_PCT) ou plus depuis cette référence force une
+                       sortie complète immédiate, indépendamment du stop ATR (qui ne réagit qu'à
+                       un NOUVEAU plus-haut, jamais à une chute rapide depuis un niveau déjà sous
+                       le dernier plus-haut confirmé).
+Volet 3 (liquidité) : même patron défense-en-profondeur que la poche VC (Formule B, plus bas) --
+                       plancher absolu 10 000$ (BONDING_LIQUIDITY_FLOOR_USD, miroir volontaire du
+                       plancher d'entrée) + chute cumulée 50% depuis l'entrée
+                       (BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT) + chute soudaine 30% entre deux
+                       cycles consécutifs (BONDING_LIQUIDITY_SUDDEN_DROP_PCT) -- une réserve de
+                       bonding qui se vide est le même signal qu'un pool DEX qui se vide.
+```
+
+**⚠️ Trouvaille empirique du 28/07, PAS ENCORE CORRIGÉE (Item #167 du backlog)** : testé contre
+un échantillon réel d'environ 380 candidats bonding vivants, les garde-fous durs actuels de ce
+pipeline — essentiellement le plancher de liquidité (10 000$) et la concentration holders —
+ne laissent passer PRESQUE AUCUN candidat réel : un taux d'acceptation proche de 0% sur le flux de
+tokens réellement en train de bonder aujourd'hui. Trou trouvé, pas encore comblé au moment de la
+rédaction de cette mise à jour du Codex — prochaine étape probable : recalibrer un ou plusieurs de
+ces planchers une fois davantage de données réelles en main, même doctrine "mesurer avant de
+resserrer/assouplir" que le reste de ce pipeline. Détail :
+`docs/HANDOFF_PIPELINE_MOMENTUM.md`, `docs/trading-thresholds-calibration.md`.
 
 ## Partie 6 — Gestion du risque de portefeuille
 
@@ -738,12 +1000,25 @@ Drawdown SOUPLE (−10% depuis le plus haut d'équité) → allocation ÷2 sur l
 Drawdown DUR (−20%) OU 5 pertes consécutives (tous contrats) → bloque toute nouvelle entrée
                                   (positions déjà ouvertes continuent d'être gérées normalement)
 
-Pertes consécutives PAR CONTRAT ≥2 → re-entrée suspendue sur CE contrat seul
-                                  (reset à chaque nouveau cycle hebdomadaire)
+Pertes consécutives PAR CONTRAT ≥2 (mode standard/swing)
+                        OU ≥3 (mode scalping, 26/07, item #101) → re-entrée suspendue sur CE
+                                  contrat seul (reset à chaque nouveau cycle hebdomadaire)
 ```
 
 La reprise après un coupe-circuit dur n'est jamais automatique — elle exige une action humaine
 explicite (commande `/riskresume`), même si le drawdown s'est entre-temps résorbé tout seul.
+
+⚠️ **Architecture à 3 poches (27/07)** : ce coupe-circuit, historiquement unique pour tout le
+portefeuille, est désormais calculé PAR POCHE (`risk_guard.evaluate_portfolio_risk(wallet=...)`,
+`resume_new_entries(wallet=...)`, `/riskresume` scopé par poche) — une série de pertes sur la
+poche scalping seule ne bloque plus les poches swing/VC, chacune a son propre plus-haut d'équité
+et son propre état persisté. Un second coupe-circuit MACRO (`risk_guard.evaluate_macro_risk`),
+délibérément plus drastique, agrège l'équité COMBINÉE des 3 poches contre son propre plus-haut :
+une chute de **-15%** (`MACRO_CIRCUIT_BREAKER_LOSS_PCT`) déclenche un arrêt total et immédiat de
+TOUTES les nouvelles entrées d'un coup, sur les 3 poches à la fois — couvre l'angle mort qu'une
+coupure par poche seule laisserait ouvert (un krach réellement corrélé sur les 3 poches en même
+temps, chacune juste sous son propre seuil individuel). Vérifié une fois par cycle, AVANT tout
+coupe-circuit par poche. Détail complet : `docs/HANDOFF_PAPER_TRADING.md`.
 
 ## Partie 7 — Mémoire, identité et gouvernance
 
