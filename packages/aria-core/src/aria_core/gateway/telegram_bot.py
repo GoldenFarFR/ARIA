@@ -582,15 +582,18 @@ async def _feedback_reply() -> str:
         )
         pnl_total = summary["realized_pnl"] + summary["unrealized_pnl"]
         sign = "+" if pnl_total >= 0 else ""
+        # 29/07 -- operator request: the single dense line per pocket (all
+        # stats packed with " · " separators) was hard to scan -- one dash
+        # per fact, on its own line, reads more cleanly on mobile Telegram.
         pocket_lines.append(
-            f"{pocket_labels[wallet]:<9}: départ {summary['starting']:,.0f} $ → "
-            f"{summary['equity']:,.0f} $ ({sign}{pnl_total:,.0f} $) · "
-            f"{summary['open_positions']} ouverte(s) · {summary['closed_trades']} clôturée(s)"
+            f"{pocket_labels[wallet]}\n"
+            f"- départ {summary['starting']:,.0f} $ → {summary['equity']:,.0f} $ ({sign}{pnl_total:,.0f} $)\n"
+            f"- {summary['open_positions']} ouverte(s) · {summary['closed_trades']} clôturée(s)"
         )
     header = (
         "🧪 SIMULATION — bilan paper-trading (3 portefeuilles de 1 M$ chacun)\n\n"
-        + "\n".join(pocket_lines)
-        + "\nAucun argent réel — track record de preuve."
+        + "\n\n".join(pocket_lines)
+        + "\n\nAucun argent réel — track record de preuve."
     )
     detail = await build_positions_detail_block(price_lookup=paper_trader._default_price_lookup)
     return f"{header}\n\n{detail}"
