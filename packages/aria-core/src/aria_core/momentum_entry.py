@@ -1191,7 +1191,7 @@ def _wash_trading_ratio_confirmed(contract: str, chain: str, volume_to_liq: floa
 
 async def _fetch_candles(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
-    mode: str = "standard",
+    mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
 ) -> list[Candle]:
     """SIX-stage OHLCV cascade (16/07, explicit operator request: "I want
     everything wired even if they do the same thing, a highway not a country
@@ -1256,12 +1256,36 @@ async def _fetch_candles(
     empty -- a degradation to 30m is always logged explicitly (never a silent
     granularity swap the caller can't see). Only if Mobula's own 15m/30m
     AND DexPaprika's own 15m/30m all fail does this skip honestly
-    (``[]`` -> HOLD, "OHLCV unavailable")."""
-    from aria_core.services.geckoterminal import geckoterminal_client
+    (``[]`` -> HOLD, "OHLCV unavailable").
+
+    ``gecko_client`` (29/07, Item #186): optional injection point, defaults
+    to the real module-wide singleton -- lets another caller (smart_money.py's
+    wallet-scoring path, which already receives its own ``gecko`` test
+    double/client for `resolve_primary_pool`) reuse this SAME cascade for
+    its OWN GeckoTerminal stage too, rather than bypassing it entirely.
+    Every existing caller of this function passes nothing here and keeps
+    exactly the previous behavior (the real singleton).
+
+    ``min_useful_candles`` (29/07, Item #186): forwarded ONLY to this first
+    GeckoTerminal stage -- restores the #182 speed optimization
+    (wallet-scoring only ever consumes a single candle via ``price_at``, so
+    the default ~20-candle threshold wastes up to 2 extra GeckoTerminal
+    calls per token) now that wallet-scoring is routed through this shared
+    cascade instead of calling GeckoTerminal directly. No other stage
+    (CoinMarketCap/Mobula/DexPaprika/Codex/Dune) accepts this parameter --
+    each already requests its own fixed, provider-appropriate candle count."""
+    if gecko_client is None:
+        from aria_core.services.geckoterminal import geckoterminal_client
+
+        gecko_client = geckoterminal_client
+
+    gecko_kwargs = {"network": chain, "mode": mode}
+    if min_useful_candles is not None:
+        gecko_kwargs["min_useful_candles"] = min_useful_candles
 
     if not _provider_in_cooldown("geckoterminal"):
         try:
-            result = await geckoterminal_client.get_ohlcv(pool_address, network=chain, mode=mode)
+            result = await gecko_client.get_ohlcv(pool_address, **gecko_kwargs)
         except Exception as exc:  # noqa: BLE001
             logger.info("_fetch_candles: GeckoTerminal %s/%s failed (%s)", chain, pool_address[:10], exc)
             result = None
@@ -1389,6 +1413,30 @@ async def _fetch_candles(
         if dp_result is None or not dp_result.available:
             _record_provider_outcome("dexpaprika", ok=False)
 
+    # 29/07 -- Codex.io (Item #185), inserted after DexPaprika and before the
+    # degraded DexScreener synthesis: real candles beat 5 synthetic price
+    # points, but this stays the LAST real-candle tier tried, after
+    # DexPaprika -- Codex's free-tier budget (10,000 req/month) is by far the
+    # scarcest of any provider in this cascade (see services/codex.py's own
+    # module docstring), so it is spent only once everything cheaper/higher-
+    # volume has already failed. Standard mode only -- never wired into
+    # scalping (too costly a budget for that call volume).
+    if mode != "scalping" and not _provider_in_cooldown("codex"):
+        from aria_core.services import codex
+
+        if codex.codex_configured():
+            try:
+                codex_result = await codex.get_ohlcv(pool_address, network=chain)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("_fetch_candles: Codex.io %s/%s failed (%s)", chain, pool_address[:10], exc)
+                codex_result = None
+            if codex_result is not None and codex_result.available and codex_result.candles:
+                _record_provider_outcome("codex", ok=True)
+                logger.info("_fetch_candles: Codex.io fallback (real candles) %s/%s", chain, pool_address[:10])
+                return codex_result.candles
+            if codex_result is None or not codex_result.available:
+                _record_provider_outcome("codex", ok=False)
+
     if pair is not None:
         from aria_core.services.dexscreener import synthesize_candles_from_pair
 
@@ -1411,6 +1459,17 @@ async def _fetch_candles(
             return dune_result.candles
 
     return []
+
+
+# 29/07 -- public alias (Item #186): smart_money.py's wallet-scoring path
+# needs this exact 7-stage cascade too (it previously called GeckoTerminal
+# directly with zero fallback -- the real cause of a production live-lock,
+# see wallet_scan_queue's own HANDOFF entry) but `_fetch_candles` stays the
+# underscore-prefixed name internally (used by 40+ existing tests via
+# monkeypatch on that exact attribute name -- renaming it outright would be
+# a purely cosmetic, high-risk churn for zero behavior change). This alias
+# is the ONLY sanctioned way for another module to reuse the cascade.
+fetch_candles = _fetch_candles
 
 
 def _technical_alignment(candles: list[Candle]) -> tuple[int, list[str], dict]:

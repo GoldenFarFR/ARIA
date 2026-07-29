@@ -1558,11 +1558,13 @@ async def _analyze_wallet_multi_token(
     lookup (already known per chain via the composite key); ``None``/an
     incomplete registry for a chain degrades cleanly to pool+OHLCV for all
     its tokens (same policy as no client in ``_hash_based_price``)."""
+    from aria_core.momentum_entry import fetch_candles
     from aria_core.services.coinmarketcap import CMC_NETWORK_SLUGS
     from aria_core.services.coinmarketcap import get_ohlcv as _cmc_get_ohlcv
     from aria_core.services.coinmarketcap import resolve_primary_pool as _cmc_resolve_primary_pool
     from aria_core.services.dexscreener import has_any_pair as _dexscreener_has_any_pair
     from aria_core.services.geckoterminal import GECKO_NETWORK_SLUGS
+    from aria_core.services.geckoterminal import OHLCVResult
     from aria_core.services.geckoterminal import UNAVAILABLE as _gecko_unavailable
 
     wallet_l = wallet.lower()
@@ -1637,15 +1639,33 @@ async def _analyze_wallet_multi_token(
             # can never be exploited to fabricate a gain (it only reveals a
             # real price, possibly a bad one), so there's nothing to protect
             # on that side.
-            # min_useful_candles=1 (#182, 15/07, speed fix): wallet-scoring
-            # only ever consumes a single candle via `price_at` (the closest
-            # one to a given timestamp) -- the default threshold of 20
-            # candles (designed for /vc, which needs enough candles for
-            # support/resistance) makes no sense here and costs up to 2 extra
-            # GeckoTerminal calls per token for a young/microcap token that
-            # doesn't yet have 20 daily candles -- exactly the frequent
-            # profile of an active wallet on Base.
-            ohlcv = await gecko.get_ohlcv(pool_meta.pool_address, network=network, min_useful_candles=1)
+            # 29/07 -- Item #186: routed through the SAME 7-stage OHLCV
+            # cascade the momentum pipeline already uses (GeckoTerminal ->
+            # CoinMarketCap -> Mobula -> DexPaprika -> Codex.io -> DexScreener
+            # synthesis -> Dune), instead of a direct, fallback-less
+            # GeckoTerminal call -- the real cause of a production live-lock
+            # in wallet_scan_queue (confirmed 29/07: 25 concurrent wallets
+            # all blocked on GeckoTerminal 429s with nowhere else to go, see
+            # that module's own HANDOFF entry). Wrapped in `OHLCVResult` to
+            # keep this function's downstream logic (`ohlcv.available`/
+            # `.candles`/`.error`) completely unchanged. `min_useful_candles=1`
+            # restores the #182 speed optimization on the cascade's own
+            # GeckoTerminal stage (see `fetch_candles`'s own docstring) --
+            # only that first stage honors it, every other stage
+            # (CoinMarketCap/Mobula/DexPaprika/Codex/Dune) requests its own
+            # fixed candle count regardless. Pool resolution itself
+            # (`gecko.resolve_primary_pool` just above) stays on GeckoTerminal
+            # unchanged -- it also feeds the anti-dust/scam-pool liquidity
+            # floor below (`pool_meta.reserve_usd`), a security-relevant path
+            # deliberately left untouched in this change.
+            _candles = await fetch_candles(
+                pool_meta.pool_address, chain, contract=token_addr, gecko_client=gecko, min_useful_candles=1,
+            )
+            ohlcv = (
+                OHLCVResult(candles=_candles, available=True, error=None)
+                if _candles
+                else OHLCVResult(candles=[], available=False, error=f"{_gecko_unavailable} (cascade OHLCV epuisee)")
+            )
             if not pool_liquid_enough:
                 result.thin_liquidity_tokens.append(token_addr)
         else:
