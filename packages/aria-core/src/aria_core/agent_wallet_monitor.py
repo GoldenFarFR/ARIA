@@ -75,15 +75,24 @@ MONITORED_WALLET_ADDRESS = "0xF04625162b616c5ad9788811b7be8CDd425B37Ef"
 # `cdp.evm.list_accounts()`/`list_smart_accounts()` (CDP source of truth,
 # never copied from memory).
 #
-# Scope deliberately limited to 3 wallets (explicit operator decision, 07/23,
-# after computing the real cost in Blockscout Pro credits) -- excluded:
-# `aria-wallet-transfert-EVM` (rarely used) and `aria-spender-smart-st-EVM`
-# (still has zero movement, the Spend Permission mechanism isn't wired up) --
-# to be re-added once either becomes genuinely active. `aria-wallet-X402-EVM`
-# stays monitored -- its role will change (active trading capital migrates to
-# `aria-smart-st-EVM`, this wallet will eventually only hold x402 payments in
-# and out for the services offered) but remains a real flow worth watching,
-# not less than before.
+# Scope originally limited to 3 wallets (explicit operator decision, 07/23,
+# after computing the real cost in Blockscout Pro credits) -- excluded at the
+# time: `aria-wallet-transfert-EVM` (rarely used, still excluded) and
+# `aria-spender-smart-st-EVM` ("zero movement" at the time, the Spend
+# Permission mechanism wasn't wired up yet).
+#
+# Item #192 (29/07): `aria-spender-smart-st-EVM`'s premise no longer holds --
+# verified live via Blockscout that it received a real movement since (a
+# phishing/dust airdrop, an ERC-20 token named "Claude" sent unsolicited on
+# 07/25, plus a legitimate small gas top-up from `aria-wallet-X402-EVM`).
+# Re-added to real-time surveillance now that it's a genuinely active
+# address, per the 07/23 comment's own stated criterion.
+# `aria-wallet-transfert-EVM` stays excluded (still no movement observed).
+#
+# `aria-wallet-X402-EVM` stays monitored -- its role will change (active
+# trading capital migrates to `aria-smart-st-EVM`, this wallet will
+# eventually only hold x402 payments in and out for the services offered)
+# but remains a real flow worth watching, not less than before.
 #
 # Deliberate dict order: pilot wallet first (existing tests that use
 # MONITORED_WALLET_ADDRESS as the recipient depend on this order to be
@@ -93,6 +102,7 @@ MONITORED_WALLETS: dict[str, str] = {
     "aria-wallet-X402-EVM": MONITORED_WALLET_ADDRESS,
     "aria-smart-st-EVM": "0x800027f61363EF304c5C2Afee811d9d4074B474c",
     "aria-smart-vc-EVM": "0x9C72AedD2836Edc24566E8B0Fd1825e0E1eFbF07",
+    "aria-spender-smart-st-EVM": "0x8e71C3e9396ded76AdA6EA56cD3c315C3D67D79b",
 }
 
 # 07/23 -- registry of ALL known addresses (not just the 3 monitored ones --
