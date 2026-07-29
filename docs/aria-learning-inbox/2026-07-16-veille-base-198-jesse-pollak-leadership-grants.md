@@ -72,8 +72,9 @@ feuille de route existante.
 
 - Suivre une éventuelle prochaine cohorte Base Batches ou un nouveau round CDP
   Builder Grants annoncé en 2026 -- rien trouvé ce soir, à revérifier périodiquement.
-- Base MCP (mai 2026) -- vérifier à la source officielle (pas seulement une synthèse
-  tierce) ce qu'il couvre exactement avant de le considérer comme une piste sérieuse.
+- ~~Base MCP (mai 2026) -- vérifier à la source officielle...~~ **Vérifié le 29/07** :
+  source primaire (tweet officiel `@base`) lue intégralement, verdict d'intégration
+  rendu. Détail : `2026-07-29-verification-base-mcp-source-officielle.md`.
 - Le remplacement de Pollak par Cobie à la tête de Base App (background ICO/launchpad)
   pourrait infléchir la stratégie app/social différemment de l'infra -- pas de signal
   clair encore sur ce que ça change concrètement pour un projet tiers comme ARIA.
