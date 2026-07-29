@@ -206,9 +206,17 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     if invalidation and pair.price_usd is not None and pair.price_usd <= invalidation:
         return "cancel"
 
+    # Item #199 (29/07): re-fetch at the SAME timeframe the order was placed
+    # under -- ``order["wallet"]`` ("scalping"/"swing"/"vc", already stored on
+    # every pending order, see this module's own header comment) is the
+    # canonical source, never re-derived or guessed. A scalping order re-
+    # checked with standard-mode (1h+) candles would silently corrupt the
+    # divergence detection's own timeframe, defeating the whole premise of
+    # ``mode=`` being timeframe-aware in the first place.
+    watch_mode = "scalping" if order.get("wallet") == "scalping" else "standard"
     try:
         candles = await momentum_entry._fetch_candles(
-            pair.pair_address, order["chain"], contract=order["contract"], pair=pair,
+            pair.pair_address, order["chain"], contract=order["contract"], pair=pair, mode=watch_mode,
         )
     except Exception as exc:  # noqa: BLE001 -- fail-open, never a cancel on a data hiccup
         logger.info("limit_orders: rsi-divergence candle refresh failed for %s (%s)", order["contract"], exc)

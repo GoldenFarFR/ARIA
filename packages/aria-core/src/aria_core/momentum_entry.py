@@ -2638,12 +2638,22 @@ async def evaluate_momentum_entry(
             if watch:
                 hold["limit_order_candidate"] = watch
         elif (
-            mode != "scalping"
-            and signal.in_golden_pocket is True
+            signal.in_golden_pocket is True
             and signal.rsi_divergence is False
             and signal.gp_high is not None and signal.gp_low is not None
             and signal.range_high is not None
         ):
+            # Item #199 (29/07): unlike #182's golden-pocket watch (excluded
+            # from scalping for a documented reason -- a multi-HOUR wait
+            # doesn't fit a 15-30min timeframe), this watch's horizon is
+            # counted in CANDLES (RSI_WATCH_MIN/MAX_SPAN), never elapsed wall
+            # time -- so it's timeframe-independent by construction (see the
+            # constants' own comment above) and there was never a real reason
+            # to exclude scalping here. Verified live: 0 scalping-pocket
+            # positions ever opened/closed despite real golden-pocket hits,
+            # traced to this stray `mode != "scalping"` (a copy-paste
+            # inherited from #182's condition, never justified on its own for
+            # this branch).
             try:
                 watch = _rsi_divergence_watch_candidate(
                     contract, signal, best.base_symbol, best.price_usd, candles,

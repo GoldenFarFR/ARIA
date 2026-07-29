@@ -5565,12 +5565,19 @@ async def test_rsi_divergence_watch_candidate_absent_without_zone(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_rsi_divergence_watch_candidate_never_in_scalping_mode(monkeypatch, test_settings):
+async def test_rsi_divergence_watch_candidate_created_in_scalping_mode(monkeypatch, test_settings):
+    """Item #199 (29/07): unlike #182's golden-pocket watch (excluded from
+    scalping for a documented reason -- a multi-hour wait doesn't fit a
+    15-30min timeframe), this watch's horizon is counted in CANDLES, never
+    elapsed wall time -- so it IS timeframe-independent and must NOT be
+    excluded from scalping. Verified live in prod: the stray `mode !=
+    "scalping"` exclusion left the scalping pocket with ZERO positions ever
+    opened/closed despite real golden-pocket hits."""
     _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
 
     result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
 
-    assert result.get("limit_order_candidate") is None
+    assert result.get("limit_order_candidate") is not None
 
 
 @pytest.mark.asyncio

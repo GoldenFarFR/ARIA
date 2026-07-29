@@ -525,6 +525,59 @@ async def test_check_rsi_divergence_watching_triggers_on_span_within_window(monk
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_scalping_wallet(monkeypatch):
+    """Item #199 (29/07): the re-check must fetch candles at the SAME
+    timeframe the order was placed under, derived from `order["wallet"]`
+    (already stored on every pending order) -- never the standard-mode
+    default, which would silently corrupt the divergence detection's own
+    timeframe for a scalping order."""
+    from aria_core import momentum_entry
+
+    captured_mode = {}
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard", **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        captured_mode["mode"] = mode
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order(wallet="scalping")
+    await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert captured_mode["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_refetches_with_standard_mode_for_swing_wallet(monkeypatch):
+    from aria_core import momentum_entry
+
+    captured_mode = {}
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard", **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        captured_mode["mode"] = mode
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order(wallet="swing")
+    await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert captured_mode["mode"] == "standard"
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_waits_on_span_outside_window(monkeypatch):
     """A divergence CAN be present but with too short/too long a span --
     never triggers on a looser span than the operator-validated window."""
