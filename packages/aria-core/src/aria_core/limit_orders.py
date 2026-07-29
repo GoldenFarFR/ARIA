@@ -761,13 +761,80 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     return pos
 
 
+_POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC"}
+
+
 def format_limit_order_placed_alert(order: dict) -> str:
+    """29/07 -- operator feedback: this alert only showed the target price,
+    never the current price nor any context on the setup itself (R/R,
+    invalidation) -- unlike the position-tracking alert, which shows both.
+    ``price_at_order_placed`` (both call sites in paper_trader.py now inject
+    it) is the real observed price at the moment this order was created --
+    never re-derived from ``target_price`` (that would silently invent a
+    number when the field is genuinely missing, e.g. an order created before
+    this fix).
+
+    29/07, second pass (operator feedback, same day) -- two more real gaps
+    found while the operator watched a live flood of scalping-pocket orders:
+    (1) the pocket (``order["wallet"]``) was never shown -- indistinguishable
+    from a swing/VC order in the alert itself. (2) for a
+    ``rsi_divergence_pending`` order specifically (``_rsi_divergence_watch_
+    candidate``), ``target_price`` is set to the price AT DETECTION TIME (the
+    golden pocket is already reached, only the RSI divergence hasn't
+    confirmed yet, see that function's docstring) -- the generic "cible X,
+    expire si le prix ne redescend jamais" wording is factually wrong here
+    (there is no pullback to wait for, X IS the current price) and was the
+    literal source of the operator's "elle cible le prix actuel, étrange"
+    confusion. Also, this order type's real expiry is a CANDLE-COUNT horizon
+    (``watch_expiry_hours``, often several hours, never the flat
+    ``LIMIT_ORDER_EXPIRY_HOURS``) -- the alert used to hardcode the flat
+    constant regardless, so it displayed "3h" on orders whose real
+    ``expires_at`` was 10-15h out. Both now read the order's OWN
+    ``created_at``/``expires_at`` instead of assuming any fixed duration."""
     name = order.get("symbol") or (order.get("contract") or "")[:10]
-    lines = [
-        "🎯 ORDRE LIMITE POSÉ (portefeuille papier, aucun argent réel)",
-        f"{name} -- cible {order['target_price']:.6g}",
-        f"Expire dans {LIMIT_ORDER_EXPIRY_HOURS:.0f}h si le prix ne redescend jamais à ce niveau.",
-    ]
+    target = order["target_price"]
+    try:
+        sig = json.loads(order.get("signal_json") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        sig = {}
+
+    pocket_label = _POCKET_LABEL.get(order.get("wallet"), (order.get("wallet") or "swing").upper())
+
+    try:
+        created = datetime.fromisoformat(order["created_at"])
+        expires = datetime.fromisoformat(order["expires_at"])
+        expiry_hours = (expires - created).total_seconds() / 3600.0
+    except (KeyError, ValueError, TypeError):
+        expiry_hours = LIMIT_ORDER_EXPIRY_HOURS
+
+    reason = sig.get("limit_order_reason")
+    if reason == "rsi_divergence_pending":
+        lines = [
+            f"🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)",
+            f"{name} -- déjà dans la golden pocket ({target:.6g}), divergence RSI pas encore confirmée",
+            "ARIA surveille la formation de la divergence (pas un niveau de prix à atteindre) avant d'acheter.",
+        ]
+        expiry_line = f"Expire dans {expiry_hours:.0f}h si la divergence ne se confirme jamais."
+    else:
+        lines = [
+            f"🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)",
+            f"{name} -- cible {target:.6g}",
+        ]
+        current_price = sig.get("price_at_order_placed")
+        if isinstance(current_price, (int, float)) and current_price > 0:
+            gap_pct = (current_price / target - 1.0) * 100.0
+            lines.append(f"Prix actuel : {current_price:.6g} (+{gap_pct:.1f}% au-dessus de la cible)")
+        expiry_line = f"Expire dans {expiry_hours:.0f}h si le prix ne redescend jamais à ce niveau."
+
+    invalidation = sig.get("invalidation")
+    if isinstance(invalidation, (int, float)) and invalidation > 0:
+        lines.append(f"Invalidation : {invalidation:.6g} (annule l'ordre si le prix casse ce niveau)")
+
+    rr = sig.get("rr")
+    if isinstance(rr, (int, float)) and rr > 0:
+        lines.append(f"R/R du signal : {rr:.1f}")
+
+    lines.append(expiry_line)
     if order.get("contract"):
         lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
     return "\n".join(lines)

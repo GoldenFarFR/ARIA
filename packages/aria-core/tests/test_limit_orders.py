@@ -1116,6 +1116,91 @@ def test_format_limit_order_placed_alert_contains_target_and_symbol():
     assert "0.038" in text
 
 
+def test_format_limit_order_placed_alert_shows_current_price_and_gap():
+    """29/07 -- operator feedback: the alert was missing the current price."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "signal_json": _json.dumps({"price_at_order_placed": 0.044, "invalidation": 0.030, "rr": 3.9}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "0.044" in text
+    assert "0.03" in text  # ``.6g`` formatting drops the trailing zero
+    assert "3.9" in text
+    # (0.044/0.038 - 1) * 100 = ~15.8%
+    assert "15.8%" in text
+
+
+def test_format_limit_order_placed_alert_omits_missing_fields_gracefully():
+    """No signal_json at all (e.g. an order created before this fix) --
+    never a crash, never an invented number."""
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Prix actuel" not in text
+    assert "Invalidation" not in text
+    assert "R/R" not in text
+
+
+def test_format_limit_order_placed_alert_ignores_non_numeric_signal_fields():
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "signal_json": _json.dumps({"price_at_order_placed": None, "invalidation": "n/a", "rr": None}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Prix actuel" not in text
+    assert "Invalidation" not in text
+    assert "R/R" not in text
+
+
+def test_format_limit_order_placed_alert_shows_pocket_label():
+    """29/07, second pass -- operator feedback: the alert never showed which
+    pocket (swing/scalping/vc) placed the order, indistinguishable from any
+    other pocket's order in Telegram."""
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "wallet": "scalping",
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "SCALPING" in text
+
+
+def test_format_limit_order_placed_alert_defaults_pocket_label_to_swing():
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "SWING" in text
+
+
+def test_format_limit_order_placed_alert_rsi_divergence_wording_and_real_expiry():
+    """29/07, second pass -- operator feedback ("elle cible le prix actuel,
+    étrange"): a rsi_divergence_pending order's target_price literally equals
+    the price at detection time (no pullback to describe) -- the generic
+    "cible X, expire si le prix ne redescend jamais" wording is wrong here.
+    Also its real expiry (created_at -> expires_at) is a candle-count horizon,
+    often far from the flat LIMIT_ORDER_EXPIRY_HOURS (3h) this alert used to
+    hardcode regardless of the order's actual expires_at."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.1087,
+        "wallet": "scalping",
+        "created_at": "2026-07-29T19:17:55.338409+00:00",
+        "expires_at": "2026-07-30T10:17:55.338409+00:00",  # 15h, NOT the flat 3h
+        "signal_json": _json.dumps({
+            "limit_order_reason": "rsi_divergence_pending", "invalidation": 0.09, "rr": 2.5,
+        }),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "cible" not in text.lower()
+    assert "golden pocket" in text.lower()
+    assert "divergence" in text.lower()
+    assert "Expire dans 15h" in text
+    assert "Invalidation" in text
+    assert "2.5" in text
+
+
 def test_format_limit_order_cancelled_alert_labels_known_reasons():
     order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
     text = lo.format_limit_order_cancelled_alert(order, "invalidation_crossed")

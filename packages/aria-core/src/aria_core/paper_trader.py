@@ -3615,6 +3615,14 @@ async def _open_new_entries_for_wallet(
                         order_sig = {
                             **sig, **watch,
                             "limit_order_reason": watch.get("limit_order_reason", "golden_pocket_pending"),
+                            # 29/07 -- operator feedback: the "ORDRE LIMITE POSÉ"
+                            # alert was missing the current price at the moment
+                            # the order was placed. sig["price"] is this watch's
+                            # own fresh evaluation price (never watch's, which
+                            # carries no price field) -- read explicitly so a
+                            # future watch dict adding one never silently wins
+                            # via the **watch spread above.
+                            "price_at_order_placed": sig.get("price"),
                         }
                         # watch["reason"] is a single string (the DEX-quality
                         # thesis) -- appended to the reasons LIST (never
@@ -3805,8 +3813,15 @@ async def _open_new_entries_for_wallet(
                     # detected it. wallet="swing" implicitly under gate OFF (this
                     # function is only ever called with wallet="swing" there).
                     if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
+                        # 29/07 -- operator feedback: the "ORDRE LIMITE POSÉ"
+                        # alert was missing the current price at order-placement
+                        # time. ``fresh_price`` (just re-fetched above, NOT the
+                        # stale ``price`` from the original signal) is what was
+                        # actually observed right now -- a copy, never mutating
+                        # the caller's own ``sig`` dict in place.
+                        order_sig = {**sig, "price_at_order_placed": fresh_price}
                         order = await limit_orders.create_pending_order(
-                            contract, sig.get("chain") or "base", sig.get("symbol", ""), price, sig,
+                            contract, sig.get("chain") or "base", sig.get("symbol", ""), price, order_sig,
                             wallet=wallet,
                         )
                         if notifier:
