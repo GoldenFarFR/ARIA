@@ -169,6 +169,34 @@ def test_bullish_divergence_accepted_at_range_boundaries(monkeypatch):
         assert "RSI remonte" in base
 
 
+# ── _bullish_rsi_divergence_detail (Item #183, 28/07 -- gap/span de qualité) ──
+
+def test_divergence_detail_exposes_gap_and_span_when_present():
+    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
+
+    detail = _bullish_rsi_divergence_detail(_candles(_setup_series()), lookback=25)
+    assert detail.present is True
+    assert detail.gap is not None and detail.gap > 0  # RSI remonte -> gap positif
+    assert detail.span is not None and detail.span > 0  # bougies entre les 2 pivots
+
+
+def test_divergence_detail_none_when_absent():
+    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
+
+    detail = _bullish_rsi_divergence_detail(_candles([100 + i for i in range(30)]), lookback=25)
+    assert detail.present is False
+    assert detail.gap is None and detail.span is None
+
+
+def test_bullish_rsi_divergence_wrapper_unchanged_signature():
+    """La fonction publique reste un tuple (bool, str) -- aucun appelant
+    existant ne doit voir sa signature changer (Item #183)."""
+    ok, base = bullish_rsi_divergence(_candles(_setup_series()), lookback=25)
+    assert isinstance(ok, bool)
+    assert isinstance(base, str)
+    assert ok is True and "RSI remonte" in base
+
+
 # ── bearish_rsi_divergence (Item #105, 26/07 -- signal de SORTIE scalping) ────
 
 def _bearish_setup_series() -> list[float]:
@@ -302,6 +330,21 @@ def test_detect_entry_confirmed_setup_also_exposes_range_bounds():
     assert sig.range_high is not None and sig.range_low is not None
     assert sig.range_low < sig.gp_low < sig.gp_high < sig.range_high
     assert sig.range_high == sig.target  # same value, same source (fib["high"])
+
+
+def test_detect_entry_exposes_rsi_gap_and_span_when_confirmed():
+    """Item #183 (28/07): rsi_gap/rsi_span populated on the confirmed setup,
+    same values _bullish_rsi_divergence_detail computed internally."""
+    sig = detect_entry(_candles(_setup_series()), lookback=25)
+    assert sig.present is True
+    assert sig.rsi_gap is not None and sig.rsi_gap > 0
+    assert sig.rsi_span is not None and sig.rsi_span > 0
+
+
+def test_detect_entry_rsi_gap_span_none_without_divergence():
+    sig = detect_entry(_candles([100 + i for i in range(30)]), lookback=25)
+    assert sig.rsi_divergence is False
+    assert sig.rsi_gap is None and sig.rsi_span is None
 
 
 # ── execution_price (19/07, trouvaille réelle en vérifiant la légitimité d'un trade

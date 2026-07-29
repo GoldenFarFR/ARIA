@@ -171,6 +171,77 @@ def check_watching_order(
     return "wait"
 
 
+async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
+    """Item #183 (28/07), watch-RSI-divergence: decision for a ``watching``
+    order tagged ``limit_order_reason == "rsi_divergence_pending"`` -- unlike
+    ``check_watching_order`` (a plain price comparison), this re-fetches
+    FRESH candles and re-runs the divergence detection itself, since the
+    entire premise here is "the divergence hasn't formed yet", not a price
+    level to wait for.
+
+    Returns ``'trigger'`` (a divergence just confirmed WITH a span inside
+    the operator-validated window, ``momentum_entry.RSI_WATCH_MIN_SPAN``-
+    ``RSI_WATCH_MAX_SPAN`` -- never a looser span, even if one forms first),
+    ``'cancel'`` (price broke below the invalidation -- the golden pocket
+    setup itself died while waiting), ``'expire'`` (the candle-count horizon
+    elapsed with no qualifying divergence -- ``RSI_WATCH_MAX_HORIZON_
+    CANDLES`` new candles observed since the order's own ``last_candle_ts``,
+    silent by design like every other expiry in this module, see
+    ``sweep_expired``), or ``'wait'`` (still forming, or data unresolved --
+    fail-open, never a cancel on a transient network failure)."""
+    from aria_core import momentum_entry
+
+    invalidation = sig.get("invalidation")
+    last_candle_ts = sig.get("last_candle_ts")
+
+    try:
+        pairs = await momentum_entry.fetch_token_pairs(order["contract"], chain=order["chain"])
+    except Exception as exc:  # noqa: BLE001 -- fail-open, a transient lookup failure just waits
+        logger.info("limit_orders: rsi-divergence pair lookup failed for %s (%s)", order["contract"], exc)
+        return "wait"
+    pair = momentum_entry._best_pair(pairs, order["contract"])
+    if pair is None:
+        return "wait"
+
+    if invalidation and pair.price_usd is not None and pair.price_usd <= invalidation:
+        return "cancel"
+
+    try:
+        candles = await momentum_entry._fetch_candles(
+            pair.pair_address, order["chain"], contract=order["contract"], pair=pair,
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail-open, never a cancel on a data hiccup
+        logger.info("limit_orders: rsi-divergence candle refresh failed for %s (%s)", order["contract"], exc)
+        return "wait"
+    if not candles:
+        return "wait"
+
+    if last_candle_ts is not None:
+        new_candles = sum(1 for c in candles if c.ts > last_candle_ts)
+        if new_candles > momentum_entry.RSI_WATCH_MAX_HORIZON_CANDLES:
+            logger.info(
+                "limit_orders: rsi-divergence watch expired for %s -- %d new candles observed "
+                "(horizon %d) with no qualifying divergence",
+                order["contract"], new_candles, momentum_entry.RSI_WATCH_MAX_HORIZON_CANDLES,
+            )
+            return "expire"
+
+    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
+
+    detail = _bullish_rsi_divergence_detail(candles)
+    if (
+        detail.present and detail.span is not None
+        and momentum_entry.RSI_WATCH_MIN_SPAN <= detail.span <= momentum_entry.RSI_WATCH_MAX_SPAN
+    ):
+        logger.info(
+            "limit_orders: rsi-divergence CONFIRMED for %s -- span=%d gap=%s (window %d-%d)",
+            order["contract"], detail.span, detail.gap,
+            momentum_entry.RSI_WATCH_MIN_SPAN, momentum_entry.RSI_WATCH_MAX_SPAN,
+        )
+        return "trigger"
+    return "wait"
+
+
 async def has_active_order(contract: str, chain: str, *, wallet: str = "swing") -> bool:
     """True if a ``pending`` or ``watching`` order already exists for this
     contract IN THIS POCKET -- never stacks a second limit order on the same
@@ -194,7 +265,8 @@ async def has_active_order(contract: str, chain: str, *, wallet: str = "swing") 
 
 
 async def create_pending_order(
-    contract: str, chain: str, symbol: str, target_price: float, sig: dict, *, wallet: str = "swing",
+    contract: str, chain: str, symbol: str, target_price: float, sig: dict, *,
+    wallet: str = "swing", expiry_hours: float | None = None,
 ) -> dict:
     """Places a new limit order at ``target_price`` (the signal's original
     price, before it drifted) -- ``sig`` is the FULL evaluated signal,
@@ -209,10 +281,19 @@ async def create_pending_order(
     eventual buy books into the SAME pocket that detected the setup, never a
     hardcoded one. Defaults to ``"swing"`` -- unchanged behavior (implicit
     single pocket) for any caller that doesn't pass it, i.e. every caller
-    while ``paper_trader.multi_pocket_sourcing_enabled()`` is OFF."""
+    while ``paper_trader.multi_pocket_sourcing_enabled()`` is OFF.
+
+    ``expiry_hours`` (Item #183, 28/07): overrides the flat
+    ``LIMIT_ORDER_EXPIRY_HOURS`` -- used by the RSI-divergence watch
+    (``momentum_entry._rsi_divergence_watch_candidate``'s own
+    ``watch_expiry_hours``), whose real horizon is a CANDLE COUNT, not a
+    fixed duration (see that function's docstring: the candle granularity
+    varies, so a fixed 3h would be meaningless on daily candles). ``None``
+    (default) keeps the original flat TTL -- unchanged behavior for every
+    other caller."""
     await _ensure_table()
     now = datetime.now(timezone.utc)
-    expires_at = (now + timedelta(hours=LIMIT_ORDER_EXPIRY_HOURS)).isoformat()
+    expires_at = (now + timedelta(hours=expiry_hours if expiry_hours is not None else LIMIT_ORDER_EXPIRY_HOURS)).isoformat()
     signal_json = json.dumps(sig, default=str)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -471,7 +552,19 @@ async def process_active_orders(price_lookup, notifier=None) -> dict:
             continue
 
         # order["state"] == "watching"
-        decision = check_watching_order(order["target_price"], sig.get("invalidation"), price)
+        # Item #183 (28/07): an order whose whole premise is a still-forming
+        # RSI divergence (never an already-confirmed golden pocket + RSI
+        # setup) can't be resolved by a plain price comparison -- see
+        # check_rsi_divergence_watching_order's own docstring for the extra
+        # 'expire' outcome (candle-count horizon elapsed, silent by design).
+        if sig.get("limit_order_reason") == "rsi_divergence_pending":
+            decision = await check_rsi_divergence_watching_order(order, sig)
+        else:
+            decision = check_watching_order(order["target_price"], sig.get("invalidation"), price)
+        if decision == "expire":
+            await mark_cancelled(order["id"], "rsi_horizon_expired")
+            actions["expired"] += 1
+            continue
         if decision == "cancel":
             await mark_cancelled(order["id"], "invalidation_crossed")
             actions["cancelled"] += 1

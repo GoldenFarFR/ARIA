@@ -2195,6 +2195,108 @@ def _diagnose_weak_point(rr: float, align_score: int) -> str:
 # first-pass doctrine as DEX_QUALITY_WATCH_THRESHOLD).
 _GOLDEN_POCKET_WATCH_MIN_RETRACEMENT = 0.5
 
+# Item #183 (28/07), watch-RSI-divergence: operator-validated backtest (span
+# 15-20 candles between the two RSI pivots being compared, ~20-candle holding
+# horizon, 71.9% win rate n=64) -- the COMPLEMENTARY case to Item #182's
+# golden-pocket watch: here the price has ALREADY reached the golden pocket
+# zone (``signal.in_golden_pocket`` True) but the RSI divergence hasn't
+# confirmed yet (``signal.rsi_divergence`` False) -- until this chantier, a
+# plain discard (the "golden-pocket watch not even attempted" log below),
+# even though this exact setup was measured to be 56% of all no_entry_signal
+# holds observed live. Span expressed in CANDLES, never a fixed duration --
+# ``bullish_rsi_divergence`` is timeframe-independent by construction (see
+# entry_signals.py's own RSI_DIVERGENCE_MIN/MAX comment), so the watch's own
+# horizon must expire the same way: counting NEW candles observed since
+# creation, never elapsed wall-clock time (see
+# ``limit_orders.check_rsi_divergence_watching_order``).
+RSI_WATCH_MIN_SPAN = 15
+RSI_WATCH_MAX_SPAN = 20
+RSI_WATCH_MAX_HORIZON_CANDLES = 20
+
+
+def _rsi_divergence_watch_candidate(
+    contract: str, signal, symbol: str, price: float, candles: list,
+) -> dict | None:
+    """Item #183 (28/07), watch-RSI-divergence: builds the payload for a
+    watch-and-wait limit order when the price has ALREADY reached the golden
+    pocket zone but the RSI divergence hasn't confirmed yet -- see the
+    constants' own comment above for the full rationale.
+
+    Unlike ``_golden_pocket_watch_candidate`` (#182), there is no separate
+    quality score to fall back on here: the golden pocket itself IS the
+    already-confirmed technical premise (real Fibonacci zone, real price
+    inside it) -- only the RSI divergence is still forming. The order enters
+    "watching" immediately (``target_price=price`` -- the current price
+    already equals the target, see ``limit_orders.should_enter_watching``);
+    ``limit_orders.check_rsi_divergence_watching_order`` re-fetches fresh
+    candles on every drain pass and re-runs the divergence detection,
+    triggering the buy only once a divergence confirms WITH a span inside
+    the operator-validated window (never a looser span, even if one forms
+    first).
+
+    Never restricted to Base (unlike #182, whose premise is a Base-only DEX
+    composite score) -- this premise is a pure OHLCV/RSI read, applicable on
+    any chain ``evaluate_momentum_entry`` already covers.
+
+    Returns ``None`` on any unresolvable input (no zone, no candles) --
+    fail-open, same doctrine as ``_golden_pocket_watch_candidate``."""
+    if (
+        signal.gp_low is None or signal.gp_high is None or signal.range_high is None
+        or not candles or price is None
+    ):
+        return None
+
+    entry = price
+    invalidation = signal.gp_low * (1 - 0.02)
+    target = signal.range_high
+    rr = None
+    if entry > invalidation and target > entry:
+        rr = round((target - entry) / (entry - invalidation), 1)
+
+    # The absolute expiry (`pending_limit_order.expires_at`, checked by
+    # `sweep_expired` as a hard safety net independent of the candle-count
+    # horizon below) can't reuse the fixed `LIMIT_ORDER_EXPIRY_HOURS` (3h,
+    # calibrated for a price-drift pullback, not a multi-candle wait): the
+    # candle GRANULARITY here isn't fixed (standard mode escalates
+    # day(120)->4h(180)->1h(240), see _fetch_candles docstring) -- 20 daily
+    # candles is ~20 days, not 20 hours. Derived from the REAL interval
+    # between this candidate's own last two candles, so the safety net
+    # roughly matches the candle-count horizon regardless of which rung of
+    # the cascade supplied them. Falls back to LIMIT_ORDER_EXPIRY_HOURS if
+    # fewer than 2 candles or a non-positive interval (defensive only).
+    from aria_core.limit_orders import LIMIT_ORDER_EXPIRY_HOURS
+
+    watch_expiry_hours = LIMIT_ORDER_EXPIRY_HOURS
+    if len(candles) >= 2:
+        interval_seconds = candles[-1].ts - candles[-2].ts
+        if interval_seconds > 0:
+            watch_expiry_hours = max(
+                1.0, min(720.0, (interval_seconds * RSI_WATCH_MAX_HORIZON_CANDLES) / 3600.0)
+            )
+
+    logger.info(
+        "momentum_entry: rsi-divergence watch CREATED for %s -- price=%.6g already in golden "
+        "pocket (%.6g-%.6g), waiting up to %d candles (expiry ~%.1fh) for a divergence with span %d-%d",
+        contract, price, signal.gp_low, signal.gp_high,
+        RSI_WATCH_MAX_HORIZON_CANDLES, watch_expiry_hours, RSI_WATCH_MIN_SPAN, RSI_WATCH_MAX_SPAN,
+    )
+
+    return {
+        "target_price": entry,
+        "target": target,
+        "invalidation": invalidation,
+        "rr": rr,
+        "symbol": symbol,
+        "limit_order_reason": "rsi_divergence_pending",
+        "last_candle_ts": candles[-1].ts,
+        "watch_expiry_hours": watch_expiry_hours,
+        "reason": (
+            f"prix déjà dans la golden pocket ({signal.gp_low:.6g}-{signal.gp_high:.6g}) mais "
+            "divergence RSI pas encore confirmée -- ordre limite posé, surveillance de sa "
+            f"formation (span {RSI_WATCH_MIN_SPAN}-{RSI_WATCH_MAX_SPAN} bougies) plutôt qu'un rejet"
+        ),
+    }
+
 
 async def _golden_pocket_watch_candidate(
     contract: str, chain: str, pair, signal, symbol: str, price: float,
@@ -2532,6 +2634,22 @@ async def evaluate_momentum_entry(
                 )
             except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
                 logger.info("momentum_entry: golden-pocket watch candidate failed for %s (%s)", contract, exc)
+                watch = None
+            if watch:
+                hold["limit_order_candidate"] = watch
+        elif (
+            mode != "scalping"
+            and signal.in_golden_pocket is True
+            and signal.rsi_divergence is False
+            and signal.gp_high is not None and signal.gp_low is not None
+            and signal.range_high is not None
+        ):
+            try:
+                watch = _rsi_divergence_watch_candidate(
+                    contract, signal, best.base_symbol, best.price_usd, candles,
+                )
+            except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
+                logger.info("momentum_entry: rsi-divergence watch candidate failed for %s (%s)", contract, exc)
                 watch = None
             if watch:
                 hold["limit_order_candidate"] = watch

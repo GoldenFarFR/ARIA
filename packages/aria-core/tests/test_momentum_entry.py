@@ -5495,3 +5495,127 @@ async def test_golden_pocket_watch_candidate_failure_never_blocks_hold(monkeypat
 
     assert result["action"] == "HOLD"
     assert result.get("limit_order_candidate") is None
+
+
+# ── watch-RSI-divergence (Item #183, 28/07) -- complementary case to #182:
+#    price ALREADY in the golden pocket zone, but the RSI divergence hasn't
+#    confirmed yet ────────────────────────────────────────────────────────
+
+def _in_gp_no_divergence_signal(**overrides) -> EntrySignal:
+    """The Item #183 case: price already reached the golden pocket zone
+    (in_golden_pocket=True) but RSI hasn't confirmed a divergence yet
+    (rsi_divergence=False) -- a real Fibonacci zone is geometrically
+    computable (gp_low=1.214, gp_high=1.382, range_low=1.0, range_high=2.0,
+    same construction as _pending_zone_signal's own 0.618/0.786 ratios)."""
+    base = dict(
+        present=False, in_golden_pocket=True, rsi_divergence=False,
+        reasons=["prix dans la zone Fibonacci"], gp_low=1.214, gp_high=1.382,
+        range_high=2.0, range_low=1.0,
+    )
+    base.update(overrides)
+    return EntrySignal(**base)
+
+
+def _rising_ts_candles(n: int = 20, *, interval: int = 3600) -> list[Candle]:
+    return [Candle(ts=i * interval, open=1, high=1, low=1, close=1) for i in range(n)]
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_divergence(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_entry_signal"
+    watch = result["limit_order_candidate"]
+    assert watch is not None
+    assert watch["limit_order_reason"] == "rsi_divergence_pending"
+    # _pair()'s default price_usd (1.5) is the order's target -- the watch
+    # enters "watching" immediately, never waiting for a price level.
+    assert watch["target_price"] == pytest.approx(1.5)
+    assert watch["invalidation"] == pytest.approx(1.214 * 0.98)
+    assert watch["target"] == pytest.approx(2.0)
+    assert watch["last_candle_ts"] == 19 * 3600
+    assert watch["watch_expiry_hours"] is not None and watch["watch_expiry_hours"] > 0
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_absent_when_divergence_already_present(monkeypatch, test_settings):
+    _patch_pipeline(
+        monkeypatch, signal=_in_gp_no_divergence_signal(rsi_divergence=True), candles=_rising_ts_candles(),
+    )
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_absent_without_zone(monkeypatch, test_settings):
+    _patch_pipeline(
+        monkeypatch,
+        signal=_in_gp_no_divergence_signal(gp_low=None, gp_high=None, range_high=None),
+        candles=_rising_ts_candles(),
+    )
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_never_in_scalping_mode(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_works_off_base(monkeypatch, test_settings):
+    """Unlike #182 (Base-only DEX composite score), this watch's premise is a
+    pure OHLCV/RSI read -- available on any chain evaluate_momentum_entry covers."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "ethereum")
+
+    watch = result.get("limit_order_candidate")
+    assert watch is not None
+    assert watch["limit_order_reason"] == "rsi_divergence_pending"
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_failure_never_blocks_hold(monkeypatch, test_settings):
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+    monkeypatch.setattr(
+        me, "_rsi_divergence_watch_candidate",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result.get("limit_order_candidate") is None
+
+
+def test_rsi_divergence_watch_candidate_expiry_scales_with_candle_interval():
+    """Item #183: the absolute expires_at safety net must track the REAL
+    candle granularity (day/4h/1h escalation, see _fetch_candles docstring)
+    -- 20 hourly candles -> ~20h, not the flat 3h golden-pocket-watch TTL."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(interval=3600),
+    )
+    assert watch["watch_expiry_hours"] == pytest.approx(20.0, rel=0.05)
+
+
+def test_rsi_divergence_watch_candidate_expiry_falls_back_on_single_candle():
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, [Candle(ts=0, open=1, high=1, low=1, close=1)],
+    )
+    from aria_core.limit_orders import LIMIT_ORDER_EXPIRY_HOURS
+
+    assert watch["watch_expiry_hours"] == LIMIT_ORDER_EXPIRY_HOURS

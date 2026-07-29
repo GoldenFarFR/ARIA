@@ -78,6 +78,15 @@ class EntrySignal:
     # uptrend, still far from any pullback" from "already retracing toward
     # the zone" -- both look identical as a plain "price > gp_high" test.
     range_low: float | None = None
+    # Item #183 (28/07), watch-RSI-divergence: RsiDivergenceDetail's own
+    # gap/span, exposed here so a caller can judge the CONVICTION of a
+    # confirmed divergence (netteté/brièveté, operator's own trading
+    # intuition) -- filled whenever ``rsi_divergence`` is True, independent
+    # of whether ``in_golden_pocket``/``present`` also hold (a divergence can
+    # be confirmed before the price has even reached the zone, see
+    # ``_golden_pocket_watch_candidate``'s counterpart).
+    rsi_gap: float | None = None
+    rsi_span: int | None = None
 
 
 def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | None]:
@@ -129,6 +138,69 @@ def fibonacci_zone(candles: list[Candle]) -> dict | None:
     }
 
 
+@dataclass(frozen=True)
+class RsiDivergenceDetail:
+    """Item #183 (28/07), watch-RSI-divergence chantier -- operator's own
+    trading intuition ("plus [la divergence] est nette et courte plus le
+    retournement peut être fort"): beyond the plain present/absent boolean,
+    exposes the two facts that measure how CONVINCING a confirmed divergence
+    is, never invented -- both derived from the exact same pivot comparison
+    ``bullish_rsi_divergence`` already performs.
+
+    ``gap`` -- RSI netteté: how far the recent pivot's RSI rose above the
+    earlier pivot's (``r2 - r1``). A bigger gap means a stronger momentum
+    shift, not just a marginal uptick.
+    ``span`` -- brièveté: how many candles separate the two pivots compared.
+    A short span means the divergence formed quickly (a sharp reversal), a
+    long span means it formed slowly across most of the lookback window.
+    Both ``None`` when no divergence is present -- never a fabricated value."""
+
+    present: bool
+    reason: str
+    gap: float | None = None
+    span: int | None = None
+
+
+def _bullish_rsi_divergence_detail(
+    candles: list[Candle], *, lookback: int = _DEFAULT_LOOKBACK, period: int = _RSI_PERIOD
+) -> RsiDivergenceDetail:
+    """The real implementation behind ``bullish_rsi_divergence`` -- same exact
+    detection logic (see that function's docstring for the full rationale),
+    additionally returning the gap/span quality metrics (Item #183, 28/07)."""
+    # RSI computed on the FULL series (warmed up before the window), then we
+    # only look for lows within the last `lookback` candles. This way a
+    # recent setup has a defined RSI even if the window is short.
+    closes_all = [c.close for c in candles]
+    rsis = rsi_series(closes_all, period)
+    start = max(1, len(candles) - lookback) if lookback else 1
+    pivots: list[tuple[int, float, float]] = []
+    for i in range(start, len(candles) - 1):
+        r = rsis[i]
+        if r is None:
+            continue
+        if candles[i].low <= candles[i - 1].low and candles[i].low <= candles[i + 1].low:
+            pivots.append((i, candles[i].low, r))
+    if len(pivots) < 2:
+        return RsiDivergenceDetail(False, "")
+    i2, l2, r2 = pivots[-1]
+    # 25/07, operator explicit requirement: the RECENT RSI value itself must
+    # sit in a real oversold-recovering zone [20, 40] -- same rule regardless
+    # of the candles' timeframe (15min/1h/4h/day), never just "any two points
+    # where the second is marginally higher". A relative-only check let
+    # RSI 39->40 (no real oversold reading at all) pass as a "divergence".
+    if not (RSI_DIVERGENCE_MIN <= r2 <= RSI_DIVERGENCE_MAX):
+        return RsiDivergenceDetail(False, "")
+    for i1, l1, r1 in reversed(pivots[:-1]):
+        if l2 < l1 and r2 > r1:
+            return RsiDivergenceDetail(
+                True,
+                f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})",
+                gap=r2 - r1,
+                span=i2 - i1,
+            )
+    return RsiDivergenceDetail(False, "")
+
+
 def bullish_rsi_divergence(
     candles: list[Candle], *, lookback: int = _DEFAULT_LOOKBACK, period: int = _RSI_PERIOD
 ) -> tuple[bool, str]:
@@ -144,34 +216,13 @@ def bullish_rsi_divergence(
     price + higher RSI) as before -- only the SCOPE of the search is widened,
     not the criterion. Classic sign of a downtrend running out of steam.
     Returns (present, factual basis).
-    """
-    # RSI computed on the FULL series (warmed up before the window), then we
-    # only look for lows within the last `lookback` candles. This way a
-    # recent setup has a defined RSI even if the window is short.
-    closes_all = [c.close for c in candles]
-    rsis = rsi_series(closes_all, period)
-    start = max(1, len(candles) - lookback) if lookback else 1
-    pivots: list[tuple[int, float, float]] = []
-    for i in range(start, len(candles) - 1):
-        r = rsis[i]
-        if r is None:
-            continue
-        if candles[i].low <= candles[i - 1].low and candles[i].low <= candles[i + 1].low:
-            pivots.append((i, candles[i].low, r))
-    if len(pivots) < 2:
-        return False, ""
-    _, l2, r2 = pivots[-1]
-    # 25/07, operator explicit requirement: the RECENT RSI value itself must
-    # sit in a real oversold-recovering zone [20, 40] -- same rule regardless
-    # of the candles' timeframe (15min/1h/4h/day), never just "any two points
-    # where the second is marginally higher". A relative-only check let
-    # RSI 39->40 (no real oversold reading at all) pass as a "divergence".
-    if not (RSI_DIVERGENCE_MIN <= r2 <= RSI_DIVERGENCE_MAX):
-        return False, ""
-    for _, l1, r1 in reversed(pivots[:-1]):
-        if l2 < l1 and r2 > r1:
-            return True, f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})"
-    return False, ""
+
+    Item #183 (28/07): thin wrapper over ``_bullish_rsi_divergence_detail``
+    (same detection, plus gap/span quality metrics) -- kept byte-for-byte
+    compatible with every existing caller/test, never changes this
+    signature."""
+    detail = _bullish_rsi_divergence_detail(candles, lookback=lookback, period=period)
+    return detail.present, detail.reason
 
 
 # Item #105 (26/07): exit-side mirror of RSI_DIVERGENCE_MIN/MAX above -- the
@@ -252,7 +303,8 @@ def detect_entry(
 
     window = candles[-lookback:]
     fib = fibonacci_zone(window)
-    div, div_base = bullish_rsi_divergence(candles, lookback=lookback, period=period)
+    div_detail = _bullish_rsi_divergence_detail(candles, lookback=lookback, period=period)
+    div, div_base = div_detail.present, div_detail.reason
     close = candles[-1].close
     reasons: list[str] = []
 
@@ -286,6 +338,13 @@ def detect_entry(
             gp_high=fib["gp_high"] if fib is not None else None,
             range_high=fib["high"] if fib is not None else None,
             range_low=fib["low"] if fib is not None else None,
+            # Item #183 (28/07): a divergence can be confirmed BEFORE the
+            # golden pocket zone is reached (in_gp=False) -- exposed
+            # regardless of whether the overall setup is "present", same
+            # doctrine as gp_low/gp_high above (a fact already computed,
+            # never gated behind the final present/absent verdict).
+            rsi_gap=div_detail.gap,
+            rsi_span=div_detail.span,
         )
 
     # Zone derived from the real levels: invalidation below the deep support,
@@ -316,4 +375,6 @@ def detect_entry(
         gp_high=gp_high,
         range_high=target,
         range_low=fib["low"],
+        rsi_gap=div_detail.gap,
+        rsi_span=div_detail.span,
     )

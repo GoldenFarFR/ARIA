@@ -10,6 +10,7 @@ import pytest
 
 from aria_core import limit_orders as lo
 from aria_core import paper_trader, risk_guard
+from aria_core.services.dexscreener import PairSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -479,6 +480,206 @@ async def test_reanalyze_for_watching_plain_order_unaffected_by_golden_pocket_ro
     monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
     order = {"contract": "0xCHECK", "chain": "base", "signal_json": json.dumps({"target": 1.0})}
     assert await lo.reanalyze_for_watching(order) is True
+
+
+# ── check_rsi_divergence_watching_order (Item #183, 28/07) ──────────────────
+
+
+def _rsi_watch_order(**overrides):
+    sig = {
+        "limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19,
+        "last_candle_ts": 5 * 3600,
+    }
+    sig.update(overrides.pop("sig_overrides", {}))
+    base = {"contract": "0xCHECK", "chain": "base", "target_price": 1.5, "signal_json": json.dumps(sig)}
+    base.update(overrides)
+    return base, sig
+
+
+def _rsi_pair(price_usd=1.5):
+    return PairSnapshot(pair_address="0xpool", base_address="0xcheck", price_usd=price_usd)
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_triggers_on_span_within_window(monkeypatch):
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]  # <= last_candle_ts, never expires
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_waits_on_span_outside_window(monkeypatch):
+    """A divergence CAN be present but with too short/too long a span --
+    never triggers on a looser span than the operator-validated window."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=5)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_waits_when_no_divergence_yet(monkeypatch):
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(False, "")
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_cancels_on_invalidation_crossed(monkeypatch):
+    """The golden pocket setup itself died while waiting -- cancel, never
+    trigger on a broken structure, even if a divergence somehow reads True."""
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair(price_usd=1.0)]  # below invalidation (1.19)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_expires_past_candle_horizon(monkeypatch):
+    """More new candles observed since creation than RSI_WATCH_MAX_HORIZON_
+    CANDLES, with no qualifying divergence -- silent expiry, never a cancel
+    Telegram alert (same doctrine as sweep_expired)."""
+    from aria_core import momentum_entry
+    from aria_core.skills.ta_levels import Candle
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        # last_candle_ts=5*3600 (18000) -- 25 new hourly candles after it,
+        # well past the 20-candle horizon.
+        return [Candle(ts=(6 + i) * 3600, open=1, high=1, low=1, close=1) for i in range(25)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "expire"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_waits_on_pair_lookup_failure(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _boom(contract, *, chain="base"):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _boom)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_waits_on_no_pair(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_waits_on_candle_fetch_failure(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _boom(pool_address, chain, *, contract="", pair=None, **kw):
+        raise RuntimeError("candles down")
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _boom)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_routes_rsi_divergence_pending_to_dedicated_check(monkeypatch):
+    """process_active_orders must dispatch a rsi_divergence_pending watching
+    order to check_rsi_divergence_watching_order, never the plain price
+    comparison (check_watching_order) -- verified by making the plain path
+    unreachable (a stale target_price that would otherwise spuriously trigger)."""
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+
+    called = {"dedicated": False}
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        called["dedicated"] = True
+        return "wait"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    await lo.process_active_orders(_price)
+    assert called["dedicated"] is True
 
 
 # ── process_active_orders orchestration ──────────────────────────────────────

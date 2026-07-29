@@ -3538,6 +3538,7 @@ async def _open_new_entries_for_wallet(
     from aria_core import bonding_entry as _bonding_entry
     from aria_core import counterfactual_tracker
     from aria_core import limit_orders
+    from aria_core import momentum_scan_log
 
     start = await starting_capital(wallet=wallet)
     opened_positions: list[dict] = []
@@ -3561,9 +3562,14 @@ async def _open_new_entries_for_wallet(
         except Exception as exc:  # noqa: BLE001 — a crashing analysis doesn't stop the cycle
             logger.info("paper_cycle: analysis %s failed (%s)", contract, exc)
             funnel["analyzer_error"] = funnel.get("analyzer_error", 0) + 1
+            # Item #193 (28/07): recorded EXHAUSTIVELY, unlike
+            # counterfactual_tracker -- see momentum_scan_log's own
+            # docstring for why (real "distinct tokens scanned" baseline).
+            await momentum_scan_log.record_scan(contract, "base", "analyzer_error", wallet=wallet)
             continue
         if not sig:
             funnel["no_price_data"] = funnel.get("no_price_data", 0) + 1
+            await momentum_scan_log.record_scan(contract, "base", "no_price_data", wallet=wallet)
             continue
         if sig.get("action") != "BUY":
             reason_code = sig.get("hold_reason") or "unspecified"
@@ -3577,6 +3583,11 @@ async def _open_new_entries_for_wallet(
             await counterfactual_tracker.record_rejection(
                 contract, sig.get("chain") or "base", sig.get("symbol", ""),
                 reason_code, sig.get("price"),
+            )
+            await momentum_scan_log.record_scan(
+                contract, sig.get("chain") or "base", reason_code,
+                symbol=sig.get("symbol"), price=sig.get("price"),
+                mode=sig.get("mode"), wallet=wallet,
             )
             # Item #182 (28/07), golden-pocket liberation: a "no_entry_signal"
             # HOLD alongside a limit_order_candidate (momentum_entry.py, price
@@ -3594,7 +3605,17 @@ async def _open_new_entries_for_wallet(
             if watch:
                 try:
                     if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
-                        order_sig = {**sig, **watch, "limit_order_reason": "golden_pocket_pending"}
+                        # Item #183 (28/07): a watch built by
+                        # momentum_entry._rsi_divergence_watch_candidate
+                        # already tags its own limit_order_reason
+                        # ("rsi_divergence_pending") -- respected here, never
+                        # overwritten. Falls back to "golden_pocket_pending"
+                        # (unchanged behavior) for #182's watch, which never
+                        # sets this field itself.
+                        order_sig = {
+                            **sig, **watch,
+                            "limit_order_reason": watch.get("limit_order_reason", "golden_pocket_pending"),
+                        }
                         # watch["reason"] is a single string (the DEX-quality
                         # thesis) -- appended to the reasons LIST (never
                         # overwriting it) so the thesis persisted at trigger
@@ -3605,6 +3626,7 @@ async def _open_new_entries_for_wallet(
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", watch.get("symbol") or sig.get("symbol", ""),
                             watch["target_price"], order_sig, wallet=wallet,
+                            expiry_hours=watch.get("watch_expiry_hours"),
                         )
                         if notifier:
                             await notifier(limit_orders.format_limit_order_placed_alert(order))
@@ -3857,6 +3879,17 @@ async def _open_new_entries_for_wallet(
             # Item #101 (26/07): golden pocket bounds -- see open_position's docstring.
             gp_low=sig.get("gp_low"),
             gp_high=sig.get("gp_high"),
+        )
+        # Item #193 (28/07): the BUY path is recorded too -- momentum_scan_log's
+        # whole point is a token-scan baseline, never just a HOLD funnel. A
+        # refused buy (portfolio-level constraint: cap reached, cash short --
+        # see open_position's own docstring, never a signal quality issue)
+        # still counts as a real evaluation of this contract, tagged distinctly
+        # from a confirmed BUY so it's never confused with one downstream.
+        await momentum_scan_log.record_scan(
+            contract, sig.get("chain") or "base", None if pos else "buy_refused",
+            symbol=sig.get("symbol"), price=sig.get("price"),
+            mode=sig.get("mode"), wallet=wallet,
         )
         if pos:
             opened += 1

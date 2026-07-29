@@ -148,6 +148,13 @@ def tmp_db(tmp_path, monkeypatch):
     from aria_core import limit_orders
 
     monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "paper.db"))
+    # Item #193 (28/07) -- same DB_PATH-computed-once-at-import trap as
+    # momentum_funnel_log/market_sentiment/limit_orders above: _open_new_
+    # entries_for_wallet now also records every evaluation via
+    # momentum_scan_log.record_scan.
+    from aria_core import momentum_scan_log
+
+    monkeypatch.setattr(momentum_scan_log, "DB_PATH", str(tmp_path / "momentum_scan.db"))
     return tmp_path
 
 
@@ -5577,6 +5584,168 @@ async def test_open_new_entries_for_wallet_unlimited_cap_never_breaks(tmp_db):
     )
     assert pt.MAX_POSITIONS_SCALPING is None
     assert count == 10  # all 10 opened -- never capped by count, past MAX_POSITIONS_VC(5)
+
+
+# ── Item #193 (28/07): momentum_scan_log records every evaluation, not just
+#    what momentum_funnel_log's own aggregate counters see ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_records_scan_on_hold(tmp_db):
+    from aria_core import momentum_scan_log, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _hold_analyzer(contract):
+        return {
+            "action": "HOLD", "chain": "base", "symbol": "TOK", "price": 1.5,
+            "hold_reason": "volume_too_low", "mode": "standard",
+        }
+
+    async def _price_lookup(contract):
+        return 1.5
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], _hold_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    row = await momentum_scan_log.last_scan_for(A, "base")
+    assert row is not None
+    assert row["hold_reason"] == "volume_too_low"
+    assert row["symbol"] == "TOK"
+    assert row["price"] == pytest.approx(1.5)
+    assert row["mode"] == "standard"
+    assert row["wallet"] == "swing"
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_records_scan_on_analyzer_error(tmp_db):
+    from aria_core import momentum_scan_log, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _boom_analyzer(contract):
+        raise RuntimeError("network exploded")
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], _boom_analyzer,
+        price_lookup=lambda c: None, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    row = await momentum_scan_log.last_scan_for(A, "base")
+    assert row is not None
+    assert row["hold_reason"] == "analyzer_error"
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_records_scan_on_no_price_data(tmp_db):
+    from aria_core import momentum_scan_log, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _none_analyzer(contract):
+        return None
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], _none_analyzer,
+        price_lookup=lambda c: None, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    row = await momentum_scan_log.last_scan_for(A, "base")
+    assert row is not None
+    assert row["hold_reason"] == "no_price_data"
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_records_scan_on_buy(tmp_db):
+    from aria_core import momentum_scan_log, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "TOK", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    opened_positions, opened = await pt._open_new_entries_for_wallet(
+        "swing", [A], _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    assert opened == 1
+    row = await momentum_scan_log.last_scan_for(A, "base")
+    assert row is not None
+    assert row["hold_reason"] is None  # confirmed BUY, never confused with a HOLD
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_records_scan_on_buy_refused(tmp_db, monkeypatch):
+    """A portfolio-level constraint refuses the buy (open_position itself
+    returns None -- e.g. insufficient cash, NOT a signal quality issue,
+    NOT the position-count cap already checked before the analyzer even
+    runs) -- still a real evaluation of this contract, tagged distinctly
+    from a confirmed BUY so it's never mistaken for one downstream."""
+    from aria_core import momentum_scan_log, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "TOK", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    async def _refused_open_position(*args, **kwargs):
+        return None  # simulates a portfolio-level refusal (e.g. cash short)
+
+    await pt.reset_portfolio(1_000_000.0)
+    monkeypatch.setattr(pt, "open_position", _refused_open_position)
+    opened_positions, opened = await pt._open_new_entries_for_wallet(
+        "swing", [A], _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    assert opened == 0
+    row = await momentum_scan_log.last_scan_for(A, "base")
+    assert row is not None
+    assert row["hold_reason"] == "buy_refused"
 
 
 @pytest.mark.asyncio
