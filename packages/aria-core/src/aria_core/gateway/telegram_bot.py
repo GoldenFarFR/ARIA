@@ -100,6 +100,25 @@ async def _owner_only(update: Update) -> bool:
     return False
 
 
+async def _record_kill_incident(
+    *, event_type: str, by: int | str | None, reason: str, tx_hash: str | None = None,
+) -> None:
+    """Item #198 (29/07) -- every manual /stop, /resume, and outflow_confirm
+    lift is logged to ``kill_incident_log`` (append-only, never overwritten),
+    on top of the automatic arm already logged from ``agent_wallet_monitor``.
+    Best-effort: a logging failure must never block the pause/resume it
+    merely records."""
+    try:
+        from aria_core import kill_incident_log
+
+        await kill_incident_log.record_incident(
+            event_type=event_type, trigger_source=kill_incident_log.TRIGGER_MANUAL,
+            by=by, reason=reason, tx_hash=tx_hash,
+        )
+    except Exception as exc:  # noqa: BLE001 -- audit logging must never block the command
+        logger.warning("telegram_bot: kill incident logging failed: %s", exc)
+
+
 def _format_tg(text: str) -> str:
     """Plain text for Telegram — strip markdown the LLM/skills emit without parse_mode."""
     return plain_telegram(fix_handle_in_text(text))[:4000]
@@ -2173,33 +2192,56 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     label = "approved ✅" if approved else "rejected ❌"
 
-    # 29/07 -- Item #187, post-incident (operator stress-test on aria-wallet-
-    # X402-EVM): interactive confirmation of an agent_wallet_monitor
-    # "unexpected_outflow" alert. "Autorisé par moi" just confirms (no side
-    # effect -- the movement was already logged read-only, nothing to
-    # execute). "PAS autorisé" triggers the SAME global kill-switch already
-    # used everywhere else in this project (`outgoing_pause.pause`) --
-    # doesn't undo the movement (already on-chain, irreversible), but freezes
-    # every future outgoing spend immediately while the operator
-    # investigates, rather than a passive notification the operator has to
-    # act on manually.
+    # 29/07 -- Item #187, redesigned by Item #198 (operator explicit request,
+    # post-incident: "systeme blinde... si ca arrive le compte bloque tout
+    # swap ou tout transfert"): the kill-switch is now armed IMMEDIATELY on
+    # detection (agent_wallet_monitor.run_agent_wallet_monitor_cycle), never
+    # waiting for this confirmation first. "🚫 PAS autorisé" just confirms it
+    # should STAY paused (already is) -- no further action needed here.
+    # "✅ Autorisé par moi" is what actually LIFTS it, but ONLY for the
+    # OWNER (operator explicit requirement: "seul l'adresse de l'owner peut
+    # permettre un transfert de fonds") -- `_admin_check_reply` above already
+    # gated this callback to admins in general, this is a STRICTER check
+    # specific to lifting an auto-armed kill-switch. Also verifies the
+    # CURRENT pause reason still references THIS tx_hash before lifting --
+    # if ARIA got paused for a DIFFERENT reason in the meantime (e.g. a
+    # second, unrelated incident), a stale "Autorisé par moi" click on the
+    # first alert must never lift a pause protecting against the second.
     if result.action.startswith("outflow_confirm:"):
+        tx_hash = result.action.split(":", 1)[1] if ":" in result.action else ""
         if not approved:
-            outgoing_pause.pause(
-                by=str(query.from_user.id),
-                reason=f"Sortie non autorisée confirmée (approval #{approval_id})",
-            )
             await query.edit_message_text(
                 _format_tg(
                     f"🚫 Confirmé : sortie NON autorisée (#{approval_id})\n"
-                    "⛔ Kill-switch activé — toutes les sorties sont gelées.\n"
+                    "⛔ Kill-switch toujours actif — toutes les sorties restent gelées.\n"
                     "Envoie /start une fois l'incident traité pour reprendre."
                 ),
             )
+        elif not is_owner(query.from_user.id):
+            await query.answer("Seul le owner peut lever cette pause.", show_alert=True)
         else:
-            await query.edit_message_text(
-                _format_tg(f"✅ Confirmé : mouvement autorisé par toi (#{approval_id})"),
-            )
+            pst = outgoing_pause.pause_status()
+            reason = str(pst.get("reason") or "")
+            if pst.get("paused") and tx_hash and tx_hash in reason:
+                outgoing_pause.resume(by=str(query.from_user.id))
+                await _record_kill_incident(
+                    event_type="lifted", by=query.from_user.id,
+                    reason=f"Confirmation Telegram (outflow_confirm #{approval_id})",
+                    tx_hash=tx_hash,
+                )
+                await query.edit_message_text(
+                    _format_tg(
+                        f"✅ Confirmé : mouvement autorisé par toi (#{approval_id})\n"
+                        "▶️ Kill-switch levé — actions sortantes réactivées."
+                    ),
+                )
+            else:
+                await query.edit_message_text(
+                    _format_tg(
+                        f"✅ Confirmé : mouvement autorisé par toi (#{approval_id})\n"
+                        "(ARIA n'est plus/pas en pause pour cet incident précis — rien à lever.)"
+                    ),
+                )
         return
 
     if result.action.startswith("spend:"):
@@ -3262,6 +3304,9 @@ async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     user = update.effective_user
     outgoing_pause.pause(by=user.id if user else None)
+    await _record_kill_incident(
+        event_type="armed", by=user.id if user else None, reason="Pause manuelle /stop (owner)",
+    )
     await _reply(
         update.message,
         "⏸ ARIA en pause — tweets, réponses/likes X, dépenses ACP et jobs planifiés suspendus.\n"
@@ -3279,6 +3324,9 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     user = update.effective_user
     outgoing_pause.resume(by=user.id if user else None)
+    await _record_kill_incident(
+        event_type="lifted", by=user.id if user else None, reason="Reprise manuelle /resume (owner)",
+    )
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 

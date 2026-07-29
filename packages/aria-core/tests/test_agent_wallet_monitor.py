@@ -7,6 +7,8 @@ import pytest
 
 from aria_core import agent_wallet_cdp_adapter as adapter
 from aria_core import agent_wallet_monitor as monitor
+from aria_core import kill_incident_log, outgoing_pause
+from aria_core.paths import configure_data_dir
 from aria_core.services.blockscout import (
     AddressInfo,
     Transaction,
@@ -30,6 +32,14 @@ def _isolated_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gate_audit_log, "DB_PATH", str(tmp_path / "gate_audit_test.db"))
     gate_audit_log._last_known_state.clear()
+
+    # Item #198 (29/07): the automatic-arm path also logs to kill_incident_log --
+    # same DB_PATH-computed-once-at-import trap.
+    monkeypatch.setattr(kill_incident_log, "DB_PATH", str(tmp_path / "kill_incident_test.db"))
+    # Item #198 also arms the REAL outgoing_pause kill-switch -- isolates its
+    # pause_state.json to this test's own tmp_path so no test ever touches a
+    # real/shared state file.
+    configure_data_dir(tmp_path)
     yield
 
 
@@ -734,9 +744,10 @@ async def test_run_cycle_notifies_only_unexpected_outflow(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_does_not_notify_when_killswitch_paused(monkeypatch):
-    """Le kill-switch coupe la NOTIFICATION, jamais la lecture/journalisation --
-    le registre reste complet meme en pause."""
+async def test_run_cycle_deposit_stays_silent_regardless_of_pause_state(monkeypatch):
+    """A deposit is never notified (classification filter alone already
+    excludes it from the notify loop) -- reading/logging still happens
+    (registre complet), whether or not the kill-switch happens to be armed."""
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     transfer = TokenTransfer(
         tx_hash="0xcycle2", from_address="0xoperator", to_address=monitor.MONITORED_WALLET_ADDRESS,
@@ -746,9 +757,6 @@ async def test_run_cycle_does_not_notify_when_killswitch_paused(monkeypatch):
     _patch_client(monkeypatch, FakeBlockscoutClient(
         token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
     ))
-
-    from aria_core import outgoing_pause
-
     monkeypatch.setattr(outgoing_pause, "is_paused", lambda *a, **k: True)
     sent = []
 
@@ -762,6 +770,130 @@ async def test_run_cycle_does_not_notify_when_killswitch_paused(monkeypatch):
     assert sent == []
     rows = await monitor.list_recent_movements()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_arms_kill_switch_immediately_on_fresh_unexpected_outflow(monkeypatch):
+    """Item #198 core behavior: an unexpected_outflow arms the REAL
+    kill-switch immediately, before/without waiting for the Telegram
+    confirmation to be answered."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow_arm", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-29T20:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _notifier(text):
+        pass
+
+    assert outgoing_pause.is_paused() is False
+    await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+
+    assert outgoing_pause.is_paused() is True
+    st = outgoing_pause.pause_status()
+    assert st["by"] == "auto:agent_wallet_monitor"
+    assert "0xoutflow_arm" in st["reason"]
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_never_overwrites_an_existing_pause_reason(monkeypatch):
+    """A SECOND unexpected_outflow while ARIA is already paused (any reason)
+    must never overwrite the existing pause's reason -- re-arming would erase
+    the trace of what triggered the FIRST pause."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    outgoing_pause.pause(by="manual-owner", reason="incident precedent non lie")
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow_second", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-29T20:05:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _notifier(text):
+        pass
+
+    await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+
+    st = outgoing_pause.pause_status()
+    assert st["by"] == "manual-owner"
+    assert st["reason"] == "incident precedent non lie"  # untouched
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_notifies_unexpected_outflow_even_when_already_paused(monkeypatch):
+    """Dropped the old #187 guard ("if notifier and not paused"): an
+    already-paused ARIA must still be told about a NEW unexpected_outflow."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    outgoing_pause.pause(by="manual-owner", reason="deja en pause")
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow_while_paused", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-29T20:10:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    sent = []
+
+    async def _notifier(text):
+        sent.append(text)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+    assert result["notified"] == 1
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_logs_kill_incident_on_fresh_arm(monkeypatch):
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow_logged", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-29T20:15:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _notifier(text):
+        pass
+
+    await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+
+    history = await kill_incident_log.list_incidents()
+    assert len(history) == 1
+    assert history[0]["event_type"] == "armed"
+    assert history[0]["trigger_source"] == "auto"
+    assert history[0]["tx_hash"] == "0xoutflow_logged"
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_does_not_log_kill_incident_when_already_paused(monkeypatch):
+    """No pause() call happens on an already-paused ARIA -- so no redundant
+    incident row either (the existing incident already covers it)."""
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    outgoing_pause.pause(by="manual-owner", reason="deja en pause")
+    transfer = TokenTransfer(
+        tx_hash="0xoutflow_no_dup", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=5.0, timestamp="2026-07-29T20:20:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _notifier(text):
+        pass
+
+    await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+
+    assert await kill_incident_log.list_incidents() == []
 
 
 @pytest.mark.asyncio

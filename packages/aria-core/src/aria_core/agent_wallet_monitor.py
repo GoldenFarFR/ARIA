@@ -844,16 +844,19 @@ def _x402_spend_may_have_settled(spend: dict) -> bool:
 
 
 async def _send_outflow_confirmation(m: WalletMovement) -> bool:
-    """29/07 -- Item #187: turns a passive ``unexpected_outflow`` notification
-    into an interactive Telegram confirmation (same approvals/callback
-    pattern as ``wallet_guard.escalate_spend``, reused rather than
-    duplicated). "PAS autorisé" (see ``_handle_callback``'s
-    ``outflow_confirm:`` branch, gateway/telegram_bot.py) triggers the
-    existing global kill-switch (``outgoing_pause.pause``) immediately --
-    "Autorisé par moi" just confirms, no side effect. Returns ``False`` on
-    ANY failure (missing admin_ids, bot not started, approval creation
-    failed) so the caller falls back to a plain text notification -- the
-    alert itself must never be lost even if this richer path breaks."""
+    """29/07 -- Item #187, redesigned by Item #198: turns a passive
+    ``unexpected_outflow`` notification into an interactive Telegram
+    confirmation (same approvals/callback pattern as ``wallet_guard.
+    escalate_spend``, reused rather than duplicated). By the time this runs,
+    the kill-switch is ALREADY armed (the caller, ``run_agent_wallet_
+    monitor_cycle``, pauses immediately on detection, never waiting for this
+    confirmation) -- "🚫 PAS autorisé" just confirms it should STAY paused,
+    "✅ Autorisé par moi" is what actually LIFTS it (owner-only check, see
+    ``_handle_callback``'s ``outflow_confirm:`` branch, gateway/telegram_bot.py).
+    Returns ``False`` on ANY failure (missing admin_ids, bot not started,
+    approval creation failed) so the caller falls back to a plain text
+    notification -- the alert itself must never be lost even if this richer
+    path breaks."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     from aria_core import approvals
@@ -882,8 +885,9 @@ async def _send_outflow_confirmation(m: WalletMovement) -> bool:
         )
         text = (
             format_movement_alert(m)
-            + "\n\n<b>Confirme si c'est bien toi.</b> Un clic sur « PAS autorisé » "
-            "gèle immédiatement toutes les sorties (kill-switch global)."
+            + "\n\n⛔ <b>ARIA est DÉJÀ en pause</b> (kill-switch armé automatiquement à la "
+            "détection). Confirme si c'est bien toi : « Autorisé par moi » lève la pause, "
+            "« PAS autorisé » la laisse active."
         )
         sent = await telegram_bot.send_message(
             text, telegram_bot.settings.admin_ids[0], parse_mode="HTML", reply_markup=keyboard,
@@ -966,20 +970,44 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     # immediate alert -- everything else (deposits, detected phishing, swaps,
     # x402 payments) stays silent, logged but never notified.
     #
-    # 29/07 -- Item #187, post-incident (operator stress-test): a plain
-    # notification only informs, it never lets the operator ACT quickly. Now
-    # sent as an interactive confirmation (same approvals/callback pattern
-    # already used by wallet_guard.escalate_spend) -- "PAS autorisé" triggers
-    # the existing global kill-switch (outgoing_pause) immediately, "Autorisé
-    # par moi" just confirms. Falls back to the plain notifier (no buttons)
-    # if the interactive send fails for any reason -- never silently loses
-    # the alert.
-    paused = outgoing_pause.is_paused()
+    # 29/07 -- Item #198, post-incident (operator explicit request: "systeme
+    # blinde... si ca arrive le compte bloque tout swap ou tout transfert"):
+    # the kill-switch now arms IMMEDIATELY on detection, fail-closed, never
+    # waiting on a human reply first (Item #187's confirmation flow used to
+    # do the opposite -- "PAS autorisé" armed it, "Autorisé par moi" was a
+    # no-op -- meaning nothing was blocked for however long the operator took
+    # to respond). Never re-arms if ARIA is ALREADY paused (for this or any
+    # other reason) -- pause() would just overwrite a possibly more relevant
+    # existing reason. Notification is now sent REGARDLESS of the pause
+    # state (dropped the old "if notifier and not paused" guard) -- an
+    # already-paused ARIA still deserves to know a NEW incident occurred,
+    # this classification was never gated behind that check for any other
+    # reason than avoiding redundant confirmations under the OLD (reactive)
+    # design.
     notified = 0
-    if notifier and not paused:
+    if notifier:
         for m in movements:
             if m.classification != "unexpected_outflow":
                 continue
+            if not outgoing_pause.is_paused():
+                pause_reason = (
+                    f"Sortie non initiee par ARIA detectee automatiquement "
+                    f"(wallet {m.wallet_name}, tx {m.tx_hash})"
+                )
+                outgoing_pause.pause(by="auto:agent_wallet_monitor", reason=pause_reason)
+                try:
+                    from aria_core import kill_incident_log
+
+                    await kill_incident_log.record_incident(
+                        event_type=kill_incident_log.EVENT_ARMED,
+                        trigger_source=kill_incident_log.TRIGGER_AUTO,
+                        by="auto:agent_wallet_monitor",
+                        reason=pause_reason,
+                        wallet_name=m.wallet_name,
+                        tx_hash=m.tx_hash,
+                    )
+                except Exception as exc:  # noqa: BLE001 -- audit logging must never block the cycle
+                    logger.warning("agent_wallet_monitor: kill incident logging failed: %s", exc)
             try:
                 sent = await _send_outflow_confirmation(m)
                 if not sent:
