@@ -237,6 +237,54 @@ async def test_chat_with_valid_session_calls_brain(client, totp_secret, monkeypa
     assert captured == {"message": "quel est le statut ?", "visitor_id": "operator-mobile", "public_mode": False}
 
 
+@pytest.mark.asyncio
+async def test_chat_idempotency_key_prevents_double_execution(client, totp_secret, monkeypatch):
+    """Plan requirement (Phase 2): a client-side timeout + server-side success
+    mismatch must never re-trigger AriaBrain.process() (and its actions_taken)
+    for the same logical message."""
+    call_count = 0
+
+    async def _fake_process(message, *, visitor_id, public_mode):
+        nonlocal call_count
+        call_count += 1
+        return {"response": f"call-{call_count}"}
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    token = login.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    body = {"message": "achete", "idempotency_key": "same-key-123"}
+    res1 = await client.post("/api/aria/ops/chat", json=body, headers=headers)
+    res2 = await client.post("/api/aria/ops/chat", json=body, headers=headers)
+
+    assert call_count == 1
+    assert res1.json() == res2.json() == {"response": "call-1"}
+
+
+@pytest.mark.asyncio
+async def test_chat_without_idempotency_key_always_calls_brain(client, totp_secret, monkeypatch):
+    call_count = 0
+
+    async def _fake_process(message, *, visitor_id, public_mode):
+        nonlocal call_count
+        call_count += 1
+        return {"response": f"call-{call_count}"}
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    token = login.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    body = {"message": "achete"}
+    await client.post("/api/aria/ops/chat", json=body, headers=headers)
+    await client.post("/api/aria/ops/chat", json=body, headers=headers)
+
+    assert call_count == 2
+
+
 # ── /version ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

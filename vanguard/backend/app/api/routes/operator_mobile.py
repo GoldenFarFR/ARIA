@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -53,6 +54,38 @@ class LoginResponse(BaseModel):
 
 class ChatBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
+    # Client-generated UUID, one per message (Phase 2 plan requirement) -- guards
+    # against a client-side timeout + server-side success mismatch causing a
+    # retried message to trigger AriaBrain's actions_taken twice.
+    idempotency_key: str | None = Field(default=None, max_length=64)
+
+
+# In-memory, short-TTL idempotency cache -- scoped to a single process/container,
+# which is enough: the risk window this guards against is a client retry within
+# seconds of a timeout, never a long-lived replay. Keyed by caller (session_id or
+# legacy IP tag) + the client's own key, so one caller can never replay another's
+# cached reply.
+_IDEMPOTENCY_TTL_SECONDS = 120
+_idempotency_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _idempotency_get(key: str) -> dict | None:
+    entry = _idempotency_cache.get(key)
+    if entry is None:
+        return None
+    expires_at, cached_response = entry
+    if time.monotonic() > expires_at:
+        _idempotency_cache.pop(key, None)
+        return None
+    return cached_response
+
+
+def _idempotency_set(key: str, response: dict) -> None:
+    now = time.monotonic()
+    expired = [k for k, (expires_at, _) in _idempotency_cache.items() if expires_at < now]
+    for k in expired:
+        _idempotency_cache.pop(k, None)
+    _idempotency_cache[key] = (now + _IDEMPOTENCY_TTL_SECONDS, response)
 
 
 def _backend_version() -> str:
@@ -190,6 +223,12 @@ async def chat(body: ChatBody, request: Request):
     auth = await require_operator_or_session(request)
     rate_key = auth.get("session_id") or f"legacy:{client_ip(request) or 'unknown'}"
 
+    idempotency_cache_key = f"{rate_key}:{body.idempotency_key}" if body.idempotency_key else None
+    if idempotency_cache_key:
+        cached = _idempotency_get(idempotency_cache_key)
+        if cached is not None:
+            return cached
+
     allowed = check_rate_limit(
         f"operator_chat:{rate_key}",
         max_attempts=CHAT_RATE_LIMIT_PER_MINUTE,
@@ -198,11 +237,16 @@ async def chat(body: ChatBody, request: Request):
     if not allowed:
         raise HTTPException(status_code=429, detail="Too many messages — slow down.")
 
-    return await aria_brain.process(
+    result = await aria_brain.process(
         body.message.strip(),
         visitor_id="operator-mobile",
         public_mode=False,
     )
+    result_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+
+    if idempotency_cache_key:
+        _idempotency_set(idempotency_cache_key, result_dict)
+    return result_dict
 
 
 @router.get("/status")
