@@ -1121,7 +1121,20 @@ class AriaHeartbeat:
                 absorber=_absorb_top_pools, limit=100, max_age_days=182
             )
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")
-            retry_counts = await retry_stale_pending(absorber=_absorb_top_pools)
+            # 29/07 (Item #200 follow-up): defaults (limit=20, max_age_days=7)
+            # meant a full retry cycle over ~2189 real pending candidates took
+            # ~27 days -- a candidate abandoned after only 3 tries in 11.8 days
+            # (RWAGMI, verified against the real prod table) never had a fair
+            # shot. A live burst test against the REAL Blockscout client (15/15
+            # get_token_holders calls, ~1s each) found the free fallback
+            # endpoint answering reliably right now -- the bottleneck is the
+            # retry SCHEDULE, not Blockscout's actual availability. limit x3
+            # (~9 days for a full pass instead of ~27) and max_age_days x3 (a
+            # candidate now gets several real retry passes before being
+            # abandoned, not effectively zero).
+            retry_counts = await retry_stale_pending(
+                absorber=_absorb_top_pools, limit=60, max_age_days=21
+            )
             if retry_counts:
                 append_memory(
                     "vc", f"[retry] {retry_counts} — {retry_counts.get('kept', 0)} mûris"
