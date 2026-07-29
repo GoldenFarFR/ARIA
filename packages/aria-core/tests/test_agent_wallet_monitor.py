@@ -22,6 +22,14 @@ USDC_ADDR = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # vraie adresse Base -
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "DB_PATH", str(tmp_path / "wallet_monitor_test.db"))
+    # Item #188 (29/07): run_agent_wallet_monitor_cycle now also calls
+    # gate_audit_log.snapshot_tracked_gates() -- same DB_PATH-computed-once-
+    # at-import trap as every other module in this codebase, without this a
+    # test here would silently read/write the real default DB path.
+    from aria_core import gate_audit_log
+
+    monkeypatch.setattr(gate_audit_log, "DB_PATH", str(tmp_path / "gate_audit_test.db"))
+    gate_audit_log._last_known_state.clear()
     yield
 
 
@@ -1100,6 +1108,56 @@ async def test_run_cycle_iterates_all_monitored_wallets(monkeypatch):
     assert result["outcome"] == "ok"
     assert result["detected"] == 6
     assert set(calls) == set(monitor.MONITORED_WALLETS.values())
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_snapshots_critical_gates(monkeypatch):
+    """Item #188 (29/07): every tick must also record the current state of
+    the 4 critical capital-adjacent gates, regardless of whether any wallet
+    movement was detected."""
+    from aria_core import gate_audit_log
+
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    _patch_client(monkeypatch, FakeBlockscoutClient())  # no movements at all
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
+
+    assert result["outcome"] == "nothing_new"  # unaffected by the new snapshot
+    for gate_name in gate_audit_log.TRACKED_GATES:
+        history = await gate_audit_log.list_history(gate_name)
+        assert len(history) == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_snapshot_runs_even_when_monitor_disabled(monkeypatch):
+    """Item #188 (29/07), deliberate: knowing what these gates were set to
+    must never depend on wallet surveillance itself being on."""
+    from aria_core import gate_audit_log
+
+    monkeypatch.delenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", raising=False)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
+
+    assert result["outcome"] == "skipped_disabled"
+    for gate_name in gate_audit_log.TRACKED_GATES:
+        history = await gate_audit_log.list_history(gate_name)
+        assert len(history) == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_snapshot_failure_never_blocks_the_cycle(monkeypatch):
+    from aria_core import gate_audit_log
+
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    _patch_client(monkeypatch, FakeBlockscoutClient())
+
+    async def _boom():
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(gate_audit_log, "snapshot_tracked_gates", _boom)
+
+    result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
+    assert result["outcome"] == "nothing_new"
 
 
 @pytest.mark.asyncio

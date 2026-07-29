@@ -904,7 +904,22 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     failure on one wallet (e.g. invalid address, Blockscout unavailable for
     this specific request) never blocks surveillance of the others -- only
     if ALL fail AND no movement was found elsewhere does the cycle report
-    "error"."""
+    "error".
+
+    Item #188 (29/07): also snapshots the 4 critical capital-adjacent gates
+    (x402 seller/mainnet, agent-wallet pilot/transfer) into ``gate_audit_
+    log`` on every tick -- BEFORE the ``agent_wallet_monitor_enabled`` early
+    return, deliberately: knowing what these gates were set to must never
+    depend on whether wallet surveillance itself happens to be on (born from
+    the 29/07 incident, where reconstructing gate state after the fact was
+    impossible)."""
+    try:
+        from aria_core import gate_audit_log
+
+        await gate_audit_log.snapshot_tracked_gates()
+    except Exception as exc:  # noqa: BLE001 -- audit logging must never block the cycle
+        logger.warning("agent_wallet_monitor: gate audit snapshot failed: %s", exc)
+
     if not agent_wallet_monitor_enabled():
         return {"outcome": "skipped_disabled"}
 
