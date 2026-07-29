@@ -40,6 +40,15 @@ def _recipient(env: dict[str, str] | None = None) -> str:
     return (src.get("ARIA_VC_REPORT_TO") or src.get("ARIA_SMTP_USER") or "").strip()
 
 
+def vc_email_enabled() -> bool:
+    """Dedicated gate, OFF by default (operator decision, 28/07) -- disables
+    the /vc detailed-report email entirely while leaving the Telegram-side
+    analysis (order, thesis, verdict) fully intact. Reversible: flip
+    ARIA_VC_EMAIL_ENABLED=true to restore the previous always-on behavior,
+    same idiom as every other dedicated gate in this codebase."""
+    return os.environ.get("ARIA_VC_EMAIL_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def send_vc_report(
     result: VCResult,
     *,
@@ -65,6 +74,13 @@ async def send_vc_report(
     language upstream, see ``vc_analysis.analyze_vc(lang=...)``).
     """
     lang = norm_lang(lang)
+
+    # 0. Dedicated gate (operator decision, 28/07): OFF by default -- see
+    # vc_email_enabled()'s own docstring. Checked before the kill-switch
+    # since this is a standing operator choice, not a transient pause state.
+    if not vc_email_enabled():
+        logger.info("send_vc_report: ARIA_VC_EMAIL_ENABLED off — email skipped (operator decision, 28/07)")
+        return False, "envoi email désactivé (décision opérateur)"
 
     # 1. Fail-closed kill-switch: paused (or unreadable state) -> nothing is sent.
     if outgoing_pause.is_paused(strict=True):

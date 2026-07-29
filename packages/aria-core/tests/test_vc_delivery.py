@@ -36,6 +36,46 @@ async def _fake_send(*, to, subject, html_body, text_body=None, config=None,
     return True, None
 
 
+@pytest.fixture(autouse=True)
+def _vc_email_enabled_by_default(monkeypatch):
+    """#152 (28/07): ARIA_VC_EMAIL_ENABLED is OFF by default (operator
+    decision) -- every test below exercises the logic AFTER that gate
+    (kill-switch/recipient/rendering/send), so it needs the gate explicitly
+    ON. The gate's own OFF-by-default behavior is tested separately,
+    without this fixture (see test_email_gate_off_by_default)."""
+    monkeypatch.setenv("ARIA_VC_EMAIL_ENABLED", "true")
+
+
+@pytest.mark.asyncio
+async def test_email_gate_off_by_default(monkeypatch):
+    """The dedicated gate itself, WITHOUT the autouse fixture above forcing
+    it on -- confirms the real default (operator decision, 28/07) blocks the
+    email before even checking the kill-switch/recipient/rendering."""
+    monkeypatch.delenv("ARIA_VC_EMAIL_ENABLED", raising=False)
+    monkeypatch.setattr(vc_delivery.outgoing_pause, "is_paused", lambda *, strict=False: False)
+    monkeypatch.setattr(vc_delivery, "_recipient", lambda env=None: "agentaria.zhc@gmail.com")
+    send = AsyncMock()
+    monkeypatch.setattr(vc_delivery, "send_email", send)
+
+    ok, error = await vc_delivery.send_vc_report(_result(), generated_at=_GEN)
+
+    assert ok is False
+    assert "désactivé" in error.lower()
+    send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_email_gate_explicitly_off(monkeypatch):
+    monkeypatch.setenv("ARIA_VC_EMAIL_ENABLED", "false")
+    send = AsyncMock()
+    monkeypatch.setattr(vc_delivery, "send_email", send)
+
+    ok, _error = await vc_delivery.send_vc_report(_result(), generated_at=_GEN)
+
+    assert ok is False
+    send.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_delivery_blocked_when_paused(monkeypatch):
     """Kill-switch fail-closed : en pause, aucun email ne part."""
