@@ -1239,6 +1239,24 @@ def test_format_limit_order_placed_alert_rsi_divergence_wording_and_real_expiry(
     assert "2.5" in text
 
 
+def test_format_limit_order_placed_alert_bolds_the_title_line():
+    """29/07 -- operator request: highlight buy/sell/limit-order alerts so
+    they stand out in a busy feed."""
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038, "wallet": "swing"}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "<b>🎯 ORDRE LIMITE POSÉ (SWING, portefeuille papier, aucun argent réel)</b>" in text
+
+
+def test_format_limit_order_placed_alert_escapes_html_special_chars_in_symbol():
+    """A token symbol is on-chain metadata an attacker can set freely -- an
+    unescaped ``<``/``>``/``&`` would break Telegram's HTML parser for the
+    WHOLE message once this alert opts into parse_mode="HTML"."""
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "<script>", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+
+
 def test_format_limit_order_cancelled_alert_labels_known_reasons():
     order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
     text = lo.format_limit_order_cancelled_alert(order, "invalidation_crossed")

@@ -267,6 +267,39 @@ async def test_dm_exception_never_raises_and_topic_still_attempted(monkeypatch):
     assert calls == [None, -1003949048605]  # le topic est bien tenté malgré l'échec du DM
 
 
+@pytest.mark.asyncio
+async def test_trading_dm_html_text_switches_parse_mode(monkeypatch):
+    """29/07 -- operator request: bold the title of buy/sell/limit-order
+    alerts. format_buy_alert/format_sell_alert/format_limit_order_placed_alert
+    now emit a literal ``<b>`` -- detected here to switch to HTML, unlike
+    every other plain-text caller."""
+    send_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", send_mock)
+
+    await heartbeat.aria_heartbeat._notify_telegram_trading("<b>ACHAT FICTIF XYZ</b>\nContrat 0x...")
+
+    send_mock.assert_awaited_once_with(
+        "<b>ACHAT FICTIF XYZ</b>\nContrat 0x...", disable_preview=True, parse_mode="HTML",
+    )
+
+
+@pytest.mark.asyncio
+async def test_trading_dm_and_topic_both_get_html_parse_mode(monkeypatch):
+    monkeypatch.setattr(settings, "aria_trading_topic_chat_id", -1003949048605, raising=False)
+    monkeypatch.setattr(settings, "aria_trading_topic_thread_id", 67, raising=False)
+    send_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", send_mock)
+
+    await heartbeat.aria_heartbeat._notify_telegram_trading("<b>VENTE FICTIVE XYZ</b>")
+
+    assert send_mock.await_count == 2
+    send_mock.assert_any_await("<b>VENTE FICTIVE XYZ</b>", disable_preview=True, parse_mode="HTML")
+    send_mock.assert_any_await(
+        "<b>VENTE FICTIVE XYZ</b>", chat_id=-1003949048605, message_thread_id=67,
+        disable_preview=True, parse_mode="HTML",
+    )
+
+
 # ── câblage paper_trade_cycle -> notifier trading-aware ────────────────────
 
 

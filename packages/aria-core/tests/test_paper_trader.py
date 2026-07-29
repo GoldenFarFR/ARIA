@@ -3009,6 +3009,45 @@ def test_format_buy_alert_defaults_to_base_chain_for_dexscreener_link():
     assert f"https://dexscreener.com/base/{A}" in buy
 
 
+def test_format_buy_alert_bolds_the_title_line():
+    """29/07 -- operator request: highlight buy/sell/limit-order alerts so
+    they stand out in a busy feed."""
+    buy = pt.format_buy_alert({"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000})
+    assert "<b>ACHAT FICTIF AAA</b>" in buy
+
+
+def test_format_buy_alert_escapes_html_special_chars_in_symbol_and_thesis():
+    """A token symbol is on-chain metadata an attacker can set freely -- an
+    unescaped ``<``/``>``/``&`` would break Telegram's HTML parser for the
+    WHOLE message once this alert opts into parse_mode="HTML" (via its own
+    ``<b>`` title)."""
+    buy = pt.format_buy_alert({
+        "symbol": "<script>", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,
+        "thesis": "R/R > 2 & setup < risky",
+    })
+    assert "<script>" not in buy
+    assert "&lt;script&gt;" in buy
+    assert "R/R &gt; 2 &amp; setup &lt; risky" in buy
+
+
+def test_format_sell_alert_bolds_the_title_line():
+    sell = pt.format_sell_alert(
+        {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,
+         "close_reason": "invalidation"}
+    )
+    assert "<b>VENTE FICTIVE AAA (invalidation)</b>" in sell
+
+
+def test_format_sell_alert_escapes_html_special_chars():
+    sell = pt.format_sell_alert({
+        "symbol": "<script>", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,
+        "close_reason": "invalidation", "close_notes": "prix < seuil & invalidé",
+    })
+    assert "<script>" not in sell
+    assert "&lt;script&gt;" in sell
+    assert "prix &lt; seuil &amp; invalidé" in sell
+
+
 def test_format_sell_alert_includes_dexscreener_link():
     sell = pt.format_sell_alert(
         {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": -500, "pnl_pct": -2.0,

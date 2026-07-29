@@ -16,6 +16,7 @@ price is real; the orders are fictitious.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import math
 import os
@@ -2208,7 +2209,14 @@ def _strategy_label(pos: dict) -> str:
 
 
 def format_buy_alert(pos: dict) -> str:
-    name = pos.get("symbol") or (pos.get("contract") or "")[:10]
+    # 29/07 -- operator request: bold the title line so it stands out at a
+    # glance in a busy Telegram feed. Sent via ``telegram_bot.send_trading_
+    # notification``, which switches to HTML parse mode the moment it sees a
+    # literal ``<b>`` in the text (see that function's own docstring) -- every
+    # dynamic field below (token symbol, thesis) MUST be HTML-escaped, since
+    # an unescaped ``<``/``>``/``&`` anywhere would break Telegram's HTML
+    # parser for the entire message, not just the bolded title.
+    name = html.escape(pos.get("symbol") or (pos.get("contract") or "")[:10], quote=False)
     # 07/17 -- explicit operator request: show the % of starting capital
     # (STARTING_CAPITAL_USD, never the current equity -- this is exactly the
     # basis each position is sized against, see run_paper_cycle) committed by
@@ -2217,7 +2225,7 @@ def format_buy_alert(pos: dict) -> str:
     pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
     lines = [
         f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(pos)})",
-        f"ACHAT FICTIF {name}",
+        f"<b>ACHAT FICTIF {name}</b>",
         f"Contrat {pos.get('contract', '')}",
         f"Entrée {pos['entry_price']:.6g} · taille {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)",
     ]
@@ -2230,9 +2238,9 @@ def format_buy_alert(pos: dict) -> str:
     # Telegram readability) -- the FULL text is always persisted as-is in the
     # DB (thesis, see open_position), never truncated where it matters for
     # after-the-fact verification.
-    thesis = (pos.get("thesis") or "").strip()
+    thesis = html.escape((pos.get("thesis") or "").strip()[:500], quote=False)
     if thesis:
-        lines.append(f"Thèse : {thesis[:500]}")
+        lines.append(f"Thèse : {thesis}")
     if pos.get("contract"):
         lines.append(f"DexScreener : {token_url(pos['contract'], chain=pos.get('chain') or 'base')}")
     lines.append("Aucun argent réel — preuve de performance en cours.")
@@ -2378,14 +2386,20 @@ def _format_hold_duration(opened_at: str | None, *, until: str | None = None) ->
 
 
 def format_sell_alert(closed: dict) -> str:
-    name = closed.get("symbol") or (closed.get("contract") or "")[:10]
+    # 29/07 -- operator request: bold title, same HTML doctrine as
+    # format_buy_alert's own comment (every dynamic field escaped -- symbol,
+    # close_reason, notes -- and the literal "P&L" spelled out as the HTML
+    # entity since a bare "&" would break Telegram's HTML parser once this
+    # message opts into parse_mode="HTML" via the "<b>" it now contains).
+    name = html.escape(closed.get("symbol") or (closed.get("contract") or "")[:10], quote=False)
     pnl = closed.get("pnl_usd") or 0.0
     pct = closed.get("pnl_pct") or 0.0
     sign = "+" if pnl >= 0 else ""
+    close_reason = html.escape(str(closed.get("close_reason") or ""), quote=False)
     lines = [
         f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(closed)})",
-        f"VENTE FICTIVE {name} ({closed.get('close_reason', '')})",
-        f"Sortie {closed['exit_price']:.6g} · P&L {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%)",
+        f"<b>VENTE FICTIVE {name} ({close_reason})</b>",
+        f"Sortie {closed['exit_price']:.6g} · P&amp;L {sign}{pnl:,.0f} $ ({sign}{pct:.1f}%)",
     ]
     hold = _format_hold_duration(closed.get("opened_at"), until=closed.get("closed_at"))
     entry_line = f"Entrée {closed['entry_price']:.6g}" if closed.get("entry_price") else ""
@@ -2395,7 +2409,7 @@ def format_sell_alert(closed: dict) -> str:
         lines.append(entry_line)
     elif hold:
         lines.append(f"Détenue {hold}")
-    notes = (closed.get("close_notes") or "").strip()
+    notes = html.escape((closed.get("close_notes") or "").strip(), quote=False)
     if notes:
         lines.append(f"Pourquoi : {notes}")
     if closed.get("contract"):

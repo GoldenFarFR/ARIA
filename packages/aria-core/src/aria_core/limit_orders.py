@@ -41,6 +41,7 @@ multi_pocket_sourcing_enabled()`` is OFF (the only caller today,
 ``wallet=`` explicitly)."""
 from __future__ import annotations
 
+import html
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -806,8 +807,16 @@ def format_limit_order_placed_alert(order: dict) -> str:
     ``LIMIT_ORDER_EXPIRY_HOURS``) -- the alert used to hardcode the flat
     constant regardless, so it displayed "3h" on orders whose real
     ``expires_at`` was 10-15h out. Both now read the order's OWN
-    ``created_at``/``expires_at`` instead of assuming any fixed duration."""
-    name = order.get("symbol") or (order.get("contract") or "")[:10]
+    ``created_at``/``expires_at`` instead of assuming any fixed duration.
+
+    29/07, third pass -- operator request: bold the title line so it stands
+    out at a glance. Sent via ``telegram_bot.send_trading_notification``,
+    which switches to HTML parse mode the moment it sees a literal ``<b>``
+    (see that function's own docstring) -- ``name`` (token symbol, on-chain
+    metadata an attacker can set freely) MUST be HTML-escaped since an
+    unescaped ``<``/``>``/``&`` anywhere in the text would break Telegram's
+    HTML parser for the whole message, not just the bolded title."""
+    name = html.escape(order.get("symbol") or (order.get("contract") or "")[:10], quote=False)
     target = order["target_price"]
     try:
         sig = json.loads(order.get("signal_json") or "{}")
@@ -826,14 +835,14 @@ def format_limit_order_placed_alert(order: dict) -> str:
     reason = sig.get("limit_order_reason")
     if reason == "rsi_divergence_pending":
         lines = [
-            f"🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)",
+            f"<b>🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)</b>",
             f"{name} -- déjà dans la golden pocket ({target:.6g}), divergence RSI pas encore confirmée",
             "ARIA surveille la formation de la divergence (pas un niveau de prix à atteindre) avant d'acheter.",
         ]
         expiry_line = f"Expire dans {expiry_hours:.0f}h si la divergence ne se confirme jamais."
     else:
         lines = [
-            f"🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)",
+            f"<b>🎯 ORDRE LIMITE POSÉ ({pocket_label}, portefeuille papier, aucun argent réel)</b>",
             f"{name} -- cible {target:.6g}",
         ]
         current_price = sig.get("price_at_order_placed")

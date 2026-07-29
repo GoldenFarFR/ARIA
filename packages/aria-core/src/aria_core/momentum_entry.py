@@ -1124,8 +1124,16 @@ async def run_goplus_watchlist_cycle() -> dict:
             security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
         ):
             _clear, reason, _code = _evaluate_security_verdict(security)
+            # 29/07 -- real data-quality gap found while verifying the
+            # watchlist live: _evaluate_security_verdict hardcodes "(GoPlus)"
+            # in every reason string (predates Honeypot.is, still accurate
+            # for the Solana path, which keeps GoPlus/RugCheck) -- APPENDING
+            # "(Honeypot.is, source primaire)" instead of replacing produced
+            # a confusing double-labeled reason ("honeypot confirmé (GoPlus)
+            # (Honeypot.is, source primaire)") in momentum_blacklist, exactly
+            # backwards from the truth on this path.
             if not used_goplus:
-                reason = f"{reason} (Honeypot.is, source primaire)"
+                reason = reason.replace("(GoPlus)", "(Honeypot.is)")
             await momentum_blacklist.add_to_blacklist(contract, chain, reason)
             await goplus_watchlist.remove(contract, chain)
             blacklisted.append(contract)

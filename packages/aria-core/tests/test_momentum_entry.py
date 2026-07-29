@@ -1083,6 +1083,15 @@ async def test_watchlist_cycle_blacklists_via_honeypot_is_confirmed(monkeypatch)
     assert await bl.is_blacklisted(CONTRACT, "base") is True
     assert await wl.count() == 0
 
+    # 29/07 -- real data-quality gap found live: the blacklist reason used to
+    # read "honeypot confirmé (GoPlus) (Honeypot.is, source primaire)"
+    # (appended rather than replaced) -- confusing/backwards on the exact
+    # path this test exercises (Honeypot.is alone, GoPlus never called).
+    entries = await bl.list_blacklist()
+    reason = next(e["reason"] for e in entries if e["contract"].lower() == CONTRACT.lower())
+    assert reason == "honeypot confirmé (Honeypot.is)"
+    assert "GoPlus" not in reason
+
 
 @pytest.mark.asyncio
 async def test_watchlist_cycle_falls_back_to_goplus_when_honeypot_is_fails(monkeypatch):

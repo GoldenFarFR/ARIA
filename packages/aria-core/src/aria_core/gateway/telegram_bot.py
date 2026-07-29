@@ -271,9 +271,34 @@ async def send_trading_notification(text: str) -> None:
     Both sends are protected individually -- ``_notify_telegram`` (the
     original method) already wrapped the main DM in a try/except; this
     free function reproduces exactly the same safety net on both sides, never a Telegram
-    exception bubbling up to break a real trading cycle."""
+    exception bubbling up to break a real trading cycle.
+
+    29/07 -- operator request: bold the title line of buy/sell/limit-order
+    alerts so it stands out when scrolling a busy feed. ``notifier`` (this
+    function, called uniformly as ``notifier(text)`` from dozens of call
+    sites across paper_trader.py/limit_orders.py/risk_guard.py) has no
+    ``parse_mode`` parameter to thread through every one of them without
+    touching every caller and every test's fake notifier -- instead, the 3
+    format functions that opt into bold (``format_buy_alert``/
+    ``format_sell_alert``/``limit_orders.format_limit_order_placed_alert``)
+    emit a literal ``<b>`` tag, detected here to switch to HTML parse mode.
+    Every OTHER caller's plain text never contains this substring (verified:
+    grep for ``<b>`` across every format_* function feeding this notifier
+    found none before this change) -- zero behavior change for them, still
+    routed through ``_format_tg``'s markdown-stripping (``parse_mode=None``).
+    The 3 opted-in functions are responsible for HTML-escaping every dynamic
+    field they interpolate (token symbol, thesis/notes) -- an unescaped
+    ``<``/``>``/``&`` anywhere in the text would break Telegram's HTML parser
+    for the WHOLE message, not just the bolded portion.
+
+    ``kwargs`` built conditionally (never a bare ``parse_mode=None`` passed
+    explicitly) so a PLAIN message's call to ``send_message`` stays
+    byte-for-byte identical to before this change -- existing tests assert
+    the exact call signature (``assert_awaited_once_with(text,
+    disable_preview=True)``, no ``parse_mode`` kwarg at all)."""
+    kwargs = {"parse_mode": "HTML"} if "<b>" in text else {}
     try:
-        await send_message(text, disable_preview=True)
+        await send_message(text, disable_preview=True, **kwargs)
     except Exception as exc:
         logger.warning("Telegram notify failed: %s", exc)
     chat_id = getattr(settings, "aria_trading_topic_chat_id", None)
@@ -281,7 +306,9 @@ async def send_trading_notification(text: str) -> None:
     if not chat_id or not thread_id:
         return
     try:
-        await send_message(text, chat_id=chat_id, message_thread_id=thread_id, disable_preview=True)
+        await send_message(
+            text, chat_id=chat_id, message_thread_id=thread_id, disable_preview=True, **kwargs,
+        )
     except Exception as exc:
         logger.warning("Telegram trading-topic notify failed: %s", exc)
 
