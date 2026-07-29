@@ -30,9 +30,12 @@ def _market(*, event_slug="evt", question="Will X happen?", yes_price=0.5, yes_t
     )
 
 
-def _judgment(*, side="YES", win_probability=0.9, aria_probability=0.9, market_probability=0.5, edge=0.4, action="BET"):
+def _judgment(
+    *, side="YES", win_probability=0.9, aria_probability=0.9, market_probability=0.5, edge=0.4,
+    action="BET", market_question="Will X happen?",
+):
     return PolymarketJudgment(
-        market_question="Will X happen?",
+        market_question=market_question,
         market_probability=market_probability,
         aria_probability=aria_probability,
         vote_spread=0.05,
@@ -598,12 +601,12 @@ async def test_save_judgment_log_then_recently_judged_true(tmp_db):
     market = _market(event_slug="fed-decision")
     judgment = _judgment(action="SKIP")
     await ppt.save_judgment_log(market, judgment)
-    assert await ppt.recently_judged("fed-decision") is True
+    assert await ppt.recently_judged("fed-decision", market.question) is True
 
 
 @pytest.mark.asyncio
 async def test_recently_judged_false_for_unknown_market(tmp_db):
-    assert await ppt.recently_judged("never-seen") is False
+    assert await ppt.recently_judged("never-seen", "Will X happen?") is False
 
 
 @pytest.mark.asyncio
@@ -616,10 +619,79 @@ async def test_recently_judged_false_after_cooldown_expires(tmp_db):
     stale = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
     async with aiosqlite.connect(ppt.DB_PATH) as db:
         await db.execute(
-            "UPDATE polymarket_judgment_log SET judged_at = ? WHERE event_slug = ?", (stale, "fed-decision"),
+            "UPDATE polymarket_judgment_log SET judged_at = ? WHERE event_slug = ? AND question = ?",
+            (stale, "fed-decision", market.question),
         )
         await db.commit()
-    assert await ppt.recently_judged("fed-decision", cooldown_hours=24) is False
+    assert await ppt.recently_judged("fed-decision", market.question, cooldown_hours=24) is False
+
+
+@pytest.mark.asyncio
+async def test_judgment_log_hot_migration_preserves_rows_and_new_key(tmp_db):
+    """Item #195 (29/07): a table already deployed under the OLD single-
+    column PK (event_slug only) must be migrated in place (SQLite can't
+    ALTER a PK) -- existing rows preserved, new composite key (event_slug,
+    question) enforced afterward."""
+    import aiosqlite
+
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE polymarket_judgment_log (
+                event_slug TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                judged_at TEXT NOT NULL,
+                market_probability REAL,
+                aria_probability REAL,
+                vote_spread REAL,
+                edge REAL,
+                side TEXT,
+                win_probability REAL,
+                action TEXT NOT NULL,
+                skip_reason TEXT
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO polymarket_judgment_log "
+            "(event_slug, question, judged_at, action) VALUES (?, ?, ?, ?)",
+            ("fed-decision", "Old question?", "2026-07-28T17:42:41+00:00", "SKIP"),
+        )
+        await db.commit()
+
+    # Triggers _ensure_tables() -- must detect the old shape and migrate.
+    await ppt.recently_judged("unrelated", "unrelated?")
+
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM polymarket_judgment_log")
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0]["event_slug"] == "fed-decision"
+    assert rows[0]["question"] == "Old question?"
+
+    # New composite key now allows the same event_slug with a DIFFERENT question.
+    market2 = _market(event_slug="fed-decision", question="New question?")
+    await ppt.save_judgment_log(market2, _judgment(action="SKIP", market_question="New question?"))
+    async with aiosqlite.connect(ppt.DB_PATH) as db:
+        cur2 = await db.execute("SELECT COUNT(*) FROM polymarket_judgment_log WHERE event_slug = ?", ("fed-decision",))
+        count = (await cur2.fetchone())[0]
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_recently_judged_scoped_per_question_not_just_event_slug(tmp_db):
+    """Item #195 (29/07), the real bug: an event can hold MANY distinct
+    markets sharing the same event_slug (e.g. "what-price-will-ethereum-
+    hit" held 33 price-threshold questions) -- judging ONE must never cool
+    down the OTHERS. has_open_position already got this right; this locks
+    the same invariant into recently_judged/polymarket_judgment_log."""
+    eth_2000 = _market(event_slug="eth-price-targets", question="Will ETH hit $2000?")
+    eth_3000 = _market(event_slug="eth-price-targets", question="Will ETH hit $3000?")
+    await ppt.save_judgment_log(eth_2000, _judgment(action="SKIP", market_question=eth_2000.question))
+
+    assert await ppt.recently_judged("eth-price-targets", "Will ETH hit $2000?") is True
+    assert await ppt.recently_judged("eth-price-targets", "Will ETH hit $3000?") is False
 
 
 @pytest.mark.asyncio
@@ -665,7 +737,7 @@ async def test_cycle_persists_a_judgment_log_row_even_on_skip(tmp_db, monkeypatc
 
     await ppt.run_polymarket_paper_cycle()
 
-    assert await ppt.recently_judged("fed-decision") is True
+    assert await ppt.recently_judged("fed-decision", market.question) is True
 
 
 @pytest.mark.asyncio

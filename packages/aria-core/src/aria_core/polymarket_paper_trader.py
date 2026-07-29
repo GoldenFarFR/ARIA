@@ -151,10 +151,25 @@ async def _ensure_tables() -> None:
         # table to skip a market judged within the cooldown window, for free
         # (no network/LLM cost), letting the cycle progress to markets on
         # other topics instead of starving on the same handful.
+        #
+        # Item #195 (29/07), real bug found live: an "event" can hold MANY
+        # distinct markets sharing the same event_slug (list_liquid_events
+        # flattens each event's own `markets` array, e.g. "what-price-will-
+        # ethereum-hit-in-july-2026" alone held 33 different price-threshold
+        # questions on a real check) -- keying this table (and `recently_
+        # judged`) on event_slug ALONE meant judging ONE of those 33 questions
+        # locked out the other 32 for a full 24h cooldown, even though they're
+        # completely different bets. `has_open_position` already got this
+        # right (event_slug + question together) -- this table didn't. Live
+        # impact confirmed: only 9 distinct event_slugs existed across 174
+        # real candidates, so the pool exhausted itself in ~2 cycles and then
+        # produced ZERO new judgments for ~15h straight (every remaining
+        # candidate shared an event_slug already cooling down). Composite key
+        # now matches has_open_position's own (event_slug, question).
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS polymarket_judgment_log (
-                event_slug TEXT PRIMARY KEY,
+                event_slug TEXT NOT NULL,
                 question TEXT NOT NULL,
                 judged_at TEXT NOT NULL,
                 market_probability REAL,
@@ -164,10 +179,48 @@ async def _ensure_tables() -> None:
                 side TEXT,
                 win_probability REAL,
                 action TEXT NOT NULL,
-                skip_reason TEXT
+                skip_reason TEXT,
+                PRIMARY KEY (event_slug, question)
             )
             """
         )
+        # Item #195 (29/07) -- hot migration for a table that already exists
+        # in prod under the OLD single-column PK (event_slug only): SQLite
+        # can't ALTER a PRIMARY KEY in place, so detect the old shape (PRAGMA
+        # table_info, `question` never marked pk under the old schema) and
+        # rebuild under the new composite key, preserving every row (a pure
+        # diagnostic log, not financial state, but still never discarded
+        # without need). No-op on a fresh table (already created with the
+        # right shape above) or one already migrated.
+        pk_cols = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(polymarket_judgment_log)")).fetchall()
+            if row[5] > 0  # row[5] is the `pk` column, 0 = not part of the primary key
+        }
+        if pk_cols == {"event_slug"}:
+            await db.execute("ALTER TABLE polymarket_judgment_log RENAME TO polymarket_judgment_log_old")
+            await db.execute(
+                """
+                CREATE TABLE polymarket_judgment_log (
+                    event_slug TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    judged_at TEXT NOT NULL,
+                    market_probability REAL,
+                    aria_probability REAL,
+                    vote_spread REAL,
+                    edge REAL,
+                    side TEXT,
+                    win_probability REAL,
+                    action TEXT NOT NULL,
+                    skip_reason TEXT,
+                    PRIMARY KEY (event_slug, question)
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO polymarket_judgment_log SELECT * FROM polymarket_judgment_log_old"
+            )
+            await db.execute("DROP TABLE polymarket_judgment_log_old")
         await db.commit()
 
 
@@ -222,14 +275,24 @@ async def save_judgment_log(market: PolymarketCandidateMarket, judgment: Polymar
         logger.warning("polymarket_paper_trader: failed to persist judgment log for %s", market.event_slug)
 
 
-async def recently_judged(event_slug: str, *, cooldown_hours: float = JUDGMENT_COOLDOWN_HOURS) -> bool:
-    """True if this market was judged (any verdict) within the cooldown --
-    free (no network/LLM call) skip, never counted against
-    ``CANDIDATES_PER_CYCLE``, same doctrine as the existing FREE_SKIP_REASONS."""
+async def recently_judged(
+    event_slug: str, question: str, *, cooldown_hours: float = JUDGMENT_COOLDOWN_HOURS,
+) -> bool:
+    """True if THIS SPECIFIC market (event_slug + question, Item #195, 29/07
+    -- see the table's own docstring: an event can hold many distinct
+    questions, judging one must never cool down the others) was judged (any
+    verdict) within the cooldown -- free (no network/LLM call) skip, never
+    counted against ``CANDIDATES_PER_CYCLE``, same doctrine as the existing
+    FREE_SKIP_REASONS.
+
+    ``question`` is required (not defaulted) deliberately: a silently-wrong
+    default here would make every call look like "never judged", which is
+    the exact failure mode this fix corrects -- any caller must be explicit."""
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT judged_at FROM polymarket_judgment_log WHERE event_slug = ?", (event_slug,)
+            "SELECT judged_at FROM polymarket_judgment_log WHERE event_slug = ? AND question = ?",
+            (event_slug, question),
         ) as cur:
             row = await cur.fetchone()
     if not row:
@@ -679,7 +742,7 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
                 # on a handful of topics, never the full Polymarket surface.
                 # Free skip (no network/LLM cost), same doctrine as FREE_SKIP_
                 # REASONS below -- never counted against CANDIDATES_PER_CYCLE.
-                if await recently_judged(market.event_slug):
+                if await recently_judged(market.event_slug, market.question):
                     continue
                 judgment = await estimate_market_probability(market)
                 # 27/07 -- Item #133, real bug found live: counting a FREE skip
