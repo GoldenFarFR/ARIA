@@ -1029,6 +1029,44 @@ async def test_execute_trigger_books_into_the_orders_own_wallet(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_trigger_scalping_pocket_sets_scalping_mode(monkeypatch):
+    """29/07 -- real bug found via a live position (wstETH, id 11): a
+    scalping-pocket order used to trigger into open_position's default
+    mode="standard", silently governed by the wrong exit discipline (no
+    scalping bearish-RSI-divergence exit, #105). ``mode`` must mirror
+    ``wallet`` exactly like the direct-buy 3-pocket loop already does."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="scalping")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="scalping")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert actions["triggered"][0]["wallet"] == "scalping"
+    assert actions["triggered"][0]["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_swing_pocket_keeps_standard_mode(monkeypatch):
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert actions["triggered"][0]["mode"] == "standard"
+
+
+@pytest.mark.asyncio
 async def test_execute_trigger_different_wallet_holding_same_contract_never_blocks(monkeypatch):
     """A "swing" position already open on a contract must never block a
     "scalping" pocket's own limit-order trigger on that SAME contract."""

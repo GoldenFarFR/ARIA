@@ -720,6 +720,21 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
         + f" [ordre limite -- placé à {order['target_price']:.6g}, "
         f"déclenché à {current_price:.6g}]"
     ).strip()
+    # 29/07 -- real bug found while the operator checked a triggered position
+    # (wstETH, id 11): open_position's own ``mode`` default ("standard") was
+    # never overridden here, so a scalping-pocket order's trigger silently
+    # persisted mode="standard" despite wallet="scalping". This isn't cosmetic
+    # -- ``mode`` (not ``wallet``) is what paper_trader.py's position-
+    # management loop reads to decide whether the scalping-specific bearish-
+    # RSI-divergence exit (#105) applies, and whether the scalping DEX swap
+    # fee (#101) is simulated on close/reduce. A mismatched position would
+    # silently be governed by the STANDARD/swing exit discipline (fixed TP
+    # tiers, no scalping exit signal) despite its capital, sizing, and risk
+    # budget all being scalping-pocket. Mirrors the exact wallet->mode mapping
+    # the direct-buy 3-pocket loop already uses (paper_trader.py's own
+    # ``pocket_mode`` tuple: "scalping" for that one pocket, "standard" for
+    # swing/vc) -- never a third, independently-invented mapping.
+    mode = "scalping" if wallet == "scalping" else "standard"
     pos = await paper_trader.open_position(
         order["contract"],
         order["symbol"],
@@ -729,6 +744,7 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
         # gate OFF (unchanged historical behavior, every order created there
         # implicitly belongs to "swing").
         wallet=wallet,
+        mode=mode,
         target_price=sig.get("target"),
         invalidation_price=sig.get("invalidation"),
         alloc_usd=entry_alloc_usd,
