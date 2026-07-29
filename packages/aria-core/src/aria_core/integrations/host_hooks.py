@@ -10,6 +10,7 @@ _init_auth_db: Callable[[], Awaitable[None]] | None = None
 _auth_db_path: Path | None = None
 _check_rate_limit: Callable[..., bool] | None = None
 _run_portfolio_analysis: Callable[[str], Awaitable[tuple[str, dict]]] | None = None
+_reset_operator_failed_attempts: Callable[[str], Awaitable[bool]] | None = None
 
 run_portfolio_analysis = None  # set by register()
 
@@ -22,9 +23,10 @@ def register(
     auth_db_path: Path | None = None,
     check_rate_limit: Callable[..., bool] | None = None,
     run_portfolio_analysis_fn: Callable[[str], Awaitable[tuple[str, dict]]] | None = None,
+    reset_operator_failed_attempts_fn: Callable[[str], Awaitable[bool]] | None = None,
 ) -> None:
     global _get_watchlist, _get_game_score, _init_auth_db, _auth_db_path, _check_rate_limit
-    global _run_portfolio_analysis, run_portfolio_analysis
+    global _run_portfolio_analysis, run_portfolio_analysis, _reset_operator_failed_attempts
     _get_watchlist = get_watchlist
     _get_game_score = get_game_score
     _init_auth_db = init_auth_db
@@ -32,6 +34,7 @@ def register(
     _check_rate_limit = check_rate_limit
     _run_portfolio_analysis = run_portfolio_analysis_fn
     run_portfolio_analysis = run_portfolio_analysis_fn
+    _reset_operator_failed_attempts = reset_operator_failed_attempts_fn
 
 
 async def get_watchlist() -> list[Any]:
@@ -59,3 +62,13 @@ def check_rate_limit(*args: Any, **kwargs: Any) -> bool:
     if _check_rate_limit is None:
         return True
     return _check_rate_limit(*args, **kwargs)
+
+
+async def reset_operator_failed_attempts(username: str) -> bool:
+    """Item #201 -- second, SSH-independent unlock path for the operator mobile
+    account's progressive login slowdown (Telegram /unlockmobile, owner-only).
+    False (never raises) if the host never registered this hook -- e.g. a
+    non-vanguard host, or the mobile account feature not wired up yet."""
+    if _reset_operator_failed_attempts is None:
+        return False
+    return await _reset_operator_failed_attempts(username)

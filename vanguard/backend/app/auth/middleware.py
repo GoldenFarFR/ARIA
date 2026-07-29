@@ -21,6 +21,12 @@ PUBLIC_PREFIXES = (
     # when unmounted, since FastAPI 404s a path with no matching route
     # regardless of this middleware.
     "/api/x402/",
+    # Operator mobile fallback channel (Item #201) -- NOT actually public: every
+    # route in operator_mobile.py does its own require_operator_or_session (or,
+    # for /login, its own account/password/TOTP check) internally. Exempted here
+    # only so this middleware's Privy-member-session gate doesn't 401 a request
+    # before the dedicated operator auth even runs.
+    "/api/aria/ops/",
     "/assets/",
     "/favicon.svg",
     "/icons.svg",

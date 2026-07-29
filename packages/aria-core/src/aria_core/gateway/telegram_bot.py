@@ -28,7 +28,7 @@ from aria_core.identity import (
     official_x_url,
 )
 from aria_core import outgoing_pause, risk_guard
-from aria_core.integrations.host_hooks import check_rate_limit
+from aria_core.integrations.host_hooks import check_rate_limit, reset_operator_failed_attempts
 from aria_core.runtime import settings
 # Wallet card/report formatting (#157 follow-up, 15/07) -- factored into
 # smart_money.py so the background cycle `wallet_scan_queue.py` reuses
@@ -3330,6 +3330,25 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 
+_DEFAULT_OPERATOR_MOBILE_USERNAME = "operator"
+
+
+async def _handle_unlock_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unlockmobile [username] -- Item #201, second SSH-independent unlock path for
+    the operator mobile account's progressive login slowdown. Owner-only, same gate
+    as /stop /resume: this bypasses a login friction, never a financial guard rail."""
+    if not await _owner_only(update):
+        return
+    username = _DEFAULT_OPERATOR_MOBILE_USERNAME
+    if context.args:
+        username = context.args[0].strip() or username
+    ok = await reset_operator_failed_attempts(username)
+    if ok:
+        await _reply(update.message, f"🔓 Compte mobile '{username}' débloqué — les tentatives de connexion échouées sont purgées.")
+    else:
+        await _reply(update.message, f"Aucun compte mobile '{username}' trouvé (ou fonctionnalité non câblée sur cet hôte).")
+
+
 _RISK_RESUME_POCKETS = ("scalping", "swing", "vc")
 
 
@@ -3409,6 +3428,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
+    app.add_handler(CommandHandler("unlockmobile", _handle_unlock_mobile))
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))

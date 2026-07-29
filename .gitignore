@@ -87,3 +87,4 @@ vanguard/operator/*
 !vanguard/operator/gen-admin-totp.py
 !vanguard/operator/gen-admin-secret.py
 !vanguard/operator/gen-sepolia-wallet.py
+!vanguard/operator/gen-operator-account.py
