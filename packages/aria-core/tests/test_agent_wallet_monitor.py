@@ -1043,15 +1043,19 @@ def test_format_wallet_balance_summary_degrades_honestly():
 # ── 07/23 -- multi-wallet, swap detection, anti-phishing blocklist ────────────
 
 
-def test_monitored_wallets_has_four_entries_pilot_first():
+def test_monitored_wallets_has_six_entries_pilot_first():
     """Deliberate scope (operator decision, 07/23; extended Item #192,
     29/07): transfert stays excluded (still no activity observed) --
     spender re-added (a real airdrop/gas movement invalidated its "zero
-    movement" exclusion) -- pilot first (order that the
+    movement" exclusion) -- the 2 dormant CDP Smart Accounts
+    (0-OLD-smart-wallet-one/two) added ahead of their future repurposing
+    (one becomes the x402 Smart Account, the other a dedicated scalping
+    wallet, per operator confirmation 29/07) -- pilot first (order that the
     run_agent_wallet_monitor_cycle tests below depend on)."""
     names = list(monitor.MONITORED_WALLETS.keys())
     assert names == [
         "aria-wallet-X402-EVM", "aria-smart-st-EVM", "aria-smart-vc-EVM", "aria-spender-smart-st-EVM",
+        "0-OLD-smart-wallet-one", "0-OLD-smart-wallet-two",
     ]
     assert monitor.MONITORED_WALLETS["aria-wallet-X402-EVM"] == monitor.MONITORED_WALLET_ADDRESS
 
@@ -1074,7 +1078,7 @@ async def test_check_wallet_activity_propagates_wallet_name(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_cycle_iterates_all_monitored_wallets(monkeypatch):
     """A movement specific to EACH monitored wallet must be detected --
-    proof that the cycle really iterates over all 4, not just the pilot."""
+    proof that the cycle really iterates over all 6, not just the pilot."""
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
     calls = []
 
@@ -1094,7 +1098,7 @@ async def test_run_cycle_iterates_all_monitored_wallets(monkeypatch):
     monkeypatch.setattr(monitor, "get_blockscout_client", lambda chain: _MultiWalletClient())
     result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
     assert result["outcome"] == "ok"
-    assert result["detected"] == 4
+    assert result["detected"] == 6
     assert set(calls) == set(monitor.MONITORED_WALLETS.values())
 
 
@@ -1115,7 +1119,7 @@ async def test_run_cycle_one_wallet_failing_does_not_block_others(monkeypatch):
     monkeypatch.setattr(monitor, "check_wallet_activity", fake_check)
     result = await monitor.run_agent_wallet_monitor_cycle(notifier=None)
     assert result["outcome"] == "ok"
-    assert result["detected"] == 3  # the 3 healthy wallets, the failing one is just skipped
+    assert result["detected"] == 5  # the 5 healthy wallets, the failing one is just skipped
 
 
 # ── swap detection ─────────────────────────────────────────────────────────

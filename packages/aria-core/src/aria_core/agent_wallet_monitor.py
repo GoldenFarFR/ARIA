@@ -94,6 +94,19 @@ MONITORED_WALLET_ADDRESS = "0xF04625162b616c5ad9788811b7be8CDd425B37Ef"
 # eventually only hold x402 payments in and out for the services offered)
 # but remains a real flow worth watching, not less than before.
 #
+# Item #192 continued (29/07): 2 more real CDP Smart Accounts exist
+# (`cdp.evm.list_smart_accounts()`, verified live) beyond the 2 already
+# monitored above, named `0-OLD-smart-wallet-one`/`0-OLD-smart-wallet-two`
+# in CDP -- zero balance, zero transaction on Blockscout at the time of
+# this check (genuinely dormant, not yet renamed/repurposed). Operator
+# intent (29/07): one becomes the future x402 Smart Account (Item #191,
+# migrating aria-wallet-X402-EVM off its current EOA), the other becomes a
+# dedicated scalping Smart Account (Item #103, "smart-sc", separate from
+# aria-smart-st-EVM) -- which specific address gets which role isn't
+# decided yet, so both are added to surveillance NOW, ahead of that
+# decision, rather than waiting for the rename and risking a gap the day
+# either goes live. Kept under their current CDP names until renamed.
+#
 # Deliberate dict order: pilot wallet first (existing tests that use
 # MONITORED_WALLET_ADDRESS as the recipient depend on this order to be
 # classified correctly before `_already_seen` cuts short the following
@@ -103,6 +116,8 @@ MONITORED_WALLETS: dict[str, str] = {
     "aria-smart-st-EVM": "0x800027f61363EF304c5C2Afee811d9d4074B474c",
     "aria-smart-vc-EVM": "0x9C72AedD2836Edc24566E8B0Fd1825e0E1eFbF07",
     "aria-spender-smart-st-EVM": "0x8e71C3e9396ded76AdA6EA56cD3c315C3D67D79b",
+    "0-OLD-smart-wallet-one": "0x81e26A7552e15D3B4cE50b505A382773b1CA0089",
+    "0-OLD-smart-wallet-two": "0xDa1a87f38E78Eb9564D135804414E089519C2B1c",
 }
 
 # 07/23 -- registry of ALL known addresses (not just the 3 monitored ones --
@@ -117,6 +132,8 @@ _KNOWN_ADDRESS_NAMES: dict[str, str] = {
     "0x8e71C3e9396ded76AdA6EA56cD3c315C3D67D79b".lower(): "aria-spender-smart-st-EVM",
     "0x800027f61363EF304c5C2Afee811d9d4074B474c".lower(): "aria-smart-st-EVM",
     "0x9C72AedD2836Edc24566E8B0Fd1825e0E1eFbF07".lower(): "aria-smart-vc-EVM",
+    "0x81e26A7552e15D3B4cE50b505A382773b1CA0089".lower(): "0-OLD-smart-wallet-one",
+    "0xDa1a87f38E78Eb9564D135804414E089519C2B1c".lower(): "0-OLD-smart-wallet-two",
     "0x33783cCb570Cb279C25F836806B5c4C3C8309777".lower(): "tangem-01 (owner aria-smart-st)",
     "0x85e3D8128a9b7be14065A4E36C1845041BF65d7F".lower(): "tangem-02 (owner aria-smart-vc)",
 }
