@@ -2316,6 +2316,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("feuvert", "Scorecard avant argent réel (8 cases)"),
     ("funnel", "Cumul du funnel de rejet momentum (48h par défaut)"),
     ("github", "Réparer/éditer une réponse showcase PR"),
+    ("goplusqueue", "État de la file d'attente honeypot GoPlus (600 slots)"),
     ("handles", "Registre des handles X (add/remove/alias/pack)"),
     ("issue", "Clôture une thèse avec son résultat"),
     ("langue", "Langue des analyses (fr/en)"),
@@ -2639,6 +2640,22 @@ async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
         "(sauf 3 mois d'inactivité on-chain)."
     )
     await _reply(message, "\n".join(lines))
+
+
+async def _handle_goplusqueue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/goplusqueue — status of the GoPlus honeypot background watchlist
+    (Item #212, 29/07). Read-only diagnostic, no argument to inject anything
+    manually (unlike /walletqueue) -- this list self-populates from the real
+    momentum pipeline (candidates already past every free gate)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.services.goplus_watchlist import format_status_report
+
+    await _reply(message, await format_status_report())
 
 
 def _format_judge_verdict(v, lang: str = "fr") -> str:
@@ -3435,6 +3452,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("scan", _handle_scan))
     app.add_handler(CommandHandler("walletscore", _handle_walletscore))
     app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
+    app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))

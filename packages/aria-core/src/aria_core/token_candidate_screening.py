@@ -188,7 +188,9 @@ async def screen_and_select_candidates(limit: int) -> list[tuple[str, str]]:
             continue  # not enough traction for now -- NOT blacklisted, can grow
 
         try:
-            clear, reason, code = await check_honeypot(addr, _CHAIN)
+            clear, reason, code = await check_honeypot(
+                addr, _CHAIN, liquidity_usd=pair.liquidity_usd, volume_24h_usd=pair.volume_24h_usd,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.info("token_candidate_screening: honeypot check failed for %s (%s)", addr, exc)
             continue  # technical failure -- neither kept nor blacklisted, retried next cycle

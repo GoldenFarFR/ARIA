@@ -60,6 +60,11 @@ REVISIT_AFTER_DAYS = 7.0
 _EXCLUDED_REASONS = frozenset({
     "no_entry_signal", "ohlcv_unavailable", "blacklisted",
     "honeypot_rejected", "honeypot_unavailable", "chain_not_covered",
+    # 29/07 (Item #212) -- same infrastructure nature as honeypot_unavailable:
+    # the candidate is queued in the GoPlus watchlist, not confirmed clear NOR
+    # confirmed dangerous -- a price counterfactual would be meaningless (the
+    # verdict may still flip either way once the background cycle checks it).
+    "honeypot_pending",
 })
 
 

@@ -57,7 +57,7 @@ def _pairs(monkeypatch, pairs_by_contract):
 
 
 def _honeypot(monkeypatch, result_by_contract, *, default=(True, "", "honeypot_clear")):
-    async def _fake(contract, chain):
+    async def _fake(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         return result_by_contract.get(contract, default)
 
     monkeypatch.setattr("aria_core.momentum_entry.check_honeypot", _fake)

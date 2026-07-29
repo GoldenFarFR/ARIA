@@ -735,55 +735,40 @@ class FakeRugCheckResult:
         return self.available and self.rugged is False and not self.danger_risks
 
 
-@pytest.mark.asyncio
-async def test_honeypot_clear(monkeypatch):
-    from aria_core.services import goplus as gp
+# 29/07 (Item #212) -- these 4 tests moved from a synchronous "base" call
+# (`_check_honeypot`) to `_evaluate_security_verdict` directly: since the
+# rearchitecture, "base"/"ethereum" no longer make a network call inside
+# `_check_honeypot` at all (see the watchlist tests further below) -- this
+# extracted function is what NOW carries the exact same verdict logic,
+# whatever the source of the `TokenSecurity` (a fresh Solana call, or a
+# cached watchlist entry on EVM).
 
-    async def fake_get_token_security(address, *, chain_id):
-        assert chain_id == "8453"
-        return FakeSecurity()
-
-    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+def test_honeypot_verdict_clear():
+    clear, _reason, code = me._evaluate_security_verdict(FakeSecurity())
     assert clear is True
     assert code == "honeypot_clear"
 
 
-@pytest.mark.asyncio
-async def test_honeypot_confirmed_rejects(monkeypatch):
-    from aria_core.services import goplus as gp
-
-    async def fake_get_token_security(address, *, chain_id):
-        return FakeSecurity(is_honeypot=True)
-
-    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+def test_honeypot_verdict_confirmed_rejects():
+    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(is_honeypot=True))
     assert clear is False
     assert "honeypot" in reason.lower()
     assert code == "honeypot_rejected"
 
 
-@pytest.mark.asyncio
-async def test_honeypot_owner_change_balance_rejects(monkeypatch):
+def test_honeypot_verdict_owner_change_balance_rejects():
     """22/07 -- trou trouvé en observant une position momentum réellement ouverte
     (CNX, owner_change_balance jamais consulté avant ce correctif). Rejoint le
     SEUL garde-fou dur du pipeline momentum -- même nature que le honeypot
     classique (pouvoir de vol direct des fonds), pas une extension du filtre
     VC-thesis (mint_authority/dev_wallet restent hors scope momentum)."""
-    from aria_core.services import goplus as gp
-
-    async def fake_get_token_security(address, *, chain_id):
-        return FakeSecurity(owner_change_balance=True)
-
-    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(owner_change_balance=True))
     assert clear is False
     assert "solde" in reason.lower()
     assert code == "honeypot_rejected"
 
 
-@pytest.mark.asyncio
-async def test_honeypot_unavailable_fails_closed(monkeypatch):
+def test_honeypot_verdict_unavailable_fails_closed():
     """Contrairement au reste du pipeline (permissif), le SEUL garde-fou dur doit
     rejeter -- jamais un pari sans protection quand GoPlus ne répond pas.
 
@@ -791,13 +776,7 @@ async def test_honeypot_unavailable_fails_closed(monkeypatch):
     D'INFRASTRUCTURE d'un vrai rejet de sécurité -- sans ce code, une panne GoPlus
     prolongée serait indiscernable d'un marché sans candidat valable au niveau du
     cycle (cf. ``test_paper_trader.py::test_run_paper_cycle_reports_momentum_funnel_by_reason_code``)."""
-    from aria_core.services import goplus as gp
-
-    async def fake_get_token_security(address, *, chain_id):
-        return FakeSecurity(available=False, error="timeout")
-
-    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(available=False, error="timeout"))
     assert clear is False
     assert "indisponible" in reason.lower()
     assert code == "honeypot_unavailable"
@@ -821,8 +800,12 @@ async def test_honeypot_no_data_retries_once_and_succeeds_on_second_attempt(monk
             return FakeSecurity(available=False, no_data=True, error="aucune donnée")
         return FakeSecurity()
 
+    # 29/07 (Item #212) -- moved to "solana": Base/Ethereum no longer make a
+    # synchronous network call inside _check_honeypot at all (watchlist path,
+    # tested separately below) -- this no_data targeted retry only survives
+    # on the Solana synchronous path.
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is True
     assert code == "honeypot_clear"
     assert calls["count"] == 2
@@ -840,7 +823,7 @@ async def test_honeypot_no_data_gives_up_after_single_retry(monkeypatch):
         return FakeSecurity(available=False, no_data=True, error="aucune donnée")
 
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
     assert code == "honeypot_unavailable"
     assert calls["count"] == 2
@@ -860,7 +843,7 @@ async def test_honeypot_genuine_failure_is_never_retried(monkeypatch):
         return FakeSecurity(available=False, no_data=False, error="timeout")
 
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "solana")
     assert clear is False
     assert code == "honeypot_unavailable"
     assert calls["count"] == 1
@@ -891,12 +874,163 @@ async def test_honeypot_translates_chain_id_for_solana(monkeypatch):
     assert seen["chain_id"] == "solana"
 
 
+# 29/07 (Item #212) -- Ethereum's chain_id translation is no longer exercised
+# by `_check_honeypot` itself (Base/Ethereum go through the watchlist, no
+# network call there) -- moved to `test_goplus_watchlist_cycle_translates_
+# chain_id_for_ethereum` further below, which tests the background cycle that
+# NOW makes this call.
+
+
+# ── #207 (18/07) : repli RugCheck sur Solana quand GoPlus n'a AUCUNE donnée ──────────
+
 @pytest.mark.asyncio
-async def test_honeypot_translates_chain_id_for_ethereum(monkeypatch):
-    """26/07 -- Ethereum ajouté à `_DEXSCREENER_TO_GOPLUS_CHAIN_ID` ("1", vérifié en
-    direct contre `supported_chains`) -- verrouille la traduction, même patron que
-    Solana ci-dessus."""
+async def test_honeypot_on_base_never_calls_goplus_or_rugcheck_synchronously(monkeypatch):
+    """29/07 (Item #212) -- rearchitected: Base/Ethereum no longer make ANY
+    synchronous network call inside `_check_honeypot` (goplus_client and
+    rugcheck are both untouched here) -- a never-seen candidate is queued in
+    the watchlist and returns ``honeypot_pending`` instead. RugCheck staying
+    strictly Solana-only (the original point of this test) is now
+    guaranteed trivially, for a stronger reason: base doesn't touch GoPlus at
+    all on this path anymore."""
     from aria_core.services import goplus as gp
+
+    async def fail_if_called(address, *, chain_id):
+        raise AssertionError("goplus_client should never be called synchronously for base")
+
+    called = {"rugcheck": False}
+
+    async def fake_rugcheck(mint):
+        called["rugcheck"] = True
+        return FakeRugCheckResult()
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fail_if_called))
+    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert code == "honeypot_pending"
+    assert called["rugcheck"] is False
+
+
+# ── watchlist wiring on EVM chains (Item #212, 29/07) ────────────────────
+
+@pytest.mark.asyncio
+async def test_check_honeypot_evm_never_checked_queues_candidate():
+    from aria_core.services import goplus_watchlist as wl
+
+    assert await wl.count() == 0
+    clear, reason, code = await me._check_honeypot(
+        CONTRACT, "base", liquidity_usd=100_000.0, volume_24h_usd=50_000.0,
+    )
+    assert clear is False
+    assert code == "honeypot_pending"
+    assert "file d'attente" in reason.lower()
+    assert await wl.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_evm_uses_fresh_watchlist_entry_without_network_call(monkeypatch):
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services.goplus import TokenSecurity
+
+    async def fail_if_called(address, *, chain_id):
+        raise AssertionError("a fresh watchlist entry must never trigger a network call")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fail_if_called))
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    await wl.record_result(CONTRACT, "base", TokenSecurity(address=CONTRACT, is_honeypot=False, available=True))
+
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is True
+    assert code == "honeypot_clear"
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_evm_confirmed_honeypot_from_watchlist_rejects():
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services.goplus import TokenSecurity
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    await wl.record_result(CONTRACT, "base", TokenSecurity(address=CONTRACT, is_honeypot=True, available=True))
+
+    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "honeypot" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_evm_stale_watchlist_entry_treated_as_absent():
+    """A watchlist entry older than the freshness window (48h) must never be
+    silently reused -- ``get_fresh`` itself already returns None past that
+    window (covered exhaustively in test_goplus_watchlist.py); this confirms
+    ``_check_honeypot`` genuinely relies on it rather than reading the raw
+    row some other way."""
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services.goplus import TokenSecurity
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    await wl.record_result(CONTRACT, "base", TokenSecurity(address=CONTRACT, is_honeypot=False, available=True))
+
+    fresh = await wl.get_fresh(CONTRACT, "base", max_age_hours=0.0)
+    assert fresh is None  # confirms staleness is honored by get_fresh itself
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_ethereum_also_uses_watchlist():
+    """29/07 -- Ethereum shares the exact same watchlist path as Base (only
+    Solana keeps the old synchronous path)."""
+    from aria_core.services import goplus_watchlist as wl
+
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "ethereum")
+    assert clear is False
+    assert code == "honeypot_pending"
+    rows = await wl.list_all()
+    assert rows[0]["chain"] == "ethereum"
+
+
+# ── run_goplus_watchlist_cycle (background refresh, Item #212) ──────────
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_empty_queue_is_a_no_op():
+    result = await me.run_goplus_watchlist_cycle()
+    assert result == {"checked": 0}
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_checks_next_due_and_records_result(monkeypatch):
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services.goplus import TokenSecurity
+
+    # A real TokenSecurity here (not the lightweight FakeSecurity dataclass
+    # used elsewhere in this file) -- record_result persists it via
+    # dataclasses.asdict()/json, so get_fresh's reconstruction genuinely
+    # needs the real field set (e.g. the required ``address``).
+    async def fake_get_token_security(address, *, chain_id):
+        return TokenSecurity(address=address, is_honeypot=False, available=True)
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    result = await me.run_goplus_watchlist_cycle()
+    assert result["checked"] == 1
+    assert result["contract"] == CONTRACT
+
+    fresh = await wl.get_fresh(CONTRACT, "base")
+    assert fresh is not None
+    assert fresh.is_honeypot is False
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_translates_chain_id_for_ethereum(monkeypatch):
+    """26/07 -- Ethereum's ``_DEXSCREENER_TO_GOPLUS_CHAIN_ID`` entry ("1",
+    verified live) -- 29/07: this translation now happens inside the
+    background cycle, not `_check_honeypot` (which no longer calls GoPlus
+    directly for EVM chains)."""
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
 
     seen = {}
 
@@ -905,33 +1039,50 @@ async def test_honeypot_translates_chain_id_for_ethereum(monkeypatch):
         return FakeSecurity()
 
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    await me._check_honeypot(CONTRACT, "ethereum")
+    await wl.add_or_touch(CONTRACT, "ethereum", 50.0)
+
+    await me.run_goplus_watchlist_cycle()
     assert seen["chain_id"] == "1"
 
 
-# ── #207 (18/07) : repli RugCheck sur Solana quand GoPlus n'a AUCUNE donnée ──────────
-
 @pytest.mark.asyncio
-async def test_rugcheck_fallback_only_fires_on_solana_no_data(monkeypatch):
-    """GoPlus sans donnée sur Base (chain != solana) -- reste honeypot_unavailable,
-    RugCheck n'est jamais consulté (portée du repli strictement Solana)."""
+async def test_watchlist_cycle_blacklists_confirmed_honeypot_and_drops_from_watchlist(monkeypatch):
+    from aria_core import momentum_blacklist as bl
     from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
 
     async def fake_get_token_security(address, *, chain_id):
-        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
-
-    called = {"rugcheck": False}
-
-    async def fake_rugcheck(mint):
-        called["rugcheck"] = True
-        return FakeRugCheckResult()
+        return FakeSecurity(is_honeypot=True)
 
     monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
-    monkeypatch.setattr("aria_core.services.rugcheck.get_report_summary", fake_rugcheck)
-    clear, reason, code = await me._check_honeypot(CONTRACT, "base")
-    assert clear is False
-    assert code == "honeypot_unavailable"
-    assert called["rugcheck"] is False
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    result = await me.run_goplus_watchlist_cycle()
+    assert result.get("blacklisted") == CONTRACT
+    assert await bl.is_blacklisted(CONTRACT, "base") is True
+    assert await wl.count() == 0  # dropped, no longer needs a slot
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_never_retries_no_data_within_the_same_passage(monkeypatch):
+    """29/07 -- deliberately different from the Solana synchronous path: a
+    second call inside the same passage would either stall past the 5min
+    heartbeat cadence (waiting out the client's own throttle) or silently
+    double this candidate's consumption. Only ONE call per passage, ever."""
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+
+    calls = {"count": 0}
+
+    async def fake_get_token_security(address, *, chain_id):
+        calls["count"] += 1
+        return FakeSecurity(available=False, no_data=True, error="aucune donnée")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    await me.run_goplus_watchlist_cycle()
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -1926,7 +2077,7 @@ def _patch_pipeline(
     security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", "", 10.0),
     parabolic_rescue=(False, "sauvetage smart money non confirmé (mock par défaut)"),
 ):
-    async def fake_honeypot(contract, chain):
+    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         if honeypot_clear:
             return True, "honeypot clear (GoPlus)", "honeypot_clear"
         return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
@@ -2126,7 +2277,7 @@ async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
     contrat répond proprement quelques minutes plus tard)."""
     from aria_core import momentum_blacklist as bl
 
-    async def fake_honeypot_unavailable(contract, chain):
+    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
 
     _patch_pipeline(monkeypatch)
@@ -3340,7 +3491,7 @@ async def test_evaluate_hold_reason_distinguishes_goplus_outage_from_real_honeyp
     # "indisponible" que ce test vérifie.
     _patch_pipeline(monkeypatch)
 
-    async def fake_honeypot_unavailable(contract, chain):
+    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
 
     monkeypatch.setattr(me, "_check_honeypot", fake_honeypot_unavailable)

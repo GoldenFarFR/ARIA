@@ -298,6 +298,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="goplus_watchlist_cycle",
+        name="GoPlus honeypot watchlist -- background refresh",
+        description="Item #212 (29/07): GoPlus's Free tier caps at 150,000 CU/MONTH (confirmed live on the operator's dashboard), far more restrictive than the 150 CU/min throttle calibrated 21/07 -- a synchronous per-candidate honeypot call was exhausting it within hours. Refreshes ONE candidate from the 600-slot watchlist (services/goplus_watchlist.py) per passage -- ~5min cadence stays comfortably under the ~288s sustainable rate. Base/Ethereum only (Solana keeps its old synchronous path, marginal volume). Dedicated gate ARIA_GOPLUS_WATCHLIST_ENABLED, OFF by default -- required IN ADDITION to ARIA_PAPER_TRADING_ENABLED (this only serves the momentum pipeline). No real money, read-only security check.",
+        interval_minutes=5,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -635,6 +642,18 @@ def _sync_x_curiosity_enabled() -> None:
                     "1", "true", "yes", "on",
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "goplus_watchlist_cycle":
+                # 29/07 (Item #212) -- same double-gate pattern as
+                # daily_trade_floor_cycle above: this cycle only serves the
+                # momentum pipeline, so it needs BOTH the master paper-trading
+                # gate AND its own dedicated ARIA_GOPLUS_WATCHLIST_ENABLED.
+                paper_on = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
+                watchlist_on = os.environ.get("ARIA_GOPLUS_WATCHLIST_ENABLED", "").strip().lower() in (
+                    "1", "true", "yes", "on",
+                )
+                task.enabled = paper_on and watchlist_on
             if task.id == "polymarket_paper_cycle":
                 from aria_core.polymarket_paper_trader import polymarket_paper_enabled
 
@@ -1351,6 +1370,16 @@ class AriaHeartbeat:
                     "paper",
                     f"[paper_trade] fictif 1M$ (plancher {actions.get('already_today', 0)}"
                     f"/{actions.get('target', 0)} du jour) : +{len(actions['opened'])} achats forcés",
+                )
+
+        elif task_id == "goplus_watchlist_cycle":
+            from aria_core.momentum_entry import run_goplus_watchlist_cycle
+
+            result = await run_goplus_watchlist_cycle()
+            if result.get("blacklisted"):
+                logger.info(
+                    "goplus_watchlist_cycle: %s/%s confirmed honeypot, blacklisted",
+                    result["blacklisted"], result.get("chain"),
                 )
 
         elif task_id == "polymarket_paper_cycle":

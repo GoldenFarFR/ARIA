@@ -884,57 +884,12 @@ def _get_cached_security(chain: str, contract: str):
     return security
 
 
-async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
-    """The only HARD guardrail in this pipeline. ``(clear, reason, code)`` --
-    ``clear=False`` must ALWAYS reject, even if GoPlus is unavailable
-    (fail-closed on THIS guardrail, unlike the rest of the pipeline which
-    degrades gracefully).
-
-    ``code`` (mandate #192, 16/07) machine-readably distinguishes a REAL danger
-    signal (``honeypot_rejected``) from an INFRASTRUCTURE OUTAGE
-    (``honeypot_unavailable``/``chain_not_covered``) -- GoPlus is the ONLY
-    provider of this guardrail, no fallback. Without this code, a prolonged
-    GoPlus outage produces exactly the same observable symptom (zero new
-    positions) as a market with no valid candidate -- indistinguishable without
-    reading application logs one by one.
-
-    #207 (18/07): the ONLY exception to the "no fallback" rule above -- when
-    GoPlus responds cleanly but explicitly has NO data (``no_data``, not an
-    outage) FOR A SOLANA TOKEN, ``services/rugcheck.py`` is consulted as a
-    second opinion (verified live: real coverage where GoPlus is empty,
-    including a danger signal -- "Creator history of rugged tokens" -- that
-    GoPlus structurally cannot see). The token must come back CONFIRMED clean by
-    RugCheck to pass; if it also has no data, or finds a "danger"/``rugged``
-    risk, the fail-closed behavior remains unchanged. Base/Robinhood are not
-    affected (GoPlus already covers them)."""
-    goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
-    if not goplus_chain:
-        return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence", "chain_not_covered"
-
-    from aria_core.services.goplus import goplus_client
-
-    security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
-    # 21/07 -- targeted retry on ``no_data`` (funnel audit: ~100% of
-    # ``honeypot_unavailable`` verdicts observed over a 6h window turned out to be
-    # REAL valid tokens when the same contract was re-tested a moment later --
-    # consistent with a GoPlus indexing delay on a fresh token, not a genuine lack
-    # of coverage). Distinct from the retry already existing in ``_get_json``
-    # (429/code 4029/5xx/timeout, several attempts within seconds): this one
-    # specifically targets a CLEAN but EMPTY response (``no_data``), never
-    # retried until now. A single extra attempt, never looped -- protects
-    # pipeline speed on the majority case (real coverage genuinely absent).
-    if not security.available and security.no_data:
-        await asyncio.sleep(_HONEYPOT_NO_DATA_RETRY_DELAY_S)
-        security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
-
-    # 28/07 -- cache the TokenSecurity object itself (not just the boolean
-    # gate result) so dex_composite_score.py's contract-risk pillar can reuse
-    # it later in the SAME evaluation without a second GoPlus call.
-    _cache_security(chain, contract, security)
-
+def _evaluate_security_verdict(security) -> tuple[bool, str, str]:
+    """Shared verdict logic on an already-fetched ``TokenSecurity`` -- extracted
+    (29/07, Item #212) so both the Solana synchronous path and the EVM
+    watchlist path below apply the EXACT same rules whatever the source of
+    the object (a fresh GoPlus call, or a cached watchlist entry)."""
     if not security.available:
-        if chain == "solana" and security.no_data:
-            return await _check_honeypot_rugcheck_fallback(contract)
         return (
             False,
             f"GoPlus indisponible ({security.error}) -- rejet par prudence, jamais un pari sans garde-fou",
@@ -957,13 +912,166 @@ async def _check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
     return True, "honeypot clear (GoPlus)", "honeypot_clear"
 
 
-async def check_honeypot(contract: str, chain: str) -> tuple[bool, str, str]:
+async def _check_honeypot(
+    contract: str, chain: str, *, liquidity_usd: float | None = None, volume_24h_usd: float | None = None,
+) -> tuple[bool, str, str]:
+    """The only HARD guardrail in this pipeline. ``(clear, reason, code)`` --
+    ``clear=False`` must ALWAYS reject, even if GoPlus is unavailable
+    (fail-closed on THIS guardrail, unlike the rest of the pipeline which
+    degrades gracefully).
+
+    ``code`` (mandate #192, 16/07) machine-readably distinguishes a REAL danger
+    signal (``honeypot_rejected``) from an INFRASTRUCTURE OUTAGE
+    (``honeypot_unavailable``/``chain_not_covered``) -- GoPlus is the ONLY
+    provider of this guardrail, no fallback. Without this code, a prolonged
+    GoPlus outage produces exactly the same observable symptom (zero new
+    positions) as a market with no valid candidate -- indistinguishable without
+    reading application logs one by one.
+
+    29/07 (Item #212) -- REARCHITECTED after finding GoPlus's Free tier caps
+    at 150,000 CU/MONTH (confirmed live on the operator's dashboard), not just
+    150 CU/min as originally calibrated 21/07 -- the sustainable rate to never
+    exhaust it is ~1 check/288s, far slower than a synchronous per-candidate
+    call can tolerate. Base/Ethereum (the two chains carrying the pipeline's
+    real volume) now go through ``services/goplus_watchlist.py``: a
+    background cycle (``goplus_watchlist_cycle``, heartbeat) refreshes a
+    600-slot watchlist of already-free-gate-qualified candidates at the
+    sustainable rate, and THIS function only ever reads that cache (free,
+    instant) -- never a synchronous network call itself on this path anymore.
+    A candidate never yet seen (or whose entry is older than
+    ``goplus_watchlist.WATCHLIST_FRESHNESS_HOURS``) is queued
+    (``honeypot_pending``, a HOLD -- retried once the background cycle has
+    checked it, never blacklisted on this code alone) instead of hammering a
+    quota that's already exhausted most of the time.
+
+    #207 (18/07): Solana keeps the OLD synchronous path unchanged (real volume
+    there is marginal and already "quasi blocked by GoPlus coverage" per
+    docs/HANDOFF_GOPLUS.md -- and the RugCheck second opinion below doesn't
+    map cleanly onto the watchlist's ``TokenSecurity`` storage, not worth the
+    complexity for a marginal volume). When GoPlus responds cleanly but
+    explicitly has NO data (``no_data``, not an outage) FOR A SOLANA TOKEN,
+    ``services/rugcheck.py`` is consulted as a second opinion (verified live:
+    real coverage where GoPlus is empty, including a danger signal -- "Creator
+    history of rugged tokens" -- that GoPlus structurally cannot see). The
+    token must come back CONFIRMED clean by RugCheck to pass; if it also has
+    no data, or finds a "danger"/``rugged`` risk, the fail-closed behavior
+    remains unchanged."""
+    goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
+    if not goplus_chain:
+        return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence", "chain_not_covered"
+
+    if chain == "solana":
+        from aria_core.services.goplus import goplus_client
+
+        security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+        # 21/07 -- targeted retry on ``no_data`` (funnel audit: ~100% of
+        # ``honeypot_unavailable`` verdicts observed over a 6h window turned out to be
+        # REAL valid tokens when the same contract was re-tested a moment later --
+        # consistent with a GoPlus indexing delay on a fresh token, not a genuine lack
+        # of coverage). Distinct from the retry already existing in ``_get_json``
+        # (429/code 4029/5xx/timeout, several attempts within seconds): this one
+        # specifically targets a CLEAN but EMPTY response (``no_data``), never
+        # retried until now. A single extra attempt, never looped -- protects
+        # pipeline speed on the majority case (real coverage genuinely absent).
+        if not security.available and security.no_data:
+            await asyncio.sleep(_HONEYPOT_NO_DATA_RETRY_DELAY_S)
+            security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+
+        # 28/07 -- cache the TokenSecurity object itself (not just the boolean
+        # gate result) so dex_composite_score.py's contract-risk pillar can reuse
+        # it later in the SAME evaluation without a second GoPlus call.
+        _cache_security(chain, contract, security)
+
+        if not security.available and security.no_data:
+            return await _check_honeypot_rugcheck_fallback(contract)
+        return _evaluate_security_verdict(security)
+
+    from aria_core.services import goplus_watchlist
+
+    security = await goplus_watchlist.get_fresh(contract, chain)
+    if security is None:
+        priority_score = goplus_watchlist.compute_priority_score(liquidity_usd, volume_24h_usd)
+        added = await goplus_watchlist.add_or_touch(contract, chain, priority_score)
+        reason = (
+            "vérification honeypot en file d'attente (cycle de fond GoPlus, "
+            "~288s/jeton, prochain passage)"
+        )
+        if not added:
+            reason += " -- liste pleine (600 slots), score de priorité insuffisant"
+        return False, reason, "honeypot_pending"
+
+    _cache_security(chain, contract, security)
+    return _evaluate_security_verdict(security)
+
+
+async def check_honeypot(
+    contract: str, chain: str, *, liquidity_usd: float | None = None, volume_24h_usd: float | None = None,
+) -> tuple[bool, str, str]:
     """Public alias for ``_check_honeypot`` (21/07) -- same hard guardrail
     (fail-closed, ``no_data`` retry, RugCheck second opinion on Solana), reusable
     outside this module without duplicating ~50 lines of already-proven logic
     (e.g. ``token_candidate_screening.py``, candidate selection for holder
-    extraction -- needs the SAME guardrail, never a lightweight version)."""
-    return await _check_honeypot(contract, chain)
+    extraction -- needs the SAME guardrail, never a lightweight version).
+
+    29/07 (Item #212) -- ``liquidity_usd``/``volume_24h_usd`` feed the
+    watchlist's priority score when this contract isn't cached yet (Base/
+    Ethereum path) -- optional, defaults to a low (but not blocking) priority
+    when the caller doesn't have a fresh ``PairSnapshot`` handy (e.g. a limit
+    order re-check, which almost always hits an already-warm cache entry
+    from this same contract's first pass through ``evaluate_hard_gates``)."""
+    return await _check_honeypot(contract, chain, liquidity_usd=liquidity_usd, volume_24h_usd=volume_24h_usd)
+
+
+async def run_goplus_watchlist_cycle() -> dict:
+    """Background refresh cycle for the GoPlus honeypot watchlist (Item #212,
+    29/07) -- heartbeat-driven (``goplus_watchlist_cycle``, ~5min/passage,
+    itself comfortably under the ~288s sustainable rate calibrated against
+    GoPlus's real monthly CU cap, confirmed 150,000 CU/month on the operator's
+    dashboard). Consumes exactly ONE due candidate per call -- the heartbeat's
+    own cadence IS the throttle here, no internal sleep loop, consistent with
+    every other periodic heartbeat task in this codebase.
+
+    Deliberately skips the ``no_data`` targeted retry that the Solana
+    synchronous path still does (see ``_check_honeypot``): a second call
+    inside the same passage would either wait out the client's own 288s
+    throttle (stalling this cycle far past its 5min cadence) or, if allowed
+    to bypass it, quietly double this candidate's real consumption. A
+    still-``no_data`` candidate just gets re-checked on its next natural turn
+    in the round-robin instead -- slower, but never over budget.
+
+    A confirmed honeypot is transferred to ``momentum_blacklist`` (same
+    guardrail as the synchronous path it replaces) and dropped from the
+    watchlist -- everything else (clear, or still unavailable) only gets its
+    ``last_checked_at`` refreshed, moving it to the back of the queue."""
+    from aria_core.services import goplus_watchlist
+    from aria_core.services.goplus import goplus_client
+
+    due = await goplus_watchlist.next_due(limit=1)
+    if not due:
+        return {"checked": 0}
+
+    entry = due[0]
+    contract, chain = entry["contract"], entry["chain"]
+    goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
+    if not goplus_chain:
+        # Defensive only -- only already-covered chains are ever added to
+        # this watchlist (see ``_check_honeypot``'s early return above), but
+        # a stale/renamed chain must never loop forever as "always due".
+        await goplus_watchlist.remove(contract, chain)
+        return {"checked": 0, "removed_uncovered": contract}
+
+    security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+    await goplus_watchlist.record_result(contract, chain, security)
+
+    if security.available and (
+        security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
+    ):
+        _clear, reason, _code = _evaluate_security_verdict(security)
+        await momentum_blacklist.add_to_blacklist(contract, chain, reason)
+        await goplus_watchlist.remove(contract, chain)
+        return {"checked": 1, "blacklisted": contract, "chain": chain}
+
+    return {"checked": 1, "contract": contract, "chain": chain, "available": security.available}
 
 
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
@@ -2142,7 +2250,9 @@ async def evaluate_hard_gates(
                 "hold_reason": "holder_concentration",
             }
 
-    clear, honeypot_reason, honeypot_code = await _check_honeypot(contract, chain)
+    clear, honeypot_reason, honeypot_code = await _check_honeypot(
+        contract, chain, liquidity_usd=best.liquidity_usd, volume_24h_usd=best.volume_24h_usd,
+    )
     if not clear:
         if honeypot_code == "honeypot_rejected":
             await momentum_blacklist.add_to_blacklist(contract, chain, honeypot_reason)
