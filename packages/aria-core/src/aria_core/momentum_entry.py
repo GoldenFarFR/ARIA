@@ -2801,6 +2801,20 @@ async def evaluate_momentum_entry(
         # considered instead of a plain discard. Never in scalping mode
         # (timeframes too short for a multi-hour watch to mean anything) or
         # off Base (dex_composite_score is Base-only).
+        #
+        # Item #221 (29/07): neither watch-candidate builder below ever sets
+        # "align_score" on its returned dict -- risk_guard.conviction_
+        # risk_budget_pct/conviction_size_multiplier treat a missing
+        # align_score as "caller doesn't support this signal" and silently
+        # fall back to their MAX (5%) tier, a fallback documented as
+        # intentional ONLY for the old, dormant VC-thesis pilot. Confirmed
+        # live: every scalping position sourced through a limit order (100%
+        # of them, since scalping never buys outright on this path) sized at
+        # exactly 5% regardless of R/R quality (as low as 0.3-0.6 observed).
+        # Computed once here (candles already fetched, confirmed non-empty
+        # above) and reused by both branches below, rather than threading
+        # `candles` through golden-pocket's signature just for this.
+        watch_align_score, _watch_align_reasons, _watch_align_detail = _technical_alignment(candles)
         if (
             mode != "scalping" and chain == "base"
             and signal.in_golden_pocket is False
@@ -2816,6 +2830,7 @@ async def evaluate_momentum_entry(
                 logger.info("momentum_entry: golden-pocket watch candidate failed for %s (%s)", contract, exc)
                 watch = None
             if watch:
+                watch["align_score"] = watch_align_score
                 hold["limit_order_candidate"] = watch
         elif (
             signal.in_golden_pocket is True
@@ -2842,6 +2857,7 @@ async def evaluate_momentum_entry(
                 logger.info("momentum_entry: rsi-divergence watch candidate failed for %s (%s)", contract, exc)
                 watch = None
             if watch:
+                watch["align_score"] = watch_align_score
                 hold["limit_order_candidate"] = watch
         else:
             logger.info(

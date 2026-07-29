@@ -5688,6 +5688,14 @@ async def test_golden_pocket_watch_candidate_created_when_score_confirmed_high(m
     assert watch["target"] == pytest.approx(2.0)
     assert watch["dex_security_score"] == 75.0
     assert watch["rr"] is not None and watch["rr"] > 0
+    # Item #221 (29/07): align_score must be populated on this dict -- its
+    # absence previously made risk_guard.conviction_risk_budget_pct/
+    # conviction_size_multiplier silently fall back to their MAX (5%) tier
+    # regardless of R/R, since ``None`` reads as "caller doesn't support
+    # this signal" (a fallback meant only for the old, dormant VC-thesis
+    # pilot).
+    assert watch["align_score"] is not None
+    assert isinstance(watch["align_score"], int)
 
 
 @pytest.mark.asyncio
@@ -5824,6 +5832,42 @@ async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_diverge
     assert watch["target"] == pytest.approx(2.0)
     assert watch["last_candle_ts"] == 19 * 3600
     assert watch["watch_expiry_hours"] is not None and watch["watch_expiry_hours"] > 0
+    # Item #221 (29/07): same align_score fix as the golden-pocket watch --
+    # this path is the one actually feeding every scalping limit order
+    # (scalping never goes through golden-pocket-watch, #182 excludes it).
+    assert watch["align_score"] is not None
+    assert isinstance(watch["align_score"], int)
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_align_score_prevents_max_tier_fallback(monkeypatch, test_settings):
+    """Item #221 (29/07), the actual bug behind the operator's observation:
+    every scalping position triggered from a limit order (100% of them go
+    through this exact path) sized at the MAX conviction tier (5%) no matter
+    how weak the R/R (0.3-0.6 observed on real positions) -- traced to
+    risk_guard.conviction_risk_budget_pct/conviction_size_multiplier reading
+    a missing align_score as "signal unsupported, use the historical MAX
+    tier" (a fallback meant only for the old, dormant VC-thesis pilot).
+
+    This candidate's own R/R (~1.6, computed below) sits below
+    risk_guard.MODERATE_RR_THRESHOLD (2.0) -- with a REAL align_score now
+    supplied, the budget/multiplier functions must resolve the WEAK tier
+    (2%), never the MAX/strong one (5%), regardless of the exact align_score
+    value (0-3): the R/R alone already disqualifies the strong tier."""
+    from aria_core import risk_guard
+
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch["rr"] < risk_guard.MODERATE_RR_THRESHOLD
+
+    budget = risk_guard.conviction_risk_budget_pct(watch["rr"], watch["align_score"])
+    multiplier = risk_guard.conviction_size_multiplier(watch["rr"], watch["align_score"])
+
+    assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+    assert multiplier == risk_guard.MIN_ALLOC_MULTIPLIER
+    assert multiplier != risk_guard.MAX_ALLOC_MULTIPLIER
 
 
 @pytest.mark.asyncio
