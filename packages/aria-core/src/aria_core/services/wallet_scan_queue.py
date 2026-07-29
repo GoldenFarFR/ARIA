@@ -47,37 +47,56 @@ DB_PATH = str(aria_db_path())
 # coupling: the two constants live in different modules).
 PROGRESS_NOTIFY_STEP = 50
 
-# 26/07 -- raised from 1, explicit operator pushback ("il faut maximum 4h par
-# wallet") after a real state check found only 2/298 queued wallets had ever
-# reached full_coverage, each after ~10 DAYS of exclusively monopolizing the
-# cycle in turn -- the other 296 received ZERO passes the entire time. Root
-# cause: at MAX_WALLETS_PER_CYCLE=1, whichever wallet is selected keeps
-# looping sub-batches (up to CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS) until it
-# finishes or the deadline hits, then immediately becomes eligible again
-# next cycle -- a wallet with hundreds of tokens (measured average: 577,
-# max 1067) can occupy MANY consecutive cycles before ever yielding the
-# queue to anyone else.
+# 29/07 -- LOWERED from 25 back to 4, correcting a flawed assumption made in
+# the 26/07 comment below (kept, struck through in spirit, for the historical
+# record): "wall-clock time stays bounded by CATCHUP_CYCLE_SOFT_DEADLINE_
+# SECONDS regardless of how many wallets run at once (they share it, they
+# don't each add to it)" is WRONG. `CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS` is
+# only checked BETWEEN `score_wallets()` sub-batch calls, never pre-emptively
+# inside one -- so it only bounds the wallet's OWN loop, not the time a
+# single sub-batch call itself takes when 25 concurrent wallets are all
+# blocked on the SAME shared GeckoTerminal lock (`_MIN_INTERVAL=2.857s`,
+# `wait_for_shared_rate_limit`, geckoterminal.py). Real math, confirmed live
+# (29/07): each token needs >=2 GeckoTerminal calls (`resolve_primary_pool` +
+# `get_ohlcv`), so one wallet's `BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET=10`
+# sub-batch needs ~20 calls x 2.857s ~= 57s of GeckoTerminal time if it had
+# the lock to itself. At 25 CONCURRENT wallets sharing that one lock. 25 x
+# 57s ~= 1428s (~24min) just to service one round for all of them -- nowhere
+# close to fitting in the 240s soft deadline OR the 300s heartbeat hard
+# ceiling (`_TASK_TIMEOUT_SECONDS`, heartbeat.py, never touched here).
 #
-# The real 15/07 concern this constant was originally calibrated against
-# (2 wallets run SEQUENTIALLY could block the rest of the heartbeat for
-# ~50 minutes) no longer applies now that `run_wallet_scan_queue_cycle`
-# processes its selected wallets CONCURRENTLY (asyncio.gather, see below) --
-# wall-clock time stays bounded by CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS
-# regardless of how many wallets run at once (they share it, they don't
-# each add to it), and GeckoTerminal's own throttle is a single process-wide
-# shared lock (wait_for_shared_rate_limit) that already serializes the real
-# network calls no matter how many coroutines are waiting on it -- so
-# concurrency here changes WHO gets a share of the existing throttled
-# bandwidth, never the total bandwidth itself.
+# Confirmed via live production state, not guessed: `queue_counts()` showed
+# 304 wallets still `catching_up` / only 2 `monitoring`, and 24 of the 25
+# wallets selected by `list_pending()` had `last_notified_milestone=0` and
+# `next_check_at` frozen at the exact 2026-07-23 enqueue timestamp -- SIX
+# DAYS of cycles (heartbeat logs: "task wallet_scan_queue_cycle exceeded
+# 300s -- abandoned" on every single tick since at least 00:02 that day)
+# with literally ZERO checkpointed progress on 24/25 wallets. Worse than the
+# pre-26/07 bug this was meant to fix: at least a monopolizing single wallet
+# used to make SOME progress each cycle -- at N=25 the whole batch was
+# cancelled by the heartbeat's blunt "kill everything" ceiling before any
+# single wallet's sub-batch could return, every time, a genuine live-lock.
 #
-# Value chosen to make the operator's "4h max" bound on how long a wallet
-# can go without a SINGLE pass (not full coverage -- see the module-level
-# physical-limit note further down) a real guarantee at the current queue
-# size: 298 queued wallets / (240min / 20min per cycle) ~= 25. Deliberately
-# a FIXED constant, not derived from the live queue size at runtime -- a
-# growing queue degrades gracefully (each wallet's rotation slows down
-# proportionally) rather than silently raising concurrency further with no
-# upper bound.
+# N=4 chosen so 4 x ~57s (~228s, normal-throttle case) fits under the 240s
+# soft deadline with margin, while still rotating across several wallets per
+# cycle rather than reverting to N=1 (the original 07/26 monopoly bug this
+# constant was raised to fix -- see that entry, kept below, still the
+# correct diagnosis of ITS OWN failure mode, just an overcorrection on the
+# replacement value). Paired with `_WALLET_HARD_TIMEOUT_SECONDS` below, which
+# makes this bound a REAL asyncio-enforced cap per wallet instead of a
+# between-iterations check that a single slow call can blow straight past.
+#
+# 26/07 (historical, value superseded above -- reasoning on WHY concurrency
+# was introduced at all remains correct) -- raised from 1, explicit operator
+# pushback ("il faut maximum 4h par wallet") after a real state check found
+# only 2/298 queued wallets had ever reached full_coverage, each after ~10
+# DAYS of exclusively monopolizing the cycle in turn -- the other 296
+# received ZERO passes the entire time. Root cause: at MAX_WALLETS_PER_
+# CYCLE=1, whichever wallet is selected keeps looping sub-batches (up to
+# CATCHUP_CYCLE_SOFT_DEADLINE_SECONDS) until it finishes or the deadline
+# hits, then immediately becomes eligible again next cycle -- a wallet with
+# hundreds of tokens (measured average: 577, max 1067) can occupy MANY
+# consecutive cycles before ever yielding the queue to anyone else.
 #
 # Physical limit, never solved by concurrency alone (documented honestly
 # rather than promised away): reaching full_coverage for EVERY queued
@@ -87,8 +106,26 @@ PROGRESS_NOTIFY_STEP = 50
 # days) of network time, REGARDLESS of how the work is scheduled
 # (sequential or concurrent) -- concurrency fixes the INEQUITY (one wallet
 # monopolizing 100% of the throttled bandwidth while 296 others get 0%),
-# not the total physical throughput ceiling.
-MAX_WALLETS_PER_CYCLE = 25
+# not the total physical throughput ceiling, and only once the concurrency
+# level itself is small enough that a full rotation can actually complete.
+MAX_WALLETS_PER_CYCLE = 4
+
+# 29/07 -- new, direct fix for the live-lock above: without this, a single
+# pathologically slow wallet (e.g. a dead tx_hash that Blockscout/GeckoTerminal
+# keep retrying) can still eat the ENTIRE 300s heartbeat budget for the whole
+# batch, since `asyncio.wait_for`'s cancellation on timeout (heartbeat.py)
+# propagates through `asyncio.gather` to every concurrent wallet task at
+# once -- including ones that were about to finish and checkpoint. Wrapping
+# each wallet individually means a stuck wallet is cancelled ON ITS OWN
+# (retried next cycle, same as any other failure -- see the exception
+# handling in `run_wallet_scan_queue_cycle`), leaving the other wallets in
+# the (now much smaller, N=4) batch free to finish and persist their own
+# `mark_attempt` checkpoint regardless. Set to 270s: enough margin above the
+# 240s soft deadline for the final full-coverage completion pass + DB write +
+# notifier call to complete gracefully, while staying 30s under the 300s
+# heartbeat ceiling so a hung wallet is cancelled by THIS timeout, never by
+# the heartbeat's blunter all-or-nothing one.
+_WALLET_HARD_TIMEOUT_SECONDS = 270
 
 # 07/23 -- real diagnosed cause of a wallet staying permanently stuck at the
 # front of the queue: heartbeat.py bounds every task at 300s
@@ -663,8 +700,23 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
         return {"outcome": "empty_queue"}
 
     now = datetime.now(timezone.utc)
+
+    async def _bounded(queued: "QueuedWallet") -> dict:
+        # 29/07 -- per-wallet hard cap (see _WALLET_HARD_TIMEOUT_SECONDS
+        # above): without this, one pathologically slow wallet can consume
+        # the entire batch's share of the heartbeat's 300s ceiling, whose
+        # cancellation on timeout propagates through asyncio.gather to every
+        # concurrent wallet at once -- including ones about to finish and
+        # checkpoint. Cancelling a stuck wallet individually here means the
+        # others in this (now much smaller, N=4) batch still get to persist
+        # their own mark_attempt regardless of this one's fate.
+        return await asyncio.wait_for(
+            _process_one_queued_wallet(queued, now, notifier),
+            timeout=_WALLET_HARD_TIMEOUT_SECONDS,
+        )
+
     results = await asyncio.gather(
-        *(_process_one_queued_wallet(queued, now, notifier) for queued in pending),
+        *(_bounded(queued) for queued in pending),
         return_exceptions=True,
     )
 
@@ -674,9 +726,11 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     rejected_wallets: list[str] = []
     for queued, res in zip(pending, results):
         if isinstance(res, BaseException):
-            # One wallet's own failure must never break the others running
-            # concurrently -- this cycle simply retries it next time (its
-            # next_check_at was never advanced past `now`).
+            # One wallet's own failure -- including a per-wallet timeout
+            # (asyncio.TimeoutError) from `_bounded` above -- must never
+            # break the others running concurrently: this cycle simply
+            # retries it next time (its next_check_at was never advanced
+            # past `now`).
             logger.warning("wallet_scan_queue: processing %s failed (%s)", queued.wallet, res)
             continue
         if res["processed"]:

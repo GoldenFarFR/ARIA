@@ -894,8 +894,9 @@ async def test_cycle_processes_all_due_wallets_concurrently_up_to_the_cap(monkey
     """26/07 -- real operator pushback ("il faut maximum 4h par wallet")
     after MAX_WALLETS_PER_CYCLE=1 was found to let a single wallet
     monopolize the queue for days while every other queued wallet got zero
-    passes. With 3 wallets enqueued (well under the new cap of 25), ALL
-    THREE must be processed in this one cycle -- never just the first."""
+    passes. With 3 wallets enqueued (under the cap, 4 as of 29/07 -- see
+    that constant's own comment for why 25 turned out to be a live-lock),
+    ALL THREE must be processed in this one cycle -- never just the first."""
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
     await wsq.enqueue_wallets([A, B, C])
@@ -916,10 +917,10 @@ async def test_cycle_processes_all_due_wallets_concurrently_up_to_the_cap(monkey
 
 @pytest.mark.asyncio
 async def test_cycle_caps_at_max_wallets_per_cycle_when_queue_is_larger(monkeypatch):
-    """Beyond the cap (MAX_WALLETS_PER_CYCLE=25), only that many wallets are
-    selected this cycle -- the rest simply wait for the next one (FIFO,
-    never dropped, never starved forever now that concurrency lets everyone
-    rotate through within a bounded number of cycles)."""
+    """Beyond the cap (MAX_WALLETS_PER_CYCLE, 4 as of 29/07), only that many
+    wallets are selected this cycle -- the rest simply wait for the next one
+    (FIFO, never dropped, never starved forever now that concurrency lets
+    everyone rotate through within a bounded number of cycles)."""
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
     many_wallets = [f"0x{i:040x}" for i in range(wsq.MAX_WALLETS_PER_CYCLE + 5)]
@@ -957,6 +958,38 @@ async def test_cycle_one_wallet_failure_never_blocks_the_others(monkeypatch):
     result = await wsq.run_wallet_scan_queue_cycle()
     assert result["outcome"] == "ok"
     assert sorted(result["processed"]) == sorted([A, C])
+
+
+@pytest.mark.asyncio
+async def test_cycle_one_stuck_wallet_is_cancelled_without_losing_the_others(monkeypatch):
+    """29/07 -- direct regression test for the live-lock fixed this day: a
+    pathologically slow wallet (real incident: a dead tx_hash Blockscout kept
+    retrying) must be cancelled ON ITS OWN once it exceeds
+    `_WALLET_HARD_TIMEOUT_SECONDS`, never allowed to consume the whole
+    batch's share of the heartbeat's 300s ceiling and drag the other
+    concurrently-running wallets down with it (which is what a bare
+    asyncio.gather over all N wallets, with no per-wallet bound, allowed to
+    happen every single cycle in production for at least 6 hours straight)."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    monkeypatch.setattr(wsq, "_WALLET_HARD_TIMEOUT_SECONDS", 0.05)
+    await wsq.enqueue_wallets([A, B, C])
+
+    import asyncio
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        if addresses[0] == B:
+            await asyncio.sleep(10)  # never finishes within the 0.05s test timeout
+        return _FakeReport(wallets=[_FakeCard(address=addresses[0], tokens_scanned_cumulative=10, tokens_found=100)])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["outcome"] == "ok"
+    assert sorted(result["processed"]) == sorted([A, C])
+
+    pending_b = [q for q in await wsq.list_pending() if q.wallet == B]
+    assert pending_b and pending_b[0].last_attempt_at is None  # never checkpointed -- retried next cycle
 
 
 @pytest.mark.asyncio
