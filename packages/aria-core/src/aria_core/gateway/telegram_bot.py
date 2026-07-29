@@ -125,7 +125,18 @@ def _format_tg(text: str) -> str:
 
 
 async def _reply(message, text: str) -> None:
-    await message.reply_text(_format_tg(text))
+    # 29/07 -- operator feedback ("supprimer l'image en bas... elle apparaît
+    # en feedback"): Telegram auto-renders a big preview CARD for a URL found
+    # anywhere in the text -- /feedback's reply lists several DexScreener
+    # links (one per position), and Telegram picks one to expand into a
+    # large image card at the very bottom, unrelated noise on an
+    # already-dense reply. Same fix already applied to buy/sell/limit-order
+    # alerts (``send_message``'s own ``disable_preview``) -- generalized here
+    # since this is the ONE shared reply path for every admin command, and no
+    # command in this bot has ever relied on a rendered preview card.
+    from telegram import LinkPreviewOptions
+
+    await message.reply_text(_format_tg(text), link_preview_options=LinkPreviewOptions(is_disabled=True))
     try:
         from aria_core.relay_chat import log_message
 

@@ -42,7 +42,7 @@ class FakeMessage:
         self.text = text
         self.replies: list[str] = []
 
-    async def reply_text(self, text: str, reply_markup=None) -> None:
+    async def reply_text(self, text: str, reply_markup=None, **kwargs) -> None:
         self.replies.append(text)
 
 

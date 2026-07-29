@@ -23,9 +23,11 @@ class FakeMessage:
     def __init__(self, text: str):
         self.text = text
         self.replies: list[str] = []
+        self.reply_kwargs: list[dict] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.replies.append(text)
+        self.reply_kwargs.append(kwargs)
 
 
 class FakeUser:
@@ -68,6 +70,37 @@ async def test_feedback_admin_only_visitor_rejected(monkeypatch):
 
     assert len(update.message.replies) == 1
     assert "restricted" in update.message.replies[0].lower() or "administrator" in update.message.replies[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_feedback_disables_link_preview(monkeypatch):
+    """29/07 -- operator feedback ("tu peux supprimer l'image en bas... elle
+    apparaît en feedback"): /feedback's reply lists several DexScreener links
+    (one per position) -- Telegram auto-renders a big preview CARD for one of
+    them, unrelated noise. _reply() (the ONE shared reply path for every
+    admin command) now disables link previews, same as the buy/sell/limit-
+    order alerts already do via send_message's own disable_preview."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
+
+    async def fake_summary(*, price_lookup=None, wallet="swing"):
+        return {
+            "starting": 1_000_000.0, "cash": 1_000_000.0, "equity": 1_000_000.0,
+            "return_pct": 0.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "open_positions": 0, "closed_trades": 0, "win_rate": None,
+        }
+
+    monkeypatch.setattr("aria_core.paper_trader.portfolio_summary", fake_summary)
+    monkeypatch.setattr(
+        "aria_core.paper_ledger_report.build_positions_detail_block", _fake_empty_detail_block,
+    )
+
+    update = FakeUpdate("/feedback", user_id=42)
+    await telegram_bot._handle_feedback(update, FakeContext())
+
+    assert len(update.message.reply_kwargs) == 1
+    opts = update.message.reply_kwargs[0]["link_preview_options"]
+    assert opts.is_disabled is True
 
 
 @pytest.mark.asyncio

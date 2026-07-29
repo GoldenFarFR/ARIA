@@ -19,7 +19,7 @@ class FakeMessage:
         self.photo = photo if photo is not None else [FakePhotoSize()]
         self.replies: list[str] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.replies.append(text)
 
 

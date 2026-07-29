@@ -19,7 +19,7 @@ class FakeMessage:
         self.text = text
         self.replies: list[str] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.replies.append(text)
 
     async def reply_chat_action(self, _action: str) -> None:

@@ -33,7 +33,7 @@ class FakeMessage:
     def __init__(self):
         self.replies: list[str] = []
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.replies.append(text)
 
 
