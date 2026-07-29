@@ -2328,6 +2328,7 @@ async def build_open_positions_tracking_lines(*, price_lookup=None, wallet: str 
 
 def format_position_tracking_alert(
     tracked: list[dict], *, cash: float | None = None, equity: float | None = None,
+    combined_pockets: bool = False,
 ) -> str:
     """PERIODIC tracking of already-open positions (#197, 07/15) -- not just on
     buy/sell. ``tracked``: list of dicts {contract, symbol, entry_price, price,
@@ -2342,15 +2343,22 @@ def format_position_tracking_alert(
     the operator couldn't know how much was left without separately checking
     /feedback or /ledger. Optional (``None`` -> old generic label, an honest
     degradation rather than an invented figure if the caller doesn't compute
-    them)."""
+    them).
+
+    ``combined_pockets`` (29/07, 3-pocket architecture): ``tracked`` already
+    spans EVERY pocket (position management is a single unified loop, unlike
+    per-pocket new-entry sourcing) -- the caller now sums cash across all 3
+    pockets to match (see its own comment), so the header says so explicitly
+    rather than implying a single ~$1M portfolio."""
     if not tracked:
         return ""
     n = len(tracked)
     position_word = "position ouverte" if n == 1 else "positions ouvertes"
     if equity is not None and cash is not None:
+        wallet_label = "3 poches combinées" if combined_pockets else "portefeuille papier"
         header = (
             f"🧪 SIMULATION — suivi positions ouvertes "
-            f"(portefeuille papier : équité {equity:,.0f} $, cash {cash:,.0f} $, "
+            f"({wallet_label} : équité {equity:,.0f} $, cash {cash:,.0f} $, "
             f"{n} {position_word})"
         )
     else:
@@ -3645,6 +3653,19 @@ async def _open_new_entries_for_wallet(
                         # sig["reasons"]) actually mentions why this order was
                         # placed, not just the original no_entry_signal text.
                         order_sig["reasons"] = list(sig.get("reasons") or []) + [watch.get("reason", "")]
+                        # 29/07 -- operator feedback ("ordre limite ne montre pas
+                        # la taille de la future position"): an ESTIMATE only --
+                        # limit_orders._execute_trigger recomputes for real with
+                        # FRESH context (regime/risk_state/weekly may move before
+                        # the order fills) via the exact same formula, so this
+                        # value can differ at trigger time. Computed here (not
+                        # persisted-then-reused) so it reflects THIS pocket's
+                        # real current risk_state/weekly_context, same inputs the
+                        # eventual real buy would use if it triggered right now.
+                        est_alloc_usd, est_tier = compute_entry_alloc(order_sig, start, weekly_context, risk_state)
+                        order_sig["estimated_alloc_usd"] = est_alloc_usd
+                        order_sig["estimated_alloc_pct"] = (est_alloc_usd / start * 100.0) if start else 0.0
+                        order_sig["estimated_conviction_tier"] = est_tier
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", watch.get("symbol") or sig.get("symbol", ""),
                             watch["target_price"], order_sig, wallet=wallet,
@@ -3834,6 +3855,14 @@ async def _open_new_entries_for_wallet(
                         # actually observed right now -- a copy, never mutating
                         # the caller's own ``sig`` dict in place.
                         order_sig = {**sig, "price_at_order_placed": fresh_price}
+                        # 29/07 -- operator feedback ("ordre limite ne montre pas
+                        # la taille de la future position"): same estimate as the
+                        # golden-pocket/rsi-divergence case above, same caveat
+                        # (recomputed for real at trigger time with fresh context).
+                        est_alloc_usd, est_tier = compute_entry_alloc(order_sig, start, weekly_context, risk_state)
+                        order_sig["estimated_alloc_usd"] = est_alloc_usd
+                        order_sig["estimated_alloc_pct"] = (est_alloc_usd / start * 100.0) if start else 0.0
+                        order_sig["estimated_conviction_tier"] = est_tier
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", sig.get("symbol", ""), price, order_sig,
                             wallet=wallet,
@@ -4694,7 +4723,23 @@ async def _run_paper_cycle_locked(
             # elsewhere), never a duplicated computation.
             tracking_cash = tracking_equity = None
             try:
-                tracking_cash = await cash_available()
+                # 29/07 -- real bug found via operator confusion ("pourquoi il
+                # y a que 1 wallet... il vaut 1400000 alors qu'il y a
+                # quelques heures il valait 995k"): ``tracked`` above already
+                # spans EVERY pocket (position management is a single unified
+                # loop, unlike new-entry sourcing) -- but ``cash_available()``
+                # defaulted to "swing" alone, mixing one pocket's cash with
+                # all 3 pockets' position value into a number that was
+                # neither a real single-pocket total nor a real combined one.
+                # Under the 3-pocket gate, sum cash across all 3 (each a real,
+                # independent $1M portfolio) to match what ``tracked`` already
+                # shows; gate OFF keeps the exact legacy single-pocket read.
+                if multi_pocket_sourcing_enabled():
+                    tracking_cash = sum([
+                        await cash_available("scalping"), await cash_available("swing"), await cash_available("vc"),
+                    ])
+                else:
+                    tracking_cash = await cash_available()
                 open_value = sum((t.get("qty") or 0.0) * (t.get("price") or 0.0) for t in tracked)
                 tracking_equity = tracking_cash + open_value
             except Exception:  # noqa: BLE001 -- the alert degrades to the generic label, never fatal
@@ -4711,7 +4756,10 @@ async def _run_paper_cycle_locked(
                     should_notify = elapsed_min >= TRACKING_ALERT_MIN_INTERVAL_MINUTES
             except Exception:  # noqa: BLE001 -- when in doubt, notify (graceful degradation)
                 should_notify = True
-            msg = format_position_tracking_alert(tracked, cash=tracking_cash, equity=tracking_equity)
+            msg = format_position_tracking_alert(
+                tracked, cash=tracking_cash, equity=tracking_equity,
+                combined_pockets=multi_pocket_sourcing_enabled(),
+            )
             if msg and should_notify:
                 try:
                     await notifier(msg)

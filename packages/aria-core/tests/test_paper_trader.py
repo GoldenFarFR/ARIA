@@ -3098,6 +3098,19 @@ def test_format_position_tracking_alert_shows_real_equity_when_provided():
     assert "portefeuille papier 1 M$" not in msg  # jamais le libelle generique si le vrai chiffre est connu
 
 
+def test_format_position_tracking_alert_labels_combined_pockets():
+    """29/07 -- real operator confusion ("pourquoi il y a que 1 wallet...
+    il vaut 1400000 alors qu'il y a quelques heures il valait 995k"): the
+    header must say explicitly this is a 3-pocket combined total, not a
+    single ~$1M portfolio, whenever the caller passes combined_pockets=True."""
+    msg = pt.format_position_tracking_alert(
+        [{"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}],
+        cash=2_000_000.0, equity=2_500_000.0, combined_pockets=True,
+    )
+    assert "3 poches combinées" in msg
+    assert "2,500,000" in msg
+
+
 def test_format_position_tracking_alert_shows_capital_and_pct_of_starting_capital():
     """17/07, demande opérateur explicite : "sur le suivi je veux aussi le capital
     investi avec le % sur le capital total au moment de l'achat" -- STARTING_CAPITAL_USD,
@@ -4173,6 +4186,15 @@ async def test_run_cycle_places_limit_order_on_small_upward_drift_check_case(tmp
     assert active[0]["contract"] == A
     assert active[0]["target_price"] == pytest.approx(0.038)  # prix du SIGNAL, jamais le prix dégradé
 
+    # 29/07 -- operator feedback ("ordre limite ne montre pas la taille de la
+    # future position"): an estimate is computed and persisted at placement
+    # time, using the same compute_entry_alloc formula a real buy would use.
+    import json as _json
+
+    order_sig = _json.loads(active[0]["signal_json"])
+    assert order_sig["estimated_alloc_usd"] > 0
+    assert order_sig["estimated_alloc_pct"] > 0
+
 
 @pytest.mark.asyncio
 async def test_run_cycle_never_places_limit_order_when_structure_already_broken(tmp_db, monkeypatch):
@@ -4787,6 +4809,53 @@ async def test_multi_pocket_gate_on_vc_pocket_sources_bonding_candidates(tmp_db,
     assert act["opened"][0]["contract"] == F
     assert act["opened"][0]["wallet"] == "vc"
     assert act["opened"][0]["strategy"] == "momentum"  # never vc_thesis for a bonding position
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_tracking_alert_sums_cash_across_all_3_pockets(tmp_db, monkeypatch):
+    """29/07 -- real operator confusion ("pourquoi il y a que 1 wallet...
+    il vaut 1400000 alors qu'il y a quelques heures il valait 995k"): the
+    periodic tracking alert's ``tracked`` list already spans every pocket
+    (position management is a single unified loop), but ``cash_available()``
+    used to default to "swing" alone -- mixing one pocket's cash with all 3
+    pockets' position value into a number that was neither a real
+    single-pocket total nor a real combined one. Must now sum all 3."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    from aria_core.skills import candidate_ranking
+
+    async def _no_new_candidates(*, limit=20):
+        return [], {}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _no_new_candidates)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    for wallet in ("scalping", "swing", "vc"):
+        await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000.0, wallet="scalping")
+    await pt.open_position(B, "BBB", 1.0, alloc_usd=50_000.0, wallet="swing")
+    # vc pocket left empty -- its full $1M cash must still count toward the total.
+
+    async def _price_lookup(contract, chain="base"):
+        return 1.0  # unchanged from entry -- keeps the arithmetic exact
+
+    notified = []
+
+    async def _notifier(msg):
+        notified.append(msg)
+
+    await pt.run_paper_cycle(price_lookup=_price_lookup, notifier=_notifier, depeg_check=_no_depeg)
+
+    tracking_msgs = [m for m in notified if "suivi positions ouvertes" in m]
+    assert len(tracking_msgs) == 1
+    msg = tracking_msgs[0]
+    assert "3 poches combinées" in msg
+    # cash: (1M-50k) + (1M-50k) + 1M = 2,900,000 ; equity: cash + 100,000 open value = 3,000,000
+    assert "2,900,000" in msg
+    assert "3,000,000" in msg
 
 
 @pytest.mark.asyncio

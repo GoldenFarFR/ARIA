@@ -525,6 +525,45 @@ async def test_check_rsi_divergence_watching_triggers_on_span_within_window(monk
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_replaces_stale_reasons_on_trigger(monkeypatch):
+    """29/07 -- real bug found via operator screenshot comparison (chart vs.
+    buy thesis): ``sig["reasons"]`` used to keep the ORIGINAL watch-creation
+    wording ("divergence RSI pas encore confirmée"), persisted as-is into the
+    executed BUY's thesis (_execute_trigger) -- the opposite of what just
+    happened. Must be replaced with the CONFIRMED divergence detail (span/
+    gap), never left stale, never merely appended (which would read as a
+    self-contradicting mix of stale + fresh)."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(
+        sig_overrides={"reasons": ["prix déjà dans la golden pocket mais divergence RSI pas encore confirmée"]},
+    )
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert len(sig["reasons"]) == 1
+    assert "pas encore confirmée" not in sig["reasons"][0]
+    assert "CONFIRMÉE" in sig["reasons"][0]
+    assert "18" in sig["reasons"][0]
+    assert "5.0" in sig["reasons"][0]
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_scalping_wallet(monkeypatch):
     """Item #199 (29/07): the re-check must fetch candles at the SAME
     timeframe the order was placed under, derived from `order["wallet"]`
@@ -776,6 +815,63 @@ async def test_process_active_orders_pending_to_watching_on_reanalysis_pass(monk
     await lo.process_active_orders(_price)
     active = await lo.get_active_orders()
     assert active[0]["state"] == "watching"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_notifies_on_entering_watching(monkeypatch):
+    """29/07 -- operator question ("plus le temps d'expiration est petit plus
+    on est proche du point d'achat ?"): expiry never signals proximity --
+    this pending->watching transition is the real one, now notified."""
+    from aria_core import momentum_entry
+
+    async def _clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _clear)
+    await paper_trader.reset_portfolio(1_000_000.0)
+    await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+
+    notified = []
+
+    async def _notifier(msg):
+        notified.append(msg)
+
+    async def _price(contract, *, chain="base"):
+        return 0.040  # within target * 1.10
+
+    await lo.process_active_orders(_price, notifier=_notifier)
+    assert len(notified) == 1
+    assert "se rapproche" in notified[0]
+    assert "SWING" in notified[0]
+    assert "0.04" in notified[0]
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_skips_watching_notification_for_rsi_divergence(monkeypatch):
+    """The rsi_divergence_pending path enters "watching" almost instantly
+    (target_price == price at creation) -- a notification here would just
+    duplicate the "ORDRE LIMITE POSÉ" alert."""
+    from aria_core import momentum_entry
+
+    async def _clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _clear)
+    await paper_trader.reset_portfolio(1_000_000.0)
+    await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 0.038, _sig(limit_order_reason="rsi_divergence_pending"), wallet="scalping",
+    )
+
+    notified = []
+
+    async def _notifier(msg):
+        notified.append(msg)
+
+    async def _price(contract, *, chain="base"):
+        return 0.038
+
+    await lo.process_active_orders(_price, notifier=_notifier)
+    assert notified == []
 
 
 @pytest.mark.asyncio
@@ -1237,6 +1333,79 @@ def test_format_limit_order_placed_alert_rsi_divergence_wording_and_real_expiry(
     assert "Expire dans 15h" in text
     assert "Invalidation" in text
     assert "2.5" in text
+
+
+def test_format_limit_order_placed_alert_shows_timeframe_per_pocket():
+    """29/07 -- operator request: the alert never stated which candle
+    timeframe the setup was analyzed on."""
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "wallet": "scalping",
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "15-30min" in text
+    assert "scalping" in text.lower()
+
+    order["wallet"] = "swing"
+    text = lo.format_limit_order_placed_alert(order)
+    assert "1h+" in text
+
+
+def test_format_limit_order_placed_alert_shows_estimated_size():
+    """29/07 -- operator feedback ("ordre limite ne montre pas la taille de
+    la future position"): an ESTIMATE only, clearly labeled as recomputed at
+    trigger time (paper_trader.compute_entry_alloc, fresh context)."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "wallet": "swing",
+        "signal_json": _json.dumps({"estimated_alloc_usd": 50_000.0, "estimated_alloc_pct": 5.0}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Taille estimée : 50,000 $" in text
+    assert "5.0%" in text
+    assert "recalculée au déclenchement" in text
+
+
+def test_format_limit_order_placed_alert_omits_estimated_size_when_absent():
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Taille estimée" not in text
+
+
+def test_format_limit_order_placed_alert_shows_sell_target_and_gain_pct():
+    """29/07 -- operator feedback ("la cible doit apparaître aussi sur
+    l'ordre limite et rajouter le pourcentage en face du prix en usdc"):
+    ``target_price`` is the BUY trigger, never the real profit target
+    (``sig["target"]``) -- the latter was never shown at all."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+        "signal_json": _json.dumps({"target": 0.076}),  # +100% from the buy trigger
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Cible de vente : 0.076" in text
+    assert "+100.0%" in text
+
+
+def test_format_limit_order_placed_alert_shows_sell_target_for_rsi_divergence_too():
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.05,
+        "signal_json": _json.dumps({"limit_order_reason": "rsi_divergence_pending", "target": 0.06}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Cible de vente : 0.06" in text
+    assert "+20.0%" in text
+
+
+def test_format_limit_order_placed_alert_omits_sell_target_when_absent():
+    order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Cible de vente" not in text
 
 
 def test_format_limit_order_placed_alert_bolds_the_title_line():

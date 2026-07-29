@@ -247,6 +247,23 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
             order["contract"], detail.span, detail.gap,
             momentum_entry.RSI_WATCH_MIN_SPAN, momentum_entry.RSI_WATCH_MAX_SPAN,
         )
+        # 29/07 -- real bug found via operator screenshot comparison (chart
+        # vs. buy thesis): ``sig["reasons"]`` still held the ORIGINAL
+        # watch-creation wording ("divergence RSI pas encore confirmée"),
+        # persisted as-is into the BUY thesis by ``_execute_trigger`` since
+        # this function only ever returned a bare decision string -- the
+        # thesis of an executed buy said the opposite of what just happened.
+        # ``sig`` is the SAME dict object ``_execute_trigger`` reads right
+        # after (mutation here, not a return value, is what the caller sees)
+        # -- replaced wholesale (not appended) so the thesis never reads as
+        # a self-contradicting mix of the stale "pending" reason and the
+        # fresh "confirmed" one.
+        gap_str = f"{detail.gap:.1f}" if detail.gap is not None else "n/a"
+        sig["reasons"] = [
+            f"Divergence RSI haussière CONFIRMÉE (span {detail.span} bougies, "
+            f"force {gap_str} points RSI, fenêtre {momentum_entry.RSI_WATCH_MIN_SPAN}-"
+            f"{momentum_entry.RSI_WATCH_MAX_SPAN}) -- prix déjà dans la golden pocket."
+        ]
         return "trigger"
     return "wait"
 
@@ -550,6 +567,23 @@ async def process_active_orders(price_lookup, notifier=None) -> dict:
             if await reanalyze_for_watching(order):
                 await transition_to_watching(order["id"])
                 actions["entered_watching"] += 1
+                # 29/07 -- operator question ("plus le temps d'expiration est
+                # petit plus on est proche du point d'achat ?"): expiry is a
+                # pure wall-clock countdown, NEVER a proximity gauge -- THIS
+                # transition (pending -> watching, price pulled back within
+                # LIMIT_ORDER_WATCH_TRIGGER_MULT of target) is the real signal
+                # that ARIA is getting close. Skipped for
+                # ``rsi_divergence_pending`` orders: their target_price
+                # equals the price AT CREATION time (see
+                # momentum_entry._rsi_divergence_watch_candidate), so they
+                # enter "watching" almost immediately -- a notification here
+                # would just duplicate the "ORDRE LIMITE POSÉ" alert with no
+                # new information.
+                if notifier and sig.get("limit_order_reason") != "rsi_divergence_pending":
+                    try:
+                        await notifier(format_limit_order_watching_alert(order, price))
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 await mark_cancelled(order["id"], "reanalysis_failed")
                 actions["cancelled"] += 1
@@ -780,6 +814,19 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
 
 _POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC"}
 
+# 29/07 -- operator request: the alert never stated which candle timeframe
+# the setup was analyzed on -- ``momentum_entry.evaluate_momentum_entry``'s
+# own docstring is the source of truth (mode="scalping" -> GeckoTerminal's
+# dedicated 15-30min ladder, no fallback; mode="standard" -> the day/4h/1h
+# cascade, never below 1h). Keyed on ``order["wallet"]`` (the pocket), the
+# one field always correctly synced to the real analysis mode since the
+# 29/07 mode-sync fix (see limit_orders._execute_trigger's own comment).
+_TIMEFRAME_LABEL = {
+    "scalping": "bougies 15-30min (mode scalping)",
+    "swing": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
+    "vc": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
+}
+
 
 def format_limit_order_placed_alert(order: dict) -> str:
     """29/07 -- operator feedback: this alert only showed the target price,
@@ -851,6 +898,18 @@ def format_limit_order_placed_alert(order: dict) -> str:
             lines.append(f"Prix actuel : {current_price:.6g} (+{gap_pct:.1f}% au-dessus de la cible)")
         expiry_line = f"Expire dans {expiry_hours:.0f}h si le prix ne redescend jamais à ce niveau."
 
+    # 29/07 -- operator feedback ("la cible doit apparaître aussi sur l'ordre
+    # limite et rajouter le pourcentage en face du prix en usdc"): ``target``
+    # above (order["target_price"]) is the BUY trigger level, never the
+    # eventual profit-taking level -- ``sig["target"]`` (the original
+    # signal's real target, e.g. the golden pocket's range_high) was never
+    # shown at all. Percentage computed from the buy trigger, the one fixed
+    # reference both branches share (current price keeps moving).
+    sell_target = sig.get("target")
+    if isinstance(sell_target, (int, float)) and sell_target > 0 and target:
+        gain_pct = (sell_target / target - 1.0) * 100.0
+        lines.append(f"Cible de vente : {sell_target:.6g} (+{gain_pct:.1f}% depuis le prix d'achat visé)")
+
     invalidation = sig.get("invalidation")
     if isinstance(invalidation, (int, float)) and invalidation > 0:
         lines.append(f"Invalidation : {invalidation:.6g} (annule l'ordre si le prix casse ce niveau)")
@@ -859,7 +918,51 @@ def format_limit_order_placed_alert(order: dict) -> str:
     if isinstance(rr, (int, float)) and rr > 0:
         lines.append(f"R/R du signal : {rr:.1f}")
 
+    timeframe = _TIMEFRAME_LABEL.get(order.get("wallet"))
+    if timeframe:
+        lines.append(f"Analyse sur {timeframe}")
+
+    # 29/07 -- operator feedback ("ordre limite ne montre pas la taille de la
+    # future position"): an ESTIMATE at the current risk_state/weekly_context
+    # (paper_trader.py's two creation sites, compute_entry_alloc) -- the real
+    # size is only known at trigger time (limit_orders._execute_trigger
+    # recomputes with FRESH context), so this is explicitly labeled as such,
+    # never presented as a locked-in number.
+    est_alloc = sig.get("estimated_alloc_usd")
+    est_pct = sig.get("estimated_alloc_pct")
+    if isinstance(est_alloc, (int, float)) and est_alloc > 0:
+        line = f"Taille estimée : {est_alloc:,.0f} $"
+        if isinstance(est_pct, (int, float)):
+            line += f" ({est_pct:.1f}% du capital de départ)"
+        line += " -- recalculée au déclenchement"
+        lines.append(line)
+
     lines.append(expiry_line)
+    if order.get("contract"):
+        lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
+    return "\n".join(lines)
+
+
+def format_limit_order_watching_alert(order: dict, current_price: float) -> str:
+    """29/07 -- operator question ("plus le temps d'expiration est petit plus
+    on est proche du point d'achat ?"): the answer is no -- expiry is a pure
+    wall-clock countdown, unrelated to price proximity. THIS transition
+    (``pending`` -> ``watching``, ``process_active_orders``) is the real
+    signal: the price pulled back within ``LIMIT_ORDER_WATCH_TRIGGER_MULT``
+    of the target AND the structure re-check (honeypot/DEX quality) just
+    passed again. Never sent for a ``rsi_divergence_pending`` order -- see
+    the caller's own comment (that transition happens almost instantly,
+    duplicating the "ORDRE LIMITE POSÉ" alert with no new information)."""
+    name = html.escape(order.get("symbol") or (order.get("contract") or "")[:10], quote=False)
+    target = order["target_price"]
+    pocket_label = _POCKET_LABEL.get(order.get("wallet"), (order.get("wallet") or "swing").upper())
+    gap_pct = (current_price / target - 1.0) * 100.0 if target else 0.0
+    lines = [
+        f"<b>👁️ ARIA se rapproche ({pocket_label})</b>",
+        f"{name} -- surveillance active, structure re-vérifiée et toujours propre",
+        f"Prix actuel : {current_price:.6g} (à {gap_pct:+.1f}% de la cible {target:.6g})",
+        "Achat dès que le prix atteint la cible (ou annulation si l'invalidation casse avant).",
+    ]
     if order.get("contract"):
         lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
     return "\n".join(lines)
