@@ -855,6 +855,17 @@ def _best_pair(pairs: list[PairSnapshot], contract: str) -> PairSnapshot | None:
 # pipeline's speed (a single attempt, never looped).
 _HONEYPOT_NO_DATA_RETRY_DELAY_S = 8.0
 
+# 29/07 (Item #212 follow-up, explicit operator decision) -- Honeypot.is is
+# now the PRIMARY honeypot source for the watchlist cycle (Base/Ethereum),
+# GoPlus only a last resort when it fails. Since Honeypot.is's real
+# sustainable rate (~5/s, see services/honeypot_is.py) is far faster than
+# GoPlus's 288s/token quota-bound rate, `run_goplus_watchlist_cycle` now
+# processes a whole BATCH per heartbeat passage (~5min) instead of one
+# candidate at a time -- 100 x ~0.2s = ~20s/passage, comfortably inside the
+# 5min cadence, draining the full 600-slot watchlist in ~6 passages (~30min)
+# instead of 48h.
+_GOPLUS_WATCHLIST_BATCH_SIZE = 100
+
 # 28/07 -- short-TTL cache of the TokenSecurity object ALREADY fetched by
 # _check_honeypot below, so dex_composite_score.py's contract-risk pillar can
 # read the residual GoPlus fields (tax/hidden_owner/can_take_back_ownership/
@@ -1022,87 +1033,107 @@ async def check_honeypot(
     return await _check_honeypot(contract, chain, liquidity_usd=liquidity_usd, volume_24h_usd=volume_24h_usd)
 
 
-async def run_goplus_watchlist_cycle() -> dict:
-    """Background refresh cycle for the GoPlus honeypot watchlist (Item #212,
-    29/07) -- heartbeat-driven (``goplus_watchlist_cycle``, ~5min/passage,
-    itself comfortably under the ~288s sustainable rate calibrated against
-    GoPlus's real monthly CU cap, confirmed 150,000 CU/month on the operator's
-    dashboard). Consumes exactly ONE due candidate per call -- the heartbeat's
-    own cadence IS the throttle here, no internal sleep loop, consistent with
-    every other periodic heartbeat task in this codebase.
+async def _check_watchlist_candidate(contract: str, chain: str, *, allow_goplus: bool) -> tuple["TokenSecurity", bool]:
+    """Resolves ONE watchlist candidate's security status -- Honeypot.is
+    ALWAYS tried first (Item #212 follow-up, 29/07, explicit operator
+    decision: PERMANENT, not just while GoPlus's quota is exhausted --
+    Honeypot.is is now the primary honeypot source for this watchlist,
+    GoPlus only a last resort when it fails). Returns
+    ``(security, used_goplus)`` -- ``used_goplus`` tells the caller whether
+    this call consumed the passage's single GoPlus slot (see
+    ``run_goplus_watchlist_cycle``).
 
-    Deliberately skips the ``no_data`` targeted retry that the Solana
-    synchronous path still does (see ``_check_honeypot``): a second call
-    inside the same passage would either wait out the client's own 288s
-    throttle (stalling this cycle far past its 5min cadence) or, if allowed
-    to bypass it, quietly double this candidate's real consumption. A
-    still-``no_data`` candidate just gets re-checked on its next natural turn
-    in the round-robin instead -- slower, but never over budget.
+    Known gap, documented honestly: Honeypot.is has no equivalent to
+    GoPlus's ``owner_change_balance`` veto (22/07, post-CNX incident) --
+    accepting Honeypot.is's verdict alone means that ONE signal goes
+    uncovered for any candidate GoPlus never gets to see. Accepted trade-off
+    (explicit operator decision) in exchange for a sustainable, fast primary
+    source instead of one bound by a monthly CU quota."""
+    from aria_core.services import honeypot_is
+    from aria_core.services.goplus import TokenSecurity
+
+    fallback = await honeypot_is.check_token(contract, chain=chain)
+    if fallback.available and fallback.is_honeypot is not None:
+        return (
+            TokenSecurity(
+                address=contract,
+                is_honeypot=fallback.is_honeypot,
+                buy_tax=fallback.buy_tax,
+                sell_tax=fallback.sell_tax,
+                available=True,
+            ),
+            False,
+        )
+
+    if not allow_goplus:
+        # Honeypot.is failed and this passage already used its one GoPlus
+        # slot -- stays unavailable, retried on its next natural turn.
+        return TokenSecurity(address=contract, available=False, error="Honeypot.is indisponible"), False
+
+    from aria_core.services.goplus import goplus_client
+
+    goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
+    if not goplus_chain:
+        return TokenSecurity(address=contract, available=False, error=f"chaîne {chain} non couverte"), False
+
+    security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+    logger.info(
+        "goplus_watchlist_cycle: Honeypot.is indisponible pour %s/%s -- dernier recours GoPlus (available=%s)",
+        contract, chain, security.available,
+    )
+    return security, True
+
+
+async def run_goplus_watchlist_cycle() -> dict:
+    """Background refresh cycle for the honeypot watchlist (Item #212,
+    29/07, revised same day -- explicit operator decision) -- heartbeat-driven
+    (``goplus_watchlist_cycle``, ~5min/passage). Honeypot.is is now the
+    PRIMARY source (fast, free, no monthly quota -- see services/honeypot_is.py
+    for the real burst-tested rate, ~5 req/s), processed as a whole BATCH per
+    passage (``_GOPLUS_WATCHLIST_BATCH_SIZE``, 100 -- ~20s at 5/s, comfortably
+    inside the 5min cadence). GoPlus only serves as a LAST RESORT when
+    Honeypot.is itself fails for a candidate -- capped at ONE GoPlus call per
+    passage (defense in depth: if Honeypot.is ever had a widespread outage,
+    this cap stops the cycle from hammering GoPlus's own quota-bound rate;
+    candidates beyond that cap simply retry on their next natural turn).
 
     A confirmed honeypot is transferred to ``momentum_blacklist`` (same
     guardrail as the synchronous path it replaces) and dropped from the
     watchlist -- everything else (clear, or still unavailable) only gets its
     ``last_checked_at`` refreshed, moving it to the back of the queue."""
     from aria_core.services import goplus_watchlist
-    from aria_core.services.goplus import goplus_client
 
-    due = await goplus_watchlist.next_due(limit=1)
+    due = await goplus_watchlist.next_due(limit=_GOPLUS_WATCHLIST_BATCH_SIZE)
     if not due:
         return {"checked": 0}
 
-    entry = due[0]
-    contract, chain = entry["contract"], entry["chain"]
-    goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
-    if not goplus_chain:
-        # Defensive only -- only already-covered chains are ever added to
-        # this watchlist (see ``_check_honeypot``'s early return above), but
-        # a stale/renamed chain must never loop forever as "always due".
-        await goplus_watchlist.remove(contract, chain)
-        return {"checked": 0, "removed_uncovered": contract}
+    checked = 0
+    blacklisted: list[str] = []
+    goplus_used = False
+    for entry in due:
+        contract, chain = entry["contract"], entry["chain"]
+        security, used_goplus = await _check_watchlist_candidate(
+            contract, chain, allow_goplus=not goplus_used,
+        )
+        goplus_used = goplus_used or used_goplus
 
-    security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
-    used_fallback = False
-    if not security.available:
-        # 29/07 (Item #212 follow-up) -- operator flagged GoPlus's monthly
-        # quota won't renew for ~15 days, far longer than this watchlist
-        # alone can bridge. TEMPORARY second opinion via Honeypot.is (see
-        # services/honeypot_is.py for the full diligence/rationale) -- GoPlus
-        # remains the reference source and takes back over automatically the
-        # moment it starts answering ``available=True`` again (this branch
-        # simply stops firing then, nothing to revert manually). Known gap:
-        # Honeypot.is has no ``owner_change_balance`` equivalent -- that one
-        # signal genuinely goes uncovered during this fallback window.
-        from aria_core.services import honeypot_is
-        from aria_core.services.goplus import TokenSecurity
+        await goplus_watchlist.record_result(contract, chain, security)
+        checked += 1
 
-        fallback = await honeypot_is.check_token(contract, chain=chain)
-        if fallback.available and fallback.is_honeypot is not None:
-            used_fallback = True
-            security = TokenSecurity(
-                address=contract,
-                is_honeypot=fallback.is_honeypot,
-                buy_tax=fallback.buy_tax,
-                sell_tax=fallback.sell_tax,
-                available=True,
-            )
-            logger.info(
-                "goplus_watchlist_cycle: GoPlus indisponible pour %s/%s -- second avis Honeypot.is "
-                "utilisé (temporaire), is_honeypot=%s", contract, chain, fallback.is_honeypot,
-            )
+        if security.available and (
+            security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
+        ):
+            _clear, reason, _code = _evaluate_security_verdict(security)
+            if not used_goplus:
+                reason = f"{reason} (Honeypot.is, source primaire)"
+            await momentum_blacklist.add_to_blacklist(contract, chain, reason)
+            await goplus_watchlist.remove(contract, chain)
+            blacklisted.append(contract)
 
-    await goplus_watchlist.record_result(contract, chain, security)
-
-    if security.available and (
-        security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
-    ):
-        _clear, reason, _code = _evaluate_security_verdict(security)
-        if used_fallback:
-            reason = f"{reason} (second avis Honeypot.is, GoPlus indisponible)"
-        await momentum_blacklist.add_to_blacklist(contract, chain, reason)
-        await goplus_watchlist.remove(contract, chain)
-        return {"checked": 1, "blacklisted": contract, "chain": chain}
-
-    return {"checked": 1, "contract": contract, "chain": chain, "available": security.available}
+    result: dict = {"checked": checked}
+    if blacklisted:
+        result["blacklisted"] = blacklisted
+    return result
 
 
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:

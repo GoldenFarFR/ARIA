@@ -44,11 +44,16 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.honeypot.is/v2"
 UNAVAILABLE = "donnée Honeypot.is indisponible"
 
-# 29/07 -- real limit observed live: 50 req / short rolling window (a few
-# seconds). 1 req/s stays comfortably under that with zero real risk of
-# hitting it, while remaining far faster than this fallback actually needs
-# (it only fires when GoPlus itself is down).
-_MIN_INTERVAL_S = 1.0
+# 29/07 -- real limit observed live via a genuine burst test (not a guess):
+# 150 requests at ~9.5 req/s sustained over 15.8s -> 0 failures; 150 requests
+# at ~22.7 req/s -> 59x HTTP 429. Calibrated at ~5 req/s (90% margin doctrine,
+# same as the rest of this codebase) -- comfortably under the confirmed-safe
+# rate. Promoted from a pure fallback to the PRIMARY honeypot source (Item
+# #212 follow-up, 29/07, explicit operator decision: GoPlus now only serves
+# as a last resort when Honeypot.is itself fails), so `run_goplus_watchlist_
+# cycle` processes a whole batch of candidates per heartbeat passage at this
+# rate rather than a single one.
+_MIN_INTERVAL_S = 0.2
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 

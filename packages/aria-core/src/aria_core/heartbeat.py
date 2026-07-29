@@ -1378,8 +1378,8 @@ class AriaHeartbeat:
             result = await run_goplus_watchlist_cycle()
             if result.get("blacklisted"):
                 logger.info(
-                    "goplus_watchlist_cycle: %s/%s confirmed honeypot, blacklisted",
-                    result["blacklisted"], result.get("chain"),
+                    "goplus_watchlist_cycle: %s confirmed honeypot, blacklisted (%s checked)",
+                    result["blacklisted"], result.get("checked"),
                 )
 
         elif task_id == "polymarket_paper_cycle":
