@@ -2338,6 +2338,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("theses", "Liste des thèses encore ouvertes"),
     ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
+    ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),

@@ -802,7 +802,11 @@ def test_apply_honeypot_signals_unavailable_is_graceful():
     assert any("GoPlus" in f for f in ctx.risk_flags)
 
 
-def test_apply_honeypot_signals_clean_no_penalty():
+def test_apply_honeypot_signals_clean_gives_positive_bonus():
+    """29/07 (Item #200 fix): a clean GoPlus read (nothing confirmed dangerous)
+    is now a real +10 positive signal -- was worth nothing (net 0) before this
+    fix, one of the reasons the achievable security_score topped out at 70/95
+    for every candidate ever scanned by the VC pocket over 3 weeks."""
     ctx = TokenScanContext(contract=ADDR, valid_address=True, security_score=80, lite_verdict="SAFE")
     sec = TokenSecurity(
         address=ADDR, available=True, is_honeypot=False, cannot_sell_all=False,
@@ -811,7 +815,8 @@ def test_apply_honeypot_signals_clean_no_penalty():
     _apply_honeypot_signals(ctx, sec)
     assert ctx.is_honeypot is False
     assert ctx.lite_verdict == "SAFE"
-    assert ctx.security_score == 80
+    assert ctx.security_score == 90
+    assert any("aucun signal de danger" in f.lower() for f in ctx.risk_flags)
 
 
 def test_apply_honeypot_signals_slippage_modifiable_penalty():

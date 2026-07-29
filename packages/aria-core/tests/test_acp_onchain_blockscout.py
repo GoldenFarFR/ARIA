@@ -59,7 +59,11 @@ def test_mint_detected_adds_flag_and_degrades_score():
 
     scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
 
-    assert ctx.security_score == _baseline_score() - 30
+    # 29/07 (Item #200 fix): a verified contract is now its own +10 positive
+    # signal, net alongside the -30 mint penalty -- was -30 alone before this
+    # fix (the achievable score used to top out at 70/95 for every candidate
+    # ever scanned in prod, see acp_onchain_scan._apply_onchain_signals).
+    assert ctx.security_score == _baseline_score() + 10 - 30
     assert any("mint" in f.lower() for f in ctx.risk_flags)
 
 
@@ -82,7 +86,9 @@ def test_mint_penalty_neutralized_by_safe_authority(authority):
 
     scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
 
-    assert ctx.security_score == _baseline_score()
+    # 29/07 (Item #200 fix): verified contract (+10) + a properly neutralized
+    # mint (+5, now a real positive signal instead of a mere non-penalty).
+    assert ctx.security_score == _baseline_score() + 15
     assert any("neutralisée" in f.lower() for f in ctx.risk_flags)
 
 
@@ -104,7 +110,9 @@ def test_mint_penalty_still_applies_for_unsafe_or_unresolved_authority(authority
 
     scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
 
-    assert ctx.security_score == _baseline_score() - 30
+    # 29/07 (Item #200 fix): verified contract (+10) net alongside the -30 mint
+    # penalty for an unsafe/unresolved authority -- was -30 alone before this fix.
+    assert ctx.security_score == _baseline_score() + 10 - 30
 
 
 @pytest.mark.asyncio
@@ -142,7 +150,9 @@ async def test_scan_base_token_resolves_mint_authority_before_scoring(monkeypatc
     ctx = await scan.scan_base_token(ADDR)
 
     assert ctx.mint_authority == "renounced"
-    assert ctx.security_score == _baseline_score()
+    # 29/07 (Item #200 fix): verified contract (+10) + a properly neutralized
+    # mint (+5) -- was baseline (net 0) before this fix.
+    assert ctx.security_score == _baseline_score() + 15
     assert not any("supply potentiellement inflatable" in f for f in ctx.risk_flags)
 
 
@@ -160,7 +170,9 @@ def test_blacklist_and_disable_transfers_each_degrade_score():
 
     scan._score_and_verdict(ctx, _pair(), contract_flags=contract_flags)
 
-    assert ctx.security_score == max(5, _baseline_score() - 60)
+    # 29/07 (Item #200 fix): verified contract (+10) net alongside blacklist
+    # (-30) + disable_transfers (-30) -- was -60 alone before this fix.
+    assert ctx.security_score == max(5, _baseline_score() + 10 - 60)
     assert any("blacklist" in f.lower() for f in ctx.risk_flags)
     assert any("transferts" in f.lower() for f in ctx.risk_flags)
 
@@ -239,7 +251,9 @@ def test_no_pair_branch_still_applies_onchain_flags():
 
     scan._score_and_verdict(ctx, None, contract_flags=contract_flags)
 
-    assert ctx.security_score == 5  # max(5, 35 - 30)
+    # 29/07 (Item #200 fix): verified contract (+10) net alongside the -30
+    # mint penalty (unresolved authority) -- was max(5, 35 - 30) == 5 before.
+    assert ctx.security_score == max(5, 35 + 10 - 30)  # == 15
     assert any("mint" in f.lower() for f in ctx.risk_flags)
     assert ctx.lite_verdict == "DANGER"
 
@@ -264,7 +278,10 @@ async def test_scan_base_token_wires_blockscout_calls(monkeypatch):
 
     ctx = await scan.scan_base_token(ADDR)
 
-    assert ctx.security_score == _baseline_score() - 30
+    # 29/07 (Item #200 fix): verified contract (+10) net alongside the -30
+    # mint penalty (authority never resolved here, no get_address_info/
+    # read_owner mock) -- was -30 alone before this fix.
+    assert ctx.security_score == _baseline_score() + 10 - 30
     assert any("mint" in f.lower() for f in ctx.risk_flags)
 
 

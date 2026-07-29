@@ -428,12 +428,20 @@ def _apply_onchain_signals(
         elif contract_flags.is_verified is False:
             flags.append("Contrat non vérifié sur Blockscout — audit du code source impossible.")
         else:
+            # 29/07 (Item #200 fix): a CONFIRMED verified contract is a real
+            # positive signal, not just "not a red flag" -- previously worth
+            # nothing here, capping the achievable score well below the
+            # theoretical max (see _score_and_verdict's docstring for the
+            # full before/after math).
+            flags.append("Contrat vérifié sur Blockscout — code source auditable.")
+            delta += 10
             if contract_flags.has_mint:
                 if mint_authority in SAFE_AUTHORITIES:
                     flags.append(
                         f"Fonction mint détectée mais autorité neutralisée ({mint_authority}) "
-                        "— aucune pénalité."
+                        "— géré proprement (renoncé/launchpad connu), signal positif."
                     )
+                    delta += 5
                 else:
                     flags.append("Fonction mint détectée dans le contrat — supply potentiellement inflatable.")
                     delta -= 30
@@ -541,6 +549,23 @@ def _score_and_verdict(
     onchain_delta = _apply_onchain_signals(
         onchain_flags, contract_flags, holders, pair, mint_authority=ctx.mint_authority,
     )
+
+    # 29/07 (Item #200 fix): a well-distributed holder base (low Gini) is a
+    # real positive signal -- ctx.holder_gini was computed (acp_onchain_scan.
+    # scan_base_token, BEFORE this function runs) but never actually fed into
+    # the score, purely informational until now (confirmed by a real-data
+    # replay: `security_score` topped out at 70/95 for every single one of the
+    # 2984 candidates scanned over 3 weeks, since none of the additive signals
+    # above ever totalled more than +20 over the base of 50).
+    if ctx.holder_gini is not None:
+        if ctx.holder_gini < 0.5:
+            onchain_flags.append(
+                f"Distribution des holders équitable (Gini {ctx.holder_gini:.2f}) — signal positif."
+            )
+            onchain_delta += 10
+        elif ctx.holder_gini < 0.7:
+            onchain_flags.append(f"Distribution des holders correcte (Gini {ctx.holder_gini:.2f}).")
+            onchain_delta += 5
 
     if not pair:
         if ctx.bonding_phase:
@@ -780,6 +805,33 @@ def _apply_honeypot_signals(ctx: "TokenScanContext", sec) -> None:
         # véto dur, même gravité que cannot_sell_all/is_honeypot.
         ctx.risk_flags.append("Achat impossible (GoPlus cannot_buy) — levier honeypot direct.")
         delta -= 40
+
+    # 29/07 (Item #200 fix): a TRULY clean GoPlus read is a real positive
+    # signal on its own -- previously worth nothing (the delta could only ever
+    # be <= 0 here), one of the reasons the achievable score topped out at
+    # 70/95 for every candidate ever scanned. Deliberately stricter than
+    # `delta == 0`: is_proxy/is_mintable/is_blacklisted/transfer_pausable never
+    # move the delta even when True (contextualized, not a mechanical malus),
+    # so a plain `delta == 0` check would wrongly reward a token that DID
+    # raise one of those flags -- explicitly excluded here, never "clean".
+    clean = (
+        sec.is_honeypot is not True
+        and sec.cannot_sell_all is not True
+        and (sec.sell_tax is None or sec.sell_tax < _HONEYPOT_TAX_FLAG)
+        and (sec.buy_tax is None or sec.buy_tax < _HONEYPOT_TAX_FLAG)
+        and sec.hidden_owner is not True
+        and sec.can_take_back_ownership is not True
+        and sec.slippage_modifiable is not True
+        and sec.owner_change_balance is not True
+        and sec.is_proxy is not True
+        and sec.is_mintable is not True
+        and sec.is_blacklisted is not True
+        and sec.transfer_pausable is not True
+        and sec.cannot_buy is not True
+    )
+    if clean:
+        ctx.risk_flags.append("GoPlus : aucun signal de danger détecté (honeypot/taxes/pouvoirs owner) — signal positif.")
+        delta += 10
 
     if delta:
         ctx.security_score = max(5, min(95, ctx.security_score + delta))
