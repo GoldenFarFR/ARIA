@@ -65,6 +65,23 @@ def _stub_dex_composite_score_unavailable(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_honeypot_is_unavailable(monkeypatch):
+    """Item #212 follow-up, 29/07: ``run_goplus_watchlist_cycle`` now tries
+    Honeypot.is (real network call) as a TEMPORARY second opinion whenever
+    GoPlus itself reports unavailable -- without this stub, every test that
+    exercises this "GoPlus down" branch would hit the real Honeypot.is API.
+    Unavailable by default (same fail-closed doctrine as an actually-down
+    fallback) -- tests dedicated to this fallback itself override it locally."""
+    from aria_core.services import honeypot_is
+    from aria_core.services.honeypot_is import HoneypotIsResult
+
+    async def _unavailable(address, *, chain):
+        return HoneypotIsResult(address=address, available=False, error="stub indisponible")
+
+    monkeypatch.setattr(honeypot_is, "check_token", _unavailable)
+
+
+@pytest.fixture(autouse=True)
 def _stub_polymarket_unavailable(monkeypatch):
     """``_polymarket_lines`` (19/07) appelle un VRAI client HTTP (``polymarket_client``,
     aucun gate/DB avant l'appel réseau, contrairement à ``_sentiment_lines`` qui ne lit
@@ -1083,6 +1100,105 @@ async def test_watchlist_cycle_never_retries_no_data_within_the_same_passage(mon
 
     await me.run_goplus_watchlist_cycle()
     assert calls["count"] == 1
+
+
+# ── Honeypot.is TEMPORARY fallback in run_goplus_watchlist_cycle (Item #212 follow-up, 29/07) ──
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_falls_back_to_honeypot_is_when_goplus_unavailable(monkeypatch):
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services import honeypot_is
+    from aria_core.services.honeypot_is import HoneypotIsResult
+
+    async def fake_goplus_down(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=False, error="quota mensuel épuisé")
+
+    async def fake_honeypot_is_clean(address, *, chain):
+        return HoneypotIsResult(address=address, available=True, is_honeypot=False, buy_tax=0.0, sell_tax=0.0)
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_goplus_down))
+    monkeypatch.setattr(honeypot_is, "check_token", fake_honeypot_is_clean)
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    result = await me.run_goplus_watchlist_cycle()
+    assert result["checked"] == 1
+    assert "blacklisted" not in result
+
+    fresh = await wl.get_fresh(CONTRACT, "base")
+    assert fresh is not None
+    assert fresh.available is True
+    assert fresh.is_honeypot is False
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_blacklists_via_honeypot_is_fallback(monkeypatch):
+    from aria_core import momentum_blacklist as bl
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services import honeypot_is
+    from aria_core.services.honeypot_is import HoneypotIsResult
+
+    async def fake_goplus_down(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=False, error="quota mensuel épuisé")
+
+    async def fake_honeypot_is_confirmed(address, *, chain):
+        return HoneypotIsResult(address=address, available=True, is_honeypot=True, buy_tax=0.05, sell_tax=0.99)
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_goplus_down))
+    monkeypatch.setattr(honeypot_is, "check_token", fake_honeypot_is_confirmed)
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    result = await me.run_goplus_watchlist_cycle()
+    assert result.get("blacklisted") == CONTRACT
+    assert await bl.is_blacklisted(CONTRACT, "base") is True
+    assert await wl.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_stays_unavailable_when_both_goplus_and_fallback_down(monkeypatch):
+    """Both sources down -- fail-closed unchanged, never invented data."""
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+
+    async def fake_goplus_down(address, *, chain_id):
+        return FakeSecurity(available=False, no_data=False, error="quota mensuel épuisé")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_goplus_down))
+    # _stub_honeypot_is_unavailable (autouse) already makes Honeypot.is unavailable too.
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    result = await me.run_goplus_watchlist_cycle()
+    assert result["available"] is False
+    assert "blacklisted" not in result
+
+    fresh = await wl.get_fresh(CONTRACT, "base")
+    assert fresh is None  # still not confirmed clean, never cached as such
+
+
+@pytest.mark.asyncio
+async def test_watchlist_cycle_never_uses_fallback_when_goplus_available(monkeypatch):
+    """The fallback must only fire when GoPlus itself is down -- never
+    consulted (extra network call, no reason to) when GoPlus already answered."""
+    from aria_core.services import goplus as gp
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services import honeypot_is
+
+    called = {"honeypot_is": False}
+
+    async def fake_goplus_clean(address, *, chain_id):
+        return FakeSecurity(available=True, is_honeypot=False)
+
+    async def fake_honeypot_is(address, *, chain):
+        called["honeypot_is"] = True
+        raise AssertionError("Honeypot.is should never be consulted when GoPlus already answered")
+
+    monkeypatch.setattr(type(gp.goplus_client), "get_token_security", staticmethod(fake_goplus_clean))
+    monkeypatch.setattr(honeypot_is, "check_token", fake_honeypot_is)
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    await me.run_goplus_watchlist_cycle()
+    assert called["honeypot_is"] is False
 
 
 @pytest.mark.asyncio

@@ -1061,12 +1061,43 @@ async def run_goplus_watchlist_cycle() -> dict:
         return {"checked": 0, "removed_uncovered": contract}
 
     security = await goplus_client.get_token_security(contract, chain_id=goplus_chain)
+    used_fallback = False
+    if not security.available:
+        # 29/07 (Item #212 follow-up) -- operator flagged GoPlus's monthly
+        # quota won't renew for ~15 days, far longer than this watchlist
+        # alone can bridge. TEMPORARY second opinion via Honeypot.is (see
+        # services/honeypot_is.py for the full diligence/rationale) -- GoPlus
+        # remains the reference source and takes back over automatically the
+        # moment it starts answering ``available=True`` again (this branch
+        # simply stops firing then, nothing to revert manually). Known gap:
+        # Honeypot.is has no ``owner_change_balance`` equivalent -- that one
+        # signal genuinely goes uncovered during this fallback window.
+        from aria_core.services import honeypot_is
+        from aria_core.services.goplus import TokenSecurity
+
+        fallback = await honeypot_is.check_token(contract, chain=chain)
+        if fallback.available and fallback.is_honeypot is not None:
+            used_fallback = True
+            security = TokenSecurity(
+                address=contract,
+                is_honeypot=fallback.is_honeypot,
+                buy_tax=fallback.buy_tax,
+                sell_tax=fallback.sell_tax,
+                available=True,
+            )
+            logger.info(
+                "goplus_watchlist_cycle: GoPlus indisponible pour %s/%s -- second avis Honeypot.is "
+                "utilisé (temporaire), is_honeypot=%s", contract, chain, fallback.is_honeypot,
+            )
+
     await goplus_watchlist.record_result(contract, chain, security)
 
     if security.available and (
         security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
     ):
         _clear, reason, _code = _evaluate_security_verdict(security)
+        if used_fallback:
+            reason = f"{reason} (second avis Honeypot.is, GoPlus indisponible)"
         await momentum_blacklist.add_to_blacklist(contract, chain, reason)
         await goplus_watchlist.remove(contract, chain)
         return {"checked": 1, "blacklisted": contract, "chain": chain}
