@@ -184,7 +184,7 @@ async def apply_bot_profile_photo(image_path: Path) -> tuple[bool, str | None]:
 
 async def send_message(
     text: str, chat_id: int | None = None, *, message_thread_id: int | None = None,
-    disable_preview: bool = False, parse_mode: str | None = None,
+    disable_preview: bool = False, parse_mode: str | None = None, reply_markup=None,
 ) -> bool:
     """``message_thread_id`` (#197, 15/07): topic of a Telegram supergroup
     with "Topics" enabled -- native Bot API parameter, already supported by
@@ -221,6 +221,8 @@ async def send_message(
             kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
         if parse_mode:
             kwargs["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
         final_text = text if parse_mode else _format_tg(text)
         await _bot_app.bot.send_message(
             chat_id=target, text=final_text, message_thread_id=message_thread_id, **kwargs,
@@ -2170,6 +2172,35 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     label = "approved ✅" if approved else "rejected ❌"
+
+    # 29/07 -- Item #187, post-incident (operator stress-test on aria-wallet-
+    # X402-EVM): interactive confirmation of an agent_wallet_monitor
+    # "unexpected_outflow" alert. "Autorisé par moi" just confirms (no side
+    # effect -- the movement was already logged read-only, nothing to
+    # execute). "PAS autorisé" triggers the SAME global kill-switch already
+    # used everywhere else in this project (`outgoing_pause.pause`) --
+    # doesn't undo the movement (already on-chain, irreversible), but freezes
+    # every future outgoing spend immediately while the operator
+    # investigates, rather than a passive notification the operator has to
+    # act on manually.
+    if result.action.startswith("outflow_confirm:"):
+        if not approved:
+            outgoing_pause.pause(
+                by=str(query.from_user.id),
+                reason=f"Sortie non autorisée confirmée (approval #{approval_id})",
+            )
+            await query.edit_message_text(
+                _format_tg(
+                    f"🚫 Confirmé : sortie NON autorisée (#{approval_id})\n"
+                    "⛔ Kill-switch activé — toutes les sorties sont gelées.\n"
+                    "Envoie /start une fois l'incident traité pour reprendre."
+                ),
+            )
+        else:
+            await query.edit_message_text(
+                _format_tg(f"✅ Confirmé : mouvement autorisé par toi (#{approval_id})"),
+            )
+        return
 
     if result.action.startswith("spend:"):
         from aria_core.wallet_guard import resolve_spend

@@ -236,6 +236,28 @@ def test_agent_wallet_pilot_cycle_registered_in_heartbeat_and_isolated():
     assert 'task_id == "agent_wallet_pilot_cycle"' in hb, "dispatch de agent_wallet_pilot_cycle absent de _run_task"
 
 
+def test_no_cdp_account_export_call_anywhere():
+    """29/07, Item #190 -- post-incident (operator stress-test on aria-wallet-
+    X402-EVM: private key exported via the CDP dashboard, then used directly
+    in MetaMask -- confirmed a real EOA private key, once exported, bypasses
+    every CDP-side control forever, no IP/API restriction can claw it back).
+    Preventive guard, not a detection: the real CDP SDK exposes
+    ``EvmClient.export_account`` (verified live in the installed SDK,
+    cdp/evm_client.py) -- no code in this project should EVER call it. If a
+    real future need arises, that's a deliberate, reviewed decision, never a
+    silent call slipped into a random module."""
+    forbidden = re.compile(r"\.export_account\s*\(")
+    hits: list[str] = []
+    for path in sorted(CORE.rglob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if forbidden.search(text):
+            hits.append(str(path.relative_to(REPO)))
+    assert not hits, (
+        "Aucun fichier ne doit jamais appeler .export_account() sur un compte CDP "
+        f"(exportation de clé privée -- garde préventif, Item #190) : {hits}"
+    )
+
+
 def test_acp_conversational_routing_gated_off():
     """L'ACP (abandonné) ne doit PAS détourner la conversation libre par défaut."""
     brain = _read_core("brain.py")

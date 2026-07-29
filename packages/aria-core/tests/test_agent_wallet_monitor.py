@@ -1527,3 +1527,154 @@ async def test_run_cycle_recognizes_x402_payment_that_failed_after_settling(monk
     assert sent == []
     rows = await monitor.list_recent_movements()
     assert rows[0]["classification"] == "known_x402"
+
+
+# ── Item #187 (29/07, post-incident) : method propagated + shown ──────────
+
+@pytest.mark.asyncio
+async def test_check_wallet_activity_propagates_onchain_method(monkeypatch):
+    """The real friction hit during the 29/07 stress-test investigation:
+    the on-chain method (e.g. "swapAndExecute") was only discoverable by
+    digging into Blockscout by hand -- now captured onto WalletMovement
+    directly from check_wallet_activity."""
+    transfer = TokenTransfer(
+        tx_hash="0xmethodtest", from_address=WALLET, to_address="0xunknown",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=1.0, timestamp="2026-07-29T07:19:07Z", method="swapAndExecute",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    movements = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(movements) == 1
+    assert movements[0].method == "swapAndExecute"
+
+
+@pytest.mark.asyncio
+async def test_check_wallet_activity_empty_method_for_native_eth(monkeypatch):
+    tx = Transaction(
+        tx_hash="0xnativemethod", from_address="0xoperator", to_address=WALLET,
+        value_native=0.01, status="ok", method=None, timestamp="2026-07-29T07:00:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        transactions=TransactionsResult(transactions=[tx], available=True),
+    ))
+    movements = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert len(movements) == 1
+    assert movements[0].method == ""
+
+
+def test_format_movement_alert_shows_method_when_present():
+    m = monitor.WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=0.998332,
+        counterparty="0x0929222bC7Cc533aecC1ccFe9d9Bd6ecbB0CBF43",
+        classification="unexpected_outflow", method="swapAndExecute",
+    )
+    text = monitor.format_movement_alert(m)
+    assert "Méthode : swapAndExecute" in text
+
+
+def test_format_movement_alert_omits_method_line_when_absent():
+    m = monitor.WalletMovement(
+        tx_hash="0xabc", direction="in", asset="USDC", amount=1.0,
+        counterparty="0xsomeone", classification="external_deposit",
+    )
+    text = monitor.format_movement_alert(m)
+    assert "Méthode" not in text
+
+
+# ── Item #187 (29/07) : third-party address registry -- display only ──────
+
+def test_label_address_shows_third_party_name_without_affecting_classification():
+    codex_addr = "0x0929222bC7Cc533aecC1ccFe9d9Bd6ecbB0CBF43"
+    label = monitor._label_address(codex_addr)
+    assert "Codex.io" in label
+    assert codex_addr in label
+    # crucially, this registry must NEVER flip the security classification --
+    # a third-party address is never treated as an ARIA/operator-owned wallet.
+    assert monitor._is_own_wallet(codex_addr) is False
+
+
+def test_label_address_third_party_case_insensitive():
+    label = monitor._label_address("0x0929222bc7cc533aecc1ccfe9d9bd6ecbb0cbf43")
+    assert "Codex.io" in label
+
+
+# ── Item #187 (29/07) : interactive outflow confirmation ───────────────────
+
+@pytest.mark.asyncio
+async def test_send_outflow_confirmation_returns_false_without_admin_ids(monkeypatch):
+    """No admin_ids configured (the default in every test/most envs) -- must
+    degrade to False so the caller falls back to the plain notifier, never
+    raise and never silently lose the alert.
+
+    29/07 -- monkeypatches `telegram_admin_ids` (the real underlying field),
+    NEVER `admin_ids` directly: `admin_ids` is a computed read-only property
+    (cf. runtime.py's `_SettingsProxy` docstring) -- setting it directly gets
+    silently shadowed onto the proxy instance and never properly restored by
+    monkeypatch's undo, leaking into every OTHER test that reads it for the
+    rest of the session (confirmed: broke test_proactive_grounding.py when
+    this file ran first in the full suite)."""
+    from aria_core.gateway import telegram_bot
+
+    monkeypatch.setattr(telegram_bot.settings, "telegram_admin_ids", "")
+    m = monitor.WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=1.0,
+        counterparty="0xunknown", classification="unexpected_outflow",
+    )
+    sent = await monitor._send_outflow_confirmation(m)
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_send_outflow_confirmation_creates_approval_and_sends_keyboard(monkeypatch, tmp_path):
+    from aria_core import approvals
+    from aria_core.gateway import telegram_bot
+
+    monkeypatch.setattr(approvals, "DB_PATH", str(tmp_path / "approvals_test.db"))
+    monkeypatch.setattr(telegram_bot.settings, "telegram_admin_ids", "12345")
+    captured = {}
+
+    async def _fake_send_message(text, chat_id=None, **kwargs):
+        captured["text"] = text
+        captured["chat_id"] = chat_id
+        captured["reply_markup"] = kwargs.get("reply_markup")
+        captured["parse_mode"] = kwargs.get("parse_mode")
+        return True
+
+    monkeypatch.setattr(telegram_bot, "send_message", _fake_send_message)
+    m = monitor.WalletMovement(
+        tx_hash="0xstresstest", direction="out", asset="USDC", amount=0.998332,
+        counterparty="0x0929222bC7Cc533aecC1ccFe9d9Bd6ecbB0CBF43",
+        classification="unexpected_outflow", method="swapAndExecute",
+    )
+    sent = await monitor._send_outflow_confirmation(m)
+    assert sent is True
+    assert captured["chat_id"] == 12345
+    assert captured["parse_mode"] == "HTML"
+    assert captured["reply_markup"] is not None
+    assert "0xstresstest" in captured["text"]
+
+    pending = await approvals.get_pending()
+    assert len(pending) == 1
+    assert pending[0].action == "outflow_confirm:0xstresstest"
+
+
+@pytest.mark.asyncio
+async def test_send_outflow_confirmation_degrades_to_false_on_send_failure(monkeypatch, tmp_path):
+    from aria_core import approvals
+    from aria_core.gateway import telegram_bot
+
+    monkeypatch.setattr(approvals, "DB_PATH", str(tmp_path / "approvals_test.db"))
+    monkeypatch.setattr(telegram_bot.settings, "telegram_admin_ids", "12345")
+
+    async def _raising_send_message(*args, **kwargs):
+        raise RuntimeError("bot not started")
+
+    monkeypatch.setattr(telegram_bot, "send_message", _raising_send_message)
+    m = monitor.WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=1.0,
+        counterparty="0xunknown", classification="unexpected_outflow",
+    )
+    sent = await monitor._send_outflow_confirmation(m)
+    assert sent is False

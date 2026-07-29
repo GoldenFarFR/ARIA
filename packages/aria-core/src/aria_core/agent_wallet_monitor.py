@@ -42,6 +42,7 @@ only read and log."""
 from __future__ import annotations
 
 import html
+import json
 import logging
 import os
 import unicodedata
@@ -110,6 +111,22 @@ _KNOWN_ADDRESS_NAMES: dict[str, str] = {
     "0x85e3D8128a9b7be14065A4E36C1845041BF65d7F".lower(): "tangem-02 (owner aria-smart-vc)",
 }
 
+# 29/07 -- registry of THIRD-PARTY addresses manually identified by the
+# operator AFTER an alert (e.g. a legitimate payment to an external service),
+# for DISPLAY ONLY -- deliberately NEVER consulted by `_is_own_wallet` (never
+# imported/merged into `_KNOWN_ADDRESS_NAMES`). A future movement to/from one
+# of these addresses stays classified exactly as it would without this
+# registry (e.g. still "unexpected_outflow" if unmatched by known_x402) --
+# labeling an address here is a readability aid, never a trust decision. A
+# real x402 payment ALREADY gets recognized automatically via
+# `_matches_known_x402` (pay_to/amount/time-window) -- this registry exists
+# for the case that mechanism can't cover: a one-off manual payment (e.g. the
+# operator paying a SaaS invoice) that will never appear in `x402_budget`.
+_THIRD_PARTY_ADDRESS_NAMES: dict[str, str] = {
+    "0x0929222bC7Cc533aecC1ccFe9d9Bd6ecbB0CBF43".lower(): "Codex.io (paiement verification compte, confirme operateur 29/07)",
+    "0x79aD858cDff50ca6728D2531894001F221e805c7".lower(): "Codex.io - frais de reglement (meme paiement, 29/07)",
+}
+
 
 def _is_own_wallet(address: str) -> bool:
     """``True`` if ``address`` is one of the wallets ARIA/the operator
@@ -125,11 +142,13 @@ def _is_own_wallet(address: str) -> bool:
 def _label_address(address: str) -> str:
     """Address enriched with the known name in parentheses
     (``"tangem-01 (0x3378...)"``) if it matches an already-registered
-    ARIA wallet/owner -- otherwise the raw address unchanged. Never blocking,
+    ARIA wallet/owner, OR a manually-identified third party (cf.
+    ``_THIRD_PARTY_ADDRESS_NAMES`` -- display only, never affects
+    classification) -- otherwise the raw address unchanged. Never blocking,
     never a guess on an unknown address."""
     if not address:
         return address
-    name = _KNOWN_ADDRESS_NAMES.get(address.lower())
+    name = _KNOWN_ADDRESS_NAMES.get(address.lower()) or _THIRD_PARTY_ADDRESS_NAMES.get(address.lower())
     return f"{name} ({address})" if name else address
 
 
@@ -170,6 +189,13 @@ class WalletMovement:
     # GIVEN side. Empty for any other movement.
     asset_out: str = ""
     amount_out: float = 0.0
+    # 29/07 -- Item #187, post-incident (operator stress-test on aria-wallet-
+    # X402-EVM): the on-chain method name (e.g. "swapAndExecute",
+    # "transferWithAuthorization"), already available from Blockscout but
+    # never surfaced in the alert before -- an investigator previously had to
+    # dig into Blockscout by hand to see it. Empty for native ETH movements
+    # (no method call) and for any test double that doesn't populate it.
+    method: str = ""
 
 
 async def _ensure_table() -> None:
@@ -569,6 +595,7 @@ async def check_wallet_activity(
                 "kind": "token", "direction": direction, "asset": t.token_symbol or "token",
                 "amount": t.amount or 0.0, "counterparty": counterparty, "timestamp": t.timestamp,
                 "token_address": t.token_address, "token_symbol": t.token_symbol,
+                "method": t.method or "",
             })
 
     tx_result = await client.get_transactions(wallet_address, limit=50)
@@ -585,7 +612,7 @@ async def check_wallet_activity(
             raw_by_tx.setdefault(tx.tx_hash, []).append({
                 "kind": "native", "direction": direction, "asset": "ETH",
                 "amount": tx.value_native, "counterparty": counterparty, "timestamp": tx.timestamp,
-                "token_address": None, "token_symbol": None,
+                "token_address": None, "token_symbol": None, "method": "",
             })
 
     for tx_hash, events in raw_by_tx.items():
@@ -626,7 +653,7 @@ async def check_wallet_activity(
                 tx_hash=tx_hash, direction=ev["direction"], asset=asset_label,
                 amount=ev["amount"], counterparty=ev["counterparty"],
                 classification=classification, timestamp=ev["timestamp"],
-                wallet_name=wallet_name,
+                wallet_name=wallet_name, method=ev.get("method", ""),
                 **_x402_movement_fields(matched_spend),
             )
             if await _record_movement(movement):
@@ -789,6 +816,57 @@ def _x402_spend_may_have_settled(spend: dict) -> bool:
     return False
 
 
+async def _send_outflow_confirmation(m: WalletMovement) -> bool:
+    """29/07 -- Item #187: turns a passive ``unexpected_outflow`` notification
+    into an interactive Telegram confirmation (same approvals/callback
+    pattern as ``wallet_guard.escalate_spend``, reused rather than
+    duplicated). "PAS autorisé" (see ``_handle_callback``'s
+    ``outflow_confirm:`` branch, gateway/telegram_bot.py) triggers the
+    existing global kill-switch (``outgoing_pause.pause``) immediately --
+    "Autorisé par moi" just confirms, no side effect. Returns ``False`` on
+    ANY failure (missing admin_ids, bot not started, approval creation
+    failed) so the caller falls back to a plain text notification -- the
+    alert itself must never be lost even if this richer path breaks."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from aria_core import approvals
+    from aria_core.gateway import telegram_bot
+
+    if not telegram_bot.settings.admin_ids:
+        return False
+
+    payload = {
+        "tx_hash": m.tx_hash, "wallet_name": m.wallet_name, "amount": m.amount,
+        "asset": m.asset, "counterparty": m.counterparty,
+    }
+    try:
+        req = await approvals.create_approval(
+            action=f"outflow_confirm:{m.tx_hash}",
+            description=format_movement_alert(m),
+            payload=json.dumps(payload, ensure_ascii=False),
+        )
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("✅ Autorisé par moi", callback_data=f"approve:{req.id}"),
+                    InlineKeyboardButton("🚫 PAS autorisé", callback_data=f"reject:{req.id}"),
+                ],
+            ]
+        )
+        text = (
+            format_movement_alert(m)
+            + "\n\n<b>Confirme si c'est bien toi.</b> Un clic sur « PAS autorisé » "
+            "gèle immédiatement toutes les sorties (kill-switch global)."
+        )
+        sent = await telegram_bot.send_message(
+            text, telegram_bot.settings.admin_ids[0], parse_mode="HTML", reply_markup=keyboard,
+        )
+        return bool(sent)
+    except Exception as exc:  # noqa: BLE001 -- any failure here degrades to plain notification
+        logger.warning("agent_wallet_monitor: interactive outflow confirmation failed: %s", exc)
+        return False
+
+
 async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     """One heartbeat tick: reads real movements on ALL monitored wallets
     (``MONITORED_WALLETS``, 07/23 -- extended from the single historical
@@ -845,6 +923,15 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     # initiated by ARIA, possible sign of a compromised key) deserves an
     # immediate alert -- everything else (deposits, detected phishing, swaps,
     # x402 payments) stays silent, logged but never notified.
+    #
+    # 29/07 -- Item #187, post-incident (operator stress-test): a plain
+    # notification only informs, it never lets the operator ACT quickly. Now
+    # sent as an interactive confirmation (same approvals/callback pattern
+    # already used by wallet_guard.escalate_spend) -- "PAS autorisé" triggers
+    # the existing global kill-switch (outgoing_pause) immediately, "Autorisé
+    # par moi" just confirms. Falls back to the plain notifier (no buttons)
+    # if the interactive send fails for any reason -- never silently loses
+    # the alert.
     paused = outgoing_pause.is_paused()
     notified = 0
     if notifier and not paused:
@@ -852,7 +939,9 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
             if m.classification != "unexpected_outflow":
                 continue
             try:
-                await notifier(format_movement_alert(m))
+                sent = await _send_outflow_confirmation(m)
+                if not sent:
+                    await notifier(format_movement_alert(m))
                 notified += 1
             except Exception as exc:  # noqa: BLE001 -- a failed send must never lose the ledger entry
                 logger.warning("agent_wallet_monitor: notification echouee pour %s: %s", m.tx_hash, exc)
@@ -922,6 +1011,13 @@ def format_movement_alert(m: WalletMovement) -> str:
         f"{counterparty_label} : {html.escape(_label_address(m.counterparty))}",
         f"Tx : {tx_link}",
     ]
+    # 29/07 -- Item #187: the on-chain method name, shown right after the
+    # basics -- previously only discoverable by digging into Blockscout by
+    # hand after the fact (real friction hit during the 29/07 stress-test
+    # investigation). Shown whenever known, not just for unexpected_outflow --
+    # cheap and never misleading for any classification.
+    if m.method:
+        lines.append(f"Méthode : {html.escape(m.method)}")
     # 07/22 -- enrichment ONLY for an x402 payment whose matched spend could be
     # tied to a specific token (m.contract): a generic x402 payment (e.g. web
     # search) has no contract, soft degradation = nothing added at all, never
