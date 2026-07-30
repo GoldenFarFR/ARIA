@@ -28,6 +28,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import aiosqlite
 
@@ -378,7 +379,16 @@ async def run_aria_brain_cycle(*, github_client=None, llm=None) -> dict:
         "path": path,
         "content_preview": content[:300],
         "commit_sha": commit_sha,
-        "url": f"https://github.com/{OWNER}/{REPO}/blob/main/{path}",
+        # Item #230 (30/07), real bug found live (operator report -- a chapter
+        # path with an accented character, e.g. "expérience", produced a
+        # Telegram link that silently broke at the accent): the write itself
+        # succeeds (GitHub/httpx handle the raw unicode path fine over the
+        # wire), but a Markdown link handed to Telegram with a raw non-ASCII
+        # byte in the URL can render/truncate incorrectly. `quote(path,
+        # safe="/")` percent-encodes everything except the path separator,
+        # producing a URL that's byte-for-byte what a browser would produce
+        # clicking through GitHub's own UI.
+        "url": f"https://github.com/{OWNER}/{REPO}/blob/main/{quote(path, safe='/')}",
     }
 
 

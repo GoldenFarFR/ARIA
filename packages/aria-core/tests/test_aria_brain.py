@@ -295,6 +295,30 @@ async def test_run_cycle_existing_repo_lists_structure_and_writes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_percent_encodes_accented_path_in_url(monkeypatch):
+    """Item #230 (30/07), real bug reported live: a chapter path with an
+    accented character (e.g. "expérience") produced a Telegram link that
+    silently broke at the accent -- the write itself succeeds, but the raw
+    unicode byte in the URL renders/truncates wrong. The URL must be
+    byte-for-byte what clicking through GitHub's own UI would produce."""
+    monkeypatch.setenv("ARIA_BRAIN_ENABLED", "true")
+    from aria_core.runtime import get_settings
+
+    monkeypatch.setattr(get_settings(), "aria_brain_github_token", "fake-token")
+    client = _FakeGitHubClient(repo_exists=True, files={})
+
+    async def fake_llm(user_message, system, **kwargs):
+        return "CHEMIN: livre/chapitre-11-la-voix-de-l-expérience-en-action.md\n---\nContenu."
+
+    result = await aria_brain.run_aria_brain_cycle(github_client=client, llm=fake_llm)
+
+    assert result["outcome"] == "written"
+    assert result["path"] == "livre/chapitre-11-la-voix-de-l-expérience-en-action.md"
+    assert "%C3%A9" in result["url"]
+    assert "é" not in result["url"]
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_lets_her_reread_previous_chapter_content(monkeypatch):
     """Suite directe de la demande opérateur (« un vrai livre, avec de vrais
     chapitres ») : elle doit voir le CONTENU déjà écrit, pas seulement les noms de
