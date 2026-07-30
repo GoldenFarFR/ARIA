@@ -708,6 +708,43 @@ async def test_discover_momentum_candidates_includes_manual_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_discover_momentum_candidates_manual_queue_processed_before_automated_sources(monkeypatch):
+    """Item #241, 30/07, real incident: manual candidates were appended LAST
+    in the merged list, so whenever automated sources alone contributed at
+    least as many entries as the caller's truncation cap
+    (paper_trader._momentum_candidates_and_chain_map hard-slices to 20
+    BEFORE any evaluation), every manual candidate was silently starved --
+    35 of 42 genuinely-new manually-queued tokens were never even evaluated
+    (no scan_log/rejection_cache row at all). Manual candidates now claim
+    the front of the list so they always survive any downstream truncation."""
+    async def fake_base_tokens(*, limit):
+        return ["0xAUTO1", "0xAUTO2"]
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+
+    from aria_core import manual_candidates as mcq
+
+    await mcq.add_manual_candidate("0xMANUAL1", "base")
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates[0] == {"contract": "0xmanual1", "chain": "base"}
+    assert {"contract": "0xauto1", "chain": "base"} in candidates[1:]
+    assert {"contract": "0xauto2", "chain": "base"} in candidates[1:]
+
+
+@pytest.mark.asyncio
 async def test_discover_momentum_candidates_dedupes_manual_with_base_crawler(monkeypatch):
     async def fake_base_tokens(*, limit):
         return [CONTRACT]

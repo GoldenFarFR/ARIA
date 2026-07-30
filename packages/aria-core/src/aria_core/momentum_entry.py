@@ -861,6 +861,40 @@ async def discover_momentum_candidates(
     def _source_snapshot() -> int:
         return len(out)
 
+    # Item #236/#241, 30/07, operator request (/add) -- a contract the operator
+    # spotted manually (e.g. on a DexScreener screener page) outside what the 6
+    # automated sources below surfaced this pass. Queued by manual_candidates.
+    # add_manual_candidate, drained here (not chain-gated to "base" -- the
+    # operator may add any chain the pipeline scans). Deliberately NOT a buy
+    # shortcut: still goes through _add_candidate (dedup/reference-token
+    # exclusion) and every downstream hard gate exactly like any other source.
+    #
+    # Processed FIRST, before the 6 automated sources -- real bug found live
+    # (30/07): the caller (paper_trader._momentum_candidates_and_chain_map)
+    # hard-truncates the merged list to 20 BEFORE any evaluation. With manual
+    # candidates appended LAST (their original position), base_crawler+Birdeye
+    # alone routinely contribute >=20 net-new entries per pass, silently
+    # pushing every manual candidate past the truncation point -- 35 of 42
+    # genuinely-new manually-queued tokens were NEVER even evaluated (no
+    # scan_log/rejection_cache row at all), not rejected, just starved.
+    # Manual entries represent explicit operator intent (the operator hand-
+    # picked them from a real screener) -- they now claim the front of the
+    # list and always survive the truncation up to the cap. Consequence
+    # (accepted, matches the operator's "je remplis moi-meme" intent):
+    # automated discovery is effectively paused on a given pass whenever the
+    # manual backlog alone reaches the cap.
+    before = _source_snapshot()
+    try:
+        from aria_core.manual_candidates import list_pending_manual_candidates
+
+        manual_entries = await list_pending_manual_candidates()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("discover_momentum_candidates: manual_candidates failed (%s)", exc)
+        manual_entries = []
+    for entry in manual_entries:
+        _add_candidate(out, seen, chains, entry["contract"], entry["chain"])
+    source_contributions["manual(/add)"] = _source_snapshot() - before
+
     if "base" in chains:
         before = _source_snapshot()
         try:
@@ -887,25 +921,6 @@ async def discover_momentum_candidates(
             "discover_momentum_candidates: birdeye raw=%d net_new=%d",
             len(birdeye_contracts), source_contributions["birdeye(bulk_volume_threshold)"],
         )
-
-    # Item #236, 30/07, operator request (/add) -- a contract the operator spotted
-    # manually (e.g. on a DexScreener screener page) outside what the 6
-    # automated sources above surfaced this pass. Queued by manual_candidates.
-    # add_manual_candidate, drained here (not chain-gated to "base" -- the
-    # operator may add any chain the pipeline scans). Deliberately NOT a buy
-    # shortcut: still goes through _add_candidate (dedup/reference-token
-    # exclusion) and every downstream hard gate exactly like any other source.
-    before = _source_snapshot()
-    try:
-        from aria_core.manual_candidates import list_pending_manual_candidates
-
-        manual_entries = await list_pending_manual_candidates()
-    except Exception as exc:  # noqa: BLE001
-        logger.info("discover_momentum_candidates: manual_candidates failed (%s)", exc)
-        manual_entries = []
-    for entry in manual_entries:
-        _add_candidate(out, seen, chains, entry["contract"], entry["chain"])
-    source_contributions["manual(/add)"] = _source_snapshot() - before
 
     # Freshness first (created/updated profiles, recent boosts), "top" ranking
     # last -- consistent with the operator's preference for signals that are

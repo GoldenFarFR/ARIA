@@ -279,7 +279,10 @@ async def queue_tokens_from_screenshot(image_data_uri: str) -> str:
             unresolved.append(ticker)
             continue
         chain = match.chain_id or "base"
-        await add_manual_candidate(match.base_address, chain)
+        await add_manual_candidate(
+            match.base_address, chain,
+            liquidity_usd=match.liquidity_usd, volume_24h_usd=match.volume_24h_usd,
+        )
         queued.append(f"{ticker} ({chain})")
 
     lines = [f"📸 {len(tickers)} ticker(s) detecte(s) dans l'image."]
