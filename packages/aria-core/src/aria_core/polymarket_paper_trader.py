@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from aria_core.paths import aria_db_path
-from aria_core.services.polymarket import PolymarketCandidateMarket, polymarket_client
+from aria_core.services.polymarket import PolymarketCandidateMarket, market_url, polymarket_client
 from aria_core.skills.polymarket_thesis import FREE_SKIP_REASONS, PolymarketJudgment, estimate_market_probability
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,13 @@ _STATE_ADDED_COLUMNS = [
     ("equity_high_water_mark", "REAL"),
 ]
 
+# Item #225 (30/07) -- same idiom, on the position table: needed to build a
+# link to the EXACT market a bet was placed on (see services/polymarket.py's
+# market_url()), never persisted before this.
+_POSITION_ADDED_COLUMNS = [
+    ("market_slug", "TEXT"),
+]
+
 
 async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -138,6 +145,14 @@ async def _ensure_tables() -> None:
             )
             """
         )
+        # Item #225 (30/07), operator request ("il me faut le lien sur
+        # polymarket") -- same idiom as _STATE_ADDED_COLUMNS above.
+        position_existing = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(polymarket_paper_position)")).fetchall()
+        }
+        for name, ddl in _POSITION_ADDED_COLUMNS:
+            if name not in position_existing:
+                await db.execute(f"ALTER TABLE polymarket_paper_position ADD COLUMN {name} {ddl}")
         # #151, 28/07 -- real gap found live: no judgment was ever persisted for
         # a SKIPped candidate (only a booked bet left a trace), so answering
         # "why didn't ARIA bet" required forcing a manual cycle. One row per
@@ -331,6 +346,7 @@ _POSITION_FIELDS = (
     "entry_price", "size_usd", "shares", "opened_at", "status", "resolution_price",
     "closed_at", "pnl_usd", "market_probability_at_entry", "aria_probability_at_entry",
     "edge_at_entry", "win_probability_at_entry", "vote_spread_at_entry", "reasoning",
+    "market_slug",
 )
 
 
@@ -459,14 +475,15 @@ async def open_bet(
                 event_slug, event_title, question, side, yes_token_id, no_token_id,
                 entry_price, size_usd, shares, opened_at, status,
                 market_probability_at_entry, aria_probability_at_entry, edge_at_entry,
-                win_probability_at_entry, vote_spread_at_entry, reasoning
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                win_probability_at_entry, vote_spread_at_entry, reasoning, market_slug
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 market.event_slug, market.event_title, market.question, judgment.side,
                 market.yes_token_id, market.no_token_id, entry_price, size_usd, shares, now,
                 judgment.market_probability, judgment.aria_probability, judgment.edge,
                 judgment.win_probability, judgment.vote_spread, judgment.reasoning,
+                market.market_slug,
             ),
         )
         await db.commit()
@@ -631,13 +648,30 @@ async def set_equity_high_water_mark(value: float) -> None:
 
 
 def format_bet_alert(pos: dict) -> str:
+    # Item #225 (30/07), operator request ("il me faut le lien sur
+    # polymarket") -- market_slug is None for any position booked before this
+    # column existed, degrades honestly (no link) rather than a broken URL.
+    market_slug = pos.get("market_slug")
+    link = f"{market_url(market_slug)}\n" if market_slug else ""
+    # Item #226 (30/07), operator request ("je veux la probabilité de
+    # réussite du pari aussi") -- win_probability_at_entry is ARIA's own
+    # estimated P(the SIDE SHE BET ON wins), already computed (polymarket_
+    # thesis.py: aria_probability if side == "YES" else 1 - aria_probability)
+    # and persisted, but never shown on this alert before -- distinct from
+    # "Probabilité ARIA" above (that one estimates P(the market resolves
+    # YES), regardless of which side ARIA bet on). None if unresolved
+    # (fail-open judgment path) -- omitted rather than a fabricated number.
+    win_prob = pos.get("win_probability_at_entry")
+    win_prob_line = f"Probabilité de réussite du pari : {win_prob:.1%}\n" if win_prob is not None else ""
     return (
         f"[FICTIF] Pari Polymarket -- {pos['side']}\n"
         f"{pos['question']}\n"
         f"Prix d'entrée : {pos['entry_price']:.1%} | Mise : ${pos['size_usd']:,.0f}\n"
         f"Probabilité ARIA : {pos['aria_probability_at_entry']:.1%} "
         f"(marché : {pos['market_probability_at_entry']:.1%})\n"
+        + win_prob_line
         + (f"Thèse : {pos['reasoning']}\n" if pos.get("reasoning") else "")
+        + link
     )
 
 

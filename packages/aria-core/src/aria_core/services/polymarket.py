@@ -102,6 +102,23 @@ class PolymarketCandidateMarket:
     # 29-day one apart (real edge concentrates at long horizons per research,
     # see that module's own comment). None when end_date is missing/unparseable.
     days_left: float | None = None
+    # Item #225 (30/07), operator request ("il me faut le lien sur
+    # polymarket") -- Gamma's per-MARKET `slug` (distinct from `event_slug`,
+    # the event this market belongs to), needed by `market_url()` to build a
+    # link to the EXACT market a bet was placed on, not just the event page
+    # (which can hold dozens of unrelated outcomes -- the "Largest Company"
+    # event alone holds 29). ``None`` if Gamma didn't return one.
+    market_slug: str | None = None
+
+
+def market_url(market_slug: str) -> str:
+    """Public Polymarket link to the EXACT market ``market_slug`` identifies
+    (Item #225, 30/07). Verified empirically (curl HEAD, not assumed from
+    docs) against a real multi-outcome event: ``/event/{market_slug}`` 404s
+    for an individual market's own slug (that path is for the EVENT's own
+    slug, which can hold many unrelated markets), while ``/market/{market_
+    slug}`` returns 200 and lands on the one specific outcome."""
+    return f"https://polymarket.com/market/{market_slug}"
 
 
 @dataclass
@@ -413,6 +430,25 @@ class PolymarketClient:
                 except (TypeError, ValueError):
                     m_liquidity_f = liquidity_f
 
+                # Item #224 (30/07), operator observation ("il me faut le lien
+                # sur polymarket") led to a real gap found while verifying a
+                # live bet: this docstring says "filtered on volume/liquidity"
+                # but the checks above (`volume_f`/`liquidity_f`) only ever
+                # look at the EVENT's aggregate, never at THIS specific market
+                # -- a real live case (event "Largest Company end of July?",
+                # aggregate liquidity $1.5M/volume $5.4M, comfortably above
+                # both thresholds) contained catch-all placeholder markets
+                # ("Company A".."Company T", alongside real named companies
+                # like NVIDIA/Apple) with $0 volume/$0 liquidity EACH, never
+                # traded -- their 50/50 price is not a real market consensus
+                # to exploit, just an untouched default. ARIA judged and bet
+                # against one of these ("Company D") as if its 50% were a real
+                # mispriced edge. Filtering per-market (not just per-event)
+                # excludes markets that could never realistically be filled at
+                # their displayed price anyway.
+                if m_volume_f < min_volume_usd or m_liquidity_f < min_liquidity_usd:
+                    continue
+
                 candidates.append(
                     PolymarketCandidateMarket(
                         event_title=str(event.get("title") or ""),
@@ -426,6 +462,7 @@ class PolymarketClient:
                         end_date=str(end_date_raw) if end_date_raw else None,
                         tags=tags,
                         days_left=days_left,
+                        market_slug=str(m.get("slug")) if m.get("slug") else None,
                     )
                 )
 

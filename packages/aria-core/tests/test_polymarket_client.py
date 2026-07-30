@@ -282,6 +282,29 @@ async def test_list_liquid_events_parses_a_real_shaped_market(monkeypatch):
     assert m.volume_usd == 100_000.0
     assert m.liquidity_usd == 50_000.0
     assert m.tags == ["macro"]
+    assert m.market_slug is None  # this fixture's market has no "slug" key
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_carries_market_slug_onto_the_candidate(monkeypatch):
+    """Item #225 (30/07), operator request ("il me faut le lien sur
+    polymarket"): the per-MARKET slug (distinct from event_slug) is needed
+    to build a link to the EXACT market a bet was placed on."""
+    markets_payload = [
+        {
+            "question": "Will X happen?",
+            "slug": "will-x-happen-real-slug",
+            "clobTokenIds": json.dumps(["yes-token-123", "no-token-456"]),
+            "outcomePrices": json.dumps(["0.4", "0.6"]),
+        }
+    ]
+    _patch_client(monkeypatch, FakeResponse(200, _liquid_event_payload(markets=markets_payload)))
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events()
+
+    assert len(markets) == 1
+    assert markets[0].market_slug == "will-x-happen-real-slug"
 
 
 @pytest.mark.asyncio
@@ -317,6 +340,43 @@ async def test_list_liquid_events_filters_below_min_liquidity(monkeypatch):
     markets = await client.list_liquid_events(min_liquidity_usd=20_000.0)
 
     assert markets == []
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_filters_market_with_zero_own_liquidity_in_a_liquid_event(monkeypatch):
+    """Item #224 (30/07), real incident found live: the event "Largest
+    Company end of July?" had a liquid aggregate ($1.5M/$5.4M, comfortably
+    above both thresholds) but held catch-all placeholder markets
+    ("Company A".."Company T") with $0 volume/$0 liquidity EACH, never
+    traded -- their 50/50 price is a default, not a real market consensus.
+    ARIA judged and bet against one as if it were a real mispriced edge.
+    Each market must be filtered on ITS OWN volume/liquidity, never just the
+    event's aggregate."""
+    markets_payload = [
+        {
+            "question": "Will NVIDIA be the largest?",
+            "clobTokenIds": json.dumps(["t1", "t2"]),
+            "outcomePrices": json.dumps(["0.075", "0.925"]),
+            "volume": "2524361.36",
+            "liquidity": "63720.56",
+        },
+        {
+            "question": "Will Company D be the largest?",
+            "clobTokenIds": json.dumps(["t3", "t4"]),
+            "outcomePrices": json.dumps(["0.5", "0.5"]),
+            "volume": "0",
+            "liquidity": "0",
+        },
+    ]
+    _patch_client(
+        monkeypatch,
+        FakeResponse(200, _liquid_event_payload(volume=5_406_181.75, liquidity=1_540_714.98, markets=markets_payload)),
+    )
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(min_volume_usd=50_000.0, min_liquidity_usd=20_000.0)
+
+    assert [m.question for m in markets] == ["Will NVIDIA be the largest?"]
 
 
 @pytest.mark.asyncio

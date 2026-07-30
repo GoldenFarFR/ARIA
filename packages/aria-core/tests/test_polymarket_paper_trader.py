@@ -771,3 +771,54 @@ async def test_cycle_skips_recently_judged_market_letting_next_candidate_through
     # fed-decision was skipped for free (cooldown) -- never reached estimate_market_probability.
     assert judged == ["world-cup-final"]
     assert len(result["opened"]) == 1
+
+
+# ── format_bet_alert (Items #225/#226, 30/07) ───────────────────────────────
+
+def _fake_position(**overrides) -> dict:
+    pos = {
+        "side": "NO",
+        "question": "Will Company D be the largest company in the world by market cap on July 31?",
+        "entry_price": 0.5,
+        "size_usd": 4512.5,
+        "aria_probability_at_entry": 0.07,
+        "market_probability_at_entry": 0.5,
+        "win_probability_at_entry": 0.93,
+        "reasoning": "Over the last 15 years, only Apple/Microsoft/Nvidia held the top spot.",
+        "market_slug": "will-company-d-be-the-largest-company-in-the-world-by-market-cap-on-july-31-20260624192329852",
+    }
+    pos.update(overrides)
+    return pos
+
+
+def test_format_bet_alert_includes_polymarket_link():
+    """Item #225 (30/07), operator request ("il me faut le lien sur
+    polymarket"): verified empirically (curl HEAD) that /market/{market_slug}
+    -- not /event/{market_slug} -- is the real, working link to the EXACT
+    market a bet was placed on."""
+    msg = ppt.format_bet_alert(_fake_position())
+    assert (
+        "https://polymarket.com/market/"
+        "will-company-d-be-the-largest-company-in-the-world-by-market-cap-on-july-31-20260624192329852" in msg
+    )
+
+
+def test_format_bet_alert_omits_link_when_market_slug_missing():
+    """A position booked before the market_slug column existed degrades
+    honestly -- no link, never a broken/fabricated URL."""
+    msg = ppt.format_bet_alert(_fake_position(market_slug=None))
+    assert "polymarket.com/market/" not in msg
+
+
+def test_format_bet_alert_includes_win_probability():
+    """Item #226 (30/07), operator request ("je veux la probabilité de
+    réussite du paris aussi"): win_probability_at_entry is ARIA's own
+    estimated P(the SIDE SHE BET ON wins) -- already computed and persisted,
+    but never shown on this alert before this fix."""
+    msg = ppt.format_bet_alert(_fake_position())
+    assert "Probabilité de réussite du pari : 93.0%" in msg
+
+
+def test_format_bet_alert_omits_win_probability_when_unresolved():
+    msg = ppt.format_bet_alert(_fake_position(win_probability_at_entry=None))
+    assert "Probabilité de réussite" not in msg
