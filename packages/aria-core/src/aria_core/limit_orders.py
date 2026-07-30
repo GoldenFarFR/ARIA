@@ -48,6 +48,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
+from aria_core import rsi_divergence_log
 from aria_core.paths import aria_db_path
 from aria_core.services.dexscreener import token_url
 
@@ -98,11 +99,25 @@ async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int
 
     Returns ``(None, sample_size)`` if the sample is below
     ``_MIN_HISTORICAL_TRIGGER_SAMPLE`` -- never a rate computed on too few
-    data points to mean anything."""
+    data points to mean anything.
+
+    Item #250 (30/07): orders resolved before the last
+    ``reset_historical_trigger_rate()`` call (if any) are excluded -- see
+    that function's own docstring for why."""
+    await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT state, signal_json FROM pending_limit_order WHERE state IN ('triggered', 'cancelled', 'expired')"
-        ) as cur:
+        cutoff = None
+        async with db.execute("SELECT reset_at FROM trigger_rate_reset_marker WHERE id = 1") as cur:
+            row = await cur.fetchone()
+            if row:
+                cutoff = row[0]
+
+        query = "SELECT state, signal_json FROM pending_limit_order WHERE state IN ('triggered', 'cancelled', 'expired')"
+        params: tuple = ()
+        if cutoff:
+            query += " AND resolved_at >= ?"
+            params = (cutoff,)
+        async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
 
     triggered = 0
@@ -123,16 +138,80 @@ async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int
     return triggered / total, total
 
 
-# Item #231 (30/07) added an R/R floor here (scalping 1.25 / swing 2.0),
-# motivated by a real incident (wIRON limit order, R/R=0.3). REMOVED 30/07,
-# Item #245 -- operator's explicit, direct call after watching scalping
-# trade volume drop to zero the same day this floor shipped ("supprime
-# l'ordre limite je suis sur que c sa le problème"). Known, disclosed
-# tradeoff: a mathematically-absurd setup like wIRON's can again be placed
-# and wait to trigger -- the operator made this call anyway, prioritizing
-# trade volume/diagnostic signal over that specific guard. If it needs to
-# come back, `docs/HANDOFF_PIPELINE_MOMENTUM.md`'s Item #231 entry has the
-# full original calibration (67 resolved scalping orders, median R/R 1.75).
+async def reset_historical_trigger_rate() -> None:
+    """Item #250 (30/07), operator request ("reset les taux de déclenchement
+    historique") after several same-day changes to the limit-order pipeline
+    (the #231 R/R floor removed then restored, Items #245/#248; the 24h
+    volume floor removed, Item #246) made the displayed historical trigger
+    rate a mix of regimes no longer representative of the pipeline's current
+    behavior.
+
+    Never deletes the underlying ``pending_limit_order`` rows -- nothing
+    else reads a resolved order's history (verified: ``historical_trigger_
+    rate`` is the sole consumer), so they remain harmless, and still useful
+    for manual debugging. Just moves a cutoff marker so ``historical_
+    trigger_rate`` only counts orders resolved AFTER this call, starting the
+    displayed stat fresh."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO trigger_rate_reset_marker (id, reset_at) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET reset_at = excluded.reset_at",
+            (_now(),),
+        )
+        await db.commit()
+
+
+# Item #231 (30/07), real bug found live (operator report, wIRON limit order:
+# R/R=0.3, +1.0% target vs -3.7% invalidation -- risking ~3.3x what's on the
+# table). Unlike a direct/LLM-confirmed buy (momentum_entry._RR_MIN_FOR_
+# DIRECT_BUY=2.0 / _RR_AMBIGUOUS_FLOOR=1.0), a limit-order candidate (#175
+# price-drift, #182 golden-pocket-not-yet-formed, #183 rsi-divergence-pending)
+# never had ANY R/R floor -- it could be placed on a mathematically
+# unjustifiable setup and just sit there waiting to trigger. Calibrated
+# empirically against the 67 resolved scalping (rsi_divergence_pending)
+# orders in prod, cross-checked against published scalping/swing R/R norms
+# (see docs/HANDOFF_PIPELINE_MOMENTUM.md's own entry for the full numbers):
+# scalping's own median R/R among orders that actually triggered was 1.75 --
+# reusing momentum_entry's 2.0 direct-buy floor here would have rejected HALF
+# of them, disproportionate for a 15-30min timeframe (scalping's real-world
+# standard is 1:1-1:1.5, closer to 1.5-2x specifically on 15min). 1.25 keeps
+# 56% of historical triggers (57% of noise blocked) -- the best measured
+# balance between eliminating mathematically-absurd setups and preserving
+# the test's diagnostic trade volume.
+#
+# Swing has ZERO resolved limit orders to calibrate against (100% of the 67
+# resolved orders are scalping) -- rather than guess a number, it reuses
+# momentum_entry's OWN direct-buy floor (2.0): a swing limit order has
+# neither an immediate confirmed signal NOR an LLM second opinion (same gap
+# as scalping), so it deserves the SAME bar as its own direct buy, not a
+# borrowed scalping number. Matches the published 1:2-1:3 swing-timeframe
+# norm (1h/4h/daily) -- 2.0 sits at the low end, defensible until real data
+# accumulates to refine it.
+#
+# REMOVED 30/07, Item #245 -- operator's explicit, direct call after watching
+# scalping trade volume drop to zero the same day this floor shipped
+# ("supprime l'ordre limite je suis sur que c sa le problème"). RESTORED
+# SAME DAY, Item #248 -- operator's next explicit call, minutes later
+# ("remet le r/r a 1.25"), after seeing the removal let through R/R=0.3/0.4
+# limit orders (BNKR screenshot) that the floor exists precisely to block.
+# Same values as originally calibrated (scalping 1.25 / swing 2.0) -- the
+# operator named 1.25 specifically (the scalping number, the pocket under
+# discussion); swing's 2.0 is restored unchanged rather than guessed at
+# without a fresh explicit call to change it too.
+_RR_MIN_LIMIT_ORDER_SCALPING = 1.25
+_RR_MIN_LIMIT_ORDER_SWING = 2.0
+
+
+def meets_limit_order_rr_floor(rr: float | None, wallet: str | None) -> bool:
+    """True only if ``rr`` clears the pocket-specific floor above. ``None``
+    (R/R not computable -- entry<=invalidation or target<=entry, a degenerate
+    setup) fails closed: a limit order is never placed without a real,
+    positive rationale, same doctrine as the direct-buy path's own R/R gates."""
+    if rr is None:
+        return False
+    floor = _RR_MIN_LIMIT_ORDER_SCALPING if wallet == "scalping" else _RR_MIN_LIMIT_ORDER_SWING
+    return rr >= floor
 
 
 # 27/07 -- 3-pocket architecture plan, Phase 2: additive hot-migration list,
@@ -173,6 +252,19 @@ async def _ensure_table() -> None:
         for name, ddl in _ADDED_COLUMNS:
             if name not in existing:
                 await db.execute(f"ALTER TABLE pending_limit_order ADD COLUMN {name} {ddl}")
+        # Item #250 (30/07), operator request ("reset les taux de
+        # déclenchement historique") -- see reset_historical_trigger_rate's
+        # own docstring below for the full rationale. Single-row marker
+        # table (id always 1), created lazily here alongside the main table
+        # since both are only ever touched together.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trigger_rate_reset_marker (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                reset_at TEXT NOT NULL
+            )
+            """
+        )
         await db.commit()
 
 
@@ -231,30 +323,20 @@ def check_watching_order(
     return "wait"
 
 
-def is_market_dead(volume_h1_usd: float | None) -> bool:
-    """30/07 (real operator gap): a ``watching`` order's whole premise --
-    price will eventually reach a meaningful level -- requires a pool that's
-    still genuinely trading. Neither ``check_watching_order`` nor
-    ``check_rsi_divergence_watching_order`` ever looked at volume, only
-    price -- a token whose market goes quiet AFTER the order was placed (the
-    common case: AQUARI/WMTX-style pools with $0 volume in the last hour)
-    just sat there until its own wall-clock expiry, up to 71h later, wasting
-    a watch slot the whole time.
-
-    Reuses the SAME floor momentum_entry already applies at entry
-    (``_MIN_VOLUME_24H_USD``, $500 as of writing) against the freshest read
-    of real activity (last-hour volume, run-rated to a 24h equivalent) --
-    never a separate magic number. Empirically confirmed against the 29 real
-    watching orders live at the time this was written: this exact floor
-    matched, contract for contract, the 9 pools an ad-hoc "$50/h" cutoff had
-    flagged as dead, with no false positive/negative either way.
-
-    ``None`` (lookup unavailable) -- fail-open, never cancels on unknown
-    data."""
-    if volume_h1_usd is None:
-        return False
-    from aria_core import momentum_entry
-    return (volume_h1_usd * 24.0) < momentum_entry._MIN_VOLUME_24H_USD
+# ``is_market_dead`` (30/07, real operator gap: a ``watching`` order's whole
+# premise -- price will eventually reach a meaningful level -- requires a
+# pool that's still genuinely trading; a token whose market goes quiet AFTER
+# the order was placed, e.g. AQUARI/WMTX-style pools with $0 volume in the
+# last hour, used to just sit there until its own wall-clock expiry, up to
+# 71h later) REMOVED 30/07, Item #251 -- operator's explicit call (screenshot
+# of a real "marché devenu illiquide" cancellation, believed already gone
+# along with the #246 24h volume floor -- a DIFFERENT mechanism: that one
+# gates a NEW entry, this one cancelled an ALREADY-PLACED watching order).
+# No other caller ever used this function (verified: only this module's own
+# now-removed call site and its own now-removed tests) -- deleted outright
+# rather than left as dead code. If a dead-market cancellation is wanted
+# again, ``momentum_entry._MIN_VOLUME_24H_USD`` (the floor it reused) is
+# still in place, still read by Birdeye's own discovery-side pre-filter.
 
 
 async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
@@ -349,6 +431,13 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
             f"force {gap_str} points RSI, fenêtre {momentum_entry.RSI_WATCH_MIN_SPAN}-"
             f"{momentum_entry.RSI_WATCH_MAX_SPAN}) -- prix déjà dans la golden pocket."
         ]
+        # Item #247 (30/07): the numeric gap/span of the divergence that just
+        # confirmed -- same mutate-in-place doctrine as the reasons text
+        # above (this IS the fresh, re-checked divergence, not the original
+        # watch-creation one). Lets ``process_active_orders`` log this
+        # trigger's real "steepness" without re-deriving it.
+        sig["rsi_gap"] = detail.gap
+        sig["rsi_span"] = detail.span
         return "trigger"
     return "wait"
 
@@ -634,12 +723,11 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
     ``pair_lookup(contract, chain=...)`` (optional, 30/07) returns the full
     ``PairSnapshot`` instead of a bare price -- SAME network call as
     ``price_lookup`` under the hood (both ultimately fetch one DexScreener
-    pair), just not throwing away the volume field. When provided, it
-    REPLACES ``price_lookup`` entirely (never both -- that would double the
-    network cost for nothing) and additionally enables ``is_market_dead`` on
-    ``watching`` orders. ``price_lookup`` alone (``pair_lookup=None``, the
-    default) keeps the exact legacy behavior -- no dead-market check, for any
-    caller/test that only has a bare price source."""
+    pair), just not throwing away the volume field. Kept as an optional
+    parameter for any future volume-aware check, but the dead-market
+    cancellation that originally used it (``is_market_dead``) was removed
+    30/07, Item #251 (operator's explicit call) -- see that function's own
+    former docstring, still in git history, for the removed rationale."""
     actions: dict = {"expired": 0, "entered_watching": 0, "cancelled": 0, "triggered": []}
 
     expired = await sweep_expired()
@@ -699,19 +787,9 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
             continue
 
         # order["state"] == "watching"
-        # 30/07: checked BEFORE the price/RSI resolution below -- no point
-        # spending a re-analysis on a pool that stopped trading. Only
-        # possible when pair_lookup was given (needs volume, price_lookup
-        # alone never carries it).
-        if pair is not None and is_market_dead(pair.volume_h1_usd):
-            await mark_cancelled(order["id"], "market_dead")
-            actions["cancelled"] += 1
-            if notifier:
-                try:
-                    await notifier(format_limit_order_cancelled_alert(order, "market_dead"))
-                except Exception:  # noqa: BLE001
-                    pass
-            continue
+        # is_market_dead cancellation removed 30/07, Item #251 -- see this
+        # function's own docstring and limit_orders.py's former is_market_
+        # dead comment (git history) for the removed rationale.
 
         # Item #183 (28/07): an order whose whole premise is a still-forming
         # RSI divergence (never an already-confirmed golden pocket + RSI
@@ -722,13 +800,31 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
             decision = await check_rsi_divergence_watching_order(order, sig)
         else:
             decision = check_watching_order(order["target_price"], sig.get("invalidation"), price)
+        is_rsi_divergence_watch = sig.get("limit_order_reason") == "rsi_divergence_pending"
         if decision == "expire":
             await mark_cancelled(order["id"], "rsi_horizon_expired")
             actions["expired"] += 1
+            # Item #247 (30/07): only ever reached for a genuine RSI-
+            # divergence watch (check_watching_order, the non-divergence
+            # path, never returns "expire") -- no gate needed, but kept
+            # explicit for symmetry with the other outcomes here.
+            await rsi_divergence_log.record_divergence(
+                order["contract"], order["chain"], symbol=order.get("symbol"),
+                wallet=order.get("wallet"),
+                mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                outcome="expired_unconfirmed",
+            )
             continue
         if decision == "cancel":
             await mark_cancelled(order["id"], "invalidation_crossed")
             actions["cancelled"] += 1
+            if is_rsi_divergence_watch:
+                await rsi_divergence_log.record_divergence(
+                    order["contract"], order["chain"], symbol=order.get("symbol"),
+                    wallet=order.get("wallet"),
+                    mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                    outcome="cancelled_unconfirmed",
+                )
             if notifier:
                 try:
                     await notifier(format_limit_order_cancelled_alert(order, "invalidation_crossed"))
@@ -739,6 +835,19 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
             if pos:
                 actions["triggered"].append(pos)
                 await mark_triggered(order["id"])
+                # Item #247 (30/07): only a genuine RSI-divergence trigger
+                # carries a real gap/span (set by check_rsi_divergence_
+                # watching_order right before returning "trigger") -- a
+                # price-drift/golden-pocket trigger has neither, this is
+                # scoped to the divergence watch specifically.
+                if is_rsi_divergence_watch:
+                    await rsi_divergence_log.record_divergence(
+                        order["contract"], order["chain"], symbol=order.get("symbol"),
+                        wallet=order.get("wallet"),
+                        mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                        gap=sig.get("rsi_gap"), span=sig.get("rsi_span"),
+                        outcome="bought_via_limit_order",
+                    )
             # A failed trigger (open_position refused -- cap reached, cash
             # short, etc.) leaves the order in "watching": it may still fill
             # on the next pass if conditions change, rather than being lost
@@ -1004,19 +1113,15 @@ def format_limit_order_placed_alert(order: dict) -> str:
             f"{name} -- déjà dans la golden pocket ({target:.6g}), divergence RSI pas encore confirmée",
             "ARIA surveille la formation de la divergence (pas un niveau de prix à atteindre) avant d'acheter.",
         ]
-        # Item #234 (30/07), operator feedback ("je ne vois pas la cible
-        # d'achat, une fourchette serait appréciée -- il suffirait de prédire
-        # ce que le graphique doit faire pour valider la divergence"): no
-        # single buy-trigger level exists here (entry == current price
-        # already), so the closest useful thing to show is the zone the price
-        # must HOLD while the RSI divergence forms -- breaking below it would
-        # invalidate the setup before the pattern ever confirms. ``None`` on
-        # orders created before this fix (no gp_low/gp_high key) -> omitted,
-        # never a fabricated range.
-        gp_low = sig.get("gp_low")
-        gp_high = sig.get("gp_high")
-        if isinstance(gp_low, (int, float)) and isinstance(gp_high, (int, float)) and gp_low > 0:
-            lines.append(f"Zone à tenir pendant la formation : {gp_low:.6g}–{gp_high:.6g}")
+        # Item #234 (30/07) added a "Zone à tenir pendant la formation"
+        # line here (gp_low/gp_high, the golden-pocket range the price must
+        # hold while the RSI divergence forms). REMOVED 30/07, Item #249 --
+        # operator's explicit call after seeing it in a real alert
+        # screenshot and understanding what it meant ("j'ai compris supprime
+        # la zone a tenir"). gp_low/gp_high are still stored on the order's
+        # own signal_json (unchanged, still read by _rsi_divergence_watch_
+        # candidate/check_rsi_divergence_watching_order) -- only this display
+        # line in the Telegram alert is gone.
         expiry_line = f"Expire dans {expiry_hours:.0f}h si la divergence ne se confirme jamais."
     else:
         lines = [
@@ -1125,7 +1230,6 @@ def format_limit_order_cancelled_alert(order: dict, reason: str) -> str:
         # confirms high quality (_reanalyze_dex_quality_for_watching), not
         # just a honeypot re-check (reanalyze_for_watching's standard path).
         "reanalysis_failed": "re-vérification échouée (sécurité ou qualité DEX)",
-        "market_dead": "marché devenu illiquide (volume horaire quasi nul)",
     }.get(reason, reason)
     return (
         f"❌ Ordre limite annulé {name} -- {reason_label}. "

@@ -3619,6 +3619,14 @@ async def evaluate_momentum_entry(
         "gp_low": signal.gp_low,
         "gp_high": signal.gp_high,
         "rr": signal.rr,
+        # Item #247 (30/07): the confirmed divergence's own gap/span (RSI
+        # points / candles) -- already computed on ``signal`` (entry_signals.
+        # EntrySignal.rsi_gap/rsi_span, Item #183) but never surfaced here
+        # before. None on a HOLD without a confirmed divergence, never an
+        # invented value. Lets ``paper_trader.py`` log a direct buy's
+        # divergence "steepness" without re-deriving it.
+        "rsi_gap": signal.rsi_gap,
+        "rsi_span": signal.rsi_span,
         # 19/07 -- exposed for risk_guard.cap_alloc_to_price_impact (Gemini
         # cross-review): the REAL liquidity of the targeted pool, needed to
         # estimate the order's price impact on THIS specific pool before sizing

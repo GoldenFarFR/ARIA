@@ -3580,6 +3580,7 @@ async def _open_new_entries_for_wallet(
     from aria_core import counterfactual_tracker
     from aria_core import limit_orders
     from aria_core import momentum_scan_log
+    from aria_core import rsi_divergence_log
 
     start = await starting_capital(wallet=wallet)
     opened_positions: list[dict] = []
@@ -3643,9 +3644,18 @@ async def _open_new_entries_for_wallet(
             # (never the plain honeypot-only re-check the price-drift case
             # uses -- there's no already-confirmed setup here to fall back on).
             watch = sig.get("limit_order_candidate")
-            # Item #231's R/R floor on this path -- REMOVED 30/07, Item #245
-            # (operator's explicit call, see limit_orders.py's own comment
-            # where the floor used to live for the full context/tradeoff).
+            # Item #231 (30/07), real bug found live (operator report, wIRON:
+            # R/R=0.3, +1.0% target vs -3.7% invalidation) -- unlike a direct
+            # buy, THIS watch-and-wait path (golden-pocket-not-yet-formed #182
+            # / rsi-divergence-pending #183) never had an R/R floor at all.
+            # Checked BEFORE has_active_order/create_pending_order below --
+            # never counts against any dedup/dupe-order state, a rejected
+            # candidate here is exactly as if momentum_entry never built it.
+            # REMOVED 30/07 (Item #245), RESTORED SAME DAY (Item #248) --
+            # see limit_orders.py's own comment on the floor for the full
+            # back-and-forth and the operator's two explicit calls.
+            if watch and not limit_orders.meets_limit_order_rr_floor(watch.get("rr"), wallet):
+                watch = None
             if watch:
                 try:
                     if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
@@ -3996,6 +4006,19 @@ async def _open_new_entries_for_wallet(
         if pos:
             opened += 1
             opened_positions.append(pos)
+            # Item #247 (30/07): only a real golden-pocket+RSI-divergence
+            # entry ever carries rsi_gap/rsi_span (momentum_entry.py's
+            # evaluate_momentum_entry, see EntrySignal.rsi_gap/rsi_span) --
+            # a bonding/VC-thesis/other analyzer's BUY simply doesn't set
+            # these keys, so this never logs an irrelevant "no angle"
+            # entry into the divergence log's bought_direct bucket.
+            if sig.get("rsi_gap") is not None and sig.get("rsi_span") is not None:
+                await rsi_divergence_log.record_divergence(
+                    contract, sig.get("chain") or "base", symbol=sig.get("symbol"),
+                    wallet=wallet, mode=sig.get("mode") or "standard",
+                    gap=sig.get("rsi_gap"), span=sig.get("rsi_span"),
+                    outcome="bought_direct",
+                )
             if notifier:
                 try:
                     await notifier(format_buy_alert(pos))

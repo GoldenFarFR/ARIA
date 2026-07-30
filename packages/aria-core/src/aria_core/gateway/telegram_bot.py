@@ -743,6 +743,35 @@ async def _handle_polymarket(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _reply(update.message, await format_portfolio_report())
 
 
+async def _handle_divergence_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/divergence -- Item #247 (30/07), operator request ("créer un log qui
+    référence l'inclinaison de la divergence en degré pour savoir lesquelles
+    sont acheter, lequel fonctionne le mieux, lesquels sont souvent
+    refuser"), extended same day to also track span (Item #250, "aussi la
+    longueur de la divergence"). Admin-only, read-only, no network call --
+    summary by outcome (count + average/min/max angle and span) plus the
+    most recent individual rows."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core import rsi_divergence_log
+
+    summary = await rsi_divergence_log.summarize_by_outcome()
+    lines = [rsi_divergence_log.format_summary_report(summary)]
+
+    recent = await rsi_divergence_log.recent_entries(limit=10)
+    if recent:
+        lines.append("\nDernières entrées :")
+        for r in recent:
+            angle = f"{r['angle_deg']:.1f}°" if r["angle_deg"] is not None else "n/a"
+            # Item #250 (30/07), operator request ("aussi la longueur de la
+            # divergence") -- span (candle length) shown alongside angle,
+            # never conflated with it.
+            span = f"{r['span']}b" if r["span"] is not None else "n/a"
+            lines.append(f"- {r['symbol'] or r['contract'][:10]} | {r['outcome']} | angle {angle} | longueur {span}")
+
+    await _reply(update.message, "\n".join(lines))
+
+
 async def _handle_trading_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/mode [standard|scalping] -- Item #101, 26/07: the ONLY way to switch the
     Milly ($1M) test's entry mode. No argument: shows the current one. Operator
@@ -2382,6 +2411,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("canal", "Contrôle du canal ARIA → Claude Code"),
     ("counterfactual", "Évolution de prix des candidats rejetés (seuils durs momentum)"),
     ("cycles", "Les 3 derniers cycles Bitcoin (macro)"),
+    ("divergence", "Log des divergences RSI (angle/longueur) par issue -- achetées/expirées/annulées"),
     ("experiment", "Crée un sandbox d'expérimentation GitHub"),
     ("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
     ("feuvert", "Scorecard avant argent réel (8 cases)"),
@@ -3676,6 +3706,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("counterfactual", _handle_counterfactual))
     app.add_handler(CommandHandler("performance", _handle_performance))
     app.add_handler(CommandHandler("polymarket", _handle_polymarket))
+    app.add_handler(CommandHandler("divergence", _handle_divergence_log))
     app.add_handler(CommandHandler("mode", _handle_trading_mode))
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))

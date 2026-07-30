@@ -5870,6 +5870,38 @@ async def test_result_golden_pocket_bounds_none_when_not_provided(monkeypatch, t
     assert result["gp_high"] is None
 
 
+@pytest.mark.asyncio
+async def test_result_includes_rsi_gap_and_span(monkeypatch, test_settings):
+    """Item #247 (30/07), operator request (log de l'inclinaison de
+    divergence en degré) -- rsi_gap/rsi_span (already computed on
+    EntrySignal, Item #183) must reach the final dict so
+    paper_trader.py/limit_orders.py can log a direct buy's divergence
+    "steepness" without re-deriving it."""
+    strong = EntrySignal(
+        present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0,
+        rsi_gap=12.5, rsi_span=8,
+    )
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["rsi_gap"] == pytest.approx(12.5)
+    assert result["rsi_span"] == 8
+
+
+@pytest.mark.asyncio
+async def test_result_rsi_gap_and_span_none_when_not_provided(monkeypatch, test_settings):
+    """Non-régression : un HOLD sans divergence confirmée ne doit jamais
+    afficher un gap/span fabriqué."""
+    tiny = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=tiny)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["rsi_gap"] is None
+    assert result["rsi_span"] is None
+
+
 # ── mode plancher -- libellé exact du point faible (25/07, operator-found gap, cas
 # réel OWB : R/R=50.8 mais le message disait quand même "R/R faible") ───────────────
 

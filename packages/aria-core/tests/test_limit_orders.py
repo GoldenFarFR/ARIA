@@ -557,10 +557,37 @@ async def test_check_rsi_divergence_watching_replaces_stale_reasons_on_trigger(m
     assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
 
     assert len(sig["reasons"]) == 1
-    assert "pas encore confirmée" not in sig["reasons"][0]
-    assert "CONFIRMÉE" in sig["reasons"][0]
-    assert "18" in sig["reasons"][0]
-    assert "5.0" in sig["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_sets_gap_span_on_trigger(monkeypatch):
+    """Item #247 (30/07): the CONFIRMED divergence's own gap/span (re-checked
+    on fresh candles, never the stale watch-creation values) must reach
+    ``sig`` so ``process_active_orders`` can log this trigger's real
+    "steepness" without re-deriving it."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=7.25, span=16)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert sig["rsi_gap"] == pytest.approx(7.25)
+    assert sig["rsi_span"] == 16
 
 
 @pytest.mark.asyncio
@@ -774,6 +801,134 @@ async def test_process_active_orders_routes_rsi_divergence_pending_to_dedicated_
     assert called["dedicated"] is True
 
 
+# ── rsi_divergence_log wiring (Item #247, 30/07) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_logs_expired_rsi_divergence(monkeypatch):
+    from aria_core import rsi_divergence_log
+
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        return "expire"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert len(calls) == 1
+    assert calls[0]["outcome"] == "expired_unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_logs_cancelled_rsi_divergence(monkeypatch):
+    from aria_core import rsi_divergence_log
+
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        return "cancel"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert len(calls) == 1
+    assert calls[0]["outcome"] == "cancelled_unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_never_logs_non_divergence_cancel(monkeypatch):
+    """A plain price-drift/golden-pocket order's invalidation-crossed cancel
+    has nothing to do with divergence "steepness" -- must never be logged
+    into the divergence log's cancelled_unconfirmed bucket."""
+    from aria_core import rsi_divergence_log
+
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(invalidation=0.03))
+    await lo.transition_to_watching(order["id"])
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    async def _price(contract, *, chain="base"):
+        return 0.029  # below invalidation
+
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_logs_triggered_rsi_divergence_with_gap_span(monkeypatch):
+    from aria_core import rsi_divergence_log
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {
+            "limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0,
+            "target": 2.5, "rr": 2.5,
+        },
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        # Same mutate-in-place contract as the real function.
+        sig_arg["rsi_gap"] = 9.5
+        sig_arg["rsi_span"] = 17
+        return "trigger"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    actions = await lo.process_active_orders(_price)
+
+    assert len(actions["triggered"]) == 1
+    assert len(calls) == 1
+    assert calls[0]["outcome"] == "bought_via_limit_order"
+    assert calls[0]["gap"] == pytest.approx(9.5)
+    assert calls[0]["span"] == 17
+
+
 # ── process_active_orders orchestration ──────────────────────────────────────
 
 
@@ -968,50 +1123,14 @@ async def test_process_active_orders_watching_trigger_skipped_if_portfolio_block
     assert active[0]["state"] == "watching"
 
 
-# ── is_market_dead (30/07, real operator gap: AQUARI/WMTX-style pools with
-# $0 volume in the last hour left watching orders stuck until wall-clock
-# expiry, up to 71h, instead of freeing the slot) ────────────────────────────
-
-def test_is_market_dead_below_floor():
-    # run-rate 10 * 24 = 240$ < momentum_entry._MIN_VOLUME_24H_USD (500$)
-    assert lo.is_market_dead(10.0) is True
-
-
-def test_is_market_dead_above_floor():
-    # run-rate 30 * 24 = 720$ >= 500$
-    assert lo.is_market_dead(30.0) is False
-
-
-def test_is_market_dead_unknown_volume_fails_open():
-    assert lo.is_market_dead(None) is False
-
-
-@pytest.mark.asyncio
-async def test_process_active_orders_watching_cancelled_on_dead_market(monkeypatch):
-    await paper_trader.reset_portfolio(1_000_000.0)
-    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
-    await lo.transition_to_watching(order["id"])
-
-    notified = []
-
-    async def _notifier(msg):
-        notified.append(msg)
-
-    async def _pair(contract, *, chain="base"):
-        # price would otherwise TRIGGER (0.037 <= target 0.038) -- the dead
-        # market must be checked BEFORE that resolution, not after.
-        return PairSnapshot(pair_address="0xpool", price_usd=0.037, volume_h1_usd=0.0)
-
-    actions = await lo.process_active_orders(
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("price_lookup must not be called when pair_lookup is given")),
-        notifier=_notifier, pair_lookup=_pair,
-    )
-    assert actions["triggered"] == []
-    assert await lo.get_active_orders() == []
-    assert await paper_trader.has_open("0xCHECK") is False
-    assert len(notified) == 1
-    assert "illiquide" in notified[0].lower()
-
+# ``is_market_dead`` (30/07) cancelled a ``watching`` order once its pool's
+# hourly volume dried up. REMOVED 30/07, Item #251 -- operator's explicit
+# call (screenshot of a real "marché devenu illiquide" cancellation,
+# believed already gone along with the #246 24h volume floor). Its 3
+# dedicated unit tests and the dead-market cancellation test above are gone
+# along with it -- the surviving test below now covers a ``pair_lookup``-
+# provided trigger regardless of volume, which is all that mechanism does
+# now.
 
 @pytest.mark.asyncio
 async def test_process_active_orders_watching_alive_market_still_triggers(monkeypatch):
@@ -1029,22 +1148,111 @@ async def test_process_active_orders_watching_alive_market_still_triggers(monkey
     assert pos is not None
 
 
+# ── historical_trigger_rate / reset_historical_trigger_rate (Item #227/#250)
+
 @pytest.mark.asyncio
-async def test_process_active_orders_without_pair_lookup_never_checks_dead_market(monkeypatch):
-    """Legacy behavior preserved byte-for-byte: a bare price_lookup (no
-    pair_lookup, no volume available) never cancels for market_dead, no
-    matter how illiquid the real pool might be -- every existing caller/test
-    that only has a price source keeps working exactly as before."""
-    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
-    await paper_trader.reset_portfolio(1_000_000.0)
-    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
-    await lo.transition_to_watching(order["id"])
+async def test_historical_trigger_rate_below_min_sample_returns_none():
+    await lo._ensure_table()
+    for i in range(5):
+        order = await lo.create_pending_order(
+            f"0x{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_triggered(order["id"])
+    rate, total = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert rate is None
+    assert total == 5
 
-    async def _price(contract, *, chain="base"):
-        return 0.037
 
-    actions = await lo.process_active_orders(_price)
-    assert len(actions["triggered"]) == 1
+@pytest.mark.asyncio
+async def test_historical_trigger_rate_computes_ratio_for_matching_reason_only():
+    await lo._ensure_table()
+    for i in range(7):
+        order = await lo.create_pending_order(
+            f"0xT{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_triggered(order["id"])
+    for i in range(3):
+        order = await lo.create_pending_order(
+            f"0xC{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_cancelled(order["id"], "invalidation_crossed")
+    # A different reason must never pollute this reason's own rate.
+    other = await lo.create_pending_order(
+        "0xOTHER", "base", "T", 1.0, {"limit_order_reason": "golden_pocket_pending"},
+    )
+    await lo.mark_triggered(other["id"])
+
+    rate, total = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert total == 10
+    assert rate == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_historical_trigger_rate_ignores_still_active_orders():
+    await lo._ensure_table()
+    for i in range(10):
+        order = await lo.create_pending_order(
+            f"0x{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_triggered(order["id"])
+    # A pending order of the SAME reason must never count -- still undecided.
+    await lo.create_pending_order(
+        "0xPENDING", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+    )
+
+    rate, total = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert total == 10
+    assert rate == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_reset_historical_trigger_rate_excludes_orders_resolved_before_reset():
+    """Item #250 (30/07), operator request ("reset les taux de déclenchement
+    historique") after several same-day pipeline changes made the displayed
+    rate a mix of regimes. Pre-reset history is preserved on disk (never
+    deleted, see reset_historical_trigger_rate's own docstring) but excluded
+    from the displayed rate going forward."""
+    import aiosqlite as _aiosqlite
+
+    await lo._ensure_table()
+    ids = []
+    for i in range(10):
+        order = await lo.create_pending_order(
+            f"0xOLD{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_cancelled(order["id"], "invalidation_crossed")
+        ids.append(order["id"])
+
+    # Backdate resolved_at well before the reset -- avoids any clock-
+    # resolution ambiguity with reset_historical_trigger_rate()'s own
+    # timestamp; the real-world case (orders resolved days/weeks earlier)
+    # always has this much separation anyway.
+    async with _aiosqlite.connect(lo.DB_PATH) as db:
+        await db.executemany(
+            "UPDATE pending_limit_order SET resolved_at = ? WHERE id = ?",
+            [("2000-01-01T00:00:00+00:00", i) for i in ids],
+        )
+        await db.commit()
+
+    rate_before, total_before = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert total_before == 10
+    assert rate_before == pytest.approx(0.0)
+
+    await lo.reset_historical_trigger_rate()
+
+    rate_after_reset, total_after_reset = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert total_after_reset == 0
+    assert rate_after_reset is None
+
+    for i in range(10):
+        order = await lo.create_pending_order(
+            f"0xNEW{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+        )
+        await lo.mark_triggered(order["id"])
+
+    rate_after, total_after = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert total_after == 10
+    assert rate_after == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -1414,39 +1622,32 @@ def test_format_limit_order_placed_alert_rsi_divergence_wording_and_real_expiry(
     assert "2.5" in text
 
 
-def test_format_limit_order_placed_alert_shows_golden_pocket_range_to_hold():
-    """Item #234 (30/07), operator feedback ("je ne vois pas la cible d'achat,
-    une fourchette serait appréciée"): a rsi_divergence_pending order has no
-    single buy-trigger price to reach (entry == current price already) -- the
-    zone the price must HOLD while the divergence forms is the closest useful
-    range to show instead."""
+def test_format_limit_order_placed_alert_no_longer_shows_zone_a_tenir():
+    """Item #234 (30/07) added a "Zone à tenir pendant la formation" line
+    (gp_low/gp_high, the golden-pocket range to hold while the divergence
+    forms). REMOVED 30/07, Item #249 -- operator's explicit call after
+    seeing it in a real alert screenshot and understanding what it meant
+    ("j'ai compris supprime la zone a tenir"). Checked both with and
+    without gp_low/gp_high present on the signal -- the line must never
+    reappear either way."""
     import json as _json
 
-    order = {
+    order_with_range = {
         "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.1087,
         "wallet": "swing",
         "signal_json": _json.dumps({
             "limit_order_reason": "rsi_divergence_pending", "gp_low": 0.0637954, "gp_high": 0.0776245,
         }),
     }
-    text = lo.format_limit_order_placed_alert(order)
-    assert "0.0637954" in text
-    assert "0.0776245" in text
-    assert "tenir" in text.lower()
-
-
-def test_format_limit_order_placed_alert_omits_golden_pocket_range_when_absent():
-    """Non-régression : un ordre créé avant ce correctif (pas de gp_low/gp_high
-    dans signal_json) ne doit jamais afficher une fourchette fabriquée."""
-    import json as _json
-
-    order = {
+    order_without_range = {
         "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.1087,
         "wallet": "swing",
         "signal_json": _json.dumps({"limit_order_reason": "rsi_divergence_pending"}),
     }
-    text = lo.format_limit_order_placed_alert(order)
-    assert "tenir" not in text.lower()
+    for order in (order_with_range, order_without_range):
+        text = lo.format_limit_order_placed_alert(order)
+        assert "tenir" not in text.lower()
+        assert "0.0637954" not in text
 
 
 def test_format_limit_order_placed_alert_shows_timeframe_per_pocket():
@@ -1546,8 +1747,42 @@ def test_format_limit_order_cancelled_alert_labels_known_reasons():
     assert "invalidation" in text.lower()
 
 
-# Item #231 (30/07)'s R/R floor on limit-order candidates (test coverage
-# removed along with it, Item #245, 30/07 -- operator's explicit call after
-# scalping trade volume dropped to zero the same day the floor shipped) --
-# see limit_orders.py's own comment where the floor used to live for the
-# full context and the known, disclosed tradeoff of removing it.
+# Item #231 (30/07), real bug found live (operator report, wIRON: R/R=0.3,
+# +1.0% target vs -3.7% invalidation) -- a limit-order candidate never had
+# any R/R floor at all, unlike a direct buy. Floors calibrated empirically
+# (scalping) / reused from momentum_entry's own direct-buy floor (swing, no
+# resolved history yet to calibrate against) -- see meets_limit_order_rr_
+# floor's own comment for the full numbers. Removed then restored same day
+# (Items #245/#248) -- coverage restored along with the floor itself.
+def test_meets_limit_order_rr_floor_scalping_at_exactly_the_floor():
+    assert lo.meets_limit_order_rr_floor(1.25, "scalping") is True
+
+
+def test_meets_limit_order_rr_floor_scalping_below_the_floor():
+    assert lo.meets_limit_order_rr_floor(0.3, "scalping") is False
+
+
+def test_meets_limit_order_rr_floor_swing_below_scalpings_looser_floor():
+    """1.7 clears scalping's 1.25 floor but must still fail swing's stricter
+    2.0 -- the two pockets are never interchangeable."""
+    assert lo.meets_limit_order_rr_floor(1.7, "swing") is False
+
+
+def test_meets_limit_order_rr_floor_swing_at_exactly_the_floor():
+    assert lo.meets_limit_order_rr_floor(2.0, "swing") is True
+
+
+def test_meets_limit_order_rr_floor_none_rr_fails_closed():
+    """A degenerate setup (entry<=invalidation or target<=entry) computes
+    rr=None -- never placed, same fail-closed doctrine as the direct-buy R/R
+    gates."""
+    assert lo.meets_limit_order_rr_floor(None, "scalping") is False
+    assert lo.meets_limit_order_rr_floor(None, "swing") is False
+
+
+def test_meets_limit_order_rr_floor_unknown_wallet_uses_swing_floor():
+    """Any non-"scalping" wallet (vc, a future pocket, a missing/legacy
+    order) gets the stricter swing floor -- never silently defaults to the
+    looser scalping bar."""
+    assert lo.meets_limit_order_rr_floor(1.7, "vc") is False
+    assert lo.meets_limit_order_rr_floor(2.0, "vc") is True
