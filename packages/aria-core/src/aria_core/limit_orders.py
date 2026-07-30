@@ -76,6 +76,53 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Item #227 (30/07), operator request ("je veut une probabilité sur les
+# ordre limite, le taux de chance de reussite que la divergence apparaisse")
+# -- below this many resolved orders of the SAME reason, a raw ratio is too
+# noisy to show honestly (e.g. 1/2 = 50% means nothing) -- degrades to "not
+# enough history" rather than a fabricated-looking precise percentage.
+_MIN_HISTORICAL_TRIGGER_SAMPLE = 10
+
+
+async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int]:
+    """Real historical rate (Item #227, 30/07) at which a pending limit order
+    tagged ``limit_order_reason == reason`` (``None`` for the price-drift
+    path, #175, which never tags one) went on to actually TRIGGER, among
+    every order of that SAME reason already resolved (``triggered``,
+    ``cancelled``, or ``expired`` -- never counting ``pending``/``watching``,
+    still-undecided orders would bias the ratio). This is a plain historical
+    average across every past candidate, NOT a per-candidate prediction (no
+    model conditions it on THIS specific setup's own features) -- displayed
+    as exactly that, an honest base rate, never framed as a forecast for the
+    order it's shown on.
+
+    Returns ``(None, sample_size)`` if the sample is below
+    ``_MIN_HISTORICAL_TRIGGER_SAMPLE`` -- never a rate computed on too few
+    data points to mean anything."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT state, signal_json FROM pending_limit_order WHERE state IN ('triggered', 'cancelled', 'expired')"
+        ) as cur:
+            rows = await cur.fetchall()
+
+    triggered = 0
+    total = 0
+    for state, signal_json in rows:
+        try:
+            sig = json.loads(signal_json) if signal_json else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if sig.get("limit_order_reason") != reason:
+            continue
+        total += 1
+        if state == "triggered":
+            triggered += 1
+
+    if total < _MIN_HISTORICAL_TRIGGER_SAMPLE:
+        return None, total
+    return triggered / total, total
+
+
 # 27/07 -- 3-pocket architecture plan, Phase 2: additive hot-migration list,
 # same idempotent idiom as paper_trader.py's own ``_ADDED_COLUMNS`` (see its
 # comment for why -- SQLite doesn't add a column to an already-existing table
@@ -917,6 +964,23 @@ def format_limit_order_placed_alert(order: dict) -> str:
     rr = sig.get("rr")
     if isinstance(rr, (int, float)) and rr > 0:
         lines.append(f"R/R du signal : {rr:.1f}")
+
+    # Item #227 (30/07), operator request ("je veut une probabilité sur les
+    # ordre limite, le taux de chance de reussite que la divergence
+    # apparaisse") -- a plain historical base rate across every PAST order of
+    # this SAME reason (never a per-candidate forecast, explicitly worded as
+    # such). None (sig.get returns None on a missing key, e.g. an order
+    # placed before this fix, or historical_trigger_rate itself returning
+    # None below _MIN_HISTORICAL_TRIGGER_SAMPLE) -> omitted, never a
+    # fabricated percentage.
+    hist_rate = sig.get("historical_trigger_rate")
+    hist_sample = sig.get("historical_trigger_sample")
+    if isinstance(hist_rate, (int, float)):
+        lines.append(
+            f"Taux de déclenchement historique : {hist_rate:.0%} (sur {hist_sample} ordres similaires résolus)"
+        )
+    elif isinstance(hist_sample, int) and hist_sample > 0:
+        lines.append(f"Taux de déclenchement historique : pas assez d'historique ({hist_sample} ordres résolus)")
 
     timeframe = _TIMEFRAME_LABEL.get(order.get("wallet"))
     if timeframe:

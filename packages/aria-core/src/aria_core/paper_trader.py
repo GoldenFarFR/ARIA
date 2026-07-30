@@ -3666,6 +3666,17 @@ async def _open_new_entries_for_wallet(
                         order_sig["estimated_alloc_usd"] = est_alloc_usd
                         order_sig["estimated_alloc_pct"] = (est_alloc_usd / start * 100.0) if start else 0.0
                         order_sig["estimated_conviction_tier"] = est_tier
+                        # Item #227 (30/07), operator request ("je veut une
+                        # probabilité sur les ordre limite, le taux de chance
+                        # de reussite que la divergence apparaisse") -- a
+                        # plain historical base rate (this reason's own past
+                        # orders, triggered vs cancelled/expired), never a
+                        # per-candidate forecast.
+                        hist_rate, hist_sample = await limit_orders.historical_trigger_rate(
+                            order_sig.get("limit_order_reason"),
+                        )
+                        order_sig["historical_trigger_rate"] = hist_rate
+                        order_sig["historical_trigger_sample"] = hist_sample
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", watch.get("symbol") or sig.get("symbol", ""),
                             watch["target_price"], order_sig, wallet=wallet,
@@ -3863,6 +3874,17 @@ async def _open_new_entries_for_wallet(
                         order_sig["estimated_alloc_usd"] = est_alloc_usd
                         order_sig["estimated_alloc_pct"] = (est_alloc_usd / start * 100.0) if start else 0.0
                         order_sig["estimated_conviction_tier"] = est_tier
+                        # Item #227 (30/07), operator request ("je veut une
+                        # probabilité sur les ordre limite, le taux de chance
+                        # de reussite que la divergence apparaisse") -- a
+                        # plain historical base rate (this reason's own past
+                        # orders, triggered vs cancelled/expired), never a
+                        # per-candidate forecast.
+                        hist_rate, hist_sample = await limit_orders.historical_trigger_rate(
+                            order_sig.get("limit_order_reason"),
+                        )
+                        order_sig["historical_trigger_rate"] = hist_rate
+                        order_sig["historical_trigger_sample"] = hist_sample
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", sig.get("symbol", ""), price, order_sig,
                             wallet=wallet,
