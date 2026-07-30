@@ -521,6 +521,80 @@ async def test_birdeye_discovery_serves_stale_cache_on_transient_empty_result(mo
     assert second == ["0xGOOD"]  # sert le cache périmé plutôt qu'une liste vide
 
 
+# ── persistance SQLite du cache Birdeye (30/07, vrai trou trouvé : un simple
+# redéploiement (fréquent sur ce projet) vidait le cache en mémoire, forçant
+# un scan réseau bien plus souvent que le TTL calibré, avec un vrai risque de
+# double-scan simultané pendant la fenêtre de bascule blue-green) ──────────
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_persists_cache_after_successful_scan(monkeypatch):
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        return ["0xPERSIST"]
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    await me._discover_birdeye_base_tokens()
+
+    persisted = await me._load_persisted_birdeye_cache()
+    assert persisted is not None
+    contracts, cached_at = persisted
+    assert contracts == ["0xPERSIST"]
+    assert cached_at == pytest.approx(me._birdeye_cache_at)
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_reuses_persisted_cache_after_in_memory_reset(monkeypatch):
+    """Simule un redémarrage de processus (cache mémoire vidé, comme à chaque
+    redéploiement) -- le cache persisté encore frais doit être réutilisé sans
+    aucun nouvel appel réseau."""
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    calls = {"n": 0}
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        calls["n"] += 1
+        return ["0xFIRST"]
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    first = await me._discover_birdeye_base_tokens()
+    assert calls["n"] == 1
+
+    # "Redémarrage" -- la mémoire est vidée, la persistance SQLite ne l'est pas.
+    me._birdeye_cache = None
+    me._birdeye_cache_at = 0.0
+
+    second = await me._discover_birdeye_base_tokens()
+    assert second == first
+    assert calls["n"] == 1  # aucun nouvel appel réseau -- servi depuis la persistance
+
+
+@pytest.mark.asyncio
+async def test_birdeye_discovery_refetches_when_persisted_cache_is_expired(monkeypatch):
+    monkeypatch.setattr("aria_core.services.birdeye.birdeye_available", lambda: True)
+    calls = {"n": 0}
+
+    async def fake_bulk(*, min_liquidity_usd, min_volume_24h_usd):
+        calls["n"] += 1
+        return [f"0x{calls['n']}"]
+
+    monkeypatch.setattr("aria_core.services.birdeye.discover_base_tokens_bulk", fake_bulk)
+
+    first = await me._discover_birdeye_base_tokens()
+    assert calls["n"] == 1
+
+    # Persiste un cache déjà expiré directement (contourne le scan), puis
+    # simule un redémarrage.
+    await me._save_persisted_birdeye_cache(["0xSTALE"], time.time() - me._BIRDEYE_CACHE_TTL_SECONDS - 1.0)
+    me._birdeye_cache = None
+    me._birdeye_cache_at = 0.0
+
+    second = await me._discover_birdeye_base_tokens()
+    assert calls["n"] == 2  # cache persisté périmé -> vrai refetch
+    assert second != ["0xSTALE"]
+
+
 @pytest.mark.asyncio
 async def test_discover_momentum_candidates_includes_birdeye_contracts(monkeypatch):
     async def fake_base_tokens(*, limit):

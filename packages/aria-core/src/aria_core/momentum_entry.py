@@ -723,15 +723,103 @@ _birdeye_cache: list[str] | None = None
 _birdeye_cache_at: float = 0.0
 
 
+async def _ensure_birdeye_cache_table() -> None:
+    import aiosqlite
+
+    from aria_core.paths import aria_db_path
+
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS birdeye_discovery_cache (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                contracts_json TEXT NOT NULL,
+                cached_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.commit()
+
+
+async def _load_persisted_birdeye_cache() -> tuple[list[str], float] | None:
+    """30/07 (real gap found: this project redeploys often, and the
+    in-memory-only cache was silently reset to empty on EVERY restart --
+    forcing a fresh network scan far more often than the TTL was calibrated
+    for, and risking two overlapping scans during a blue-green bascule window
+    where the old and new container each start with an empty cache). Reads
+    the persisted row -- ``None`` if never written, unreadable, or the wrong
+    shape (never raises, a fresh scan is always a safe fallback)."""
+    import json
+
+    import aiosqlite
+
+    from aria_core.paths import aria_db_path
+
+    await _ensure_birdeye_cache_table()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        row = await (
+            await db.execute("SELECT contracts_json, cached_at FROM birdeye_discovery_cache WHERE id = 1")
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        contracts = json.loads(row[0])
+        cached_at = float(row[1])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(contracts, list):
+        return None
+    return contracts, cached_at
+
+
+async def _save_persisted_birdeye_cache(contracts: list[str], cached_at: float) -> None:
+    import json
+
+    import aiosqlite
+
+    from aria_core.paths import aria_db_path
+
+    await _ensure_birdeye_cache_table()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            "INSERT INTO birdeye_discovery_cache (id, contracts_json, cached_at) VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET contracts_json = excluded.contracts_json, "
+            "cached_at = excluded.cached_at",
+            (json.dumps(contracts), str(cached_at)),
+        )
+        await db.commit()
+
+
 async def _discover_birdeye_base_tokens() -> list[str]:
     """Fallback/complement to DexScreener for discovery -- Birdeye has a real
     bulk filtered search (``/defi/v3/token/list``) that DexScreener doesn't
     (confirmed on 21/07: ~520 Base tokens via Birdeye vs. ~18 via the existing
-    DexScreener sourcing). 12h cache -- see constants above."""
+    DexScreener sourcing). Cache TTL -- see constants above.
+
+    30/07 -- persisted to SQLite (``_load_persisted_birdeye_cache``/``_save_
+    persisted_birdeye_cache``) in ADDITION to the in-memory copy: the
+    in-memory-only version was silently reset on every redeploy (frequent in
+    this project), forcing a fresh scan far more often than the TTL implies.
+    ``time.time()`` (wall-clock, not ``time.monotonic()``) is used
+    deliberately here -- a persisted value must survive a process restart,
+    where a monotonic clock resets to an arbitrary origin and becomes
+    meaningless across processes."""
     global _birdeye_cache, _birdeye_cache_at
-    now = time.monotonic()
+    now = time.time()
     if _birdeye_cache is not None and (now - _birdeye_cache_at) < _BIRDEYE_CACHE_TTL_SECONDS:
         return _birdeye_cache
+
+    if _birdeye_cache is None:
+        try:
+            persisted = await _load_persisted_birdeye_cache()
+        except Exception as exc:  # noqa: BLE001 -- a cache-read failure never blocks discovery
+            logger.info("discover_momentum_candidates: birdeye persisted cache read failed (%s)", exc)
+            persisted = None
+        if persisted is not None:
+            contracts, cached_at = persisted
+            if (now - cached_at) < _BIRDEYE_CACHE_TTL_SECONDS:
+                _birdeye_cache, _birdeye_cache_at = contracts, cached_at
+                return contracts
 
     from aria_core.services.birdeye import birdeye_available, discover_base_tokens_bulk
 
@@ -744,6 +832,10 @@ async def _discover_birdeye_base_tokens() -> list[str]:
     if tokens:
         _birdeye_cache = tokens
         _birdeye_cache_at = now
+        try:
+            await _save_persisted_birdeye_cache(tokens, now)
+        except Exception as exc:  # noqa: BLE001 -- persistence failure never blocks discovery
+            logger.info("discover_momentum_candidates: birdeye persisted cache write failed (%s)", exc)
         return tokens
     return _birdeye_cache or []
 
