@@ -1351,6 +1351,56 @@ async def test_fetch_candles_uses_geckoterminal_first(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_candles_rejects_price_inconsistent_candles(monkeypatch):
+    """Item #222 (30/07), real incident found live in guardian-mode audit:
+    GeckoTerminal returned genuinely wrong OHLCV (~$1900 scale) for a pool
+    DexScreener confirmed to be a real $0.0057 token (NPC) -- reproduced live
+    by calling geckoterminal_client.get_ohlcv directly against the exact same
+    pool_address. A candidate reaching this scale mismatch would compute a
+    golden-pocket zone / RSI divergence at a price level the real token could
+    structurally never reach. The candles' last close (~1900) is >1000x the
+    real spot price (pair.price_usd, already independently confirmed via
+    DexScreener) -- rejected as "OHLCV unavailable" ([]) rather than
+    propagated, and the cascade must NOT silently fall through to
+    CoinMarketCap here (that's a deliberate tradeoff documented on
+    _fetch_candles itself -- an extra HOLD beats resuming mid-cascade)."""
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(
+            candles=[Candle(ts=0, open=1900.0, high=1920.0, low=1880.0, close=1900.0, volume=0.0)],
+            available=True, error=None,
+        )
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    pair = _pair(price_usd=0.005751, price_change_24h=1.0, price_change_h6=1.0, price_change_h1=1.0, price_change_m5=1.0)
+    result = await me._fetch_candles("0xpool", "base", pair=pair)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_accepts_price_consistent_candles(monkeypatch):
+    """Same mechanism as the rejection test above, inverted: candles whose
+    last close is within a sane order of magnitude of pair.price_usd must
+    pass through unchanged -- this is a last-resort sanity net against a
+    catastrophic scale mismatch, never a new hard requirement for normal
+    price movement between pair resolution and the candles' own timestamps."""
+    from aria_core.services import geckoterminal as gt
+
+    gt_candles = [Candle(ts=0, open=1.4, high=1.6, low=1.3, close=1.5, volume=0.0)]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    pair = _pair(price_usd=1.5, price_change_24h=1.0, price_change_h6=1.0, price_change_h1=1.0, price_change_m5=1.0)
+    result = await me._fetch_candles("0xpool", "base", pair=pair)
+    assert result == gt_candles
+
+
+@pytest.mark.asyncio
 async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc

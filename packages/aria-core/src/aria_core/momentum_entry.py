@@ -1367,7 +1367,7 @@ def _wash_trading_ratio_confirmed(contract: str, chain: str, volume_to_liq: floa
     return (now - breach_since) >= _WASH_TRADING_CONFIRMATION_SECONDS
 
 
-async def _fetch_candles(
+async def _fetch_candles_impl(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
 ) -> list[Candle]:
@@ -1637,6 +1637,78 @@ async def _fetch_candles(
             return dune_result.candles
 
     return []
+
+
+# Item #222 (30/07), operator's guardian-mode audit: real incident found live
+# (NPC, 0xb166e8b140d35d9d8226e40c09f757bac5a4d87d) -- GeckoTerminal returned
+# genuinely wrong OHLCV for this pool's exact address (reproduced live,
+# `geckoterminal_client.get_ohlcv` called directly against the SAME
+# pool_address DexScreener confirms is the real NPC/quote pair at $0.005751)
+# -- candles at a completely different price scale (~$1873-1958, the same
+# order of magnitude as ETH), corrupting the golden-pocket zone / RSI
+# divergence computed from them (a watch order was created with
+# target=$1918.98 for a token whose real price is $0.005751 -- had it
+# triggered, the resulting position's stop/target would sit at a price level
+# the real token could structurally never reach, defeating the trailing
+# stop's entire protection). Root cause is external (bad data from ONE
+# provider for this specific pool, not a logic bug in our own pool
+# resolution -- `_best_pair`'s own `base_address` filter already confirmed
+# correct, same pool_address, same real price via DexScreener) -- nothing to
+# fix upstream at GeckoTerminal itself, only to detect and reject downstream.
+# Tolerance deliberately very wide (1000x) -- this is a last-resort sanity
+# check against a catastrophic scale mismatch (this incident: ~330,000x),
+# never meant to second-guess normal price volatility between `pair`'s
+# resolution and the candles' own timestamps.
+_CANDLE_PRICE_CONSISTENCY_RATIO = 1000.0
+
+
+def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) -> bool:
+    """``True`` if the candles' most recent close is within a sane order of
+    magnitude of ``pair.price_usd`` (the already-confirmed real spot price,
+    same ``PairSnapshot`` every caller already resolves via ``_best_pair``'s
+    ``base_address`` filter). Fail-OPEN when there's nothing to compare
+    against (``pair`` missing, no usable price, or an empty/degenerate candle
+    list) -- this is a sanity check against a catastrophic provider mix-up,
+    never a new hard requirement for data that was always optional."""
+    if pair is None or not pair.price_usd or pair.price_usd <= 0:
+        return True
+    last_close = candles[-1].close if candles else None
+    if not last_close or last_close <= 0:
+        return True
+    ratio = last_close / pair.price_usd
+    return (1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO) <= ratio <= _CANDLE_PRICE_CONSISTENCY_RATIO
+
+
+async def _fetch_candles(
+    pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
+    mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
+) -> list[Candle]:
+    """Thin wrapper around ``_fetch_candles_impl`` (the real 6-stage cascade,
+    docstring there) -- adds the ``_candles_price_consistent`` sanity check
+    (Item #222) on the cascade's final result. An inconsistent result is
+    treated exactly like an empty one (``[]``, same "OHLCV unavailable"
+    degradation already in place) rather than propagated -- deliberately NOT
+    re-attempting a different stage of the cascade on rejection (the stage
+    that already succeeded won't un-succeed on retry, and the added
+    complexity of resuming mid-cascade isn't worth it for what live data
+    shows is a rare, single-provider, single-pool incident) -- a real
+    tradeoff, but always the SAFE side of it: an extra HOLD is never worse
+    than a signal built on a nonsensical price scale."""
+    candles = await _fetch_candles_impl(
+        pool_address, chain, contract=contract, pair=pair, mode=mode,
+        gecko_client=gecko_client, min_useful_candles=min_useful_candles,
+    )
+    if candles and not _candles_price_consistent(candles, pair):
+        logger.warning(
+            "_fetch_candles: rejecting inconsistent candles for %s/%s -- last close %.6g vs "
+            "spot price %.6g (ratio %.3g, outside the [%.4g, %.4g] sanity band) -- treating as "
+            "OHLCV unavailable rather than risk a corrupted golden-pocket/RSI read",
+            chain, pool_address[:10], candles[-1].close, pair.price_usd if pair else float("nan"),
+            (candles[-1].close / pair.price_usd) if pair and pair.price_usd else float("nan"),
+            1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO, _CANDLE_PRICE_CONSISTENCY_RATIO,
+        )
+        return []
+    return candles
 
 
 # 29/07 -- public alias (Item #186): smart_money.py's wallet-scoring path
