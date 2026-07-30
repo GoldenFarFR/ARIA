@@ -4195,10 +4195,19 @@ async def _run_paper_cycle_locked(
 
             # #197 -- provisional: removed below if the position closes
             # (fully) in this same round, to never duplicate with format_sell_alert.
+            #
+            # Item #223 (30/07), operator observation ("je vois pas le temps de
+            # détention dans feedback min"): this dict never carried
+            # ``opened_at`` -- ``_format_tracked_position_line`` already reads
+            # it (added 27/07, Item #137) via ``_format_hold_duration``, but a
+            # missing key means that call always got ``None`` -> ``""``,
+            # silently dropping the "· détenue ..." segment on EVERY periodic
+            # tracking alert since #137 shipped, even though the exact same
+            # field is already correctly shown on close/partial-exit alerts.
             tracked.append({
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
-                "mode": p.get("mode"), "strategy": p.get("strategy"),
+                "mode": p.get("mode"), "strategy": p.get("strategy"), "opened_at": p.get("opened_at"),
             })
 
             # Item #105 (26/07): scalping-mode exit signal -- a confirmed

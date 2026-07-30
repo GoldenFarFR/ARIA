@@ -3209,6 +3209,12 @@ async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp
     assert any("suivi positions ouvertes" in a for a in alerts)
     # 17/07 -- lien DexScreener présent dans le suivi périodique aussi, pas seulement achat/vente
     assert any(f"https://dexscreener.com/base/{D}" in a for a in alerts)
+    # Item #223 (30/07), operator observation ("je vois pas le temps de détention
+    # dans feedback min"): _format_tracked_position_line already reads opened_at
+    # (Item #137, 27/07) via _format_hold_duration -- but the dict built inside
+    # this cycle's own tracking loop never carried that key, silently dropping
+    # the "· détenue ..." segment on every real periodic tracking alert.
+    assert any("détenue" in a for a in alerts)
 
 
 @pytest.mark.asyncio
