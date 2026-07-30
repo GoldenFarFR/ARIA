@@ -707,11 +707,18 @@ def _add_candidate(
 
 # 21/07 -- process-local cache for the bulk Birdeye scan (75 CU/call, ~6 calls per
 # full scan -- calling this every heartbeat cycle, 96x/day, would blow past the
-# monthly free quota by several orders of magnitude). TTL 12h = 2 scans/day,
-# comfortably within the free budget (30,000 CU/month, cf. services/birdeye.py).
+# monthly free quota by several orders of magnitude).
+# 30/07, explicit operator decision: pushed from 12h (90% of the monthly quota,
+# 2 scans/day) to 10.8h (100%, ~2.22 scans/day, 30000/450 = 66.7 scans/month) --
+# Birdeye's ONLY role in this whole codebase is discovery (verified: the sole
+# caller of services/birdeye.py is this function), so running the free quota
+# dry before month-end only pauses THIS ONE discovery source (the other 5 --
+# GeckoTerminal new/trending pools + the 4 DexScreener boost/profile feeds --
+# keep working) -- never a correctness/security risk on price, safety, or
+# execution. Operator's own words: "temp pis si il n'y a plus de credit".
 # Losing the cache on a restart only costs an immediate refetch -- never a
 # correctness risk, just a matter of latency freshness.
-_BIRDEYE_CACHE_TTL_SECONDS = 12.0 * 3600.0
+_BIRDEYE_CACHE_TTL_SECONDS = 10.8 * 3600.0
 _birdeye_cache: list[str] | None = None
 _birdeye_cache_at: float = 0.0
 
