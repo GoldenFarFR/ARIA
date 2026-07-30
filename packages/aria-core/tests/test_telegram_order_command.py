@@ -69,14 +69,17 @@ async def test_order_groups_by_wallet_and_shows_details(monkeypatch):
         {
             "wallet": "scalping", "symbol": "AERO", "chain": "base", "state": "pending",
             "target_price": 0.4322, "expires_at": "2026-07-30T20:02:26.828504+00:00",
+            "contract": "0x" + "a" * 40,
         },
         {
             "wallet": "scalping", "symbol": "TIG", "chain": "base", "state": "watching",
             "target_price": 1.016, "expires_at": "2026-07-30T18:00:46.149580+00:00",
+            "contract": "0x" + "b" * 40,
         },
         {
             "wallet": "swing", "symbol": "BRETT", "chain": "base", "state": "watching",
             "target_price": 0.003903, "expires_at": "2026-08-19T14:19:40.041093+00:00",
+            "contract": "0x" + "c" * 40,
         },
     ]
     monkeypatch.setattr("aria_core.limit_orders.get_active_orders", AsyncMock(return_value=orders))
@@ -92,6 +95,11 @@ async def test_order_groups_by_wallet_and_shows_details(monkeypatch):
     assert "0.4322" in report
     assert "🆕 pending" in report
     assert "⏳ watching" in report
+    # 30/07, operator request: a real DexScreener link per token, reusing the
+    # existing services/dexscreener.py::token_url (no new URL pattern).
+    assert f"https://dexscreener.com/base/0x{'a' * 40}" in report
+    assert f"https://dexscreener.com/base/0x{'b' * 40}" in report
+    assert f"https://dexscreener.com/base/0x{'c' * 40}" in report
 
 
 @pytest.mark.asyncio

@@ -2714,6 +2714,7 @@ async def _handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     from aria_core.limit_orders import get_active_orders
+    from aria_core.services.dexscreener import token_url
 
     orders = await get_active_orders()
     if not orders:
@@ -2735,11 +2736,16 @@ async def _handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         for o in wallet_orders[:_MAX_SHOWN_PER_WALLET]:
             target = o.get("target_price")
             target_str = f"{target:.6g}" if isinstance(target, (int, float)) else "?"
+            # 30/07, operator request: real gap otherwise -- no way to open
+            # the chart directly from this list. Pure construction (no
+            # network call), reuses the same token_url already used
+            # elsewhere for real positions (17/07) -- no new URL pattern.
+            link = token_url(o.get("contract") or "", chain=o.get("chain") or "base")
             expires = (o.get("expires_at") or "")[:16].replace("T", " ")
             state_label = "⏳ watching" if o.get("state") == "watching" else "🆕 pending"
             symbol = o.get("symbol") or "?"
             chain = o.get("chain") or "?"
-            lines.append(f"{symbol} ({chain}) — {state_label} — cible {target_str} — expire {expires}")
+            lines.append(f"{symbol} ({chain}) — {state_label} — cible {target_str} — expire {expires} — {link}")
         if len(wallet_orders) > _MAX_SHOWN_PER_WALLET:
             lines.append(f"... +{len(wallet_orders) - _MAX_SHOWN_PER_WALLET} de plus, non affichés")
 
