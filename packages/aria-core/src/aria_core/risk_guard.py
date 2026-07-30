@@ -482,6 +482,23 @@ PRICE_IMPACT_RATIO = 2.0  # standard AMM rule: X% of the pool -> ~2*X% price imp
 # constant, never a cross-module import).
 PRICE_IMPACT_MIN_RR = 1.0
 
+# 30/07 -- real bug found live (CFI, a real limit order): a candidate's raw R/R
+# (11.9) cleared every floor by a wide margin, but the pool's liquidity was only
+# $60k -- ``cap_alloc_to_price_impact`` above degraded the size down to a ~2%
+# stake purely to keep the R/R at its own PRICE_IMPACT_MIN_RR floor (1.0), which
+# is LOWER than the swing pocket's own entry floor (2.0, limit_orders.py's
+# ``_RR_MIN_LIMIT_ORDER_SWING``) -- a trade that had just cleared a real
+# R/R bar was silently re-sized down to a WORSE one. That fix alone doesn't
+# bound the outright SIZE relative to the pool -- it only protects the R/R
+# ratio, and only when target/invalidation are BOTH known (fail-open
+# otherwise, see that function's own docstring). This is the missing hard cap,
+# independent of R/R: never let an order represent more than this fraction of
+# the pool's own liquidity, so a candidate with no computable structural R/R
+# yet still gets a sane ceiling. Chosen so the resulting price impact
+# (PRICE_IMPACT_RATIO * this) tops out at ~2% -- disproportionate market
+# impact even on a "textbook" setup was the whole point of this fix.
+MAX_ALLOC_PCT_OF_POOL_LIQUIDITY = 0.01
+
 
 def _price_impact_pct(alloc_usd: float, pool_liquidity_usd: float) -> float:
     """Estimated price impact (fraction) of an order of ``alloc_usd`` on a pool of
@@ -531,6 +548,30 @@ def cap_alloc_to_price_impact(
     k = PRICE_IMPACT_RATIO / pool_liquidity_usd
     capped_alloc = (target_degraded_entry / entry_price - 1.0) / k
     return max(0.0, min(alloc_usd, capped_alloc))
+
+
+def cap_alloc_to_pool_share(alloc_usd: float, pool_liquidity_usd: float | None) -> float:
+    """Hard cap on the order's own size as a fraction of the pool's REAL
+    liquidity (``MAX_ALLOC_PCT_OF_POOL_LIQUIDITY``) -- independent of, and IN
+    ADDITION TO, ``cap_alloc_to_price_impact`` above.
+
+    Why a separate function rather than folding this into that one: that
+    function only ever activates when target_price/invalidation_price are
+    BOTH known (fail-open otherwise, by its own docstring), and its floor is
+    the trade's R/R ratio, not its outright size -- a candidate with no
+    computable structural R/R yet (or one whose R/R floor is looser than this
+    pocket's own entry bar, the exact CFI bug this fix closes) would sail
+    through it untouched. This one only needs ``pool_liquidity_usd`` to be
+    known, and caps the dollar amount directly.
+
+    Never an increase beyond the entry ``alloc_usd`` (same doctrine as every
+    other cap in this module). Missing/non-positive liquidity -> unchanged,
+    fail-open -- the hard liquidity FLOOR for a candidate to even be
+    considered already lives in ``momentum_entry._MIN_LIQUIDITY_USD``; this
+    caps the ORDER size, never the pool's eligibility."""
+    if alloc_usd <= 0 or not pool_liquidity_usd or pool_liquidity_usd <= 0:
+        return alloc_usd
+    return min(alloc_usd, MAX_ALLOC_PCT_OF_POOL_LIQUIDITY * pool_liquidity_usd)
 
 
 # 07/20 -- #175: ``cap_alloc_to_price_impact`` above already computes a ``degraded_

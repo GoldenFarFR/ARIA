@@ -1335,6 +1335,41 @@ def test_format_limit_order_placed_alert_rsi_divergence_wording_and_real_expiry(
     assert "2.5" in text
 
 
+def test_format_limit_order_placed_alert_shows_golden_pocket_range_to_hold():
+    """Item #234 (30/07), operator feedback ("je ne vois pas la cible d'achat,
+    une fourchette serait appréciée"): a rsi_divergence_pending order has no
+    single buy-trigger price to reach (entry == current price already) -- the
+    zone the price must HOLD while the divergence forms is the closest useful
+    range to show instead."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.1087,
+        "wallet": "swing",
+        "signal_json": _json.dumps({
+            "limit_order_reason": "rsi_divergence_pending", "gp_low": 0.0637954, "gp_high": 0.0776245,
+        }),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "0.0637954" in text
+    assert "0.0776245" in text
+    assert "tenir" in text.lower()
+
+
+def test_format_limit_order_placed_alert_omits_golden_pocket_range_when_absent():
+    """Non-régression : un ordre créé avant ce correctif (pas de gp_low/gp_high
+    dans signal_json) ne doit jamais afficher une fourchette fabriquée."""
+    import json as _json
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.1087,
+        "wallet": "swing",
+        "signal_json": _json.dumps({"limit_order_reason": "rsi_divergence_pending"}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "tenir" not in text.lower()
+
+
 def test_format_limit_order_placed_alert_shows_timeframe_per_pocket():
     """29/07 -- operator request: the alert never stated which candle
     timeframe the setup was analyzed on."""

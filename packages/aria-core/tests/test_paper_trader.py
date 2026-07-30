@@ -2827,15 +2827,18 @@ async def test_open_position_thesis_defaults_to_none(tmp_db):
 
 @pytest.mark.asyncio
 async def test_open_position_shrinks_alloc_on_thin_pool(tmp_db):
-    """50k$ demandés sur un pool à 100k$ (la moitié du pool) -- même cas que
-    TestCapAllocToPriceImpact.test_shrinks_on_thin_pool_matches_hand_computed_
-    breakeven (test_risk_guard.py) : réduit à 10 000$ (vérifié à la main)."""
+    """50k$ demandés sur un pool à 100k$ (la moitié du pool). Deux plafonds
+    s'appliquent en cascade -- le R/R-based (``cap_alloc_to_price_impact``,
+    same case as TestCapAllocToPriceImpact.test_shrinks_on_thin_pool_matches_
+    hand_computed_breakeven in test_risk_guard.py) reduit d'abord a 10 000$,
+    PUIS le plafond de part de pool (Item #233, 30/07 -- 1% de 100 000$ = 1000$)
+    reduit davantage -- le plus strict des deux gagne, jamais l'inverse."""
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(
         A, "AAA", 1.0, target_price=1.5, invalidation_price=0.9,
         alloc_usd=50_000, pool_liquidity_usd=100_000.0, wallet="swing",
     )
-    assert pos["cost_usd"] == pytest.approx(10_000.0, rel=1e-6)
+    assert pos["cost_usd"] == pytest.approx(1_000.0, rel=1e-6)
 
 
 @pytest.mark.asyncio
@@ -2868,7 +2871,9 @@ async def test_run_paper_cycle_threads_liquidity_usd_from_analyzer_to_sizing(tmp
     await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer)
     opens = await pt.get_open_positions()
     assert len(opens) == 1
-    assert opens[0]["cost_usd"] == pytest.approx(10_000.0, rel=1e-6)
+    # Item #233 (30/07): cap_alloc_to_pool_share applies after the R/R-based
+    # cap -- 1% of 100 000$ = 1000$, stricter than the 10 000$ R/R cap.
+    assert opens[0]["cost_usd"] == pytest.approx(1_000.0, rel=1e-6)
 
 
 @pytest.mark.asyncio

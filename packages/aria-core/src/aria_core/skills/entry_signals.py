@@ -265,6 +265,54 @@ def bearish_rsi_divergence(
     return False, ""
 
 
+# 30/07 -- real bug found live, 3 separate cases in one morning (CFI, TIBBIR,
+# FOLKS-on-swing): ``invalidation = gp_low * (1 - 0.02)`` is a FIXED 2% below
+# the zone's own low bound -- but the entry test above tolerates the price
+# sitting up to ``tolerance`` (3%) BELOW ``gp_low`` and still calling it
+# "in the golden pocket". When the entry price is already 2-3% under gp_low,
+# the invalidation (still anchored 2% under gp_low, not under the entry
+# price) can end up a fraction of a percent away from entry -- an
+# R/R in the hundreds that has nothing to do with the trade's real risk.
+# Confirmed structurally on 30/07: the SAME token (FOLKS) at the SAME spot
+# price produced a sane R/R=1.6 on scalping (short candles -> gp_low
+# naturally further from spot) and R/R=132.4 on swing (long candles -> gp_low
+# landed almost exactly at spot) from the exact same formula.
+#
+# Fix: the invalidation can never sit closer to the ENTRY price than a floor
+# derived from the token's own REAL volatility (ATR on these same candles,
+# already the exact doctrine used for the trailing stop on open positions --
+# see paper_trader.py's ATR_TRAIL_MULTIPLIER/MIN_ATR_TRAIL_PCT/MAX_ATR_TRAIL_
+# PCT). Deliberately reuses the SAME numeric values here, independently
+# defined (no cross-module import, same autonomy doctrine already applied
+# elsewhere in this codebase, e.g. risk_guard.PRICE_IMPACT_MIN_RR) -- a
+# stop-loss-shaped floor and a trailing-stop width are the same concept
+# (a sane distance given this token's real volatility), so there's no reason
+# for the two to diverge.
+ATR_INVALIDATION_MULTIPLIER = 2.5
+MIN_ATR_INVALIDATION_PCT = 0.05
+MAX_ATR_INVALIDATION_PCT = 0.40
+
+
+def _invalidation_floor_pct(candles: list[Candle]) -> float | None:
+    """ATR-derived floor on how close the invalidation may sit to the entry
+    price, as a fraction. ``None`` if ATR isn't computable yet (insufficient
+    candles) -- caller falls back to the pre-existing fixed-2%-below-gp_low
+    behavior, never a fabricated distance."""
+    from aria_core.skills.indicators import atr_series
+
+    atr_values = atr_series(candles)
+    last_atr = atr_values[-1] if atr_values else None
+    if last_atr is None or last_atr <= 0:
+        return None
+    close = candles[-1].close
+    if not close or close <= 0:
+        return None
+    return max(
+        MIN_ATR_INVALIDATION_PCT,
+        min(MAX_ATR_INVALIDATION_PCT, ATR_INVALIDATION_MULTIPLIER * (last_atr / close)),
+    )
+
+
 def detect_entry(
     candles: list[Candle],
     *,
@@ -356,10 +404,29 @@ def detect_entry(
     entry = close
     if execution_price is not None and execution_price > 0:
         entry = execution_price
-    invalidation = fib["gp_low"] * (1 - 0.02)
+    # Structural level: independent of ``entry``, describes the setup itself,
+    # never a fill price. This is what gates whether ``entry`` is even
+    # consistent with the setup (below -- see the ``rr`` guard below).
+    structural_invalidation = fib["gp_low"] * (1 - 0.02)
+    invalidation = structural_invalidation
+    # 30/07 -- ATR floor (see this module's own comment above): never let the
+    # invalidation sit closer to ENTRY than this token's real volatility
+    # allows, regardless of how close gp_low happens to be to the entry
+    # price. Takes the LOWER of the two -- a naturally wide Fibonacci
+    # structure is never tightened, only a dangerously narrow one is widened.
+    atr_floor_pct = _invalidation_floor_pct(candles)
+    if atr_floor_pct is not None and entry > 0:
+        invalidation = min(invalidation, entry * (1 - atr_floor_pct))
     target = fib["high"]
     rr = None
-    if entry > invalidation and target > entry:
+    # Consistency check against the STRUCTURAL level, never the ATR-widened
+    # ``invalidation`` -- the ATR floor is anchored ON entry (entry * (1 - x),
+    # x > 0), so it is ALWAYS strictly below entry by construction and could
+    # never itself catch an execution_price that has broken clean through the
+    # real support (structural_invalidation) -- it would silently "follow"
+    # entry down and still produce a number. This guard is what a corrupted/
+    # aberrant execution_price actually needs to be caught by.
+    if entry > structural_invalidation and target > entry:
         rr = round((target - entry) / (entry - invalidation), 1)
     return EntrySignal(
         present=True,

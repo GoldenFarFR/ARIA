@@ -285,8 +285,10 @@ def test_detect_entry_exposes_golden_pocket_bounds():
     sig = detect_entry(_candles(_setup_series()), lookback=25)
     assert sig.gp_low is not None and sig.gp_high is not None
     assert sig.gp_low < sig.gp_high
-    # invalidation = gp_low avec une marge de 2% -- coherence interne.
-    assert sig.invalidation == pytest.approx(sig.gp_low * 0.98)
+    # 30/07 -- invalidation = min(gp_low avec une marge de 2%, plancher ATR) : jamais
+    # PLUS PRES de l'entree que la formule Fibonacci fixe (le plancher ATR ne peut que
+    # l'ELOIGNER davantage si le token est plus volatil que 2%, jamais la resserrer).
+    assert sig.invalidation <= sig.gp_low * 0.98 + 1e-9
 
 
 def test_detect_entry_absent_on_uptrend():
@@ -376,10 +378,15 @@ def test_execution_price_replaces_close_as_rr_reference():
     assert exec_based.present is True
     assert exec_based.entry == higher_execution_price
     assert exec_based.entry != close_based.entry
-    # invalidation/target restent des niveaux Fibonacci/RSI réels -- inchangés, ils
-    # décrivent la STRUCTURE du setup, pas un prix de remplissage.
-    assert exec_based.invalidation == close_based.invalidation
+    # target reste un niveau Fibonacci reel -- inchange, il decrit la STRUCTURE du
+    # setup, pas un prix de remplissage.
     assert exec_based.target == close_based.target
+    # 30/07 -- invalidation peut desormais differer legerement : le plancher ATR
+    # (min(fib, entry*(1-atr_floor))) est ancre sur ENTRY, donc un execution_price
+    # different peut deplacer LE PLANCHER (jamais le niveau Fibonacci lui-meme, qui
+    # reste identique en interne) -- les deux restent neanmoins <= la formule fib pure.
+    assert exec_based.invalidation <= exec_based.gp_low * 0.98 + 1e-9
+    assert close_based.invalidation <= close_based.gp_low * 0.98 + 1e-9
     # Un prix d'entrée plus haut (plus proche de la cible, plus loin de l'invalidation
     # en absolu -- mais ici le déplacement du dénominateur domine) change le R/R --
     # jamais silencieusement ignoré.
@@ -392,7 +399,10 @@ def test_execution_price_inconsistent_with_invalidation_falls_back_to_close():
     (``entry > invalidation``)."""
     candles = _candles(_setup_series())
     close_based = detect_entry(candles, lookback=25)
-    absurd_price = close_based.invalidation - 0.001  # sous l'invalidation -- aberrant
+    # 30/07 -- largement sous gp_low (pas juste sous l'ancienne invalidation calculee) :
+    # reste incoherent quel que soit le plancher ATR applique sur CE nouvel entry
+    # (le plancher ne peut jamais faire remonter l'invalidation au-dessus de gp_low*0.98).
+    absurd_price = close_based.gp_low * 0.5
     exec_based = detect_entry(candles, lookback=25, execution_price=absurd_price)
 
     assert exec_based.present is True

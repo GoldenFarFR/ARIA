@@ -1791,6 +1791,14 @@ async def open_position(
     alloc = risk_guard.cap_alloc_to_price_impact(
         alloc, entry_price, target_price, invalidation_price, pool_liquidity_usd,
     )
+    # Item #233 (30/07, real bug found live on CFI): a hard cap on the order's
+    # OWN SIZE relative to the pool, independent of (and in addition to) the
+    # R/R-based cap just above -- that one only fires when target/invalidation
+    # are both known, and its floor (PRICE_IMPACT_MIN_RR=1.0) is looser than
+    # some pockets' own entry bar, so a signal could clear its real R/R floor
+    # and still get re-sized down to a worse one. This one activates whenever
+    # liquidity alone is known.
+    alloc = risk_guard.cap_alloc_to_pool_share(alloc, pool_liquidity_usd)
     alloc = min(alloc, cash)
     if alloc <= 0:
         return None

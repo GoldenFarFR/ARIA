@@ -2364,6 +2364,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
+    ("order", "Liste les ordres limite en cours (pending/watching), par poche"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
     ("polymarket", "Portefeuille papier Polymarket (équité, positions ouvertes, dernières résolutions)"),
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
@@ -2697,6 +2698,52 @@ async def _handle_goplusqueue(update: Update, context: ContextTypes.DEFAULT_TYPE
     from aria_core.services.goplus_watchlist import format_status_report
 
     await _reply(message, await format_status_report())
+
+
+async def _handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/order -- lists every currently active (pending or watching) limit
+    order across all momentum pockets (30/07, real gap found: no Telegram
+    command exposed ``limit_orders.get_active_orders()`` at all, even though
+    the background cycle already reads it every pass). Read-only
+    diagnostic, no argument -- same shape as /goplusqueue (self-populating,
+    nothing to inject manually)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    from aria_core.limit_orders import get_active_orders
+
+    orders = await get_active_orders()
+    if not orders:
+        await _reply(message, "📭 Aucun ordre limite en cours (pending ou watching).")
+        return
+
+    by_wallet: dict[str, list[dict]] = {}
+    for o in orders:
+        by_wallet.setdefault(o.get("wallet") or "?", []).append(o)
+
+    # No silent cap: shows every order per wallet up to this ceiling, and
+    # says explicitly how many were left out otherwise -- never a truncated
+    # list that reads as complete.
+    _MAX_SHOWN_PER_WALLET = 25
+    lines = [f"📋 Ordres limite en cours — {len(orders)} au total."]
+    for wallet in sorted(by_wallet):
+        wallet_orders = by_wallet[wallet]
+        lines.append(f"\n[{wallet}] ({len(wallet_orders)})")
+        for o in wallet_orders[:_MAX_SHOWN_PER_WALLET]:
+            target = o.get("target_price")
+            target_str = f"{target:.6g}" if isinstance(target, (int, float)) else "?"
+            expires = (o.get("expires_at") or "")[:16].replace("T", " ")
+            state_label = "⏳ watching" if o.get("state") == "watching" else "🆕 pending"
+            symbol = o.get("symbol") or "?"
+            chain = o.get("chain") or "?"
+            lines.append(f"{symbol} ({chain}) — {state_label} — cible {target_str} — expire {expires}")
+        if len(wallet_orders) > _MAX_SHOWN_PER_WALLET:
+            lines.append(f"... +{len(wallet_orders) - _MAX_SHOWN_PER_WALLET} de plus, non affichés")
+
+    await _reply(message, "\n".join(lines))
 
 
 def _format_judge_verdict(v, lang: str = "fr") -> str:
@@ -3494,6 +3541,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("walletscore", _handle_walletscore))
     app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))
+    app.add_handler(CommandHandler("order", _handle_order))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))

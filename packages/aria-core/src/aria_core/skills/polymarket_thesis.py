@@ -147,13 +147,16 @@ def _horizon_thresholds(market: PolymarketCandidateMarket) -> tuple[float, float
         return MAX_VOTE_SPREAD_SHORT_HORIZON, MIN_EDGE_PROBABILITY_SHORT_HORIZON
     return MAX_VOTE_SPREAD, MIN_EDGE_PROBABILITY
 
-# Explicit operator decision, precise wording: "ses recherches avant de
-# parier doivent lui permettre de dire oui je suis sur a 85% que le parie
-# mise va reussir" -- floor on ARIA's own estimated probability of winning
-# the SIDE SHE ACTUALLY BETS ON (not just the raw "Yes" probability --
-# betting NO wins when the "Yes" probability she estimated is LOW, so the
-# relevant number there is 1 - probability).
-MIN_WIN_PROBABILITY = 0.85
+# Explicit operator decision (original, 26/07), precise wording: "ses
+# recherches avant de parier doivent lui permettre de dire oui je suis sur a
+# 85% que le parie mise va reussir" -- floor on ARIA's own estimated
+# probability of winning the SIDE SHE ACTUALLY BETS ON (not just the raw
+# "Yes" probability -- betting NO wins when the "Yes" probability she
+# estimated is LOW, so the relevant number there is 1 - probability).
+# Lowered to 0.78 (30/07, explicit operator decision) -- the bar was found too
+# strict in practice (near-zero bets cleared it), 0.78 was chosen as the new
+# floor.
+MIN_WIN_PROBABILITY = 0.78
 
 # "Quality probability system" (operator decision #3 above): N independent
 # votes, same question/context, must agree within this spread (probability

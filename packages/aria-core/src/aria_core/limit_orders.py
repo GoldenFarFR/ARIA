@@ -974,6 +974,19 @@ def format_limit_order_placed_alert(order: dict) -> str:
             f"{name} -- déjà dans la golden pocket ({target:.6g}), divergence RSI pas encore confirmée",
             "ARIA surveille la formation de la divergence (pas un niveau de prix à atteindre) avant d'acheter.",
         ]
+        # Item #234 (30/07), operator feedback ("je ne vois pas la cible
+        # d'achat, une fourchette serait appréciée -- il suffirait de prédire
+        # ce que le graphique doit faire pour valider la divergence"): no
+        # single buy-trigger level exists here (entry == current price
+        # already), so the closest useful thing to show is the zone the price
+        # must HOLD while the RSI divergence forms -- breaking below it would
+        # invalidate the setup before the pattern ever confirms. ``None`` on
+        # orders created before this fix (no gp_low/gp_high key) -> omitted,
+        # never a fabricated range.
+        gp_low = sig.get("gp_low")
+        gp_high = sig.get("gp_high")
+        if isinstance(gp_low, (int, float)) and isinstance(gp_high, (int, float)) and gp_low > 0:
+            lines.append(f"Zone à tenir pendant la formation : {gp_low:.6g}–{gp_high:.6g}")
         expiry_line = f"Expire dans {expiry_hours:.0f}h si la divergence ne se confirme jamais."
     else:
         lines = [
