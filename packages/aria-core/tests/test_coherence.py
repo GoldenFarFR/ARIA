@@ -417,6 +417,38 @@ def test_operator_2fa_totp_wired():
     )
 
 
+def test_operator_mobile_kill_switch_requires_fresh_totp_and_anti_replay():
+    """Item #201 Phase 3 -- /aria/ops/stop and /aria/ops/resume are the only REST
+    surface able to arm or lift the kill-switch. Two invariants are locked here:
+    (1) a fresh TOTP code is demanded on EVERY call, so a stolen sliding session is
+    never enough on its own; (2) a code is single-use, enforced by a UNIQUE
+    constraint in a dedicated table -- a captured code can never lift a STOP the
+    operator legitimately armed. Also pins the reuse of the EXISTING
+    kill_incident_log.TRIGGER_MANUAL, never a new trigger constant.
+    """
+    route = _read("vanguard/backend/app/api/routes/operator_mobile.py")
+    assert '@router.post("/stop")' in route, "the mobile kill-switch arm route disappeared"
+    assert '@router.post("/resume")' in route, "the mobile kill-switch lift route disappeared"
+    assert route.count("await _require_fresh_totp(") == 2, (
+        "both /stop and /resume must demand a fresh TOTP -- one of them lost its "
+        "second factor, or a third state-changing route was added without it."
+    )
+    assert "totp_replay.claim_code" in route, (
+        "the TOTP anti-replay claim is gone: a captured code becomes reusable for "
+        "its whole validity window."
+    )
+    assert "kill_incident_log.TRIGGER_MANUAL" in route, (
+        "the mobile kill-switch no longer logs its incidents under the existing "
+        "manual trigger (audit hole, or a duplicated trigger constant)."
+    )
+
+    replay = _read("vanguard/backend/app/auth/operator_totp_replay.py")
+    assert "UNIQUE(account_id, totp_code)" in replay, (
+        "anti-replay downgraded to something other than a DB-level unique "
+        "constraint: two simultaneous calls could both pass a check-then-mark race."
+    )
+
+
 def test_site_login_google_wired():
     """Site : Google dans les méthodes de connexion Privy câblé.
 

@@ -551,6 +551,7 @@ de zéro.
 - `docs/HANDOFF_VPS_OPS.md` — git, déploiement, worktrees, dispatch VPS.
 - `docs/HANDOFF_DUNE.md` — sourcing SQL Dune Analytics, pièges de requête.
 - `docs/HANDOFF_TELEGRAM.md` — routage langage naturel, workflows conversationnels, aria-brain.
+- `docs/HANDOFF_OPERATOR_MOBILE.md` — canal de secours mobile (compte/sessions/chat/kill-switch REST).
 - `docs/HANDOFF_SECURITE.md` — secrets, CI, rotations de clés, accès.
 - `docs/HANDOFF_MOTEUR_LEGITIMITE.md` — score de sécurité, mint_authority, safety_screen (poche VC).
 - `docs/HANDOFF_DOPPLER.md` — lecture de prix on-chain Uniswap v4 pour les tokens Bankr/Doppler.
