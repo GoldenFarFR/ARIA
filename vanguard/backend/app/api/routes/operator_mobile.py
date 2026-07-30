@@ -22,6 +22,7 @@ from aria_core import kill_incident_log
 from aria_core.admin_totp import verify_totp
 from aria_core.brain import aria_brain
 from aria_core.locale import LANG_FR
+from aria_core.models import ChatResponse
 from aria_core.outgoing_pause import pause, pause_status, resume
 from aria_core.public_mode import is_operator_request
 
@@ -242,6 +243,41 @@ def _actor(auth: dict) -> str:
     return f"mobile:{auth.get('account_id')}"
 
 
+# Real incident (30/07): the operator typed "/stop" as a plain chat message and
+# ARIA answered "Stop confirmed" -- a pure LLM confabulation, since the free-text
+# chat only ever calls aria_brain.process(), never outgoing_pause.pause(). Proven
+# live: a routine limit-order alert kept arriving right after the fake "stop".
+# Telegram never has this problem because /stop there is a dedicated
+# CommandHandler intercepted BEFORE the brain (see gateway/telegram_bot.py's
+# _handle_stop) -- this mirrors that same interception for this channel, until
+# the app gets its own real STOP button calling POST /stop directly (tracked
+# separately, lower priority). Matched on the FIRST WORD only, so a genuine
+# question that happens to contain "stop" (e.g. "why no stop loss on this
+# token?") is never caught by mistake.
+_CONTROL_COMMANDS = {"/stop", "/resume", "/pause", "/start"}
+
+_CONTROL_COMMAND_REPLY = {
+    "fr": (
+        "Ce chat ne peut pas encore armer ou lever le kill-switch — un message ici "
+        "n'est qu'une conversation avec ARIA, jamais une action réelle. Utilise "
+        "Telegram (/stop, /resume) pour l'instant ; un vrai bouton dans cette app "
+        "arrivera dans une prochaine mise à jour."
+    ),
+    "en": (
+        "This chat cannot yet arm or lift the kill-switch — a message here is only "
+        "ever a conversation with ARIA, never a real action. Use Telegram (/stop, "
+        "/resume) for now; a real button in this app is coming in a later update."
+    ),
+}
+
+
+def _control_command_reply(message: str, lang: str) -> ChatResponse | None:
+    first_word = message.strip().split(maxsplit=1)[0].lower() if message.strip() else ""
+    if first_word not in _CONTROL_COMMANDS:
+        return None
+    return ChatResponse(reply=_CONTROL_COMMAND_REPLY.get(lang, _CONTROL_COMMAND_REPLY["en"]))
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request):
     ip = client_ip(request)
@@ -355,6 +391,15 @@ async def chat(body: ChatBody, request: Request):
     )
     if not allowed:
         raise HTTPException(status_code=429, detail="Too many messages — slow down.")
+
+    # Checked BEFORE the brain, never after: a fixed reply here, the brain never
+    # invoked at all -- see _control_command_reply's own docstring for why.
+    control_reply = _control_command_reply(body.message, body.lang)
+    if control_reply is not None:
+        result_dict = control_reply.model_dump()
+        if idempotency_cache_key:
+            _idempotency_set(idempotency_cache_key, result_dict)
+        return result_dict
 
     result = await aria_brain.process(
         body.message.strip(),

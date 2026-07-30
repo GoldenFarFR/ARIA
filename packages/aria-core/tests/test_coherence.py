@@ -449,6 +449,27 @@ def test_operator_mobile_kill_switch_requires_fresh_totp_and_anti_replay():
     )
 
 
+def test_operator_mobile_chat_never_confabulates_a_kill_switch_action():
+    """Real incident (30/07): the operator typed "/stop" as a plain chat message
+    and ARIA answered "Stop confirmed" -- a pure LLM confabulation, proven live by
+    a routine trading alert that kept arriving right after. The free-text chat
+    must intercept a control command BEFORE calling the brain, with a fixed
+    reply, never a generated one that could falsely claim an action happened."""
+    route = _read("vanguard/backend/app/api/routes/operator_mobile.py")
+    assert "_control_command_reply(" in route, "the confabulation guard on /stop-style chat messages is gone"
+    assert route.count('"/stop"') >= 1 and route.count('"/resume"') >= 1, (
+        "the guarded command set lost /stop or /resume -- the exact commands "
+        "that caused the real incident this test locks in"
+    )
+    # The guard must run BEFORE aria_brain.process is ever called for that message.
+    guard_pos = route.find("_control_command_reply(body.message")
+    brain_pos = route.find("await aria_brain.process(")
+    assert 0 <= guard_pos < brain_pos, (
+        "the guard no longer runs before the brain call -- a control command "
+        "could reach AriaBrain.process() and be confabulated again"
+    )
+
+
 def test_site_login_google_wired():
     """Site : Google dans les méthodes de connexion Privy câblé.
 

@@ -330,6 +330,86 @@ async def test_chat_rejects_unsupported_lang(client, totp_secret, monkeypatch):
     assert res.status_code == 422
 
 
+# ── Control-command confabulation guard (real incident, 30/07) ─────────────
+# The operator typed "/stop" as a plain chat message and got back "Stop confirmed"
+# from the LLM -- a pure confabulation, proven live by a routine trading alert
+# that kept arriving right after. These lock the fix: /stop, /resume, /pause,
+# /start are intercepted BEFORE the brain, with a fixed reply, never a generated one.
+
+@pytest.mark.asyncio
+async def test_chat_stop_command_never_reaches_the_brain(client, totp_secret, monkeypatch):
+    async def _fake_process(*args, **kwargs):
+        raise AssertionError("brain must not be reached for a /stop chat message")
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    res = await client.post("/api/aria/ops/chat", json={"message": "/stop"}, headers=headers)
+    assert res.status_code == 200
+    assert "kill-switch" in res.json()["reply"]
+    assert outgoing_pause.is_paused() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/resume", "/pause", "/start", "/STOP", "/Stop "])
+async def test_chat_intercepts_every_control_command_case_insensitively(
+    client, totp_secret, monkeypatch, command,
+):
+    async def _fake_process(*args, **kwargs):
+        raise AssertionError(f"brain must not be reached for {command!r}")
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    res = await client.post("/api/aria/ops/chat", json={"message": command}, headers=headers)
+    assert res.status_code == 200
+    assert "kill-switch" in res.json()["reply"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stop_reply_respects_lang(client, totp_secret, monkeypatch):
+    async def _fake_process(*args, **kwargs):
+        raise AssertionError("brain must not be reached")
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    res = await client.post(
+        "/api/aria/ops/chat", json={"message": "/stop", "lang": "en"}, headers=headers,
+    )
+    assert res.status_code == 200
+    assert "kill-switch" in res.json()["reply"]
+    assert "Telegram" in res.json()["reply"]
+
+
+@pytest.mark.asyncio
+async def test_chat_mentioning_stop_mid_sentence_still_reaches_the_brain(
+    client, totp_secret, monkeypatch,
+):
+    """The guard must never catch a genuine question just because it contains
+    the word "stop" -- only an exact /stop-style first word."""
+    captured = {}
+
+    async def _fake_process(message, *, lang, visitor_id, public_mode):
+        captured["message"] = message
+        return {"response": "ok"}
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    res = await client.post(
+        "/api/aria/ops/chat",
+        json={"message": "why is there no stop loss on this token?"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert captured["message"] == "why is there no stop loss on this token?"
+
+
 @pytest.mark.asyncio
 async def test_chat_idempotency_key_prevents_double_execution(client, totp_secret, monkeypatch):
     """Plan requirement (Phase 2): a client-side timeout + server-side success
