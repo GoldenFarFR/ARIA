@@ -1444,6 +1444,22 @@ def _caption_is_avatar_upload(caption: str) -> bool:
     )
 
 
+def _caption_requests_manual_add(caption: str) -> bool:
+    """Item #236 follow-up, 30/07: an image sent WITHOUT this explicit signal
+    must never silently queue tokens (same doctrine as
+    ``_caption_is_avatar_upload`` above -- a screenshot sent for an ordinary
+    question, e.g. "is this legit?", must fall through to the normal vision
+    reply, not a side effect). Only an unambiguous keyword (``/add``, "ajoute",
+    "add") in the caption triggers the multi-ticker extraction + queue path."""
+    text = (caption or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if lower.startswith("/add"):
+        return True
+    return bool(re.search(r"\bajoute[rz]?\b|\badd\b", lower))
+
+
 async def _handle_avatar_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _admin_check_reply(update):
         return
@@ -1601,6 +1617,19 @@ async def _handle_vision_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     image_data_uri = f"data:image/jpeg;base64,{base64.b64encode(data).decode('ascii')}"
+
+    # Item #236 follow-up, 30/07, operator request ("ou mieux aria ajoute les
+    # tokens avec le screenshot que je lui envoie") -- an EXPLICIT caption
+    # keyword (never the default, unconditional path -- a screenshot sent for
+    # an ordinary question must never silently queue tokens) switches to
+    # multi-ticker extraction + queuing instead of the normal vision reply.
+    if _caption_requests_manual_add(caption):
+        from aria_core.skills.image_token_curiosity import queue_tokens_from_screenshot
+
+        summary = await queue_tokens_from_screenshot(image_data_uri)
+        await _reply(message, summary)
+        return
+
     prompt = caption or "Décris cette image et donne ta lecture."
 
     from aria_core.locale import LANG_FR, detect_operator_lang

@@ -273,3 +273,119 @@ async def test_verify_token_mention_degrades_on_search_exception(monkeypatch):
     monkeypatch.setattr(curiosity, "_extract_ticker", fake_extract)
     monkeypatch.setattr(curiosity, "search_pairs", raising)
     assert await curiosity.verify_token_mention("uri") == ""
+
+
+# ── _extract_all_tickers / queue_tokens_from_screenshot (Item #236 follow-up) ──
+
+@pytest.fixture(autouse=True)
+def _isolated_manual_candidates_db(tmp_path, monkeypatch):
+    from aria_core import manual_candidates as mcq
+
+    monkeypatch.setattr(mcq, "DB_PATH", str(tmp_path / "manual_candidates_test.db"))
+
+
+@pytest.mark.asyncio
+async def test_extract_all_tickers_parses_multiple_lines(monkeypatch):
+    async def fake_chat(*a, **kw):
+        return "TICKER: SOL\nTICKER: $VIRTUAL\nTICKER: BRETT"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    assert await curiosity._extract_all_tickers("uri") == ["SOL", "VIRTUAL", "BRETT"]
+
+
+@pytest.mark.asyncio
+async def test_extract_all_tickers_dedupes(monkeypatch):
+    async def fake_chat(*a, **kw):
+        return "TICKER: SOL\nTICKER: sol\nTICKER: SOL"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    assert await curiosity._extract_all_tickers("uri") == ["SOL"]
+
+
+@pytest.mark.asyncio
+async def test_extract_all_tickers_empty_on_aucun(monkeypatch):
+    async def fake_chat(*a, **kw):
+        return "AUCUN"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    assert await curiosity._extract_all_tickers("uri") == []
+
+
+@pytest.mark.asyncio
+async def test_extract_all_tickers_caps_at_max(monkeypatch):
+    lines = "\n".join(f"TICKER: TOK{i}" for i in range(50))
+
+    async def fake_chat(*a, **kw):
+        return lines
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat)
+    tickers = await curiosity._extract_all_tickers("uri")
+    assert len(tickers) == curiosity._MAX_TICKERS_PER_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_no_tickers(monkeypatch):
+    async def fake_extract(uri):
+        return []
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", fake_extract)
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+    assert "Aucun ticker" in summary
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_degrades_on_extraction_failure(monkeypatch):
+    async def raising(uri):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", raising)
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+    assert "reessaie" in summary
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_queues_resolved_and_reports_unresolved(monkeypatch):
+    from aria_core import manual_candidates as mcq
+
+    async def fake_extract(uri):
+        return ["SOL", "GHOST", "AMBIG"]
+
+    async def fake_search(ticker):
+        if ticker == "SOL":
+            return [_pair(symbol="SOL", address="0xsol", liquidity=500_000.0, chain="base")]
+        if ticker == "AMBIG":
+            return [
+                _pair(symbol="AMBIG", address="0xone", liquidity=100_000.0),
+                _pair(symbol="AMBIG", address="0xtwo", liquidity=90_000.0),
+            ]
+        return []
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", fake_extract)
+    monkeypatch.setattr(curiosity, "search_pairs", fake_search)
+
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+
+    assert "3 ticker(s)" in summary
+    assert "1 ajoute" in summary
+    assert "2 non resolu" in summary
+    assert "GHOST" in summary and "AMBIG" in summary
+
+    pending = await mcq.list_pending_manual_candidates()
+    assert len(pending) == 1
+    assert pending[0]["contract"] == "0xsol"
+    assert pending[0]["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_tolerates_search_failure(monkeypatch):
+    async def fake_extract(uri):
+        return ["SOL"]
+
+    async def raising(ticker):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", fake_extract)
+    monkeypatch.setattr(curiosity, "search_pairs", raising)
+
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+    assert "1 non resolu" in summary

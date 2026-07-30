@@ -163,3 +163,104 @@ async def verify_token_mention(image_data_uri: str) -> str:
         "de diligence produit)."
     )
     return "\n".join(lines)
+
+
+# Item #236 follow-up (30/07, operator request: "aria ajoute les tokens avec
+# le screenshot que je lui envoie") -- a real screener page (DexScreener
+# trending, etc.) shows DOZENS of tokens at once, unlike the single-mention
+# case above (an X post about ONE token). Sane cap against a runaway/
+# hallucinated list -- a real screener page rarely shows more than this many
+# rows above the fold anyway.
+_MAX_TICKERS_PER_IMAGE = 30
+
+
+async def _extract_all_tickers(image_data_uri: str) -> list[str]:
+    """Multi-ticker variant of ``_extract_ticker`` -- used ONLY by the
+    explicit-caption queue path (``queue_tokens_from_screenshot``), never by
+    the default single-ticker curiosity check above. Deduplicated,
+    order-preserving, capped at ``_MAX_TICKERS_PER_IMAGE``."""
+    from aria_core.llm import chat_with_context
+
+    raw = await chat_with_context(
+        "Regarde cette image (probablement un tableau ou un ecran de tri de "
+        "tokens crypto, ex. un screener DexScreener). Liste TOUS les tickers "
+        "ou symboles de tokens visibles.",
+        "Reponds STRICTEMENT avec un ticker par ligne, format 'TICKER: <symbole>', "
+        "rien avant, rien apres. Si aucun ticker n'est visible, reponds 'AUCUN'.",
+        None,
+        temperature=0.0,
+        max_tokens=400,
+        image_data_uri=image_data_uri,
+    )
+    if not raw:
+        return []
+    raw = raw.strip()
+    if raw.upper() in _NO_TICKER_MARKERS:
+        return []
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        m = _TICKER_RE.search(line)
+        if not m:
+            continue
+        ticker = m.group(1).strip().lstrip("$").upper()
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            tickers.append(ticker)
+        if len(tickers) >= _MAX_TICKERS_PER_IMAGE:
+            break
+    return tickers
+
+
+async def queue_tokens_from_screenshot(image_data_uri: str) -> str:
+    """Explicit-caption-only flow (``_caption_requests_manual_add`` in
+    ``gateway/telegram_bot.py`` gates this -- an image sent without that
+    signal never reaches here). Extracts every ticker visible, resolves each
+    to a real contract via DexScreener (same ``_pick_dominant_match`` dominant-
+    liquidity logic as the single-ticker path above -- never guesses between
+    several unrelated tokens sharing a ticker), and queues every resolved one
+    into ``manual_candidates`` -- the SAME downstream pool and hard gates
+    (honeypot/liquidity/volume/wash-trading/holder concentration/R-R) as
+    ``/add`` or an auto-discovered candidate, never a buy shortcut. Never
+    silent: always reports counts, including tickers that could not be
+    resolved, rather than a bare confirmation."""
+    try:
+        tickers = await _extract_all_tickers(image_data_uri)
+    except Exception as exc:  # noqa: BLE001 -- never raises to the caller
+        logger.info("image_token_curiosity: multi-ticker extraction failed (%s)", exc)
+        return "Je n'ai pas reussi a lire les tickers de cette image, reessaie."
+    if not tickers:
+        return "Aucun ticker lisible dans cette image."
+
+    from aria_core.manual_candidates import add_manual_candidate
+
+    queued: list[str] = []
+    unresolved: list[str] = []
+    for ticker in tickers:
+        try:
+            pairs = await search_pairs(ticker)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("image_token_curiosity: dexscreener search failed for %s (%s)", ticker, exc)
+            unresolved.append(ticker)
+            continue
+        match = _pick_dominant_match(ticker, pairs)
+        if match is None or not match.base_address:
+            unresolved.append(ticker)
+            continue
+        chain = match.chain_id or "base"
+        await add_manual_candidate(match.base_address, chain)
+        queued.append(f"{ticker} ({chain})")
+
+    lines = [f"📸 {len(tickers)} ticker(s) detecte(s) dans l'image."]
+    if queued:
+        lines.append(f"✅ {len(queued)} ajoute(s) a la file de decouverte : " + ", ".join(queued))
+    if unresolved:
+        lines.append(
+            f"⚠️ {len(unresolved)} non resolu(s) (ambigu ou introuvable sur DexScreener) : "
+            + ", ".join(unresolved)
+        )
+    lines.append(
+        "Passeront par les memes garde-fous (honeypot/liquidite/volume/wash-trading/R-R) "
+        "qu'un candidat trouve automatiquement -- jamais un achat force."
+    )
+    return "\n".join(lines)

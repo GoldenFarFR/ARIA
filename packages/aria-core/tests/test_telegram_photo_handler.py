@@ -427,3 +427,73 @@ def test_vision_gate_off_by_default(monkeypatch):
 def test_vision_gate_on_via_env(monkeypatch):
     monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
     assert telegram_bot.vision_enabled() is True
+
+
+class TestCaptionRequestsManualAdd:
+    """Tests directs sur _caption_requests_manual_add (Item #236 follow-up, 30/07)."""
+
+    def test_empty_caption_never_requests_add(self):
+        assert telegram_bot._caption_requests_manual_add("") is False
+        assert telegram_bot._caption_requests_manual_add("   ") is False
+
+    def test_slash_add_prefix_triggers(self):
+        assert telegram_bot._caption_requests_manual_add("/add") is True
+        assert telegram_bot._caption_requests_manual_add("/add base") is True
+
+    def test_explicit_ajoute_keyword_triggers(self):
+        assert telegram_bot._caption_requests_manual_add("ajoute ces tokens") is True
+        assert telegram_bot._caption_requests_manual_add("ajoutez les") is True
+        assert telegram_bot._caption_requests_manual_add("add these") is True
+
+    def test_ordinary_question_never_triggers(self):
+        assert telegram_bot._caption_requests_manual_add("c'est quoi ce token ?") is False
+        assert telegram_bot._caption_requests_manual_add("juge cette situation") is False
+
+
+@pytest.mark.asyncio
+async def test_vision_ajoute_caption_routes_to_screenshot_queue_not_llm(monkeypatch):
+    """Item #236 follow-up, 30/07: an explicit 'ajoute' caption on a photo
+    must never reach the normal LLM vision reply -- it queues tokens instead."""
+    llm_called = {"value": False}
+
+    async def fake_llm_response(*a, **kw):
+        llm_called["value"] = True
+        return "ne devrait jamais etre appele"
+
+    async def fake_queue(image_data_uri):
+        return "📸 3 ticker(s) detecte(s) dans l'image.\n✅ 2 ajoute(s)."
+
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
+    monkeypatch.setattr(
+        "aria_core.skills.image_token_curiosity.queue_tokens_from_screenshot", fake_queue,
+    )
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    caption = "ajoute ces tokens"
+    update = FakeUpdate(caption=caption, user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), caption)
+
+    assert llm_called["value"] is False
+    assert update.message.replies == ["📸 3 ticker(s) detecte(s) dans l'image.\n✅ 2 ajoute(s)."]
+
+
+@pytest.mark.asyncio
+async def test_vision_ordinary_caption_still_reaches_llm_not_screenshot_queue(monkeypatch):
+    """Non-regression: a caption without the explicit 'ajoute'/'add' signal
+    must never trigger the screenshot-queue side effect."""
+    async def fake_llm_response(message, lang, *, public=False, image_data_uri=None, **kw):
+        return "voici ma lecture"
+
+    async def fail_queue(image_data_uri):
+        raise AssertionError("ne doit jamais etre appele sans legende explicite")
+
+    monkeypatch.setattr(type(brain_mod.aria_brain), "_llm_response", staticmethod(fake_llm_response))
+    monkeypatch.setattr(
+        "aria_core.skills.image_token_curiosity.queue_tokens_from_screenshot", fail_queue,
+    )
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "1")
+
+    update = FakeUpdate(caption="juge cette situation", user_id=42)
+    await telegram_bot._handle_vision_photo(update, FakeContext(), "juge cette situation")
+
+    assert update.message.replies == ["voici ma lecture"]
