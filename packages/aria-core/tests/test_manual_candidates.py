@@ -1,0 +1,94 @@
+"""Item #236 (30/07, operator request: /add) -- manually-queued discovery
+candidates. Persisted (survives redeployments, same doctrine as
+momentum_blacklist.py), expires after MANUAL_CANDIDATE_TTL_DAYS if never
+consumed."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from aria_core import manual_candidates as mc
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "manual_candidates_test.db")
+    monkeypatch.setattr(mc, "DB_PATH", db_path)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_empty_queue_by_default():
+    assert await mc.list_pending_manual_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_add_then_list_returns_it():
+    assert await mc.add_manual_candidate("0xABC", "base") is True
+    pending = await mc.list_pending_manual_candidates()
+    assert len(pending) == 1
+    assert pending[0]["contract"] == "0xabc"
+    assert pending[0]["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_defaults_to_base_chain():
+    await mc.add_manual_candidate("0xABC")
+    pending = await mc.list_pending_manual_candidates()
+    assert pending[0]["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_solana_case_preserved_base_lowercased():
+    await mc.add_manual_candidate("0xABC", "base")
+    await mc.add_manual_candidate("SoLMixedCase", "solana")
+    pending = await mc.list_pending_manual_candidates()
+    contracts = {p["contract"] for p in pending}
+    assert "0xabc" in contracts
+    assert "SoLMixedCase" in contracts
+
+
+@pytest.mark.asyncio
+async def test_empty_contract_or_chain_is_a_no_op():
+    assert await mc.add_manual_candidate("", "base") is False
+    assert await mc.list_pending_manual_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_submission_keeps_original_added_at():
+    await mc.add_manual_candidate("0xABC", "base")
+    first = (await mc.list_pending_manual_candidates())[0]["added_at"]
+    await mc.add_manual_candidate("0xABC", "base")
+    second = (await mc.list_pending_manual_candidates())[0]["added_at"]
+    assert first == second
+    assert len(await mc.list_pending_manual_candidates()) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_entry_is_purged_on_list(monkeypatch):
+    await mc.add_manual_candidate("0xABC", "base")
+    future = datetime.now(timezone.utc) + timedelta(days=mc.MANUAL_CANDIDATE_TTL_DAYS + 1)
+
+    real_datetime = mc.datetime
+
+    class _FrozenDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return future
+
+    monkeypatch.setattr(mc, "datetime", _FrozenDatetime)
+    assert await mc.list_pending_manual_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_remove_manual_candidate_deletes_it():
+    await mc.add_manual_candidate("0xABC", "base")
+    await mc.remove_manual_candidate("0xABC", "base")
+    assert await mc.list_pending_manual_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_remove_unknown_candidate_is_a_no_op():
+    await mc.remove_manual_candidate("0xNEVERADDED", "base")
+    assert await mc.list_pending_manual_candidates() == []

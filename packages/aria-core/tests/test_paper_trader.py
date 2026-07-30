@@ -155,6 +155,12 @@ def tmp_db(tmp_path, monkeypatch):
     from aria_core import momentum_scan_log
 
     monkeypatch.setattr(momentum_scan_log, "DB_PATH", str(tmp_path / "momentum_scan.db"))
+    # Item #236 (30/07) -- same DB_PATH-computed-once-at-import trap as the
+    # others above: open_position now also cleans up manual_candidates (the
+    # /add queue) on every successful buy.
+    from aria_core import manual_candidates
+
+    monkeypatch.setattr(manual_candidates, "DB_PATH", str(tmp_path / "manual_candidates.db"))
     return tmp_path
 
 
@@ -1596,6 +1602,33 @@ async def test_open_position_golden_pocket_bounds_default_to_none(tmp_db):
     pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     assert pos["gp_low"] is None
     assert pos["gp_high"] is None
+
+
+@pytest.mark.asyncio
+async def test_open_position_removes_contract_from_manual_queue(tmp_db):
+    """Item #236, 30/07: a contract queued via /add is drained from
+    manual_candidates once actually bought -- no longer needs re-discovery
+    every cycle."""
+    from aria_core import manual_candidates
+
+    await manual_candidates.add_manual_candidate(A, "base")
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+
+    assert await manual_candidates.list_pending_manual_candidates() == []
+
+
+@pytest.mark.asyncio
+async def test_open_position_never_open_never_manually_queued_is_a_noop(tmp_db):
+    """The vast majority of buys never went through /add -- cleanup must be a
+    harmless no-op, not an error."""
+    from aria_core import manual_candidates
+
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+
+    assert pos is not None
+    assert await manual_candidates.list_pending_manual_candidates() == []
 
 
 @pytest.mark.asyncio

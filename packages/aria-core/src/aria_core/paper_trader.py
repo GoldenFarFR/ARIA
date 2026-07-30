@@ -1882,6 +1882,17 @@ async def open_position(
         )
         await db.commit()
         pid = cur.lastrowid
+    # Item #236, 30/07 -- a contract queued via /add no longer needs
+    # re-discovery every cycle once it's actually bought (has_open already
+    # skips the expensive analysis on it, this is just queue hygiene). A
+    # no-op for any contract never queued this way (the vast majority of
+    # positions). Best-effort, never blocks a successful buy.
+    try:
+        from aria_core.manual_candidates import remove_manual_candidate
+
+        await remove_manual_candidate(contract, chain)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("open_position: manual_candidates cleanup failed for %s (%s)", contract, exc)
     # 27/07 -- resolved by ROW ID, never by bare contract: once 3 pockets can
     # legally hold the SAME contract at once, ``_get_open(contract)`` alone
     # would raise (multi-pocket ambiguity guard, see its docstring) as soon as

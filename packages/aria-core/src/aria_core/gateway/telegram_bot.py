@@ -2344,6 +2344,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # -- e.g. answering "what commands do you have" in natural language with the SAME
 # list, never a second copy that could diverge (see _nl_command_router.py).
 TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
+    ("add", "Injecte un/plusieurs contrat(s) dans la file de découverte momentum"),
     ("agentwallet", "Solde réel du wallet agent CDP (USDC + ETH gas)"),
     ("alerts", "Dernier digest crypto-Twitter (Otto AI, x402)"),
     ("api", "Inventaire de toutes les API (URL, configurée, quota en direct)"),
@@ -2509,6 +2510,103 @@ async def _handle_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append("Aucun flag de risque détecté.")
 
     await _reply(message, "\n".join(lines))
+
+
+def _parse_manual_candidate_tokens(tokens: list[str]) -> tuple[list[str], str]:
+    """Shared by /add and the bare-paste auto-detect in _handle_message --
+    tokens matching _SCAN_ADDR_RE become addresses, any other token (last
+    one wins) becomes the chain, default "base"."""
+    chain = "base"
+    addresses = []
+    for tok in tokens:
+        if _SCAN_ADDR_RE.match(tok):
+            addresses.append(tok)
+        else:
+            chain = tok.strip().lower()
+    return addresses, chain
+
+
+def _looks_like_bare_manual_candidates(text: str) -> tuple[list[str], str] | None:
+    """30/07, operator request ("c'est possible de juste poser le contrat
+    sans ecrire /add ?"): a message consisting ONLY of one or more 0x
+    addresses (optionally followed by a single chain-name token) -- e.g.
+    pasting a contract spotted on DexScreener without typing /add first.
+    ``None`` if the message contains anything else (more than one
+    non-address token) -- avoids misfiring on a natural-language message
+    that merely mentions an address (a question, "check 0xabc for me")."""
+    tokens = text.split()
+    if not tokens:
+        return None
+    addresses, chain = _parse_manual_candidate_tokens(tokens)
+    if not addresses:
+        return None
+    non_address_tokens = [t for t in tokens if not _SCAN_ADDR_RE.match(t)]
+    if len(non_address_tokens) > 1:
+        return None
+    return addresses, chain
+
+
+async def _reply_manual_candidates_queued(message, addresses: list[str], chain: str) -> None:
+    """Shared by /add and the bare-paste auto-detect -- queues each address
+    and replies with the same confirmation either way."""
+    from aria_core.manual_candidates import add_manual_candidate
+
+    added = 0
+    for addr in addresses:
+        if await add_manual_candidate(addr, chain):
+            added += 1
+
+    await _reply(
+        message,
+        f"✅ {added}/{len(addresses)} contrat(s) ajouté(s) à la file de découverte ({chain}).\n"
+        "Passeront par les mêmes garde-fous (honeypot/liquidité/volume/wash-trading/R-R) "
+        "qu'un candidat trouvé automatiquement — jamais un achat forcé.",
+    )
+
+
+async def _handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/add <contract1> [contract2 ...] [chain] -- Item #236, 30/07, operator request:
+    inject a manually-spotted contract (e.g. found on a DexScreener screener
+    page, outside what the 6 automated discovery sources surfaced this pass)
+    into the momentum discovery pool. Deliberately NOT a buy shortcut -- a
+    queued contract goes through the exact same hard gates (honeypot,
+    liquidity, volume, wash-trading, holder concentration, R/R) as any
+    auto-discovered candidate on the next discover_momentum_candidates pass.
+    Accepts MULTIPLE addresses in one message (operator plans to paste
+    dozens at once), space/newline separated. Optional trailing chain name
+    (any non-address token) applies to ALL addresses in the message --
+    defaults to "base". See also ``_looks_like_bare_manual_candidates``
+    (``_handle_message``) for pasting addresses without this prefix at all."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+
+    text = (message.text or "").strip()
+    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if not body and context.args:
+        body = " ".join(context.args).strip()
+
+    tokens = body.split()
+    if not tokens:
+        await _reply(
+            message,
+            "Usage : /add <adresse1> [adresse2 ...] [chaîne]\n"
+            "Une ou plusieurs adresses 0x... séparées par un espace/retour à la ligne, "
+            "chaîne optionnelle en dernier (défaut : base).",
+        )
+        return
+
+    addresses, chain = _parse_manual_candidate_tokens(tokens)
+    if not addresses:
+        await _reply(
+            message,
+            "Aucune adresse valide trouvée — attendu : 0x suivi de 40 caractères hexadécimaux.",
+        )
+        return
+
+    await _reply_manual_candidates_queued(message, addresses, chain)
 
 
 # Dedicated concurrency guard (#157) -- distinct from `_vc_semaphore`: a multi-token
@@ -3557,6 +3655,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
+    app.add_handler(CommandHandler("add", _handle_add))
     app.add_handler(CommandHandler("walletscore", _handle_walletscore))
     app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))

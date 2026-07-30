@@ -892,6 +892,25 @@ async def discover_momentum_candidates(
             len(birdeye_contracts), source_contributions["birdeye(bulk_volume_threshold)"],
         )
 
+    # Item #236, 30/07, operator request (/add) -- a contract the operator spotted
+    # manually (e.g. on a DexScreener screener page) outside what the 6
+    # automated sources above surfaced this pass. Queued by manual_candidates.
+    # add_manual_candidate, drained here (not chain-gated to "base" -- the
+    # operator may add any chain the pipeline scans). Deliberately NOT a buy
+    # shortcut: still goes through _add_candidate (dedup/reference-token
+    # exclusion) and every downstream hard gate exactly like any other source.
+    before = _source_snapshot()
+    try:
+        from aria_core.manual_candidates import list_pending_manual_candidates
+
+        manual_entries = await list_pending_manual_candidates()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("discover_momentum_candidates: manual_candidates failed (%s)", exc)
+        manual_entries = []
+    for entry in manual_entries:
+        _add_candidate(out, seen, chains, entry["contract"], entry["chain"])
+    source_contributions["manual(/add)"] = _source_snapshot() - before
+
     # Freshness first (created/updated profiles, recent boosts), "top" ranking
     # last -- consistent with the operator's preference for signals that are
     # JUST STARTING to form rather than a movement everyone has already seen.

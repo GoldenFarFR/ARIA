@@ -41,6 +41,17 @@ def _isolated_rejection_cache_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_manual_candidates_db(tmp_path, monkeypatch):
+    """Item #236, 30/07: ``discover_momentum_candidates`` now also drains
+    ``manual_candidates`` (the /add queue) as its 7th source -- same
+    isolation need as the two fixtures above, ``manual_candidates.DB_PATH``
+    is computed once at import time."""
+    from aria_core import manual_candidates as mcq
+
+    monkeypatch.setattr(mcq, "DB_PATH", str(tmp_path / "manual_candidates_test.db"))
+
+
+@pytest.fixture(autouse=True)
 def _stub_virtuals_launchpad_lookup_unresolved(monkeypatch):
     """Item #171, 28/07: the conviction-diligence step now tries to resolve
     a Base candidate's Virtuals launchpad id (real network call) before
@@ -663,6 +674,88 @@ async def test_discover_momentum_candidates_tolerates_birdeye_failure(monkeypatc
     monkeypatch.setattr(me, "token_boosts_top", empty_listings)
     monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
     monkeypatch.setattr(me, "_discover_birdeye_base_tokens", failing_birdeye)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates == [{"contract": CONTRACT, "chain": "base"}]  # base_crawler survit à la panne
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_includes_manual_queue(monkeypatch):
+    """Item #236, 30/07: /add queue drained as the 7th source."""
+    async def fake_base_tokens(*, limit):
+        return []
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+
+    from aria_core import manual_candidates as mcq
+
+    await mcq.add_manual_candidate("0xMANUAL1", "base")
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates == [{"contract": "0xmanual1", "chain": "base"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_dedupes_manual_with_base_crawler(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+
+    from aria_core import manual_candidates as mcq
+
+    await mcq.add_manual_candidate(CONTRACT, "base")  # même contrat que base_crawler
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    assert candidates == [{"contract": CONTRACT, "chain": "base"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_tolerates_manual_queue_failure(monkeypatch):
+    async def fake_base_tokens(*, limit):
+        return [CONTRACT]
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    async def failing_manual_queue():
+        raise RuntimeError("panne file /add")
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+    monkeypatch.setattr("aria_core.manual_candidates.list_pending_manual_candidates", failing_manual_queue)
 
     candidates = await me.discover_momentum_candidates(chains=("base",))
     assert candidates == [{"contract": CONTRACT, "chain": "base"}]  # base_crawler survit à la panne
