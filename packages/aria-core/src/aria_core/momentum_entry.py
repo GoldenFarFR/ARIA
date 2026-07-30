@@ -2484,7 +2484,23 @@ async def evaluate_hard_gates(
 
     from aria_core import momentum_rejection_cache
 
-    cached_reason = await momentum_rejection_cache.recently_rejected(contract, chain)
+    # Item #228 (30/07): the liquidity tier only depends on current_regime/
+    # mode (both already known here, no network call needed) -- computed
+    # once, reused for both the cache lookup below and the eventual
+    # insufficient_liquidity write further down, never diverging between the
+    # two. See momentum_rejection_cache.py's own module comment for the full
+    # rationale (a scalping-tier rejection must never silently block a
+    # swing-tier re-evaluation of the same contract, or vice versa).
+    if current_regime == "peur":
+        liquidity_tier = "fear"
+    elif mode == "scalping":
+        liquidity_tier = "scalping"
+    else:
+        liquidity_tier = "standard"
+
+    cached_reason = await momentum_rejection_cache.recently_rejected(
+        contract, chain, liquidity_tier=liquidity_tier,
+    )
     if cached_reason is not None:
         return None, None, {
             "action": "HOLD", "chain": chain,
@@ -2508,14 +2524,18 @@ async def evaluate_hard_gates(
     # independent of trading style -- never silently under-protected during a
     # macro stress event just because scalping is the active mode). Otherwise,
     # scalping gets its own lower floor (see _MIN_LIQUIDITY_USD_SCALPING).
-    if current_regime == "peur":
+    # Reuses ``liquidity_tier`` computed above the cache lookup (same
+    # regime/mode inputs, never re-derived differently) -- Item #228.
+    if liquidity_tier == "fear":
         effective_min_liquidity = _MIN_LIQUIDITY_USD_FEAR
-    elif mode == "scalping":
+    elif liquidity_tier == "scalping":
         effective_min_liquidity = _MIN_LIQUIDITY_USD_SCALPING
     else:
         effective_min_liquidity = _MIN_LIQUIDITY_USD
     if liquidity_usd < effective_min_liquidity:
-        await momentum_rejection_cache.record_rejection(contract, chain, "insufficient_liquidity")
+        await momentum_rejection_cache.record_rejection(
+            contract, chain, "insufficient_liquidity", liquidity_tier=liquidity_tier,
+        )
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,

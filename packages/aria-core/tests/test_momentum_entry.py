@@ -2761,6 +2761,31 @@ async def test_evaluate_hard_gates_never_caches_already_parabolic(monkeypatch):
     assert await rc.recently_rejected(CONTRACT, "base") is None
 
 
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_liquidity_rejection_cache_never_blocks_a_different_pocket(monkeypatch):
+    """Item #228 (30/07), real bug found investigating "why does swing never
+    scan some tokens scalping does" (empirically confirmed: 130/427
+    contracts scalping scanned were NEVER scanned by swing, on a shared
+    candidate pool). $30,000 liquidity clears scalping's own floor
+    (_MIN_LIQUIDITY_USD_SCALPING=15,000) but not standard's
+    (_MIN_LIQUIDITY_USD=50,000) -- standard's rejection must never poison
+    scalping's own, independent, re-check of the SAME contract."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=30_000.0)])
+
+    # standard (swing) rejects on its own, stricter floor.
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base", mode="standard")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "insufficient_liquidity"
+
+    # scalping's own, independent re-check of the SAME contract must NOT be
+    # short-circuited by standard's cached rejection -- it clears scalping's
+    # lower floor and reaches the honeypot-clear "no HOLD" outcome.
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base", mode="scalping")
+    assert hold is None
+    assert best is not None
+    assert best.liquidity_usd == 30_000.0
+
+
 # ── PairSnapshot cache shared with _batch_liquidity_prefilter (26/07, Item #122
 # -- full-pipeline audit finding: evaluate_hard_gates used to always refetch via
 # fetch_token_pairs the EXACT same pair the batch pre-filter had already fetched

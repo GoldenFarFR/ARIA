@@ -471,6 +471,122 @@ async def test_list_liquid_events_network_failure_returns_empty_never_raises(mon
     assert markets == []
 
 
+# ── pagination (Item #196, 30/07) ────────────────────────────────────────────
+# Real gap found alongside #228: a single page only ever sees the top-100-
+# by-volume events -- everything past that was structurally invisible.
+# Verified live that Gamma's `offset` param genuinely advances the result
+# set (curl: offset=0 and offset=5 returned disjoint event slugs).
+
+def _offset_from_url(url: str) -> int:
+    match = __import__("re").search(r"offset=(\d+)", url)
+    return int(match.group(1)) if match else 0
+
+
+class _PaginatedFakeClient:
+    """Returns a DIFFERENT page (keyed by the URL's own offset param) --
+    unlike ``FakeClient`` above, which always returns the same fixed
+    response regardless of what was requested."""
+
+    def __init__(self, pages: dict[int, "FakeResponse"]):
+        self._pages = pages
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get(self, url):
+        return self._pages.get(_offset_from_url(url), FakeResponse(200, []))
+
+
+def _patch_paginated_client(monkeypatch, pages: dict[int, "FakeResponse"]):
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.httpx.AsyncClient", lambda **kw: _PaginatedFakeClient(pages),
+    )
+
+
+def _n_events(n: int, *, title_prefix: str = "Event") -> list[dict]:
+    return [
+        {
+            "title": f"{title_prefix} {i}",
+            "slug": f"{title_prefix.lower()}-{i}",
+            "volume": 100_000.0,
+            "liquidity": 50_000.0,
+            "endDate": _far_future_end_date(),
+            "tags": [],
+            "markets": [
+                {
+                    "question": f"Will {title_prefix} {i} happen?",
+                    "clobTokenIds": json.dumps([f"yes-{i}", f"no-{i}"]),
+                    "outcomePrices": json.dumps(["0.4", "0.6"]),
+                }
+            ],
+        }
+        for i in range(n)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_paginates_past_the_first_100(monkeypatch):
+    """A full first page (100 raw events) must trigger a second fetch at
+    offset=100 -- otherwise everything past the top-100-by-volume is
+    structurally invisible, the exact gap this fix closes."""
+    _patch_paginated_client(monkeypatch, {
+        0: FakeResponse(200, _n_events(100, title_prefix="PageOne")),
+        100: FakeResponse(200, _n_events(5, title_prefix="PageTwo")),
+    })
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(limit=100)
+
+    assert len(markets) == 105
+    assert markets[0].event_title == "PageOne 0"
+    assert markets[-1].event_title == "PageTwo 4"
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_stops_early_on_short_page(monkeypatch):
+    """A page returning FEWER raw events than requested is Gamma's own
+    signal there's nothing further -- must not fetch a 2nd page just
+    because max_pages allows it."""
+    calls: list[int] = []
+
+    class _CountingClient(_PaginatedFakeClient):
+        async def get(self, url):
+            calls.append(_offset_from_url(url))
+            return await super().get(url)
+
+    def _patch(monkeypatch, pages):
+        monkeypatch.setattr(
+            "aria_core.services.polymarket.httpx.AsyncClient", lambda **kw: _CountingClient(pages),
+        )
+
+    _patch(monkeypatch, {0: FakeResponse(200, _n_events(3))})  # short page, well below limit=100
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(limit=100, max_pages=3)
+
+    assert len(markets) == 3
+    assert calls == [0]  # never fetched page 2 or 3
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_respects_max_pages_ceiling(monkeypatch):
+    """Even if every page comes back full, pagination must stop at
+    max_pages -- never fetch unboundedly deep into the long tail."""
+    _patch_paginated_client(monkeypatch, {
+        0: FakeResponse(200, _n_events(10, title_prefix="P0")),
+        10: FakeResponse(200, _n_events(10, title_prefix="P1")),
+        20: FakeResponse(200, _n_events(10, title_prefix="P2")),
+    })
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(limit=10, max_pages=2)
+
+    assert len(markets) == 20  # only pages 0 and 1, page 2 (offset=20) never fetched
+
+
 # ── get_price_history / compute_probability_velocity (26/07, Item #108 follow-up) ──
 
 @pytest.mark.asyncio

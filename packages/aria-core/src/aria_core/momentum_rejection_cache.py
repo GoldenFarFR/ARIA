@@ -61,6 +61,26 @@ def _normalize_contract(contract: str, chain: str) -> str:
     return contract
 
 
+# 30/07, Item #228, real bug found investigating "why does swing never scan
+# some tokens scalping does" (empirically confirmed: 130 of 427 contracts
+# scalping scanned were NEVER scanned by swing, on a shared WebSocket
+# candidate pool): this cache was keyed by (contract, chain) alone, but
+# ``insufficient_liquidity`` is the ONE cacheable reason whose threshold
+# depends on the caller's pocket (``evaluate_hard_gates``'s ``_MIN_
+# LIQUIDITY_USD_SCALPING`` vs ``_MIN_LIQUIDITY_USD``/``_FEAR``) -- a contract
+# whose liquidity cleared scalping's lower floor but not swing's higher one
+# (or vice versa) got a rejection cached by ONE pocket that silently blocked
+# the OTHER pocket from ever re-evaluating it with its own, different,
+# correct threshold, for the full TTL. ``mode`` below partitions ONLY this
+# one reason (``"scalping"``/``"standard"``/``"fear"``, whichever threshold
+# was actually applied) -- every other cacheable reason (wash-trading ratio,
+# unverified profile, holder concentration) never depends on the pocket, so
+# it keeps the ORIGINAL shared-cache behavior (``mode="shared"``): scoping
+# those by pocket too would just double a real paid check (holder
+# concentration's x402 call) for zero benefit.
+_SHARED_MODE = "shared"
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -75,17 +95,31 @@ async def _ensure_table() -> None:
             )
             """
         )
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(momentum_rejection_cache)")).fetchall()
+        }
+        if "mode" not in existing:
+            await db.execute(
+                f"ALTER TABLE momentum_rejection_cache ADD COLUMN mode TEXT NOT NULL DEFAULT '{_SHARED_MODE}'"
+            )
         await db.commit()
 
 
-async def record_rejection(contract: str, chain: str, reason: str) -> None:
+async def record_rejection(
+    contract: str, chain: str, reason: str, *, liquidity_tier: str | None = None,
+) -> None:
     """Called right before ``evaluate_hard_gates`` returns a HOLD verdict
     whose ``hold_reason`` is in ``CACHEABLE_REASONS``. Silently a no-op for
     any other reason -- the caller is expected to consult
     ``CACHEABLE_REASONS`` itself; this is just the write, never a second
     gate. Also opportunistically purges expired rows (reuses the already-open
     connection, same low-cost hygiene as ``momentum_timing._purge_expired_
-    evaluations``) so this table never grows unbounded."""
+    evaluations``) so this table never grows unbounded.
+
+    ``liquidity_tier`` (Item #228, 30/07): only used when ``reason ==
+    "insufficient_liquidity"`` -- see the module-level comment above. Ignored
+    for every other reason, which always stores under the shared partition."""
     if reason not in CACHEABLE_REASONS:
         return
     await _ensure_table()
@@ -93,13 +127,14 @@ async def record_rejection(contract: str, chain: str, reason: str) -> None:
     contract = _normalize_contract(contract, chain)
     if not contract or not chain:
         return
+    mode = liquidity_tier if (reason == "insufficient_liquidity" and liquidity_tier) else _SHARED_MODE
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=REJECTION_CACHE_TTL_SECONDS)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR REPLACE INTO momentum_rejection_cache "
-            "(contract, chain, reason, rejected_at, expires_at) VALUES (?, ?, ?, ?, ?)",
-            (contract, chain, reason, now.isoformat(), expires_at.isoformat()),
+            "(contract, chain, reason, rejected_at, expires_at, mode) VALUES (?, ?, ?, ?, ?, ?)",
+            (contract, chain, reason, now.isoformat(), expires_at.isoformat(), mode),
         )
         await db.execute(
             "DELETE FROM momentum_rejection_cache WHERE expires_at < ?", (now.isoformat(),),
@@ -107,26 +142,39 @@ async def record_rejection(contract: str, chain: str, reason: str) -> None:
         await db.commit()
 
 
-async def recently_rejected(contract: str, chain: str) -> str | None:
+async def recently_rejected(contract: str, chain: str, *, liquidity_tier: str | None = None) -> str | None:
     """Checked FIRST in ``evaluate_hard_gates``, before any network call --
     returns the cached ``hold_reason`` if still within its TTL, else
     ``None`` (never seen, or expired -- a fresh evaluation is warranted
     either way). Never raises, never blocks a fresh evaluation on a lookup
-    failure."""
+    failure.
+
+    ``liquidity_tier`` (Item #228, 30/07): the CALLING pocket's own liquidity
+    tier (``"scalping"``/``"standard"``/``"fear"``). A cached rejection
+    always applies if it was stored under the shared partition (every
+    reason except ``insufficient_liquidity``); a cached ``insufficient_
+    liquidity`` rejection only applies if it was stored under THIS SAME
+    tier -- otherwise it belongs to a different pocket's threshold and is
+    ignored (fresh evaluation), never silently blocks a pocket it was never
+    computed for. ``None`` (omitted, no caller left after this fix) falls
+    back to the legacy behavior of accepting whatever's cached, regardless
+    of tier."""
     await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
     async with aiosqlite.connect(DB_PATH) as db:
         row = await (
             await db.execute(
-                "SELECT reason, expires_at FROM momentum_rejection_cache "
+                "SELECT reason, expires_at, mode FROM momentum_rejection_cache "
                 "WHERE contract = ? AND chain = ?",
                 (contract, chain),
             )
         ).fetchone()
     if row is None:
         return None
-    reason, expires_at_raw = row
+    reason, expires_at_raw, stored_mode = row
+    if liquidity_tier is not None and stored_mode not in (_SHARED_MODE, liquidity_tier):
+        return None
     try:
         expires_at = datetime.fromisoformat(expires_at_raw)
     except (TypeError, ValueError):

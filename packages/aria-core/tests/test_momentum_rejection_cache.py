@@ -82,3 +82,60 @@ async def test_missing_contract_or_chain_is_a_no_op():
     await rc.record_rejection("", "base", "insufficient_liquidity")
     await rc.record_rejection("0xabc", "", "insufficient_liquidity")
     assert await rc.recently_rejected("0xabc", "base") is None
+
+
+# ── liquidity_tier partitioning (Item #228, 30/07) ───────────────────────────
+# Real bug found investigating "why does swing never scan some tokens
+# scalping does" (empirically confirmed: 130/427 contracts scalping scanned
+# were NEVER scanned by swing on a shared candidate pool): insufficient_
+# liquidity's threshold depends on the pocket (scalping vs standard/fear),
+# so a rejection cached by ONE pocket must never silently block the OTHER
+# pocket from re-evaluating with its own, different, threshold.
+
+
+@pytest.mark.asyncio
+async def test_insufficient_liquidity_rejection_scoped_to_scalping_never_blocks_standard():
+    await rc.record_rejection("0xabc", "base", "insufficient_liquidity", liquidity_tier="scalping")
+    # scalping's own re-check still sees its own cached rejection...
+    assert await rc.recently_rejected("0xabc", "base", liquidity_tier="scalping") == "insufficient_liquidity"
+    # ...but a DIFFERENT pocket (standard/swing) must re-evaluate fresh, not
+    # inherit a rejection computed against a threshold it never used.
+    assert await rc.recently_rejected("0xabc", "base", liquidity_tier="standard") is None
+
+
+@pytest.mark.asyncio
+async def test_insufficient_liquidity_rejection_scoped_to_standard_never_blocks_scalping():
+    await rc.record_rejection("0xabc", "base", "insufficient_liquidity", liquidity_tier="standard")
+    assert await rc.recently_rejected("0xabc", "base", liquidity_tier="standard") == "insufficient_liquidity"
+    assert await rc.recently_rejected("0xabc", "base", liquidity_tier="scalping") is None
+
+
+@pytest.mark.asyncio
+async def test_shared_reasons_still_block_every_pocket_regardless_of_tier():
+    """wash_trading_ratio/no_verified_profile/holder_concentration never
+    depend on the pocket -- a rejection on one of these must keep blocking
+    ALL pockets, exactly as before this fix (no regression on the shared
+    cache's whole reason for existing)."""
+    for reason in ("wash_trading_ratio", "no_verified_profile", "holder_concentration"):
+        await rc.record_rejection("0xshared", "base", reason)
+        assert await rc.recently_rejected("0xshared", "base", liquidity_tier="scalping") == reason
+        assert await rc.recently_rejected("0xshared", "base", liquidity_tier="standard") == reason
+        assert await rc.recently_rejected("0xshared", "base", liquidity_tier="fear") == reason
+
+
+@pytest.mark.asyncio
+async def test_no_liquidity_tier_argument_keeps_legacy_accept_anything_behavior():
+    """A caller that never passes liquidity_tier (none left after this fix,
+    but kept as a safe default) must see the exact pre-#228 behavior --
+    accepts whatever's cached, regardless of which tier wrote it."""
+    await rc.record_rejection("0xabc", "base", "insufficient_liquidity", liquidity_tier="scalping")
+    assert await rc.recently_rejected("0xabc", "base") == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_liquidity_tier_ignored_for_non_liquidity_reasons_stays_shared():
+    """Passing a liquidity_tier on a non-insufficient_liquidity rejection
+    must never accidentally scope it -- it always stores under the shared
+    partition, same as omitting the tier entirely."""
+    await rc.record_rejection("0xabc", "base", "wash_trading_ratio", liquidity_tier="scalping")
+    assert await rc.recently_rejected("0xabc", "base", liquidity_tier="standard") == "wash_trading_ratio"

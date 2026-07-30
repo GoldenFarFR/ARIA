@@ -326,6 +326,7 @@ class PolymarketClient:
         max_days_to_resolution: int | None = 30,
         min_days_to_resolution: float = 0.25,
         limit: int = 100,
+        max_pages: int = 3,
     ) -> list[PolymarketCandidateMarket]:
         """Real listing of tradeable markets (26/07, Item #108) -- unlike
         ``fetch_top_event_by_tag`` (ONE event, hardcoded to a single tag,
@@ -339,6 +340,21 @@ class PolymarketClient:
         never assume the requested limit is honored, filtering always
         happens on whatever comes back.
 
+        ``max_pages`` (Item #196, 30/07): a single page only ever sees the
+        top-100-by-volume events -- everything past that was structurally
+        invisible (the same root cause Item #151's rotation guard works
+        around WITHIN those 100, but can't reach beyond them). Verified live
+        that Gamma's ``offset`` param genuinely advances the result set
+        (page 1 and page 2 return disjoint events, not a repeat) -- pages
+        past the first are fetched via ``offset=page*limit``, stopping EARLY
+        the moment a page returns fewer raw events than ``limit`` (Gamma's
+        own signal that there's nothing further), never blindly fetching
+        ``max_pages`` pages regardless of how much data actually exists.
+        Default 3 (up to 300 raw events) is a deliberately modest ceiling --
+        this pipeline only ever judges a handful of candidates per cycle
+        (``CANDIDATES_PER_CYCLE``), no need to paginate deep into the long
+        tail for that.
+
         ``min_days_to_resolution`` (default 6 hours): a market resolving in
         the next few minutes leaves no real time for a paper position to
         exist -- excluded here rather than in the judgment layer, since it's
@@ -348,25 +364,51 @@ class PolymarketClient:
         Never a fabricated market: network failure or empty response ->
         empty list, same fail-open posture as `momentum_entry.discover_
         momentum_candidates` tolerating a source outage."""
-        url = f"{self.base_url}/events?limit={int(limit)}&active=true&closed=false&order=volume&ascending=false"
+        candidates: list[PolymarketCandidateMarket] = []
+        for page in range(max(1, max_pages)):
+            offset = page * limit
+            page_candidates, raw_count = await self._fetch_liquid_events_page(
+                offset=offset, limit=limit,
+                min_volume_usd=min_volume_usd, min_liquidity_usd=min_liquidity_usd,
+                max_days_to_resolution=max_days_to_resolution, min_days_to_resolution=min_days_to_resolution,
+            )
+            candidates.extend(page_candidates)
+            if raw_count < limit:
+                break  # Gamma's own signal that there's nothing past this page
+        return candidates
+
+    async def _fetch_liquid_events_page(
+        self, *, offset: int, limit: int,
+        min_volume_usd: float, min_liquidity_usd: float,
+        max_days_to_resolution: int | None, min_days_to_resolution: float,
+    ) -> tuple[list[PolymarketCandidateMarket], int]:
+        """One page of ``list_liquid_events`` -- returns the filtered
+        candidates from THIS page plus the raw (unfiltered) event count, so
+        the caller can tell a genuinely-short final page (stop paginating)
+        apart from a full page that simply filtered down to few/zero
+        candidates (keep going)."""
+        url = (
+            f"{self.base_url}/events?limit={int(limit)}&offset={int(offset)}"
+            "&active=true&closed=false&order=volume&ascending=false"
+        )
         await self._throttle()
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.get(url)
         except Exception as exc:  # noqa: BLE001 -- a network outage must never propagate
             self._record_failure(f"{url} -> {exc}")
-            return []
+            return [], 0
 
         if response.status_code >= 400:
             self._record_failure(f"{url} -> HTTP {response.status_code}")
-            return []
+            return [], 0
         try:
             events = response.json()
         except Exception:  # noqa: BLE001
             self._record_failure(f"{url} -> unreadable response")
-            return []
+            return [], 0
         if not isinstance(events, list):
-            return []
+            return [], 0
 
         now = datetime.now(timezone.utc)
         candidates: list[PolymarketCandidateMarket] = []
@@ -467,7 +509,7 @@ class PolymarketClient:
                 )
 
         self._record_success()
-        return candidates
+        return candidates, len(events)
 
     async def get_market_resolution(self, event_slug: str, yes_token_id: str) -> tuple[bool, float | None]:
         """Checks whether a specific market has resolved (26/07, Item #108) --
