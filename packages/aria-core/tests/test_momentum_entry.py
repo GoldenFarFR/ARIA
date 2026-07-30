@@ -29,6 +29,18 @@ def _isolated_blacklist_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_rejection_cache_db(tmp_path, monkeypatch):
+    """Item #193, 30/07: ``evaluate_hard_gates`` now consults
+    ``momentum_rejection_cache`` right after the blacklist check -- same
+    isolation need as ``_isolated_blacklist_db`` above, otherwise every test
+    in this file would share the same real DB (``DB_PATH`` computed once at
+    import)."""
+    from aria_core import momentum_rejection_cache as rc
+
+    monkeypatch.setattr(rc, "DB_PATH", str(tmp_path / "momentum_rejection_cache_test.db"))
+
+
+@pytest.fixture(autouse=True)
 def _stub_virtuals_launchpad_lookup_unresolved(monkeypatch):
     """Item #171, 28/07: the conviction-diligence step now tries to resolve
     a Base candidate's Virtuals launchpad id (real network call) before
@@ -2506,6 +2518,43 @@ async def test_evaluate_hard_gates_rejects_on_honeypot_and_blacklists(monkeypatc
     assert best is None and reason is None
     assert hold["hold_reason"] == "honeypot_rejected"
     assert await bl.is_blacklisted(CONTRACT, "base") is True
+
+
+# ── rejection cache (Item #193, 30/07) ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_caches_stable_rejection_and_skips_network_next_time(monkeypatch):
+    """A candidate rejected on liquidity must be short-circuited by the
+    rejection cache on the NEXT call, never re-fetching the pair."""
+    from aria_core import momentum_rejection_cache as rc
+
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold["hold_reason"] == "insufficient_liquidity"
+    assert await rc.recently_rejected(CONTRACT, "base") == "insufficient_liquidity"
+
+    async def _never_called(contract, *, chain="base"):
+        raise AssertionError("fetch_token_pairs must not be called on a cached rejection")
+
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+    monkeypatch.setattr(me, "_get_cached_pair_snapshot", lambda chain, contract: None)
+
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "insufficient_liquidity"
+    assert "rejet en cache" in hold["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_never_caches_already_parabolic(monkeypatch):
+    """already_parabolic moves every minute -- caching it would delay
+    noticing a real pullback, so a second call must re-evaluate for real."""
+    from aria_core import momentum_rejection_cache as rc
+
+    _patch_pipeline(monkeypatch, pairs=[_pair(price_change_24h=999.0)])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold["hold_reason"] == "already_parabolic"
+    assert await rc.recently_rejected(CONTRACT, "base") is None
 
 
 # ── PairSnapshot cache shared with _batch_liquidity_prefilter (26/07, Item #122

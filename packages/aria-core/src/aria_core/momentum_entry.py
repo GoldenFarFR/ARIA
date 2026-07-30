@@ -2353,6 +2353,20 @@ async def evaluate_hard_gates(
             "hold_reason": "blacklisted",
         }
 
+    from aria_core import momentum_rejection_cache
+
+    cached_reason = await momentum_rejection_cache.recently_rejected(contract, chain)
+    if cached_reason is not None:
+        return None, None, {
+            "action": "HOLD", "chain": chain,
+            "reasons": [
+                f"rejet en cache ({cached_reason}) -- réévalué il y a moins de "
+                f"{momentum_rejection_cache.REJECTION_CACHE_TTL_SECONDS / 3600:.0f}h, "
+                "pas encore de raison de retester"
+            ],
+            "hold_reason": cached_reason,
+        }
+
     best = _get_cached_pair_snapshot(chain, contract)
     if best is None:
         pairs = await fetch_token_pairs(contract, chain=chain)
@@ -2372,6 +2386,7 @@ async def evaluate_hard_gates(
     else:
         effective_min_liquidity = _MIN_LIQUIDITY_USD
     if liquidity_usd < effective_min_liquidity:
+        await momentum_rejection_cache.record_rejection(contract, chain, "insufficient_liquidity")
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
@@ -2390,6 +2405,7 @@ async def evaluate_hard_gates(
     # signal), never a scam vector.
     min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
     if not relaxed and (best.volume_24h_usd or 0.0) < min_volume_required:
+        await momentum_rejection_cache.record_rejection(contract, chain, "volume_too_low")
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
@@ -2405,6 +2421,7 @@ async def evaluate_hard_gates(
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
         if _wash_trading_ratio_confirmed(contract, chain, volume_to_liq):
+            await momentum_rejection_cache.record_rejection(contract, chain, "wash_trading_ratio")
             return None, None, {
                 "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
                 "price": best.price_usd,
@@ -2451,6 +2468,7 @@ async def evaluate_hard_gates(
     # a "we can't confirm the project is established" signal.
     has_profile, profile_reason = (True, "") if relaxed else await _check_project_profile(chain, contract, best)
     if not has_profile:
+        await momentum_rejection_cache.record_rejection(contract, chain, "no_verified_profile")
         return None, None, {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd,
@@ -2463,6 +2481,7 @@ async def evaluate_hard_gates(
             contract, chain, best.pair_address,
         )
         if too_concentrated:
+            await momentum_rejection_cache.record_rejection(contract, chain, "holder_concentration")
             return None, None, {
                 "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
                 "price": best.price_usd, "reasons": [concentration_reason],
@@ -3071,6 +3090,9 @@ async def evaluate_momentum_entry(
         contract, chain, best.pair_address,
     )
     if too_concentrated:
+        from aria_core import momentum_rejection_cache
+
+        await momentum_rejection_cache.record_rejection(contract, chain, "holder_concentration")
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons + [concentration_reason],
