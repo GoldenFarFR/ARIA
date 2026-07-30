@@ -103,6 +103,38 @@ async def test_order_groups_by_wallet_and_shows_details(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_order_labels_rsi_divergence_target_distinctly(monkeypatch):
+    """30/07, operator correction (real confusion on LCAP): an
+    rsi_divergence_pending order's target_price is the price AT CREATION
+    time, not a buy-trigger level -- must read "cible de divergence", never
+    plain "cible" (which reads as "price reached target = should buy")."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    orders = [
+        {
+            "wallet": "scalping", "symbol": "LCAP", "chain": "base", "state": "watching",
+            "target_price": 5.33, "expires_at": "2026-07-31T14:46:39.937755+00:00",
+            "contract": "0x" + "d" * 40,
+            "signal_json": '{"limit_order_reason": "rsi_divergence_pending"}',
+        },
+        {
+            "wallet": "scalping", "symbol": "AERO", "chain": "base", "state": "watching",
+            "target_price": 0.4322, "expires_at": "2026-07-30T20:02:26.828504+00:00",
+            "contract": "0x" + "a" * 40,
+            "signal_json": '{"limit_order_reason": "golden_pocket"}',
+        },
+    ]
+    monkeypatch.setattr("aria_core.limit_orders.get_active_orders", AsyncMock(return_value=orders))
+
+    update = FakeUpdate("/order")
+    await telegram_bot._handle_order(update, FakeContext())
+
+    report = update.message.replies[-1]
+    assert "cible de divergence 5.33" in report
+    assert "cible 0.4322" in report
+    assert "cible de divergence 0.4322" not in report
+
+
+@pytest.mark.asyncio
 async def test_order_caps_display_per_wallet_without_hiding_the_count(monkeypatch):
     """No silent cap: beyond the display ceiling, the overflow is stated
     explicitly rather than a truncated list that reads as complete."""

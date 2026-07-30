@@ -2745,7 +2745,20 @@ async def _handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             state_label = "⏳ watching" if o.get("state") == "watching" else "🆕 pending"
             symbol = o.get("symbol") or "?"
             chain = o.get("chain") or "?"
-            lines.append(f"{symbol} ({chain}) — {state_label} — cible {target_str} — expire {expires} — {link}")
+            # 30/07, operator correction: for an rsi_divergence_pending order,
+            # target_price is the price AT CREATION time, never a buy-trigger
+            # level (see check_rsi_divergence_watching_order) -- labelling it
+            # plain "cible" reads as "price reached target = should buy",
+            # which is exactly the confusion the operator hit on LCAP.
+            try:
+                sig = json.loads(o.get("signal_json") or "{}")
+            except (TypeError, ValueError):
+                sig = {}
+            target_label = (
+                "cible de divergence" if sig.get("limit_order_reason") == "rsi_divergence_pending"
+                else "cible"
+            )
+            lines.append(f"{symbol} ({chain}) — {state_label} — {target_label} {target_str} — expire {expires} — {link}")
         if len(wallet_orders) > _MAX_SHOWN_PER_WALLET:
             lines.append(f"... +{len(wallet_orders) - _MAX_SHOWN_PER_WALLET} de plus, non affichés")
 
