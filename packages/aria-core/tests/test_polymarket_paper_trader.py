@@ -111,6 +111,10 @@ async def test_open_bet_persists_all_entry_fields(tmp_db, monkeypatch):
     assert pos["aria_probability_at_entry"] == 0.9
     assert pos["win_probability_at_entry"] == 0.9
     assert pos["shares"] == pytest.approx(pos["size_usd"] / 0.55)
+    # Item #244 (30/07), operator request ("je veut aussi la date de fin du
+    # paris") -- market.end_date was already fetched at candidate-build time
+    # but never carried onto the position before this.
+    assert pos["end_date"] == "2026-08-15T00:00:00Z"
 
 
 @pytest.mark.asyncio
@@ -429,6 +433,9 @@ async def test_format_portfolio_report_reflects_open_and_closed_positions(tmp_db
     assert "GAGNÉ" in report
     assert "Positions ouvertes : 1" in report
     assert "Résolues : 1" in report
+    # Item #244 (30/07): _market()'s own default end_date, real doctrine
+    # (persisted at open time, no live fetch inside this read-only report).
+    assert "fin : 15/08/2026" in report
 
 
 @pytest.mark.asyncio
@@ -868,3 +875,31 @@ def test_format_bet_alert_includes_win_probability():
 def test_format_bet_alert_omits_win_probability_when_unresolved():
     msg = ppt.format_bet_alert(_fake_position(win_probability_at_entry=None))
     assert "Probabilité de réussite" not in msg
+
+
+# Item #244 (30/07), operator request ("je veut aussi la date de fin du
+# paris") -- verified live against the real Polymarket API on the exact
+# event these paper positions are booked against
+# ("largest-company-end-of-july-...", endDate "2026-07-31T23:59:00Z").
+
+
+def test_format_end_date_formats_iso_string_to_french_date():
+    assert ppt.format_end_date("2026-07-31T23:59:00Z") == "31/07/2026"
+
+
+def test_format_end_date_none_degrades_honestly():
+    assert ppt.format_end_date(None) == "date inconnue"
+
+
+def test_format_end_date_unparseable_degrades_honestly():
+    assert ppt.format_end_date("not-a-real-date") == "date inconnue"
+
+
+def test_format_bet_alert_includes_end_date():
+    msg = ppt.format_bet_alert(_fake_position(end_date="2026-07-31T23:59:00Z"))
+    assert "Date de fin : 31/07/2026" in msg
+
+
+def test_format_bet_alert_end_date_unknown_when_missing():
+    msg = ppt.format_bet_alert(_fake_position())
+    assert "Date de fin : date inconnue" in msg

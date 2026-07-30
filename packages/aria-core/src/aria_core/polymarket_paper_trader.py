@@ -92,8 +92,15 @@ _STATE_ADDED_COLUMNS = [
 # Item #225 (30/07) -- same idiom, on the position table: needed to build a
 # link to the EXACT market a bet was placed on (see services/polymarket.py's
 # market_url()), never persisted before this.
+# Item #244 (30/07), operator request ("je veut aussi la date de fin du
+# paris") -- market.end_date is already fetched as part of the candidate's
+# own data at open_bet() time (services/polymarket.py's own end_date field),
+# just never carried onto the position before now. Persisted rather than
+# fetched live on every /polymarket call, same "read-only, no network call"
+# doctrine format_portfolio_report already documents for itself.
 _POSITION_ADDED_COLUMNS = [
     ("market_slug", "TEXT"),
+    ("end_date", "TEXT"),
 ]
 
 
@@ -346,8 +353,22 @@ _POSITION_FIELDS = (
     "entry_price", "size_usd", "shares", "opened_at", "status", "resolution_price",
     "closed_at", "pnl_usd", "market_probability_at_entry", "aria_probability_at_entry",
     "edge_at_entry", "win_probability_at_entry", "vote_spread_at_entry", "reasoning",
-    "market_slug",
+    "market_slug", "end_date",
 )
+
+
+def format_end_date(end_date_iso: str | None) -> str:
+    """Human-readable resolution date (``31/07/2026``), same French
+    convention as the rest of the operator-facing surface. ``None``/
+    unparseable degrades to an honest "date inconnue" -- never a fabricated
+    date (same doctrine as every other None-handling in this module)."""
+    if not end_date_iso:
+        return "date inconnue"
+    try:
+        dt = datetime.fromisoformat(str(end_date_iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return "date inconnue"
+    return dt.strftime("%d/%m/%Y")
 
 
 def _row_to_dict(row: tuple) -> dict:
@@ -475,15 +496,16 @@ async def open_bet(
                 event_slug, event_title, question, side, yes_token_id, no_token_id,
                 entry_price, size_usd, shares, opened_at, status,
                 market_probability_at_entry, aria_probability_at_entry, edge_at_entry,
-                win_probability_at_entry, vote_spread_at_entry, reasoning, market_slug
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
+                win_probability_at_entry, vote_spread_at_entry, reasoning, market_slug,
+                end_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 market.event_slug, market.event_title, market.question, judgment.side,
                 market.yes_token_id, market.no_token_id, entry_price, size_usd, shares, now,
                 judgment.market_probability, judgment.aria_probability, judgment.edge,
                 judgment.win_probability, judgment.vote_spread, judgment.reasoning,
-                market.market_slug,
+                market.market_slug, market.end_date,
             ),
         )
         await db.commit()
@@ -705,6 +727,7 @@ def format_bet_alert(pos: dict) -> str:
         f"Probabilité ARIA : {pos['aria_probability_at_entry']:.1%} "
         f"(marché : {pos['market_probability_at_entry']:.1%})\n"
         + win_prob_line
+        + f"Date de fin : {format_end_date(pos.get('end_date'))}\n"
         + (f"Thèse : {pos['reasoning']}\n" if pos.get("reasoning") else "")
         + link
     )
@@ -750,7 +773,8 @@ async def format_portfolio_report(*, recent_closed_limit: int = 5) -> str:
         lines.append("\nPositions ouvertes :")
         for pos in open_positions:
             lines.append(
-                f"- {pos['question'][:70]} | {pos['side']} @ {pos['entry_price']:.1%} | ${pos['size_usd']:,.0f}"
+                f"- {pos['question'][:70]} | {pos['side']} @ {pos['entry_price']:.1%} | ${pos['size_usd']:,.0f} "
+                f"| fin : {format_end_date(pos.get('end_date'))}"
             )
 
     closed = await get_closed_positions(limit=recent_closed_limit)
