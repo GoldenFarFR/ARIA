@@ -2528,24 +2528,16 @@ async def evaluate_hard_gates(
             "hold_reason": "insufficient_liquidity",
         }
 
-    # 07/23 -- QUALITY gate (waived in ``relaxed`` floor mode): a low-volume
-    # token is exactly the "dead volume" entry the operator samples on purpose
-    # (a forced floor trade may legitimately lose on it -- that's the diagnostic
-    # signal), never a scam vector.
-    min_volume_required = max(_MIN_VOLUME_24H_USD, liquidity_usd * _MIN_VOLUME_TO_LIQUIDITY_RATIO)
-    if not relaxed and (best.volume_24h_usd or 0.0) < min_volume_required:
-        await momentum_rejection_cache.record_rejection(contract, chain, "volume_too_low")
-        return None, None, {
-            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
-            "price": best.price_usd,
-            "reasons": [
-                f"volume 24h insuffisant ({(best.volume_24h_usd or 0.0):,.0f}$ < "
-                f"{min_volume_required:,.0f}$ requis -- max({_MIN_VOLUME_24H_USD:,.0f}$ "
-                f"absolu, {_MIN_VOLUME_TO_LIQUIDITY_RATIO:.0%} de la liquidité)) -- "
-                "marché quasi inactif, signal technique non fiable"
-            ],
-            "hold_reason": "volume_too_low",
-        }
+    # 07/23 -- QUALITY gate (24h volume floor) -- REMOVED 30/07, Item #246,
+    # operator's explicit call ("supprime le") the same day as #245's
+    # limit-order R/R floor removal. A candidate with near-dead 24h volume
+    # is no longer rejected here -- disclosed, accepted tradeoff: a "zombie"
+    # market (liquidity present, nobody trading) can again produce a
+    # technically-valid-looking setup with no real volume backing it. RVOL
+    # (step 13, ``_check_volume_confirmation``) remains an INDEPENDENT check,
+    # later in the pipeline, on the specific triggering candle -- it still
+    # catches a buy signal not backed by real per-candle volume, even though
+    # this earlier, cruder 24h floor no longer runs.
 
     if best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
@@ -2742,7 +2734,21 @@ def _rsi_divergence_watch_candidate(
     # ATR floor (always entry * (1 - x), x > 0) can never itself catch a
     # broken structure.
     if entry > structural_invalidation and target > entry:
-        rr = round((target - entry) / (entry - invalidation), 1)
+        # 30/07, real bug found live (Item #243, operator report: a scalping
+        # limit-order candidate whose R/R genuinely sat at the #231 floor
+        # -- 1.25 at the time -- was silently rejected). Root cause: rounding
+        # to 1 decimal here made an exact 1.25 round DOWN to 1.2 (Python's
+        # round-half-to-even: 1.2/1.3 are equidistant from 1.25, 1.2 is the
+        # even digit) -- a threshold check then saw 1.2 < 1.25 and rejected a
+        # candidate the floor's own stated intent said should pass. Rounding
+        # to ANY fixed decimal count before a threshold comparison has this
+        # same flaw at that count's own boundary; 4 decimals shrinks the
+        # ambiguous window to 0.0001 -- real entry/target/invalidation prices
+        # essentially never land exactly on a tie at that resolution. Kept at
+        # this precision even after the #231 floor itself was removed (Item
+        # #245, 30/07) -- still the right way to compute/display this value,
+        # and protects any future gate that reads it.
+        rr = round((target - entry) / (entry - invalidation), 4)
 
     # The absolute expiry (`pending_limit_order.expires_at`, checked by
     # `sweep_expired` as a hard safety net independent of the candle-count
@@ -2889,7 +2895,21 @@ async def _golden_pocket_watch_candidate(
     # entry_signals.detect_entry's own comment on why the ATR floor alone
     # (always entry * (1 - x), x > 0) can never catch a broken structure.
     if entry > structural_invalidation and target > entry:
-        rr = round((target - entry) / (entry - invalidation), 1)
+        # 30/07, real bug found live (Item #243, operator report: a scalping
+        # limit-order candidate whose R/R genuinely sat at the #231 floor
+        # -- 1.25 at the time -- was silently rejected). Root cause: rounding
+        # to 1 decimal here made an exact 1.25 round DOWN to 1.2 (Python's
+        # round-half-to-even: 1.2/1.3 are equidistant from 1.25, 1.2 is the
+        # even digit) -- a threshold check then saw 1.2 < 1.25 and rejected a
+        # candidate the floor's own stated intent said should pass. Rounding
+        # to ANY fixed decimal count before a threshold comparison has this
+        # same flaw at that count's own boundary; 4 decimals shrinks the
+        # ambiguous window to 0.0001 -- real entry/target/invalidation prices
+        # essentially never land exactly on a tie at that resolution. Kept at
+        # this precision even after the #231 floor itself was removed (Item
+        # #245, 30/07) -- still the right way to compute/display this value,
+        # and protects any future gate that reads it.
+        rr = round((target - entry) / (entry - invalidation), 4)
 
     logger.info(
         "momentum_entry: golden-pocket watch CREATED for %s -- retracement=%.2f score=%.1f "
@@ -3013,9 +3033,13 @@ async def evaluate_momentum_entry(
       3. Liquidity floor (``_MIN_LIQUIDITY_USD``, $50,000 since 21/07 -- doubled
          to ``_MIN_LIQUIDITY_USD_FEAR`` in Fear regime) -- SYSTEMATIC rejection
          if the pool is too thin, even if everything else is clean.
-      4. 24h volume floor (``_MIN_VOLUME_24H_USD``, $500 + 1% liquidity ratio,
-         19/07, lowered 20/07 then 21/07 -- ongoing trial) -- rejection if the
-         market is nearly dead, on data already in hand.
+      4. ~~24h volume floor~~ -- REMOVED 30/07, Item #246, operator's explicit
+         call ("supprime le") the same day as #245's limit-order R/R floor
+         removal. Never rejects a candidate for near-dead 24h volume anymore
+         -- ``_MIN_VOLUME_24H_USD``/``_MIN_VOLUME_TO_LIQUIDITY_RATIO`` remain
+         as constants (still used by Birdeye's own discovery-side pre-filter,
+         an unrelated efficiency optimization, see ``_refresh_birdeye_cache``)
+         but no longer gate a buy decision here.
       5. 24h volume/liquidity ratio (wash-trading, 17/07) -- rejection if
          extreme, on data already in hand (no extra network call).
       6. Price movement already parabolic over 24h (17/07, TSG case) --

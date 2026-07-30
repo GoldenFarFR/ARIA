@@ -3115,71 +3115,11 @@ async def test_evaluate_buy_signal_tags_strategy_momentum(monkeypatch):
     assert result["strategy"] == "momentum"
 
 
-# ── plancher de volume 24h (19/07, revue croisée Gemini -- anti token zombie) ───────
-
-@pytest.mark.asyncio
-async def test_evaluate_rejects_volume_below_floor(monkeypatch):
-    """150k$ de liquidité (au-dessus du plancher) mais seulement 400$ de volume/24h --
-    exactement le cas "token zombie" décrit par Gemini : le ratio volume/liquidité
-    (400/150000 ~ 0,003x) est bien trop bas pour jamais être suspect de wash-trading,
-    donc sans plancher de volume dédié rien ne l'aurait arrêté."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=400.0)])
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result["action"] == "HOLD"
-    assert result["hold_reason"] == "volume_too_low"
-    assert "volume 24h insuffisant" in result["reasons"][0].lower()
-
-
-@pytest.mark.asyncio
-async def test_evaluate_allows_volume_at_or_above_required_floor(monkeypatch):
-    """Non-régression : un volume qui satisfait le plancher RÉELLEMENT requis pour sa
-    liquidité (le plus haut de l'absolu et du ratio, cf. section dédiée ci-dessous) ne
-    doit jamais être bloqué par ce gate précis.
-
-    20/07 -- valeurs mises à jour (essai en cours, opérateur : "abaisse le volume à
-    1000 et voyons") : plancher absolu 5k$->1k$, ratio 10%->1%."""
-    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
-    # Liquidité 150k$ (défaut ``_pair``) -> plancher requis = max(1k, 150k*1% = 1,5k).
-    _patch_pipeline(
-        monkeypatch, pairs=[_pair(liquidity_usd=150_000.0, volume_24h_usd=1_500.0)],
-        signal=strong, align=(3, []),
-    )
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result.get("hold_reason") != "volume_too_low"
-    assert result["action"] == "BUY"
-
-
-# ── plancher volume/liquidité en RATIO (19/07, revue croisée Gemini round 5 ; valeurs
-# abaissées 20/07, essai en cours) -- corrige l'angle mort du plancher purement absolu
-# ci-dessus : il devient trivial à mesure que la liquidité grossit (volume dérisoire sur
-# un pool géant reste "au-dessus du plancher absolu" mais un marché structurellement
-# mort). Le plancher EFFECTIF est le plus haut de l'absolu et du ratio.
-
-@pytest.mark.asyncio
-async def test_evaluate_rejects_zombie_market_on_a_large_pool(monkeypatch):
-    """Un gros pool (10M$) avec un volume au-dessus du plancher ABSOLU (1k$ depuis le
-    20/07) mais représentant un turnover dérisoire (0,05%) doit quand même être rejeté
-    -- le ratio (1% de 10M$ = 100k$ requis) reste bien plus strict que l'absolu ici."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=10_000_000.0, volume_24h_usd=5_000.0)])
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result["action"] == "HOLD"
-    assert result["hold_reason"] == "volume_too_low"
-
-
-@pytest.mark.asyncio
-async def test_evaluate_allows_volume_meeting_ratio_on_large_pool(monkeypatch):
-    """Non-régression : sur un gros pool, un volume qui satisfait le RATIO (1% depuis
-    le 20/07) reste accepté même s'il dépasse très largement le plancher absolu."""
-    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
-    _patch_pipeline(
-        monkeypatch,
-        pairs=[_pair(liquidity_usd=10_000_000.0, volume_24h_usd=100_000.0)],  # 1 % pile
-        signal=strong, align=(3, []),
-    )
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result.get("hold_reason") != "volume_too_low"
-    assert result["action"] == "BUY"
-
+# ── plancher de volume 24h (19/07, anti token zombie) -- REMOVED 30/07, Item
+# #246, operator's explicit call ("supprime le") the same day as #245's
+# limit-order R/R floor removal. Test coverage for the rejection behavior
+# removed along with it -- see momentum_entry.py's own comment (where the
+# gate used to live) for the full context and disclosed tradeoff.
 
 # ── profil projet établi -- DexScreener payant OU CoinGecko (20/07, décision opérateur
 # explicite : "il faut que le profil soit payé que ce soit sur dexscreener ou coingecko") ─
@@ -4011,13 +3951,13 @@ async def test_evaluate_allows_reasonable_volume_to_liquidity_ratio(monkeypatch)
 @pytest.mark.asyncio
 async def test_evaluate_ratio_check_skipped_when_liquidity_zero(monkeypatch):
     """Pas de division par zéro -- une liquidité nulle/inconnue ne doit jamais
-    planter, ni être traitée comme un ratio infini. Plancher de liquidité ET de
-    volume (19/07) désactivés ici pour isoler VRAIMENT ce garde-fou précis -- sinon
-    une liquidité/un volume à 0/1000$ serait de toute façon rejeté en amont par
-    ``insufficient_liquidity``/``volume_too_low`` avant même d'atteindre le calcul
-    de ratio, et ce test ne prouverait plus rien."""
+    planter, ni être traitée comme un ratio infini. Plancher de liquidité (19/07)
+    désactivé ici pour isoler VRAIMENT ce garde-fou précis -- sinon une
+    liquidité à 0 serait de toute façon rejetée en amont par
+    ``insufficient_liquidity`` avant même d'atteindre le calcul de ratio, et ce
+    test ne prouverait plus rien. (Le plancher de volume 24h, qui jouait le
+    même rôle de bruit ici, a été retiré -- Item #246, 30/07.)"""
     monkeypatch.setattr(me, "_MIN_LIQUIDITY_USD", 0.0)
-    monkeypatch.setattr(me, "_MIN_VOLUME_24H_USD", 0.0)
     _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, volume_24h_usd=1_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result.get("hold_reason") != "wash_trading_ratio"
@@ -6411,3 +6351,25 @@ def test_rsi_divergence_watch_candidate_expiry_falls_back_on_single_candle():
     from aria_core.limit_orders import LIMIT_ORDER_EXPIRY_HOURS
 
     assert watch["watch_expiry_hours"] == LIMIT_ORDER_EXPIRY_HOURS
+
+
+def test_rsi_divergence_watch_candidate_rr_avoids_1_decimal_rounding_artifacts():
+    """30/07, real bug found live (Item #243, operator report): a scalping
+    limit-order candidate whose R/R sat EXACTLY at the #231 floor (1.25 at
+    the time, since removed -- Item #245) was silently rejected. These
+    entry/target/gp_low values are constructed so the true, intended R/R is
+    exactly 1.25 (target = entry + 1.25*(entry-invalidation)) -- but
+    floating-point arithmetic computes the ratio back as 1.249999999999999,
+    a hair below 1.25. Rounding that to 1 decimal (the pre-fix behavior)
+    gives 1.2 -- an artifact that would misjudge ANY 1.25-ish threshold
+    reading this value, present or future. Rounding to 4 decimals (the fix,
+    kept even after the #231 floor itself was removed) recovers 1.25."""
+    signal = _in_gp_no_divergence_signal(
+        gp_low=1.737632, gp_high=1.737632 * 1.1, range_high=2.0459140231388955,
+    )
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.8553392102839537, _rising_ts_candles(),
+    )
+
+    assert watch is not None
+    assert watch["rr"] == pytest.approx(1.25, abs=1e-4)

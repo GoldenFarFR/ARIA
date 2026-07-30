@@ -123,45 +123,16 @@ async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int
     return triggered / total, total
 
 
-# Item #231 (30/07), real bug found live (operator report, wIRON limit order:
-# R/R=0.3, +1.0% target vs -3.7% invalidation -- risking ~3.3x what's on the
-# table). Unlike a direct/LLM-confirmed buy (momentum_entry._RR_MIN_FOR_
-# DIRECT_BUY=2.0 / _RR_AMBIGUOUS_FLOOR=1.0), a limit-order candidate (#175
-# price-drift, #182 golden-pocket-not-yet-formed, #183 rsi-divergence-pending)
-# never had ANY R/R floor -- it could be placed on a mathematically
-# unjustifiable setup and just sit there waiting to trigger. Calibrated
-# empirically against the 67 resolved scalping (rsi_divergence_pending)
-# orders in prod, cross-checked against published scalping/swing R/R norms
-# (see docs/HANDOFF_PIPELINE_MOMENTUM.md's own entry for the full numbers):
-# scalping's own median R/R among orders that actually triggered was 1.75 --
-# reusing momentum_entry's 2.0 direct-buy floor here would have rejected HALF
-# of them, disproportionate for a 15-30min timeframe (scalping's real-world
-# standard is 1:1-1:1.5, closer to 1.5-2x specifically on 15min). 1.25 keeps
-# 56% of historical triggers (57% of noise blocked) -- the best measured
-# balance between eliminating mathematically-absurd setups and preserving
-# the test's diagnostic trade volume.
-#
-# Swing has ZERO resolved limit orders to calibrate against (100% of the 67
-# resolved orders are scalping) -- rather than guess a number, it reuses
-# momentum_entry's OWN direct-buy floor (2.0): a swing limit order has
-# neither an immediate confirmed signal NOR an LLM second opinion (same gap
-# as scalping), so it deserves the SAME bar as its own direct buy, not a
-# borrowed scalping number. Matches the published 1:2-1:3 swing-timeframe
-# norm (1h/4h/daily) -- 2.0 sits at the low end, defensible until real data
-# accumulates to refine it.
-_RR_MIN_LIMIT_ORDER_SCALPING = 1.25
-_RR_MIN_LIMIT_ORDER_SWING = 2.0
-
-
-def meets_limit_order_rr_floor(rr: float | None, wallet: str | None) -> bool:
-    """True only if ``rr`` clears the pocket-specific floor above. ``None``
-    (R/R not computable -- entry<=invalidation or target<=entry, a degenerate
-    setup) fails closed: a limit order is never placed without a real,
-    positive rationale, same doctrine as the direct-buy path's own R/R gates."""
-    if rr is None:
-        return False
-    floor = _RR_MIN_LIMIT_ORDER_SCALPING if wallet == "scalping" else _RR_MIN_LIMIT_ORDER_SWING
-    return rr >= floor
+# Item #231 (30/07) added an R/R floor here (scalping 1.25 / swing 2.0),
+# motivated by a real incident (wIRON limit order, R/R=0.3). REMOVED 30/07,
+# Item #245 -- operator's explicit, direct call after watching scalping
+# trade volume drop to zero the same day this floor shipped ("supprime
+# l'ordre limite je suis sur que c sa le problème"). Known, disclosed
+# tradeoff: a mathematically-absurd setup like wIRON's can again be placed
+# and wait to trigger -- the operator made this call anyway, prioritizing
+# trade volume/diagnostic signal over that specific guard. If it needs to
+# come back, `docs/HANDOFF_PIPELINE_MOMENTUM.md`'s Item #231 entry has the
+# full original calibration (67 resolved scalping orders, median R/R 1.75).
 
 
 # 27/07 -- 3-pocket architecture plan, Phase 2: additive hot-migration list,
