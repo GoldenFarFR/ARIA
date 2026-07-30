@@ -1430,3 +1430,43 @@ def test_format_limit_order_cancelled_alert_labels_known_reasons():
     order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
     text = lo.format_limit_order_cancelled_alert(order, "invalidation_crossed")
     assert "invalidation" in text.lower()
+
+
+# Item #231 (30/07), real bug found live (operator report, wIRON: R/R=0.3,
+# +1.0% target vs -3.7% invalidation) -- a limit-order candidate never had
+# any R/R floor at all, unlike a direct buy. Floors calibrated empirically
+# (scalping) / reused from momentum_entry's own direct-buy floor (swing, no
+# resolved history yet to calibrate against) -- see meets_limit_order_rr_
+# floor's own comment for the full numbers.
+def test_meets_limit_order_rr_floor_scalping_at_exactly_the_floor():
+    assert lo.meets_limit_order_rr_floor(1.25, "scalping") is True
+
+
+def test_meets_limit_order_rr_floor_scalping_below_the_floor():
+    assert lo.meets_limit_order_rr_floor(0.3, "scalping") is False
+
+
+def test_meets_limit_order_rr_floor_swing_below_scalpings_looser_floor():
+    """1.7 clears scalping's 1.25 floor but must still fail swing's stricter
+    2.0 -- the two pockets are never interchangeable."""
+    assert lo.meets_limit_order_rr_floor(1.7, "swing") is False
+
+
+def test_meets_limit_order_rr_floor_swing_at_exactly_the_floor():
+    assert lo.meets_limit_order_rr_floor(2.0, "swing") is True
+
+
+def test_meets_limit_order_rr_floor_none_rr_fails_closed():
+    """A degenerate setup (entry<=invalidation or target<=entry) computes
+    rr=None -- never placed, same fail-closed doctrine as the direct-buy R/R
+    gates."""
+    assert lo.meets_limit_order_rr_floor(None, "scalping") is False
+    assert lo.meets_limit_order_rr_floor(None, "swing") is False
+
+
+def test_meets_limit_order_rr_floor_unknown_wallet_uses_swing_floor():
+    """Any non-"scalping" wallet (vc, a future pocket, a missing/legacy
+    order) gets the stricter swing floor -- never silently defaults to the
+    looser scalping bar."""
+    assert lo.meets_limit_order_rr_floor(1.7, "vc") is False
+    assert lo.meets_limit_order_rr_floor(2.0, "vc") is True

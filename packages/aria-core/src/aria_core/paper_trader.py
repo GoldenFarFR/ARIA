@@ -3624,6 +3624,15 @@ async def _open_new_entries_for_wallet(
             # (never the plain honeypot-only re-check the price-drift case
             # uses -- there's no already-confirmed setup here to fall back on).
             watch = sig.get("limit_order_candidate")
+            # Item #231 (30/07), real bug found live (operator report, wIRON:
+            # R/R=0.3, +1.0% target vs -3.7% invalidation) -- unlike a direct
+            # buy, THIS watch-and-wait path (golden-pocket-not-yet-formed #182
+            # / rsi-divergence-pending #183) never had an R/R floor at all.
+            # Checked BEFORE has_active_order/create_pending_order below --
+            # never counts against any dedup/dupe-order state, a rejected
+            # candidate here is exactly as if momentum_entry never built it.
+            if watch and not limit_orders.meets_limit_order_rr_floor(watch.get("rr"), wallet):
+                watch = None
             if watch:
                 try:
                     if not await limit_orders.has_active_order(contract, sig.get("chain") or "base", wallet=wallet):
