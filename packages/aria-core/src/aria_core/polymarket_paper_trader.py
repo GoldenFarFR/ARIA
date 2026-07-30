@@ -531,6 +531,26 @@ async def check_resolutions() -> list[dict]:
     return closed
 
 
+async def _mark_to_market_value(pos: dict) -> float:
+    """Current resale value of one still-open position -- ``best_bid`` (what
+    a real sell would fetch right now), never the reference/spot price (same
+    doctrine as the order-book-based entry price above and the momentum
+    pipeline's ``simulated_fill_price``). Falls back to the position's own
+    ``size_usd`` (entry cost) when the book is unavailable or empty on this
+    side -- never a fabricated number, and the best available approximation
+    absent a fresh quote (Item #229, 30/07)."""
+    token_id = pos["yes_token_id"] if pos["side"] == "YES" else pos["no_token_id"]
+    if not token_id:
+        return pos["size_usd"]
+    try:
+        book = await polymarket_client.get_order_book(token_id)
+    except Exception:  # noqa: BLE001 -- a network hiccup never blocks the summary
+        return pos["size_usd"]
+    if not book.available or book.best_bid is None:
+        return pos["size_usd"]
+    return pos["shares"] * book.best_bid
+
+
 async def portfolio_summary() -> dict:
     await _ensure_tables()
     start = await starting_capital()
@@ -538,11 +558,26 @@ async def portfolio_summary() -> dict:
     closed_positions = await get_closed_positions(limit=10_000)
     realized_pnl = sum(p["pnl_usd"] or 0.0 for p in closed_positions)
     wins = sum(1 for p in closed_positions if (p["pnl_usd"] or 0.0) > 0)
-    equity = start - sum(p["size_usd"] for p in open_positions) + realized_pnl
+    # Item #229 (30/07, real bug found live -- operator noticed "equity" and
+    # "cash" always showed the exact same number in /polymarket despite 3 open
+    # bets): this used to be `start - sum(open sizes) + realized_pnl`, which is
+    # LITERALLY `cash_available()`'s own formula -- "equity" never valued the
+    # open positions at their current market price at all, just subtracted
+    # their cost as if it were a fixed, never-revisited loss. Also fed
+    # `polymarket_risk_guard.evaluate_portfolio_risk()`'s drawdown circuit
+    # breaker, which was therefore blind to any latent loss on still-open
+    # bets -- only realized losses (already-resolved markets) could ever
+    # trigger it. Now: cash (unaffected by open positions' price moves) +
+    # each open position's current resale value (mark-to-market, degrades to
+    # entry cost on a stale/unavailable quote -- never fabricated, never
+    # blocking).
+    open_value = sum([await _mark_to_market_value(p) for p in open_positions])
+    cash = await cash_available()
+    equity = cash + open_value
     return {
         "starting_capital": start,
         "equity": equity,
-        "cash": await cash_available(),
+        "cash": cash,
         "open_count": len(open_positions),
         "closed_count": len(closed_positions),
         "realized_pnl": realized_pnl,

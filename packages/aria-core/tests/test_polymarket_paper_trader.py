@@ -265,6 +265,52 @@ async def test_portfolio_summary_reflects_realized_pnl(tmp_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_portfolio_summary_marks_open_position_to_market(tmp_db, monkeypatch):
+    """Item #229 (30/07, real bug found live): "equity" used to equal "cash"
+    exactly (never valued an open position at its current price) -- a bet
+    bought at 0.5 whose market has since moved to 0.7 must raise equity above
+    cash by the position's unrealized gain, not leave it identical."""
+    _patch_order_book(monkeypatch, best_ask=0.5)
+    pos = await ppt.open_bet(_market(yes_token="yes-tok"), _judgment(side="YES"))
+
+    async def fake_order_book_moved(self, token_id):
+        from aria_core.services.polymarket import PolymarketOrderBook
+
+        return PolymarketOrderBook(available=True, best_bid=0.68, best_ask=0.7, spread=0.02)
+
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.PolymarketClient.get_order_book", fake_order_book_moved,
+    )
+
+    summary = await ppt.portfolio_summary()
+    assert summary["cash"] == pytest.approx(ppt.STARTING_CAPITAL_USD - pos["size_usd"])
+    expected_open_value = pos["shares"] * 0.68
+    assert summary["equity"] == pytest.approx(summary["cash"] + expected_open_value)
+    assert summary["equity"] > summary["cash"]  # market moved in ARIA's favor
+
+
+@pytest.mark.asyncio
+async def test_portfolio_summary_degrades_to_entry_cost_when_book_unavailable(tmp_db, monkeypatch):
+    """Same bug fix, degradation path: an unavailable/empty order book on the
+    held side must never fabricate a value -- falls back to the position's
+    own entry cost (size_usd), never blocking the summary."""
+    _patch_order_book(monkeypatch, best_ask=0.5)
+    pos = await ppt.open_bet(_market(yes_token="yes-tok"), _judgment(side="YES"))
+
+    async def fake_order_book_unavailable(self, token_id):
+        from aria_core.services.polymarket import PolymarketOrderBook
+
+        return PolymarketOrderBook(available=False, error="indisponible")
+
+    monkeypatch.setattr(
+        "aria_core.services.polymarket.PolymarketClient.get_order_book", fake_order_book_unavailable,
+    )
+
+    summary = await ppt.portfolio_summary()
+    assert summary["equity"] == pytest.approx(summary["cash"] + pos["size_usd"])
+
+
+@pytest.mark.asyncio
 async def test_cash_available_reduced_by_open_position_cost(tmp_db, monkeypatch):
     _patch_order_book(monkeypatch, best_ask=0.5)
     start = await ppt.cash_available()
