@@ -82,3 +82,27 @@ def test_main_returns_zero_when_clean(tmp_path, monkeypatch, capsys):
     assert scanner.main() == 0
     out = capsys.readouterr().out
     assert "Aucun email" in out
+
+
+def test_git_at_github_ssh_syntax_is_allowlisted(tmp_path):
+    """Item #232 (30/07), real incident: git@github.com (generic SSH remote
+    syntax, not a personal address) re-triggered the 13/07 incident already
+    documented in HANDOFF_SECURITE.md -- ironically via the very sentence
+    that DESCRIBES that incident."""
+    _write(tmp_path, "docs/HANDOFF_SECURITE.md", "cloned via git@github.com:user/repo.git\n")
+    assert scanner.find_unallowlisted_emails(tmp_path) == {}
+
+
+def test_binary_file_with_email_like_byte_noise_is_exempt(tmp_path):
+    """Item #232 (30/07), real incident: mobile/assets/icon.png produced a
+    false "email" from pure PNG byte noise -- ``read_text(errors="ignore")``
+    silently succeeds on binary content instead of raising. Extension-based
+    exemption, not a one-off path exception (any future binary asset is
+    covered)."""
+    p = tmp_path / "mobile" / "assets" / "icon.png"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # Invalid UTF-8 bytes surrounding a valid email-shaped ASCII sequence --
+    # errors="ignore" would decode this to something like "Pn@a.fF" if the
+    # file weren't exempted by extension first.
+    p.write_bytes(b"\x89PNG\r\n\x1a\n\xffP\xffn@\xffa\xff.\xfffF\xff\x00\x01")
+    assert scanner.find_unallowlisted_emails(tmp_path) == {}

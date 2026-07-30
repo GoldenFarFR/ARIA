@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : Item #232 -- CI secret-scan casse en boucle (2 bugs distincts, pre-existants)
+Date : 2026.07.30 / Probleme : signalement operateur en direct (captures d'ecran de checks GitHub Actions en echec repete) -- le job `detect-secrets (baseline diff)` echouait systematiquement sur TOUT push/PR, sans rapport avec le contenu reellement pousse. Deux causes distinctes trouvees via l'API GitHub Actions (jamais devine) : (1) 7 findings jamais audites dans `.secrets.baseline` depuis l'ajout des tests Phase 1 App mobile (mots de passe/TOTP factices dans test_operator_account.py/test_operator_mobile_routes.py, adresses Ethereum publiques dans test_basenames.py) + 1 finding de cette session (market_slug Polymarket, test_polymarket_paper_trader.py) -- tous verifies manuellement comme faux positifs avant regeneration. (2) le step separe "Scanner les emails hors liste blanche" (incident #139) detectait `git@github.com` (syntaxe SSH generique, PAS une adresse personnelle -- ironiquement present dans le texte de CE MEME fichier qui RACONTE l'incident du 13/07) et `mobile/assets/icon.png` (un email fantome genere par du bruit d'octets binaires, `read_text(errors="ignore")` decodant silencieusement un PNG au lieu d'echouer).
+Solution : `.secrets.baseline` regenere (procedure documentee dans secrets-scan.yml). `check_no_personal_email.py` : `git@github.com` ajoute a `ALLOWLISTED_EMAILS` avec la raison en commentaire ; nouvelle exemption par EXTENSION binaire (`_BINARY_EXTENSIONS`, png/jpg/ico/woff/pdf/zip/etc.) plutot qu'une exception au cas par cas -- couvre tout futur asset binaire, pas seulement ce PNG precis. — .secrets.baseline/check_no_personal_email.py, 2 nouveaux tests dedies (13 total), suite complete verte.
+
+------------------------------------------------------------
+
 [ETAT ACTUEL] Sujet    : Repos annexes volontairement archivés sur GitHub, jamais désarchivés
 Date : 2026.07.18  /  Probleme : —
 Solution : `template-grok-cursor` et `aria-acp-showcase` restent archivés (décision opérateur) en plus du `GITHUB_TOKEN` PAT fine-grained scopé au seul repo `ARIA` et de la protection de branche `main` (entrées ci-dessous) — ne jamais les désarchiver/supprimer sans consigne opérateur explicite.

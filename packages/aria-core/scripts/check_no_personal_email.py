@@ -32,6 +32,18 @@ _EXCLUDE_DIR_NAMES = {
 }
 _EXCLUDE_FILE_NAMES = {"package-lock.json"}
 
+# Binary asset extensions -- ``path.read_text(errors="ignore")`` below silently
+# "succeeds" on binary content (it just drops invalid UTF-8 bytes), producing
+# semi-random text where the email regex can coincidentally match a byte
+# sequence that looks like an address (real incident: mobile/assets/icon.png
+# -> a 4-char false "email" from pure PNG byte noise). Never a text/config
+# format that could legitimately carry a real email.
+_BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".pdf", ".zip", ".gz", ".tar", ".mp3", ".mp4", ".wav", ".mov",
+}
+
 # Adresses de service/identité ARIA connues et légitimes -- exactes, jamais un domaine
 # entier (un domaine large comme gmail.com couvrirait aussi de vraies adresses
 # personnelles, ce qui viderait le garde-fou de son sens).
@@ -40,6 +52,10 @@ ALLOWLISTED_EMAILS = {
     "aria_vanguard_zhc@agents.world",  # identité agent ACP (showcase_pr_watch, email watcher)
     "noreply@anthropic.com",         # co-auteur de commit standard (CLAUDE.md)
     "cursoragent@cursor.com",        # identité bot Cursor (docs historiques)
+    "git@github.com",                # syntaxe SSH generique (git@github.com:user/repo.git),
+                                      # jamais une adresse personnelle -- redeclenchait
+                                      # l'incident du 13/07 documente dans HANDOFF_SECURITE.md,
+                                      # ironiquement a cause du texte qui RACONTE cet incident.
 }
 
 # Domaines placeholder de documentation/exemple connus -- jamais une vraie adresse
@@ -63,6 +79,8 @@ def _is_exempt_path(rel: Path) -> bool:
     if any(part in _EXCLUDE_DIR_NAMES for part in rel.parts):
         return True
     if rel.name in _EXCLUDE_FILE_NAMES:
+        return True
+    if rel.suffix.lower() in _BINARY_EXTENSIONS:
         return True
     if "tests" in rel.parts:
         return True

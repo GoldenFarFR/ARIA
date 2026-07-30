@@ -5,6 +5,12 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
+[DEPLOYE] Sujet    : Item #230 -- lien Telegram casse pour un chemin aria-brain accentue
+Date : 2026.07.30 / Probleme : signalement operateur en direct -- une alerte "ARIA a ecrit dans sa memoire libre" pour un chapitre au nom accentue (ex "chapitre-11-la-voix-de-l-experience-en-action.md") produisait un lien Telegram qui s'arretait/cassait pile a l'accent. Verifie en base (`aria_brain_log`) : l'ecriture reelle reussit bien (commit_sha renseigne, le fichier existe reellement sur GitHub avec l'accent) -- le bug est uniquement dans la construction du lien affiche.
+Solution : `write_free_entry` construisait l'URL avec le path brut (accent unicode non encode) au lieu de le percent-encoder -- `quote(path, safe="/")` produit desormais exactement l'URL qu'un navigateur produirait en cliquant depuis l'interface GitHub elle-meme. — aria_brain.py, 1 nouveau test (path accentue -> `%C3%A9` dans l'URL, jamais le caractere brut), suite complete verte (8484 passed).
+
+------------------------------------------------------------
+
 [CODE] Sujet    : Capture automatique des lecons du relay ("qu'elle puisse s'auto-ameliorer")
 Date : 2026.07.25 / Probleme : demande operateur explicite -- les lecons reelles qu'ARIA tire dans le canal relay (comme le signal fondamental CHECK/le mode plancher OWB, tous deux corriges manuellement en items #97/#98 aujourd'hui) restaient perdues dans une conversation Telegram ephemere une fois le test termine. Aucun mecanisme ne persistait ces echanges pour qu'une future session Claude Code puisse les relire.
 Solution : nouveau `relay_conversation._log_lesson`, declenche uniquement quand la question porte sur une position identifiee (`_matched_position_for_message`, jamais sur du small-talk) -- persiste position/question/reponse dans un journal HORS-REPO (`relay_lessons_dir()`, `/opt/aria-data/relay-lessons/lessons-log.md`), meme doctrine que `research-log.md` (volume trop bruyant pour l'historique git public). **Explicitement PAS une auto-modification** : aucune promotion automatique, aucun changement de code declenche par ARIA elle-meme -- une future session lit ce journal et juge, exactement le processus manuel qui a produit #97/#98. — paths.py/relay_conversation.py, 4 nouveaux tests, suite complete + test_coherence.py verts.
