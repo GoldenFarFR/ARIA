@@ -274,13 +274,26 @@ HEARTBEAT_TASKS = [
         # 07/23 -- lowered 60 -> 30 min (operator request "on peut baisser le
         # delai"): the WebSocket (ARIA_MOMENTUM_WEBSOCKET_ENABLED, ON in prod)
         # already covers ~30s detection of boost/profile tokens, so this REST
-        # scan's real added value is the "trending" universe -- 30 min catches
-        # those faster at a modest GoPlus cost (the scarcest client, hit only on
-        # candidates that clear the free filters). NOT lowered further: 15 min
-        # would start stressing the calibrated GoPlus/GeckoTerminal ceilings
-        # (rate-limit doctrine, "90% of real capacity, never guessed") -- revisit
-        # only with a real sustained-load measurement.
-        interval_minutes=30,
+        # scan's real added value is the "trending" universe.
+        # 07/30 -- lowered 30 -> 15 min (operator-approved, "scalping arrives
+        # too late" diagnostic on PRXVT: a 30min-only periodic scan can fully
+        # miss a pump that forms and unwinds within a single 15-30min window).
+        # The GoPlus ceiling that justified holding this at 30min is no longer
+        # the real constraint: since Item #212-217 (29/07), _check_honeypot no
+        # longer makes a synchronous GoPlus call on this path at all -- it
+        # reads goplus_watchlist.get_fresh() (a background cycle refreshed
+        # separately, every 5min) and returns a HOLD (honeypot_pending) on a
+        # miss, never a blocking network call here. The remaining real cost is
+        # GeckoTerminal OHLCV (calibrated 27/min, docs/api-rate-limit-calibration.md)
+        # + DexScreener sourcing (60/min confirmed) -- both are rate-limited by
+        # their own client-level throttle regardless of how often this cycle
+        # fires, and _run_cycle_lock already forbids two passes from
+        # overlapping, so halving the interval raises the total hourly call
+        # volume (more candidates processed per hour) but never the
+        # instantaneous rate against either ceiling. Revisit only if a future
+        # real-load observation shows GeckoTerminal/DexScreener throttling
+        # (cycles queuing behind the lock, HOLD reasons piling up).
+        interval_minutes=15,
         enabled=False,
     ),
     HeartbeatTask(
