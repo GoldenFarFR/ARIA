@@ -876,13 +876,14 @@ _TRADING_THRESHOLDS = {
         # TIER is a dict, not tracked here (this registry only tracks scalar
         # constants), documented in the markdown table directly instead.
         "_MAX_SUPPLY_PCT_DEFAULT": 0.01,
-        # Items #161/#162, 28/07 -- organic-decline (staleness) penalty.
-        "_STALENESS_DAYS_THRESHOLD": 30.0,
-        "_STALENESS_MAX_DAYS": 45.0,
-        "_STALENESS_MAX_PENALTY_PCT": 0.5,
-        "_STALENESS_WAIVER_POSTING_CADENCE": "active",
         # Item #165, 28/07 -- BTC long-cycle sizing lever.
         "_BTC_LATE_CYCLE_SIZE_MULTIPLIER": 0.7,
+        # Items #161/#162 (organic-decline/staleness penalty) REMOVED 30/07,
+        # Item #242 -- operator's explicit, standing directive: never apply a
+        # malus to a token for low market cap or bonding status. See
+        # bonding_entry.py's module docstring and docs/trading-thresholds-
+        # calibration.md for the full removal note.
+        "_HOLDER_CONCENTRATION_UNINFORMATIVE_SCORE_FRACTION": 0.5,
     },
     "aria_core.limit_orders": {
         "LIMIT_ORDER_WATCH_TRIGGER_MULT": 1.10,

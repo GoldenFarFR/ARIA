@@ -705,7 +705,8 @@ async def test_bonding_score_matches_the_validated_worked_example(monkeypatch):
     """Exact worked example from the document the operator had independently
     reviewed (external LLM cross-check) before this was coded: dev=0% -> 35,
     potential_score=6.0 -> 21, rr=3.0/align=2 -> 9.4, holder_count=6 (<50
-    since #152, near-zero fraction) -> 3.0, total 68.4/100 -> BUY."""
+    since #152, neutral half fraction per the 30/07 revert) -> 7.5, total
+    72.9/100 -> BUY."""
     token = _bonding_token(dev_holding_pct=0.0, holder_count=6, top10_holder_pct=100.0)
     _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
 
@@ -724,7 +725,7 @@ async def test_bonding_score_matches_the_validated_worked_example(monkeypatch):
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
 
     assert result["action"] == "BUY"
-    assert result["bonding_score"] == pytest.approx(68.4, abs=0.01)
+    assert result["bonding_score"] == pytest.approx(72.9, abs=0.01)
 
 
 @pytest.mark.asyncio
@@ -753,12 +754,12 @@ async def test_hold_when_composite_score_below_threshold(monkeypatch):
     result = await bonding_entry.evaluate_bonding_entry("0xabc")
 
     # score_dev = 35*(1-4.9/5.0) = 0.7 ; score_product = 17.5 (neutral) ;
-    # score_setup = (2.0/5.0*9) + (2/3*6) = 3.6+4.0 = 7.6 ; score_holders = 3.0
-    # (near-zero fraction, <50 holders since #152) -- total = 0.7+17.5+7.6+3.0
-    # = 28.8, well under 60.
+    # score_setup = (2.0/5.0*9) + (2/3*6) = 3.6+4.0 = 7.6 ; score_holders = 7.5
+    # (neutral half fraction per the 30/07 revert, <50 holders since #152) --
+    # total = 0.7+17.5+7.6+7.5 = 33.3, well under 60.
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "score_below_threshold"
-    assert result["bonding_score"] == pytest.approx(28.8, abs=0.01)
+    assert result["bonding_score"] == pytest.approx(33.3, abs=0.01)
     assert result["bonding_score"] < bonding_entry._SCORE_THRESHOLD
 
 
@@ -784,118 +785,10 @@ def test_late_cycle_multiplier_fails_open_on_unknown_or_missing():
     assert bonding_entry.late_cycle_size_multiplier("some_unexpected_label") == 1.0
 
 
-# ── Item #161/#162, 28/07: organic-decline (staleness) penalty ─────────────
-
-
-def _iso_days_ago(days: float) -> str:
-    from datetime import datetime, timedelta, timezone
-
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-def test_staleness_penalty_none_when_launch_date_unknown():
-    assert bonding_entry._staleness_penalty_multiplier(None) == 1.0
-
-
-def test_staleness_penalty_none_below_threshold():
-    fresh = _iso_days_ago(bonding_entry._STALENESS_DAYS_THRESHOLD - 1.0)
-    assert bonding_entry._staleness_penalty_multiplier(fresh) == 1.0
-
-
-def test_staleness_penalty_partial_between_threshold_and_max():
-    midway_days = (bonding_entry._STALENESS_DAYS_THRESHOLD + bonding_entry._STALENESS_MAX_DAYS) / 2.0
-    launched = _iso_days_ago(midway_days)
-    multiplier = bonding_entry._staleness_penalty_multiplier(launched)
-    assert 1.0 - bonding_entry._STALENESS_MAX_PENALTY_PCT < multiplier < 1.0
-
-
-def test_staleness_penalty_capped_beyond_max_days():
-    ancient = _iso_days_ago(bonding_entry._STALENESS_MAX_DAYS + 100.0)
-    multiplier = bonding_entry._staleness_penalty_multiplier(ancient)
-    assert multiplier == pytest.approx(1.0 - bonding_entry._STALENESS_MAX_PENALTY_PCT)
-
-
-def test_staleness_penalty_waived_by_active_posting_cadence():
-    """Item #162: a genuine dated catalyst (posting_cadence == "active")
-    waives the decay entirely, no matter how old the token is."""
-    ancient = _iso_days_ago(bonding_entry._STALENESS_MAX_DAYS + 100.0)
-    multiplier = bonding_entry._staleness_penalty_multiplier(
-        ancient, posting_cadence=bonding_entry._STALENESS_WAIVER_POSTING_CADENCE,
-    )
-    assert multiplier == 1.0
-
-
-def test_staleness_penalty_not_waived_by_other_cadence_values():
-    ancient = _iso_days_ago(bonding_entry._STALENESS_MAX_DAYS + 100.0)
-    for cadence in ("low", "dormant", "unknown", None):
-        multiplier = bonding_entry._staleness_penalty_multiplier(ancient, posting_cadence=cadence)
-        assert multiplier == pytest.approx(1.0 - bonding_entry._STALENESS_MAX_PENALTY_PCT)
-
-
-def test_staleness_penalty_unparsable_date_fails_open():
-    assert bonding_entry._staleness_penalty_multiplier("not-a-real-date") == 1.0
-
-
-@pytest.mark.asyncio
-async def test_stale_token_score_reduced_and_can_flip_to_hold(monkeypatch):
-    """End-to-end: an otherwise-BUY-worthy stale token (aged well past
-    _STALENESS_MAX_DAYS, no active posting cadence) has its composite score
-    reduced -- verified via a case exactly on the BUY/HOLD boundary so the
-    penalty is what flips the verdict, not a coincidence."""
-    token = _bonding_token(
-        dev_holding_pct=2.0, holder_count=6, top10_holder_pct=100.0,
-        launched_at=_iso_days_ago(bonding_entry._STALENESS_MAX_DAYS + 30.0),
-    )
-    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
-
-    def fake_detect_entry(candles, **kwargs):
-        return EntrySignal(present=True, reasons=["setup"], rr=2.0, target=0.002, invalidation=0.0009)
-
-    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
-    _patch_usd_rate(monkeypatch, 0.5)
-
-    async def fake_research_quiet(contract, symbol, chain, *, known_links=None, **kwargs):
-        return bonding_entry.ConvictionResearch(available=True, potential_score=9.0, posting_cadence="dormant")
-
-    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research_quiet)
-
-    result = await bonding_entry.evaluate_bonding_entry("0xabc")
-
-    # Same inputs as test_bonding_score_rewards_strong_conviction_over_weak_dev_security's
-    # "strong" case (BUY there, no staleness) -- here the token is ancient and
-    # dormant, so the penalty applies and the score comes back down.
-    assert result["action"] == "HOLD"
-    assert "déclin organique" in " ".join(result["reasons"])
-
-
-@pytest.mark.asyncio
-async def test_active_posting_cadence_protects_an_aged_token_from_the_penalty(monkeypatch):
-    """Item #162's guardrail proven end-to-end: the SAME aged token as above,
-    but with posting_cadence="active" -- the penalty is waived, the BUY goes
-    through on the strength of the underlying score alone."""
-    token = _bonding_token(
-        dev_holding_pct=2.0, holder_count=6, top10_holder_pct=100.0,
-        launched_at=_iso_days_ago(bonding_entry._STALENESS_MAX_DAYS + 30.0),
-    )
-    _patch_client(monkeypatch, _FakeVirtualsClient(token=token, trades=_trades(20)))
-
-    def fake_detect_entry(candles, **kwargs):
-        return EntrySignal(present=True, reasons=["setup"], rr=2.0, target=0.002, invalidation=0.0009)
-
-    monkeypatch.setattr(bonding_entry, "detect_entry", fake_detect_entry)
-    monkeypatch.setattr("aria_core.momentum_entry._technical_alignment", lambda candles: (2, [], {}))
-    _patch_usd_rate(monkeypatch, 0.5)
-
-    async def fake_research_active(contract, symbol, chain, *, known_links=None, **kwargs):
-        return bonding_entry.ConvictionResearch(available=True, potential_score=9.0, posting_cadence="active")
-
-    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research_active)
-
-    result = await bonding_entry.evaluate_bonding_entry("0xabc")
-
-    assert result["action"] == "BUY"
-    assert "déclin organique" not in " ".join(result["reasons"])
+# ── Item #161/#162 staleness penalty REMOVED 30/07 (operator's explicit,
+# standing directive: never apply a malus to a token for low market cap or
+# for still being in bonding -- staleness fired precisely on that pattern).
+# See bonding_entry.py's module docstring for the full removal note.
 
 
 @pytest.mark.asyncio

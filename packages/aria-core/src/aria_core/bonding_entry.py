@@ -115,11 +115,19 @@ USD``) keeps a limit order from being placed on a bonding token too thin for
 architecture) now also evaluates bonding candidates via this SAME engine --
 a Take-Seed exit design assuming a long holding horizon fits a pocket that's
 never force-closed by a weekly reset far better than scalping/swing.
-Finally, an organic-decline penalty (``_staleness_penalty_multiplier``)
-shaves points off the composite score for a token that's aged well past a
-typical bonding window without graduating -- waived by a genuine dated
-catalyst (an "active" posting cadence from conviction_research.py), never a
-hard reject on its own.
+
+30/07 (operator's explicit, standing directive): the organic-decline
+("staleness") penalty introduced by #161/#162 -- which shaved up to 50% off
+the composite score for a token that stayed non-graduated too long -- has
+been REMOVED entirely. The operator's ruling: ARIA must never apply a malus
+to a token specifically for having a low market cap or for still being in
+bonding -- and a token that hasn't graduated is, by definition, exactly
+that. Staleness was, on inspection, precisely such a malus (it fired ONLY
+on small/bonding tokens, never on anything else), so it's gone rather than
+tuned. Real case that surfaced it (28/07-30/07): HOLO, a legitimate,
+well-known project, scored 66.7/100 on fundamentals alone, then got cut to
+33.4/100 by this penalty for having stayed in bonding a while -- exactly
+the pattern this directive rules out.
 
 Sizing: reuses ``paper_trader.compute_entry_alloc`` (same risk/ATR formula
 as the standard pipeline) -- the caller (``paper_trader.py``) then applies
@@ -142,7 +150,6 @@ point of failure at worst.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from aria_core.conviction_research import ConvictionResearch, research_project_potential
 from aria_core.skills.entry_signals import detect_entry
@@ -206,13 +213,18 @@ _TOP10_HOLDER_PCT_SCORE_FLOOR = 90.0
 _MIN_HOLDERS_FOR_CONCENTRATION_CHECK = 50
 
 # #152, 28/07 -- below the sample-size floor above, holder concentration is
-# uninformative (see the comment there) -- previously scored a neutral half
-# (7.5/15), now much lower per the research recommendation ("keep this
-# factor's weight very low, near-zero, until ~50 real holders") -- kept
-# slightly above literal zero rather than a hard 0, same "unknown is not
-# proof of a negative signal" doctrine as the rest of this module's None
-# handling (e.g. potential_score=None on a quiet-but-real team).
-_HOLDER_CONCENTRATION_UNINFORMATIVE_SCORE_FRACTION = 0.2
+# uninformative (see the comment there): a neutral half (7.5/15). Briefly
+# lowered near-zero (0.2) by a 28/07 research pass -- REVERTED 30/07 per the
+# operator's explicit, standing directive: ARIA must never apply a malus to
+# a token specifically for having a low market cap or for still being in
+# bonding. A token below this holder-count floor is, almost by definition,
+# small/early -- scoring it down for that alone is exactly the pattern the
+# directive rules out. "Uninformative" means give it the benefit of the
+# doubt (neutral), not punish it for lacking a sample it hasn't had time to
+# build yet -- same "unknown is not proof of a negative signal" doctrine as
+# the rest of this module's None handling (e.g. potential_score=None on a
+# quiet-but-real team).
+_HOLDER_CONCENTRATION_UNINFORMATIVE_SCORE_FRACTION = 0.5
 
 # "Market" floor, expressed as the bonding pool's own liquidity (already in
 # USD) -- proxy for market cap per the operator's own observation that the
@@ -294,56 +306,6 @@ _FALLBACK_INVALIDATION_MULTIPLE = 0.35
 # starting constant in this pipeline (e.g. the daily-trade-floor's own
 # quality bars).
 _SCORE_THRESHOLD = 60.0
-
-# Item #161, 28/07 -- organic decline (staleness): a bonding-curve token is a
-# race against a thin, easily-exhausted pool of early buyer attention -- one
-# that hasn't graduated after weeks is statistically less likely to ever take
-# off (real interest/momentum naturally decays on a market this shallow,
-# distinct from the "no candles yet" case at the very start of a token's
-# life). Never a hard reject -- shaves points off the ALREADY-COMPUTED
-# composite score, same "score decides, never a second veto" doctrine as
-# every other pillar in this module. Starting values, to recalibrate once
-# real bonding outcomes accumulate (same doctrine as every other starting
-# constant here).
-_STALENESS_DAYS_THRESHOLD = 30.0  # decay starts here
-_STALENESS_MAX_DAYS = 45.0  # decay reaches its full extent here
-_STALENESS_MAX_PENALTY_PCT = 0.5  # up to 50% of the composite score shaved off
-
-# Item #162, 28/07 -- "dated catalyst required" guardrail: staleness (#161)
-# measures ORGANIC decline, not every long-lived bonding token -- a project
-# still visibly, ACTIVELY posting/shipping despite a long bonding phase is a
-# real, dated signal of continued life, not noise. conviction_research.py's
-# own ``posting_cadence`` is reused as-is (never a second, separately-fetched
-# signal) -- "active" is its freshest, most recently-verified activity tier,
-# which waives the decay entirely; any other value ("low"/"dormant"/
-# "unknown") lets the age-based decay above apply in full.
-_STALENESS_WAIVER_POSTING_CADENCE = "active"
-
-
-def _staleness_penalty_multiplier(launched_at: str | None, *, posting_cadence: str | None = None) -> float:
-    """Returns a multiplier in ``[1 - _STALENESS_MAX_PENALTY_PCT, 1.0]`` applied
-    to the composite bonding score -- 1.0 (no penalty) if the launch date is
-    unknown (fail-open, never an invented age), the token hasn't yet crossed
-    ``_STALENESS_DAYS_THRESHOLD``, or a genuine dated catalyst was found
-    (``_STALENESS_WAIVER_POSTING_CADENCE``, Item #162). Decays LINEARLY
-    between the threshold and ``_STALENESS_MAX_DAYS``, capped at
-    ``_STALENESS_MAX_PENALTY_PCT`` beyond that -- never harsher than the cap,
-    regardless of how old the token gets."""
-    if not launched_at or posting_cadence == _STALENESS_WAIVER_POSTING_CADENCE:
-        return 1.0
-    try:
-        launched_dt = datetime.fromisoformat(str(launched_at).replace("Z", "+00:00"))
-        if launched_dt.tzinfo is None:
-            launched_dt = launched_dt.replace(tzinfo=timezone.utc)
-        age_days = (datetime.now(timezone.utc) - launched_dt).total_seconds() / 86400.0
-    except (ValueError, TypeError):
-        return 1.0  # unparsable date -- fail-open, never a fabricated age
-    if age_days <= _STALENESS_DAYS_THRESHOLD:
-        return 1.0
-    progress = min(
-        1.0, (age_days - _STALENESS_DAYS_THRESHOLD) / (_STALENESS_MAX_DAYS - _STALENESS_DAYS_THRESHOLD)
-    )
-    return 1.0 - progress * _STALENESS_MAX_PENALTY_PCT
 
 # Item #156, 28/07 -- supply-proportion cap: on a bonding curve the total
 # supply is fixed and often thin (see the liquidity-bimodality finding
@@ -725,22 +687,6 @@ async def evaluate_bonding_entry(
         f"setup {score_setup:.1f}/{_WEIGHT_TECHNICAL_SETUP:.0f}, "
         f"holders {score_holders:.1f}/{_WEIGHT_HOLDER_CONCENTRATION:.0f})"
     )
-
-    # Item #161/#162, 28/07: organic-decline penalty, applied to the ALREADY-
-    # COMPUTED score above (never a separate gate) -- waived entirely by a
-    # genuine dated catalyst (#162, posting_cadence == "active"), otherwise
-    # decaying linearly once the token has aged past _STALENESS_DAYS_
-    # THRESHOLD without graduating (still UNDERGRAD at this point in the
-    # function, see the is_in_bonding() check earlier).
-    staleness_multiplier = _staleness_penalty_multiplier(
-        token.launched_at, posting_cadence=conviction_posting_cadence,
-    )
-    if staleness_multiplier < 1.0:
-        bonding_score *= staleness_multiplier
-        reasons.append(
-            f"déclin organique (bonding non-gradué depuis longtemps) -- score réduit "
-            f"de {(1.0 - staleness_multiplier) * 100:.0f}% à {bonding_score:.1f}/100"
-        )
 
     if bonding_score < _SCORE_THRESHOLD:
         reasons.append(f"score composite sous le seuil ({_SCORE_THRESHOLD:.0f}/100)")
