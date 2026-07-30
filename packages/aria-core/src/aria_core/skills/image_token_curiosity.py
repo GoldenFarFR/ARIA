@@ -90,12 +90,25 @@ def _pick_dominant_match(
         exact = [p for p in exact if (p.chain_id or "").lower() in allowed]
     if not exact:
         return None
-    exact.sort(key=lambda p: p.liquidity_usd, reverse=True)
-    if len(exact) == 1:
-        return exact[0]
-    top, runner_up = exact[0], exact[1]
-    if runner_up.liquidity_usd <= 0 or top.liquidity_usd >= runner_up.liquidity_usd * _DOMINANT_LIQUIDITY_RATIO:
-        return top
+
+    # Item #238, 30/07, real incident: BRETT (a single real Base contract,
+    # 19 pools across Uniswap/Aerodrome/Pancakeswap/etc.) was misreported as
+    # "ambiguous" because comparing raw POOL liquidity treated its own 2nd
+    # pool ($598K, Aerodrome) as if it were a DIFFERENT competing token vs
+    # its main pool ($903K, Uniswap) -- ratio 1.51x, under the 3x threshold,
+    # tripping the guard against itself. Group by base_address FIRST and
+    # compare AGGREGATE (summed) liquidity across DISTINCT addresses --
+    # never a single token's own pools mistaken for two competing tokens.
+    by_address: dict[str, list[PairSnapshot]] = {}
+    for p in exact:
+        by_address.setdefault(p.base_address, []).append(p)
+    ranked = sorted(by_address.values(), key=lambda ps: sum(p.liquidity_usd for p in ps), reverse=True)
+    if len(ranked) == 1:
+        return max(ranked[0], key=lambda p: p.liquidity_usd)
+    top_liq = sum(p.liquidity_usd for p in ranked[0])
+    runner_up_liq = sum(p.liquidity_usd for p in ranked[1])
+    if runner_up_liq <= 0 or top_liq >= runner_up_liq * _DOMINANT_LIQUIDITY_RATIO:
+        return max(ranked[0], key=lambda p: p.liquidity_usd)
     return None  # too ambiguous -- several unrelated tokens share this ticker
 
 

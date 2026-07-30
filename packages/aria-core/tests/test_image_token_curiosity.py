@@ -169,6 +169,54 @@ def test_pick_dominant_match_chains_case_insensitive():
     assert curiosity._pick_dominant_match("STONK", pairs, chains=("base",)) is not None
 
 
+# ── _pick_dominant_match address-grouping (Item #238, real incident: BRETT) ──
+# a single real token's OWN second pool was mistaken for a competing token.
+
+def test_pick_dominant_match_own_second_pool_never_counts_as_a_competitor():
+    """Reproduces the real BRETT incident exactly: ONE real Base contract,
+    two of its own pools ($903K Uniswap, $598K Aerodrome, ratio 1.51x --
+    under the 3x threshold if compared as if they were different tokens).
+    Grouping by address means there's only ONE distinct token here -- must
+    resolve immediately, never flagged ambiguous."""
+    pairs = [
+        _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=903_234.0),
+        _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=598_326.0),
+        _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=19_741.0),
+    ]
+    match = curiosity._pick_dominant_match("BRETT", pairs)
+    assert match is not None
+    assert match.base_address == "0xbrett"
+
+
+def test_pick_dominant_match_distinct_tokens_still_compared_by_aggregate_liquidity():
+    """Two GENUINELY distinct tokens, each with multiple pools -- aggregate
+    (summed) liquidity per address must still decide dominance correctly,
+    not just whichever single pool happens to be biggest."""
+    pairs = [
+        _pair(symbol="STONK", address="0xreal", chain="base", liquidity=50_000.0),
+        _pair(symbol="STONK", address="0xreal", chain="base", liquidity=40_000.0),
+        _pair(symbol="STONK", address="0xreal", chain="base", liquidity=30_000.0),
+        # 0xreal aggregate = 120,000 -- dominates 0xfake's single pool by >3x
+        _pair(symbol="STONK", address="0xfake", chain="base", liquidity=35_000.0),
+    ]
+    match = curiosity._pick_dominant_match("STONK", pairs)
+    assert match is not None
+    assert match.base_address == "0xreal"
+
+
+def test_pick_dominant_match_distinct_tokens_with_multiple_pools_still_ambiguous_when_close():
+    """Non-regression: address-grouping doesn't relax the guard when two
+    DISTINCT tokens' aggregate liquidity is genuinely comparable."""
+    pairs = [
+        _pair(symbol="STONK", address="0xone", chain="base", liquidity=60_000.0),
+        _pair(symbol="STONK", address="0xone", chain="base", liquidity=40_000.0),
+        # 0xone aggregate = 100,000
+        _pair(symbol="STONK", address="0xtwo", chain="base", liquidity=80_000.0),
+        # 0xtwo aggregate = 80,000 -- ratio 1.25x, genuinely ambiguous
+    ]
+    assert curiosity._pick_dominant_match("STONK", pairs) is None
+
+
 # ── _honeypot_line ───────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -459,3 +507,34 @@ async def test_queue_tokens_from_screenshot_resolves_real_gitlawb_incident(monke
     assert len(pending) == 1
     assert pending[0]["contract"] == "0xrealbase"
     assert pending[0]["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_resolves_real_brett_incident(monkeypatch):
+    """Item #238 follow-up (30/07, real operator report, 'brettcheck pourquoi'):
+    BRETT is the ONLY real Base contract for this ticker (19 pools across
+    Uniswap/Aerodrome/Pancakeswap/etc.) but was reported unresolved -- its
+    own 2nd-biggest pool ($598K) was compared against its main pool ($903K)
+    as if they were different tokens (ratio 1.51x, under 3x). Fixed by
+    grouping by base_address before the dominance check."""
+    from aria_core import manual_candidates as mcq
+
+    async def fake_extract(uri):
+        return ["BRETT"]
+
+    async def fake_search(ticker):
+        return [
+            _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=903_234.0),
+            _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=598_326.0),
+            _pair(symbol="BRETT", address="0xbrett", chain="base", liquidity=143_053.0),
+        ]
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", fake_extract)
+    monkeypatch.setattr(curiosity, "search_pairs", fake_search)
+
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+
+    assert "1 ajoute" in summary
+    pending = await mcq.list_pending_manual_candidates()
+    assert len(pending) == 1
+    assert pending[0]["contract"] == "0xbrett"
