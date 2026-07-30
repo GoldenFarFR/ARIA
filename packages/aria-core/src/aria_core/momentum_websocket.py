@@ -315,6 +315,7 @@ class MomentumWebsocketListener:
 
                 await limit_orders.process_active_orders(
                     paper_trader._default_price_lookup, notifier=send_trading_notification,
+                    pair_lookup=paper_trader._default_pair_lookup,
                 )
             except Exception as exc:  # noqa: BLE001 -- never kills the drain/websocket
                 logger.exception("momentum_websocket: limit-order processing failed (%s)", exc)

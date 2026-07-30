@@ -260,6 +260,32 @@ def check_watching_order(
     return "wait"
 
 
+def is_market_dead(volume_h1_usd: float | None) -> bool:
+    """30/07 (real operator gap): a ``watching`` order's whole premise --
+    price will eventually reach a meaningful level -- requires a pool that's
+    still genuinely trading. Neither ``check_watching_order`` nor
+    ``check_rsi_divergence_watching_order`` ever looked at volume, only
+    price -- a token whose market goes quiet AFTER the order was placed (the
+    common case: AQUARI/WMTX-style pools with $0 volume in the last hour)
+    just sat there until its own wall-clock expiry, up to 71h later, wasting
+    a watch slot the whole time.
+
+    Reuses the SAME floor momentum_entry already applies at entry
+    (``_MIN_VOLUME_24H_USD``, $500 as of writing) against the freshest read
+    of real activity (last-hour volume, run-rated to a 24h equivalent) --
+    never a separate magic number. Empirically confirmed against the 29 real
+    watching orders live at the time this was written: this exact floor
+    matched, contract for contract, the 9 pools an ad-hoc "$50/h" cutoff had
+    flagged as dead, with no false positive/negative either way.
+
+    ``None`` (lookup unavailable) -- fail-open, never cancels on unknown
+    data."""
+    if volume_h1_usd is None:
+        return False
+    from aria_core import momentum_entry
+    return (volume_h1_usd * 24.0) < momentum_entry._MIN_VOLUME_24H_USD
+
+
 async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     """Item #183 (28/07), watch-RSI-divergence: decision for a ``watching``
     order tagged ``limit_order_reason == "rsi_divergence_pending"`` -- unlike
@@ -624,7 +650,7 @@ async def reanalyze_for_watching(order: dict) -> bool:
     return clear
 
 
-async def process_active_orders(price_lookup, notifier=None) -> dict:
+async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -> dict:
     """Orchestrates every active limit order for one pass of the caller's
     drain loop (``momentum_websocket._drain_once()``): expires stale orders,
     advances ``pending`` orders toward ``watching`` (with the one-time
@@ -632,18 +658,37 @@ async def process_active_orders(price_lookup, notifier=None) -> dict:
     cancel on a broken structure). ``price_lookup(contract, chain=...)``
     matches the same contract already used everywhere else in this pipeline.
     Never raises -- a failure on one order never blocks the others or the
-    caller's own drain."""
+    caller's own drain.
+
+    ``pair_lookup(contract, chain=...)`` (optional, 30/07) returns the full
+    ``PairSnapshot`` instead of a bare price -- SAME network call as
+    ``price_lookup`` under the hood (both ultimately fetch one DexScreener
+    pair), just not throwing away the volume field. When provided, it
+    REPLACES ``price_lookup`` entirely (never both -- that would double the
+    network cost for nothing) and additionally enables ``is_market_dead`` on
+    ``watching`` orders. ``price_lookup`` alone (``pair_lookup=None``, the
+    default) keeps the exact legacy behavior -- no dead-market check, for any
+    caller/test that only has a bare price source."""
     actions: dict = {"expired": 0, "entered_watching": 0, "cancelled": 0, "triggered": []}
 
     expired = await sweep_expired()
     actions["expired"] = len(expired)
 
     for order in await get_active_orders():
-        try:
-            price = await price_lookup(order["contract"], chain=order["chain"])
-        except Exception as exc:  # noqa: BLE001 -- one failed lookup never blocks the others
-            logger.info("limit_orders: price lookup failed for %s (%s)", order["contract"], exc)
-            continue
+        pair = None
+        if pair_lookup is not None:
+            try:
+                pair = await pair_lookup(order["contract"], chain=order["chain"])
+            except Exception as exc:  # noqa: BLE001 -- one failed lookup never blocks the others
+                logger.info("limit_orders: pair lookup failed for %s (%s)", order["contract"], exc)
+                continue
+            price = pair.price_usd if pair is not None and pair.price_usd > 0 else None
+        else:
+            try:
+                price = await price_lookup(order["contract"], chain=order["chain"])
+            except Exception as exc:  # noqa: BLE001 -- one failed lookup never blocks the others
+                logger.info("limit_orders: price lookup failed for %s (%s)", order["contract"], exc)
+                continue
         if not price or price <= 0:
             continue
 
@@ -683,6 +728,20 @@ async def process_active_orders(price_lookup, notifier=None) -> dict:
             continue
 
         # order["state"] == "watching"
+        # 30/07: checked BEFORE the price/RSI resolution below -- no point
+        # spending a re-analysis on a pool that stopped trading. Only
+        # possible when pair_lookup was given (needs volume, price_lookup
+        # alone never carries it).
+        if pair is not None and is_market_dead(pair.volume_h1_usd):
+            await mark_cancelled(order["id"], "market_dead")
+            actions["cancelled"] += 1
+            if notifier:
+                try:
+                    await notifier(format_limit_order_cancelled_alert(order, "market_dead"))
+                except Exception:  # noqa: BLE001
+                    pass
+            continue
+
         # Item #183 (28/07): an order whose whole premise is a still-forming
         # RSI divergence (never an already-confirmed golden pocket + RSI
         # setup) can't be resolved by a plain price comparison -- see
@@ -1095,6 +1154,7 @@ def format_limit_order_cancelled_alert(order: dict, reason: str) -> str:
         # confirms high quality (_reanalyze_dex_quality_for_watching), not
         # just a honeypot re-check (reanalyze_for_watching's standard path).
         "reanalysis_failed": "re-vérification échouée (sécurité ou qualité DEX)",
+        "market_dead": "marché devenu illiquide (volume horaire quasi nul)",
     }.get(reason, reason)
     return (
         f"❌ Ordre limite annulé {name} -- {reason_label}. "

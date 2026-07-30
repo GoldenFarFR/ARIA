@@ -968,6 +968,85 @@ async def test_process_active_orders_watching_trigger_skipped_if_portfolio_block
     assert active[0]["state"] == "watching"
 
 
+# ── is_market_dead (30/07, real operator gap: AQUARI/WMTX-style pools with
+# $0 volume in the last hour left watching orders stuck until wall-clock
+# expiry, up to 71h, instead of freeing the slot) ────────────────────────────
+
+def test_is_market_dead_below_floor():
+    # run-rate 10 * 24 = 240$ < momentum_entry._MIN_VOLUME_24H_USD (500$)
+    assert lo.is_market_dead(10.0) is True
+
+
+def test_is_market_dead_above_floor():
+    # run-rate 30 * 24 = 720$ >= 500$
+    assert lo.is_market_dead(30.0) is False
+
+
+def test_is_market_dead_unknown_volume_fails_open():
+    assert lo.is_market_dead(None) is False
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_watching_cancelled_on_dead_market(monkeypatch):
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    await lo.transition_to_watching(order["id"])
+
+    notified = []
+
+    async def _notifier(msg):
+        notified.append(msg)
+
+    async def _pair(contract, *, chain="base"):
+        # price would otherwise TRIGGER (0.037 <= target 0.038) -- the dead
+        # market must be checked BEFORE that resolution, not after.
+        return PairSnapshot(pair_address="0xpool", price_usd=0.037, volume_h1_usd=0.0)
+
+    actions = await lo.process_active_orders(
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("price_lookup must not be called when pair_lookup is given")),
+        notifier=_notifier, pair_lookup=_pair,
+    )
+    assert actions["triggered"] == []
+    assert await lo.get_active_orders() == []
+    assert await paper_trader.has_open("0xCHECK") is False
+    assert len(notified) == 1
+    assert "illiquide" in notified[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_watching_alive_market_still_triggers(monkeypatch):
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    await lo.transition_to_watching(order["id"])
+
+    async def _pair(contract, *, chain="base"):
+        return PairSnapshot(pair_address="0xpool", price_usd=0.037, volume_h1_usd=1_000.0)
+
+    actions = await lo.process_active_orders(None, pair_lookup=_pair)
+    assert len(actions["triggered"]) == 1
+    pos = await paper_trader._get_open("0xCHECK")
+    assert pos is not None
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_without_pair_lookup_never_checks_dead_market(monkeypatch):
+    """Legacy behavior preserved byte-for-byte: a bare price_lookup (no
+    pair_lookup, no volume available) never cancels for market_dead, no
+    matter how illiquid the real pool might be -- every existing caller/test
+    that only has a price source keeps working exactly as before."""
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+
+
 @pytest.mark.asyncio
 async def test_process_active_orders_sweeps_expired_orders_silently(monkeypatch):
     import aiosqlite

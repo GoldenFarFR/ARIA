@@ -338,7 +338,7 @@ async def test_drain_once_checks_limit_orders_even_with_empty_pending(monkeypatc
 
     called = False
 
-    async def _fake_process(price_lookup, notifier=None):
+    async def _fake_process(price_lookup, notifier=None, pair_lookup=None):
         nonlocal called
         called = True
         return {"expired": 0, "entered_watching": 0, "cancelled": 0, "triggered": []}
