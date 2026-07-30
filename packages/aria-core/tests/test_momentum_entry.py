@@ -736,6 +736,27 @@ class FakeSecurity:
     is_honeypot: bool | None = False
     cannot_sell_all: bool | None = False
     owner_change_balance: bool | None = False
+    # Item #234 (30/07): _evaluate_security_verdict now also reads these on
+    # every call (exemption check via ``address``, dormant-lever veto via the
+    # other 3) -- never present on real GoPlus/Honeypot.is-derived
+    # TokenSecurity objects with a missing address, but this test double must
+    # still provide sane defaults so it doesn't AttributeError.
+    address: str | None = "0xfake000000000000000000000000000000fake"
+    slippage_modifiable: bool | None = False
+    is_blacklisted: bool | None = False
+    transfer_pausable: bool | None = False
+    # Item #234 follow-up (30/07, operator review comparing a live Quick
+    # Intel dashboard field-by-field against GoPlus): these already existed
+    # on real TokenSecurity but were never consulted on this momentum entry
+    # path at all -- now part of the same arbitrated pattern_flags family
+    # (mintable/hidden_owner/can_take_back_ownership/trading_cooldown), or,
+    # for cannot_buy, the direct hard-veto family (simulation-based, same as
+    # is_honeypot/cannot_sell_all).
+    is_mintable: bool | None = False
+    hidden_owner: bool | None = False
+    can_take_back_ownership: bool | None = False
+    cannot_buy: bool | None = False
+    trading_cooldown: bool | None = False
     error: str | None = None
     no_data: bool = False
 
@@ -760,32 +781,151 @@ class FakeRugCheckResult:
 # whatever the source of the `TokenSecurity` (a fresh Solana call, or a
 # cached watchlist entry on EVM).
 
-def test_honeypot_verdict_clear():
-    clear, _reason, code = me._evaluate_security_verdict(FakeSecurity())
+@pytest.mark.asyncio
+async def test_honeypot_verdict_clear():
+    clear, _reason, code = await me._evaluate_security_verdict(FakeSecurity())
     assert clear is True
     assert code == "honeypot_clear"
 
 
-def test_honeypot_verdict_confirmed_rejects():
-    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(is_honeypot=True))
+@pytest.mark.asyncio
+async def test_honeypot_verdict_confirmed_rejects():
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(is_honeypot=True))
     assert clear is False
     assert "honeypot" in reason.lower()
     assert code == "honeypot_rejected"
 
 
-def test_honeypot_verdict_owner_change_balance_rejects():
+@pytest.mark.asyncio
+async def test_honeypot_verdict_owner_change_balance_rejects():
     """22/07 -- trou trouvé en observant une position momentum réellement ouverte
     (CNX, owner_change_balance jamais consulté avant ce correctif). Rejoint le
     SEUL garde-fou dur du pipeline momentum -- même nature que le honeypot
     classique (pouvoir de vol direct des fonds), pas une extension du filtre
     VC-thesis (mint_authority/dev_wallet restent hors scope momentum)."""
-    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(owner_change_balance=True))
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(owner_change_balance=True))
     assert clear is False
     assert "solde" in reason.lower()
     assert code == "honeypot_rejected"
 
 
-def test_honeypot_verdict_unavailable_fails_closed():
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_mintable_confirmed_by_llm_rejects(monkeypatch):
+    """Item #234 follow-up (30/07) -- ``mintable`` joins the arbitrated
+    pattern_flags family (was defined in _CATEGORY_LABELS since the original
+    chantier but never actually wired into this loop, a real gap found via
+    operator review comparing a live Quick Intel dashboard against GoPlus)."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        assert category == "mintable"
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="mint() réellement appelable")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(is_mintable=True))
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "mint" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_mintable_false_positive_clears(monkeypatch):
+    """The whole point of Item #234: a flag GoPlus raises but the real source
+    doesn't confirm must NOT block the entry."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        return sca.ArbitrationVerdict(resolved=True, confirmed=False, reason="aucun mint réel dans le code")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, _reason, code = await me._evaluate_security_verdict(FakeSecurity(is_mintable=True))
+    assert clear is True
+    assert code == "honeypot_clear"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_hidden_owner_confirmed_rejects(monkeypatch):
+    """30/07 -- ``hidden_owner`` was already read on the VC crible and
+    dex_composite_score.py but never on this momentum entry path at all."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        assert category == "hidden_owner"
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="owner réel masqué derrière un proxy")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(hidden_owner=True))
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "owner" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_can_take_back_ownership_confirmed_rejects(monkeypatch):
+    """30/07 -- same gap as hidden_owner, same fix."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        assert category == "can_take_back_ownership"
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="fonction de reprise de propriété trouvée")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(can_take_back_ownership=True))
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "propriété" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_cannot_buy_rejects_directly():
+    """30/07 (Item #234 follow-up) -- found missing entirely from momentum
+    while auditing every remaining TokenSecurity boolean field: GoPlus's own
+    buy simulation failing was already a hard veto on the VC crible
+    (acp_onchain_scan.py) but never checked here. Same simulation-based
+    family as is_honeypot/cannot_sell_all -- direct reject, no arbitration,
+    no LLM/arbitrate_flag call needed (monkeypatch-free test proves it)."""
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(cannot_buy=True))
+    assert clear is False
+    assert "achat" in reason.lower()
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_trading_cooldown_confirmed_rejects(monkeypatch):
+    """30/07 -- trading_cooldown was defined on TokenSecurity but consulted
+    NOWHERE in ARIA at all (unlike hidden_owner/can_take_back_ownership,
+    which were at least read on the VC side) -- joins the arbitrated
+    pattern_flags family, same treatment as the other 5."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        assert category == "trading_cooldown"
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="cooldown asymétrique achat/vente confirmé")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(trading_cooldown=True))
+    assert clear is False
+    assert code == "honeypot_rejected"
+    assert "cooldown" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_security_verdict_unresolved_arbitration_fails_closed(monkeypatch):
+    """Unresolved (contract unverified, LLM down, etc.) must NEVER be treated
+    as a green light -- the raw flag's hard reject stands."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        return sca.ArbitrationVerdict(resolved=False, reason="code source non vérifié")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    clear, _reason, code = await me._evaluate_security_verdict(FakeSecurity(is_mintable=True))
+    assert clear is False
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_honeypot_verdict_unavailable_fails_closed():
     """Contrairement au reste du pipeline (permissif), le SEUL garde-fou dur doit
     rejeter -- jamais un pari sans protection quand GoPlus ne répond pas.
 
@@ -793,7 +933,7 @@ def test_honeypot_verdict_unavailable_fails_closed():
     D'INFRASTRUCTURE d'un vrai rejet de sécurité -- sans ce code, une panne GoPlus
     prolongée serait indiscernable d'un marché sans candidat valable au niveau du
     cycle (cf. ``test_paper_trader.py::test_run_paper_cycle_reports_momentum_funnel_by_reason_code``)."""
-    clear, reason, code = me._evaluate_security_verdict(FakeSecurity(available=False, error="timeout"))
+    clear, reason, code = await me._evaluate_security_verdict(FakeSecurity(available=False, error="timeout"))
     assert clear is False
     assert "indisponible" in reason.lower()
     assert code == "honeypot_unavailable"
@@ -1156,8 +1296,20 @@ async def test_watchlist_cycle_stays_unavailable_when_both_sources_down(monkeypa
     assert result["checked"] == 1
     assert "blacklisted" not in result
 
+    # Item #234 (30/07): this assertion previously read ``fresh is None`` --
+    # passing only by accident, because the old FakeSecurity test double had
+    # no ``address`` field, and TokenSecurity.address has NO default, so
+    # get_fresh's ``TokenSecurity(**json.loads(...))`` reconstruction raised
+    # TypeError (caught, returns None) regardless of ``available``. Now that
+    # FakeSecurity provides ``address`` (needed for the new slippage_
+    # modifiable/is_blacklisted/transfer_pausable exemption check), the
+    # reconstruction succeeds and get_fresh correctly returns the cached
+    # ``available=False`` entry -- get_fresh never filters on availability
+    # itself, it's the CALLER (_evaluate_security_verdict, via its own
+    # ``if not security.available`` branch) that fail-closes on it. Assert
+    # the real contract instead: never returned as confirmed clean.
     fresh = await wl.get_fresh(CONTRACT, "base")
-    assert fresh is None  # still not confirmed clean, never cached as such
+    assert fresh is None or fresh.available is False
 
 
 @pytest.mark.asyncio

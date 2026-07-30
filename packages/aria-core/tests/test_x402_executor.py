@@ -472,6 +472,94 @@ async def test_raw_v2_header_absent_when_offer_comes_from_body():
     assert "_raw_v2_header" not in captured
 
 
+def _v2_body_with_accepts(*, amount="30000", pay_to="0xquickintel") -> bytes:
+    """Real Quick Intel 402 shape (30/07, captured live): a fully valid v2
+    ``accepts`` array in the JSON BODY itself -- unlike lonestaroracle/lionx402
+    (empty/custom body, offer only in the header)."""
+    return json.dumps({
+        "x402Version": 2,
+        "accepts": [{
+            "scheme": "exact", "network": "eip155:8453", "amount": amount,
+            "payTo": pay_to, "maxTimeoutSeconds": 3600,
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        }],
+        "error": "Payment required",
+    }).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_raw_v2_header_attached_when_v2_offer_resolved_from_body(monkeypatch):
+    """30/07 -- real bug found while diligencing Quick Intel: it sends a
+    fully valid v2 offer in BOTH the body AND the ``payment-required``
+    header at once. The body path used to return immediately, so
+    ``_raw_v2_header`` was never captured for THIS shape of provider --
+    every such payment would fail signing (the SDK's synthetic-body
+    fallback only understands x402Version==1, confirmed against the
+    installed SDK's own source). Must now be attached regardless of which
+    path resolved the offer."""
+    header_value = _payment_required_header(amount="30000", pay_to="0xquickintel")
+
+    async def fake_fetch(url, *, method="GET", headers=None, **kwargs):
+        if headers and executor.PAYMENT_SIGNATURE_HEADER in headers:
+            return HttpResult(status_code=200, body=b'{"scan": "ok"}')
+        return HttpResult(
+            status_code=402,
+            body=_v2_body_with_accepts(amount="30000", pay_to="0xquickintel"),
+            headers={"payment-required": header_value},
+        )
+
+    async def sufficient_balance():
+        return 1.0
+
+    captured = {}
+
+    async def working_pay(requirement):
+        captured.update(requirement)
+        return "signed-payload"
+
+    result = await executor.fetch_paid_resource(
+        "https://x402.quickintel.io/v1/scan/full", resource="scan-full", provider="quickintel",
+        method="POST", balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+        json_body={"chain": "base", "tokenAddress": "0xabc"},
+    )
+    assert result.status == "ok"
+    assert captured["x402Version"] == 2
+    assert captured["_raw_v2_header"] == header_value
+
+
+@pytest.mark.asyncio
+async def test_json_body_sent_on_both_unpaid_and_paid_requests():
+    """30/07 -- Quick Intel identifies the resource via a JSON body, not the
+    URL alone. The provider must see the IDENTICAL body on both the
+    challenge and the paid retry, or it could charge for one token while
+    returning data for another."""
+    seen_bodies = []
+
+    async def fake_fetch(url, *, method="GET", headers=None, json_body=None):
+        seen_bodies.append(json_body)
+        if headers and executor.PAYMENT_SIGNATURE_HEADER in headers:
+            return HttpResult(status_code=200, body=b'{"scan": "ok"}')
+        return HttpResult(
+            status_code=402,
+            body=_v2_body_with_accepts(),
+            headers={"payment-required": _payment_required_header(amount="30000", pay_to="0xquickintel")},
+        )
+
+    async def sufficient_balance():
+        return 1.0
+
+    async def working_pay(requirement):
+        return "signed-payload"
+
+    result = await executor.fetch_paid_resource(
+        "https://x402.quickintel.io/v1/scan/full", resource="scan-full", provider="quickintel",
+        method="POST", balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+        json_body={"chain": "base", "tokenAddress": "0xabc"},
+    )
+    assert result.status == "ok"
+    assert seen_bodies == [{"chain": "base", "tokenAddress": "0xabc"}] * 2
+
+
 @pytest.mark.asyncio
 async def test_v2_offer_sends_payment_under_payment_signature_header_not_x_payment():
     """19/07 -- 2e bug réel trouvé sur le MÊME appel réel (lionx402) juste après le

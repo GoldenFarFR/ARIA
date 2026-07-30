@@ -158,6 +158,14 @@ class FakeSecurity:
     hidden_owner: bool | None = False
     can_take_back_ownership: bool | None = False
     owner_change_balance: bool | None = False
+    # Item #234 (30/07): rescan_open_position now also reads these 3 (same
+    # dormant-lever family, exempts recognized reference assets via
+    # ``address``) -- defaults keep every pre-existing test's behavior
+    # unchanged (not a recognized asset, nothing newly detected).
+    address: str | None = "0xfake000000000000000000000000000000fake"
+    slippage_modifiable: bool | None = False
+    is_blacklisted: bool | None = False
+    transfer_pausable: bool | None = False
 
 
 @dataclass

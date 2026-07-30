@@ -895,11 +895,34 @@ def _get_cached_security(chain: str, contract: str):
     return security
 
 
-def _evaluate_security_verdict(security) -> tuple[bool, str, str]:
+async def _evaluate_security_verdict(security, chain: str = "base") -> tuple[bool, str, str]:
     """Shared verdict logic on an already-fetched ``TokenSecurity`` -- extracted
     (29/07, Item #212) so both the Solana synchronous path and the EVM
     watchlist path below apply the EXACT same rules whatever the source of
-    the object (a fresh GoPlus call, or a cached watchlist entry)."""
+    the object (a fresh GoPlus call, or a cached watchlist entry).
+
+    Made ASYNC (30/07, Item #234): the pattern-based flags below (mint/
+    blacklist/slippage/pause/hidden_owner/can_take_back_ownership/
+    trading_cooldown) now go through ``source_code_audit.arbitrate_flag``
+    before rejecting -- a real discrepancy found live on PONKE showed GoPlus
+    can miss a genuine mint AND a "Quick Intel" widget can invent a blacklist
+    that isn't in the code. ``mintable``/``hidden_owner``/
+    ``can_take_back_ownership``/``trading_cooldown`` added the same day
+    (operator review, comparing a live Quick Intel dashboard field-by-field
+    against ``TokenSecurity``): these GoPlus fields already existed (some
+    already read elsewhere -- VC crible, dex_composite_score.py) but were
+    never consulted on this momentum entry path at all -- a real gap, not a
+    deliberate scope choice like the VC-only ``is_proxy``/``is_open_source``
+    (structural facts, not exploit-risk flags a CONFIRME/FAUX_POSITIF verdict
+    can meaningfully answer). ``cannot_buy`` joins the DIRECT hard-veto trio
+    below instead (same call: also found missing from momentum entirely,
+    already a hard veto on the VC side) -- it's a transaction-SIMULATION
+    result like is_honeypot/cannot_sell_all, not a bytecode pattern, so no
+    arbitration needed. is_honeypot/cannot_sell_all/cannot_buy/
+    owner_change_balance stay DIRECT hard vetoes below, no arbitration:
+    those are transaction-SIMULATION results (GoPlus actually tries a buy/
+    sell), not just bytecode pattern matches, and far less prone to this
+    class of error."""
     if not security.available:
         return (
             False,
@@ -910,6 +933,13 @@ def _evaluate_security_verdict(security) -> tuple[bool, str, str]:
         return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
     if security.cannot_sell_all:
         return False, "revente totale bloquée (GoPlus)", "honeypot_rejected"
+    # 30/07 (Item #234 follow-up) -- same simulation-based hard-veto family as
+    # the two checks above, found missing here the same way (already a hard
+    # veto on the VC crible, acp_onchain_scan.py, but never reused on this
+    # momentum path): GoPlus's own buy simulation failing is at least as
+    # severe as a failed sell, not a case for LLM arbitration.
+    if security.cannot_buy:
+        return False, "achat lui-même bloqué par la simulation GoPlus", "honeypot_rejected"
     # 22/07 -- gap found while observing a REALLY open momentum position (CNX,
     # owner_change_balance never checked here). Joins this hard guardrail -- NOT
     # an extension of the VC-thesis filter (mint_authority/dev_wallet remain out
@@ -920,6 +950,44 @@ def _evaluate_security_verdict(security) -> tuple[bool, str, str]:
     # above).
     if security.owner_change_balance:
         return False, "owner peut modifier le solde d'un wallet (GoPlus)", "honeypot_rejected"
+    # Item #234 (30/07) -- same family as owner_change_balance above: a DORMANT
+    # owner-controlled lever that looks clean at scan time but can be pulled
+    # AFTER entry (raise sell tax to near-100%, ban a specific wallet from
+    # selling, freeze every transfer at will) -- exactly the "let ARIA buy,
+    # spring the trap later" pattern the operator flagged. Already
+    # contextualized on the VC crible (acp_onchain_scan.py, 24/07) but never
+    # reused here until now. Exempts recognized stablecoins/blue-chip wrapped
+    # assets (WETH/cbBTC/cbETH/WBTC) -- these mechanisms are normal custodial
+    # safety features for a regulated/institutional issuer, not a rug pattern,
+    # same doctrine as the VC-side contextualization.
+    from aria_core.services.smart_money import is_recognized_reference_asset
+
+    if not is_recognized_reference_asset(security.address):
+        from aria_core.skills.source_code_audit import arbitrate_flag
+
+        pattern_flags = (
+            ("slippage_modifiable", security.slippage_modifiable, "taxe/slippage modifiable après coup (GoPlus)"),
+            ("is_blacklisted", security.is_blacklisted, "capacité de blacklist wallet (GoPlus)"),
+            ("transfer_pausable", security.transfer_pausable, "transferts pausables (GoPlus)"),
+            ("mintable", security.is_mintable, "mint réel possible (GoPlus)"),
+            ("hidden_owner", security.hidden_owner, "owner dissimulé (GoPlus)"),
+            (
+                "can_take_back_ownership", security.can_take_back_ownership,
+                "reprise de propriété possible après renoncement (GoPlus)",
+            ),
+            ("trading_cooldown", security.trading_cooldown, "cooldown de trading (GoPlus)"),
+        )
+        for category, flagged, raw_reason in pattern_flags:
+            if not flagged:
+                continue
+            verdict = await arbitrate_flag(security.address, chain, category, raw_reason=raw_reason)
+            if not verdict.resolved or verdict.confirmed is not False:
+                # Unresolved (can't read the real contract) or CONFIRMED real
+                # -- the raw flag's hard reject stands either way, fail-closed
+                # on anything short of an explicit, cached false-positive.
+                return False, f"{raw_reason} -- {verdict.reason}".strip(" -"), "honeypot_rejected"
+                # (a confirmed false positive falls through to the next flag /
+                # the final clear return below, never an early "clear" here)
     return True, "honeypot clear (GoPlus)", "honeypot_clear"
 
 
@@ -995,7 +1063,7 @@ async def _check_honeypot(
 
         if not security.available and security.no_data:
             return await _check_honeypot_rugcheck_fallback(contract)
-        return _evaluate_security_verdict(security)
+        return await _evaluate_security_verdict(security, chain)
 
     from aria_core.services import goplus_watchlist
 
@@ -1012,7 +1080,7 @@ async def _check_honeypot(
         return False, reason, "honeypot_pending"
 
     _cache_security(chain, contract, security)
-    return _evaluate_security_verdict(security)
+    return await _evaluate_security_verdict(security, chain)
 
 
 async def check_honeypot(
@@ -1120,10 +1188,19 @@ async def run_goplus_watchlist_cycle() -> dict:
         await goplus_watchlist.record_result(contract, chain, security)
         checked += 1
 
-        if security.available and (
-            security.is_honeypot or security.cannot_sell_all or security.owner_change_balance
-        ):
-            _clear, reason, _code = _evaluate_security_verdict(security)
+        clear, reason, _code = await _evaluate_security_verdict(security, chain)
+        # Item #234 (30/07): was a raw 3-field check duplicated from
+        # _evaluate_security_verdict (is_honeypot/cannot_sell_all/
+        # owner_change_balance only) -- reusing the shared verdict directly
+        # means the new slippage_modifiable/is_blacklisted/transfer_pausable
+        # veto (same function, same exemption for recognized reference
+        # assets) now ALSO permanently blacklists here, not just soft-rejects
+        # a live buy attempt every time. ``security.available`` still gated
+        # explicitly (never blacklist merely for a network/read failure --
+        # _evaluate_security_verdict's own "unavailable" branch already
+        # returns clear=False for that case too, so this guard is required,
+        # not redundant).
+        if security.available and not clear:
             # 29/07 -- real data-quality gap found while verifying the
             # watchlist live: _evaluate_security_verdict hardcodes "(GoPlus)"
             # in every reason string (predates Honeypot.is, still accurate
@@ -2499,10 +2576,24 @@ def _rsi_divergence_watch_candidate(
         return None
 
     entry = price
-    invalidation = signal.gp_low * (1 - 0.02)
+    structural_invalidation = signal.gp_low * (1 - 0.02)
+    invalidation = structural_invalidation
+    # 30/07, real bug found live (CFI, TIBBIR, FOLKS-on-swing -- see
+    # entry_signals.py's own comment on this exact fix): never let the
+    # invalidation sit closer to ENTRY than this token's real ATR-derived
+    # volatility floor allows, regardless of how close gp_low happens to be.
+    from aria_core.skills.entry_signals import _invalidation_floor_pct
+
+    atr_floor_pct = _invalidation_floor_pct(candles)
+    if atr_floor_pct is not None and entry > 0:
+        invalidation = min(invalidation, entry * (1 - atr_floor_pct))
     target = signal.range_high
     rr = None
-    if entry > invalidation and target > entry:
+    # Consistency check against the STRUCTURAL level, never the ATR-widened
+    # invalidation -- see entry_signals.detect_entry's own comment on why the
+    # ATR floor (always entry * (1 - x), x > 0) can never itself catch a
+    # broken structure.
+    if entry > structural_invalidation and target > entry:
         rr = round((target - entry) / (entry - invalidation), 1)
 
     # The absolute expiry (`pending_limit_order.expires_at`, checked by
@@ -2542,6 +2633,15 @@ def _rsi_divergence_watch_candidate(
         "limit_order_reason": "rsi_divergence_pending",
         "last_candle_ts": candles[-1].ts,
         "watch_expiry_hours": watch_expiry_hours,
+        # Item #234 (30/07), operator feedback ("je ne vois pas la cible
+        # d'achat, une fourchette serait appréciée") -- this watch type has no
+        # single buy-trigger price to reach (entry == current price already,
+        # only the RSI PATTERN is pending), so the closest useful thing to
+        # show is the zone the price must HOLD while the divergence forms.
+        # Explicit numeric fields (not just baked into the ``reason`` text
+        # below) so the Telegram alert can render them without string-parsing.
+        "gp_low": signal.gp_low,
+        "gp_high": signal.gp_high,
         "reason": (
             f"prix déjà dans la golden pocket ({signal.gp_low:.6g}-{signal.gp_high:.6g}) mais "
             "divergence RSI pas encore confirmée -- ordre limite posé, surveillance de sa "
@@ -2551,7 +2651,7 @@ def _rsi_divergence_watch_candidate(
 
 
 async def _golden_pocket_watch_candidate(
-    contract: str, chain: str, pair, signal, symbol: str, price: float,
+    contract: str, chain: str, pair, signal, symbol: str, price: float, candles: list,
 ) -> dict | None:
     """Item #182 (28/07), golden-pocket liberation: builds the payload for a
     watch-and-wait limit order when the golden pocket/RSI setup hasn't formed
@@ -2572,7 +2672,8 @@ async def _golden_pocket_watch_candidate(
     zone's shallow bound (``gp_high``, the earliest point a real golden pocket
     could form), invalidation = 2% below the zone's deep bound (identical
     formula to ``detect_entry``'s own ``invalidation = fib["gp_low"] * (1 -
-    0.02)``), target = the window's swing-high (``range_high``)."""
+    0.02)``, ATR floor included -- see entry_signals.py's own comment),
+    target = the window's swing-high (``range_high``)."""
     from aria_core import risk_guard
 
     if signal.range_low is None:
@@ -2623,19 +2724,30 @@ async def _golden_pocket_watch_candidate(
             contract, dex_score.score, risk_guard.DEX_QUALITY_WATCH_THRESHOLD, retracement,
         )
         return None
+    entry = signal.gp_high
+    structural_invalidation = signal.gp_low * (1 - 0.02)
+    invalidation = structural_invalidation
+    # 30/07, real bug found live -- see entry_signals.py's own comment: never
+    # let the invalidation sit closer to ENTRY than this token's real
+    # ATR-derived volatility floor allows.
+    from aria_core.skills.entry_signals import _invalidation_floor_pct
+
+    atr_floor_pct = _invalidation_floor_pct(candles)
+    if atr_floor_pct is not None and entry > 0:
+        invalidation = min(invalidation, entry * (1 - atr_floor_pct))
+    target = signal.range_high
+    rr = None
+    # Consistency check against the STRUCTURAL level -- see
+    # entry_signals.detect_entry's own comment on why the ATR floor alone
+    # (always entry * (1 - x), x > 0) can never catch a broken structure.
+    if entry > structural_invalidation and target > entry:
+        rr = round((target - entry) / (entry - invalidation), 1)
+
     logger.info(
         "momentum_entry: golden-pocket watch CREATED for %s -- retracement=%.2f score=%.1f "
         "target_price(entry)=%.6g invalidation=%.6g target=%.6g",
-        contract, retracement, dex_score.score, signal.gp_high,
-        signal.gp_low * (1 - 0.02), signal.range_high,
+        contract, retracement, dex_score.score, entry, invalidation, signal.range_high,
     )
-
-    entry = signal.gp_high
-    invalidation = signal.gp_low * (1 - 0.02)
-    target = signal.range_high
-    rr = None
-    if entry > invalidation and target > entry:
-        rr = round((target - entry) / (entry - invalidation), 1)
 
     return {
         "target_price": entry,
@@ -2896,13 +3008,22 @@ async def evaluate_momentum_entry(
         ):
             try:
                 watch = await _golden_pocket_watch_candidate(
-                    contract, chain, best, signal, best.base_symbol, best.price_usd,
+                    contract, chain, best, signal, best.base_symbol, best.price_usd, candles,
                 )
             except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
                 logger.info("momentum_entry: golden-pocket watch candidate failed for %s (%s)", contract, exc)
                 watch = None
             if watch:
                 watch["align_score"] = watch_align_score
+                # Item #234 (30/07) -- same fix as the outright-BUY path below:
+                # a position later opened by THIS limit order must carry an
+                # entry snapshot too, or rescan_open_position stays a no-op for
+                # it exactly like every momentum position did before this fix.
+                from aria_core import paper_trader_risk as _risk
+
+                watch["entry_security_json"] = _risk.capture_entry_snapshot_from_security(
+                    _get_cached_security(chain, contract)
+                ).to_json()
                 hold["limit_order_candidate"] = watch
         elif (
             signal.in_golden_pocket is True
@@ -3289,12 +3410,30 @@ async def evaluate_momentum_entry(
                 except Exception as exc:  # noqa: BLE001 -- never blocking
                     logger.info("momentum_entry: dex_score_log write failed for %s (%s)", contract, exc)
 
+    # Item #234 (30/07) -- entry security snapshot, so
+    # paper_trader_risk.rescan_open_position can actually detect a NEW dormant
+    # lever (slippage_modifiable/is_blacklisted/transfer_pausable/etc.)
+    # appearing AFTER entry. Previously never set on this path -- momentum
+    # positions had an empty ``entry_security_json``, which made the whole
+    # rescan mechanism a no-op for 100% of real trading (only the dormant
+    # VC-thesis pilot ever populated it). Reuses the SAME TokenSecurity object
+    # already fetched by the honeypot gate above (``_get_cached_security``,
+    # short-lived cache) -- zero extra network call.
+    entry_security_json = ""
+    if action == "BUY":
+        from aria_core import paper_trader_risk as _risk
+
+        entry_security_json = _risk.capture_entry_snapshot_from_security(
+            _get_cached_security(chain, contract)
+        ).to_json()
+
     return {
         "action": action,
         # Item #101 (26/07) -- lets paper_trader.py/the thesis text know
         # which mode produced this signal ("standard"/"scalping").
         "mode": mode,
         "chain": chain,
+        "entry_security_json": entry_security_json,
         "symbol": best.base_symbol,
         "price": best.price_usd,
         "target": signal.target,

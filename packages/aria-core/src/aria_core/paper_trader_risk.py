@@ -126,6 +126,14 @@ class EntrySecuritySnapshot:
     owner_change_balance: bool | None = None
     contract_verified: bool | None = None
     owner_address: str | None = None
+    # Item #234 (30/07) -- same dormant-lever family as owner_change_balance
+    # above (looks clean at scan time, can be pulled AFTER entry): tax/slippage
+    # raised post-launch, a specific wallet banned from selling, all transfers
+    # frozen at will. Mirrors the momentum entry veto added the same day
+    # (momentum_entry._evaluate_security_verdict).
+    slippage_modifiable: bool | None = None
+    is_blacklisted: bool | None = None
+    transfer_pausable: bool | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -142,6 +150,42 @@ class EntrySecuritySnapshot:
             return None
         names = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in names})
+
+
+def capture_entry_snapshot_from_security(security) -> EntrySecuritySnapshot:
+    """Item #234 (30/07): builds an ``EntrySecuritySnapshot`` directly from a
+    ``services.goplus.TokenSecurity``-shaped object -- the momentum pipeline's
+    OWN entry gate (``momentum_entry._check_honeypot``) already fetches this
+    exact object, cached briefly (``_get_cached_security``), so this is ZERO
+    extra network cost. Distinct from ``capture_entry_snapshot`` above (which
+    reads a VC-only ``TokenScanContext`` and makes its own ``read_owner``
+    call) -- momentum has no equivalent context object and doesn't need a
+    fresh owner lookup, ``security.owner_address`` (from the same GoPlus/
+    Honeypot.is read) is close enough for a rescan REFERENCE point, never
+    treated as an absolute truth on its own (see the class docstring above).
+
+    Field names differ from ``TokenSecurity`` on 2 points: ``cannot_sell_all``
+    -> ``cannot_sell``, ``is_open_source`` -> ``contract_verified`` (both mean
+    the same thing under a different name in each module). ``security`` may be
+    ``None`` (cache miss/expired, e.g. Honeypot.is-only path never populated
+    it) -- returns an all-``None`` snapshot rather than skipping entirely, so
+    ``rescan_open_position`` still has SOMETHING to compare against instead of
+    silently never running for this position (its prior behavior when
+    ``entry_security_json`` was simply absent)."""
+    if security is None:
+        return EntrySecuritySnapshot()
+    return EntrySecuritySnapshot(
+        is_honeypot=getattr(security, "is_honeypot", None),
+        cannot_sell=getattr(security, "cannot_sell_all", None),
+        hidden_owner=getattr(security, "hidden_owner", None),
+        can_take_back_ownership=getattr(security, "can_take_back_ownership", None),
+        owner_change_balance=getattr(security, "owner_change_balance", None),
+        contract_verified=getattr(security, "is_open_source", None),
+        owner_address=getattr(security, "owner_address", None),
+        slippage_modifiable=getattr(security, "slippage_modifiable", None),
+        is_blacklisted=getattr(security, "is_blacklisted", None),
+        transfer_pausable=getattr(security, "transfer_pausable", None),
+    )
 
 
 async def capture_entry_snapshot(contract: str, ctx) -> EntrySecuritySnapshot:
@@ -221,6 +265,28 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
                 "owner peut modifier le solde d'un wallet détecté (GoPlus owner_change_balance, "
                 "absent à l'entrée) -- vecteur de perte totale, même famille que honeypot"
             )
+        # Item #234 (30/07) -- same dormant-lever family, newly detected since
+        # entry. Exempts recognized stablecoins/blue-chip wrapped assets, same
+        # doctrine as the momentum entry veto (momentum_entry.
+        # _evaluate_security_verdict) and the VC crible (acp_onchain_scan.py).
+        from aria_core.services.smart_money import is_recognized_reference_asset
+
+        if not is_recognized_reference_asset(getattr(security, "address", None) or contract):
+            if security.slippage_modifiable and not snapshot.slippage_modifiable:
+                reasons.append(
+                    "taxe/slippage modifiable après coup détectée (GoPlus slippage_modifiable, "
+                    "absente à l'entrée) -- levier extractif différé"
+                )
+            if security.is_blacklisted and not snapshot.is_blacklisted:
+                reasons.append(
+                    "capacité de blacklist wallet détectée (GoPlus is_blacklisted, absente à "
+                    "l'entrée) -- peut bannir n'importe quelle adresse de la revente"
+                )
+            if security.transfer_pausable and not snapshot.transfer_pausable:
+                reasons.append(
+                    "transferts pausables détectés (GoPlus transfer_pausable, absents à l'entrée) "
+                    "-- l'owner peut geler toutes les reventes"
+                )
 
     from aria_core.services.blockscout import blockscout_client
 

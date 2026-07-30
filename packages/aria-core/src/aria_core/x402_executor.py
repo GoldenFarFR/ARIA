@@ -120,7 +120,7 @@ HttpFetchFn = Callable[..., Awaitable[HttpResult]]
 
 async def _default_http_fetch(
     url: str, *, method: str = "GET", headers: dict[str, str] | None = None,
-    timeout: float = _HTTP_TIMEOUT,
+    timeout: float = _HTTP_TIMEOUT, json_body: dict[str, Any] | None = None,
 ) -> HttpResult:
     """Real default implementation (httpx). Never used in tests --
     always replaced by a fake (cf. test_x402_executor.py).
@@ -133,9 +133,16 @@ async def _default_http_fetch(
     on the provider's side). The 12s default stays unchanged for every
     provider already in prod (Cybercentry/Otto AI/twit.sh, never an issue
     observed) -- only a caller that explicitly passes a longer ``timeout``
-    changes behavior."""
+    changes behavior.
+
+    30/07 -- ``json_body`` added (default ``None``, historical GET-only
+    behavior unchanged): every provider so far (Cybercentry/Otto AI/twit.sh)
+    identifies the resource via the URL alone (query string or path).
+    Quick Intel's ``POST /v1/scan/full`` is the first that requires a JSON
+    body (``{"chain", "tokenAddress"}``) on BOTH the unpaid challenge
+    request and the paid retry -- passed through as-is to ``httpx``."""
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.request(method, url, headers=headers or {})
+        r = await client.request(method, url, headers=headers or {}, json=json_body)
     return HttpResult(status_code=r.status_code, headers=dict(r.headers), body=r.content)
 
 
@@ -164,38 +171,58 @@ def _extract_payment_requirement(
     official SDK schema (V1, which only knows flat network names like
     "base", never the CAIP-2 format "eip155:8453" used by real v2 offers)
     -- systematic "No payment requirements match registered schemes"
-    failure on every v2 provider."""
+    failure on every v2 provider.
+
+    30/07 -- real bug found while diligencing Quick Intel's x402 endpoint
+    (live 402 captured, no payment made): unlike lionx402/sociavault (offer
+    ONLY in the header, empty/custom body), Quick Intel sends a fully valid
+    v2 ``accepts`` array in BOTH the JSON body AND the ``payment-required``
+    header at once. The body path below resolves first and used to return
+    immediately, never looking at the header -- so ``_raw_v2_header`` was
+    never attached for x402Version==2 offers resolved from the body. Per
+    the installed SDK's own source (``x402HTTPClient.get_payment_required_response``),
+    its synthetic-body fallback raises ``ValueError("Invalid payment
+    required response")`` for anything other than x402Version==1 -- every
+    such provider would fail signing 100% of the time, having never been
+    exercised against a real payment before. Fixed by always checking for
+    the header and attaching it whenever the resolved offer is v2,
+    regardless of which path (body or header) produced it."""
+    header_value = None
+    for key, value in (headers or {}).items():
+        if key.lower() == "payment-required":
+            header_value = value
+            break
+
+    requirement: dict[str, Any] | None = None
     try:
         data = json.loads(body.decode("utf-8"))
         accepts = data.get("accepts") if isinstance(data, dict) else None
         if isinstance(accepts, list) and accepts and isinstance(accepts[0], dict):
             first = dict(accepts[0])
             first.setdefault("x402Version", data.get("x402Version", 1))
-            return first
+            requirement = first
     except Exception:  # noqa: BLE001 — unreadable body, retry via the header
         pass
 
-    header_value = None
-    for key, value in (headers or {}).items():
-        if key.lower() == "payment-required":
-            header_value = value
-            break
-    if not header_value:
-        return None
-    try:
-        padded = header_value + "=" * (-len(header_value) % 4)
-        decoded = base64.b64decode(padded)
-        data = json.loads(decoded.decode("utf-8"))
-    except Exception:  # noqa: BLE001 — unreadable header, graceful degradation
-        return None
-    accepts = data.get("accepts") if isinstance(data, dict) else None
-    if not isinstance(accepts, list) or not accepts:
-        return None
-    first = accepts[0]
-    if not isinstance(first, dict):
-        return None
-    first = dict(first)
-    first.setdefault("x402Version", data.get("x402Version", 1))
+    if requirement is None:
+        if not header_value:
+            return None
+        try:
+            padded = header_value + "=" * (-len(header_value) % 4)
+            decoded = base64.b64decode(padded)
+            data = json.loads(decoded.decode("utf-8"))
+        except Exception:  # noqa: BLE001 — unreadable header, graceful degradation
+            return None
+        accepts = data.get("accepts") if isinstance(data, dict) else None
+        if not isinstance(accepts, list) or not accepts:
+            return None
+        first = accepts[0]
+        if not isinstance(first, dict):
+            return None
+        first = dict(first)
+        first.setdefault("x402Version", data.get("x402Version", 1))
+        requirement = first
+
     # 19/07 -- real bug found while testing 2 real v2 providers from the
     # Bazaar catalog (lionx402, sociavault): x402_cdp_signer.py was
     # reconstructing a synthetic body and passing a no-op header getter to
@@ -206,8 +233,12 @@ def _extract_payment_requirement(
     # carrying the RAW header as-is -- never in PayFn (unchanged signature,
     # no existing fake pay_fn broken), x402_cdp_signer.py reads it if
     # present and ignores it otherwise (V1/Cybercentry unchanged).
-    first["_raw_v2_header"] = header_value
-    return first
+    # 30/07 -- widened (see docstring) to also cover a v2 offer resolved
+    # from the BODY when a header is also present -- never overwrites an
+    # explicit ``_raw_v2_header`` a future caller might have set upstream.
+    if requirement.get("x402Version") == 2 and header_value:
+        requirement.setdefault("_raw_v2_header", header_value)
+    return requirement
 
 
 def _amount_to_usd(requirement: dict[str, Any]) -> float | None:
@@ -248,6 +279,7 @@ async def fetch_paid_resource(
     contract: str = "",
     token_symbol: str = "",
     timeout: float | None = None,
+    json_body: dict[str, Any] | None = None,
 ) -> X402ExecutionResult:
     """Attempts to fetch ``url``, automatically paying if the resource responds 402.
 
@@ -266,8 +298,18 @@ async def fetch_paid_resource(
     e.g. test fakes). Only passed through if explicitly provided by the
     caller -- cf. Blockscout, whose payment settlement turned out to be
     slower than the 12s default (silent ``httpx.ReadTimeout``, its
-    ``str()`` is empty -- which explained a phantom ``reason=""``)."""
+    ``str()`` is empty -- which explained a phantom ``reason=""``)).
+
+    ``json_body`` (30/07): ``None`` by default -- HISTORICAL behavior
+    unchanged for every GET-only provider (Cybercentry/Otto AI/twit.sh).
+    Quick Intel's ``POST /v1/scan/full`` identifies the resource via a JSON
+    body (``{"chain", "tokenAddress"}``), not the URL alone -- sent as-is on
+    BOTH the unpaid challenge request and the paid retry (the provider must
+    see the identical request both times, or it could charge for one token
+    while returning data for another)."""
     fetch_kwargs: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
+    if json_body is not None:
+        fetch_kwargs["json_body"] = json_body
     try:
         first = await http_fetch_fn(url, method=method, headers=None, **fetch_kwargs)
     except Exception as exc:  # noqa: BLE001

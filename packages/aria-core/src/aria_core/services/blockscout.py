@@ -243,6 +243,25 @@ class ContractFlags:
     error: str | None = None
 
 
+@dataclass
+class VerifiedSourceResult:
+    """Item #234 (30/07): full verified source (main file + every imported
+    file Blockscout returns under ``additional_sources``), used by
+    ``skills/source_code_audit.py`` to let an LLM read the REAL contract
+    instead of trusting a single scanner's flag. Deliberately a SEPARATE
+    method from ``check_contract_flags`` above (not reusing its cached
+    response) -- a second credit-costed call, but this method is only ever
+    invoked on the small subset of candidates GoPlus/Quick Intel already
+    flagged, never on every scan."""
+
+    address: str
+    is_verified: bool = False
+    files: dict[str, str] = field(default_factory=dict)  # file_path -> source
+    implementation_address: str | None = None  # set if this contract is a proxy
+    available: bool = False
+    error: str | None = None
+
+
 class BlockscoutClient:
     """Async HTTP client, read-only, moderate throttle.
 
@@ -918,6 +937,55 @@ class BlockscoutClient:
             has_blacklist=_has_flag(_SENSITIVE_FUNCTION_NAMES["blacklist"]),
             available=True,
             error=None,
+        )
+
+    async def get_verified_source(self, token_address: str) -> VerifiedSourceResult:
+        """Item #234 (30/07): full verified source, for an LLM to read the
+        REAL contract when GoPlus/Quick Intel already flagged something
+        (mint/blacklist/tax/pause/suspicious) -- catches both directions
+        found live on a real token (PONKE, 30/07): GoPlus missed a genuine
+        mint function, Quick Intel invented a blacklist that doesn't exist
+        anywhere in the source. Resolves ONE level of proxy indirection
+        (``implementations``, Blockscout's own field) since a proxy's own
+        file is just a thin delegate -- the real logic lives elsewhere.
+        Unverified contract -> ``is_verified=False``, no files (nothing to
+        read), never blocking (caller degrades to fail-open on this signal,
+        same doctrine as an unresolved GoPlus/Honeypot.is check)."""
+        data, error = await self._get_json(f"/smart-contracts/{token_address}")
+        if error is not None:
+            return VerifiedSourceResult(address=token_address, available=False, error=error)
+        if not isinstance(data, dict):
+            return VerifiedSourceResult(address=token_address, available=False, error=UNAVAILABLE)
+
+        is_verified = bool(data.get("is_verified"))
+        if not is_verified:
+            return VerifiedSourceResult(
+                address=token_address, is_verified=False, available=True,
+                error="contrat non vérifié -- lecture de source impossible",
+            )
+
+        files: dict[str, str] = {}
+        main_source = data.get("source_code")
+        if isinstance(main_source, str) and main_source.strip():
+            files[data.get("file_path") or "main"] = main_source
+        for entry in data.get("additional_sources") or []:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("file_path")
+            src = entry.get("source_code")
+            if isinstance(path, str) and isinstance(src, str) and src.strip():
+                files[path] = src
+
+        implementation_address = None
+        implementations = data.get("implementations")
+        if isinstance(implementations, list) and implementations:
+            first = implementations[0]
+            if isinstance(first, dict):
+                implementation_address = first.get("address") or first.get("address_hash")
+
+        return VerifiedSourceResult(
+            address=token_address, is_verified=True, files=files,
+            implementation_address=implementation_address, available=True, error=None,
         )
 
     # ------------------------------------------------------------------

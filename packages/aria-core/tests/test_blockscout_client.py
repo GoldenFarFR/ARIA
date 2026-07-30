@@ -390,6 +390,91 @@ async def test_check_contract_flags_unverified_no_guessing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_verified_source_combines_main_and_additional_files(monkeypatch):
+    """Item #234 (30/07) -- PONKE's own real contract (PeerToken.sol) imports
+    a separate BaseToken.sol where the actual mint logic partly lives; a
+    single-file read would have missed it. Confirms both files are combined."""
+    client = BlockscoutClient()
+    url = f"{client.base_url}/smart-contracts/0xtok"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "is_verified": True,
+                    "file_path": "PeerToken.sol",
+                    "source_code": "contract PeerToken { function mint() external onlyMinter {} }",
+                    "additional_sources": [
+                        {"file_path": "BaseToken.sol", "source_code": "contract BaseToken {}"},
+                    ],
+                },
+            )
+        },
+    )
+
+    result = await client.get_verified_source("0xtok")
+
+    assert result.available is True
+    assert result.is_verified is True
+    assert "PeerToken.sol" in result.files
+    assert "BaseToken.sol" in result.files
+    assert "onlyMinter" in result.files["PeerToken.sol"]
+    assert result.implementation_address is None
+
+
+@pytest.mark.asyncio
+async def test_get_verified_source_unverified_has_no_files(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/smart-contracts/0xtok"
+    _patch_client(monkeypatch, {url: FakeResponse(200, {"is_verified": False})})
+
+    result = await client.get_verified_source("0xtok")
+
+    assert result.available is True
+    assert result.is_verified is False
+    assert result.files == {}
+    assert "non vérifié" in result.error
+
+
+@pytest.mark.asyncio
+async def test_get_verified_source_exposes_implementation_address(monkeypatch):
+    """A proxy's own file is a thin delegate -- the caller (source_code_audit)
+    needs the implementation address to fetch the REAL logic separately."""
+    client = BlockscoutClient()
+    url = f"{client.base_url}/smart-contracts/0xproxy"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "is_verified": True,
+                    "file_path": "Proxy.sol",
+                    "source_code": "contract Proxy {}",
+                    "implementations": [{"address": "0xImplAddr"}],
+                },
+            )
+        },
+    )
+
+    result = await client.get_verified_source("0xproxy")
+    assert result.implementation_address == "0xImplAddr"
+
+
+@pytest.mark.asyncio
+async def test_get_verified_source_network_failure_unavailable(monkeypatch):
+    client = BlockscoutClient()
+    url = f"{client.base_url}/smart-contracts/0xtok"
+    _patch_client(monkeypatch, {url: FakeResponse(500)})
+    _patch_no_sleep(monkeypatch)
+
+    result = await client.get_verified_source("0xtok")
+    assert result.available is False
+    assert result.is_verified is False
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_gives_up_after_three_attempts(monkeypatch):
     _patch_no_sleep(monkeypatch)
     client = BlockscoutClient()

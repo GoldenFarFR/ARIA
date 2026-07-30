@@ -146,6 +146,44 @@ def _is_recognized_stablecoin(token_address: str | None) -> bool:
     return (token_address or "").lower() in _ALL_RECOGNIZED_STABLECOINS
 
 
+# Item #234 (30/07), operator question ("sauf pour les tokens comme btc eth et
+# tous non?") while extending the momentum honeypot veto to
+# slippage_modifiable/is_blacklisted/transfer_pausable (same contextualization
+# doctrine already applied to the VC crible, acp_onchain_scan.py -- a
+# regulated/institutional issuer legitimately uses these mechanisms, an
+# anonymous memecoin deployer doesn't). `_is_recognized_stablecoin` above only
+# covers USD/EUR pegs -- a wrapped BTC/ETH candidate would NOT be exempted by
+# it, and these blue-chip wrapped assets structurally carry the same
+# custodian-controlled mint/pause/blacklist mechanisms (e.g. Coinbase's cbBTC/
+# cbETH) for the same non-malicious reasons. Reuses `_WRAPPED_NATIVE_ADDRESSES`
+# for WETH (already verified) rather than duplicating it. All addresses below
+# independently confirmed live (DexScreener, highest-liquidity match) on
+# 30/07 -- never guessed, same doctrine as every other registry on this file.
+_BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN: dict[str, frozenset[str]] = {
+    "base": frozenset({
+        "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",  # cbBTC (Coinbase) -- confirmed live, ~8.7M$ liq
+        "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22",  # cbETH (Coinbase) -- confirmed live
+        "0x0555e30da8f98308edb960aa94c0db47230d2b9c",  # WBTC -- confirmed live
+    }),
+}
+_ALL_RECOGNIZED_BLUECHIPS: frozenset[str] = _WRAPPED_NATIVE_ADDRESSES.union(
+    *_BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN.values()
+)
+
+
+def _is_recognized_bluechip(token_address: str | None) -> bool:
+    return (token_address or "").lower() in _ALL_RECOGNIZED_BLUECHIPS
+
+
+def is_recognized_reference_asset(token_address: str | None) -> bool:
+    """Public helper (Item #234, 30/07): stablecoin OR blue-chip wrapped asset
+    -- the combined exemption used wherever a mint/pause/blacklist-style
+    dormant lever is contextualized (regulated/blue-chip issuer vs. anonymous
+    deployer), reused as-is by both the VC crible and the momentum hard gate
+    rather than each maintaining its own copy of this OR."""
+    return _is_recognized_stablecoin(token_address) or _is_recognized_bluechip(token_address)
+
+
 def _is_stable_to_stable_peg_swap(tx_hash: str, transfers_by_tx: dict[str, list[TokenTransfer]]) -> bool:
     """True if ALL legs touching the wallet in this transaction are recognized
     stablecoins (buy AND sell on either side) -- a stable<->stable swap, not a
