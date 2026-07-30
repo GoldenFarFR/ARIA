@@ -69,8 +69,25 @@ async def _extract_ticker(image_data_uri: str) -> str | None:
     return ticker or None
 
 
-def _pick_dominant_match(ticker: str, pairs: list[PairSnapshot]) -> PairSnapshot | None:
+def _pick_dominant_match(
+    ticker: str, pairs: list[PairSnapshot], *, chains: tuple[str, ...] | None = None,
+) -> PairSnapshot | None:
+    """``chains`` (Item #236 follow-up, 30/07, real incident: GITLAWB/KellyClaude,
+    both real liquid Base tokens the operator pointed at, were misreported as
+    "ambiguous" because a same-ticker pair on "robinhood"/"ethereum" -- a chain
+    this pipeline never trades, verified via DexScreener's own search API --
+    happened to sit within 3x liquidity of the real Base match, tripping the
+    dominance check below against a candidate that could never be bought
+    anyway. When given, restricts comparison to these chains BEFORE the
+    dominance check, so an out-of-scope chain can no longer poison the
+    decision for the one chain that matters. ``None`` (default, used by
+    ``verify_token_mention``'s pure informational curiosity check) keeps the
+    original unscoped behavior -- that path isn't gated by what this pipeline
+    can actually trade."""
     exact = [p for p in pairs if p.base_symbol.upper() == ticker.upper() and p.base_address]
+    if chains is not None:
+        allowed = {c.lower() for c in chains}
+        exact = [p for p in exact if (p.chain_id or "").lower() in allowed]
     if not exact:
         return None
     exact.sort(key=lambda p: p.liquidity_usd, reverse=True)
@@ -233,6 +250,7 @@ async def queue_tokens_from_screenshot(image_data_uri: str) -> str:
         return "Aucun ticker lisible dans cette image."
 
     from aria_core.manual_candidates import add_manual_candidate
+    from aria_core.momentum_entry import DEFAULT_CHAINS
 
     queued: list[str] = []
     unresolved: list[str] = []
@@ -243,7 +261,7 @@ async def queue_tokens_from_screenshot(image_data_uri: str) -> str:
             logger.info("image_token_curiosity: dexscreener search failed for %s (%s)", ticker, exc)
             unresolved.append(ticker)
             continue
-        match = _pick_dominant_match(ticker, pairs)
+        match = _pick_dominant_match(ticker, pairs, chains=DEFAULT_CHAINS)
         if match is None or not match.base_address:
             unresolved.append(ticker)
             continue

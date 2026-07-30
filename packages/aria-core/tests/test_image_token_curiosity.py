@@ -130,6 +130,45 @@ def test_pick_dominant_match_none_when_no_address():
     assert curiosity._pick_dominant_match("STONK", pairs) is None
 
 
+# ── _pick_dominant_match with chains= (Item #236 follow-up, real incident: ──
+# GITLAWB/KellyClaude, real liquid Base tokens, misreported "ambiguous"
+# because of a same-ticker pair on a chain the pipeline never trades.
+
+def test_pick_dominant_match_ignores_out_of_scope_chain_when_scoped():
+    """Reproduces the real GITLAWB incident: a real Base match ($1.09M) was
+    blocked because a "robinhood" pair ($2.71M, ratio ~2.47x, under 3x) was
+    picked as top by raw liquidity -- scoping to chains=("base",) removes
+    the out-of-scope competitor entirely, letting the real match through."""
+    pairs = [
+        _pair(symbol="GITLAWB", address="0xbase", chain="base", liquidity=1_097_368.0),
+        _pair(symbol="GITLAWB", address="0xrobinhood", chain="robinhood", liquidity=2_711_046.0),
+    ]
+    assert curiosity._pick_dominant_match("GITLAWB", pairs, chains=None) is None  # unscoped: still ambiguous
+    match = curiosity._pick_dominant_match("GITLAWB", pairs, chains=("base",))
+    assert match is not None
+    assert match.base_address == "0xbase"
+
+
+def test_pick_dominant_match_still_ambiguous_within_scoped_chains():
+    """Scoping doesn't relax the dominance check itself -- two genuinely
+    close matches on the SAME allowed chain remain ambiguous."""
+    pairs = [
+        _pair(symbol="STONK", address="0xone", chain="base", liquidity=100_000.0),
+        _pair(symbol="STONK", address="0xtwo", chain="base", liquidity=80_000.0),
+    ]
+    assert curiosity._pick_dominant_match("STONK", pairs, chains=("base",)) is None
+
+
+def test_pick_dominant_match_none_when_only_out_of_scope_chains_match():
+    pairs = [_pair(symbol="STONK", chain="robinhood", liquidity=500_000.0)]
+    assert curiosity._pick_dominant_match("STONK", pairs, chains=("base",)) is None
+
+
+def test_pick_dominant_match_chains_case_insensitive():
+    pairs = [_pair(symbol="STONK", chain="BASE", liquidity=500_000.0)]
+    assert curiosity._pick_dominant_match("STONK", pairs, chains=("base",)) is not None
+
+
 # ── _honeypot_line ───────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -389,3 +428,34 @@ async def test_queue_tokens_from_screenshot_tolerates_search_failure(monkeypatch
 
     summary = await curiosity.queue_tokens_from_screenshot("uri")
     assert "1 non resolu" in summary
+
+
+@pytest.mark.asyncio
+async def test_queue_tokens_from_screenshot_resolves_real_gitlawb_incident(monkeypatch):
+    """Item #236 follow-up (30/07, real operator report): GITLAWB is a real
+    liquid Base token ($1.09M) but was reported as unresolved -- a
+    "robinhood" pair ($2.71M, this pipeline never trades that chain) beat it
+    on raw liquidity without dominating 3x, tripping the ambiguity guard.
+    Fixed by scoping resolution to momentum_entry.DEFAULT_CHAINS."""
+    from aria_core import manual_candidates as mcq
+
+    async def fake_extract(uri):
+        return ["GITLAWB"]
+
+    async def fake_search(ticker):
+        return [
+            _pair(symbol="GITLAWB", address="0xrealbase", chain="base", liquidity=1_097_368.0),
+            _pair(symbol="GITLAWB", address="0xrobinhood", chain="robinhood", liquidity=2_711_046.0),
+        ]
+
+    monkeypatch.setattr(curiosity, "_extract_all_tickers", fake_extract)
+    monkeypatch.setattr(curiosity, "search_pairs", fake_search)
+
+    summary = await curiosity.queue_tokens_from_screenshot("uri")
+
+    assert "1 ajoute" in summary
+    assert "0 non resolu" not in summary or "non resolu" not in summary
+    pending = await mcq.list_pending_manual_candidates()
+    assert len(pending) == 1
+    assert pending[0]["contract"] == "0xrealbase"
+    assert pending[0]["chain"] == "base"
