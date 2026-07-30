@@ -56,6 +56,9 @@ ALLOWLISTED_EMAILS = {
                                       # jamais une adresse personnelle -- redeclenchait
                                       # l'incident du 13/07 documente dans HANDOFF_SECURITE.md,
                                       # ironiquement a cause du texte qui RACONTE cet incident.
+    "contact@ariavanguardzhc.com",   # adresse de contact publique ARIA (SECURITY.md),
+                                      # redirige vers agentaria.zhc@gmail.com -- pas une
+                                      # adresse personnelle.
 }
 
 # Domaines placeholder de documentation/exemple connus -- jamais une vraie adresse
