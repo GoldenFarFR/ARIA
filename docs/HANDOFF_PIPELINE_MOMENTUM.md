@@ -504,3 +504,8 @@ Solution : `_pick_dominant_match` now groups the exact-symbol (and chain-scoped,
 `skills/image_token_curiosity.py` -- 3 new unit tests on `_pick_dominant_match` (own-pools-never-a-competitor reproducing BRETT exactly, distinct-tokens-still-compared-by-aggregate-liquidity, distinct-tokens-with-multiple-pools-still-ambiguous-when-genuinely-close) + 1 integration test reproducing the exact BRETT incident end-to-end through `queue_tokens_from_screenshot`. Full suite green (8598 passed, 17 skipped), `test_coherence.py` green.
 
 ------------------------------------------------------------
+
+[DEPLOYE] Subject  : Birdeye cache TTL reverted 10.8h -> 12h (100% -> 90% of quota) -- operator now fills the watchlist manually (Item #236/#237 follow-up, #240)
+Date : 2026.07.30 / Problem : the 30/07 push to 100% of the monthly Birdeye quota (Item #212-era entry, same day) was meant to grow the GoPlus watchlist faster -- superseded the same day once /add (#236) and screenshot queuing (#237) gave the operator a direct, faster way to fill the 600 slots himself. No longer worth the added quota-exhaustion risk for marginal extra automated coverage.
+Solution : `_BIRDEYE_CACHE_TTL_SECONDS` reverted to `12.0 * 3600.0` (90% of the monthly quota, 2 scans/day, standard "90% of real capacity" calibration doctrine) -- back to the pre-30/07 value, comment updated to record the revert and why.
+`momentum_entry.py` -- no test locks the exact TTL value (existing tests reference the constant dynamically). Full suite green (8598 passed, 17 skipped), `test_coherence.py` green.
