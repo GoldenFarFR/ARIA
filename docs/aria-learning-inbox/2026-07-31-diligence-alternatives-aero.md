@@ -652,3 +652,30 @@ BTC (cbBTC) et ETH. **Annonce publique prévue sur X dans plusieurs semaines** (
 opérateur, pas encore fixé) — aucune action de communication engagée à ce stade, cette fiche
 reste un document de diligence interne tant que l'annonce n'est pas décidée et exécutée par
 l'opérateur (campagne marketing outward-facing = gatée opérateur, cf. `CLAUDE.md`).
+
+## Post-scriptum méthodologique — critique externe ChatGPT (31/07)
+
+Critique reçue de l'opérateur après relecture croisée de cette fiche par ChatGPT, portée sur la
+méthode plutôt que sur le verdict final (décision déjà close ci-dessus, non rouverte).
+
+**Proposition ChatGPT** : pondérer les critères plutôt que les traiter à poids égal — 30%
+qualité/durabilité de la capture de valeur, 20% gouvernance réelle, 20% moat/difficulté de
+remplacement, 15% capacité d'adaptation (innovation démontrée, pas annoncée), 10% valorisation/
+revenu, 5% diversification des chaînes. Argument central : le multiple de valorisation devrait
+être un critère d'AJUSTEMENT, pas un critère majeur/disqualifiant — un excellent protocole peut
+rester cher durablement (le marché paie une croissance future réelle), un protocole médiocre
+peut sembler "bon marché" tout aussi durablement (value trap, revenu qui stagne aussi).
+
+**Évaluation** : principe validé — cohérent avec la doctrine déjà en place dans cette diligence
+(toujours calculer ratio + tendance/vélocité, jamais le ratio statique seul, cf. mémoire
+dédiée). Nuance : la pondération à 10% proposée semble un peu faible quand l'écart devient un
+ordre de grandeur (INJ ~134x contre UNI ~36-52x n'est pas un simple "un peu plus cher") — un
+ratio extrême reste un signal fort même traité comme ajustement, plutôt 15-20% que 10%.
+
+**Sur UNI précisément** : ChatGPT confirme indépendamment le finding déjà établi ici (Hooks v4/
+Unichain ne génèrent pas encore de revenu réel malgré des analyses tierces qui le suggèrent
+parfois) — validation croisée, pas une contradiction. Sa formulation retenue : **"une option
+n'est pas un cash-flow — le marché peut payer cher une option, ou énormément trop cher"** —
+résume honnêtement le vrai risque du choix déjà acté par l'opérateur : un pari sur l'exécution
+future (Unichain/hooks qui se matérialisent en revenu réel), pas une valeur déjà prouvée à ce
+prix. Cohérent avec la réserve déjà notée plus haut sur le repli des frais/revenu du 31/07.
