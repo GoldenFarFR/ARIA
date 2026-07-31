@@ -562,3 +562,20 @@ Conséquence pratique : pas d'adresse MetaMask/Base classique pour détenir de l
 par un wallet Cosmos (Keplr) ou reste simplement sur un exchange centralisé. Friction
 opérationnelle réelle à noter si INJ est retenu, sans être un facteur disqualifiant compte tenu
 de l'ouverture déjà actée de l'opérateur à détenir du capital hors EVM.
+
+**Nuance sur le critère #1 (pas de fusion/remplacement de token) — migration ERC-20 → natif
+tout juste conclue (31/07, adresse Ethereum vérifiée par l'opérateur).** Il a existé un contrat
+INJ ERC-20 historique sur Ethereum mainnet
+([`0xe28b3b32b6c345a34ff64674606124dd5aceca30`](https://etherscan.io/token/0xe28b3b32b6c345a34ff64674606124dd5aceca30),
+confirmé officiel — GitHub `InjectiveLabs/injective-token-contract`), utilisé par les grands
+exchanges avant le mainnet natif Injective. **Migration finale vers le token natif (couche EVM
+de la chaîne Injective elle-même, pas Ethereum) terminée le 22/07/2026** — Kraken a cessé de
+supporter la version ERC-20 depuis le 27/07/2026 (il y a 4 jours au moment de cette diligence),
+Coinbase a basculé vers le format natif ([CryptoBriefing](https://cryptobriefing.com/injective-migration-native-inj/) ;
+[Kraken support](https://support.kraken.com/articles/injective-protocol-conversion-to-native-inj-token)).
+**Différence claire avec le cas disqualifiant MKR→SKY** : aucun ratio de conversion punitif
+trouvé, pas de rebranding de ticker/nom, pas de controverse communautaire identifiée — supply
+et ticker INJ inchangés de bout en bout. Reste à noter honnêtement : c'est une migration de
+contrat qui vient de se conclure CETTE SEMAINE MÊME, pas un non-événement — un facteur de
+récence à surveiller (transition encore fraîche, tout exchange/wallet n'a peut-être pas encore
+basculé), même si elle ne disqualifie pas INJ sur le fond de ce critère.
