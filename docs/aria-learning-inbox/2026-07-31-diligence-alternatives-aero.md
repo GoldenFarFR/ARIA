@@ -226,22 +226,133 @@ incident de dépeg sUSD en 2026), Compound et Morpho (aucun mécanisme de captur
 pour le token, Morpho en plus trop récent pour un track record multi-cycles) — tous échouent
 sur au moins un des 6 critères.
 
-## Synthèse — classement et verdict (mis à jour après le round 2)
+## Round 3 — découverte de 3 nouveaux candidats (24 agents, vraie recherche web)
+
+Un tour de découverte dédié (Scope avec WebSearch réel, pas la mémoire du modèle) a cherché
+explicitement des candidats non encore évalués capables de rivaliser avec AAVE/UNI. Verdict
+après vérification croisée manuelle des 18 sources récupérées :
+
+- **Yearn Finance (YFI) — intéressant sur le papier, mais deux défauts réels.** Fair-launch
+  (août 2020, zéro allocation VC/équipe), pas de fusion de token, rachat/burn financé par les
+  performance fees des vaults, multisig limité à un rôle de veto (ne peut jamais proposer).
+  Mais : **TVL concentré à 85,8% sur Ethereum** malgré une présence sur 7 chaînes dont Base —
+  échoue le critère #2 (dépendance quasi-totale à un écosystème)
+  ([DefiLlama](https://defillama.com/protocol/yearn-finance)). **Revenu réel bien trop faible** :
+  seulement 776 911$/an de revenu protocolaire (10,53M$ de frais bruts annualisés) — un ordre
+  de grandeur en dessous d'AAVE/UNI, TVL total modeste (181M$). Gouvernance pas pleinement
+  décentralisée : le pouvoir de veto du multisig "ychad.eth" repose sur convention sociale,
+  "non formalisé dans un accord légal ou du code"
+  ([forum de gouvernance Yearn](https://gov.yearn.fi/t/yip-xx-convert-ychad-eth-into-a-borg/14531)).
+  Historique d'incidents de sécurité récurrents (exploit majeur 2021, exploit flashloan 2023,
+  incident de 300k$ en décembre 2025).
+
+- **PancakeSwap (CAKE) — le plus solide économiquement des 3, mais deux vrais red flags.**
+  34 mois consécutifs de déflation nette (juin 2026), 56M CAKE brûlés net (~14% du pic de
+  supply), cible de -20% de supply d'ici 2030, vraiment multi-chaîne (10 chaînes dont Base)
+  ([thecryptoupdates.com](https://www.thecryptoupdates.com/pancakeswaps-cake-token-burns-remove-56-million-tokens/)).
+  Mais : **lien historique fort avec Binance** (financé par le Binance Accelerator Fund,
+  construit sur BSC) — risque de centralisation similaire à ce qu'on cherche à éviter
+  ([Gate.com](https://www.gate.com/learn/articles/what-is-pancakeswap-all-you-need-to-know-about-cake/3942)).
+  **A déjà changé fondamentalement son modèle de tokenomics une fois** : retrait complet du
+  système veCAKE (vote-escrow) en avril 2025 pour "Tokenomics 3.0" — pas une fusion de token à
+  proprement parler, mais un signal d'instabilité structurelle répétée
+  ([ChainPlay](https://chainplay.gg/blog/pancakeswap-launches-cake-3-with-major-governance-overhaul/)).
+
+- **SushiSwap (SUSHI) — à écarter clairement.** Revenu réel effondré de deux ordres de
+  grandeur depuis son pic 2021 (270 500$ de revenu mensuel cité en 2024, contre des millions
+  au pic). **Restructuration en cours vers un écosystème multi-token**, éloignement du modèle
+  DAO à un seul token SUSHI — viole directement le critère #1
+  ([Cointelegraph](https://cointelegraph.com/news/sushiswap-replaces-dao-labs-model-multi-token-ecosystem)).
+  Crise de liquidité documentée (décembre 2022, seulement 1,5 an de trésorerie de
+  fonctionnement), vrai hack en mars 2023 (~3,3M$, code non audité)
+  ([Halborn](https://www.halborn.com/blog/post/explained-the-sushi-swap-hack-march-2023)), et
+  un épisode de malversation du fondateur (Chef Nomi a converti ~14M$ de fonds de
+  développement en ETH en 2020, avant de les rendre sous pression communautaire).
+
+**Conclusion du round 3** : aucun des 3 nouveaux candidats ne détrône AAVE/UNI. Yearn est le
+plus proche en esprit (fair-launch, discipline économique) mais trop petit et trop concentré
+sur Ethereum pour rivaliser sérieusement. PancakeSwap a un vrai mécanisme économique mais
+porte un risque de centralisation historique (Binance) et un changement de tokenomics déjà
+versé une fois. SushiSwap est clairement le plus faible des 3, à écarter.
+
+## Synthèse — classement et verdict (mis à jour après le round 3)
 
 | Candidat | Fusion de token | Gouvernance décentralisée | Modèle économique | Sécurité | Verdict |
 |---|---|---|---|---|---|
-| **AAVE** | Aucune prévue | Décentralisée dès 2020, timelock+guardian | Buyback financé par revenu réel (Aavenomics 3.0) | 65 audits, 1 seul incident (remboursé) | **Meilleur candidat, confirmé round 2** |
-| **UNI** | Aucune prévue | Timelock 2-30j, DUNA (2025) | Burn déflationniste étendu (Proposition 100) | 9 audits, bug bounty 15,5M$ | **Quasi à égalité avec AAVE, confirmé round 2** |
+| **AAVE** | Aucune prévue | Décentralisée dès 2020, timelock+guardian | Buyback financé par revenu réel, mais tendance récente en ralentissement | 65 audits, 1 seul incident (remboursé) | **Finaliste — moins cher aujourd'hui, tendance qui ralentit** |
+| **UNI** | Aucune prévue | Timelock 2-30j, DUNA (2025) | Burn déflationniste, tendance récente en forte accélération (Prop. 100, 27/07/2026) | 9 audits, bug bounty 15,5M$ | **Finaliste — plus cher aujourd'hui, tendance qui accélère** |
+| **PancakeSwap (CAKE)** | Pas de fusion, mais retrait complet du système veCAKE (avril 2025) | Lien historique fort avec Binance/BSC | Vrais burns financés par le revenu (34 mois de déflation nette) | Non vérifiée en détail | Écarté — risque de centralisation Binance |
+| **Yearn Finance (YFI)** | Aucune, fair-launch 2020 | Multisig limité à un veto, mais pas formalisé légalement | Revenu réel bien trop faible (776k$/an) | Incidents récurrents (2021, 2023, 2025) | Écarté — dépend à 85,8% d'Ethereum, trop petit |
 | **LDO** | Aucune prévue | Dual Governance (partiel) | ⚠️ Domination de marché sans capture de valeur pour le token | 120 audits, incidents mineurs bien gérés | Faible — nouveau défaut confirmé |
 | **LINK** | Aucune prévue | Non documentée (trou réel) | ⚠️ Émissions > revenu réel, transition inachevée | Aucun incident oracle, dilution Labs opaque | Faible — défaut confirmé round 2 |
 | **CRV** | Aucune prévue | Convex ~47% des votes + risque fondateur personnel | Émissions classiques | A subi un vrai hack (2023), score 6,5/10 | Faible — gouvernance concentrée confirmée |
+| **SushiSwap (SUSHI)** | Restructuration multi-token en cours | Sushi Labs (conseil), pas une DAO simple | Revenu effondré (2 ordres de grandeur sous le pic 2021) | Vrai hack 2023 (3,3M$) + crise de liquidité 2022 | **Écarté clairement** |
 | **MKR/SKY** | **DÉJÀ vécue** (Endgame), migration encore forcée en 2026 | 4 entités = quasi tous les votes | Buyback + réduction d'émissions (seul point positif) | Réserves gérées par simple EOA | **Disqualifié, aggravé round 2** |
 
-**Recommandation finale de cette session** : **AAVE** reste le candidat en tête, confirmé et
-renforcé par une vraie recherche web indépendante — gouvernance décentralisée depuis 2020,
-modèle économique qui distribue moins qu'il ne gagne, présence directe sur Base, aucune
-fusion de token. **UNI** est désormais un challenger quasi à égalité, pas juste un second
-choix. **MKR/SKY, LINK, CRV et LDO** portent chacun un défaut structurel confirmé et
-documenté — aucun n'est disqualifiant au même degré que MKR/SKY, mais aucun ne rivalise avec
-AAVE/UNI sur l'ensemble des critères. Le tour de validation n'a trouvé aucun 7e candidat
-meilleur (GMX/Synthetix/Compound/Morpho tous vérifiés et écartés).
+**Recommandation finale de cette session** : **AAVE et UNI restent les deux seuls finalistes**
+après 3 rounds de vérification (37 + 1 + 24 agents, tous avec vraie recherche web) — aucun
+7e/8e/9e candidat parmi GMX/Synthetix/Compound/Morpho/Yearn/PancakeSwap/SushiSwap ne les
+détrône. Les deux ont des profils opposés à départager, pas juste un score composite unique :
+- **AAVE** : moins cher aujourd'hui sur le ratio valorisation/revenu réel (~13x), mais
+  tendance récente en ralentissement (TVL -52% depuis le pic de novembre 2025, croissance du
+  revenu qui décélère, budget de buyback déjà réduit face à une baisse de revenu).
+- **UNI** : plus cher aujourd'hui (~43-52x), mais tendance récente en forte accélération
+  suite à l'extension du fee switch (Proposition 100, 27/07/2026) — signal très récent, pas
+  encore confirmé sur la durée.
+- Rappel méthodologique (cf. mémoire `feedback_valuation_ratio_over_ath_distance`) : la
+  distance à l'ATH est un mauvais critère de départage (biais d'ancrage sur un pic
+  potentiellement irrationnel) — le ratio valorisation/revenu ET sa tendance/vitesse doivent
+  être combinés, jamais un seul chiffre statique.
+- Tous les autres candidats (LDO, LINK, CRV, PancakeSwap, Yearn, SushiSwap) portent un défaut
+  structurel confirmé et documenté qui les place en retrait d'AAVE/UNI. MKR/SKY reste le seul
+  disqualifié au sens strict.
+
+## Relecture croisée — 3 LLM externes (ChatGPT, Gemini, Grok), 31/07
+
+Le texte de diligence a été soumis à 3 LLM indépendants pour challenge critique. Les trois
+confirment les 6 critères et ne trouvent aucun 7e/8e candidat oublié (ChatGPT et Gemini
+vérifient et écartent explicitement Pendle, Ethena, Hyperliquid — ce dernier étant un L1/
+AppChain, pas un token EVM standard, échouant le critère #6). **Mais les trois se contredisent
+sur le verdict final AAVE vs UNI** — résultat en soi le plus important de cet exercice : il
+n'y a pas de réponse objective unique.
+
+**Point commun ajouté aux critères** : un 7e critère informel — le **"moat"** (avantage
+concurrentiel durable) — un protocole facilement copiable n'est pas le même actif qu'un
+protocole quasi impossible à déloger, même à revenu égal.
+
+**Biais méthodologiques reconnus par les 3** :
+- Revenu brut vs revenu net réellement capturé (déjà noté en round 2)
+- Nature du revenu : AAVE taxe un capital immobile (rente stable, prévisible) vs UNI taxe un
+  flux de volume (hyper-corrélé à la volatilité du marché) — comparer leur vélocité de
+  croissance directement biaise mécaniquement en faveur d'AAVE (déjà mature) contre UNI
+  (capture en cours de montée)
+- Risque de décote réglementaire non pricé par un simple ratio (SEC) — **vérifié** : la SEC a
+  clos son enquête sur Uniswap Labs en février 2025 sans poursuite, après une Wells Notice
+  d'avril 2024 ([CoinDesk](https://www.coindesk.com/policy/2025/02/25/sec-drops-investigation-into-uniswap-will-not-file-enforcement-action)) —
+  ce risque spécifique est donc largement retombé, pas un facteur différenciant actif
+  aujourd'hui contrairement à ce que les LLM supposaient sans le vérifier.
+
+**Correction factuelle apportée par cette session** (aucun des 3 LLM ne l'avait) : Unichain/
+UniswapX/hooks v4, cités par ChatGPT et Gemini comme des sources de revenu déjà actives pour
+UNI, ne génèrent **pas encore** de revenu réel capturé — le fee switch V4 n'a pas été activé,
+DefiLlama enregistre zéro revenu protocolaire sur V4 en juin 2026. Ce sont des potentiels
+futurs, pas des faits acquis.
+
+**Verdicts divergents** :
+- **Gemini → AAVE** : capture de valeur naturelle (spread de taux sur du crédit inélastique),
+  pas besoin de "prendre" la valeur des LPs comme UNI doit le faire via son fee switch —
+  "Banque centrale de facto de la DeFi".
+- **Grok → UNI** (légèrement) : TAM du trading plus large et structurel que le lending
+  overcollatéralisé, moat de liquidité/marque plus difficile à déloger, et surtout — angle
+  neuf non exploré par cette session — **Aave fait face à une concurrence réelle de Morpho et
+  du "modular lending"** qui pourrait éroder son moat avec le temps.
+- **ChatGPT** : ne tranche pas, présente les deux comme des profils différents (value vs
+  growth) légitimes chacun à sa manière.
+
+**Conclusion finale de cette diligence** : la méthodologie et le filtrage (6+1 critères) sont
+solides et confirmés par 3 relectures indépendantes. Le choix final entre AAVE (revenu déjà
+mature et prouvé, mais croissance plus limitée et concurrence Morpho à surveiller) et UNI
+(revenu en accélération mais reposant en partie sur des paris non encore matérialisés,
+Unichain/hooks) reste un vrai choix de profil — value vs growth — sans réponse objective
+unique, à trancher selon l'horizon et la tolérance à parier sur une capture de valeur pas
+encore pleinement prouvée.
