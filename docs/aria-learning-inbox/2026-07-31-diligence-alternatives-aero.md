@@ -452,3 +452,31 @@ red flag propre (gouvernance JUP, centralisation HYPE/STX-phase-actuelle/validat
 mécanisme one-off GNO, chiffres encore modestes OP/PYTH) qui n'a pas d'équivalent aussi grave
 chez AAVE ou UNI. **Rappel permanent** : ceci reste une lecture technique/structurelle de faits
 vérifiés, jamais une prédiction de prix ni un conseil en investissement personnalisé.
+
+## Round 5 — les 3 derniers candidats du criblage top-200 (31/07, recherche directe WebSearch)
+
+Traitement des 3 candidats restés en Search au moment de l'arrêt du workflow (RAY, RUNE, GRT).
+
+| Candidat | Capture de valeur vérifiée | Point fort | Red flag confirmé |
+|---|---|---|---|
+| **RAY** (Raydium) | Mécanisme réel et fort, comparable en intensité à UNI/AAVE — 12% des frais de trading → rachat continu, envoyé vers une adresse de burn publique. ~196M$ dépensés cumulés, ~71M RAY rachetés (~26,4% du circulant, fin août 2025) ; 54M$ brûlés en un seul mois (janvier 2025, >10% du circulant à l'époque). Revenu brut ~9,1M$/mois (annualisé >109M$/an) contre seulement ~1,9M RAY d'émission/an | Rachat/burn financé par du revenu réel, ratio émission/rachat très favorable | Aucune donnée trouvée sur la structure de gouvernance réelle (clés admin, timelock) — à vérifier avant toute conviction ferme ; incohérence de données déjà relevée plus tôt dans cette diligence (un chiffre de supply circulant très supérieur au max supply théorique sur une source) — fiabilité des chiffres à confirmer par recoupement |
+| **RUNE** (THORChain) | Pas de mécanisme de rachat/burn substantiel trouvé — modèle basé sur des émissions dynamiques ("Incentive Pendulum") vers nodes/LPs, pas une capture de valeur par revenu réel comme RAY/UNI/AAVE | Fonction réelle (pont cross-chain natif) | **Disqualifiant** : exploit de sécurité de ~10,8M$ le 15/05/2026 (3e incident majeur du protocole), halt d'urgence du réseau, RUNE -11 à -15%, reprise après 5 semaines de pause — échoue le critère #4 (pas de vraie capture de valeur) ET soulève un doute sérieux sur la robustesse technique répétée |
+| **GRT** (The Graph) | Mécanisme faible/neutre — burns (taxe de curation/délégation + 1% des frais de requête) qui compensent l'essentiel de l'émission sans la dépasser nettement : "inflation nette proche de zéro, légèrement déflationniste" en période de demande saine — pas un moteur déflationniste actif comme RAY/UNI/HYPE | "Horizon" (déc. 2025) = plus gros changement architectural de l'histoire du protocole, signe d'évolution active | Pas de red flag disqualifiant trouvé, mais pas non plus de signal de capture de valeur convaincant — capture de valeur trop faible pour rivaliser avec les autres candidats déjà retenus |
+
+**Verdict Round 5** : **RUNE écarté** — 3e incident de sécurité majeur du protocole en plus d'une
+absence de vrai mécanisme de capture de valeur pour le token, cumul de deux défauts structurels
+sérieux. **GRT ni disqualifié ni convaincant** — mécanisme de capture de valeur trop faible
+(quasi-neutre) pour rivaliser avec HYPE/INJ/AAVE/UNI/RAY sur ce critère précis. **RAY est le
+candidat le plus solide de ce dernier lot** sur la capture de valeur pure (rachat/burn aussi
+intense que RAY/UNI en proportion), mais avec un vrai trou de diligence non résolu : aucune
+donnée trouvée sur sa gouvernance réelle (clés admin/timelock), à combler avant toute conviction
+ferme — et l'incohérence de données déjà repérée sur ce token appelle à la prudence sur la
+fiabilité des sources disponibles.
+
+**Bilan des 10 candidats top-200 traités (Round 4 + 5)** : sur 10 candidats vérifiés au-delà
+d'AAVE/UNI, 2 disqualifiés pour de vrais red flags structurels (JUP — capture de gouvernance ;
+RUNE — incidents de sécurité répétés + absence de capture de valeur), et aucun ne dépasse
+objectivement AAVE/UNI sur l'ensemble des 6+1 critères. RAY et INJ ressortent comme les plus
+sérieux du lot restant, chacun avec un point de vigilance propre (gouvernance non vérifiée pour
+RAY, centralisation validateurs pour INJ) — sans invalider la conclusion déjà actée : le choix
+final reste entre AAVE et UNI, un vrai choix de profil value/growth plutôt qu'une case à cocher.
