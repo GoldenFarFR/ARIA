@@ -736,6 +736,117 @@ class TestNewEntryBlockState:
         assert outgoing_pause.is_paused() is False
 
 
+# ── 2bis. Rappel horaire tant qu'un coupe-circuit reste armé (31/07) ────────
+# Demande opérateur explicite : "je veut une notification dans telegram
+# toute les heures tant que j'ai pas traité le problème avec toi".
+
+
+class TestPocketReminder:
+    def test_no_reminder_when_not_blocked(self, tmp_db):
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+
+    def test_first_reminder_right_after_arming(self, tmp_db):
+        """Aucun rappel encore envoyé -> True dès que le coupe-circuit est armé,
+        pas besoin d'attendre une première heure complète."""
+        risk_guard.block_new_entries("swing", "drawdown 22%")
+        assert risk_guard.should_send_pocket_reminder("swing") is True
+
+    def test_no_second_reminder_before_interval_elapsed(self, tmp_db):
+        risk_guard.block_new_entries("swing", "drawdown 22%")
+        risk_guard.record_pocket_reminder_sent("swing")
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+
+    def test_reminder_again_once_interval_elapsed(self, tmp_db):
+        import json as _json
+        from datetime import datetime, timedelta, timezone
+
+        risk_guard.block_new_entries("swing", "drawdown 22%")
+        stale = (datetime.now(timezone.utc) - timedelta(seconds=risk_guard.REMINDER_INTERVAL_SECONDS + 5)).isoformat()
+        state_file = tmp_db / "risk_guard_state_swing.json"
+        data = _json.loads(state_file.read_text(encoding="utf-8"))
+        data["last_reminder_at"] = stale
+        state_file.write_text(_json.dumps(data), encoding="utf-8")
+        assert risk_guard.should_send_pocket_reminder("swing") is True
+
+    def test_record_reminder_preserves_other_fields(self, tmp_db):
+        risk_guard.block_new_entries("swing", "drawdown 22%", by=999)
+        risk_guard.record_pocket_reminder_sent("swing")
+        status = risk_guard.new_entry_block_status("swing")
+        assert status["blocked"] is True
+        assert status["reason"] == "drawdown 22%"
+        assert status["by"] == 999
+        assert status["last_reminder_at"] is not None
+
+    def test_resuming_stops_the_reminder(self, tmp_db):
+        risk_guard.block_new_entries("swing", "drawdown 22%")
+        risk_guard.resume_new_entries("swing")
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+
+    def test_soft_tier_alone_never_reminds(self, tmp_db):
+        """Le palier SOUPLE ne bloque aucune entrée -- pas la situation "ARIA
+        arrête de trader" que ce rappel cible, jamais de rappel pour lui seul."""
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+
+    def test_format_reminder_mentions_since_and_reason(self, tmp_db):
+        risk_guard.block_new_entries("swing", "drawdown 22%")
+        status = risk_guard.new_entry_block_status("swing")
+        text = risk_guard.format_pocket_blocked_reminder_alert(status, "swing")
+        assert "drawdown 22%" in text
+        assert "RAPPEL" in text
+        assert "/riskresume" in text
+
+    def test_each_pocket_reminder_independent(self, tmp_db):
+        risk_guard.block_new_entries("scalping", "drawdown scalping")
+        assert risk_guard.should_send_pocket_reminder("scalping") is True
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+        assert risk_guard.should_send_pocket_reminder("vc") is False
+
+
+class TestMacroReminder:
+    def test_no_reminder_when_not_paused(self, tmp_db):
+        assert risk_guard.should_send_macro_reminder() is False
+
+    def test_no_reminder_when_paused_for_an_unrelated_reason(self, tmp_db):
+        """Un /stop opérateur volontaire (sans rapport avec un drawdown) ne doit
+        jamais produire un rappel "coupe-circuit MACRO" trompeur."""
+        outgoing_pause.pause(by=1, reason="pause opérateur volontaire")
+        assert risk_guard.should_send_macro_reminder() is False
+
+    @pytest.mark.asyncio
+    async def test_reminder_after_macro_trigger(self, tmp_db):
+        await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+        await pt.reset_portfolio(1_000_000.0, wallet="swing")
+        await pt.reset_portfolio(1_000_000.0, wallet="vc")
+
+        async def price_lookup(contract):
+            return 1.0
+
+        # Force un HWM élevé puis un effondrement -16% (> MACRO_CIRCUIT_BREAKER_LOSS_PCT).
+        state = await risk_guard.evaluate_macro_risk(price_lookup=price_lookup)
+        assert state.newly_triggered is False  # pas encore de drawdown
+
+        async def crashed_lookup(contract):
+            return 1.0
+
+        import json as _json
+
+        macro_file = tmp_db / "risk_guard_state_macro.json"
+        data = _json.loads(macro_file.read_text(encoding="utf-8"))
+        data["high_water_mark"] = 10_000_000.0  # simule un HWM bien plus haut que l'équité réelle
+        macro_file.write_text(_json.dumps(data), encoding="utf-8")
+
+        state2 = await risk_guard.evaluate_macro_risk(price_lookup=crashed_lookup)
+        assert state2.newly_triggered is True
+        assert risk_guard.should_send_macro_reminder() is True
+
+        risk_guard.record_macro_reminder_sent()
+        assert risk_guard.should_send_macro_reminder() is False
+
+        text = risk_guard.format_macro_blocked_reminder_alert(state2)
+        assert "RAPPEL" in text
+        assert "/resume" in text
+
+
 # ── 3. evaluate_portfolio_risk (intégration paper_trader) ──────────────────
 
 

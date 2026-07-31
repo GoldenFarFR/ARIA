@@ -731,6 +731,15 @@ def new_entry_block_status(wallet: str) -> dict[str, Any]:
                 since = since.replace(tzinfo=timezone.utc)
         except ValueError:
             since = None
+    last_reminder_at: datetime | None = None
+    last_reminder_raw = data.get("last_reminder_at")
+    if isinstance(last_reminder_raw, str):
+        try:
+            last_reminder_at = datetime.fromisoformat(last_reminder_raw.replace("Z", "+00:00"))
+            if last_reminder_at.tzinfo is None:
+                last_reminder_at = last_reminder_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            last_reminder_at = None
     return {
         "blocked": bool(data.get("blocked")),
         "since": since,
@@ -738,6 +747,7 @@ def new_entry_block_status(wallet: str) -> dict[str, Any]:
         "reason": data.get("reason") or "",
         "last_alert_band": data.get("last_alert_band") or _BAND_NONE,
         "readable": readable,
+        "last_reminder_at": last_reminder_at,
     }
 
 
@@ -924,6 +934,60 @@ def format_hard_circuit_breaker_alert(state: PortfolioRiskState, wallet: str) ->
     ])
 
 
+# ── 2bis. Rappel horaire tant qu'un coupe-circuit DUR reste armé ────────────
+# 31/07, demande opérateur explicite ("si aria arrête de trader ... je veut
+# une notification dans telegram toute les heures tant que j'ai pas traité le
+# problème"). ``newly_triggered_hard`` ci-dessus n'alerte QU'À LA TRANSITION
+# (armement initial) -- sans ce mécanisme, un coupe-circuit resté armé
+# plusieurs heures/jours (reprise manuelle jamais donnée) redevient
+# silencieux après la toute première alerte. Générique : réutilisé identique
+# pour le macro breaker plus bas (mêmes fonctions, un ``wallet`` différent
+# suffit à cibler le bon fichier d'état -- jamais une deuxième copie).
+REMINDER_INTERVAL_SECONDS = 3600.0  # 1h, valeur explicite de l'opérateur
+
+
+def should_send_pocket_reminder(wallet: str) -> bool:
+    """True si le coupe-circuit DUR de cette poche est actuellement armé ET
+    qu'aucun rappel n'a été envoyé depuis au moins ``REMINDER_INTERVAL_
+    SECONDS``. Jamais vrai pour le palier SOUPLE (celui-ci n'empêche aucune
+    entrée, seulement une taille réduite -- pas la situation "ARIA arrête de
+    trader" que ce rappel cible)."""
+    status = new_entry_block_status(wallet)
+    if not status["readable"] or not status["blocked"]:
+        return False
+    last_reminder_at = status["last_reminder_at"]
+    if last_reminder_at is None:
+        return True
+    elapsed = (datetime.now(timezone.utc) - last_reminder_at).total_seconds()
+    return elapsed >= REMINDER_INTERVAL_SECONDS
+
+
+def record_pocket_reminder_sent(wallet: str) -> None:
+    """Marque l'instant du rappel envoyé -- ne touche à AUCUN autre champ du
+    fichier d'état de cette poche (préserve ``since``/``reason``/``by`` tels
+    quels, jamais un ré-armement implicite)."""
+    raw = _read_raw(wallet)
+    if raw is None:
+        return  # état illisible -- rien à corrompre davantage
+    payload = dict(raw)
+    payload["last_reminder_at"] = datetime.now(timezone.utc).isoformat()
+    _write(wallet, payload)
+
+
+def format_pocket_blocked_reminder_alert(status: dict[str, Any], wallet: str) -> str:
+    pocket_label = wallet.upper()
+    since = status.get("since")
+    since_txt = since.strftime("%Y-%m-%d %H:%M UTC") if since else "date inconnue"
+    return "\n".join([
+        f"⏰ RAPPEL — coupe-circuit portefeuille (poche {pocket_label}) toujours ARMÉ",
+        f"Armé depuis {since_txt} : {status.get('reason') or 'seuil de risque franchi'}.",
+        f"Aucune nouvelle position paper dans la poche {pocket_label} tant que la reprise "
+        "manuelle n'est pas donnée (/riskresume).",
+        "Ce rappel se répète toutes les heures tant que le coupe-circuit reste armé.",
+        "Aucun argent réel.",
+    ])
+
+
 # ── 3. MACRO circuit breaker (aggregated across all 3 pockets) ─────────────
 # 27/07 -- 3-pocket architecture plan, Phase 3 ("Ajout de robustesse retenu",
 # operator-approved). The 3 per-pocket breakers above are now fully
@@ -1068,5 +1132,53 @@ def format_macro_circuit_breaker_alert(state: MacroRiskState) -> str:
         "palier par poche.",
         "ARIA est mise en pause globale (kill-switch sortant) -- reprise manuelle explicite "
         "requise (/resume).",
+        "Aucun argent réel.",
+    ])
+
+
+# ── Rappel horaire, macro breaker (même doctrine que la 2bis per-pocket ci-dessus) ──
+# Restreint au cas où ``outgoing_pause`` est actif À CAUSE de ce breaker précis
+# (``triggered`` persisté dans son propre fichier) -- jamais un rappel "coupe-
+# circuit" trompeur si l'opérateur a lui-même déclenché /stop pour une raison
+# sans rapport avec un drawdown (garde-fou/incident/pause volontaire).
+
+
+def should_send_macro_reminder() -> bool:
+    from aria_core import outgoing_pause
+
+    if not outgoing_pause.is_paused():
+        return False
+    raw = _read_macro_raw()
+    if not raw or not raw.get("triggered"):
+        return False
+    last_reminder_raw = raw.get("last_reminder_at")
+    if not isinstance(last_reminder_raw, str):
+        return True
+    try:
+        last_reminder_at = datetime.fromisoformat(last_reminder_raw.replace("Z", "+00:00"))
+        if last_reminder_at.tzinfo is None:
+            last_reminder_at = last_reminder_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True
+    elapsed = (datetime.now(timezone.utc) - last_reminder_at).total_seconds()
+    return elapsed >= REMINDER_INTERVAL_SECONDS
+
+
+def record_macro_reminder_sent() -> None:
+    raw = _read_macro_raw()
+    if raw is None:
+        return
+    payload = dict(raw)
+    payload["last_reminder_at"] = datetime.now(timezone.utc).isoformat()
+    _write_macro(payload)
+
+
+def format_macro_blocked_reminder_alert(state: MacroRiskState) -> str:
+    return "\n".join([
+        "⏰ RAPPEL — coupe-circuit MACRO toujours ARMÉ (portefeuille combiné, 3 poches)",
+        f"Drawdown {state.drawdown_pct:.1%} sur l'équité combinée depuis le plus haut "
+        f"({state.total_high_water_mark:,.0f} $).",
+        "TOUTES les poches restent arrêtées tant que la reprise manuelle n'est pas donnée (/resume).",
+        "Ce rappel se répète toutes les heures tant que le coupe-circuit reste armé.",
         "Aucun argent réel.",
     ])

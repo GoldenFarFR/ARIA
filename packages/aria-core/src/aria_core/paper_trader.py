@@ -4872,6 +4872,19 @@ async def _run_paper_cycle_locked(
             await notifier(risk_guard.format_soft_drawdown_alert(risk_state, "swing"))
         except Exception:  # noqa: BLE001
             pass
+    # 31/07 -- explicit operator request: an hourly Telegram reminder while a
+    # HARD circuit breaker stays armed (the alert above only fires ONCE, at
+    # the initial transition -- silent afterwards without this). Never
+    # overlaps with the transition alert itself (should_send_pocket_reminder
+    # only turns True once REMINDER_INTERVAL_SECONDS has elapsed since the
+    # last reminder, and there's none yet right after arming).
+    if notifier and risk_guard.should_send_pocket_reminder("swing"):
+        try:
+            status = risk_guard.new_entry_block_status("swing")
+            await notifier(risk_guard.format_pocket_blocked_reminder_alert(status, "swing"))
+            risk_guard.record_pocket_reminder_sent("swing")
+        except Exception:  # noqa: BLE001
+            pass
 
     # Single-pocket path (gate OFF, or an explicit caller-provided
     # candidates/analyzer): unchanged historical behavior -- there IS only
@@ -5032,6 +5045,15 @@ async def _run_paper_cycle_locked(
                 except Exception:  # noqa: BLE001
                     pass
             return actions
+        # 31/07 -- hourly reminder while the macro breaker stays armed on a
+        # LATER cycle (newly_triggered is only True once, at the initial
+        # transition -- this covers every cycle after that, until /resume).
+        if macro_state is not None and notifier and risk_guard.should_send_macro_reminder():
+            try:
+                await notifier(risk_guard.format_macro_blocked_reminder_alert(macro_state))
+                risk_guard.record_macro_reminder_sent()
+            except Exception:  # noqa: BLE001
+                pass
 
         # We don't re-enter a name we just EXITED this round (avoids churn: an
         # exit on trailing stop/last stage requires a new signal on the next
@@ -5071,6 +5093,15 @@ async def _run_paper_cycle_locked(
             elif pocket_risk_state.newly_triggered_soft and notifier:
                 try:
                     await notifier(risk_guard.format_soft_drawdown_alert(pocket_risk_state, pocket_wallet))
+                except Exception:  # noqa: BLE001
+                    pass
+            # 31/07 -- same hourly-reminder doctrine as the single-pocket
+            # "swing" snapshot above, per pocket.
+            if notifier and risk_guard.should_send_pocket_reminder(pocket_wallet):
+                try:
+                    pocket_status = risk_guard.new_entry_block_status(pocket_wallet)
+                    await notifier(risk_guard.format_pocket_blocked_reminder_alert(pocket_status, pocket_wallet))
+                    risk_guard.record_pocket_reminder_sent(pocket_wallet)
                 except Exception:  # noqa: BLE001
                     pass
             if pocket_risk_state.blocked:
