@@ -643,3 +643,12 @@ frais 24h 1 436 996$, revenu de projet 24h 204 033$ → revenu annualisé ≈ 74
 et revenu tous deux en repli sur 24h (-30,4% et -14,0% vs la veille) — signe possible que le pic
 du 27/07 (~325k$/jour, extension du fee switch) était ponctuel plutôt qu'un nouveau plateau
 soutenu ; la tendance ne se confirmera que sur plusieurs semaines, pas un seul jour.
+
+## Clôture (31/07)
+
+**Décision finale actée par l'opérateur** : UNI devient le 3e/4e pilier de conviction long
+terme du capital personnel de l'opérateur (distinct du capital de trading ARIA), aux côtés de
+BTC (cbBTC) et ETH. **Annonce publique prévue sur X dans plusieurs semaines** (calendrier
+opérateur, pas encore fixé) — aucune action de communication engagée à ce stade, cette fiche
+reste un document de diligence interne tant que l'annonce n'est pas décidée et exécutée par
+l'opérateur (campagne marketing outward-facing = gatée opérateur, cf. `CLAUDE.md`).
