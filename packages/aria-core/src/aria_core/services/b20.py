@@ -437,11 +437,71 @@ class B20SafetyVerdict:
     reason: str = ""
 
 
+# 31/07 -- SHORT cache, hours not days (operator's explicit call after the
+# tradeoff was raised directly: B20 is the same security-scan family as the
+# honeypot check it sits next to in both cribles -- see
+# external_signal_cache.py's own comment on this narrow, deliberate
+# exception). Never used for "opaque" (see ``evaluate_b20_safety`` below) --
+# an unresolved scan always retries fresh, never stuck on "unknown".
+_CACHE_SIGNAL_TYPE = "b20_verdict"
+_CACHE_TTL_HOURS = 3.0
+
+
+def _verdict_to_cache_payload(verdict: "B20SafetyVerdict") -> dict:
+    return {
+        "verdict": verdict.verdict,
+        "reason": verdict.reason,
+        "role_holders": {name: sorted(holders) for name, holders in verdict.role_holders.items()},
+    }
+
+
+def _cache_payload_to_verdict(payload: dict) -> "B20SafetyVerdict":
+    return B20SafetyVerdict(
+        verdict=payload.get("verdict") or "opaque",
+        reason=payload.get("reason") or "",
+        role_holders={
+            name: set(holders) for name, holders in (payload.get("role_holders") or {}).items()
+        },
+    )
+
+
 async def evaluate_b20_safety(token_address: str, *, w3=None) -> B20SafetyVerdict:
     """The single entry point a caller (momentum/VC gate) needs. Never
     raises -- every failure degrades to a verdict the caller can act on
     directly (fail-closed: "opaque" on any unresolved scan, never a silent
     "safe" out of missing data).
+
+    Cache-first (``external_signal_cache``, ``_CACHE_TTL_HOURS``): a cache
+    hit skips the real scan entirely. "opaque" is NEVER written to the cache
+    -- only a real, confirmed answer ("safe"/"risky"/"not_b20") qualifies. A
+    cache read/write failure degrades to a fresh scan (never blocking)."""
+    from aria_core.services import external_signal_cache
+
+    cache_key = (token_address or "").strip().lower()
+    try:
+        cached = await external_signal_cache.get_cached(
+            _CACHE_SIGNAL_TYPE, cache_key, ttl_days=_CACHE_TTL_HOURS / 24.0,
+        )
+    except Exception as exc:  # noqa: BLE001 -- cache read failure never blocks a real scan
+        logger.info("b20: cache read failed for %s (%s)", token_address, exc)
+        cached = None
+    if cached is not None:
+        return _cache_payload_to_verdict(cached)
+
+    verdict = await _evaluate_b20_safety_uncached(token_address, w3=w3)
+    if verdict.verdict != "opaque":
+        try:
+            await external_signal_cache.store(
+                _CACHE_SIGNAL_TYPE, cache_key, _verdict_to_cache_payload(verdict),
+            )
+        except Exception as exc:  # noqa: BLE001 -- cache write failure never blocks the real verdict
+            logger.info("b20: cache write failed for %s (%s)", token_address, exc)
+    return verdict
+
+
+async def _evaluate_b20_safety_uncached(token_address: str, *, w3=None) -> B20SafetyVerdict:
+    """The real scan, never cache-aware itself -- see ``evaluate_b20_safety``
+    (the public entry point) for the cache-first wrapper.
 
     Resolves the token's creation block ONCE here (``_find_creation_block``)
     and reuses it for all 3 role scans -- avoids 3 redundant binary searches

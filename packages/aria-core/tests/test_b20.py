@@ -5,6 +5,17 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services import b20
+from aria_core.services import external_signal_cache as cache
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    # 31/07 -- evaluate_b20_safety is now cache-first (external_signal_cache,
+    # module-level DB_PATH fixed at import time) -- same isolation pattern as
+    # test_external_signal_cache.py, otherwise every test in this file would
+    # share one real cache and pollute each other's verdicts.
+    monkeypatch.setattr(cache, "DB_PATH", str(tmp_path / "b20_cache_test.db"))
+
 
 TOKEN = "0xB200000000000000000000289914488470f54529"
 GRANTEE = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -394,6 +405,99 @@ async def test_evaluate_b20_safety_opaque_when_creation_block_unresolved():
     verdict = await b20.evaluate_b20_safety(TOKEN, w3=w3)
     assert verdict.verdict == "opaque"
     assert "creation block" in verdict.reason
+
+
+# ── cache (31/07, operator's explicit call: SHORT cache -- hours, not the
+# days used elsewhere in external_signal_cache.py -- since B20 is still a
+# security scan, same family as the honeypot check next to it in both
+# cribles). "opaque" must NEVER be cached -- always a fresh retry. ─────────
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_serves_safe_verdict_from_cache():
+    """Second call reuses a DIFFERENT w3 that would give a different verdict
+    if actually executed -- proves the real scan was skipped, not re-run."""
+    addr = "0x" + "1" * 40
+    w3_safe = _FakeW3(is_b20=True, block_number=10, windows={})
+    first = await b20.evaluate_b20_safety(addr, w3=w3_safe)
+    assert first.verdict == "safe"
+
+    to_block = 999
+    from_block = to_block - b20.LOG_SCAN_WINDOW_BLOCKS + 1
+    windows = {(from_block, to_block): [_log("RoleGranted", "MINT_ROLE", GRANTEE, 950, 0)]}
+    w3_risky = _FakeW3(is_b20=True, block_number=to_block, windows=windows)
+    second = await b20.evaluate_b20_safety(addr, w3=w3_risky)
+
+    assert second.verdict == "safe"  # served from cache, not re-scanned
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_serves_risky_verdict_from_cache():
+    addr = "0x" + "2" * 40
+    to_block = 999
+    from_block = to_block - b20.LOG_SCAN_WINDOW_BLOCKS + 1
+    windows = {(from_block, to_block): [_log("RoleGranted", "MINT_ROLE", GRANTEE, 950, 0)]}
+    w3_risky = _FakeW3(is_b20=True, block_number=to_block, windows=windows)
+    first = await b20.evaluate_b20_safety(addr, w3=w3_risky)
+    assert first.verdict == "risky"
+
+    w3_safe = _FakeW3(is_b20=True, block_number=10, windows={})
+    second = await b20.evaluate_b20_safety(addr, w3=w3_safe)
+
+    assert second.verdict == "risky"  # served from cache, not re-scanned
+    assert GRANTEE in second.role_holders["MINT_ROLE"]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_caches_not_b20():
+    addr = "0x" + "3" * 40
+    first = await b20.evaluate_b20_safety(addr, w3=_FakeW3(is_b20=False))
+    assert first.verdict == "not_b20"
+
+    w3_safe = _FakeW3(is_b20=True, block_number=10, windows={})
+    second = await b20.evaluate_b20_safety(addr, w3=w3_safe)
+
+    assert second.verdict == "not_b20"  # served from cache, not re-scanned
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_never_caches_opaque():
+    """An unresolved (opaque) scan must never freeze the verdict -- the next
+    call does a REAL fresh scan, proven here by a different w3 giving a
+    different, real answer."""
+    addr = "0x" + "4" * 40
+    first = await b20.evaluate_b20_safety(addr, w3=_FakeW3(break_contract=True))
+    assert first.verdict == "opaque"
+
+    w3_safe = _FakeW3(is_b20=True, block_number=10, windows={})
+    second = await b20.evaluate_b20_safety(addr, w3=w3_safe)
+
+    assert second.verdict == "safe"  # real fresh scan, not stuck on opaque
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_cache_read_failure_falls_back_to_fresh_scan(monkeypatch):
+    from aria_core.services import external_signal_cache
+
+    async def broken_get_cached(*args, **kwargs):
+        raise ConnectionError("db down")
+
+    monkeypatch.setattr(external_signal_cache, "get_cached", broken_get_cached)
+    w3 = _FakeW3(is_b20=True, block_number=10, windows={})
+    verdict = await b20.evaluate_b20_safety(TOKEN, w3=w3)
+    assert verdict.verdict == "safe"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_cache_write_failure_never_blocks_real_verdict(monkeypatch):
+    from aria_core.services import external_signal_cache
+
+    async def broken_store(*args, **kwargs):
+        raise ConnectionError("db down")
+
+    monkeypatch.setattr(external_signal_cache, "store", broken_store)
+    w3 = _FakeW3(is_b20=True, block_number=10, windows={})
+    verdict = await b20.evaluate_b20_safety(TOKEN, w3=w3)
+    assert verdict.verdict == "safe"
 
 
 def test_rpc_url_default(monkeypatch):

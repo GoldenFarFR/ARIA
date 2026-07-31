@@ -28,6 +28,20 @@ from this chantier): safety_screen/security_score (a honeypot/rug can happen
 in minutes -- security scans must always be fresh) and the 8h anti-front-
 running delay on momentum/VC alerts (a wholly separate mechanism, see #39).
 
+31/07 -- ONE deliberate, narrow exception to the "security scans stay fresh"
+rule above: ``services/b20.py``'s role-holder verdict. Operator's explicit
+call, after the tradeoff was raised directly (B20 is the same security-scan
+family as the honeypot check it sits next to in both cribles) -- accepted
+because a B20 role-holder change is a real on-chain transaction (renounce/
+grant), not an instantaneous switch flip like a honeypot toggle, AND the
+scan itself is expensive (a real RPC cost per call, the reason this cache
+exists at all). Kept structurally distinct from every other row here: TTL is
+HOURS, not days (``b20.py``'s own constant, never reuses this module's
+day-scale TTLs), and an "opaque" (unresolved) verdict is NEVER stored --
+only "safe"/"risky"/"not_b20" (a real, confirmed answer) qualify, so a
+caller always gets a fresh retry on an unresolved scan rather than being
+stuck on "unknown" for hours.
+
 ``signal_type`` is a short fixed string per caller (e.g. "github_substance"),
 ``target_key`` is the natural identifier being looked up (a URL, an X
 handle) -- normalized (lowercased, trimmed) so two callers referring to the
