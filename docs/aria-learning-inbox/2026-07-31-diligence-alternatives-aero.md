@@ -476,7 +476,44 @@ fiabilité des sources disponibles.
 **Bilan des 10 candidats top-200 traités (Round 4 + 5)** : sur 10 candidats vérifiés au-delà
 d'AAVE/UNI, 2 disqualifiés pour de vrais red flags structurels (JUP — capture de gouvernance ;
 RUNE — incidents de sécurité répétés + absence de capture de valeur), et aucun ne dépasse
-objectivement AAVE/UNI sur l'ensemble des 6+1 critères. RAY et INJ ressortent comme les plus
-sérieux du lot restant, chacun avec un point de vigilance propre (gouvernance non vérifiée pour
-RAY, centralisation validateurs pour INJ) — sans invalider la conclusion déjà actée : le choix
-final reste entre AAVE et UNI, un vrai choix de profil value/growth plutôt qu'une case à cocher.
+objectivement AAVE/UNI sur l'ensemble des 6+1 critères. RAY et INJ ressortaient comme les plus
+sérieux du lot restant — trou de gouvernance RAY comblé ci-dessous.
+
+## Complément — gouvernance et supply RAY vérifiées (31/07, demande opérateur explicite)
+
+**Supply : incohérence résolue, aucune anomalie réelle.** Le chiffre "269,3 milliards" relevé
+en Round 4 était une erreur de lecture d'une source antérieure — circulant réel confirmé :
+**269 103 895 RAY** (~269,1 millions) sur un supply max/total de **555 000 000 RAY** (~48,5%
+déjà en circulation), émission résiduelle ~1,9M RAY/an ([Tokenomist](https://tokenomist.ai/raydium)).
+Cohérent et sans signal d'alerte.
+
+**Gouvernance : PAS une DAO décentralisée — contrôle par multisig d'équipe, red flag confirmé.**
+Vérifié directement dans la doc officielle Raydium et par recoupement ([Raydium Docs — Access
+Controls](https://docs.raydium.io/raydium/protocol/security/access-controls) ;
+[Squads](https://squads.xyz/blog/solana-multisig-program-upgrades-management)) :
+- L'autorité de mise à niveau/admin du programme AMM est sous un **multisig Squads 3-sur-4** —
+  3 signataires suffisent pour changer le code du protocole.
+- La trésorerie est gérée par un **multisig séparé 3-sur-5**, portée plus étroite, **sans
+  timelock du tout**.
+- Sources contradictoires sur l'existence d'un vrai timelock côté programme : une source
+  récente cite 24h, mais la doc officielle plus ancienne indique explicitement l'**absence** de
+  mécanisme de timelock — Solana n'a pas de programme timelock natif, et Raydium ne "réplique"
+  ce comportement que via un vote de gouvernance, pas une contrainte on-chain automatique.
+- Tous les programmes Anchor partagent une **seule clé admin (Pubkey) codée en dur** pour le
+  contrôle d'accès au niveau instruction — pas de vote de détenteurs de token RAY sur les
+  changements de protocole, contrairement à AAVE/UNI/INJ qui ont tous une vraie DAO on-chain.
+
+**Verdict** : RAY **échoue clairement le critère #3** (gouvernance réellement décentralisée) —
+c'est un contrôle d'équipe via multisig (3/4 et 3/5 signataires), pas une gouvernance
+communautaire avec vote de détenteurs de token. Comparable en gravité à MKR/SKY côté
+concentration de pouvoir, sans même l'alibi d'un vote DAO formel que ce dernier a. **RAY est
+donc déclassé** malgré son mécanisme de rachat/burn autrement solide — la capture de valeur ne
+sert à rien si 3 personnes peuvent changer les règles du jour au lendemain.
+
+**Conclusion mise à jour** : **aucun des 10 candidats top-200 vérifiés ne détrône INJ** sur ce
+sous-groupe (HYPE explicitement écarté par l'opérateur pour risque de centralisation/incident ;
+RAY déclassé pour gouvernance multisig d'équipe ; RUNE disqualifié pour hacks répétés ; PYTH/OP/
+STX/GNO/GRT trop jeunes, trop modestes, ou mécanisme insuffisant). Le choix final reste entre
+AAVE et UNI (les deux finalistes historiques de cette diligence) et, en 3e position pour un
+profil plus risqué mais éprouvé dans le temps, INJ — un vrai choix de profil, pas une case à
+cocher.
