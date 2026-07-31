@@ -414,3 +414,41 @@ distribution Robinhood confirmé, mais paris d'extension — Unichain, hooks mon
 moins matérialisés) reste un vrai choix de profil — value vs growth — sans réponse objective
 unique, à trancher selon l'horizon et la tolérance à parier sur une capture de valeur pas
 encore pleinement prouvée.
+
+## Round 4 — élargissement au top 200 toutes chaînes (31/07, recherche directe WebSearch)
+
+Suite à l'ouverture explicite de l'opérateur à détenir le capital sur n'importe quelle
+blockchain ("sa me derange pas de hold notre capital sur solana ou une autre blockchain sa
+reste du transfert rare"), un premier workflow de criblage sur le top 200 (par capitalisation)
+a été lancé puis interrompu par l'opérateur ("stop tous") en cours de Search — seuls les
+résultats déjà en cache ont été récupérés. Sur demande explicite de l'opérateur ("fais toi
+meme tes recherhce"), les 8 candidats les plus prometteurs issus du criblage partiel ont
+ensuite été vérifiés par recherche directe (WebSearch, pas un nouveau workflow multi-agents) :
+HYPE, PYTH, OP, STX, JUP, GNO, INJ (+ AVAX/SOL/TAO déjà couverts par ailleurs). RAY
+(Raydium/Solana), RUNE (THORChain) et GRT (The Graph) restaient en cours de Search au moment
+de l'arrêt — pas encore vérifiés directement, à traiter dans un futur round si besoin.
+
+| Candidat | Capture de valeur vérifiée | Point fort | Red flag confirmé |
+|---|---|---|---|
+| **HYPE** (Hyperliquid) | La plus forte de toute la diligence — Assistance Fund : 97% des frais → rachat continu, ~1,3Md$/an de revenu, intensité de rachat ~7%/an du market cap (4-5x Ethereum/BNB) | Financé à 100% par le vrai revenu, pas par émission/trésorerie | **Sérieux** : incident de manipulation de prix (nov. 2025, ~4,9M$, retraits/pont temporairement suspendus) + validateurs de la Fondation encore à ~49,3% du stake + critiques publiques sévères de figures reconnues ("arrêtons de prétendre qu'Hyperliquid est décentralisé" — Arthur Hayes ; comparaison à "FTX 2.0" — CEO de Bitget) |
+| **INJ** (Injective) | Mécanisme le plus ANCIEN et éprouvé du lot — burn auction actif depuis décembre 2021 (renommé "Community BuyBack" oct. 2025), cadre déflationniste renforcé (IIP-617) voté à 99,96% | Track record long, pas une mode 2026 ; large consensus de gouvernance | Modéré : pouvoir de vote concentré chez des validateurs institutionnels (risque de centralisation typique Cosmos-SDK) |
+| **PYTH** (Pyth Network) | Réel mais récent — Pyth Reserve lancé déc. 2025, 33% du revenu mensuel → rachat marché ouvert ; Pyth Pro (produit institutionnel) déjà 1M$ ARR à son 1er mois, projeté 50M$ ARR sous 12-18 mois | Partenariat Nasdaq confirmé — vrai canal de distribution institutionnel | Chiffres encore modestes en absolu ; gros "cliff unlock" le 19/05/2026 (fin de vesting 30 mois) — risque de dilution/pression vendeuse |
+| **OP** (Optimism) | Réel mais modeste — gouvernance a approuvé (84,4%) un rachat à 50% du revenu net du séquenceur Superchain, pilote 12 mois depuis février 2026, ~8M$/an disponibles | Écosystème Superchain (inclut Base) | Chiffre nettement plus petit que HYPE/AAVE/UNI ; tokens rachetés vont d'abord en trésorerie, **pas automatiquement brûlés** — rien de garanti au-delà du pilote |
+| **STX** (Stacks) | Mécanisme unique et réel — rendement en vrai BTC (Proof-of-Transfer) depuis janvier 2021, 4200+ BTC distribués aux stakers | Lien direct et vérifié à Bitcoin, historique long | La nouvelle phase de rendement BTC (PoX-5) est encore **centralisée/permissionnée** (capacité plafonnée ~3000 BTC, contrôlée par "Stacks Endowment", partenaires institutionnels "curated" — pas encore décentralisée, PoX-6 futur doit lever ce contrôle mais n'est pas encore fait) |
+| **GNO** (Gnosis) | Historique le plus long du lot (2017) — vrai débat démocratique fonctionnel : GIP-150 (redemption pro-rata) rejetée, GIP-151 (fenêtre de rachat limitée) approuvée en juin 2026, distribution réelle de trésorerie actée | Gouvernance qui fonctionne réellement (contraste net avec JUP ci-dessous) | Mécanisme one-off (liquidation partielle ponctuelle sur un débat précis "retour sur la levée 2017"), pas un modèle récurrent comme un buyback continu |
+| **JUP** (Jupiter) | Mécanisme de rachat/burn réel sur le papier | — | **Disqualifiant** : gouvernance DAO **entièrement suspendue** depuis fin 2025 pour "rupture de confiance" documentée par plusieurs sources (The Block, DL News, CoinMarketCap) — équipe/fondateurs ~20% du supply total, 220M JUP votés en bonus pour le co-fondateur Ming Ng, package salarial de 7M$ pour 4 nouveaux employés, une seule wallet d'équipe a représenté 4,5% des votes sur une proposition. Échoue clairement le critère #3 (gouvernance décentralisée) — plus sévère que MKR/SKY ou CRV |
+
+**Verdict Round 4** : **JUP écarté** — capture de gouvernance par l'équipe, cas le plus flagrant
+de toute la diligence à ce jour. **HYPE a le mécanisme de capture de valeur objectivement le
+plus puissant** du panel entier (dépasse même AAVE/UNI en intensité de rachat), mais le risque
+de gouvernance/centralisation est réel, documenté, et porté par des voix reconnues du secteur —
+à ne jamais minimiser. **INJ ressort comme le compromis le plus solide sur la durée** parmi ces
+nouveaux candidats : mécanisme éprouvé depuis 2021 (pas une mode récente comme HYPE/PYTH/OP),
+consensus de gouvernance très large (99,96%), sans red flag aussi sérieux que HYPE ou JUP —
+mais reste, comme AAVE/UNI, une question de profil (track record long et régulier vs mécanisme
+plus jeune mais plus intense) plutôt qu'une réponse tranchée à la place de l'opérateur. Aucun
+de ces candidats ne "bat" objectivement AAVE/UNI sur l'ensemble des 6+1 critères — chacun a un
+red flag propre (gouvernance JUP, centralisation HYPE/STX-phase-actuelle/validateurs INJ,
+mécanisme one-off GNO, chiffres encore modestes OP/PYTH) qui n'a pas d'équivalent aussi grave
+chez AAVE ou UNI. **Rappel permanent** : ceci reste une lecture technique/structurelle de faits
+vérifiés, jamais une prédiction de prix ni un conseil en investissement personnalisé.
