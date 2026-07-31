@@ -90,12 +90,23 @@ class _FakeContract:
 
 
 class _FakeEth:
-    def __init__(self, *, is_b20=True, block_number=1000, windows=None, raise_on_logs=None, break_contract=False):
+    def __init__(
+        self, *, is_b20=True, block_number=1000, windows=None, raise_on_logs=None,
+        break_contract=False, creation_block=0, break_get_code=False, no_code_at_latest=False,
+    ):
         self._is_b20 = is_b20
         self.block_number = block_number
         self._windows = windows or {}
         self._raise_on_logs = raise_on_logs
         self._break_contract = break_contract
+        # 31/07 -- creation-block binary search support. Default 0 (code
+        # present since genesis) preserves every pre-existing test's old
+        # "scan reaches block 0" behavior with zero changes needed there --
+        # only tests that specifically exercise the NEW creation-block
+        # bounding override this.
+        self._creation_block = creation_block
+        self._break_get_code = break_get_code
+        self._no_code_at_latest = no_code_at_latest
 
     def contract(self, address, abi):
         if self._break_contract:
@@ -105,6 +116,13 @@ class _FakeEth:
             _FakeFunctions(is_b20=self._is_b20),
             _FakeEvents(self._windows, raise_on=self._raise_on_logs),
         )
+
+    def get_code(self, address, block_identifier):
+        if self._break_get_code:
+            raise ConnectionError("RPC down")
+        if self._no_code_at_latest:
+            return b""
+        return b"\x01" if block_identifier >= self._creation_block else b""
 
 
 class _FakeW3:
@@ -216,23 +234,90 @@ async def test_scan_role_holders_two_holders_independent():
 
 
 @pytest.mark.asyncio
-async def test_scan_role_holders_incomplete_when_horizon_exceeded():
-    """A grant sitting exactly at the scan horizon, with non-empty windows
-    all the way, never lets the early-stop heuristic or the block-0 exit
-    fire within MAX_LOG_SCAN_WINDOWS -- degrades to complete=False."""
-    to_block = b20.MAX_LOG_SCAN_WINDOWS * b20.LOG_SCAN_WINDOW_BLOCKS + 10_000_000
-    windows = {}
-    cursor = to_block
-    for _ in range(b20.MAX_LOG_SCAN_WINDOWS):
-        from_block = max(0, cursor - b20.LOG_SCAN_WINDOW_BLOCKS + 1)
-        # a lone grant in every window keeps consecutive_empty at 0, so the
-        # early-stop heuristic never triggers and block 0 is never reached.
-        windows[(from_block, cursor)] = [_log("RoleGranted", "MINT_ROLE", GRANTEE, from_block, 0)]
-        cursor = from_block - 1
-    w3 = _FakeW3(block_number=to_block, windows=windows)
+async def test_scan_role_holders_incomplete_when_backstop_exhausted(monkeypatch):
+    """MAX_LOG_SCAN_WINDOWS is now only a safety BACKSTOP (31/07) -- exercised
+    here with a small monkeypatched cap so the test stays fast. creation_block=0
+    (genesis) is never reached within that cap, and empty windows keep
+    `holders` empty so the early-stop heuristic never fires either (it
+    requires at least one grant already seen) -- degrades to complete=False."""
+    monkeypatch.setattr(b20, "MAX_LOG_SCAN_WINDOWS", 3)
+    to_block = 3 * b20.LOG_SCAN_WINDOW_BLOCKS + 10_000
+    w3 = _FakeW3(block_number=to_block, windows={})
     result = await b20.scan_role_holders(TOKEN, "MINT_ROLE", w3=w3)
     assert result is not None
     assert result.complete is False
+
+
+@pytest.mark.asyncio
+async def test_scan_role_holders_bounded_by_real_creation_block():
+    """The scan now stops exactly at the token's real creation block (found
+    via binary search on eth_getCode), never walking further back than that
+    -- confirmed here with a creation_block well above genesis, reached
+    within a single window, with no grant anywhere (a real fresh B20 with
+    every role still unset since creation)."""
+    to_block = 1_000_000
+    creation = to_block - 100  # comfortably inside one LOG_SCAN_WINDOW_BLOCKS window
+    w3 = _FakeW3(block_number=to_block, windows={}, creation_block=creation)
+    result = await b20.scan_role_holders(TOKEN, "MINT_ROLE", w3=w3)
+    assert result is not None
+    assert result.complete is True
+    assert result.holders == set()
+
+
+@pytest.mark.asyncio
+async def test_scan_role_holders_reuses_passed_creation_block_without_binary_search():
+    """When the caller already resolved creation_block (evaluate_b20_safety's
+    doctrine -- resolve once, reuse for all 3 roles), get_code must never be
+    called again here."""
+    to_block = 1_000_000
+    w3 = _FakeW3(block_number=to_block, windows={}, break_get_code=True)
+    # break_get_code=True would raise if get_code were called -- passing
+    # creation_block explicitly must skip that path entirely.
+    result = await b20.scan_role_holders(TOKEN, "MINT_ROLE", w3=w3, creation_block=to_block - 100)
+    assert result is not None
+    assert result.complete is True
+
+
+@pytest.mark.asyncio
+async def test_scan_role_holders_incomplete_when_creation_block_unresolved():
+    """get_code failing means the creation block can't be bounded -- fail
+    closed (incomplete), never guess/fall back to genesis."""
+    w3 = _FakeW3(block_number=1000, windows={}, break_get_code=True)
+    result = await b20.scan_role_holders(TOKEN, "MINT_ROLE", w3=w3)
+    assert result is not None
+    assert result.complete is False
+
+
+# ── _find_creation_block (31/07, binary search via eth_getCode) ────────────
+
+@pytest.mark.asyncio
+async def test_find_creation_block_binary_search_finds_exact_boundary():
+    w3 = _FakeW3(creation_block=500)
+    result = await b20._find_creation_block(w3, TOKEN, 1000)
+    assert result == 500
+
+
+@pytest.mark.asyncio
+async def test_find_creation_block_genesis_short_circuits():
+    w3 = _FakeW3(creation_block=0)
+    result = await b20._find_creation_block(w3, TOKEN, 1000)
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_find_creation_block_none_when_no_code_at_latest():
+    """No code even at the chain tip -- not really deployed at this address,
+    never guessed as block 0."""
+    w3 = _FakeW3(no_code_at_latest=True)
+    result = await b20._find_creation_block(w3, TOKEN, 1000)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_creation_block_none_on_rpc_failure():
+    w3 = _FakeW3(break_get_code=True)
+    result = await b20._find_creation_block(w3, TOKEN, 1000)
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -293,18 +378,22 @@ async def test_evaluate_b20_safety_risky_when_mint_role_active():
 
 
 @pytest.mark.asyncio
-async def test_evaluate_b20_safety_opaque_when_scan_incomplete():
-    to_block = b20.MAX_LOG_SCAN_WINDOWS * b20.LOG_SCAN_WINDOW_BLOCKS + 10_000_000
-    windows = {}
-    cursor = to_block
-    for _ in range(b20.MAX_LOG_SCAN_WINDOWS):
-        from_block = max(0, cursor - b20.LOG_SCAN_WINDOW_BLOCKS + 1)
-        windows[(from_block, cursor)] = [_log("RoleGranted", "MINT_ROLE", GRANTEE, from_block, 0)]
-        cursor = from_block - 1
-    w3 = _FakeW3(is_b20=True, block_number=to_block, windows=windows)
+async def test_evaluate_b20_safety_opaque_when_scan_incomplete(monkeypatch):
+    """MAX_LOG_SCAN_WINDOWS backstop exhausted before reaching creation_block
+    (0, genesis, kept unreachable within the small monkeypatched cap)."""
+    monkeypatch.setattr(b20, "MAX_LOG_SCAN_WINDOWS", 3)
+    to_block = 3 * b20.LOG_SCAN_WINDOW_BLOCKS + 10_000
+    w3 = _FakeW3(is_b20=True, block_number=to_block, windows={})
     verdict = await b20.evaluate_b20_safety(TOKEN, w3=w3)
     assert verdict.verdict == "opaque"
-    assert "MINT_ROLE" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_evaluate_b20_safety_opaque_when_creation_block_unresolved():
+    w3 = _FakeW3(is_b20=True, break_get_code=True)
+    verdict = await b20.evaluate_b20_safety(TOKEN, w3=w3)
+    assert verdict.verdict == "opaque"
+    assert "creation block" in verdict.reason
 
 
 def test_rpc_url_default(monkeypatch):

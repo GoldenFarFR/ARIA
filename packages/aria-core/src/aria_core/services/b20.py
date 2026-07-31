@@ -38,14 +38,21 @@ Two capabilities, both real network calls, both best-effort (degrade to
 Known, accepted limitation: a public RPC node's ``eth_getLogs`` enforces a
 narrow block-range window (confirmed empirically well under the "10,000"
 figure the node itself advertises in its own error message). Scanning is
-therefore paginated in small windows, capped at ``MAX_LOG_SCAN_WINDOWS`` --
-if the token's creation block lies beyond that horizon, the scan returns
-``complete=False`` and the caller must treat the token as opaque (same
-fail-closed doctrine already applied to an unverified contract in the VC
-crible), never assume "no grants found" means "none exist". In practice a
-momentum-pipeline candidate is freshly discovered (hours/days old), so this
-horizon is rarely the real constraint -- but it is a real, documented one for
-an older B20."""
+therefore paginated in small windows, walking backward from the chain tip
+down to the token's own CREATION BLOCK -- found via binary search on
+``eth_getCode`` (``_find_creation_block``), since neither Blockscout nor any
+other indexer can give a creation block for a precompile-instantiated token
+(confirmed live: ``creation_transaction_hash`` is ``null`` even for a real
+B20 that Blockscout otherwise recognizes). A first version of this module
+bounded the scan at a FIXED window count instead (~5.5 days of history) --
+confirmed live to silently return "opaque" for a real 23-day-old B20 (block
+time on Base is 2.0s, not what that first calibration assumed), which would
+have made this check useless on anything but a same-week-old token. The
+creation-block search removes that ceiling entirely -- the scan always
+reaches exactly as far back as it needs to, regardless of the token's real
+age. ``MAX_LOG_SCAN_WINDOWS`` remains only as a generous safety backstop
+(a pathological creation-block resolution failure), never the primary
+limiter now."""
 from __future__ import annotations
 
 import asyncio
@@ -121,12 +128,16 @@ _TOKEN_ABI = (
 # that observed ceiling, not the advertised one (same "measure, don't trust
 # the doc" doctrine as docs/api-rate-limit-calibration.md).
 LOG_SCAN_WINDOW_BLOCKS = 800
-# Caps total RPC calls per role scan (2 events x this many windows). At
-# ~2s/block on Base, 300 windows x 800 blocks = 240,000 blocks =~ 5.5 days --
-# comfortably covers a freshly-discovered momentum candidate (hours/days
-# old); an older B20 whose creation lies beyond this horizon degrades to
-# "incomplete", never a false "no holder found".
-MAX_LOG_SCAN_WINDOWS = 300
+# Safety BACKSTOP only (31/07, real bug found live: this used to be the
+# PRIMARY limiter at 300 -- 240,000 blocks =~ 5.5 days on Base's real 2.0s
+# block time -- and silently forced "opaque" on a real 23-day-old B20).
+# Since the scan now walks exactly down to the token's real creation block
+# (found via `_find_creation_block`, never guessed), this cap should never
+# realistically be hit for a genuine B20 -- it only guards against a
+# pathological creation-block resolution bug. ~10,000 windows =~ 8,000,000
+# blocks =~ 185 days on Base, comfortably beyond B20's entire lifetime as a
+# standard so far (activated 2026-07-08).
+MAX_LOG_SCAN_WINDOWS = 10_000
 
 
 def _rpc_url() -> str:
@@ -139,6 +150,46 @@ def _client(*, w3=None):
     from web3 import Web3
 
     return Web3(Web3.HTTPProvider(_rpc_url(), request_kwargs={"timeout": 10}))
+
+
+async def _find_creation_block(client, checksum_address: str, latest: int) -> int | None:
+    """Binary search via ``eth_getCode`` for the earliest block at which the
+    B20 precompile already has code. Blockscout has no creation-block index
+    for a precompile-instantiated token (confirmed live: creation_transaction_hash
+    is null even for a real B20 it otherwise recognizes) -- this is the only
+    reliable way to bound the role-history scan to the token's REAL age.
+    ``~log2(latest)`` sequential calls (one token, ~26 calls on Base's real
+    chain height) -- run ONCE per token by the caller (``evaluate_b20_safety``),
+    never per-role. Fails closed (``None``) on any RPC error -- the caller
+    then treats the scan as opaque, never guesses a block."""
+    try:
+        code_at_latest = await asyncio.to_thread(client.eth.get_code, checksum_address, latest)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("b20: get_code(latest) failed for %s (%s)", checksum_address, exc)
+        return None
+    if not code_at_latest:
+        return None  # no code even at the chain tip -- not really deployed here
+    try:
+        code_at_zero = await asyncio.to_thread(client.eth.get_code, checksum_address, 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("b20: get_code(0) failed for %s (%s)", checksum_address, exc)
+        return None
+    if code_at_zero:
+        return 0  # existed since genesis (not expected for B20, but correct)
+
+    lo, hi = 0, latest  # invariant: code absent at lo, present at hi
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        try:
+            code = await asyncio.to_thread(client.eth.get_code, checksum_address, mid)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("b20: get_code(%d) failed for %s (%s)", mid, checksum_address, exc)
+            return None
+        if code:
+            hi = mid
+        else:
+            lo = mid
+    return hi
 
 
 async def is_b20(token_address: str, *, w3=None) -> bool | None:
@@ -200,20 +251,28 @@ _PARALLEL_BATCH_SIZE = 20
 
 
 async def scan_role_holders(
-    token_address: str, role_name: str, *, w3=None
+    token_address: str, role_name: str, *, w3=None, creation_block: int | None = None,
 ) -> RoleHolderScan | None:
     """Reconstructs the CURRENT holder set of one role by replaying its
     ``RoleGranted``/``RoleRevoked`` history, paginated in
     ``LOG_SCAN_WINDOW_BLOCKS``-sized windows walking backward from the chain
-    tip, up to ``MAX_LOG_SCAN_WINDOWS`` -- fetched ``_PARALLEL_BATCH_SIZE``
-    windows at a time (see the module-level comment above for why this isn't
-    sequential). Stops early once a window returns zero events on BOTH event
-    types for ``_EARLY_STOP_EMPTY_WINDOWS`` consecutive windows AND at least
-    one grant has already been seen -- a heuristic (not a proof the scan
-    reached genesis), but the earliest real grant almost always sits right
-    around token creation, so a long empty stretch beyond that is a strong
-    signal the wallet's history is fully covered. Returns ``None`` on a hard
-    failure (RPC unreachable for the role-constant read itself)."""
+    tip down to the token's own creation block -- fetched ``_PARALLEL_BATCH_
+    SIZE`` windows at a time (see the module-level comment above for why this
+    isn't sequential). Stops early once a window returns zero events on BOTH
+    event types for ``_EARLY_STOP_EMPTY_WINDOWS`` consecutive windows AND at
+    least one grant has already been seen -- a heuristic (not a proof the
+    scan reached creation), but the earliest real grant almost always sits
+    right around token creation, so a long empty stretch beyond that is a
+    strong signal the wallet's history is fully covered. Returns ``None`` on
+    a hard failure (RPC unreachable for the role-constant read itself).
+
+    ``creation_block`` (31/07): pass the token's real creation block (found
+    via ``_find_creation_block``) to bound the scan precisely instead of
+    the fixed ``MAX_LOG_SCAN_WINDOWS`` window count that used to be the
+    primary limiter (real bug: too short for anything but a same-week-old
+    B20, see module docstring). ``evaluate_b20_safety`` resolves this ONCE
+    per token and passes it to all 3 role scans -- if omitted (e.g. direct
+    callers/tests), it's resolved here instead."""
     if not token_address or role_name not in SENSITIVE_ROLES:
         return None
     try:
@@ -231,16 +290,25 @@ async def scan_role_holders(
         logger.info("b20: block_number read failed for %s (%s)", token_address, exc)
         return None
 
+    if creation_block is None:
+        creation_block = await _find_creation_block(client, checksum, latest)
+        if creation_block is None:
+            logger.info(
+                "b20: creation block unresolved for %s -- role scan treated as incomplete", token_address,
+            )
+            return RoleHolderScan(complete=False, holders=set())
+
     # Pre-compute every window's (from_block, to_block) bounds up front,
-    # newest-to-oldest, capped at MAX_LOG_SCAN_WINDOWS -- batching just
-    # slices this fixed list, the early-stop logic below still walks it in
-    # this exact chronological order.
+    # newest-to-oldest, down to creation_block, capped at MAX_LOG_SCAN_WINDOWS
+    # (safety backstop, see its own comment) -- batching just slices this
+    # fixed list, the early-stop logic below still walks it in this exact
+    # chronological order.
     windows: list[tuple[int, int]] = []
     to_block = latest
     for _ in range(MAX_LOG_SCAN_WINDOWS):
-        from_block = max(0, to_block - LOG_SCAN_WINDOW_BLOCKS + 1)
+        from_block = max(creation_block, to_block - LOG_SCAN_WINDOW_BLOCKS + 1)
         windows.append((from_block, to_block))
-        if from_block == 0:
+        if from_block <= creation_block:
             break
         to_block = from_block - 1
 
@@ -285,7 +353,7 @@ async def scan_role_holders(
             else:
                 consecutive_empty = 0
 
-            if from_block == 0:
+            if from_block <= creation_block:
                 complete = True
                 break
             if holders and consecutive_empty >= _EARLY_STOP_EMPTY_WINDOWS:
@@ -318,16 +386,41 @@ async def evaluate_b20_safety(token_address: str, *, w3=None) -> B20SafetyVerdic
     """The single entry point a caller (momentum/VC gate) needs. Never
     raises -- every failure degrades to a verdict the caller can act on
     directly (fail-closed: "opaque" on any unresolved scan, never a silent
-    "safe" out of missing data)."""
+    "safe" out of missing data).
+
+    Resolves the token's creation block ONCE here (``_find_creation_block``)
+    and reuses it for all 3 role scans -- avoids 3 redundant binary searches
+    (creation block is a property of the token, not the role). The 3 scans
+    are then independent given that shared bound, so they run concurrently
+    (``asyncio.gather``) rather than one after another."""
     b20 = await is_b20(token_address, w3=w3)
     if b20 is None:
         return B20SafetyVerdict(verdict="opaque", reason="isB20() lookup failed -- factory unreachable")
     if not b20:
         return B20SafetyVerdict(verdict="not_b20")
 
+    client = _client(w3=w3)
+    try:
+        checksum = client.to_checksum_address(token_address)
+        latest = client.eth.block_number
+    except Exception as exc:  # noqa: BLE001
+        logger.info("b20: block height unreachable for %s (%s)", token_address, exc)
+        return B20SafetyVerdict(verdict="opaque", reason="block height unreachable")
+    creation_block = await _find_creation_block(client, checksum, latest)
+    if creation_block is None:
+        return B20SafetyVerdict(
+            verdict="opaque", reason="creation block unresolved -- can't bound the role history scan",
+        )
+
+    scans = await asyncio.gather(
+        *[
+            scan_role_holders(token_address, role_name, w3=w3, creation_block=creation_block)
+            for role_name in SENSITIVE_ROLES
+        ]
+    )
+
     role_holders: dict[str, set[str]] = {}
-    for role_name in SENSITIVE_ROLES:
-        scan = await scan_role_holders(token_address, role_name, w3=w3)
+    for role_name, scan in zip(SENSITIVE_ROLES, scans):
         if scan is None:
             return B20SafetyVerdict(
                 verdict="opaque", reason=f"{role_name} constant unreachable -- role holders unknown",
@@ -335,7 +428,7 @@ async def evaluate_b20_safety(token_address: str, *, w3=None) -> B20SafetyVerdic
         if not scan.complete:
             return B20SafetyVerdict(
                 verdict="opaque",
-                reason=f"{role_name} history scan incomplete (creation block beyond scan horizon)",
+                reason=f"{role_name} history scan incomplete",
                 role_holders={role_name: scan.holders},
             )
         role_holders[role_name] = scan.holders
