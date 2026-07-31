@@ -97,3 +97,55 @@ async def test_unique_recurring_payers_ignores_failed_payments():
     await ledger.record_sale(product="wallet_score", payer_address="0xAAA", amount_usd=0.10, status="failed")
     await ledger.record_sale(product="wallet_score", payer_address="0xAAA", amount_usd=0.10, status="failed")
     assert await ledger.unique_recurring_payers() == 0
+
+
+# ── recent_sale_count (31/07, B20 x402 anti-abuse building block) ─────────
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_empty_payer_always_zero():
+    assert await ledger.recent_sale_count("", "b20_safety", window_seconds=3600) == 0
+    assert await ledger.recent_sale_count("   ", "b20_safety", window_seconds=3600) == 0
+
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_counts_within_window():
+    await ledger.record_sale(product="b20_safety", payer_address="0xAAA", amount_usd=0.15, status="ok")
+    await ledger.record_sale(product="b20_safety", payer_address="0xAAA", amount_usd=0.15, status="ok")
+    assert await ledger.recent_sale_count("0xAAA", "b20_safety", window_seconds=3600) == 2
+
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_case_insensitive_payer():
+    await ledger.record_sale(product="b20_safety", payer_address="0xAAA", amount_usd=0.15, status="ok")
+    assert await ledger.recent_sale_count("0xaaa", "b20_safety", window_seconds=3600) == 1
+
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_ignores_other_products():
+    await ledger.record_sale(product="wallet_score", payer_address="0xAAA", amount_usd=0.10, status="ok")
+    assert await ledger.recent_sale_count("0xAAA", "b20_safety", window_seconds=3600) == 0
+
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_ignores_failed_sales():
+    await ledger.record_sale(product="b20_safety", payer_address="0xAAA", amount_usd=0.15, status="failed")
+    assert await ledger.recent_sale_count("0xAAA", "b20_safety", window_seconds=3600) == 0
+
+
+@pytest.mark.asyncio
+async def test_recent_sale_count_ignores_sales_outside_window():
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    async with aiosqlite.connect(ledger.DB_PATH) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS x402_revenue_log ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, product TEXT NOT NULL, "
+            "payer_address TEXT NOT NULL DEFAULT '', wallet TEXT NOT NULL DEFAULT '', "
+            "amount_usd REAL NOT NULL DEFAULT 0, status TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "INSERT INTO x402_revenue_log (product, payer_address, wallet, amount_usd, status, created_at) "
+            "VALUES ('b20_safety', '0xAAA', 'aria-wallet-X402-EVM', 0.15, 'ok', ?)",
+            (old,),
+        )
+        await db.commit()
+    assert await ledger.recent_sale_count("0xAAA", "b20_safety", window_seconds=3600) == 0

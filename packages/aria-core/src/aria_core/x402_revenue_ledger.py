@@ -113,6 +113,32 @@ async def unique_recurring_payers(*, window_days: int = 30) -> int:
     return len(rows)
 
 
+async def recent_sale_count(payer_address: str, product: str, *, window_seconds: float) -> int:
+    """31/07 -- anti-abuse building block (backlog #228, B20 x402 route):
+    counts this payer's SETTLED purchases of ``product`` within the last
+    ``window_seconds`` -- the ledger already records every sale with
+    ``payer_address``, so this is a read on data already collected, never a
+    new table. Empty/whitespace ``payer_address`` always returns 0 (never
+    rate-limits an unidentified/no-payment request -- that's the payment
+    gate's job, not this one's)."""
+    payer = (payer_address or "").strip().lower()
+    if not payer:
+        return 0
+    await _ensure_table()
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT COUNT(*) FROM x402_revenue_log "
+                "WHERE status = 'ok' AND product = ? AND LOWER(payer_address) = ? AND created_at >= ?",
+                (product, payer, cutoff),
+            )
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
 async def list_sales(limit: int = 200) -> list[dict]:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:

@@ -222,3 +222,174 @@ async def test_wallet_score_404_never_records_a_sale(monkeypatch, tmp_path):
         await x402_signals.x402_wallet_score(address="0xneverscored", request=request)
 
     assert await ledger.list_sales() == []
+
+
+# ── B20 route (31/07) -- anti-abuse guardrails baked in from the start ──────
+
+_VALID_ADDR = "0x" + "a" * 40
+
+
+@pytest.mark.asyncio
+async def test_b20_exists_rejects_malformed_address():
+    from fastapi import HTTPException
+
+    from app.api.routes import x402_signals
+
+    with pytest.raises(HTTPException) as exc_info:
+        await x402_signals.x402_b20_score_exists(contract="not-an-address")
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_b20_exists_reflects_real_verdict(monkeypatch):
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def fake_is_b20(address):
+        return True
+
+    monkeypatch.setattr(b20, "is_b20", fake_is_b20)
+    result = await x402_signals.x402_b20_score_exists(contract=_VALID_ADDR)
+    assert result == {"contract": _VALID_ADDR.lower(), "is_b20": True}
+
+
+@pytest.mark.asyncio
+async def test_b20_exists_degrades_to_none_on_failure(monkeypatch):
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def failing_is_b20(address):
+        raise RuntimeError("RPC down")
+
+    monkeypatch.setattr(b20, "is_b20", failing_is_b20)
+    result = await x402_signals.x402_b20_score_exists(contract=_VALID_ADDR)
+    assert result == {"contract": _VALID_ADDR.lower(), "is_b20": None}
+
+
+@pytest.mark.asyncio
+async def test_b20_score_rejects_malformed_address_before_any_scan(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def fail_if_called(address):
+        raise AssertionError("must never scan a malformed address")
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fail_if_called)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await x402_signals.x402_b20_score(contract="garbage")
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_b20_score_returns_verdict_and_records_sale(monkeypatch, tmp_path):
+    from aria_core import x402_revenue_ledger as ledger
+    from aria_core.services import b20
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(
+            verdict="risky", reason="active holder(s) on: MINT_ROLE",
+            role_holders={"MINT_ROLE": {"0xHolder"}},
+        )
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
+
+    result = await x402_signals.x402_b20_score(contract=_VALID_ADDR, request=request)
+
+    assert result["contract"] == _VALID_ADDR.lower()
+    assert result["b20_verdict"] == "risky"
+    assert result["role_holders"] == {"MINT_ROLE": ["0xHolder"]}
+    sales = await ledger.list_sales()
+    assert len(sales) == 1
+    assert sales[0]["product"] == "b20_safety"
+    assert sales[0]["payer_address"] == "0xPayer"
+
+
+@pytest.mark.asyncio
+async def test_b20_score_scan_failure_never_leaks_raw_error(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def failing_verdict(address):
+        raise RuntimeError("internal RPC secret detail that must never reach a client")
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", failing_verdict)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await x402_signals.x402_b20_score(contract=_VALID_ADDR)
+    assert exc_info.value.status_code == 502
+    assert "internal RPC secret detail" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_b20_score_rate_limit_blocks_before_scanning(monkeypatch):
+    from fastapi import HTTPException
+
+    from aria_core import x402_revenue_ledger as ledger_module
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def fail_if_called(address):
+        raise AssertionError("must never scan once the payer is over quota")
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fail_if_called)
+
+    async def over_quota(payer, product, *, window_seconds):
+        return x402_signals._B20_RATE_LIMIT_MAX_REQUESTS
+
+    monkeypatch.setattr(ledger_module, "recent_sale_count", over_quota)
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await x402_signals.x402_b20_score(contract=_VALID_ADDR, request=request)
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_b20_score_rate_limit_check_failure_fails_open(monkeypatch, tmp_path):
+    """Never blocks a legitimate paying request on a rate-limit CHECK failure
+    (distinct from actually being over quota) -- same fail-open doctrine as
+    every other best-effort guardrail in this pipeline."""
+    from aria_core import x402_revenue_ledger as ledger_module, x402_revenue_ledger as ledger
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    async def broken_count(payer, product, *, window_seconds):
+        raise ConnectionError("db down")
+
+    monkeypatch.setattr(ledger_module, "recent_sale_count", broken_count)
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(verdict="safe", reason="every sensitive role confirmed renounced")
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
+
+    result = await x402_signals.x402_b20_score(contract=_VALID_ADDR, request=request)
+    assert result["b20_verdict"] == "safe"
+
+
+@pytest.mark.asyncio
+async def test_b20_score_no_payer_skips_rate_limit_check(monkeypatch):
+    """Free-mode/gate-off request (no payment payload) -- never rate-limited,
+    that's the payment gate's own job, not this one's."""
+    from app.api.routes import x402_signals
+    from aria_core.services import b20
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(verdict="not_b20")
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+
+    result = await x402_signals.x402_b20_score(contract=_VALID_ADDR, request=None)
+    assert result["b20_verdict"] == "not_b20"

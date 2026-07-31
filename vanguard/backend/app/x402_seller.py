@@ -73,13 +73,15 @@ def mount_x402_seller(app) -> None:
     once and this function assumes it's safe to mount, so the gate check and
     the mount stay at a single call site rather than duplicated here.
 
-    Catalog of paid routes deliberately still small at v0 -- only ARIA's own
-    composite wallet score (already cached in wallet_score_log, zero
-    third-party raw-data re-exposure). Extending this catalog to
-    GitHub/Website/Docs/X substance scores (now persisted, see backlog #40)
-    still waits on written ToS clearance from GoPlus/Blockscout/CabalSpy
-    (docs/conformite-dossier-avocat.md, HANDOFF pending) -- adding a route here
-    without that clearance is a compliance mistake, not just a technical one."""
+    Catalog of paid routes deliberately still small: ARIA's own composite
+    wallet score (already cached in wallet_score_log) and, since 31/07, her
+    B20 native-token role-holder safety verdict (services/b20.py) -- both
+    zero third-party raw-data re-exposure (ARIA's own computed judgment
+    only). Extending this catalog to GitHub/Website/Docs/X substance scores
+    (now persisted, see backlog #40) still waits on written ToS clearance
+    from GoPlus/Blockscout/CabalSpy (docs/conformite-dossier-avocat.md,
+    HANDOFF pending) -- adding a route here without that clearance is a
+    compliance mistake, not just a technical one."""
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
     from x402.http.middleware.fastapi import PaymentMiddlewareASGI
     from x402.http.types import RouteConfig
@@ -91,16 +93,15 @@ def mount_x402_seller(app) -> None:
     network = aria_x402_seller.resolve_network()
     server.register(network, ExactEvmServerScheme())
 
-    resource_config = aria_x402_seller.build_resource_config("wallet_score")
-    if resource_config is None:
-        # x402_seller_ready() already confirmed the gate is on right before this
-        # was called (single call site, main.py) -- a None here means the
-        # catalog/gate changed between that check and this mount, which should
-        # never happen at boot. Fail loud rather than silently mount nothing.
-        raise RuntimeError("x402 seller ready but wallet_score resource config unavailable")
-
-    routes = {
-        "GET /api/x402/walletscore": RouteConfig(
+    def _route_config(product: str, description: str) -> RouteConfig:
+        resource_config = aria_x402_seller.build_resource_config(product)
+        if resource_config is None:
+            # x402_seller_ready() already confirmed the gate is on right before this
+            # was called (single call site, main.py) -- a None here means the
+            # catalog/gate changed between that check and this mount, which should
+            # never happen at boot. Fail loud rather than silently mount nothing.
+            raise RuntimeError(f"x402 seller ready but {product} resource config unavailable")
+        return RouteConfig(
             accepts=[
                 PaymentOption(
                     scheme=resource_config.scheme,
@@ -112,7 +113,17 @@ def mount_x402_seller(app) -> None:
                 )
             ],
             mime_type="application/json",
-            description="ARIA's own composite wallet reputation score (Base wallets, cached)",
+            description=description,
+        )
+
+    routes = {
+        "GET /api/x402/walletscore": _route_config(
+            "wallet_score", "ARIA's own composite wallet reputation score (Base wallets, cached)",
+        ),
+        # 31/07 -- B20 native Base token safety verdict (services/b20.py).
+        "GET /api/x402/b20score": _route_config(
+            "b20_safety",
+            "ARIA's own B20 role-holder safety verdict (MINT/PAUSE/BURN_BLOCKED, cache-first)",
         ),
     }
     app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)

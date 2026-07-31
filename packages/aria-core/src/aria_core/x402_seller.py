@@ -51,6 +51,12 @@ PRICING_CATALOG: dict[str, str] = {
     # confirmed against actual per-call cost, revisit once real volume/COGS
     # data exists.
     "token_analysis_fresh": "$0.25",
+    # 31/07 -- B20 native Base token safety verdict (services/b20.py): who
+    # holds MINT_ROLE/PAUSE_ROLE/BURN_BLOCKED_ROLE, a check GoPlus can't do
+    # at all for this token standard (precompile, no bytecode). Cache-first
+    # (3h TTL) -- most requests are served from the cache, not a fresh scan,
+    # so priced below the full LLM-backed token_analysis tiers.
+    "b20_safety": "$0.15",
 }
 
 # CAIP-2 chain identifiers -- verified against the installed x402 2.16.0 SDK
