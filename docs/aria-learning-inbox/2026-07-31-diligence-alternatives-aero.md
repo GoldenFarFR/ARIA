@@ -679,3 +679,36 @@ n'est pas un cash-flow — le marché peut payer cher une option, ou énormémen
 résume honnêtement le vrai risque du choix déjà acté par l'opérateur : un pari sur l'exécution
 future (Unichain/hooks qui se matérialisent en revenu réel), pas une valeur déjà prouvée à ce
 prix. Cohérent avec la réserve déjà notée plus haut sur le repli des frais/revenu du 31/07.
+
+## Post-scriptum — validation croisée Grok + Gemini (31/07)
+
+Deux relectures externes supplémentaires reçues de l'opérateur, portant sur le Round 4/verdict
+final — troisième et quatrième LLM après ChatGPT, aucune n'a été guidée par notre propre
+raisonnement (relecture indépendante à partir de la fiche seule).
+
+**Grok** : confirme indépendamment tous les faits du Round 4 sans contradiction — HYPE
+(mécanisme le plus puissant du panel, mais fondation encore à ~49,3% du stake, critiques
+publiques sérieuses, incident de manipulation documenté, « pas encore vraiment décentralisé au
+sens du critère #3 »), INJ (« meilleur compromis non-EVM du Round 4 », mécanisme le plus ancien
+et éprouvé, gouvernance relativement saine pour un Cosmos-SDK). Correction factuelle utile sur
+AAVE : le vrai revenu DefiLlama récent se situe plutôt dans la zone 110-145M$/an (pas le chiffre
+« ~400M$ annualisé » parfois cité ailleurs) — cohérent avec le piège frais-bruts/revenu-net déjà
+documenté dans cette fiche (Round 2), confirme que la fourchette basse est la bonne mesure. UNI :
+confirme le multiple ~45-55x, « profil growth clairement plus spéculatif sur la durée de la
+capture » — cohérent avec notre propre lecture.
+
+**Gemini** : synthèse finale convergente — AAVE (le socle value, capture naturelle, gouvernance
+mature, GHO/Horizon = adoption réelle malgré Morpho), UNI (l'accélérateur growth, « le marché
+commence à peine à intégrer » le potentiel Robinhood/fee switch), INJ (seule alternative viable
+du round, mais « ne supplante pas AAVE ou UNI sur le critère de la décentralisation pure »).
+**Point notable** : Gemini exclut INJ sur la gouvernance seule (concentration validateurs
+Cosmos-SDK), sans mentionner le ratio de valorisation extrême (~134x) calculé indépendamment
+dans cette fiche — **deux raisons indépendantes disqualifient INJ**, pas une seule, ce qui
+renforce la robustesse de la conclusion plutôt que de la contredire. Gemini note aussi que la
+méthode « résiste aux shiny new things » (HYPE, PYTH) qui n'ont pas encore fait leurs preuves sur
+plusieurs cycles ou masquent des failles de gouvernance — cohérent avec les verdicts déjà rendus
+ici sur ces deux candidats.
+
+**Bilan des 3 relectures croisées (ChatGPT + Grok + Gemini)** : aucune contradiction de fond sur
+le verdict final — toutes confirment AAVE/UNI comme seuls finalistes et le choix opérateur pour
+UNI comme un vrai choix de profil de risque (value vs growth), pas une erreur de méthode.
