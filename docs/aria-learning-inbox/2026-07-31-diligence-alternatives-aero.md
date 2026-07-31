@@ -506,14 +506,59 @@ Controls](https://docs.raydium.io/raydium/protocol/security/access-controls) ;
 **Verdict** : RAY **échoue clairement le critère #3** (gouvernance réellement décentralisée) —
 c'est un contrôle d'équipe via multisig (3/4 et 3/5 signataires), pas une gouvernance
 communautaire avec vote de détenteurs de token. Comparable en gravité à MKR/SKY côté
-concentration de pouvoir, sans même l'alibi d'un vote DAO formel que ce dernier a. **RAY est
-donc déclassé** malgré son mécanisme de rachat/burn autrement solide — la capture de valeur ne
-sert à rien si 3 personnes peuvent changer les règles du jour au lendemain.
+concentration de pouvoir, sans même l'alibi d'un vote DAO formel que ce dernier a.
+
+**Correction méthodologique (31/07, captures CoinGecko/Token Terminal fournies par l'opérateur)
+— le chiffre de revenu du Round 4 était erroné.** Le "9,1M$/mois" utilisé en Round 4 pour
+estimer un revenu annualisé de >109M$/an était en réalité un chiffre de **frais bruts**, pas le
+revenu net réellement capturé — exactement le piège frais-bruts-vs-revenu-net déjà documenté
+sur AAVE plus haut dans cette fiche (section « Round 2 »).
+Données réelles (Token Terminal, 31/07) : **frais 24h = 100 312$** vs **revenu de projet 24h =
+12 574$** (ratio ~8:1, cohérent avec les 12% des frais qui vont réellement au rachat RAY).
+Revenu réel annualisé correct : 12 574$ × 365 ≈ **4,6M$/an** (pas 109M$/an). Ratio
+valorisation/revenu réel recalculé : market cap 163,3M$ ÷ 4,6M$/an ≈ **35,6x** — comparable à
+UNI (~43-52x), **pas un avantage de valorisation réel** contrairement à ce que suggérait le
+chiffre erroné.
+
+**Incohérence supplémentaire relevée (même captures)** : le widget "Tokenomique" (Tokenomist)
+affiche 144,3M RAY en circulation contre 269,3M sur l'onglet "Présentation" de CoinGecko — deux
+chiffres différents pour le même token sur la même page, probablement deux périmètres de
+mesure distincts (offre totale déjà en circulation vs tranches débloquées selon le calendrier
+de vesting Team/Community/Seed) jamais clarifiés par la source. Signal de qualité de données
+plus faible que sur AAVE/UNI/INJ.
+
+**RAY est donc déclassé sur DEUX fronts, pas un seul** : gouvernance (multisig d'équipe, pas de
+DAO on-chain) ET valorisation (aucun avantage réel une fois le vrai revenu isolé du bruit des
+frais bruts) — la capture de valeur ne sert à rien si 3 personnes peuvent changer les règles du
+jour au lendemain, et le prix à payer n'est même pas plus avantageux qu'UNI pour ce risque.
 
 **Conclusion mise à jour** : **aucun des 10 candidats top-200 vérifiés ne détrône INJ** sur ce
 sous-groupe (HYPE explicitement écarté par l'opérateur pour risque de centralisation/incident ;
-RAY déclassé pour gouvernance multisig d'équipe ; RUNE disqualifié pour hacks répétés ; PYTH/OP/
-STX/GNO/GRT trop jeunes, trop modestes, ou mécanisme insuffisant). Le choix final reste entre
-AAVE et UNI (les deux finalistes historiques de cette diligence) et, en 3e position pour un
-profil plus risqué mais éprouvé dans le temps, INJ — un vrai choix de profil, pas une case à
+RAY déclassé sur gouvernance ET valorisation réelle ; RUNE disqualifié pour hacks répétés ;
+PYTH/OP/STX/GNO/GRT trop jeunes, trop modestes, ou mécanisme insuffisant). Le choix final reste
+entre AAVE et UNI (les deux finalistes historiques de cette diligence) et, en 3e position pour
+un profil plus risqué mais éprouvé dans le temps, INJ — un vrai choix de profil, pas une case à
 cocher.
+
+**Complément supply INJ vérifiée (31/07, capture CoinGecko fournie par l'opérateur)** : supply
+à **100 000 000 INJ, plafond dur** — calendrier de vesting entièrement terminé depuis 2023
+(100% déjà en circulation, aucune tranche verrouillée restante), contrairement à RAY qui a
+encore 410,7M de tokens verrouillés sur 555M (74% du supply total pas encore débloqué — vrai
+risque de dilution future). Le mécanisme de burn (60% des frais dApp → rachat/burn hebdomadaire,
+cf. Round 4) a déjà réduit ce supply de **~7,19M INJ brûlés** (~7,2% du max supply, fin juillet
+2026) ([tokenomist.ai](https://tokenomist.ai/injective-protocol)) — INJ est donc structurellement
+**déflationniste net**, pas seulement "sans nouvelle émission". Point supplémentaire en faveur
+d'INJ face à RAY, en plus de la gouvernance et de la valorisation déjà tranchées ci-dessus.
+
+**Précision technique (demande opérateur explicite, 31/07) — INJ n'est PAS nativement EVM.**
+INJ est un token Cosmos-SDK (consensus Tendermint), pas un ERC-20 natif Ethereum. Injective a
+récemment déployé un support EVM natif directement sur sa propre chaîne (architecture
+"MultiVM" unifiant WASM + EVM + bientôt Solana VM), mais le token INJ lui-même reste géré
+nativement via le module Cosmos Bank — une version wrapped (wINJ) existe pour interagir avec
+la partie EVM de la chaîne
+([The Block](https://www.theblock.co/post/378418/injective-rolls-out-native-evm-support-on-its-high-performance-cosmos-based-chain) ;
+[Injective — MultiVM Token Standard](https://injective.com/blog/multivm-token-standard-wrapped-inj)).
+Conséquence pratique : pas d'adresse MetaMask/Base classique pour détenir de l'INJ natif — passe
+par un wallet Cosmos (Keplr) ou reste simplement sur un exchange centralisé. Friction
+opérationnelle réelle à noter si INJ est retenu, sans être un facteur disqualifiant compte tenu
+de l'ouverture déjà actée de l'opérateur à détenir du capital hors EVM.
