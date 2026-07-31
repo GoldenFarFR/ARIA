@@ -349,10 +349,68 @@ futurs, pas des faits acquis.
 - **ChatGPT** : ne tranche pas, présente les deux comme des profils différents (value vs
   growth) légitimes chacun à sa manière.
 
+## Plafond de marché et capacité d'évolution (demande opérateur, 31/07)
+
+**AAVE — risque de mur réel (Morpho), mais réponse déjà engagée et traction déjà prouvée.**
+Morpho (architecture modulaire : marchés isolés + vaults curés par des gestionnaires de
+risque professionnels) menace structurellement le modèle "pool monolithique" d'Aave —
+~51,3% de part de marché TVL pour Aave contre ~9,8% pour Morpho en janvier 2026, mais Morpho
+a grossi de 2Md$ à plus de 10Md$ en 2025-2026 sur une adoption institutionnelle réelle
+([Crypto Economy](https://crypto-economy.com/morpho-and-the-institutionalization-of-defi-lending-infrastructure/)).
+Réponse d'Aave : **V4 introduit une "Unified Liquidity Layer"** combinant la profondeur du
+pool monolithique avec l'isolation de risque façon Morpho — leur plus gros changement
+architectural depuis V2, une preuve d'adaptation active, pas d'immobilisme. Extensions de
+produit avec **traction déjà mesurée en dollars, pas des promesses** : GHO (stablecoin)
+dépasse 500M$ de capitalisation (54% du circulant staké en sGHO) ; **Aave Horizon** (marché
+RWA institutionnel, lancé août 2025) est devenu le plus gros marché de prêt adossé à des
+actifs réels de toute la DeFi en quelques mois — 570M$+ de dépôts, partenaires sérieux
+(VanEck, Circle, Ripple, WisdomTree, Hamilton Lane)
+([The Block](https://www.theblock.co/post/346075/aave-horizon)). TAM du secteur lending :
+54Md$+ de TVL sur 380+ protocoles/80+ chaînes — marge de croissance réelle, pas saturé.
+
+**UNI — ambition plus large sur le papier, moins matérialisée à ce jour.** Hooks v4 : des
+milliers de pools déjà déployés en 2026, vraie adoption développeur (frais dynamiques,
+TWAMM, oracles personnalisés, "compliance gates" pour entités régulées)
+([DEXTools](https://www.dextools.io/tutorials/what-is-uniswap-v4-hooks-customizable-amm-guide-2026)).
+**Unichain** (leur propre L2, live depuis février 2025, blocs de 1s, ~95% moins cher
+qu'Ethereum) : pari d'infrastructure ambitieux mais **non garanti** — en concurrence directe
+avec Base/Arbitrum/Optimism pour attirer la même liquidité. Expansion institutionnelle
+réelle mais moins chiffrée qu'Aave : déploiement prévu sur Arc (chaîne stablecoin Circle,
+Q3 2026), BlackRock a routé un fonds Treasury tokenisé via Uniswap (un signal, pas un chiffre
+agrégé). Le métier de base (trading/swap) reste structurellement plus commoditisé et
+copiable que le crédit (un emprunteur ne bouge pas sa dette aussi facilement qu'un trader
+change de DEX) — point déjà soulevé par Gemini lors de la relecture croisée.
+
+## Exposition publique et partenariats de distribution (demande opérateur, 31/07)
+
+**UNI a un catalyseur net et déjà confirmé** : Uniswap est l'AMM natif et l'infrastructure
+DeFi centrale de la **Robinhood Chain** (nouveau L2 de Robinhood) — plus de 250M$ de volume
+dès la première semaine de lancement. Un analyste de Standard Chartered affirme explicitement
+que le marché **sous-estime** ce partenariat, qui positionne Uniswap comme couche de
+liquidité par défaut pour les actions tokenisées/RWA (marché projeté à 4 000 milliards $
+d'ici 2028) ([BitcoinWorld](https://bitcoinworld.co.in/standard-chartered-uniswap-robinhood-partnership-underestimated/) ;
+[blog officiel Uniswap](https://blog.uniswap.org/robinhood-chain-is-live)). Robinhood
+apporte des millions d'utilisateurs retail déjà captifs — un vrai canal de distribution à
+grande échelle, pas une annonce théorique.
+
+**AAVE mise sur du B2B/institutionnel et sa propre app, pas un partenariat de distribution
+grand public équivalent** : une "Tokenized Asset Coalition" avec Coinbase/Circle (coalition
+institutionnelle), cbBTC comme actif de lancement d'Aave V4 (intégration technique, pas
+marketing), et une app mobile propre ("Aave App") ciblant le premier million d'utilisateurs
+via un rollout grand public début 2026 — un effort réel mais qui repose sur leur propre
+distribution, pas sur un partenariat avec un acteur déjà établi à des millions d'utilisateurs
+comme Robinhood.
+
+**Verdict sur cette dimension** : avantage net à UNI — catalyseur de distribution/volume
+plus fort et déjà confirmé, renforçant son profil "growth", même si (comme pour Unichain/
+hooks) c'est plus récent et moins éprouvé dans la durée que la traction déjà installée
+d'AAVE sur GHO/Horizon.
+
 **Conclusion finale de cette diligence** : la méthodologie et le filtrage (6+1 critères) sont
 solides et confirmés par 3 relectures indépendantes. Le choix final entre AAVE (revenu déjà
-mature et prouvé, mais croissance plus limitée et concurrence Morpho à surveiller) et UNI
-(revenu en accélération mais reposant en partie sur des paris non encore matérialisés,
-Unichain/hooks) reste un vrai choix de profil — value vs growth — sans réponse objective
+mature et prouvé, extensions de produit déjà chiffrées en dollars, mais croissance plus
+limitée et concurrence Morpho à surveiller) et UNI (revenu en accélération, catalyseur de
+distribution Robinhood confirmé, mais paris d'extension — Unichain, hooks monétisés — encore
+moins matérialisés) reste un vrai choix de profil — value vs growth — sans réponse objective
 unique, à trancher selon l'horizon et la tolérance à parier sur une capture de valeur pas
 encore pleinement prouvée.
