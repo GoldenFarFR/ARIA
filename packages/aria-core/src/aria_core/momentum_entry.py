@@ -153,11 +153,15 @@ _SOURCE_LIMIT_PER_CHANNEL = 30
 # by an explicit hard rejection in evaluate_momentum_entry (see below) --
 # henceforth applied SYSTEMATICALLY, never bypassable, even if honeypot/R-R/
 # alignment are otherwise all clean.
-# 21/07 -- lowered $100,000 -> $50,000 (explicit operator decision -- corrected
-# the same day, a first figure of $30,000 had been applied by mistake then
-# fixed). The systematic hard rejection above remains fully in place -- only
-# the THRESHOLD changes, never the guarantee that it applies.
-_MIN_LIQUIDITY_USD = 50_000.0
+# 31/07 -- lowered $50,000 -> $25,000 (explicit operator decision, same-day as
+# the swing R/R floor removal below -- both loosen the swing/standard path
+# together, diagnostic-test philosophy: more candidates through, sort out
+# quality at the LLM/R-R-visible-to-ARIA stage rather than at the door).
+# _MIN_LIQUIDITY_USD_FEAR deliberately left UNCHANGED (100,000$, operator asked
+# only about the standard/swing floor) -- the Fear-regime multiplier is now
+# x4 instead of the x2 it was calibrated at on 20-21/07, a known, accepted
+# side effect of this change, not silently lost.
+_MIN_LIQUIDITY_USD = 25_000.0
 # 20/07 -- dynamic Regime Switch (Gemini cross-review, explicit operator green
 # light "200k but keep an eye on it to check over the following years"): in a
 # Fear macro regime (``market_sentiment.resolve_meta_regime``), liquidity
@@ -1001,8 +1005,8 @@ _HONEYPOT_NO_DATA_RETRY_DELAY_S = 8.0
 # GoPlus's 288s/token quota-bound rate, `run_goplus_watchlist_cycle` now
 # processes a whole BATCH per heartbeat passage (~5min) instead of one
 # candidate at a time -- 100 x ~0.2s = ~20s/passage, comfortably inside the
-# 5min cadence, draining the full 600-slot watchlist in ~6 passages (~30min)
-# instead of 48h.
+# 5min cadence, draining the full watchlist (2000 slots since 31/07, was 600)
+# in ~20 passages (~1h40) instead of 48h.
 _GOPLUS_WATCHLIST_BATCH_SIZE = 100
 
 # 28/07 -- short-TTL cache of the TokenSecurity object ALREADY fetched by
@@ -1153,8 +1157,9 @@ async def _check_honeypot(
     call can tolerate. Base/Ethereum (the two chains carrying the pipeline's
     real volume) now go through ``services/goplus_watchlist.py``: a
     background cycle (``goplus_watchlist_cycle``, heartbeat) refreshes a
-    600-slot watchlist of already-free-gate-qualified candidates at the
-    sustainable rate, and THIS function only ever reads that cache (free,
+    watchlist (``goplus_watchlist.MAX_WATCHLIST_SIZE`` slots) of already-
+    free-gate-qualified candidates at the sustainable rate, and THIS function
+    only ever reads that cache (free,
     instant) -- never a synchronous network call itself on this path anymore.
     A candidate never yet seen (or whose entry is older than
     ``goplus_watchlist.WATCHLIST_FRESHNESS_HOURS``) is queued
@@ -1215,7 +1220,10 @@ async def _check_honeypot(
             "~288s/jeton, prochain passage)"
         )
         if not added:
-            reason += " -- liste pleine (600 slots), score de priorité insuffisant"
+            reason += (
+                f" -- liste pleine ({goplus_watchlist.MAX_WATCHLIST_SIZE} slots), "
+                "score de priorité insuffisant"
+            )
         return False, reason, "honeypot_pending"
 
     _cache_security(chain, contract, security)
@@ -3299,7 +3307,17 @@ async def evaluate_momentum_entry(
     # relaxed floor branch below (waived quality bars, forced small size) --
     # exposed on the returned dict so paper_trader tags + down-sizes it.
     floor_trade = False
-    if signal.rr >= _RR_MIN_FOR_DIRECT_BUY and align_score >= _ALIGN_SCORE_MIN_FOR_DIRECT_BUY:
+    # 31/07 -- explicit operator decision: swing (mode != "scalping") no longer
+    # has an R/R floor at all -- neither the deterministic direct-buy path
+    # below (gated ``mode == "scalping"`` now) nor the pure-HOLD-for-weak-R/R
+    # branch further down (see the matching ``mode != "scalping" or`` guard on
+    # the LLM branch). Every swing setup with a formed technical signal always
+    # goes through ``_llm_confirm_and_gate`` -- never a 100%-automatic buy
+    # without an LLM look, never a pure HOLD just because R/R is weak/negative.
+    # Scalping's own 2.0/1.0 thresholds are UNCHANGED. Rationale matches the
+    # same-day removal of the limit-order R/R floor (Item #252): entry R/R
+    # doesn't bound the trailing-stop exit's upside.
+    if mode == "scalping" and signal.rr >= _RR_MIN_FOR_DIRECT_BUY and align_score >= _ALIGN_SCORE_MIN_FOR_DIRECT_BUY:
         action = "BUY"
         reasons.append(f"R/R franc ({signal.rr:.1f}) + alignement technique -- décision directe")
     elif relaxed:
@@ -3332,13 +3350,17 @@ async def evaluate_momentum_entry(
             f"mode plancher (diagnostic {DAILY_TRADE_FLOOR} trades/jour) : {weak_point} accepté, "
             "taille réduite, garde-fous sécurité intacts"
         )
-    elif signal.rr >= _RR_AMBIGUOUS_FLOOR:
+    elif mode != "scalping" or signal.rr >= _RR_AMBIGUOUS_FLOOR:
         # 26/07 -- same mislabeling gap as the 25/07 floor-mode fix (see
         # _diagnose_weak_point's docstring): this branch is ALSO reached
         # whenever the direct-buy AND fails on align_score alone while R/R is
         # already excellent (real case, ZEN, R/R=6.1) -- the messages below
         # used to always blame "R/R faible" regardless of which condition
         # actually missed the bar.
+        # 31/07 -- ``mode != "scalping" or`` added: swing ALWAYS lands here
+        # now (R/R floor removed, see above), even with a weak/negative R/R --
+        # _diagnose_weak_point/_llm_confirm_and_gate both handle any numeric
+        # rr value fine (no assumption of a positive floor).
         weak_point = _diagnose_weak_point(signal.rr, align_score)
         verdict, gate_hold_reason = await _llm_confirm_and_gate(
             contract, best.base_symbol, chain, signal.rr, reasons, weekly_context=weekly_context,
@@ -3354,6 +3376,8 @@ async def evaluate_momentum_entry(
             hold_reason = gate_hold_reason
             reasons.append(f"{weak_point}, non confirmé -- HOLD")
     else:
+        # 31/07 -- only reachable by mode == "scalping" now (swing's ``mode
+        # != "scalping" or`` guard above always takes the LLM branch instead).
         reasons.append(f"R/R positif mais sous le seuil ambigu ({signal.rr:.1f} < {_RR_AMBIGUOUS_FLOOR})")
         hold_reason = "rr_below_ambiguous_floor"
 

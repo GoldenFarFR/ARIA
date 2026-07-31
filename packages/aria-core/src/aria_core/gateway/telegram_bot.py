@@ -2417,7 +2417,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("feuvert", "Scorecard avant argent réel (8 cases)"),
     ("funnel", "Cumul du funnel de rejet momentum (48h par défaut)"),
     ("github", "Réparer/éditer une réponse showcase PR"),
-    ("goplusqueue", "État de la file d'attente honeypot GoPlus (600 slots)"),
+    ("goplusqueue", "État de la file d'attente honeypot GoPlus (2000 slots)"),
     ("handles", "Registre des handles X (add/remove/alias/pack)"),
     ("issue", "Clôture une thèse avec son résultat"),
     ("langue", "Langue des analyses (fr/en)"),

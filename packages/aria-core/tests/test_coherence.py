@@ -900,7 +900,7 @@ def test_aria_directive_log_is_append_only():
 # mets à jour LES DEUX dans le même commit : ce dict ET le tableau markdown correspondant.
 _TRADING_THRESHOLDS = {
     "aria_core.momentum_entry": {
-        "_MIN_LIQUIDITY_USD": 50_000.0,
+        "_MIN_LIQUIDITY_USD": 25_000.0,
         "_MIN_LIQUIDITY_USD_FEAR": 100_000.0,
         "_MIN_LIQUIDITY_USD_SCALPING": 15_000.0,
         "_RR_MIN_FOR_DIRECT_BUY": 2.0,

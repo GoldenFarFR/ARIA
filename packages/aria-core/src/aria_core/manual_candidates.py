@@ -97,8 +97,9 @@ async def add_manual_candidate(
     own DexScreener match) feed the SAME priority score as any other
     candidate (``goplus_watchlist.compute_priority_score``) -- ``None``
     (the bare ``/add`` case, no fetch performed) degrades to a neutral
-    0.0 score, which still claims a slot as long as the watchlist (600) has
-    room. Best-effort: a watchlist-queueing failure never blocks the
+    0.0 score, which still claims a slot as long as the watchlist
+    (``goplus_watchlist.MAX_WATCHLIST_SIZE``) has room. Best-effort: a
+    watchlist-queueing failure never blocks the
     discovery-queue insert itself."""
     await _ensure_table()
     chain = (chain or "base").strip().lower()

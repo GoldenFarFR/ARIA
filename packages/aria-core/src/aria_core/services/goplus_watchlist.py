@@ -17,12 +17,22 @@ margin, same doctrine as the rest of this project):
 Operator-designed fix (29/07): instead of a synchronous honeypot call on
 every candidate that reaches the gate (today's behavior, which starves the
 instant a fresh candidate needs checking), maintain a WATCHLIST of up to
-``MAX_WATCHLIST_SIZE`` (600) already-free-gate-qualified candidates, refreshed
-in the background at the sustainable rate. 600 slots x ~288s = 48h for a full
-refresh cycle (operator's own math, confirmed exact: 600 * 288 = 172,800s =
-48h). A candidate already in the watchlist with a status younger than
-``WATCHLIST_FRESHNESS_HOURS`` (48h) never triggers a new network call --
-``momentum_entry._check_honeypot`` reads it directly, free and instant.
+``MAX_WATCHLIST_SIZE`` already-free-gate-qualified candidates, refreshed
+in the background at the sustainable rate. A candidate already in the
+watchlist with a status younger than ``WATCHLIST_FRESHNESS_HOURS`` (48h) never
+triggers a new network call -- ``momentum_entry._check_honeypot`` reads it
+directly, free and instant.
+
+31/07 -- ``MAX_WATCHLIST_SIZE`` raised 600 -> 2000 (explicit operator decision,
+"on fera le tri au fur et a mesure", same day as widening swing's discovery
+funnel -- R/R floor removed, liquidity floor lowered -- both feed more
+candidates into this same shared pool). The 600/~288s-per-token math above
+(GoPlus as sole source) is now HISTORICAL: ``run_goplus_watchlist_cycle``
+(momentum_entry.py, Item #212 follow-up, 29/07) reworked Honeypot.is into the
+PRIMARY source, batched 100/passage at a ~5min heartbeat cadence -- draining
+2000 slots takes ~20 passages, ~1h40 for a full refresh cycle, comfortably
+inside ``WATCHLIST_FRESHNESS_HOURS`` (48h). GoPlus itself is now only a
+last-resort fallback (capped at 1 call/passage) when Honeypot.is fails.
 
 This is what actually preserves the "ARIA must be first" speed doctrine: the
 background cycle keeps the KNOWN universe's honeypot status warm continuously
@@ -53,9 +63,10 @@ from aria_core.services.goplus import TokenSecurity
 
 logger = logging.getLogger(__name__)
 
-# Operator's own number (29/07): 600 slots x ~288s sustainable interval = 48h
-# for one full refresh cycle -- confirmed exact math (600 * 288 = 172,800s).
-MAX_WATCHLIST_SIZE = 600
+# 31/07 -- raised 600 -> 2000 (explicit operator decision). See the module
+# docstring above for why the old 288s/token GoPlus-only math no longer
+# applies (Honeypot.is is now the primary, much faster source).
+MAX_WATCHLIST_SIZE = 2000
 
 # A watchlist entry checked more recently than this is used as-is, no network
 # call. Slightly more than one full cycle (48h) would be self-defeating (a

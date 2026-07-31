@@ -2629,6 +2629,7 @@ def _patch_pipeline(
     monkeypatch, *, honeypot_clear=True, pairs=None, candles=None, signal=None, align=(0, []),
     security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", "", 10.0),
     parabolic_rescue=(False, "sauvetage smart money non confirmé (mock par défaut)"),
+    confirm_gate=("BUY", None),
 ):
     async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         if honeypot_clear:
@@ -2656,6 +2657,9 @@ def _patch_pipeline(
     async def fake_parabolic_rescue(*args, **kwargs):
         return parabolic_rescue
 
+    async def fake_confirm_and_gate(*args, **kwargs):
+        return confirm_gate
+
     monkeypatch.setattr(me, "_check_honeypot", fake_honeypot)
     monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_pairs)
     monkeypatch.setattr(me, "_fetch_candles", fake_candles)
@@ -2680,6 +2684,14 @@ def _patch_pipeline(
     # défaut (aucun appel Blockscout réel en test), couvert par ses propres tests dédiés.
     monkeypatch.setattr(me, "_check_holder_concentration", fake_concentration)
     monkeypatch.setattr(me, "_check_parabolic_smart_money_rescue", fake_parabolic_rescue)
+    # 31/07 -- swing (mode != "scalping") no longer has an R/R floor: every
+    # setup now goes through _llm_confirm_and_gate (see momentum_entry.py's
+    # own comment on the "mode != scalping or" branch). Mocked BUY by default
+    # so the ~40 existing callers of this fixture that test the deterministic
+    # R/R/alignment pipeline (not this LLM branch specifically) keep working
+    # unchanged -- tests that specifically exercise the ambiguous/LLM path
+    # override via ``confirm_gate=``.
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_confirm_and_gate)
 
 
 # ── evaluate_hard_gates (22/07, extraction pour le crible unifié VC/Swing) ─────────
@@ -2698,7 +2710,7 @@ async def test_evaluate_hard_gates_passes_returns_pair_and_reason(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_hard_gates_rejects_on_liquidity(monkeypatch):
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=15_000.0)])
     best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
     assert best is None and reason is None
     assert hold["hold_reason"] == "insufficient_liquidity"
@@ -2732,7 +2744,7 @@ async def test_evaluate_hard_gates_caches_stable_rejection_and_skips_network_nex
     rejection cache on the NEXT call, never re-fetching the pair."""
     from aria_core import momentum_rejection_cache as rc
 
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=15_000.0)])
     best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
     assert hold["hold_reason"] == "insufficient_liquidity"
     assert await rc.recently_rejected(CONTRACT, "base") == "insufficient_liquidity"
@@ -2766,11 +2778,12 @@ async def test_evaluate_hard_gates_liquidity_rejection_cache_never_blocks_a_diff
     """Item #228 (30/07), real bug found investigating "why does swing never
     scan some tokens scalping does" (empirically confirmed: 130/427
     contracts scalping scanned were NEVER scanned by swing, on a shared
-    candidate pool). $30,000 liquidity clears scalping's own floor
+    candidate pool). $20,000 liquidity clears scalping's own floor
     (_MIN_LIQUIDITY_USD_SCALPING=15,000) but not standard's
-    (_MIN_LIQUIDITY_USD=50,000) -- standard's rejection must never poison
-    scalping's own, independent, re-check of the SAME contract."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=30_000.0)])
+    (_MIN_LIQUIDITY_USD=25,000 since 31/07, was 50,000) -- standard's
+    rejection must never poison scalping's own, independent, re-check of the
+    SAME contract."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=20_000.0)])
 
     # standard (swing) rejects on its own, stricter floor.
     best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base", mode="standard")
@@ -2783,7 +2796,7 @@ async def test_evaluate_hard_gates_liquidity_rejection_cache_never_blocks_a_diff
     best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base", mode="scalping")
     assert hold is None
     assert best is not None
-    assert best.liquidity_usd == 30_000.0
+    assert best.liquidity_usd == 20_000.0
 
 
 # ── PairSnapshot cache shared with _batch_liquidity_prefilter (26/07, Item #122
@@ -2912,7 +2925,7 @@ async def test_evaluate_rejects_liquidity_below_floor(monkeypatch):
     en dessous il peut y avoir x ou y risques" -- rejet SYSTÉMATIQUE, même si
     honeypot/R-R/alignement seraient par ailleurs tous propres (le mock
     ``signal``/``align`` par défaut n'est jamais atteint : ce gate doit couper avant)."""
-    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=35_000.0)])
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=15_000.0)])
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "insufficient_liquidity"
@@ -3846,9 +3859,13 @@ async def test_evaluate_buy_exposes_liquidity_rotation_signal(monkeypatch):
 @pytest.mark.asyncio
 async def test_evaluate_hold_has_no_liquidity_rotation_signal(monkeypatch):
     """Same doctrine as entry_atr_pct/rvol_multiple: an informational sizing
-    signal has no purpose while no buy is decided."""
+    signal has no purpose while no buy is decided.
+
+    31/07 -- swing no longer HOLDs purely for weak R/R (floor removed, always
+    goes through the LLM now) -- ``confirm_gate`` forces the LLM's own
+    rejection here so this stays a genuine HOLD, testing the same doctrine."""
     weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
-    _patch_pipeline(monkeypatch, signal=weak)
+    _patch_pipeline(monkeypatch, signal=weak, confirm_gate=("HOLD", "non confirmé (mock test)"))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["liquidity_rotation_score"] is None
     assert result["liquidity_rotation_accelerating"] is None
@@ -3858,9 +3875,12 @@ async def test_evaluate_hold_has_no_liquidity_rotation_signal(monkeypatch):
 @pytest.mark.asyncio
 async def test_evaluate_hold_has_no_volume_confirmed(monkeypatch):
     """Un HOLD (R/R sous le seuil ambigu) ne calcule jamais le RVOL -- même doctrine
-    que entry_atr_pct, une info de sizing sans objet tant qu'aucun achat n'est décidé."""
+    que entry_atr_pct, une info de sizing sans objet tant qu'aucun achat n'est décidé.
+
+    31/07 -- swing va toujours au LLM désormais (plancher R/R retiré) --
+    ``confirm_gate`` force son rejet pour que ce reste un vrai HOLD."""
     weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
-    _patch_pipeline(monkeypatch, signal=weak)
+    _patch_pipeline(monkeypatch, signal=weak, confirm_gate=("HOLD", "non confirmé (mock test)"))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result.get("volume_confirmed") is None
@@ -4121,9 +4141,12 @@ async def test_evaluate_buy_exposes_entry_atr_pct(monkeypatch):
 async def test_evaluate_hold_has_no_entry_atr_pct(monkeypatch):
     """Un HOLD (ici : R/R sous le seuil ambigu, chemin qui atteint bien le dict de
     retour final) ne calcule jamais l'ATR -- c'est une info de SIZING, sans objet tant
-    qu'aucun achat n'est décidé."""
+    qu'aucun achat n'est décidé.
+
+    31/07 -- swing va toujours au LLM désormais (plancher R/R retiré) --
+    ``confirm_gate`` force son rejet pour que ce reste un vrai HOLD."""
     weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
-    _patch_pipeline(monkeypatch, signal=weak)
+    _patch_pipeline(monkeypatch, signal=weak, confirm_gate=("HOLD", "non confirmé (mock test)"))
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
     assert result["action"] == "HOLD"
     assert result.get("entry_atr_pct") is None
@@ -4155,11 +4178,18 @@ async def test_evaluate_threads_live_price_as_execution_price_to_detect_entry(mo
 
 @pytest.mark.asyncio
 async def test_evaluate_holds_strong_rr_without_any_alignment(monkeypatch):
-    """R/R franc mais AUCUN signal technique en soutien -- pas de décision directe."""
+    """R/R franc mais AUCUN signal technique en soutien -- pas de décision directe.
+
+    31/07 -- swing (mode standard) n'a plus de plancher R/R : ce cas tombe
+    dans la branche LLM (jamais le HOLD pur d'avant) -- ``confirm_gate`` force
+    son rejet pour reproduire "non confirmé -- HOLD"."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
-    _patch_pipeline(monkeypatch, signal=strong, align=(0, []))
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(0, []),
+        confirm_gate=("HOLD", "llm_not_confirmed"),
+    )
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
-    assert result["action"] == "HOLD"  # tombe dans la branche ambiguë -> LLM (mocké absent -> HOLD)
+    assert result["action"] == "HOLD"  # tombe dans la branche ambiguë -> LLM (mocké rejet -> HOLD)
     assert result["hold_reason"] == "llm_not_confirmed"
 
 
@@ -4196,22 +4226,47 @@ async def test_evaluate_ambiguous_rr_rejected_by_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_low_rr_never_calls_llm(monkeypatch):
+async def test_evaluate_low_rr_never_calls_llm_scalping(monkeypatch):
+    """31/07 -- ce plancher (HOLD pur sous _RR_AMBIGUOUS_FLOOR, jamais de LLM)
+    reste vrai pour scalping (comportement inchangé), mais plus pour swing
+    (mode standard) -- voir test_evaluate_low_rr_swing_always_calls_llm
+    juste après, qui couvre le nouveau comportement."""
     tiny = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
     _patch_pipeline(monkeypatch, signal=tiny)
 
     called = False
 
-    async def fake_llm_confirm(*args, **kwargs):
+    async def fake_confirm_and_gate(*args, **kwargs):
         nonlocal called
         called = True
-        return True
+        return "BUY", None
 
-    monkeypatch.setattr(me, "_llm_confirm", fake_llm_confirm)
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
     assert result["action"] == "HOLD"
     assert called is False
     assert result["hold_reason"] == "rr_below_ambiguous_floor"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_low_rr_swing_always_calls_llm(monkeypatch):
+    """31/07, décision opérateur explicite ("enlève le R/R minimum ... sur
+    swing") : swing n'a plus de plancher R/R -- même un R/R très faible passe
+    toujours par confirmation LLM, jamais un HOLD pur automatique."""
+    tiny = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+
+    called = False
+
+    async def fake_confirm_and_gate(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "BUY", None
+
+    _patch_pipeline(monkeypatch, signal=tiny, confirm_gate=("BUY", None))
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_confirm_and_gate)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")  # mode="standard" default = swing
+    assert called is True
+    assert result["action"] == "BUY"
 
 
 @pytest.mark.asyncio
@@ -4854,6 +4909,11 @@ async def test_evaluate_threads_weekly_context_to_llm_confirm_and_gate(monkeypat
 
 @pytest.mark.asyncio
 async def test_evaluate_threads_weekly_context_to_security_gate(monkeypatch):
+    """31/07 -- mode="scalping" pinned explicitly: this test exercises the
+    deterministic direct-buy path (-> lone ``_llm_security_gate`` call),
+    which swing no longer takes (R/R floor removed, always ``_llm_confirm_
+    and_gate`` now -- see test_evaluate_threads_weekly_context_to_confirm_
+    and_gate_swing just below for swing's own equivalent)."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
     captured = {}
@@ -4863,6 +4923,27 @@ async def test_evaluate_threads_weekly_context_to_security_gate(monkeypatch):
         return True, ""
 
     monkeypatch.setattr(me, "_llm_security_gate", fake_security_gate)
+    ctx = {"cycle_number": 2, "day": 4, "days_total": 7, "equity": 1_050_000.0,
+           "target_equity": 1_100_000.0, "progress_pct": 5.0, "remaining_pct": 5.0}
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx, mode="scalping")
+    assert result["action"] == "BUY"
+    assert captured["weekly_context"] == ctx
+
+
+@pytest.mark.asyncio
+async def test_evaluate_threads_weekly_context_to_confirm_and_gate_swing(monkeypatch):
+    """31/07 -- swing's equivalent: every swing setup now goes through
+    ``_llm_confirm_and_gate`` (never the lone ``_llm_security_gate``), which
+    must still receive ``weekly_context``."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+    captured = {}
+
+    async def fake_confirm_and_gate(*args, **kwargs):
+        captured["weekly_context"] = kwargs.get("weekly_context")
+        return "BUY", None
+
+    monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_confirm_and_gate)
     ctx = {"cycle_number": 2, "day": 4, "days_total": 7, "equity": 1_050_000.0,
            "target_equity": 1_100_000.0, "progress_pct": 5.0, "remaining_pct": 5.0}
     result = await me.evaluate_momentum_entry(CONTRACT, "base", weekly_context=ctx)
@@ -5050,13 +5131,18 @@ async def test_confirm_and_gate_omits_trade_lessons_when_absent(monkeypatch):
 @pytest.mark.asyncio
 async def test_evaluate_security_gate_rejects_strong_rr_buy(monkeypatch):
     """Le cas BRIAN : R/R franc + alignement complet + honeypot clair, mais le garde
-    final trouve un piège -- l'achat déterministe est annulé, pas laissé passer."""
+    final trouve un piège -- l'achat déterministe est annulé, pas laissé passer.
+
+    31/07 -- mode="scalping" fixé explicitement : ce chemin déterministe
+    (-> ``_llm_security_gate`` seul) n'est plus emprunté par swing (plancher
+    R/R retiré, toujours ``_llm_confirm_and_gate`` désormais -- ce garde reste
+    tout aussi actif là-bas via son propre verdict "HOLD_TRAP")."""
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
     _patch_pipeline(
         monkeypatch, signal=strong, align=(3, ["EMA12 > EMA26", "MACD", "pattern bullish"]),
         security_gate=(False, "security_gate_rejected"),
     )
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
     assert result["action"] == "HOLD"
     assert result["hold_reason"] == "security_gate_rejected"
     assert any("garde de sécurité" in r.lower() for r in result["reasons"])
@@ -5491,7 +5577,11 @@ async def test_conviction_research_never_called_when_action_stays_hold(monkeypat
 @pytest.mark.asyncio
 async def test_conviction_research_never_called_when_security_gate_rejects(monkeypatch, test_settings):
     """Le garde de sécurité final annule le BUY -- la diligence de conviction ne doit
-    jamais tourner sur un achat déjà annulé."""
+    jamais tourner sur un achat déjà annulé.
+
+    31/07 -- mode="scalping" fixé explicitement (voir test_evaluate_security_
+    gate_rejects_strong_rr_buy's own comment: swing no longer takes this
+    direct-buy path)."""
     test_settings.aria_conviction_research_enabled = True
     called = False
 
@@ -5506,7 +5596,7 @@ async def test_conviction_research_never_called_when_security_gate_rejects(monke
         monkeypatch, signal=strong, align=(3, ["EMA12 > EMA26", "MACD", "pattern bullish"]),
         security_gate=(False, "security_gate_rejected"),
     )
-    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
     assert result["action"] == "HOLD"
     assert called is False
 
