@@ -579,3 +579,33 @@ et ticker INJ inchangés de bout en bout. Reste à noter honnêtement : c'est un
 contrat qui vient de se conclure CETTE SEMAINE MÊME, pas un non-événement — un facteur de
 récence à surveiller (transition encore fraîche, tout exchange/wallet n'a peut-être pas encore
 basculé), même si elle ne disqualifie pas INJ sur le fond de ce critère.
+
+## Verdict final sur INJ — ratio valorisation/revenu appliqué (31/07, demande opérateur explicite)
+
+Avant de valider INJ comme éventuel remplaçant d'AAVE/UNI, application de la même méthode
+qu'ailleurs dans cette diligence (ratio market cap/revenu réel annualisé).
+
+**Revenu réel INJ vérifié** : ~3-3,4M$/an (Token Terminal, 12 derniers mois) — burn de juin
+2026 valorisé à >315k$, cohérent avec ce rythme annualisé
+([CoinGecko](https://www.coingecko.com/learn/injective-2026-convergence-report) ;
+[Messari](https://messari.io/project/injective-protocol)). **Market cap** : ~4,91$ ×
+~92,8M en circulation (net du burn) ≈ 455M$. **Ratio valorisation/revenu ≈ 134x.**
+
+| | AAVE | UNI | INJ |
+|---|---|---|---|
+| Ratio valorisation/revenu | ~13x | ~43-52x | **~134x** |
+| Revenu réel annualisé | ~116M$+ | ~48-58M$ | ~3-3,4M$ |
+
+**INJ est en réalité le candidat le PLUS CHER des trois relativement à son revenu réel** — pas
+le moins cher. Le mécanisme de burn est solide en proportion (60% des frais, consensus 99,96%,
+supply déflationniste net déjà vérifié ci-dessus), mais l'échelle absolue du revenu généré par
+le protocole reste très modeste comparée à AAVE/UNI (et même à RAY, ~4,6M$/an).
+
+**Conclusion définitive de cette diligence** : **INJ ne détrône ni AAVE ni UNI** sur la méthode
+déjà validée par l'opérateur (ratio valorisation/revenu réel, cf. mémoire dédiée). Ses vrais
+points forts (supply hard cap déjà entièrement débloqué, consensus de gouvernance large,
+mécanisme de burn ancien et éprouvé) restent réels, mais à ce prix il représente un pari sur la
+croissance FUTURE du revenu (thèse RWA/finance institutionnelle d'Injective), pas une valeur
+déjà prouvée. **Le choix final de cette diligence reste entre AAVE et UNI** — INJ peut rester
+une diversification hors-EVM en 3e position si un pari sur une croissance de revenu non encore
+matérialisée est recherché, mais ne remplace pas les deux finalistes historiques.
