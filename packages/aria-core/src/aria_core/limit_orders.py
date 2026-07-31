@@ -349,7 +349,17 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # checked with standard-mode (1h+) candles would silently corrupt the
     # divergence detection's own timeframe, defeating the whole premise of
     # ``mode=`` being timeframe-aware in the first place.
-    watch_mode = "scalping" if order.get("wallet") == "scalping" else "standard"
+    #
+    # 31/07 -- explicit operator decision: swing's own WATCH phase (once an
+    # order is placed and price is in the targeted golden-pocket zone) now
+    # ALSO uses fine-grained (15-30min) scalping-scale candles here, never
+    # the standard day/4h/1h ladder the original swing SIGNAL was detected
+    # on. Rationale (operator's own words): swing finds the setup on big
+    # timeframes, then "scalping" (this fine-grained lens, not the separate
+    # scalping WALLET/capital -- that pocket's own independent trading is
+    # entirely unaffected) confirms the precise entry timing within the
+    # already-targeted zone. VC unaffected (falls through to "standard").
+    watch_mode = "scalping" if order.get("wallet") in ("scalping", "swing") else "standard"
     try:
         candles = await momentum_entry._fetch_candles(
             pair.pair_address, order["chain"], contract=order["contract"], pair=pair, mode=watch_mode,
@@ -764,11 +774,25 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         # setup) can't be resolved by a plain price comparison -- see
         # check_rsi_divergence_watching_order's own docstring for the extra
         # 'expire' outcome (candle-count horizon elapsed, silent by design).
-        if sig.get("limit_order_reason") == "rsi_divergence_pending":
+        #
+        # 31/07 -- explicit operator decision: EVERY swing order in "watching"
+        # now resolves via this same fresh-divergence re-check (fine-grained
+        # candles, see check_rsi_divergence_watching_order's own watch_mode
+        # comment), regardless of limit_order_reason -- not just the
+        # rsi_divergence_pending case. A price-drift/golden-pocket-not-yet-
+        # formed swing order that pulls back into its target zone no longer
+        # buys on price alone; it waits for a genuine fine-grained divergence
+        # to confirm within that zone. Scalping's own orders are UNCHANGED
+        # (still gated on limit_order_reason exactly as before).
+        uses_rsi_divergence_check = (
+            sig.get("limit_order_reason") == "rsi_divergence_pending"
+            or order.get("wallet") == "swing"
+        )
+        if uses_rsi_divergence_check:
             decision = await check_rsi_divergence_watching_order(order, sig)
         else:
             decision = check_watching_order(order["target_price"], sig.get("invalidation"), price)
-        is_rsi_divergence_watch = sig.get("limit_order_reason") == "rsi_divergence_pending"
+        is_rsi_divergence_watch = uses_rsi_divergence_check
         if decision == "expire":
             await mark_cancelled(order["id"], "rsi_horizon_expired")
             actions["expired"] += 1
@@ -779,7 +803,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
             await rsi_divergence_log.record_divergence(
                 order["contract"], order["chain"], symbol=order.get("symbol"),
                 wallet=order.get("wallet"),
-                mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
                 outcome="expired_unconfirmed",
             )
             continue
@@ -790,7 +814,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                 await rsi_divergence_log.record_divergence(
                     order["contract"], order["chain"], symbol=order.get("symbol"),
                     wallet=order.get("wallet"),
-                    mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                    mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
                     outcome="cancelled_unconfirmed",
                 )
             if notifier:
@@ -812,7 +836,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                     await rsi_divergence_log.record_divergence(
                         order["contract"], order["chain"], symbol=order.get("symbol"),
                         wallet=order.get("wallet"),
-                        mode="scalping" if order.get("wallet") == "scalping" else "standard",
+                        mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
                         gap=sig.get("rsi_gap"), span=sig.get("rsi_span"),
                         outcome="bought_via_limit_order",
                     )
@@ -1100,6 +1124,19 @@ def format_limit_order_placed_alert(order: dict) -> str:
         if isinstance(current_price, (int, float)) and current_price > 0:
             gap_pct = (current_price / target - 1.0) * 100.0
             lines.append(f"Prix actuel : {current_price:.6g} (+{gap_pct:.1f}% au-dessus de la cible)")
+        # 31/07 -- explicit operator decision: once a SWING order reaches its
+        # target zone, ARIA no longer buys on price alone -- she waits for a
+        # fine-grained (15-30min) RSI divergence to confirm within that zone
+        # (see check_rsi_divergence_watching_order's own watch_mode comment).
+        # Without this line, the alert would silently claim a plain price
+        # trigger, same misleading gap already fixed once for the
+        # rsi_divergence_pending case (29/07, "elle cible le prix actuel,
+        # étrange").
+        if order.get("wallet") == "swing":
+            lines.append(
+                "Une fois dans cette zone, ARIA cherche une divergence RSI sur bougies fines "
+                "(15-30 min) avant d'acheter -- pas un simple niveau de prix atteint."
+            )
         expiry_line = f"Expire dans {expiry_hours:.0f}h si le prix ne redescend jamais à ce niveau."
 
     # 29/07 -- operator feedback ("la cible doit apparaître aussi sur l'ordre

@@ -620,7 +620,12 @@ async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_sc
 
 
 @pytest.mark.asyncio
-async def test_check_rsi_divergence_watching_refetches_with_standard_mode_for_swing_wallet(monkeypatch):
+async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_swing_wallet(monkeypatch):
+    """31/07, explicit operator decision: swing's own WATCH phase (once an
+    order reaches its target zone) now uses fine-grained (15-30min) candles,
+    same as scalping -- swing finds the setup on big timeframes, then this
+    fine-grained lens confirms the precise entry timing. Was "standard" mode
+    before this change (see git history for the prior version of this test)."""
     from aria_core import momentum_entry
 
     captured_mode = {}
@@ -638,6 +643,31 @@ async def test_check_rsi_divergence_watching_refetches_with_standard_mode_for_sw
     monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
 
     order, sig = _rsi_watch_order(wallet="swing")
+    await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert captured_mode["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_refetches_with_standard_mode_for_vc_wallet(monkeypatch):
+    """VC unaffected by the 31/07 swing change -- still standard mode."""
+    from aria_core import momentum_entry
+
+    captured_mode = {}
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard", **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        captured_mode["mode"] = mode
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order(wallet="vc")
     await lo.check_rsi_divergence_watching_order(order, sig)
 
     assert captured_mode["mode"] == "standard"
@@ -1056,8 +1086,14 @@ async def test_process_active_orders_pending_to_cancelled_on_reanalysis_fail(mon
 
 @pytest.mark.asyncio
 async def test_process_active_orders_watching_cancelled_on_invalidation_crossed(monkeypatch):
-    await paper_trader.reset_portfolio(1_000_000.0)
-    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(invalidation=0.03))
+    """31/07 -- wallet="vc" pinned explicitly: swing's own watching orders now
+    resolve via check_rsi_divergence_watching_order (a real network lookup),
+    see test_process_active_orders_swing_watching_cancelled_on_invalidation
+    below for that path's own cancel test."""
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 0.038, _sig(invalidation=0.03), wallet="vc",
+    )
     await lo.transition_to_watching(order["id"])
 
     notified = []
@@ -1074,10 +1110,44 @@ async def test_process_active_orders_watching_cancelled_on_invalidation_crossed(
 
 
 @pytest.mark.asyncio
+async def test_process_active_orders_swing_watching_cancelled_on_invalidation(monkeypatch):
+    """31/07 -- swing's own cancel path, routed through check_rsi_divergence_
+    watching_order (mocked here -- its own real invalidation-crossing logic
+    is covered by check_rsi_divergence_watching_order's dedicated tests)."""
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 0.038, _sig(invalidation=0.03), wallet="swing",
+    )
+    await lo.transition_to_watching(order["id"])
+
+    notified = []
+
+    async def _notifier(msg):
+        notified.append(msg)
+
+    async def _fake_check(order_arg, sig_arg):
+        return "cancel"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
+
+    async def _price(contract, *, chain="base"):
+        return 0.029
+
+    await lo.process_active_orders(_price, notifier=_notifier)
+    assert await lo.get_active_orders() == []
+    assert len(notified) == 1
+
+
+@pytest.mark.asyncio
 async def test_process_active_orders_watching_triggers_buy(monkeypatch):
+    """31/07 -- wallet="vc" pinned explicitly: swing's own watching orders no
+    longer trigger on price alone (they now wait for a fresh RSI divergence,
+    see test_process_active_orders_swing_watching_triggers_on_fresh_
+    divergence below) -- VC keeps this plain price-comparison mechanism
+    unchanged."""
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
-    await paper_trader.reset_portfolio(1_000_000.0)
-    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
     await lo.transition_to_watching(order["id"])
 
     notified = []
@@ -1134,9 +1204,11 @@ async def test_process_active_orders_watching_trigger_skipped_if_portfolio_block
 
 @pytest.mark.asyncio
 async def test_process_active_orders_watching_alive_market_still_triggers(monkeypatch):
+    """31/07 -- wallet="vc" pinned explicitly, same rationale as
+    test_process_active_orders_watching_triggers_buy above."""
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
-    await paper_trader.reset_portfolio(1_000_000.0)
-    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig())
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
     await lo.transition_to_watching(order["id"])
 
     async def _pair(contract, *, chain="base"):
@@ -1146,6 +1218,59 @@ async def test_process_active_orders_watching_alive_market_still_triggers(monkey
     assert len(actions["triggered"]) == 1
     pos = await paper_trader._get_open("0xCHECK")
     assert pos is not None
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_swing_watching_triggers_on_fresh_divergence(monkeypatch):
+    """31/07, explicit operator decision: a swing order in "watching" now
+    resolves via a fresh RSI-divergence re-check (fine-grained candles),
+    never a plain price comparison -- even for reasons other than
+    rsi_divergence_pending (e.g. this one, a plain price-drift order,
+    limit_order_reason=None)."""
+    from aria_core import momentum_entry
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_check(order_arg, sig_arg):
+        return "trigger"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    pos = await paper_trader._get_open("0xCHECK", wallet="swing")
+    assert pos is not None
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_swing_watching_waits_without_fresh_divergence(monkeypatch):
+    """Mirror of the above: price alone reaching the target is NOT enough
+    for a swing order anymore -- without a confirmed divergence, it stays in
+    "watching"."""
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_check(order_arg, sig_arg):
+        return "wait"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037  # would have triggered under the old plain-price mechanism
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 0
+    active = await lo.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["state"] == "watching"
 
 
 # ── historical_trigger_rate / reset_historical_trigger_rate (Item #227/#250)
@@ -1435,11 +1560,20 @@ async def test_execute_trigger_scalping_pocket_sets_scalping_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_trigger_swing_pocket_keeps_standard_mode(monkeypatch):
+    """31/07 -- swing's WATCH mechanism now needs a confirmed fresh divergence
+    to trigger (check_rsi_divergence_watching_order mocked here), but the
+    resulting POSITION's own trading mode (exit discipline: stop/TP, distinct
+    from the watch candle granularity) stays "standard" for swing, unchanged."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
     await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
     order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
     await lo.transition_to_watching(order["id"])
+
+    async def _fake_check(order_arg, sig_arg):
+        return "trigger"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
 
     async def _price(contract, *, chain="base"):
         return 0.037
