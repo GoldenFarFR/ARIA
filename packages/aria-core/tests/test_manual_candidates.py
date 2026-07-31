@@ -161,3 +161,59 @@ async def test_add_manual_candidate_tolerates_watchlist_queueing_failure(monkeyp
     assert await mc.add_manual_candidate("0xABC", "base") is True
     pending = await mc.list_pending_manual_candidates()
     assert len(pending) == 1
+
+
+# ── Watchlist reconciliation (Item #241 follow-up, 31/07) ───────────────────
+# Real gap found live: 97 of 161 operator-submitted candidates never got a
+# goplus_watchlist slot because the one-shot insert at add-time silently
+# failed (watchlist full then) and was never retried, even after the
+# watchlist later freed up hundreds of slots.
+
+@pytest.mark.asyncio
+async def test_reconcile_heals_a_candidate_whose_initial_queueing_failed(monkeypatch):
+    from aria_core.services import goplus_watchlist
+
+    await goplus_watchlist._ensure_table()  # bypassed below, never created otherwise
+
+    async def failing_once(contract, chain, score):
+        return False  # simulates "watchlist full at add-time"
+
+    monkeypatch.setattr(goplus_watchlist, "add_or_touch", failing_once)
+    await mc.add_manual_candidate("0xABC", "base")
+    assert await _watchlist_row("0xabc", "base") is None  # confirmed missing
+
+    monkeypatch.undo()  # restore the real add_or_touch (room has since freed up)
+    added = await mc.reconcile_watchlist_membership([{"contract": "0xABC", "chain": "base"}])
+    assert added == 1
+    assert await _watchlist_row("0xabc", "base") is not None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_entries_already_present():
+    from aria_core.services import goplus_watchlist
+
+    await mc.add_manual_candidate("0xABC", "base", liquidity_usd=500_000.0, volume_24h_usd=200_000.0)
+    real_score = (await _watchlist_row("0xabc", "base"))[0]
+    assert real_score > 0.0
+
+    added = await mc.reconcile_watchlist_membership([{"contract": "0xABC", "chain": "base"}])
+    assert added == 0
+    # never overwritten with the reconciliation's neutral 0.0 default
+    assert (await _watchlist_row("0xabc", "base"))[0] == real_score
+
+
+@pytest.mark.asyncio
+async def test_reconcile_empty_entries_is_a_no_op():
+    assert await mc.reconcile_watchlist_membership([]) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tolerates_watchlist_failure(monkeypatch):
+    from aria_core.services import goplus_watchlist
+
+    async def raising(contract, chain, score):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(goplus_watchlist, "add_or_touch", raising)
+    added = await mc.reconcile_watchlist_membership([{"contract": "0xABC", "chain": "base"}])
+    assert added == 0

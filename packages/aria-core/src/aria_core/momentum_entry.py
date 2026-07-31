@@ -885,7 +885,7 @@ async def discover_momentum_candidates(
     # manual backlog alone reaches the cap.
     before = _source_snapshot()
     try:
-        from aria_core.manual_candidates import list_pending_manual_candidates
+        from aria_core.manual_candidates import list_pending_manual_candidates, reconcile_watchlist_membership
 
         manual_entries = await list_pending_manual_candidates()
     except Exception as exc:  # noqa: BLE001
@@ -894,6 +894,16 @@ async def discover_momentum_candidates(
     for entry in manual_entries:
         _add_candidate(out, seen, chains, entry["contract"], entry["chain"])
     source_contributions["manual(/add)"] = _source_snapshot() - before
+
+    # 31/07 -- see reconcile_watchlist_membership's own docstring: heals any
+    # manual candidate whose one-shot goplus_watchlist insert silently failed
+    # at add-time (watchlist full then, room since freed by evictions). Zero
+    # network cost, best-effort, never blocks discovery on failure.
+    if manual_entries:
+        try:
+            await reconcile_watchlist_membership(manual_entries)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("discover_momentum_candidates: watchlist reconciliation failed (%s)", exc)
 
     if "base" in chains:
         before = _source_snapshot()

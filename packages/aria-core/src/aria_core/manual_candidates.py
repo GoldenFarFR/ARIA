@@ -141,6 +141,44 @@ async def list_pending_manual_candidates() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def reconcile_watchlist_membership(entries: list[dict]) -> int:
+    """Item #241 follow-up (31/07, real gap found live): ``add_manual_candidate``
+    only ever ATTEMPTS the ``goplus_watchlist`` insert ONCE, at add-time --
+    ``add_or_touch`` returning ``False`` (watchlist full at that exact moment,
+    this candidate's neutral 0.0 score didn't beat the current worst entry)
+    is silent and never retried. Confirmed live: 97 of 161 operator-submitted
+    candidates (screenshot batch, 30/07) never got a slot, even though the
+    watchlist had since freed up hundreds of slots (entries evicted via
+    confirmed-honeypot removal) -- they simply never got a second attempt.
+    Called once per discovery cycle (~15min) with the SAME ``manual_entries``
+    ``discover_momentum_candidates`` already fetched -- a single query finds
+    the genuinely-missing subset (never re-writes an already-present entry),
+    then retries only those, best-effort. Zero network cost (``add_or_touch``
+    is a pure local DB check). Returns the number actually added this pass."""
+    if not entries:
+        return 0
+    await _ensure_table()
+    from aria_core.services import goplus_watchlist
+
+    rows = await goplus_watchlist.list_all()
+    present = {(r["contract"].lower(), r["chain"].lower()) for r in rows}
+
+    added = 0
+    for entry in entries:
+        contract = _normalize_contract(entry["contract"], entry["chain"])
+        chain = (entry["chain"] or "").strip().lower()
+        if not contract or not chain or (contract, chain) in present:
+            continue
+        try:
+            ok = await goplus_watchlist.add_or_touch(contract, chain, 0.0)
+        except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks discovery
+            logger.info("reconcile_watchlist_membership: failed for %s/%s (%s)", contract, chain, exc)
+            continue
+        if ok:
+            added += 1
+    return added
+
+
 async def remove_manual_candidate(contract: str, chain: str) -> None:
     """Called once a manually-added candidate is bought -- no longer needs
     re-discovery every cycle (``paper_trader.has_open`` already prevents a
