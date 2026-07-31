@@ -609,3 +609,18 @@ croissance FUTURE du revenu (thèse RWA/finance institutionnelle d'Injective), p
 déjà prouvée. **Le choix final de cette diligence reste entre AAVE et UNI** — INJ peut rester
 une diversification hors-EVM en 3e position si un pari sur une croissance de revenu non encore
 matérialisée est recherché, mais ne remplace pas les deux finalistes historiques.
+
+## Décision opérateur (31/07) — UNI retenu comme 3e/4e pilier de conviction long terme
+
+**Adresse contrat vérifiée** : `0x1f9840a85d5af5bf1d1762f925bdaddc4201f984` — contrat officiel UNI
+sur Ethereum, confirmé sur [Etherscan](https://etherscan.io/token/0x1f9840a85d5af5bf1d1762f925bdaddc4201f984).
+Contrat original depuis la genèse du token (novembre 2020, "Introducing UNI") — **jamais migré**,
+à la différence d'INJ qui vient de changer de contrat le 22/07/2026.
+
+**Choix acté** : UNI plutôt qu'AAVE — profil growth (revenu en accélération suite à l'extension
+du fee switch du 27/07/2026, catalyseur de distribution Robinhood Chain déjà confirmé et
+matérialisé en volume) contre le profil value d'AAVE (moins cher sur le ratio valorisation/
+revenu, ~13x contre ~43-52x pour UNI, mais tendance de revenu qui ralentit nettement). Choix de
+profil assumé par l'opérateur, cohérent avec l'ensemble de cette diligence — rappel permanent :
+lecture technique/structurelle de faits vérifiés, jamais une prédiction de prix ni un conseil en
+investissement personnalisé.
