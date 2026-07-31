@@ -110,3 +110,10 @@ Solution : `list_liquid_events` gains a `max_pages` kwarg (default 3, up to 300 
 `services/polymarket.py` -- 3 new tests in `test_polymarket_client.py` (paginates past a full first page, stops early on a short page without ever fetching further pages, respects the `max_pages` ceiling even when every page comes back full). All pre-existing `list_liquid_events` tests pass unmodified (their fixed single-event mock naturally short-circuits pagination after page 1). Full suite green, `test_coherence.py` green.
 
 ------------------------------------------------------------
+
+[DEPLOYE] Subject  : `max_pages` default raised 3 -> 6 (Item #196 follow-up, same day)
+Date : 2026.07.30 / Problem : operator follow-up right after #196 shipped ("on peut l'augmenter encore en taille ?") -- asked whether 300 events was leaving real liquid candidates on the table.
+Solution : verified live with 6 real curl passes (offsets 0/100/200/300/400/500) against Gamma's own `/events` endpoint: the liquidity-floor (20,000$) pass rate stays well above zero all the way out -- 97% at offset 0-100, still 50-54% at offset 400-600 -- a real population of tradeable markets, not noise past page 3. Raised the default to 6 (up to 600 raw events) -- API cost is zero (Gamma is free, unlike Tavily's per-call charge) and the added latency is negligible (~2s/page via the existing `min_interval` throttle) against a cycle that runs every 60min (temporary accelerated cadence) to 12h (nominal).
+`services/polymarket.py` (docstring + default only) -- no new tests needed, existing pagination tests already cover the mechanism itself (they pass `max_pages` explicitly or rely on early-stop, unaffected by the default's value). Full suite green, `test_coherence.py` green.
+
+------------------------------------------------------------

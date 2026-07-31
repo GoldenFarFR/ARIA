@@ -326,7 +326,7 @@ class PolymarketClient:
         max_days_to_resolution: int | None = 30,
         min_days_to_resolution: float = 0.25,
         limit: int = 100,
-        max_pages: int = 3,
+        max_pages: int = 6,
     ) -> list[PolymarketCandidateMarket]:
         """Real listing of tradeable markets (26/07, Item #108) -- unlike
         ``fetch_top_event_by_tag`` (ONE event, hardcoded to a single tag,
@@ -350,10 +350,15 @@ class PolymarketClient:
         the moment a page returns fewer raw events than ``limit`` (Gamma's
         own signal that there's nothing further), never blindly fetching
         ``max_pages`` pages regardless of how much data actually exists.
-        Default 3 (up to 300 raw events) is a deliberately modest ceiling --
-        this pipeline only ever judges a handful of candidates per cycle
-        (``CANDIDATES_PER_CYCLE``), no need to paginate deep into the long
-        tail for that.
+        Default 6 (up to 600 raw events) -- operator follow-up (30/07)
+        after seeing #196 shipped ("on peut l'augmenter encore en taille ?"):
+        verified live (6 real curl passes, offsets 0-600) that the
+        liquidity-floor pass rate stays well above zero all the way out
+        (97% at offset 0-100, still 50-54% at offset 400-600 -- a real
+        population of tradeable markets, not noise). Raised from the
+        original 3-page ceiling; the API cost is zero (Gamma is free, no
+        per-call charge like Tavily) and the added latency is negligible
+        (~2s/page, `min_interval`) against a cycle that runs every 60min-12h.
 
         ``min_days_to_resolution`` (default 6 hours): a market resolving in
         the next few minutes leaves no real time for a paper position to
