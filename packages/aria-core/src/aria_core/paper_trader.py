@@ -2746,7 +2746,7 @@ async def _bonding_candidates(*, limit: int = 20) -> list[str]:
     return contracts[:limit]
 
 
-async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[str], dict[str, str]]:
+async def _momentum_candidates_and_chain_map(*, limit: int = 50) -> tuple[list[str], dict[str, str]]:
     """#194, momentum pivot -- default candidate source for THIS TEST (replaces
     ``candidate_ranking.top_candidates()`` ONLY as ``run_paper_cycle``'s
     default when neither ``candidates`` nor ``analyzer`` are provided by the
@@ -2762,13 +2762,40 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 20) -> tuple[list[s
     (operator's explicit choice, not a separate/dormant pocket). A contract
     already present via the standard momentum discovery (already graduated,
     real DEX pair) keeps its real chain -- bonding sourcing never overwrites
-    an existing entry."""
-    from aria_core import momentum_entry
+    an existing entry.
+
+    31/07, operator request ("toujours les derniers scannés en dernier pour
+    être sûr que tous les token passe au scan") -- when ``discover_momentum_
+    candidates`` surfaces more candidates than ``limit``, truncating on the
+    raw discovery order (previously: whatever the 6 sources happened to list
+    first, every cycle) could starve candidates further down the list
+    forever if the same well-liquid tokens keep resurfacing first. Sorted by
+    ``momentum_scan_log.last_scan_map`` before truncating: never-scanned
+    candidates first, then oldest-scanned first -- same round-robin doctrine
+    as ``goplus_watchlist.next_due``. Best-effort: a lookup failure degrades
+    to the original discovery order (never blocks the cycle)."""
+    from aria_core import momentum_entry, momentum_scan_log
     from aria_core.bonding_entry import CHAIN_MARKER
 
     found = await momentum_entry.discover_momentum_candidates()
     chain_by_contract = {c["contract"]: c["chain"] for c in found}
-    contracts = [c["contract"] for c in found[:limit]]
+
+    try:
+        last_scan = await momentum_scan_log.last_scan_map(
+            [(c["contract"], c["chain"]) for c in found]
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks discovery
+        logger.info("_momentum_candidates_and_chain_map: last_scan_map failed (%s)", exc)
+        last_scan = {}
+
+    def _priority_key(entry: dict) -> str:
+        # Never-scanned (absent from last_scan) sorts before any real
+        # timestamp -- ISO timestamps compare lexicographically, and the
+        # empty string is lexicographically smaller than any real one.
+        return last_scan.get((entry["contract"].lower(), entry["chain"] or "base"), "")
+
+    prioritized = sorted(found, key=_priority_key)
+    contracts = [c["contract"] for c in prioritized[:limit]]
 
     bonding_contracts = await _bonding_candidates(limit=limit)
     for addr in bonding_contracts:
@@ -3040,7 +3067,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
     # mode.
     trading_mode = await get_trading_mode()
 
-    candidates, chain_map = await _momentum_candidates_and_chain_map(limit=20)
+    candidates, chain_map = await _momentum_candidates_and_chain_map(limit=50)
     analyzer = _default_momentum_analyzer(
         chain_map, weekly_context, current_regime=current_regime, relaxed=True,
         mode=trading_mode,
@@ -4975,7 +5002,7 @@ async def _run_paper_cycle_locked(
         # discovery (#194) is fetched ONCE and shared by scalping+swing (same
         # real-world scan, only the analyzer's ``mode`` differs) -- never a
         # duplicated network call for the same discovery pass.
-        momentum_candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
+        momentum_candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=50)
         from aria_core.skills.candidate_ranking import top_candidates
 
         vc_candidates = [c.contract for c in await top_candidates(20)]
@@ -5129,7 +5156,7 @@ async def _run_paper_cycle_locked(
         # ``_open_new_entries_for_wallet`` (the only new wiring needed to
         # keep working under ``open_position``'s new mandatory ``wallet`` param).
         if candidates is None and analyzer is None:
-            candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=20)
+            candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=50)
             analyzer = _default_momentum_analyzer(
                 _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
                 mode=trading_mode,

@@ -144,6 +144,38 @@ async def total_scans(hours: float = 24.0) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+async def last_scan_map(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """Batched variant of ``last_scan_for`` -- one query for MANY (contract,
+    chain) pairs instead of N sequential ones (31/07, needed to prioritize a
+    large discovery list before truncating to the per-cycle evaluation cap,
+    see ``paper_trader._momentum_candidates_and_chain_map``). Returns only
+    the pairs that HAVE been scanned at least once -- a pair absent from the
+    result was never scanned (the caller treats that as "most urgent",
+    same doctrine as ``goplus_watchlist.next_due``'s NULL-sorts-first rule).
+
+    Uses MAX(scanned_at) grouped by (contract, chain) -- a single query
+    regardless of how many prior scan rows exist for a given pair (this
+    table is append-only, a popular token can have dozens)."""
+    if not pairs:
+        return {}
+    await _ensure_table()
+    normalized = [(c.lower(), ch or "base") for c, ch in pairs if c]
+    if not normalized:
+        return {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("(?,?)" for _ in normalized)
+        params = [v for pair in normalized for v in pair]
+        cursor = await db.execute(
+            f"SELECT contract, chain, MAX(scanned_at) AS last_scanned_at "
+            f"FROM momentum_scan_log WHERE (contract, chain) IN ({placeholders}) "
+            f"GROUP BY contract, chain",
+            params,
+        )
+        rows = await cursor.fetchall()
+    return {(r["contract"], r["chain"]): r["last_scanned_at"] for r in rows}
+
+
 async def last_scan_for(contract: str, chain: str) -> dict | None:
     """Most recent scan for this (contract, chain) -- not yet consumed by
     any caller (Item #193's next step, the rejection-TTL cache itself, will

@@ -94,7 +94,12 @@ ENDPOINTS: tuple[str, ...] = (
 
 # Explicit operator decisions, 16/07 (#196).
 DRAIN_INTERVAL_SECONDS = 30       # lower bound of the proposed range -- the goal is speed
-MAX_CANDIDATES_PER_DRAIN = 20     # same order of magnitude as the cap already accepted for paper_trade_cycle
+# 31/07 -- raised 20 -> 50 (explicit operator decision, matches the same-day
+# raise of paper_trader._momentum_candidates_and_chain_map's own limit).
+# MAX_EVALUATIONS_PER_HOUR below remains the real ceiling either way (still
+# far under this number x drains/hour), unchanged -- the operator only asked
+# to raise the per-drain/per-cycle figure, not the hourly safety cap.
+MAX_CANDIDATES_PER_DRAIN = 50
 DEDUP_TTL_SECONDS = 15 * 60       # 15 minutes -- anti-spam for closely-spaced frames on
                                   # the same candidate, NOT the rescan cooldown (see
                                   # RESCAN_COOLDOWN_SECONDS below, 22/07).
@@ -120,18 +125,32 @@ MAX_NEW_PER_DRAIN = 3             # same pacing as the heartbeat default (run_pa
 
 # 19/07 -- rate cap added BEFORE activation (legitimate operator question:
 # "won't this break the API plumbing?"). Without it, the theoretical worst
-# case is MAX_CANDIDATES_PER_DRAIN (20) every DRAIN_INTERVAL_SECONDS (30s) =
-# up to ~2400 candidates evaluated/hour -- a ~30x factor over the classic
-# heartbeat cycle's rate (20 candidates x 4 cycles/hour = 80/hour).
-# GeckoTerminal/GoPlus have a SHARED client-side throttle (protects against a
-# real 429 -- calls are serialized, not parallelized), but CoinMarketCap has
-# NO client throttle at all, and none of the three has an hourly/daily QUOTA
-# cap coded anywhere: sustained throughput could exhaust a monthly paid quota
-# within days without ever triggering a single individual 429 that would
-# alert anyone. Brings the WebSocket rate back to the SAME ORDER OF MAGNITUDE
-# as the current regime (80/hour) -- keeps the LATENCY advantage (near-instant
-# detection) without blowing up the total VOLUME consumed by downstream APIs.
-MAX_EVALUATIONS_PER_HOUR = 80
+# case is MAX_CANDIDATES_PER_DRAIN every DRAIN_INTERVAL_SECONDS (30s) --
+# with the 31/07 value (50), up to ~6000 candidates evaluated/hour -- a huge
+# multiple over the classic heartbeat cycle's rate (used to be 20 candidates
+# x 4 cycles/hour = 80/hour, back when that cycle ran every 15min; it now
+# runs hourly). GeckoTerminal/GoPlus have a SHARED client-side throttle
+# (protects against a real 429 -- calls are serialized, not parallelized),
+# but CoinMarketCap has NO client throttle at all, and none of the three has
+# an hourly/daily QUOTA cap coded anywhere: sustained throughput could
+# exhaust a monthly paid quota within days without ever triggering a single
+# individual 429 that would alert anyone.
+#
+# 31/07 -- raised 80 -> 200 (explicit operator decision, same day as the
+# 20->50 per-drain raise above), after verifying the real ceiling this
+# actually competes against: GeckoTerminal (the lowest-throughput OHLCV
+# source in the cascade, ~27 req/min = ~1620/h calibrated at 90%,
+# docs/api-rate-limit-calibration.md) is shared with other system consumers,
+# not dedicated to this pipeline. Each drained candidate costs 2 real
+# GeckoTerminal calls (scalping + swing evaluated separately) -- even at 200
+# candidates/hour, that's ~400 calls/hour, still only ~25% of GeckoTerminal's
+# calibrated capacity, a real, verified margin (the old 80 figure used only
+# ~10%). Known, flagged gap NOT resolved by this change: the LLM call now
+# made for EVERY swing setup (R/R floor removed, same day) has no calibrated
+# rate/quota documented anywhere in this codebase -- it could become the real
+# bottleneck before GeckoTerminal ever does. Observe real latency/cost over
+# the following days before raising this further.
+MAX_EVALUATIONS_PER_HOUR = 200
 
 _CONNECT_TIMEOUT_SECONDS = 8
 _RECV_TIMEOUT_SECONDS = 15

@@ -4811,6 +4811,62 @@ async def test_momentum_candidates_appends_bonding_without_overwriting(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_momentum_candidates_prioritizes_never_scanned_over_stale(monkeypatch):
+    """31/07, operator request ("toujours les derniers scannés en dernier
+    pour être sûr que tous les token passe au scan"): when discovery
+    surfaces MORE candidates than the per-cycle limit, truncating on raw
+    discovery order could starve the same never-reached candidates forever.
+    A/B/C already scanned (B most recently, A a while ago), D never scanned
+    -- with limit=2, D (never scanned) and A (oldest real scan) must win over
+    B/C (scanned more recently), even though D/A are LAST in the raw
+    discovery order."""
+    from aria_core import momentum_entry, momentum_scan_log
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        # Raw discovery order deliberately puts the recently-scanned ones
+        # FIRST -- a naive found[:limit] would pick B/C, never D/A.
+        return [
+            {"contract": B, "chain": "base"},
+            {"contract": C, "chain": "base"},
+            {"contract": A, "chain": "base"},
+            {"contract": D, "chain": "base"},
+        ]
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+
+    await momentum_scan_log.record_scan(A, "base", "no_entry_signal")
+    old_scan = (await momentum_scan_log.last_scan_for(A, "base"))["scanned_at"]
+    await momentum_scan_log.record_scan(B, "base", "no_entry_signal")
+    await momentum_scan_log.record_scan(C, "base", "no_entry_signal")
+    # D never scanned.
+
+    contracts, _ = await pt._momentum_candidates_and_chain_map(limit=2)
+
+    assert set(contracts) == {D, A}  # never-scanned + oldest-scanned, not the 2 most recent
+    assert old_scan  # sanity: A really has a real, older timestamp on record
+
+
+@pytest.mark.asyncio
+async def test_momentum_candidates_falls_back_to_discovery_order_on_scan_log_failure(monkeypatch):
+    """Best-effort: a last_scan_map failure must never block discovery --
+    degrades to the raw discovery order, same doctrine as every other
+    optional signal in this pipeline."""
+    from aria_core import momentum_entry, momentum_scan_log
+
+    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+        return [{"contract": A, "chain": "base"}, {"contract": B, "chain": "base"}]
+
+    async def failing_last_scan_map(pairs):
+        raise RuntimeError("DB unavailable")
+
+    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(momentum_scan_log, "last_scan_map", failing_last_scan_map)
+
+    contracts, _ = await pt._momentum_candidates_and_chain_map(limit=2)
+    assert set(contracts) == {A, B}
+
+
+@pytest.mark.asyncio
 async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(monkeypatch):
     from aria_core import bonding_entry, momentum_entry
     from aria_core.bonding_entry import CHAIN_MARKER

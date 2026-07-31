@@ -102,6 +102,55 @@ async def test_last_scan_for_unknown_contract_returns_none():
     assert await msl.last_scan_for("0xNEVERSEEN", "base") is None
 
 
+# ── last_scan_map (31/07, batched priority lookup for the discovery limit) ──
+
+@pytest.mark.asyncio
+async def test_last_scan_map_empty_input_is_a_noop():
+    assert await msl.last_scan_map([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_last_scan_map_omits_never_scanned_pairs():
+    await msl.record_scan("0xAAA", "base", "volume_too_low")
+    result = await msl.last_scan_map([("0xAAA", "base"), ("0xNEVERSEEN", "base")])
+    assert ("0xaaa", "base") in result
+    assert ("0xneverseen", "base") not in result
+
+
+@pytest.mark.asyncio
+async def test_last_scan_map_returns_most_recent_per_pair():
+    await msl.record_scan("0xAAA", "base", "volume_too_low")
+    first = (await msl.last_scan_for("0xAAA", "base"))["scanned_at"]
+    await msl.record_scan("0xAAA", "base", "no_entry_signal")
+    result = await msl.last_scan_map([("0xAAA", "base")])
+    assert result[("0xaaa", "base")] >= first
+
+
+@pytest.mark.asyncio
+async def test_last_scan_map_keeps_chains_separate():
+    await msl.record_scan("0xAAA", "base", "volume_too_low")
+    await msl.record_scan("0xAAA", "ethereum", "no_entry_signal")
+    result = await msl.last_scan_map([("0xAAA", "base"), ("0xAAA", "ethereum")])
+    assert ("0xaaa", "base") in result
+    assert ("0xaaa", "ethereum") in result
+
+
+@pytest.mark.asyncio
+async def test_last_scan_map_case_insensitive_contract():
+    await msl.record_scan("0xAAA", "base", "volume_too_low")
+    result = await msl.last_scan_map([("0xaaa", "base")])
+    assert ("0xaaa", "base") in result
+
+
+@pytest.mark.asyncio
+async def test_last_scan_map_handles_many_pairs_in_one_query():
+    pairs = [(f"0x{i:040x}", "base") for i in range(30)]
+    for contract, chain in pairs[:10]:
+        await msl.record_scan(contract, chain, "volume_too_low")
+    result = await msl.last_scan_map(pairs)
+    assert len(result) == 10
+
+
 @pytest.mark.asyncio
 async def test_count_distinct_excludes_entries_older_than_window():
     await msl.record_scan("0xAAA", "base", "volume_too_low")  # dans la fenêtre
