@@ -712,3 +712,22 @@ ici sur ces deux candidats.
 **Bilan des 3 relectures croisées (ChatGPT + Grok + Gemini)** : aucune contradiction de fond sur
 le verdict final — toutes confirment AAVE/UNI comme seuls finalistes et le choix opérateur pour
 UNI comme un vrai choix de profil de risque (value vs growth), pas une erreur de méthode.
+
+## Conclusion définitive de cette diligence (31/07)
+
+**Les 3 relectures croisées externes ne changent pas le résultat final — elles le renforcent.**
+Aucune des trois n'a proposé un candidat alternatif à AAVE/UNI comme finaliste ; toutes
+confirment indépendamment le même cadre (AAVE = socle value, UNI = accélérateur growth) et que
+INJ, même s'il reste la meilleure alternative non-EVM du panel, ne les supplante pas — pour deux
+raisons indépendantes selon les analyses (gouvernance chez Gemini, ratio de valorisation ~134x
+dans notre propre calcul), ce qui rend la conclusion plus solide qu'un simple avis isolé.
+
+Ce qui a gagné en précision, ce n'est pas le verdict mais la **conscience du risque assumé** :
+UNI reste un pari sur l'exécution future (Unichain/hooks v4/Robinhood se matérialisant en
+revenu réel), pas une valeur déjà prouvée à ce prix — résumé le plus juste retenu : *« une
+option n'est pas un cash-flow »*. AAVE reste en réserve comme profil value plus sûr si
+l'arbitrage devait un jour changer.
+
+**Décision opérateur finale, inchangée et confirmée (31/07)** : UNI devient le 3e/4e pilier de
+conviction long terme du capital personnel de l'opérateur, aux côtés de BTC (cbBTC) et ETH.
+Cette diligence est close.
