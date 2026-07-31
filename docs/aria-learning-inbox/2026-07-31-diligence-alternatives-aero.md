@@ -172,27 +172,76 @@ La "Dual Governance" (permet aux détenteurs stETH de bloquer/retarder une propo
 atténue partiellement ce risque, sans le supprimer
 ([lido.fi/known-risks](https://lido.fi/how-lido-works/known-risks-and-mitigations)).
 
-## Synthèse — classement et verdict
+## Round 2 — validation par vraie recherche web (31/07, agent dédié, post-committé)
+
+Un second tour, cette fois avec une VRAIE recherche web (pas la mémoire du modèle) pour
+challenger le tableau ci-dessus et vérifier qu'aucun meilleur candidat n'a été oublié. Verdict
+par candidat, chacun réévalué avec des faits datés de juillet 2026 :
+
+- **AAVE — confirmé fort, renforcé.** "Aavenomics 3.0" (live le 27/06/2026) automatise des
+  rachats sur marché ouvert **financés à 100% par le revenu réel** (~402M$ annualisé selon
+  DefiLlama), retirant ~292 AAVE/jour de la circulation ; plus de 205 000 AAVE (1,28% du
+  supply) déjà rachetés depuis avril 2025. Le budget a été réduit de 50M$ à 30M$/an en
+  mars 2026 suite à une baisse de 25% du revenu des frais d'emprunt — signal de **discipline**
+  (ajustement sur le revenu réel plutôt qu'une promesse intenable), pas un défaut
+  ([The Defiant](https://thedefiant.io/news/defi/aave-confirms-aavenomics-3-0-live-buybacks-dao-spending-cut) ;
+  [gouvernance Aave](https://governance.aave.com/t/arfc-buyback-program-budget-adjustment/24229) ;
+  adresse vérifiée sur [BaseScan](https://basescan.org/address/0x63706e401c06ac8513145b7687a14804d17f814b)).
+- **UNI — confirmé fort, se rapproche désormais d'AAVE.** Le fee switch a été étendu par la
+  Proposition de gouvernance 100 (27/07/2026) à des pools v4 sur 7 réseaux ; mécanisme
+  TokenJar (brûler UNI pour réclamer les frais) — économiquement équivalent à un rachat
+  d'actions, jamais un dividende qui poserait un risque réglementaire. Revenu ~23M$ en 2026
+  post-activation, +27M$/an supplémentaire estimé
+  ([The Defiant](https://thedefiant.io/news/defi/uniswap-passes-unification-fee-switch-proposal)).
+- **LINK — confirmé faible, le défaut tient toujours.** Chainlink Economics 2.0 est
+  explicitement une TRANSITION en cours ("les récompenses de staking commenceront à passer
+  des émissions vers les frais organiques") — pas encore assainie. Le pool de staking a
+  grossi vers une cible de 75M LINK (contre 45M) — dilution qui continue tant que la
+  transition n'est pas achevée ([chain.link/economics/staking](https://chain.link/economics/staking)).
+- **MKR/SKY — disqualification aggravée.** La conversion forcée 1:24000 (sept. 2024) reste
+  contestée en 2026 : un vote a maintenu la marque Sky (79,3%) puis Sky a ouvert un vote pour
+  imposer une **pénalité de 1%** aux détenteurs n'ayant toujours pas converti leur MKR — preuve
+  d'une migration forcée non terminée. Pire : une enquête indépendante montre que **4 entités
+  seulement** représentent la quasi-totalité des votes ayant maintenu la marque Sky — échec
+  net de gouvernance décentralisée, pas seulement un historique de fusion
+  ([The Block](https://www.theblock.co/post/371401/sky-opens-vote-to-penalize-stragglers-delaying-mkr-to-sky-token-conversion) ;
+  [The Block, concentration des votes](https://www.theblock.co/post/325096/just-four-entities-account-for-nearly-all-the-votes-to-keep-makerdaos-rebranding-to-sky)).
+- **CRV — confirmé faible, deux problèmes non vus au premier tour.** (1) Convex contrôle à
+  lui seul ~47% des votes veCRV, et des entités alignées au fondateur (Swiss Stake AG)
+  figurent aussi parmi les plus gros verrouilleurs — gouvernance dominée par une poignée
+  d'acteurs. (2) Le fondateur Michael Egorov a par le passé engagé des positions de levier
+  personnelles ayant menacé la solvabilité du protocole (crise de 2023) — risque systémique
+  lié à une personne, pas à un protocole vraiment distribué
+  ([Blockworks](https://blockworks.co/news/curve-founder-faces-community-pushback-on-funding-proposal)).
+- **LDO — confirmé faible (nouveau défaut structurel trouvé).** "Les détenteurs de LDO
+  gouvernent une trésorerie, pas un flux de revenu" — désalignement explicite entre la
+  domination du protocole (32Md$ TVL, 75,4M$ de revenu annualisé) et la valeur captée par le
+  token (rachat de seulement 1,95M$ à ce jour). Le token se négocie à **-96%** de son sommet de
+  2021 malgré des fondamentaux solides — symptôme direct de ce défaut
+  ([ainvest.com](https://www.ainvest.com/news/ldo-lido-dao-research-2606/)).
+
+**Aucun meilleur candidat trouvé** : l'agent a aussi vérifié GMX (récompenses de staking
+suspendues, pas natif Base, un seul cycle), Synthetix (transition tokenomique instable,
+incident de dépeg sUSD en 2026), Compound et Morpho (aucun mécanisme de capture de revenu
+pour le token, Morpho en plus trop récent pour un track record multi-cycles) — tous échouent
+sur au moins un des 6 critères.
+
+## Synthèse — classement et verdict (mis à jour après le round 2)
 
 | Candidat | Fusion de token | Gouvernance décentralisée | Modèle économique | Sécurité | Verdict |
 |---|---|---|---|---|---|
-| **AAVE** | Aucune prévue | Décentralisée dès 2020, timelock+guardian | Buyback financé par revenu réel | 65 audits, 1 seul incident (remboursé) | **Meilleur candidat** |
-| **UNI** | Aucune prévue | Timelock 2-30j, DUNA (2025) | Burn déflationniste financé par revenu réel | 9 audits, bug bounty 15,5M$ | **2e candidat solide** |
-| **LDO** | Aucune prévue | Dual Governance (partiel) | Frais réels (staking ETH) | 120 audits, incidents mineurs bien gérés | Solide mais conflit de gouvernance reconnu |
-| **LINK** | Aucune prévue | Non documentée (trou réel) | ⚠️ Émissions > revenu réel (défaut AERO) | Aucun incident oracle, mais dilution Labs opaque | Défaut structurel identique à AERO |
-| **CRV** | Aucune prévue | Address Provider = 1 individu | Émissions classiques | A subi un vrai hack (2023), score 6,5/10 | Point de centralisation + historique d'exploit |
-| **MKR/SKY** | **DÉJÀ vécue** (Endgame) | — | Buyback + réduction d'émissions (positif) | Réserves gérées par simple EOA | **Disqualifié** |
+| **AAVE** | Aucune prévue | Décentralisée dès 2020, timelock+guardian | Buyback financé par revenu réel (Aavenomics 3.0) | 65 audits, 1 seul incident (remboursé) | **Meilleur candidat, confirmé round 2** |
+| **UNI** | Aucune prévue | Timelock 2-30j, DUNA (2025) | Burn déflationniste étendu (Proposition 100) | 9 audits, bug bounty 15,5M$ | **Quasi à égalité avec AAVE, confirmé round 2** |
+| **LDO** | Aucune prévue | Dual Governance (partiel) | ⚠️ Domination de marché sans capture de valeur pour le token | 120 audits, incidents mineurs bien gérés | Faible — nouveau défaut confirmé |
+| **LINK** | Aucune prévue | Non documentée (trou réel) | ⚠️ Émissions > revenu réel, transition inachevée | Aucun incident oracle, dilution Labs opaque | Faible — défaut confirmé round 2 |
+| **CRV** | Aucune prévue | Convex ~47% des votes + risque fondateur personnel | Émissions classiques | A subi un vrai hack (2023), score 6,5/10 | Faible — gouvernance concentrée confirmée |
+| **MKR/SKY** | **DÉJÀ vécue** (Endgame), migration encore forcée en 2026 | 4 entités = quasi tous les votes | Buyback + réduction d'émissions (seul point positif) | Réserves gérées par simple EOA | **Disqualifié, aggravé round 2** |
 
-**Recommandation de cette session** : **AAVE** est le candidat le plus solide sur l'ensemble
-des critères qui ont fait rejeter AERO — gouvernance décentralisée depuis le plus longtemps
-(2020), modèle économique qui distribue moins qu'il ne gagne (l'inverse exact du problème
-AERO), présence directe sur Base, aucun projet de fusion de token. **UNI** est un second choix
-solide avec un mécanisme déflationniste tout aussi sain. **MKR/SKY est à écarter directement**
-— il reproduit déjà le défaut n°1 qui a fait rejeter AERO. **LINK mérite prudence** malgré sa
-dominance de marché — son modèle de récompenses est structurellement financé par des
-émissions, pas par le revenu réel, exactement le défaut identifié chez AERO.
-
-**Limite de cette diligence, honnêtement signalée** : la liste des 6 candidats vient d'une
-sélection a priori (mémoire du modèle + 4 noms suggérés par l'opérateur), pas d'une recherche
-web de validation. Un tour de validation/démolition dédié est prévu en complément pour
-vérifier qu'aucun meilleur candidat n'a été oublié.
+**Recommandation finale de cette session** : **AAVE** reste le candidat en tête, confirmé et
+renforcé par une vraie recherche web indépendante — gouvernance décentralisée depuis 2020,
+modèle économique qui distribue moins qu'il ne gagne, présence directe sur Base, aucune
+fusion de token. **UNI** est désormais un challenger quasi à égalité, pas juste un second
+choix. **MKR/SKY, LINK, CRV et LDO** portent chacun un défaut structurel confirmé et
+documenté — aucun n'est disqualifiant au même degré que MKR/SKY, mais aucun ne rivalise avec
+AAVE/UNI sur l'ensemble des critères. Le tour de validation n'a trouvé aucun 7e candidat
+meilleur (GMX/Synthetix/Compound/Morpho tous vérifiés et écartés).
