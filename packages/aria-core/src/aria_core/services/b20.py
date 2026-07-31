@@ -52,7 +52,26 @@ creation-block search removes that ceiling entirely -- the scan always
 reaches exactly as far back as it needs to, regardless of the token's real
 age. ``MAX_LOG_SCAN_WINDOWS`` remains only as a generous safety backstop
 (a pathological creation-block resolution failure), never the primary
-limiter now."""
+limiter now.
+
+Known, UNRESOLVED limitation (31/07, verified live, not just theorized): the
+public Base RPC's real ceiling on CONCURRENT ``eth_getLogs`` calls sits
+between 26 (succeeds) and 28 (real HTTP 429) -- ``_PARALLEL_BATCH_SIZE``
+calibrated down to 8 (16 concurrent calls/batch) with a short retry-with-
+backoff on 429 in ``_window_logs``. This closes most of the gap but NOT all
+of it: on a genuinely old B20 (~23 days, ~1,233 windows), two back-to-back
+live runs against the real public RPC took 488s (succeeded) and 572s
+(exhausted its retries, degraded to "opaque") -- the node's real capacity
+fluctuates with its own shared load, not something a client-side constant
+alone can fully compensate for. For a FRESHLY-discovered candidate (hours to
+a few days old, the momentum pipeline's actual real-world case -- confirmed
+live: a ~1,800-block/~6h-old scan resolved in 0.6s, first try, every time)
+this is a non-issue. It only bites an OLDER token: the manual VC crible
+(``/vc <any contract>``) and any future x402 product that could be asked
+about an arbitrary token are the paths actually exposed to it. The real fix
+is a dedicated/paid RPC provider with a verified throughput (not the free
+public node) -- tracked as a prerequisite before selling this via x402,
+never silently worked around by guessing another client-side constant."""
 from __future__ import annotations
 
 import asyncio
@@ -230,12 +249,38 @@ class RoleHolderScan:
 _EARLY_STOP_EMPTY_WINDOWS = 15
 
 
+# 31/07 -- real bug found live testing the creation-block fix above: a batch
+# of _PARALLEL_BATCH_SIZE=20 windows x 2 event types = 40 concurrent
+# eth_getLogs calls hit a real HTTP 429 on the public Base RPC on the very
+# first batch of a genuinely-aged token's scan. Empirically measured (not
+# guessed, same doctrine as docs/api-rate-limit-calibration.md): 26
+# concurrent calls succeeded, 28 failed -- the real ceiling sits right there.
+# A short retry-with-backoff on 429 alone (never on a genuine/permanent
+# failure) absorbs a transient burst without derailing the whole scan.
+_LOG_FETCH_MAX_RETRIES = 3
+_LOG_FETCH_RETRY_BASE_DELAY_S = 0.5
+
+
 def _window_logs(contract, event_name: str, *, from_block: int, to_block: int, role_id) -> list[dict]:
     """Synchronous, blocking web3 call -- ALWAYS run via ``asyncio.to_thread``
     by the caller, never awaited directly (web3.py's HTTPProvider has no
-    native async mode here)."""
+    native async mode here). Retries a rate-limit response (429) with a short
+    backoff -- ``time.sleep`` is safe here since this already runs in its own
+    thread, never the main event loop."""
+    import time
+
     event = getattr(contract.events, event_name)
-    return list(event.get_logs(from_block=from_block, to_block=to_block, argument_filters={"role": role_id}))
+    for attempt in range(_LOG_FETCH_MAX_RETRIES):
+        try:
+            return list(
+                event.get_logs(from_block=from_block, to_block=to_block, argument_filters={"role": role_id})
+            )
+        except Exception as exc:  # noqa: BLE001
+            is_rate_limited = "429" in str(exc) or "Too Many Requests" in str(exc)
+            if not is_rate_limited or attempt == _LOG_FETCH_MAX_RETRIES - 1:
+                raise
+            time.sleep(_LOG_FETCH_RETRY_BASE_DELAY_S * (2**attempt))
+    return []  # unreachable (loop always returns or raises), keeps type-checkers happy
 
 
 # 31/07 -- real performance problem found live: the naive sequential version
@@ -247,7 +292,17 @@ def _window_logs(contract, event_name: str, *, from_block: int, to_block: int, r
 # stop heuristic) -- fetched in parallel batches via asyncio.gather, only the
 # early-stop decision itself stays sequential (applied once a full batch is
 # back, walking it newest-to-oldest exactly as the old serial loop did).
-_PARALLEL_BATCH_SIZE = 20
+#
+# Value calibrated DOWN the same day (real 429 hit live testing the
+# creation-block fix): each window fires 2 concurrent requests (RoleGranted +
+# RoleRevoked), so the original 20 meant 40 concurrent eth_getLogs calls --
+# empirically measured against the real public Base RPC (mainnet.base.org):
+# 26 concurrent calls succeeded, 28 failed with a real HTTP 429. 8 windows =
+# 16 concurrent calls, comfortably under that measured ceiling with margin
+# for the RPC being shared with the rest of ARIA's own concurrent traffic at
+# the same time (same "90% of measured capacity, never guessed" doctrine as
+# docs/api-rate-limit-calibration.md).
+_PARALLEL_BATCH_SIZE = 8
 
 
 async def scan_role_holders(
