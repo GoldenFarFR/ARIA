@@ -624,3 +624,22 @@ revenu, ~13x contre ~43-52x pour UNI, mais tendance de revenu qui ralentit nette
 profil assumé par l'opérateur, cohérent avec l'ensemble de cette diligence — rappel permanent :
 lecture technique/structurelle de faits vérifiés, jamais une prédiction de prix ni un conseil en
 investissement personnalisé.
+
+**Friction opérationnelle réelle trouvée (31/07) — pas de wrap officiel d'UNI sur Base.**
+Vérifié directement sur la page multi-chaînes CoinGecko : UNI existe sur Ethereum, Unichain
+(leur propre L2), Optimism, Arbitrum, Polygon, BNB Chain, Avalanche, Gnosis Chain, Near,
+Harmony, Energi, Sora — **mais pas Base**. Une adresse "UNI" existe bien sur BaseScan
+(`0xcac25237b1a55b2fff5a3c5b4219ab07f920890e`), vérifiée et **confirmée être un impersonateur** :
+38 milliards de supply max (vs 1 milliard réel), seulement 50 holders, prix à 0,00$, aucun lien
+vers la documentation/gouvernance officielle Uniswap — **à ne jamais utiliser**. Conséquence
+pratique : détenir UNI nécessite de passer par Ethereum mainnet (frais de gas plus élevés que
+Base) ou un des L2 listés ci-dessus (Optimism/Arbitrum/Unichain), pas la simplicité "tout sur
+Base" dont bénéficie cbBTC.
+
+**Recalcul du ratio valorisation/revenu (31/07, données CoinGecko/Token Terminal fraîches)** :
+frais 24h 1 436 996$, revenu de projet 24h 204 033$ → revenu annualisé ≈ 74,6M$/an ; market cap
+≈ 4,34$ × 624,9M ≈ 2,71Md$ → ratio ≈ **36x**, cohérent avec la fourchette ~43-52x déjà établie
+(légèrement plus favorable sur cet instantané précis). **À surveiller, pas à ignorer** : frais
+et revenu tous deux en repli sur 24h (-30,4% et -14,0% vs la veille) — signe possible que le pic
+du 27/07 (~325k$/jour, extension du fee switch) était ponctuel plutôt qu'un nouveau plateau
+soutenu ; la tendance ne se confirmera que sur plusieurs semaines, pas un seul jour.
