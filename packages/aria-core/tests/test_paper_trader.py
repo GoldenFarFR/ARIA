@@ -4349,11 +4349,6 @@ async def test_run_cycle_places_limit_order_on_golden_pocket_watch_candidate(tmp
             "reasons": ["pas de setup golden pocket + divergence RSI avec R/R positif"],
             "hold_reason": "no_entry_signal",
             "limit_order_candidate": {
-                # rr=2.5 -- clears the swing floor (Item #231, meets_limit_
-                # order_rr_floor, >=2.0 for any non-scalping pocket) so this
-                # test still exercises the placement mechanism itself, not
-                # the floor (see test_run_cycle_rejects_golden_pocket_watch_
-                # candidate_below_rr_floor for the floor's own coverage).
                 "target_price": 1.382, "target": 2.5, "invalidation": 1.18972,
                 "rr": 2.5, "symbol": "WATCH", "dex_security_score": 75.0,
                 "dex_security_breakdown": {}, "reason": "score DEX fort, golden pocket pas encore formé",
@@ -4388,49 +4383,6 @@ async def test_run_cycle_places_limit_order_on_golden_pocket_watch_candidate(tmp
     assert sig["dex_security_score"] == 75.0
     assert any("score DEX fort" in r for r in sig["reasons"])
     assert len(notified) == 1
-
-
-@pytest.mark.asyncio
-async def test_run_cycle_rejects_golden_pocket_watch_candidate_below_rr_floor(tmp_db, monkeypatch):
-    """Item #231 (30/07), real bug found live (operator report, wIRON limit
-    order: R/R=0.3, +1.0% target vs -3.7% invalidation -- risking ~3.3x what's
-    on the table). A watch candidate is now REJECTED outright (never placed as
-    a limit order) if its own R/R doesn't clear the pocket's floor (swing:
-    2.0) -- same doctrine as the direct-buy path's own R/R gates, just never
-    applied to this watch-and-wait path until this fix. Removed then restored
-    same day (Items #245/#248) -- coverage restored along with the floor."""
-    await pt.reset_portfolio(1_000_000.0)
-
-    async def fake_analyzer(contract):
-        return {
-            "action": "HOLD", "symbol": "WATCH", "price": 1.5, "chain": "base",
-            "reasons": ["pas de setup golden pocket + divergence RSI avec R/R positif"],
-            "hold_reason": "no_entry_signal",
-            "limit_order_candidate": {
-                "target_price": 1.382, "target": 1.45, "invalidation": 1.18972,
-                "rr": 0.3, "symbol": "WATCH", "dex_security_score": 75.0,
-                "dex_security_breakdown": {}, "reason": "score DEX fort, golden pocket pas encore formé",
-            },
-        }
-
-    async def price_lookup(contract):
-        return 1.5
-
-    notified = []
-
-    async def notifier(msg):
-        notified.append(msg)
-
-    act = await pt.run_paper_cycle(
-        candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup, notifier=notifier,
-    )
-    assert act["opened"] == []
-
-    from aria_core import limit_orders
-
-    active = await limit_orders.get_active_orders()
-    assert active == []
-    assert notified == []
 
 
 @pytest.mark.asyncio

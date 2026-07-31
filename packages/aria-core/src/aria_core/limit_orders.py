@@ -162,56 +162,24 @@ async def reset_historical_trigger_rate() -> None:
         await db.commit()
 
 
-# Item #231 (30/07), real bug found live (operator report, wIRON limit order:
-# R/R=0.3, +1.0% target vs -3.7% invalidation -- risking ~3.3x what's on the
-# table). Unlike a direct/LLM-confirmed buy (momentum_entry._RR_MIN_FOR_
-# DIRECT_BUY=2.0 / _RR_AMBIGUOUS_FLOOR=1.0), a limit-order candidate (#175
-# price-drift, #182 golden-pocket-not-yet-formed, #183 rsi-divergence-pending)
-# never had ANY R/R floor -- it could be placed on a mathematically
-# unjustifiable setup and just sit there waiting to trigger. Calibrated
-# empirically against the 67 resolved scalping (rsi_divergence_pending)
-# orders in prod, cross-checked against published scalping/swing R/R norms
-# (see docs/HANDOFF_PIPELINE_MOMENTUM.md's own entry for the full numbers):
-# scalping's own median R/R among orders that actually triggered was 1.75 --
-# reusing momentum_entry's 2.0 direct-buy floor here would have rejected HALF
-# of them, disproportionate for a 15-30min timeframe (scalping's real-world
-# standard is 1:1-1:1.5, closer to 1.5-2x specifically on 15min). 1.25 keeps
-# 56% of historical triggers (57% of noise blocked) -- the best measured
-# balance between eliminating mathematically-absurd setups and preserving
-# the test's diagnostic trade volume.
+# Item #231 (30/07) added an R/R floor here (scalping 1.25 / swing 2.0),
+# motivated by a real incident (wIRON limit order, R/R=0.3). Removed then
+# restored the SAME DAY (Items #245/#248) -- see git history for that
+# back-and-forth's full context. REMOVED AGAIN 31/07, Item #252 -- operator's
+# explicit call ("enleve le"), after a live case (DRV, R/R 0.066 at entry)
+# went on to +18.3% -- reached far beyond its original technical target once
+# the trailing-stop/staged-TP exit mechanism took over. Operator's read: the
+# entry R/R doesn't bound the exit's upside, so filtering on it may be
+# discarding trades with real "run further than planned" potential.
 #
-# Swing has ZERO resolved limit orders to calibrate against (100% of the 67
-# resolved orders are scalping) -- rather than guess a number, it reuses
-# momentum_entry's OWN direct-buy floor (2.0): a swing limit order has
-# neither an immediate confirmed signal NOR an LLM second opinion (same gap
-# as scalping), so it deserves the SAME bar as its own direct buy, not a
-# borrowed scalping number. Matches the published 1:2-1:3 swing-timeframe
-# norm (1h/4h/daily) -- 2.0 sits at the low end, defensible until real data
-# accumulates to refine it.
-#
-# REMOVED 30/07, Item #245 -- operator's explicit, direct call after watching
-# scalping trade volume drop to zero the same day this floor shipped
-# ("supprime l'ordre limite je suis sur que c sa le problème"). RESTORED
-# SAME DAY, Item #248 -- operator's next explicit call, minutes later
-# ("remet le r/r a 1.25"), after seeing the removal let through R/R=0.3/0.4
-# limit orders (BNKR screenshot) that the floor exists precisely to block.
-# Same values as originally calibrated (scalping 1.25 / swing 2.0) -- the
-# operator named 1.25 specifically (the scalping number, the pocket under
-# discussion); swing's 2.0 is restored unchanged rather than guessed at
-# without a fresh explicit call to change it too.
-_RR_MIN_LIMIT_ORDER_SCALPING = 1.25
-_RR_MIN_LIMIT_ORDER_SWING = 2.0
-
-
-def meets_limit_order_rr_floor(rr: float | None, wallet: str | None) -> bool:
-    """True only if ``rr`` clears the pocket-specific floor above. ``None``
-    (R/R not computable -- entry<=invalidation or target<=entry, a degenerate
-    setup) fails closed: a limit order is never placed without a real,
-    positive rationale, same doctrine as the direct-buy path's own R/R gates."""
-    if rr is None:
-        return False
-    floor = _RR_MIN_LIMIT_ORDER_SCALPING if wallet == "scalping" else _RR_MIN_LIMIT_ORDER_SWING
-    return rr >= floor
+# Disclosed, accepted tradeoff (flagged directly by this session before the
+# operator's final call): only 3 limit-order triggers exist in the entire
+# history at the time of this decision, none yet closed (1 latent gain,
+# 2 latent small losses) -- too small a sample to prove entry R/R predicts
+# exit upside either way. The wIRON-style setup (mathematically indefensible
+# at entry) can recur. If the floor needs to come back again,
+# `docs/HANDOFF_PIPELINE_MOMENTUM.md`'s Item #231 entry has the full original
+# calibration (67 resolved scalping orders, median R/R 1.75).
 
 
 # 27/07 -- 3-pocket architecture plan, Phase 2: additive hot-migration list,

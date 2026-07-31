@@ -486,10 +486,11 @@ PRICE_IMPACT_MIN_RR = 1.0
 # (11.9) cleared every floor by a wide margin, but the pool's liquidity was only
 # $60k -- ``cap_alloc_to_price_impact`` above degraded the size down to a ~2%
 # stake purely to keep the R/R at its own PRICE_IMPACT_MIN_RR floor (1.0), which
-# is LOWER than the swing pocket's own entry floor (2.0, limit_orders.py's
-# ``_RR_MIN_LIMIT_ORDER_SWING`` -- removed then restored same day, Items
-# #245/#248) -- a trade that had just cleared a real R/R bar was silently
-# re-sized down to a WORSE one. That fix alone doesn't
+# is LOWER than the swing pocket's own entry floor at the time (2.0,
+# limit_orders.py's ``_RR_MIN_LIMIT_ORDER_SWING`` -- removed, restored, then
+# removed again the same week, Items #245/#248/#252) -- a trade that had
+# just cleared a real R/R bar was silently re-sized down to a WORSE one.
+# That fix alone doesn't
 # bound the outright SIZE relative to the pool -- it only protects the R/R
 # ratio, and only when target/invalidation are BOTH known (fail-open
 # otherwise, see that function's own docstring). This is the missing hard cap,
