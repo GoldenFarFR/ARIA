@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import uuid4
 
@@ -164,3 +164,70 @@ async def get_pending() -> list[ApprovalRequest]:
         )
         for row in rows
     ]
+
+
+# Item #175 (31/07): a pending approval (ACP spend escalation, agent-wallet-monitor
+# alert, marketing_video review -- this registry is shared, cf. its callers) with no
+# admin decision can sit forever -- safe on its own (wallet_guard.escalate_spend's own
+# doctrine: no spend happens without a real Telegram click), but a decision made days
+# or weeks later would act on stale context (a swap quote, a since-changed config).
+# Auto-expire, never auto-decide: an expired entry requires a fresh escalation if the
+# action is still wanted.
+PENDING_APPROVAL_TTL_HOURS = 24.0
+
+
+async def expire_stale_pending(
+    ttl_hours: float = PENDING_APPROVAL_TTL_HOURS,
+) -> list[ApprovalRequest]:
+    """Marks every ``pending`` approval older than ``ttl_hours`` as ``expired``.
+
+    Purely a cleanup -- never approves or executes anything. Idempotent: re-running
+    finds no more ``pending`` rows past the cutoff once they're already expired.
+    """
+    await _ensure_table()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=ttl_hours)).isoformat()
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT * FROM approvals WHERE status = 'pending' AND created_at < ?",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return []
+        await db.execute(
+            "UPDATE approvals SET status = 'expired', resolved_at = ?, resolved_by = 'system_ttl' "
+            "WHERE status = 'pending' AND created_at < ?",
+            (resolved_at, cutoff),
+        )
+        await db.commit()
+    return [
+        ApprovalRequest(
+            id=row[0],
+            action=row[1],
+            description=row[2],
+            payload=row[3],
+            status=ApprovalStatus.EXPIRED,
+            requested_by=row[5],
+            created_at=datetime.fromisoformat(row[6]),
+            resolved_at=datetime.fromisoformat(resolved_at),
+            resolved_by="system_ttl",
+        )
+        for row in rows
+    ]
+
+
+async def run_expiry_cycle(notifier=None, ttl_hours: float = PENDING_APPROVAL_TTL_HOURS) -> dict:
+    """Heartbeat entry point: expires stale pending approvals and notifies the admin
+    per entry (best-effort -- a notification failure never blocks the expiry itself)."""
+    expired = await expire_stale_pending(ttl_hours=ttl_hours)
+    if notifier is not None:
+        for req in expired:
+            try:
+                await notifier(
+                    f"⏰ Demande expirée (sans décision sous {ttl_hours:.0f}h) : "
+                    f"#{req.id} -- {req.action} ({req.description[:120]})"
+                )
+            except Exception:
+                pass
+    return {"expired_count": len(expired), "expired_ids": [r.id for r in expired]}

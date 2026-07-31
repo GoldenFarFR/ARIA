@@ -3,6 +3,8 @@
 get_pending() n'avaient aucune couverture directe."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from aria_core import approvals
@@ -93,3 +95,106 @@ async def test_get_pending_excludes_resolved_entries():
 @pytest.mark.asyncio
 async def test_get_pending_empty_when_nothing_pending():
     assert await approvals.get_pending() == []
+
+
+# Item #175 (31/07) -- TTL expiry on stale pending approvals. Same frozen-datetime
+# pattern as test_momentum_rejection_cache.py (monkeypatch approvals.datetime.now to
+# jump past the TTL), rather than poking created_at directly in the DB.
+def _freeze_after_ttl(monkeypatch, ttl_hours: float) -> None:
+    real_datetime = approvals.datetime
+    future = real_datetime.now(approvals.timezone.utc) + timedelta(hours=ttl_hours + 1)
+
+    class _FrozenDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return future
+
+    monkeypatch.setattr(approvals, "datetime", _FrozenDatetime)
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_pending_leaves_fresh_entry_untouched():
+    req = await approvals.create_approval("spend:trade_tokens", "recent")
+    expired = await approvals.expire_stale_pending(ttl_hours=24.0)
+    assert expired == []
+    fetched = await approvals.get_approval(req.id)
+    assert fetched.status == approvals.ApprovalStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_pending_expires_old_entry(monkeypatch):
+    req = await approvals.create_approval("spend:trade_tokens", "vieille demande")
+    _freeze_after_ttl(monkeypatch, ttl_hours=24.0)
+
+    expired = await approvals.expire_stale_pending(ttl_hours=24.0)
+
+    assert [e.id for e in expired] == [req.id]
+    assert expired[0].status == approvals.ApprovalStatus.EXPIRED
+    assert expired[0].resolved_by == "system_ttl"
+    fetched = await approvals.get_approval(req.id)
+    assert fetched.status == approvals.ApprovalStatus.EXPIRED
+    assert fetched.resolved_by == "system_ttl"
+    assert fetched.resolved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_pending_never_touches_a_resolved_entry(monkeypatch):
+    req = await approvals.create_approval("spend:trade_tokens", "deja tranchee")
+    await approvals.resolve_approval(req.id, True, "admin1")
+    _freeze_after_ttl(monkeypatch, ttl_hours=24.0)
+
+    expired = await approvals.expire_stale_pending(ttl_hours=24.0)
+
+    assert expired == []
+    fetched = await approvals.get_approval(req.id)
+    assert fetched.status == approvals.ApprovalStatus.APPROVED
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_pending_is_idempotent(monkeypatch):
+    await approvals.create_approval("spend:trade_tokens", "vieille demande")
+    _freeze_after_ttl(monkeypatch, ttl_hours=24.0)
+
+    first_pass = await approvals.expire_stale_pending(ttl_hours=24.0)
+    second_pass = await approvals.expire_stale_pending(ttl_hours=24.0)
+
+    assert len(first_pass) == 1
+    assert second_pass == []
+
+
+@pytest.mark.asyncio
+async def test_run_expiry_cycle_notifies_once_per_expired_entry(monkeypatch):
+    req1 = await approvals.create_approval("spend:trade_tokens", "vieille demande 1")
+    req2 = await approvals.create_approval("spend:client_fund_job", "vieille demande 2")
+    _freeze_after_ttl(monkeypatch, ttl_hours=24.0)
+
+    sent: list[str] = []
+
+    async def _notifier(text: str) -> None:
+        sent.append(text)
+
+    result = await approvals.run_expiry_cycle(notifier=_notifier, ttl_hours=24.0)
+
+    assert result["expired_count"] == 2
+    assert set(result["expired_ids"]) == {req1.id, req2.id}
+    assert len(sent) == 2
+    assert all(req1.id in t or req2.id in t for t in sent)
+
+
+@pytest.mark.asyncio
+async def test_run_expiry_cycle_survives_a_notifier_failure(monkeypatch):
+    await approvals.create_approval("spend:trade_tokens", "vieille demande")
+    _freeze_after_ttl(monkeypatch, ttl_hours=24.0)
+
+    async def _broken_notifier(text: str) -> None:
+        raise RuntimeError("Telegram down")
+
+    result = await approvals.run_expiry_cycle(notifier=_broken_notifier, ttl_hours=24.0)
+    assert result["expired_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_expiry_cycle_without_notifier_still_expires():
+    await approvals.create_approval("spend:trade_tokens", "recent")
+    result = await approvals.run_expiry_cycle(notifier=None, ttl_hours=24.0)
+    assert result == {"expired_count": 0, "expired_ids": []}

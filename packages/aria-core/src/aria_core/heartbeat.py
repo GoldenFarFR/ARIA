@@ -567,6 +567,19 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="approval_ttl_cycle",
+        name="Approval TTL expiry",
+        description="Item #175 (31/07): expires any pending approval (ACP spend escalation, "
+        "agent-wallet-monitor alert, marketing_video review -- aria_core.approvals is a "
+        "shared registry) that has sat undecided past ARIA_APPROVAL_TTL_HOURS (default 24h). "
+        "Never auto-approves or executes anything -- a stale request is closed, not acted on; "
+        "a fresh escalation is needed if the action is still wanted. No ARIA_*_ENABLED gate: "
+        "pure safety cleanup, safe to run always (same reasoning as xai_balance_monitor_cycle "
+        "above).",
+        interval_minutes=60,
+        enabled=True,
+    ),
 ]
 
 
@@ -1675,6 +1688,17 @@ class AriaHeartbeat:
                     "xai_balance_monitor",
                     f"[xai_balance_monitor] disjoncteur arme automatiquement, "
                     f"solde={result.get('balance_usd')}$ -> bascule OpenRouter",
+                )
+
+        elif task_id == "approval_ttl_cycle":
+            from aria_core.approvals import run_expiry_cycle
+
+            result = await run_expiry_cycle(notifier=self._notify_telegram)
+            if result.get("expired_count"):
+                append_memory(
+                    "approvals",
+                    f"[approval_ttl] {result['expired_count']} demande(s) expirée(s) "
+                    f"sans décision : {', '.join(result['expired_ids'])}",
                 )
 
         elif task_id == "wallet_scan_queue_cycle":

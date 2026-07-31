@@ -721,6 +721,100 @@ def test_external_write_actions_registered_in_allowlist():
     )
 
 
+# Item #176 (31/07) -- generic mechanical guard for every ARIA_*_ENABLED gate. Motivated by
+# real, already-lived drift: this file's own history recorded ARIA_BONDING_DISCOVERY_ENABLED
+# and ARIA_CABALSPY_SOURCING_ENABLED as OFF in CLAUDE.md while both were actually ON in prod,
+# caught only by a manual 5-agent audit (24/07) -- never mechanically. Same pattern as
+# _EXTERNAL_WRITE_ALLOWLIST above: a new gate must be REGISTERED here, so it can never exist
+# unreviewed. Scope, honestly: this proves a gate is KNOWN and DECLARED -- it cannot prove the
+# live prod value of any of them (that still requires a real `docker exec` + "verifier avant
+# d'affirmer", CI has no access to the deployed .env).
+_ENABLED_GATE_RE = re.compile(r"ARIA_[A-Z_]*_ENABLED")
+
+_KNOWN_ENABLED_GATES = {
+    "ARIA_ACP_ENABLED",
+    "ARIA_ACP_PROVIDER_ENABLED",
+    "ARIA_AGENT_WALLET_MONITOR_ENABLED",
+    "ARIA_AGENT_WALLET_PILOT_ENABLED",
+    "ARIA_AGENT_WALLET_TRANSFER_ENABLED",
+    "ARIA_ALPHAVANTAGE_ENABLED",
+    "ARIA_AVATAR_STYLE_ENABLED",
+    "ARIA_BLOCKRUN_KALSHI_ENABLED",
+    "ARIA_BONDING_DISCOVERY_ENABLED",
+    "ARIA_BRAIN_ENABLED",
+    "ARIA_CABALSPY_SOURCING_ENABLED",
+    "ARIA_CANONICAL_FACTS_SYNC_ENABLED",
+    "ARIA_CLAUDE_MENTOR_ENABLED",
+    "ARIA_CODE_PROPOSAL_ENABLED",
+    "ARIA_CONVICTION_RESEARCH_ENABLED",
+    "ARIA_COUNTERFACTUAL_TRACKER_ENABLED",
+    "ARIA_DAILY_TRADE_FLOOR_ENABLED",
+    "ARIA_DIRECTIVE_CHANNEL_ENABLED",
+    "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
+    "ARIA_DUNE_ENABLED",
+    "ARIA_EXAM_ENABLED",
+    "ARIA_GOPLUS_WATCHLIST_ENABLED",
+    "ARIA_HIGH_CONVICTION_ALERTS_ENABLED",
+    "ARIA_KNOWLEDGE_INBOX_ENABLED",
+    "ARIA_LLM_ANTHROPIC_ROUTING_ENABLED",
+    "ARIA_LLM_ENABLED",
+    "ARIA_MARKETING_VIDEO_ENABLED",
+    "ARIA_MARKET_ALERTS_ENABLED",
+    "ARIA_MARKET_SENTIMENT_ENABLED",
+    "ARIA_MEMORY_CONSOLIDATION_ENABLED",
+    "ARIA_MOMENTUM_WEBSOCKET_ENABLED",
+    "ARIA_MULTI_POCKET_SOURCING_ENABLED",
+    "ARIA_ONCHAIN_ANCHOR_ENABLED",
+    "ARIA_ONCHAIN_GRADUATION_ENABLED",
+    "ARIA_OPPORTUNITY_RADAR_ENABLED",
+    "ARIA_OTTO_AI_ENABLED",
+    "ARIA_PAPER_TRADING_ENABLED",
+    "ARIA_POLYMARKET_PAPER_ENABLED",
+    "ARIA_PUMP_DUMP_AUTOPSY_ENABLED",
+    "ARIA_QUICKINTEL_ENABLED",
+    "ARIA_RELAY_AUTOREPLY_ENABLED",
+    "ARIA_SEPOLIA_AUTONOMOUS_ENABLED",
+    "ARIA_SEPOLIA_SWAP_ENABLED",
+    "ARIA_SEPOLIA_WALLET_ENABLED",
+    "ARIA_SKILL_PROJECTS_ENABLED",
+    "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",
+    "ARIA_SMART_SWING_ENABLED",
+    "ARIA_TAVILY_LEARNING_ENABLED",
+    "ARIA_TELEGRAM_MINER_ENABLED",
+    "ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED",
+    "ARIA_TIKTOK_PUBLISH_ENABLED",
+    "ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED",
+    "ARIA_TRADE_DEVILS_ADVOCATE_ENABLED",
+    "ARIA_TRADE_LOSS_BATCH_REVIEW_ENABLED",
+    "ARIA_UX_WATCH_ENABLED",
+    "ARIA_VC_EMAIL_ENABLED",
+    "ARIA_VC_INTELLIGENCE_ENABLED",
+    "ARIA_VISION_ENABLED",
+    "ARIA_WALLET_CANDIDATE_SOURCING_ENABLED",
+    "ARIA_WALLET_SCAN_QUEUE_ENABLED",
+    "ARIA_WALLET_SCORING_ENABLED",
+    "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",
+    "ARIA_WEB_FETCH_ENABLED",
+    "ARIA_X_PROFILE_SYNC_ENABLED",
+}
+
+
+def test_all_enabled_gates_registered_in_known_gates():
+    """Garde-fou mécanique générique (Item #176) : tout ARIA_*_ENABLED référencé dans le
+    code doit être déclaré dans _KNOWN_ENABLED_GATES. Casse immédiatement si un nouveau gate
+    apparaît sans revue explicite -- empêche la classe de dérive déjà vécue deux fois (gate
+    documenté OFF alors qu'il tourne ON en prod, jamais détecté mécaniquement jusqu'ici)."""
+    found: set[str] = set()
+    for path in CORE.rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found.update(_ENABLED_GATE_RE.findall(text))
+    unexpected = found - _KNOWN_ENABLED_GATES
+    assert not unexpected, (
+        f"Nouveau(x) gate(s) ARIA_*_ENABLED jamais déclaré(s) dans _KNOWN_ENABLED_GATES : "
+        f"{sorted(unexpected)}. Ajoute-le(s) avec une raison si légitime."
+    )
+
+
 # Décision opérateur explicite (20/07) : « seul ARIA peut écrire » dans son propre repo
 # (aria-brain) -- le token dédié ne doit JAMAIS être lu ailleurs que dans le skill qui
 # écrit sa mémoire libre, ni par un autre skill du projet, ni par une future session
