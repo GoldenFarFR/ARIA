@@ -1042,6 +1042,137 @@ def test_screen_owner_change_balance_unknown_unaffected():
     assert safety_screen(c).passed is True
 
 
+# ── B20 dans scan_base_token (31/07, backlog #228) ─────────────────────────
+# GoPlus's honeypot check runs first (silently blind on a genuine B20) --
+# the B20 check runs right after it, in the SAME `include_honeypot` gate.
+# Blockscout (contract flags + holders) is fetched unconditionally by
+# scan_base_token via asyncio.gather -- mocked at the class level (same
+# pattern as test_acp_onchain_blockscout.py) so no test here ever touches
+# the real singleton client/throttle lock (shared across the whole process,
+# bound to whichever event loop first acquires it -- a real unmocked call
+# here would randomly break OTHER tests' event loops, not just this one).
+
+def _patch_blockscout_empty(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from aria_core.services.blockscout import ContractFlags, TokenHoldersResult
+    from aria_core.skills import acp_onchain_scan as scan
+
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "check_contract_flags",
+        AsyncMock(return_value=ContractFlags(address="", available=False)),
+    )
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_token_holders",
+        AsyncMock(return_value=TokenHoldersResult()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_populates_b20_verdict_when_include_honeypot(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from aria_core.services import b20 as b20_mod
+    from aria_core.services.goplus import goplus_client
+    from aria_core.skills import acp_onchain_scan as scan
+
+    addr = "0x" + "c" * 40
+    pair = PairSnapshot(pair_address="0xpair", liquidity_usd=20_000, base_address=addr)
+    _patch_blockscout_empty(monkeypatch)
+    monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[pair]))
+
+    async def fake_get_token_security(address, *, chain_id="8453"):
+        return TokenSecurity(address=addr, available=False, error="B20 -- pas de bytecode")
+
+    monkeypatch.setattr(type(goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    monkeypatch.setattr(
+        b20_mod, "evaluate_b20_safety",
+        AsyncMock(return_value=b20_mod.B20SafetyVerdict(
+            verdict="risky", reason="MINT_ROLE toujours détenu par 0xabc",
+        )),
+    )
+
+    ctx = await scan.scan_base_token(addr, include_honeypot=True)
+
+    assert ctx.b20_verdict == "risky"
+    assert "MINT_ROLE" in ctx.b20_reason
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_b20_verdict_none_when_not_b20(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from aria_core.services import b20 as b20_mod
+    from aria_core.services.goplus import goplus_client
+    from aria_core.skills import acp_onchain_scan as scan
+
+    addr = "0x" + "d" * 40
+    pair = PairSnapshot(pair_address="0xpair", liquidity_usd=20_000, base_address=addr)
+    _patch_blockscout_empty(monkeypatch)
+    monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[pair]))
+
+    async def fake_get_token_security(address, *, chain_id="8453"):
+        return TokenSecurity(address=addr, available=True, is_honeypot=False)
+
+    monkeypatch.setattr(type(goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    monkeypatch.setattr(
+        b20_mod, "evaluate_b20_safety",
+        AsyncMock(return_value=b20_mod.B20SafetyVerdict(verdict="not_b20")),
+    )
+
+    ctx = await scan.scan_base_token(addr, include_honeypot=True)
+
+    assert ctx.b20_verdict == "not_b20"
+    assert ctx.b20_reason == ""
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_b20_check_never_blocks_scan_on_failure(monkeypatch):
+    """A real exception (RPC down) must never break the rest of the scan --
+    same fail-open doctrine as every other best-effort signal here."""
+    from unittest.mock import AsyncMock
+
+    from aria_core.services import b20 as b20_mod
+    from aria_core.services.goplus import goplus_client
+    from aria_core.skills import acp_onchain_scan as scan
+
+    addr = "0x" + "e" * 40
+    pair = PairSnapshot(pair_address="0xpair", liquidity_usd=20_000, base_address=addr)
+    _patch_blockscout_empty(monkeypatch)
+    monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[pair]))
+
+    async def fake_get_token_security(address, *, chain_id="8453"):
+        return TokenSecurity(address=addr, available=True, is_honeypot=False)
+
+    monkeypatch.setattr(type(goplus_client), "get_token_security", staticmethod(fake_get_token_security))
+    monkeypatch.setattr(b20_mod, "evaluate_b20_safety", AsyncMock(side_effect=RuntimeError("RPC down")))
+
+    ctx = await scan.scan_base_token(addr, include_honeypot=True)
+
+    assert ctx.b20_verdict is None
+    assert ctx.is_honeypot is False  # le reste du scan honeypot n'est pas affecté
+
+
+@pytest.mark.asyncio
+async def test_scan_base_token_skips_b20_when_honeypot_not_requested(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from aria_core.services import b20 as b20_mod
+    from aria_core.skills import acp_onchain_scan as scan
+
+    addr = "0x" + "f" * 40
+    pair = PairSnapshot(pair_address="0xpair", liquidity_usd=20_000, base_address=addr)
+    _patch_blockscout_empty(monkeypatch)
+    monkeypatch.setattr(scan, "_fetch_token_pairs", AsyncMock(return_value=[pair]))
+    b20_mock = AsyncMock(return_value=b20_mod.B20SafetyVerdict(verdict="risky"))
+    monkeypatch.setattr(b20_mod, "evaluate_b20_safety", b20_mock)
+
+    ctx = await scan.scan_base_token(addr)  # include_honeypot défaut False
+
+    assert ctx.b20_verdict is None
+    b20_mock.assert_not_called()
+
+
 # ── Malicious Address API (AML, #157) ──────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -2630,6 +2630,7 @@ def _patch_pipeline(
     security_gate=(True, ""), concentration=(False, ""), volume_status=("confirmed", "", 10.0),
     parabolic_rescue=(False, "sauvetage smart money non confirmé (mock par défaut)"),
     confirm_gate=("BUY", None),
+    b20_verdict="not_b20", b20_reason="",
 ):
     async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
         if honeypot_clear:
@@ -2692,6 +2693,17 @@ def _patch_pipeline(
     # unchanged -- tests that specifically exercise the ambiguous/LLM path
     # override via ``confirm_gate=``.
     monkeypatch.setattr(me, "_llm_confirm_and_gate", fake_confirm_and_gate)
+    # 31/07 -- B20 (real Base RPC call otherwise, unreachable/slow in an
+    # offline test run and would fail-closed to "opaque" -> reject every
+    # candidate in this fixture's ~40 callers). Defaults to "not_b20" (the
+    # common case, unchanged pipeline) -- override via b20_verdict= for the
+    # dedicated B20 tests below.
+    from aria_core.services import b20 as b20_mod
+
+    async def fake_b20_safety(token_address, *, w3=None):
+        return b20_mod.B20SafetyVerdict(verdict=b20_verdict, reason=b20_reason)
+
+    monkeypatch.setattr(b20_mod, "evaluate_b20_safety", fake_b20_safety)
 
 
 # ── evaluate_hard_gates (22/07, extraction pour le crible unifié VC/Swing) ─────────
@@ -2734,6 +2746,75 @@ async def test_evaluate_hard_gates_rejects_on_honeypot_and_blacklists(monkeypatc
     assert best is None and reason is None
     assert hold["hold_reason"] == "honeypot_rejected"
     assert await bl.is_blacklisted(CONTRACT, "base") is True
+
+
+# ── B20 (31/07, backlog #228): GoPlus's honeypot check above already said
+# "clear" for a genuine B20 -- silently blind (Rust precompile, no bytecode),
+# never a real answer. Checked separately, after the free honeypot read.
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_passes_when_not_b20(monkeypatch):
+    """Default fixture behavior ("not_b20") -- the common case, unchanged pipeline."""
+    _patch_pipeline(monkeypatch)
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold is None
+    assert best is not None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_passes_when_b20_safe(monkeypatch):
+    """A genuine B20 with every sensitive role confirmed renounced -- passes."""
+    _patch_pipeline(monkeypatch, b20_verdict="safe")
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold is None
+    assert best is not None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_rejects_on_b20_risky(monkeypatch):
+    """A sensitive role (MINT/PAUSE/BURN_BLOCKED) still held by a wallet -- reject,
+    never blacklisted (an investment/maturity aspect, not a confirmed malicious
+    mechanism -- role could be renounced later, same doctrine as an unrenounced mint
+    elsewhere in this pipeline)."""
+    from aria_core import momentum_blacklist as bl
+
+    _patch_pipeline(monkeypatch, b20_verdict="risky", b20_reason="MINT_ROLE toujours détenu par 0xabc")
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "b20_unresolved_risk"
+    assert "risky" in hold["reasons"][0]
+    assert await bl.is_blacklisted(CONTRACT, "base") is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_rejects_on_b20_opaque(monkeypatch):
+    """Role history scan incomplete/unresolved -- fail-closed, never a silent pass."""
+    _patch_pipeline(
+        monkeypatch, b20_verdict="opaque", b20_reason="PAUSE_ROLE history scan incomplete",
+    )
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "b20_unresolved_risk"
+    assert "opaque" in hold["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_b20_check_never_blocks_on_lookup_failure(monkeypatch):
+    """A real exception raised while checking B20 status must never block a
+    non-B20 candidate -- degrades to "no B20 signal", same fail-open doctrine as
+    every other best-effort signal in this pipeline (never the hard honeypot gate
+    itself, which stays fail-closed)."""
+    from aria_core.services import b20 as b20_mod
+
+    _patch_pipeline(monkeypatch)
+
+    async def failing_b20_safety(token_address, *, w3=None):
+        raise RuntimeError("RPC unreachable")
+
+    monkeypatch.setattr(b20_mod, "evaluate_b20_safety", failing_b20_safety)
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert hold is None
+    assert best is not None
 
 
 # ── rejection cache (Item #193, 30/07) ──────────────────────────────────────

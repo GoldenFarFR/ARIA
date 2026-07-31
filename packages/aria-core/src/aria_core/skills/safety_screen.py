@@ -202,6 +202,25 @@ def safety_screen(
     # balance, a total-loss vector, never fixed by time -> hard failure.
     if ctx.owner_change_balance is True:
         reasons.append("owner peut modifier le solde d'un wallet (GoPlus) — vecteur de perte totale")
+    # 31/07 -- B20 (Base's native precompile token standard, backlog #228):
+    # GoPlus is structurally blind to this token type (Rust precompile, no
+    # bytecode) -- ctx.b20_verdict is the ONLY signal that can confirm
+    # mint/pause/burn-blocked powers are actually renounced for a B20.
+    # "opaque" (role scan incomplete/failed) blocks fail-closed, same
+    # treatment as an unknown holder distribution below -- never hard_fail,
+    # may resolve on a retry. "risky" (a role IS still held by a wallet) is a
+    # CONFIRMED dev-retained power -- same family as hidden_owner/
+    # can_take_back_ownership -> hard failure.
+    if ctx.b20_verdict == "opaque":
+        reasons.append(
+            "token B20 natif Base, pouvoirs mint/pause/gel non résolus (GoPlus ne peut pas "
+            f"analyser ce type de token) — {ctx.b20_reason or 'scan incomplet'}"
+        )
+    if ctx.b20_verdict == "risky":
+        reasons.append(
+            "token B20 natif Base, pouvoir mint/pause/gel toujours détenu par un wallet (GoPlus "
+            f"ne peut pas analyser ce type de token) — {ctx.b20_reason or 'rôle sensible actif'}"
+        )
 
     # Concentration (whale) guardrail
     if ctx.top_holder_pct is None:
@@ -238,6 +257,7 @@ def safety_screen(
         and ctx.can_take_back_ownership is not True
         and ctx.slippage_modifiable is not True
         and ctx.owner_change_balance is not True
+        and ctx.b20_verdict not in ("opaque", "risky")
     )
     if passed:
         reasons = [
@@ -275,6 +295,7 @@ def safety_screen(
         or (ctx.can_take_back_ownership is True)
         or (ctx.slippage_modifiable is True)
         or (ctx.owner_change_balance is True)
+        or (ctx.b20_verdict == "risky")
     )
 
     return ScreenResult(

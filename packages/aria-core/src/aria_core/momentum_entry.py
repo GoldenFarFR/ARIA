@@ -2658,6 +2658,38 @@ async def evaluate_hard_gates(
             "price": best.price_usd, "reasons": [honeypot_reason], "hold_reason": honeypot_code,
         }
 
+    # 31/07 -- B20 (Base's native precompile token standard, backlog #228,
+    # confirmed by a 2-agent diligence workflow): GoPlus's honeypot check
+    # above already ran and said "clear" -- but confirmed live the SAME day,
+    # GoPlus silently OMITS every risk field for a genuine B20 (no bytecode
+    # to analyze, it's a Rust precompile, not a Solidity contract), so a
+    # "clear" verdict on a B20 means "GoPlus never actually looked", not
+    # "confirmed safe". Checked HERE (after the free/cached honeypot read,
+    # before spending the multi-second role-history scan) rather than
+    # first, matching the pipeline's own "cheapest gate first" doctrine.
+    # `evaluate_b20_safety` degrades to "opaque" (fail-closed, same doctrine
+    # as an unverified contract in the VC crible) whenever it can't fully
+    # resolve who holds mint/pause/freeze-seize power -- never a silent
+    # "safe" out of missing data. A non-B20 candidate (the common case)
+    # only pays the cost of one cheap `isB20()` call.
+    try:
+        from aria_core.services import b20
+
+        b20_verdict = await b20.evaluate_b20_safety(contract)
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks a non-B20 candidate
+        logger.info("evaluate_hard_gates: b20 check failed for %s (%s)", contract, exc)
+        b20_verdict = None
+    if b20_verdict is not None and b20_verdict.verdict in ("opaque", "risky"):
+        b20_reason = (
+            f"B20 natif Base ({b20_verdict.verdict}) -- {b20_verdict.reason or 'pouvoirs mint/pause/gel non résolus'} "
+            "-- GoPlus ne peut pas analyser ce type de token (precompile, pas de bytecode)"
+        )
+        await momentum_rejection_cache.record_rejection(contract, chain, "b20_unresolved_risk")
+        return None, None, {
+            "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+            "price": best.price_usd, "reasons": [b20_reason], "hold_reason": "b20_unresolved_risk",
+        }
+
     if rescue_note:
         honeypot_reason = f"{honeypot_reason} ; {rescue_note}"
     return best, honeypot_reason, None

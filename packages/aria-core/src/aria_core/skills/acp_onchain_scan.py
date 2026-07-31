@@ -296,6 +296,19 @@ class TokenScanContext:
     # (services/goplus.py::TokenSecurity), never renamed to stay traceable
     # end-to-end through the pipeline.
     owner_change_balance: bool | None = None
+    # 31/07 -- B20 (Base's native precompile token standard, backlog #228):
+    # GoPlus's every field above (is_honeypot/hidden_owner/etc.) is silently
+    # ABSENT for a genuine B20 -- confirmed live, it's a Rust precompile, no
+    # bytecode to analyze -- so all the fields above staying None for a B20
+    # candidate must NEVER read as "not scanned yet, still fine", it means
+    # "GoPlus structurally cannot see this token's real risk". See
+    # services/b20.py's own module docstring for the full mechanism
+    # (isB20() factory check + mint/pause/freeze-seize role-holder replay).
+    # None = not a B20 (the common case, unchanged pipeline). "risky"/
+    # "opaque" both mean GoPlus's clean fields above are NOT trustworthy for
+    # this candidate.
+    b20_verdict: str | None = None  # None / "safe" / "risky" / "opaque"
+    b20_reason: str = ""
     # 24/07 -- operator question after a real confusion risk: GoPlus flags
     # "Proxy contract" (upgradeable logic) as a red warning regardless of the
     # issuer -- correct instinct for an anonymous deployer (the owner can
@@ -1110,6 +1123,26 @@ async def scan_base_token(
 
         sec = await goplus_client.get_token_security(ca)
         _apply_honeypot_signals(ctx, sec)
+
+        # 31/07 -- B20 (Base's native precompile token standard, backlog
+        # #228): GoPlus is structurally blind to a genuine B20 (Rust
+        # precompile, no bytecode to analyze -- confirmed live, every field
+        # `_apply_honeypot_signals` just populated stays silently absent).
+        # Checked in the SAME `include_honeypot` gate (same cost tier, one
+        # more real network scan) right after the GoPlus call so a B20
+        # candidate never reads as "clean" on GoPlus's silence alone. Same
+        # module as the momentum pipeline's B20 gate (services/b20.py) --
+        # never a second implementation.
+        try:
+            from aria_core.services import b20
+
+            b20_verdict = await b20.evaluate_b20_safety(ca)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("scan_base_token: b20 check failed for %s (%s)", ca, exc)
+            b20_verdict = None
+        if b20_verdict is not None:
+            ctx.b20_verdict = b20_verdict.verdict
+            ctx.b20_reason = b20_verdict.reason or ""
 
     return ctx
 

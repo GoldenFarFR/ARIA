@@ -182,6 +182,42 @@ def test_disable_transfers_is_hard_fail():
     assert safety_screen(_ctx(has_disable=True)).hard_fail is True
 
 
+# ── B20 (31/07) : GoPlus aveugle sur ce type de token, le verdict B20 du
+# contexte est le seul signal qui confirme mint/pause/gel renoncés ───────────
+
+def test_b20_none_unaffected():
+    # None = pas un B20 (cas courant) -- comportement inchangé.
+    r = safety_screen(_ctx())
+    assert r.passed is True
+
+
+def test_b20_safe_passes():
+    ctx = _ctx()
+    ctx.b20_verdict = "safe"
+    r = safety_screen(ctx)
+    assert r.passed is True
+
+
+def test_b20_opaque_fails_soft():
+    ctx = _ctx()
+    ctx.b20_verdict = "opaque"
+    ctx.b20_reason = "scan de rôle incomplet"
+    r = safety_screen(ctx)
+    assert r.passed is False
+    assert r.hard_fail is False
+    assert any("B20" in x and "non résolus" in x for x in r.reasons)
+
+
+def test_b20_risky_fails_hard():
+    ctx = _ctx()
+    ctx.b20_verdict = "risky"
+    ctx.b20_reason = "MINT_ROLE toujours détenu par 0xabc"
+    r = safety_screen(ctx)
+    assert r.passed is False
+    assert r.hard_fail is True
+    assert any("B20" in x and "toujours détenu" in x for x in r.reasons)
+
+
 # ── item #1 (22/07) : anti-wash-trading réutilisé du pipeline momentum ────────
 # (MAX_VOLUME_TO_LIQUIDITY_RATIO + _wash_trading_ratio_confirmed, TEL QUEL, jamais
 # une deuxième constante indépendante qui pourrait diverger).
