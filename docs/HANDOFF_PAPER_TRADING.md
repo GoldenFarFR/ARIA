@@ -6,10 +6,10 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
-[CODE] Sujet    : reset_portfolio() laissait certaines poches sans ligne paper_state
+[DEPLOYE] Sujet  : reset_portfolio() laissait certaines poches sans ligne paper_state
 Date : 2026.08.01 / Probleme : trouvé en direct en exécutant une réinitialisation manuelle demandée par l'opérateur ("renitialise tous les trades on va repartir propore avec 1 milly en capital") sur les 8 poches (`all_reporting_wallets()`). `reset_portfolio()` fait un simple `UPDATE ... WHERE wallet = ?` sur `paper_state` -- pour un wallet qui n'a JAMAIS eu de ligne dans cette table (les 5 variantes scalping, créées le 01/08, n'ont jamais eu de migration dédiée contrairement à scalping/swing/vc), l'UPDATE affecte 0 lignes silencieusement, sans erreur. En pratique rien n'était cassé (`starting_capital()`/`get_equity_high_water_mark()` replient déjà sur `STARTING_CAPITAL_USD` sans ligne), mais le coupe-circuit de drawdown ne pouvait jamais vraiment persister de progression pour ces poches.
 Solution : `INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at)` ajouté juste avant l'UPDATE dans `reset_portfolio()` -- garantit qu'une ligne existe toujours pour le wallet demandé avant que l'UPDATE ne s'applique. Comportement inchangé pour tout wallet qui avait déjà une ligne.
-`paper_trader.py` -- 1 nouveau test (`test_reset_portfolio_creates_row_for_wallet_with_no_prior_state`), suite paper_trader+coherence verte (401 passed), suite complète relancée avant déploiement.
+`paper_trader.py` -- 1 nouveau test (`test_reset_portfolio_creates_row_for_wallet_with_no_prior_state`), suite complète verte (8770 passed, 17 skipped), déployé (commit `2aaf9a73`). Les 8 poches ont été re-réinitialisées après déploiement -- toutes ont désormais leur ligne `paper_state` (1M$, cycle 1) confirmée en base.
 
 ------------------------------------------------------------
 
