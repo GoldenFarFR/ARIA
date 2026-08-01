@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import httpx
 
 from app.config import settings
@@ -49,11 +51,20 @@ class GeckoTerminalClient:
         url = f"{self.base_url}/networks/{network}/pools/{pair_address}/ohlcv/{period}"
         params = {"aggregate": aggregate, "limit": limit}
 
+        # 01/08 : ce client déléguait déjà le throttle au lock partagé (calibré pour
+        # du trafic authentifié, ~21 req/min) mais n'envoyait jamais la clé -- tirait
+        # donc en réalité au tarif keyless (~10 req/min) sur ce même lock. Même bug
+        # que celui déjà corrigé côté aria-core/services/ohlcv.py le même jour.
+        headers = {"Accept": "application/json"}
+        api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip()
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
+
         async with httpx.AsyncClient(timeout=25.0) as client:
             response = await client.get(
                 url,
                 params=params,
-                headers={"Accept": "application/json"},
+                headers=headers,
             )
             if response.status_code in (400, 404, 429):
                 return []

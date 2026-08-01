@@ -44,6 +44,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -71,6 +72,44 @@ LIMIT_ORDER_EXPIRY_HOURS = 3.0  # short-lived -- momentum setups go stale fast
 # conversion just for this gate. Starting value, to recalibrate once real
 # bonding limit orders accumulate outcomes.
 BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD = 20_000.0
+
+# 01/08 -- real bug found live (Workflow audit triggered by a GeckoTerminal
+# 429 rate that stayed flat, ~59-60/15min, even after 3 unrelated
+# uncoordinated-client fixes landed the same day): EVERY "watching" order
+# whose resolution goes through check_rsi_divergence_watching_order (the
+# rsi_divergence_pending reason, or any swing order per the 31/07 fine-grained
+# WATCH decision above) re-fetched FRESH candles on EVERY drain pass -- no
+# cache, no cap -- unlike every other GeckoTerminal-heavy path in this
+# pipeline (_gates_cache in scalping_variants.py, MAX_CANDIDATES_PER_DRAIN,
+# MAX_EVALUATIONS_PER_HOUR). Measured live: 104 of 105 watching orders used
+# this path, drained every 30s -> ~208 calls/min of DEMAND against a
+# throttle-imposed ~21 req/min SUPPLY (services/geckoterminal.py's shared
+# lock) -- the lock caps the outgoing rate correctly, but the queue behind it
+# never empties, a saturated-queue 429 pattern rather than a raw-overshoot
+# one.
+#
+# Fix: cap how many rsi-divergence watching orders get a fresh candle re-check
+# per drain pass, rotating oldest-checked-first (_rsi_watch_check_last_at
+# below) so every order still eventually gets re-checked, just not every 30s
+# -- the underlying candles (15-30min scalping-scale, or the standard
+# day/4h/1h ladder for VC) don't carry new information anywhere near that
+# often anyway. A hard per-pass cap (not a fixed time TTL) was chosen over a
+# cooldown window because it bounds worst-case load regardless of how many
+# orders accumulate -- more orders means a slower rotation, never more
+# requests, mirroring MAX_MANUAL_CANDIDATES_PER_CYCLE's own reasoning in
+# momentum_entry.py. Starting value: 10/drain * 2 drains/min = ~20/min, at
+# today's ~105-order backlog a full rotation completes roughly every 5min --
+# comfortably inside even the fastest (15min) candle granularity. Recalibrate
+# if the watching backlog keeps growing (it has been, per the same audit) or
+# if the other GeckoTerminal-heavy sources (discovery cycle, websocket drain
+# on NEW candidates) leave less headroom than assumed here.
+MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN = 10
+
+# order_id -> time.monotonic() of its last check_rsi_divergence_watching_order
+# call. Pruned to only currently-active order ids at the top of every
+# process_active_orders pass (an order leaves 'watching' for good --
+# triggered/cancelled/expired -- so its entry would otherwise linger forever).
+_rsi_watch_check_last_at: dict[int, float] = {}
 
 
 def _now() -> str:
@@ -688,6 +727,39 @@ async def reanalyze_for_watching(order: dict) -> bool:
     return clear
 
 
+def _order_uses_rsi_divergence_check(order: dict) -> bool:
+    """Same gate ``process_active_orders`` applies inline for a ``watching``
+    order -- pulled out standalone so the per-drain selection below (which
+    needs to know this BEFORE deciding whether to spend one of its
+    ``MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN`` slots on it) doesn't
+    duplicate the condition."""
+    sig = json.loads(order.get("signal_json") or "{}")
+    return sig.get("limit_order_reason") == "rsi_divergence_pending" or order.get("wallet") == "swing"
+
+
+def _select_due_rsi_watch_order_ids(orders: list[dict], now: float) -> set[int]:
+    """Which ``watching`` orders get a fresh ``check_rsi_divergence_watching_
+    order`` re-check THIS drain pass -- see ``MAX_RSI_DIVERGENCE_WATCH_CHECKS_
+    PER_DRAIN``'s own comment for why this is a hard per-pass cap (not a
+    cooldown window): oldest-checked-first (an order never checked yet, i.e.
+    absent from ``_rsi_watch_check_last_at``, sorts first via the ``0.0``
+    default -- a freshly-entered watching order gets checked promptly rather
+    than waiting a full rotation). Also prunes ``_rsi_watch_check_last_at``
+    down to only the order ids still present in ``orders`` -- an order that
+    left 'watching' for good (triggered/cancelled/expired) no longer appears
+    in ``get_active_orders()``'s result, so its stale entry would otherwise
+    never get cleaned up."""
+    watching_rsi_ids = [
+        o["id"] for o in orders if o["state"] == "watching" and _order_uses_rsi_divergence_check(o)
+    ]
+    live_ids = {o["id"] for o in orders}
+    for stale_id in [k for k in _rsi_watch_check_last_at if k not in live_ids]:
+        del _rsi_watch_check_last_at[stale_id]
+
+    watching_rsi_ids.sort(key=lambda oid: _rsi_watch_check_last_at.get(oid, 0.0))
+    return set(watching_rsi_ids[:MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN])
+
+
 async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -> dict:
     """Orchestrates every active limit order for one pass of the caller's
     drain loop (``momentum_websocket._drain_once()``): expires stale orders,
@@ -711,7 +783,11 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
     expired = await sweep_expired()
     actions["expired"] = len(expired)
 
-    for order in await get_active_orders():
+    active_orders = await get_active_orders()
+    now = time.monotonic()
+    due_rsi_watch_ids = _select_due_rsi_watch_order_ids(active_orders, now)
+
+    for order in active_orders:
         pair = None
         if pair_lookup is not None:
             try:
@@ -784,12 +860,16 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         # buys on price alone; it waits for a genuine fine-grained divergence
         # to confirm within that zone. Scalping's own orders are UNCHANGED
         # (still gated on limit_order_reason exactly as before).
-        uses_rsi_divergence_check = (
-            sig.get("limit_order_reason") == "rsi_divergence_pending"
-            or order.get("wallet") == "swing"
-        )
+        uses_rsi_divergence_check = _order_uses_rsi_divergence_check(order)
         if uses_rsi_divergence_check:
+            # 01/08 -- MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN's own comment:
+            # not this pass's turn in the rotation -- skip (same as 'wait',
+            # order stays 'watching' unchanged) rather than spending a fresh
+            # GeckoTerminal candle re-fetch on it every single 30s drain.
+            if order["id"] not in due_rsi_watch_ids:
+                continue
             decision = await check_rsi_divergence_watching_order(order, sig)
+            _rsi_watch_check_last_at[order["id"]] = now
         else:
             decision = check_watching_order(order["target_price"], sig.get("invalidation"), price)
         is_rsi_divergence_watch = uses_rsi_divergence_check

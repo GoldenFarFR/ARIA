@@ -35,6 +35,18 @@ def _bypass_btc_cycles_network_call(monkeypatch):
     monkeypatch.setattr(btc_cycles, "fetch_current_macro_phase", _fake_fetch_current_macro_phase)
 
 
+@pytest.fixture(autouse=True)
+def _clear_rsi_watch_rotation_state():
+    """``lo._rsi_watch_check_last_at`` (01/08, per-drain rotation cap) is a
+    process-global dict keyed by order id -- without a reset, order ids that
+    collide across tests (each test's isolated sqlite db restarts its own
+    autoincrement at 1) would leak stale 'last checked' timestamps between
+    tests."""
+    lo._rsi_watch_check_last_at.clear()
+    yield
+    lo._rsi_watch_check_last_at.clear()
+
+
 def _sig(**overrides) -> dict:
     base = {
         "price": 0.038, "target": 0.06, "invalidation": 0.03, "rr": 3.9,
@@ -829,6 +841,150 @@ async def test_process_active_orders_routes_rsi_divergence_pending_to_dedicated_
     monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
     await lo.process_active_orders(_price)
     assert called["dedicated"] is True
+
+
+# ── per-drain rotation cap on RSI-divergence watch re-checks (01/08) ────────
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_caps_rsi_divergence_checks_per_drain(monkeypatch):
+    """More rsi_divergence_pending watching orders than MAX_RSI_DIVERGENCE_
+    WATCH_CHECKS_PER_DRAIN exist -- only the cap gets a fresh
+    check_rsi_divergence_watching_order call this pass, the rest are skipped
+    (left 'watching', unchanged) rather than all re-checked every 30s drain."""
+    await paper_trader.reset_portfolio(1_000_000.0)
+    total_orders = lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN + 5
+    for i in range(total_orders):
+        order = await lo.create_pending_order(
+            f"0xCONTRACT{i}", "base", f"SYM{i}", 1.5,
+            {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+        )
+        await lo.transition_to_watching(order["id"])
+
+    checked_contracts = []
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        checked_contracts.append(order_arg["contract"])
+        return "wait"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    await lo.process_active_orders(_price)
+
+    assert len(checked_contracts) == lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN
+    assert len(set(checked_contracts)) == lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_rsi_divergence_rotation_covers_all_orders_eventually(monkeypatch):
+    """Orders skipped on pass 1 (over the cap) must be exactly the ones
+    prioritized on pass 2 -- oldest-checked-first rotation, never the same
+    subset re-checked every pass while the rest starve."""
+    await paper_trader.reset_portfolio(1_000_000.0)
+    total_orders = lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN + 5
+    for i in range(total_orders):
+        order = await lo.create_pending_order(
+            f"0xCONTRACT{i}", "base", f"SYM{i}", 1.5,
+            {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+        )
+        await lo.transition_to_watching(order["id"])
+
+    checked_contracts = []
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        checked_contracts.append(order_arg["contract"])
+        return "wait"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+
+    await lo.process_active_orders(_price)
+    first_pass = set(checked_contracts)
+    checked_contracts.clear()
+
+    await lo.process_active_orders(_price)
+    second_pass = set(checked_contracts)
+
+    # The 5 never-checked-yet orders from pass 1 that missed the cap must be
+    # among the first checked on pass 2 (oldest-checked-first == never-checked
+    # sorts first) -- no overlap between what pass 1 already covered and what
+    # was still starving, until the rotation wraps back around.
+    assert len(first_pass | second_pass) == total_orders
+    assert len(first_pass & second_pass) < lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_rsi_watch_rotation_state_pruned_on_resolution(monkeypatch):
+    """An order that resolves (cancel/trigger/expire) leaves 'watching' for
+    good -- its _rsi_watch_check_last_at entry must be pruned rather than
+    lingering forever, verified via the selection helper directly."""
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+    lo._rsi_watch_check_last_at[order["id"]] = 123.0
+    lo._rsi_watch_check_last_at[999_999] = 456.0  # a stale id, no longer active
+
+    await lo.mark_cancelled(order["id"], "test_cleanup")
+    active = await lo.get_active_orders()
+    lo._select_due_rsi_watch_order_ids(active, now=999.0)
+
+    assert order["id"] not in lo._rsi_watch_check_last_at
+    assert 999_999 not in lo._rsi_watch_check_last_at
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_non_rsi_watching_orders_never_capped(monkeypatch):
+    """The rotation cap only scopes rsi_divergence_pending/swing watching
+    orders (GeckoTerminal-heavy) -- a plain price-comparison watching order
+    (check_watching_order, no network call of its own beyond the already-
+    fetched price) must never be skipped by this cap, no matter how many
+    rsi-divergence orders are also active."""
+    await paper_trader.reset_portfolio(1_000_000.0)
+    for i in range(lo.MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN + 5):
+        order = await lo.create_pending_order(
+            f"0xRSI{i}", "base", f"RSI{i}", 1.5,
+            {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+        )
+        await lo.transition_to_watching(order["id"])
+
+    # wallet="vc" explicitly -- "swing" (the default) always routes through
+    # the rsi-divergence check regardless of limit_order_reason (31/07
+    # decision, _order_uses_rsi_divergence_check's own condition), so a truly
+    # "plain" check_watching_order path needs a non-swing/non-scalping pocket.
+    plain_order = await lo.create_pending_order(
+        "0xPLAIN", "base", "PLAIN", 1.5, {"invalidation": 1.19}, wallet="vc",
+    )
+    await lo.transition_to_watching(plain_order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        return "wait"
+
+    checked_plain_ids = []
+    real_check_watching_order = lo.check_watching_order
+
+    def _spy_check_watching_order(target_price, invalidation_price, current_price):
+        checked_plain_ids.append(target_price)
+        return real_check_watching_order(target_price, invalidation_price, current_price)
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(lo, "check_watching_order", _spy_check_watching_order)
+    await lo.process_active_orders(_price)
+
+    # The plain order was evaluated via check_watching_order this pass -- the
+    # rsi-divergence rotation cap (MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN,
+    # already exhausted by the 15 rsi-divergence orders above) never applies
+    # to it.
+    assert checked_plain_ids == [plain_order["target_price"]]
 
 
 # ── rsi_divergence_log wiring (Item #247, 30/07) ─────────────────────────────
