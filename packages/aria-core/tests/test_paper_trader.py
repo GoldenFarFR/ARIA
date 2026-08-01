@@ -262,6 +262,115 @@ async def test_reset_portfolio_creates_row_for_wallet_with_no_prior_state(tmp_db
     assert row == (1_000_000.0, 1_000_000.0, 1)
 
 
+# ── migrate_legacy_wallet_rows (08/01, legacy "scalping" -> "scalping_v6") ──
+
+
+def _point_wallet_scoped_modules_at_tmp_db(monkeypatch):
+    """pending_limit_order/momentum_scan_log/rsi_divergence_log each own
+    their own module-level DB_PATH -- all point at the same real
+    aria_db_path() in production, but a test with its own isolated tmp_db
+    (only pt.DB_PATH by default) must repoint these 3 too, or migrate_
+    legacy_wallet_rows's own _ensure_table() calls create/read a DIFFERENT
+    file than the one this test seeds."""
+    import aiosqlite  # noqa: F401 -- keeps the import grouping consistent with callers
+
+    from aria_core import limit_orders, momentum_scan_log, rsi_divergence_log
+
+    monkeypatch.setattr(limit_orders, "DB_PATH", pt.DB_PATH)
+    monkeypatch.setattr(momentum_scan_log, "DB_PATH", pt.DB_PATH)
+    monkeypatch.setattr(rsi_divergence_log, "DB_PATH", pt.DB_PATH)
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_wallet_rows_moves_every_scoped_table(tmp_db, monkeypatch):
+    """Real DB evidence the migration exists to preserve: 642 pending_limit_
+    order rows, 3 open paper_position rows, months of momentum_scan_log/
+    rsi_divergence_log history on wallet="scalping" -- none of it discarded
+    just because the pocket is renamed."""
+    import aiosqlite
+
+    _point_wallet_scoped_modules_at_tmp_db(monkeypatch)
+    from aria_core import limit_orders, momentum_scan_log, rsi_divergence_log
+
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+    await pt.open_position("0xAAA", "AAA", 1.0, wallet="scalping", alloc_usd=100.0)
+    # These 3 tables are each owned by their own module -- created here
+    # (rather than assumed pre-existing) so this test's own raw INSERTs
+    # below don't race the schema, same as migrate_legacy_wallet_rows's own
+    # _ensure_table() calls handle in production.
+    await limit_orders._ensure_table()
+    await momentum_scan_log._ensure_table()
+    await rsi_divergence_log._ensure_table()
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO paper_position_archive (cycle_number, contract, cost_usd, entry_price, qty, "
+            "opened_at, status, wallet) VALUES (1, '0xBBB', 50.0, 1.0, 50.0, '2026-08-01T00:00:00', "
+            "'closed', 'scalping')"
+        )
+        await db.execute(
+            "INSERT INTO pending_limit_order (contract, chain, symbol, target_price, signal_json, state, "
+            "created_at, expires_at, wallet) VALUES ('0xCCC', 'base', 'CCC', 1.0, '{}', 'watching', "
+            "'2026-08-01T00:00:00', '2026-08-02T00:00:00', 'scalping')"
+        )
+        await db.execute(
+            "INSERT INTO paper_weekly_cycle (wallet, cycle_number, started_at, target_equity, start_capital) "
+            "VALUES ('scalping', 1, '2026-08-01T00:00:00', 1_100_000.0, 1_000_000.0)"
+        )
+        await db.execute(
+            "INSERT INTO momentum_scan_log (contract, chain, hold_reason, wallet, scanned_at) "
+            "VALUES ('0xDDD', 'base', 'no_entry_signal', 'scalping', '2026-08-01T00:00:00')"
+        )
+        await db.execute(
+            "INSERT INTO rsi_divergence_log (contract, chain, wallet, outcome, recorded_at) "
+            "VALUES ('0xEEE', 'base', 'scalping', 'expired_unconfirmed', '2026-08-01T00:00:00')"
+        )
+        # A DIFFERENT wallet's row -- must never be touched by this migration.
+        await db.execute(
+            "INSERT INTO momentum_scan_log (contract, chain, hold_reason, wallet, scanned_at) "
+            "VALUES ('0xFFF', 'base', 'no_entry_signal', 'swing', '2026-08-01T00:00:00')"
+        )
+        await db.commit()
+
+    counts = await pt.migrate_legacy_wallet_rows("scalping", "scalping_v6")
+
+    assert counts == {
+        "paper_state": 1, "paper_position": 1, "paper_position_archive": 1,
+        "pending_limit_order": 1, "paper_weekly_cycle": 1, "momentum_scan_log": 1,
+        "rsi_divergence_log": 1,
+    }
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        for table in pt._WALLET_SCOPED_TABLES:
+            row = await (await db.execute(f"SELECT COUNT(*) FROM {table} WHERE wallet = 'scalping'")).fetchone()
+            assert row[0] == 0, f"{table} still has a 'scalping' row after migration"
+            row = await (
+                await db.execute(f"SELECT COUNT(*) FROM {table} WHERE wallet = 'scalping_v6'")
+            ).fetchone()
+            assert row[0] == 1, f"{table} missing its migrated 'scalping_v6' row"
+        # the "swing" row in momentum_scan_log must be completely untouched
+        row = await (await db.execute("SELECT COUNT(*) FROM momentum_scan_log WHERE wallet = 'swing'")).fetchone()
+        assert row[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_wallet_rows_is_idempotent(tmp_db, monkeypatch):
+    _point_wallet_scoped_modules_at_tmp_db(monkeypatch)
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+    first = await pt.migrate_legacy_wallet_rows("scalping", "scalping_v6")
+    assert first["paper_state"] == 1
+
+    second = await pt.migrate_legacy_wallet_rows("scalping", "scalping_v6")
+    assert all(v == 0 for v in second.values())
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_wallet_rows_nothing_to_migrate_returns_zeros(tmp_db, monkeypatch):
+    _point_wallet_scoped_modules_at_tmp_db(monkeypatch)
+    counts = await pt.migrate_legacy_wallet_rows("scalping", "scalping_v6")
+    assert all(v == 0 for v in counts.values())
+
+
 @pytest.mark.asyncio
 async def test_open_deducts_cash_and_no_double(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
@@ -6430,10 +6539,13 @@ def test_all_pocket_wallets_gate_off_returns_classic_three():
     assert pt.all_pocket_wallets() == ("scalping", "swing", "vc")
 
 
-def test_all_pocket_wallets_gate_on_returns_five_variants_plus_two(monkeypatch):
+def test_all_pocket_wallets_gate_on_returns_six_variants_plus_two(monkeypatch):
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     wallets = pt.all_pocket_wallets()
-    assert wallets == ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "swing", "vc")
+    assert wallets == (
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+        "swing", "vc",
+    )
 
 
 @pytest.mark.asyncio
@@ -6472,12 +6584,15 @@ async def test_all_reporting_wallets_includes_retired_pocket_with_history(tmp_db
 
 
 @pytest.mark.asyncio
-async def test_scalping_variants_enabled_replaces_scalping_pocket_with_five(tmp_db, monkeypatch):
-    """The classic "scalping" slot disappears entirely -- each of the 5
-    variant pockets sources and can open its own independent position, all
+async def test_scalping_variants_enabled_replaces_scalping_pocket_with_six(tmp_db, monkeypatch):
+    """The classic "scalping" slot disappears from SOURCING entirely -- each
+    of the 5 variant pockets PLUS scalping_v6 (08/01, the legacy RSI-
+    divergence engine kept as its own comparison arm, "le scalping met le à
+    part en v6") sources and can open its own independent position, all
     sharing the SAME momentum discovery pass (never a duplicated network call)."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    from aria_core import momentum_entry
     from aria_core.skills import candidate_ranking, scalping_variants
 
     async def _fake_sources(*, limit=20):
@@ -6499,16 +6614,112 @@ async def test_scalping_variants_enabled_replaces_scalping_pocket_with_five(tmp_
     for key in scalping_variants.VARIANT_ANALYZERS:
         monkeypatch.setitem(scalping_variants.VARIANT_ANALYZERS, key, _fake_buy)
 
+    # scalping_v6's own analyzer is the legacy _default_momentum_analyzer,
+    # which calls momentum_entry.evaluate_momentum_entry -- a REAL code path
+    # in this test (unlike the 5 variants above, faked via VARIANT_ANALYZERS),
+    # so it needs its own fake too. swing/vc go through this SAME function
+    # (mode="standard") -- gated on mode here so this scalping-only test
+    # doesn't accidentally also open a swing/vc position via the same mock.
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        if mode != "scalping":
+            return {"action": "HOLD", "chain": chain, "symbol": "DDD", "price": 1.0, "hold_reason": "test_stub"}
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
     await pt.reset_portfolio(1_000_000.0)
     act = await pt.run_paper_cycle(price_lookup=_price_lookup_one, depeg_check=_no_depeg)
 
     wallets_opened = {p["wallet"] for p in act["opened"]}
-    assert wallets_opened == {"scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5"}
-    assert len(act["opened"]) == 5
+    assert wallets_opened == {
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+    }
+    assert len(act["opened"]) == 6
     assert await pt.get_open_positions(wallet="scalping") == []  # classic slot never sourced
-    for key in scalping_variants.VARIANT_ANALYZERS:
+    for key in (*scalping_variants.VARIANT_ANALYZERS, "scalping_v6"):
         positions = await pt.get_open_positions(wallet=key)
         assert len(positions) == 1 and positions[0]["mode"] == "scalping"
+
+
+# ── build_scalping_pocket_entries (08/01) ───────────────────────────────────
+# Real bug found live: scalping_v1 alone consumed 245-283s of the shared 300s
+# momentum_discovery_cycle budget on every tick (production DB evidence,
+# 6 bursts measured) -- v2..v5 never got a chance to evaluate even one
+# candidate. Fix: all scalping-variant pockets now share the SAME small
+# candidate slice (MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE) instead of each
+# getting the full up-to-50 list independently.
+
+
+def test_build_scalping_pocket_entries_gate_off_single_pocket_full_candidates():
+    candidates = [f"0xC{i}" for i in range(30)]
+    entries = pt.build_scalping_pocket_entries(candidates, {})
+    assert len(entries) == 1
+    wallet, pocket_candidates, _analyzer, mode, cap = entries[0]
+    assert wallet == "scalping"
+    assert pocket_candidates == candidates  # never truncated when the gate is off
+    assert mode == "scalping"
+    assert cap == pt.MAX_POSITIONS_SCALPING
+
+
+def test_build_scalping_pocket_entries_gate_on_returns_six_pockets(monkeypatch):
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    entries = pt.build_scalping_pocket_entries([f"0xC{i}" for i in range(30)], {})
+    wallets = [e[0] for e in entries]
+    assert wallets == [
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+    ]
+    assert all(e[3] == "scalping" for e in entries)
+    assert all(e[4] == pt.MAX_POSITIONS_SCALPING for e in entries)
+
+
+def test_build_scalping_pocket_entries_gate_on_truncates_shared_candidate_slice(monkeypatch):
+    """The real fix: more than MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE
+    candidates exist -- every one of the 6 pockets gets the SAME truncated
+    slice (identical input, preserving the "compared side by side" design
+    intent), never the full list independently."""
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    candidates = [f"0xC{i}" for i in range(30)]
+    entries = pt.build_scalping_pocket_entries(candidates, {})
+    expected = candidates[: pt.MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE]
+    for _wallet, pocket_candidates, _analyzer, _mode, _cap in entries:
+        assert pocket_candidates == expected
+        assert len(pocket_candidates) == pt.MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE
+
+
+def test_build_scalping_pocket_entries_gate_on_under_cap_never_padded(monkeypatch):
+    """Fewer candidates than the cap -- no truncation artifact, every pocket
+    just sees the (short) full list."""
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    candidates = ["0xC1", "0xC2"]
+    entries = pt.build_scalping_pocket_entries(candidates, {})
+    for _wallet, pocket_candidates, _analyzer, _mode, _cap in entries:
+        assert pocket_candidates == candidates
+
+
+@pytest.mark.asyncio
+async def test_build_scalping_pocket_entries_v6_uses_legacy_analyzer(monkeypatch):
+    """scalping_v6's analyzer must be the SAME legacy RSI-divergence engine
+    the classic "scalping" pocket always used (_default_momentum_analyzer,
+    mode="scalping") -- never one of the 5 new variant functions."""
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    from aria_core import momentum_entry
+
+    captured: list[dict] = []
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        captured.append({"contract": contract, "mode": mode})
+        return None
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    entries = pt.build_scalping_pocket_entries(["0xC1"], {})
+    v6_entry = next(e for e in entries if e[0] == "scalping_v6")
+    await v6_entry[2]("0xC1")
+
+    assert captured == [{"contract": "0xC1", "mode": "scalping"}]
 
 
 @pytest.mark.asyncio

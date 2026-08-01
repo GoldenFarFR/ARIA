@@ -1266,3 +1266,41 @@ class TestResetPortfolioLiftsCircuitBreaker:
         blocked_swing, _ = risk_guard.blocks_new_entries("swing")
         assert blocked_scalping is False
         assert blocked_swing is True  # jamais touché
+
+
+class TestMigrateWalletState:
+    """08/01, one-off migration (legacy "scalping" pocket folded into
+    "scalping_v6") -- a pocket's circuit-breaker block/resume history is
+    real data, never silently dropped on a rename."""
+
+    def test_moves_state_file_to_new_wallet(self, tmp_db):
+        risk_guard.block_new_entries("scalping", "5 pertes consécutives", by="test")
+
+        moved = risk_guard.migrate_wallet_state("scalping", "scalping_v6")
+
+        assert moved is True
+        blocked_old, _ = risk_guard.blocks_new_entries("scalping")
+        blocked_new, reason_new = risk_guard.blocks_new_entries("scalping_v6")
+        assert blocked_old is False  # nothing left under the old name
+        assert blocked_new is True
+        assert reason_new == "5 pertes consécutives"
+        assert not risk_guard._state_path("scalping").exists()
+
+    def test_nothing_to_migrate_is_a_safe_noop(self, tmp_db):
+        moved = risk_guard.migrate_wallet_state("scalping", "scalping_v6")
+        assert moved is False
+        assert not risk_guard._state_path("scalping_v6").exists()
+
+    def test_never_overwrites_an_existing_destination(self, tmp_db):
+        """scalping_v6 already has its OWN real history (e.g. this migration
+        already ran once) -- a second call must never clobber it."""
+        risk_guard.block_new_entries("scalping", "old reason", by="test")
+        risk_guard.block_new_entries("scalping_v6", "scalping_v6's own real block", by="test")
+
+        moved = risk_guard.migrate_wallet_state("scalping", "scalping_v6")
+
+        assert moved is False
+        blocked_old, reason_old = risk_guard.blocks_new_entries("scalping")
+        blocked_new, reason_new = risk_guard.blocks_new_entries("scalping_v6")
+        assert blocked_old is True and reason_old == "old reason"  # untouched, left in place
+        assert blocked_new is True and reason_new == "scalping_v6's own real block"  # untouched

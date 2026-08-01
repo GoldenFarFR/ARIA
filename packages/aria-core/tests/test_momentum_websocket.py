@@ -864,6 +864,89 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
 
 
 @pytest.mark.asyncio
+async def test_drain_multi_pocket_gate_on_dispatches_six_scalping_variants_when_variants_enabled(
+    monkeypatch,
+):
+    """08/01 -- real bug found live: this drain used to hardcode its own
+    single "scalping" wallet entry, never updated when scalping_v1..v6 were
+    introduced -- it kept feeding the legacy pocket through this 30s drain,
+    invisible to and duplicate of the periodic heartbeat's own multi-pocket
+    construction (642 limit orders / 3 open positions on "scalping" found
+    live while v2..v5 had zero). Now both use paper_trader.
+    build_scalping_pocket_entries -- this proves the websocket drain picks
+    up all 6 scalping pockets once ARIA_SCALPING_VARIANTS_ENABLED is on,
+    never just the legacy "scalping" wallet."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader, risk_guard
+    from aria_core import paper_trader_risk as risk
+    from aria_core.skills import candidate_ranking, market_sentiment
+
+    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
+
+    async def _no_depeg():
+        return 0.0
+
+    monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
+
+    async def _fake_evaluate(wallet="swing", *, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard, wallet=wallet)
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate)
+
+    async def _fake_macro(*, price_lookup=None):
+        return risk_guard.MacroRiskState(
+            total_equity=3_000_000.0, total_high_water_mark=3_000_000.0,
+            drawdown_pct=0.0, blocked=False, newly_triggered=False,
+        )
+
+    monkeypatch.setattr(risk_guard, "evaluate_macro_risk", _fake_macro)
+
+    async def _fake_regime():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _fake_regime)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(B)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    captured_calls: list[dict] = []
+
+    async def _fake_open_new_entries(wallet, candidates, analyzer, **kwargs):
+        captured_calls.append({"wallet": wallet, "candidates": list(candidates)})
+        return [], 0
+
+    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
+
+    await listener._drain_once()
+
+    by_wallet = {c["wallet"]: c for c in captured_calls}
+    assert set(by_wallet) == {
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+        "swing", "vc",
+    }
+    # every scalping-variant pocket (v1..v6) shares the SAME candidate list --
+    # the legacy "scalping" wallet is never sourced through this drain again.
+    for key in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+        assert by_wallet[key]["candidates"] == [A]
+
+
+@pytest.mark.asyncio
 async def test_drain_multi_pocket_skips_all_pockets_when_usdc_depegged(monkeypatch):
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")

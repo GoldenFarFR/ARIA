@@ -1095,12 +1095,27 @@ async def _ensure_tables() -> None:
             )
             await db.execute("DROP TABLE paper_state_legacy_migrated")
 
-        # Seed the 2 new pockets fresh at STARTING_CAPITAL_USD (migration
-        # decision: scalping/VC start empty -- only 'swing' carries the
+        # Seed the new pockets fresh at STARTING_CAPITAL_USD (migration
+        # decision: scalping/VC started empty -- only 'swing' carries the
         # existing portfolio's history forward). INSERT OR IGNORE also covers
         # the 'swing' row itself on a DB that was already on the new schema
         # (no legacy row to copy -- e.g. a fresh test DB).
-        for wallet_name in ("swing", "scalping", "vc"):
+        #
+        # 08/01 -- "scalping" REMOVED from this unconditional seed (real bug
+        # found live via migrate_legacy_wallet_rows's own idempotence test):
+        # this ran on EVERY _ensure_tables() call, so renaming the legacy
+        # "scalping" pocket to "scalping_v6" (build_scalping_pocket_entries's
+        # own docstring) would silently resurrect an empty "scalping" row
+        # loaded with a fresh STARTING_CAPITAL_USD on the very next cycle --
+        # exactly the ghost-pocket problem this migration exists to close.
+        # Never a regression for the gate-OFF fallback (single legacy
+        # "scalping" pocket, scalping_variants_enabled() off): it never
+        # needed a PRE-seeded row either, same lazy-creation-on-first-use
+        # doctrine scalping_v1..v6 already rely on (starting_capital()/
+        # get_equity_high_water_mark() fail open to STARTING_CAPITAL_USD
+        # with no row, reset_portfolio()'s own INSERT OR IGNORE creates one
+        # on first explicit reset -- see its own 08/01 comment).
+        for wallet_name in ("swing", "vc"):
             await db.execute(
                 "INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at) "
                 "VALUES (?, ?, ?)",
@@ -1325,6 +1340,56 @@ async def reset_portfolio(
     from aria_core import risk_guard
 
     risk_guard.resume_new_entries(wallet, by="manual_reset")
+
+
+# Every table that carries a "wallet" column scoping a pocket's own capital/
+# history (verified 08/01 by grepping every real table for a "wallet" column
+# -- deliberately excludes tables whose "wallet" is an EXTERNAL EVM address
+# scored by /walletscore, e.g. wallet_score_log/cabalspy_kol_wallets/
+# smart_money_*, which never collides with a pocket name).
+_WALLET_SCOPED_TABLES = (
+    "paper_state", "paper_position", "paper_position_archive",
+    "pending_limit_order", "paper_weekly_cycle", "momentum_scan_log", "rsi_divergence_log",
+)
+
+
+async def migrate_legacy_wallet_rows(old_wallet: str, new_wallet: str) -> dict[str, int]:
+    """08/01, one-off migration (operator's explicit call, "le scalping met
+    le à part en v6"): the legacy "scalping" pocket (retired from SOURCING
+    when scalping_variants_enabled() first went on, but never actually
+    stopped -- momentum_websocket.py kept feeding it through its 30s drain,
+    a real bug found the same day, see build_scalping_pocket_entries's own
+    docstring) is folded into the multi-variant comparison as its own 6th
+    arm, "scalping_v6" -- never re-created from zero. This renames every
+    ``old_wallet`` row across every wallet-scoped table (see
+    ``_WALLET_SCOPED_TABLES``) to ``new_wallet`` in place, preserving the
+    real capital/equity/position/order history rather than discarding it.
+
+    Idempotent: a table with zero ``old_wallet`` rows left (already
+    migrated, or never had any) just reports 0 for that table -- safe to
+    call more than once. Returns ``{table_name: rows_migrated}`` for the
+    caller to log/verify, never silent about what moved."""
+    # pending_limit_order/momentum_scan_log/rsi_divergence_log are each
+    # owned (schema created) by their own module, not paper_trader's own
+    # _ensure_tables() -- all point at the same real aria_db_path() in
+    # production, but a caller (or a test with its own isolated DB_PATH)
+    # must never assume they already exist just because paper_trader's own
+    # tables do.
+    from aria_core import limit_orders, momentum_scan_log, rsi_divergence_log
+
+    await _ensure_tables()
+    await limit_orders._ensure_table()
+    await momentum_scan_log._ensure_table()
+    await rsi_divergence_log._ensure_table()
+    counts: dict[str, int] = {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        for table in _WALLET_SCOPED_TABLES:
+            cur = await db.execute(
+                f"UPDATE {table} SET wallet = ? WHERE wallet = ?", (new_wallet, old_wallet),
+            )
+            counts[table] = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
+        await db.commit()
+    return counts
 
 
 async def get_equity_high_water_mark(wallet: str = "swing") -> float:
@@ -2942,6 +3007,101 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
     return analyzer
 
 
+# 08/01 -- real bug found live (operator: "toujours pas de trade" on
+# scalping_v2..v5, hours after activation): a 2-agent research Workflow
+# confirmed, with production DB evidence, that scalping_v1 alone consumed
+# 245-283s of the shared 300s momentum_discovery_cycle budget on every
+# single tick (measured across 6 bursts) -- v2..v5 never got a chance to
+# even START evaluating their first candidate before the whole coroutine
+# was cancelled by heartbeat.py's asyncio.wait_for. The 120s _gates_cache
+# TTL in scalping_variants.py, meant to let variants 2-6 reuse variant 1's
+# network fetch for the SAME candidate (its own docstring: "the first
+# variant's call is the only one that hits the network"), never got a
+# chance to do its job either -- by the time v1 finished its OWN up-to-50
+# candidate pass, the cache entries for the first candidates were already
+# stale.
+#
+# Fix: instead of giving every scalping-variant pocket the FULL shared
+# momentum_candidates list (up to 50), they now all share the SAME much
+# smaller slice (MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE) -- same
+# candidates for every variant (preserves the "compared side by side on
+# identical input" design intent, scalping_variants.py's own module
+# docstring), but small enough that a full 6-variant sequential pass
+# actually finishes inside the cache TTL: variant 1 pays the real network
+# cost once per candidate, variants 2-6 hit the warm cache for the exact
+# same (contract, chain) key. Starting value: 10, matching the same
+# starting-value doctrine as MAX_MANUAL_CANDIDATES_PER_CYCLE/MAX_RSI_
+# DIVERGENCE_WATCH_CHECKS_PER_DRAIN added the same day -- a hard per-cycle
+# cap bounds the worst case regardless of pool size, rotating slowly (the
+# shared candidate list is already sorted oldest-scanned-first) rather than
+# starving anyone outright. Recalibrate once real multi-cycle timing data
+# accumulates under this new shape.
+MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 10
+
+
+def build_scalping_pocket_entries(
+    momentum_candidates: list[str],
+    chain_by_contract: dict[str, str],
+    *,
+    weekly_context=None,
+    current_regime=None,
+) -> tuple:
+    """Single source of truth for what the "scalping slot" of the multi-
+    pocket loop looks like this cycle -- shared by BOTH the periodic
+    heartbeat (``_run_paper_cycle_locked`` below) and the real-time
+    WebSocket drain (``momentum_websocket._drain_multi_pocket``), which used
+    to hardcode its OWN 3-wallet tuple (real bug: it never learned about
+    ``scalping_v1``..``scalping_v5`` when they were introduced 08/01, so it
+    kept feeding the legacy "scalping" wallet through its 30s drain --
+    orphaned duplicate sourcing invisible to anyone checking only
+    ``scalping_v1``..``v5``, confirmed live: 642 limit orders / 3 open
+    positions on "scalping" while v2..v5 had zero of anything). Extracting
+    this here so there is exactly ONE place that knows the pocket list, not
+    two that can silently drift apart again.
+
+    Gate OFF (``scalping_variants_enabled()`` False): byte-for-byte the
+    historical single "scalping" pocket, full candidate list, unchanged.
+
+    Gate ON: 6 pockets, not 5 -- ``scalping_v6`` (08/01, operator's explicit
+    call, "le scalping met le à part en v6") is the SAME legacy RSI-
+    divergence engine (``_default_momentum_analyzer(mode="scalping")``) the
+    single "scalping" pocket always used, kept as its own comparison arm
+    rather than retired -- its pre-existing history (paper_state/
+    paper_position/pending_limit_order/momentum_scan_log/rsi_divergence_log
+    rows, risk_guard_state file) was migrated wallet "scalping" ->
+    "scalping_v6" in the same rollout (one-off migration, see
+    docs/HANDOFF_PIPELINE_MOMENTUM.md), never re-created from zero. All 6
+    scalping pockets (v1..v6) share the SAME truncated candidate slice --
+    see MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE's own comment."""
+    if scalping_variants_enabled():
+        from aria_core.skills import scalping_variants
+
+        shared_candidates = momentum_candidates[:MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE]
+        entries = tuple(
+            (
+                wallet_name,
+                shared_candidates,
+                _scalping_variant_analyzer(evaluate_fn, chain_by_contract),
+                "scalping",
+                MAX_POSITIONS_SCALPING,
+            )
+            for wallet_name, evaluate_fn in scalping_variants.VARIANT_ANALYZERS.items()
+        )
+        legacy_analyzer = _default_momentum_analyzer(
+            chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+            mode="scalping",
+        )
+        return entries + (
+            ("scalping_v6", shared_candidates, legacy_analyzer, "scalping", MAX_POSITIONS_SCALPING),
+        )
+
+    scalping_analyzer = _default_momentum_analyzer(
+        chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+        mode="scalping",
+    )
+    return (("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),)
+
+
 def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
     """Item #157, 28/07: the VC pocket's own analyzer, routing a contract
     tagged ``bonding_entry.CHAIN_MARKER`` to ``evaluate_bonding_entry``
@@ -3025,7 +3185,13 @@ def scalping_variants_enabled() -> bool:
     )
 
 
-_SCALPING_VARIANT_WALLETS = ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5")
+_SCALPING_VARIANT_WALLETS = (
+    "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
+    # scalping_v6 (08/01) -- the legacy RSI-divergence "scalping" pocket,
+    # kept as its own comparison arm rather than retired, see
+    # build_scalping_pocket_entries's own docstring.
+    "scalping_v6",
+)
 
 
 def all_pocket_wallets() -> tuple[str, ...]:
@@ -5313,31 +5479,15 @@ async def _run_paper_cycle_locked(
         )
 
         # 08/01 -- scalping_variants_enabled(): the single "scalping" slot is
-        # REPLACED (not added to) by 5 independent pockets, one per variant
-        # (services/skills/scalping_variants.py) -- same doctrine as every
-        # other pocket here (own $1M wallet, own MAX_POSITIONS_SCALPING cap
-        # -- uncapped, same as the RSI-divergence mode it replaces).
-        if scalping_variants_enabled():
-            from aria_core.skills import scalping_variants
-
-            scalping_pocket_entries = tuple(
-                (
-                    wallet_name,
-                    momentum_candidates,
-                    _scalping_variant_analyzer(evaluate_fn, _momentum_chain_by_contract),
-                    "scalping",
-                    MAX_POSITIONS_SCALPING,
-                )
-                for wallet_name, evaluate_fn in scalping_variants.VARIANT_ANALYZERS.items()
-            )
-        else:
-            scalping_analyzer = _default_momentum_analyzer(
-                _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-                mode="scalping",
-            )
-            scalping_pocket_entries = (
-                ("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),
-            )
+        # replaced by 6 independent pockets (v1..v5 + legacy-as-v6) -- see
+        # build_scalping_pocket_entries's own docstring for the full history
+        # (this used to be constructed inline here AND, separately and
+        # incorrectly, hardcoded again in momentum_websocket.py -- now one
+        # shared function).
+        scalping_pocket_entries = build_scalping_pocket_entries(
+            momentum_candidates, _momentum_chain_by_contract,
+            weekly_context=weekly_context, current_regime=current_regime,
+        )
 
         # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)
         for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (

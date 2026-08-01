@@ -603,8 +603,16 @@ class MomentumWebsocketListener:
                     pass
                 return
 
-            scalping_analyzer = paper_trader._default_momentum_analyzer(
-                chain_by_contract, current_regime=current_regime, mode="scalping",
+            # 08/01 -- real bug found live: this used to hardcode its OWN
+            # single "scalping" pocket entry here, never updated when
+            # scalping_v1..v5 were introduced the same day -- kept feeding
+            # the legacy pocket through this 30s drain, invisible to and
+            # duplicate of the periodic heartbeat's own (correct) multi-
+            # pocket construction. Now the SAME shared function, so this
+            # drain and the heartbeat can never silently diverge again -- see
+            # paper_trader.build_scalping_pocket_entries's own docstring.
+            scalping_entries = paper_trader.build_scalping_pocket_entries(
+                candidates, chain_by_contract, current_regime=current_regime,
             )
             swing_analyzer = paper_trader._default_momentum_analyzer(
                 chain_by_contract, current_regime=current_regime, mode="standard",
@@ -614,7 +622,7 @@ class MomentumWebsocketListener:
             funnel: dict[str, int] = {}
 
             for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
-                ("scalping", candidates, scalping_analyzer, "scalping", paper_trader.MAX_POSITIONS_SCALPING),
+                *scalping_entries,
                 ("swing", candidates, swing_analyzer, "standard", paper_trader.MAX_POSITIONS_SWING),
                 ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
             ):

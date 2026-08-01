@@ -728,6 +728,33 @@ def _write(wallet: str, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def migrate_wallet_state(old_wallet: str, new_wallet: str) -> bool:
+    """08/01 -- one-off migration helper (legacy "scalping" pocket folded
+    into "scalping_v6", see paper_trader.build_scalping_pocket_entries's own
+    docstring): moves ``old_wallet``'s circuit-breaker state file to
+    ``new_wallet`` -- a pocket's block/resume history is real data (who
+    armed it, when, why), never silently dropped on a rename.
+
+    Fails safe: no-op (returns ``False``) if ``old_wallet`` has no state
+    file (nothing to migrate), or if ``new_wallet`` ALREADY has one (never
+    overwrites existing state -- a rename target that already exists means
+    this was already run, or the destination pocket has its own real
+    history that must not be clobbered)."""
+    old_path = _state_path(old_wallet)
+    new_path = _state_path(new_wallet)
+    if not old_path.exists():
+        return False
+    if new_path.exists():
+        logger.warning(
+            "risk_guard.migrate_wallet_state: %s already has a state file -- refusing to overwrite, "
+            "leaving %s in place", new_wallet, old_wallet,
+        )
+        return False
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(old_path, new_path)
+    return True
+
+
 def new_entry_block_status(wallet: str) -> dict[str, Any]:
     """Current state of THIS POCKET's dedicated circuit breaker (never
     ``outgoing_pause``, never another pocket's own file):
