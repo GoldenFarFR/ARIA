@@ -7,10 +7,10 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
-[CODE] Sujet    : Plafond par cycle sur les candidats manuels (/add) -- corrige la cause structurelle du chantier précédent
+[DEPLOYE] Sujet  : Plafond par cycle sur les candidats manuels (/add) -- corrige la cause structurelle du chantier précédent
 Date : 2026.08.01 / Probleme : suite directe du chantier "backlog manuel 479 contrats" (entrée précédente) -- la file avait été vidée manuellement, mais la vraie cause structurelle (aucun plafond sur le nombre de candidats manuels traités par cycle) restait dans le code. Décision opérateur explicite ("plafonne le nombre traité par cycle") après avoir écarté une première option (retirer un candidat de la file dès son entrée dans la watchlist honeypot des 2000) -- rejetée car ça viderait le vrai but de `/add` (suivre un token jusqu'à un signal d'achat, pas juste jusqu'à son statut honeypot connu).
 Solution : nouveau `MAX_MANUAL_CANDIDATES_PER_CYCLE = 15` dans `momentum_entry.py` -- seuls les 15 candidats manuels les plus anciens (déjà triés `ORDER BY added_at ASC`) sont injectés dans la découverte à chaque cycle, laissant toujours le reste du budget (50/cycle) aux sources automatiques. Un futur ajout en masse se draine désormais progressivement sur plusieurs cycles au lieu de monopoliser tout le budget d'un coup. `reconcile_watchlist_membership` (guérison du statut watchlist honeypot, coût réseau nul) continue de tourner sur le backlog COMPLET, jamais juste le sous-ensemble plafonné -- un candidat non tiré ce cycle garde quand même son statut honeypot à jour.
-`momentum_entry.py` -- 2 nouveaux tests (`test_momentum_entry.py` : plafond respecté + source automatique jamais totalement affamée, `reconcile_watchlist_membership` voit toujours le backlog complet), suite momentum_entry+coherence verte (426 passed), suite complète relancée avant déploiement.
+`momentum_entry.py` -- 2 nouveaux tests (`test_momentum_entry.py` : plafond respecté + source automatique jamais totalement affamée, `reconcile_watchlist_membership` voit toujours le backlog complet), suite complète verte (8772 passed, 17 skipped), déployé (commit `d495cac9`).
 
 ------------------------------------------------------------
 
