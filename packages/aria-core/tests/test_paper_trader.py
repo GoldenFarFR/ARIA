@@ -107,6 +107,23 @@ async def _backdate_breakeven_pending(contract: str, seconds: float) -> None:
         )
         await db.commit()
 
+
+async def _backdate_opened_at(contract: str, hours: float) -> None:
+    """Recule ``opened_at`` de ``hours`` -- simule une position ouverte depuis
+    longtemps (08/01, timeout de stagnation scalping) sans attendre pour de vrai."""
+    import aiosqlite
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute("SELECT opened_at FROM paper_position WHERE contract = ?", (contract,))
+        ).fetchone()
+        assert row and row[0], "aucune position à reculer"
+        backdated = datetime.fromisoformat(row[0]) - timedelta(hours=hours)
+        await db.execute(
+            "UPDATE paper_position SET opened_at = ? WHERE contract = ?", (backdated.isoformat(), contract),
+        )
+        await db.commit()
+
 A = "0x" + "a" * 40
 B = "0x" + "b" * 40
 C = "0x" + "c" * 40
@@ -963,6 +980,125 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     # 17/07 -- la note cite le vrai plus haut atteint (2.5), pas l'invalidation d'origine
     assert "Stop suiveur déclenché" in act3["closed"][0]["close_notes"]
     assert "2.5" in act3["closed"][0]["close_notes"]
+
+
+# ── timeout de stagnation scalping (08/01, bug réel trouvé en direct : 19/21 ────────
+# positions scalping ouvertes gelées à 0% de mouvement depuis l'entrée, certaines
+# depuis 19h+, rien ne les fermait jamais -- le capital restait bloqué sur des setups
+# morts au lieu de tourner vers de nouveaux candidats) ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_scalping_stagnant_position_closed_after_timeout(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+
+    async def price_lookup(contract):
+        return 1.0  # jamais bougé depuis l'entrée
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "timeout stagnation (scalping)"
+    assert not await pt.has_open(D)
+    assert "Timeout de stagnation" in act["closed"][0]["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_scalping_position_not_closed_before_timeout_elapsed(tmp_db):
+    """Moins de SCALPING_STAGNATION_TIMEOUT_HOURS écoulées -- reste ouverte même
+    si le prix n'a jamais bougé (pas encore assez de temps pour conclure)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS - 0.5)
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_scalping_position_with_real_movement_never_times_out(tmp_db):
+    """Le timeout ne concerne QUE les positions genuinely stagnantes -- une position
+    scalping qui a réellement dépassé le seuil de mouvement minimum, même après le
+    délai, ne doit jamais être fermée par ce mécanisme."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+
+    # +10% -- généreusement au-dessus de SCALPING_STAGNATION_MIN_MOVE_PCT (1%),
+    # marge large pour absorber l'impact de prix simulé à l'entrée/sortie
+    # (open_position/close_position dégradent le prix "spot" demandé, cf.
+    # simulated_fill_price()) sans faire dépendre le test d'un calcul exact.
+    prices = {"v": 1.10}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert await pt.has_open(D)
+
+    # Laisse le temps à la confirmation temporelle du stop suiveur (même
+    # mécanique anti-mèche que le reste du fichier, cf. HIGH_WATER_
+    # CONFIRMATION_SECONDS) -- sans ça, un retour de prix AVANT confirmation
+    # abandonne la candidature pending (comportement voulu du stop suiveur,
+    # anti-mèche), un cas distinct de celui testé ici (un vrai mouvement
+    # SOUTENU qui a eu le temps d'être confirmé).
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # confirme le ratchet
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] > pos["entry_price"] * 1.05  # ratché, largement au-dessus de l'entrée
+
+    prices["v"] = 1.0  # retombe à l'entrée -- toujours pas fermé (le plus haut CONFIRMÉ a dépassé le seuil)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_swing_stagnant_position_never_times_out(tmp_db):
+    """Le timeout est scalping-only -- une position swing/standard stagnante depuis
+    largement plus longtemps que le seuil scalping reste ouverte indéfiniment
+    (tolérance de durée différente par design)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing", mode="standard",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS * 10)
+
+    async def price_lookup(contract):
+        return 1.0
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_scalping_generic_stop_takes_priority_over_stagnation_timeout(tmp_db):
+    """Si le stop générique (invalidation) se déclenche sur la même position, elle se
+    ferme via ce chemin normal -- jamais un double traitement ni un conflit."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+
+    async def price_lookup(contract):
+        return 0.8  # sous l'invalidation
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation"
+    assert not await pt.has_open(D)
 
 
 # ── stop suiveur adaptatif à la volatilité (19/07, revue croisée Gemini) ────────────
@@ -6140,6 +6276,100 @@ async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, 
     assert scalping_positions[0]["id"] != swing_positions[0]["id"]
     assert scalping_positions[0]["mode"] == "scalping"
     assert swing_positions[0]["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_scalping_only_sourcing_skips_swing_and_vc_new_entries(tmp_db, monkeypatch):
+    """08/01 -- operator's temporary call while the scalping stagnation-timeout
+    fix is being validated: with ARIA_SCALPING_ONLY_SOURCING_ENABLED on, only
+    the scalping pocket opens new positions -- swing/vc are skipped entirely
+    this cycle, even though the multi-pocket gate itself is on and their
+    candidates/analyzers would otherwise have produced a BUY."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "true")
+    from aria_core import momentum_entry
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_momentum_eval(
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+    ):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_momentum_eval)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(E)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_vc_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "EEE", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "strategy": "vc_thesis",
+        }
+
+    monkeypatch.setattr(pt, "_default_analyzer", _fake_vc_analyzer)
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert wallets_opened == {"scalping"}
+    assert len(act["opened"]) == 1
+    assert await pt.get_open_positions(wallet="swing") == []
+    assert await pt.get_open_positions(wallet="vc") == []
+    assert len(await pt.get_open_positions(wallet="scalping")) == 1
+
+
+@pytest.mark.asyncio
+async def test_scalping_only_sourcing_off_by_default(tmp_db, monkeypatch):
+    monkeypatch.delenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", raising=False)
+    assert pt.scalping_only_sourcing_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_scalping_only_sourcing_never_closes_an_already_open_swing_position(tmp_db, monkeypatch):
+    """The gate only skips NEW entries -- an already-open swing position keeps
+    being managed exactly as before (still eligible for its trailing stop/TP),
+    never force-closed just because sourcing is paused."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "true")
+
+    async def _fake_sources(*, limit=20):
+        return [], {}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="swing")
+
+    async def _price_lookup(contract):
+        return 1.0  # unchanged -- neither stop nor TP triggers
+
+    await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+    assert await pt.has_open(D)
 
 
 @pytest.mark.asyncio

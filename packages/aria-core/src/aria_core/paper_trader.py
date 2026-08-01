@@ -59,6 +59,23 @@ MAX_POSITIONS_SWING = 15
 MAX_POSITIONS_SCALPING = None  # unlimited, same doctrine as the scalping bypass above
 MODE = "trading"
 
+# 08/01 -- real bug found live (operator observation: "no gain accumulation
+# visible" on the scalping pocket): 19 of 21 open scalping positions were
+# frozen at EXACTLY 0% movement since entry, some for 19h+, with NOTHING
+# ever forcing a close -- capital stayed locked on dead setups instead of
+# turning over into new candidates. The generic trailing stop/TP-tier logic
+# below only fires on PRICE movement; a position whose price genuinely never
+# moves never triggers either one. Scalping-only (swing/vc tolerate longer
+# holds by design, no timeout added there). Deliberately a plain constant
+# here, not an import of limit_orders.LIMIT_ORDER_EXPIRY_HOURS -- same value
+# (3h, "setup is dead" horizon already used for a PENDING order elsewhere in
+# this pipeline) but a genuinely separate concept (an OPEN position, not a
+# pending order) that could reasonably diverge later. Starting values, never
+# empirically calibrated (no real outcome data existed before this fix) --
+# revisit once real volume/outcome data exists.
+SCALPING_STAGNATION_TIMEOUT_HOURS = 3.0
+SCALPING_STAGNATION_MIN_MOVE_PCT = 1.0
+
 # 07/18 -- explicit operator decision: replaces the 30d/7d/14d protocol. ARIA restarts at
 # $1M EVERY week, target +10% ($1.1M) VALIDATED every week -- a repeated TRAINING loop
 # (never a one-time exit gate to cross once). The reset happens whether the week was
@@ -2912,6 +2929,22 @@ def multi_pocket_sourcing_enabled() -> bool:
     )
 
 
+def scalping_only_sourcing_enabled() -> bool:
+    """08/01 -- operator's explicit, temporary call while the scalping pocket's
+    stagnation-timeout fix (SCALPING_STAGNATION_TIMEOUT_HOURS) is being
+    validated: pause NEW entries on swing/vc so all attention (and capital
+    turnover) concentrates on scalping alone. Deliberately narrow: this ONLY
+    skips sourcing new positions for the non-scalping pockets in the
+    multi-pocket loop below -- it never force-closes an already-open swing/vc
+    position, which keeps being managed exactly as before (trailing stop/TP/
+    weekly reset) until it exits naturally. OFF by default (fail-closed, same
+    idiom as every other gate in this file) -- meant to be temporary, not a
+    permanent architecture change."""
+    return os.environ.get("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
 
 def daily_trade_floor_enabled() -> bool:
@@ -4707,6 +4740,50 @@ async def _run_paper_cycle_locked(
                             pass
                 continue  # position closed, nothing else to evaluate this round
 
+            # 08/01 -- scalping stagnation timeout (see SCALPING_STAGNATION_
+            # TIMEOUT_HOURS's own comment above for the full incident/reasoning).
+            # Only reached if the generic stop above did NOT already close the
+            # position this round -- a genuinely stagnant position never gets
+            # here via that branch (price never dropped to active_stop either).
+            if p.get("mode") == "scalping":
+                hours_open = _hours_since(p.get("opened_at"))
+                # Best price ever OBSERVED, not the confirmed (ratcheted) high
+                # water -- the trailing-stop ratchet requires ~75s of holding
+                # above the old high (HIGH_WATER_CONFIRMATION_SECONDS) before
+                # `high_water` itself updates, but a real, live price move
+                # already proves the token isn't dead even before that
+                # confirmation lands. Using `high_water` alone here would
+                # false-positive close a position on its very first cycle
+                # after a genuine move (real bug caught by this fix's own
+                # tests).
+                best_seen_price = max(high_water, pending_hw or 0.0, price)
+                peak_gain_pct = (best_seen_price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                if (
+                    hours_open is not None
+                    and hours_open >= SCALPING_STAGNATION_TIMEOUT_HOURS
+                    and peak_gain_pct < SCALPING_STAGNATION_MIN_MOVE_PCT
+                ):
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Timeout de stagnation (scalping) : aucun mouvement > "
+                        f"+{SCALPING_STAGNATION_MIN_MOVE_PCT:.1f}% depuis l'entrée en "
+                        f"{SCALPING_STAGNATION_TIMEOUT_HOURS:.0f}h (plus haut {peak_gain_pct:+.1f}%) -- "
+                        f"clôture forcée pour libérer le capital ({exit_gain_pct:+.1f}% net vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="timeout stagnation (scalping)",
+                        notes=exit_notes, position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
             # Staged profit-taking: sells a fraction of the INITIAL quantity at
             # each gain stage crossed. Last stage (or negligible remainder) ->
             # full close. ``stages`` (07/19): TP1 anchored on THIS position's
@@ -5132,6 +5209,10 @@ async def _run_paper_cycle_locked(
                 except Exception:  # noqa: BLE001
                     pass
             if pocket_risk_state.blocked:
+                continue
+
+            # 08/01 -- see scalping_only_sourcing_enabled()'s own docstring.
+            if pocket_wallet != "scalping" and scalping_only_sourcing_enabled():
                 continue
 
             opened_positions, _ = await _open_new_entries_for_wallet(
