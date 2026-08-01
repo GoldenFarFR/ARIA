@@ -44,8 +44,9 @@ class FakeResponse:
 
 
 class FakeClient:
-    def __init__(self, responses: dict):
+    def __init__(self, responses: dict, *, captured_headers: list | None = None):
         self._responses = responses
+        self._captured_headers = captured_headers
 
     async def __aenter__(self):
         return self
@@ -54,6 +55,8 @@ class FakeClient:
         return None
 
     async def get(self, url, params=None, headers=None):
+        if self._captured_headers is not None:
+            self._captured_headers.append(headers)
         queue = self._responses[url]
         if isinstance(queue, list):
             return queue.pop(0)
@@ -392,3 +395,47 @@ async def test_module_singleton_uses_the_shared_throttle():
     from aria_core.services.ohlcv import ohlcv_client
 
     assert ohlcv_client._use_shared_throttle is True
+
+
+# ── clé API optionnelle (08/01, vrai bug -- jamais envoyée avant ce correctif) ──
+
+@pytest.mark.asyncio
+async def test_api_key_sent_when_configured(monkeypatch):
+    monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "demo-key-123")
+    captured: list = []
+    monkeypatch.setattr(
+        "aria_core.services.ohlcv.httpx.AsyncClient",
+        lambda **kw: FakeClient({_url("day"): FakeResponse(200, _payload(_rows(1)))}, captured_headers=captured),
+    )
+
+    async def _no_sleep(_):
+        return None
+
+    monkeypatch.setattr("aria_core.services.ohlcv.asyncio.sleep", _no_sleep)
+
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    await client.get_ohlcv(POOL, min_useful_candles=1)
+
+    assert captured
+    assert captured[0]["x-cg-demo-api-key"] == "demo-key-123"
+
+
+@pytest.mark.asyncio
+async def test_no_api_key_header_when_not_configured(monkeypatch):
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+    captured: list = []
+    monkeypatch.setattr(
+        "aria_core.services.ohlcv.httpx.AsyncClient",
+        lambda **kw: FakeClient({_url("day"): FakeResponse(200, _payload(_rows(1)))}, captured_headers=captured),
+    )
+
+    async def _no_sleep(_):
+        return None
+
+    monkeypatch.setattr("aria_core.services.ohlcv.asyncio.sleep", _no_sleep)
+
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    await client.get_ohlcv(POOL, min_useful_candles=1)
+
+    assert captured
+    assert "x-cg-demo-api-key" not in captured[0]

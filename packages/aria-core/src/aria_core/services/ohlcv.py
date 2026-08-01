@@ -4,7 +4,11 @@ Provides the **raw material** of technical analysis: a series of real OHLCV
 candles for a DEX pool, which `skills/ta_levels.py` turns into levels
 (support / resistance / trend) and `skills/chart_render.py` charts.
 
-GeckoTerminal public tier (no key required). Error policy identical to
+GeckoTerminal public tier, OPTIONAL authentication (08/01, real bug found
+live -- see `_get_json`'s own comment): if `COINGECKO_DEMO_API_KEY` is set,
+attached as the `x-cg-demo-api-key` header on every call, same pattern as
+`services/geckoterminal.py` (which already did this correctly since 18/07 --
+this module never had). Error policy identical to
 `services/coingecko.py` (see AGENTS.md):
 - 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
 - Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 import httpx
@@ -188,18 +193,32 @@ class OHLCVClient:
             )
 
     async def _get_json(self, path: str, params: dict[str, object]) -> tuple[object | None, str | None]:
-        """GET with the AGENTS.md error policy. Returns (data, error)."""
+        """GET with the AGENTS.md error policy. Returns (data, error).
+
+        08/01 -- real bug found live (operator report "sa trade beaucoup moin
+        depuis 14h", traced to a sustained GeckoTerminal 429 burst): this
+        client never sent `COINGECKO_DEMO_API_KEY` at all, even though
+        `services/geckoterminal.py` has done so correctly since 18/07 -- this
+        module (a SEPARATE client, see module docstring) was simply never
+        updated. Silently ran at the KEYLESS throughput (~10 req/min per the
+        19/07 incident's verified figures) instead of the Demo-key tier
+        (~30 req/min) its shared throttle (`use_shared_throttle=True`) was
+        already calibrated for -- explains a real, sustained gap between the
+        throttle's intent and the actual server-side allowance. Header sent
+        whenever the key is configured, never invented if absent."""
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
+        headers = {"Accept": "application/json"}
+        api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip()
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
 
         while True:
             await self._throttle()
             try:
                 async with httpx.AsyncClient(timeout=25.0) as client:
-                    response = await client.get(
-                        url, params=params, headers={"Accept": "application/json"}
-                    )
+                    response = await client.get(url, params=params, headers=headers)
             except httpx.TransportError as exc:
                 if not timeout_retried:
                     timeout_retried = True
