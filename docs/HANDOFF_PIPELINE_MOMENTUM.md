@@ -7,10 +7,10 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
-[CODE] Sujet    : base_crawler.py -- 3e client GeckoTerminal totalement non coordonné, jamais authentifié
+[DEPLOYE] Sujet  : base_crawler.py -- 3e client GeckoTerminal totalement non coordonné, jamais authentifié
 Date : 2026.08.01 / Probleme : le blocage 429 GeckoTerminal persistait malgré tous les correctifs du jour (cache, clé API sur ohlcv.py, débit restauré, backlog manuel vidé et plafonné). Workflow de recherche (2 agents) lancé sur le mystère -- trouvaille confirmée dans le code : `base_crawler.py::_fetch_gt` est un TROISIÈME client GeckoTerminal, complètement indépendant de `services/geckoterminal.py` et `services/ohlcv.py` -- jamais authentifié (`COINGECKO_DEMO_API_KEY` jamais envoyé, donc tier public documenté comme "5-15 req/min variable selon la charge mondiale partagée par IP", pas le tier Demo fixe ~30/min) ET jamais coordonné avec le throttle partagé (`wait_for_shared_rate_limit`) que tous les autres appelants respectent déjà. Même classe d'incident que celui du 21/07 déjà documenté dans CLAUDE.md ("deux clients GeckoTerminal indépendants... jamais coordonnés entre eux"). Appelé à chaque cycle de découverte (une des 6 sources automatiques), ce client pouvait à lui seul expliquer une pression soutenue indépendante de tous les correctifs déjà appliqués.
 Solution : `_fetch_gt` appelle désormais `wait_for_shared_rate_limit()` avant chaque requête et envoie `x-cg-demo-api-key` quand `COINGECKO_DEMO_API_KEY` est configuré -- même pattern que `geckoterminal.py`/`ohlcv.py`.
-`base_crawler.py` -- 3 nouveaux tests (`test_base_crawler.py` : throttle partagé appelé, clé envoyée si configurée, absente sinon), suite base_crawler+coherence verte (119 passed), suite complète relancée avant déploiement.
+`base_crawler.py` -- 3 nouveaux tests (`test_base_crawler.py` : throttle partagé appelé, clé envoyée si configurée, absente sinon), suite complète verte (8777 passed, 17 skipped), déployé (commit `42ce3453`). Effet réel sur le taux de 429 à confirmer après une fenêtre d'observation.
 
 ------------------------------------------------------------
 
