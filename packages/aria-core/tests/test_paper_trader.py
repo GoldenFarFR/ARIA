@@ -241,6 +241,28 @@ async def test_reset_portfolio_archives_open_positions_too(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_reset_portfolio_creates_row_for_wallet_with_no_prior_state(tmp_db):
+    """08/01 -- real bug found live (operator-triggered full reset across all
+    pockets, including the 5 scalping variants which never had a paper_state
+    row): the plain UPDATE silently affected 0 rows for a wallet with no
+    existing state, leaving it row-less even after an explicit reset. Now a
+    row is guaranteed to exist (INSERT OR IGNORE before the UPDATE)."""
+    import aiosqlite
+
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v3")  # never seen this wallet before
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        row = await (
+            await db.execute(
+                "SELECT starting_capital, equity_high_water_mark, cycle_number FROM paper_state "
+                "WHERE wallet = ?", ("scalping_v3",),
+            )
+        ).fetchone()
+    assert row is not None
+    assert row == (1_000_000.0, 1_000_000.0, 1)
+
+
+@pytest.mark.asyncio
 async def test_open_deducts_cash_and_no_double(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
     pos = await pt.open_position(A, "AAA", 2.0, target_price=3.0, invalidation_price=1.5, alloc_usd=50_000, wallet="swing")

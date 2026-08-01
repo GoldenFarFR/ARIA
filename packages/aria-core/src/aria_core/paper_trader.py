@@ -1291,6 +1291,21 @@ async def reset_portfolio(
         # get from its column DEFAULT is reset explicitly here (cycle_number
         # back to 1, last_tracking_alert_at/trading_mode back to their
         # defaults) -- not just the 4 fields the old code set post-recreate.
+        #
+        # 08/01 -- real bug found live (operator-triggered full reset of all
+        # pockets): a wallet with NO existing paper_state row (any of the 5
+        # scalping variants -- they've never had one, only "swing"/"scalping"/
+        # "vc" get theirs via the migration in _ensure_tables) silently kept
+        # having NO row after this UPDATE (0 rows affected, no error). In
+        # practice starting_capital()/get_equity_high_water_mark() fail-open
+        # to STARTING_CAPITAL_USD without a row, so nothing was outright
+        # broken -- but the drawdown circuit breaker's high-water mark could
+        # never actually persist progress for these pockets. INSERT OR IGNORE
+        # first guarantees a row exists before the UPDATE always applies.
+        await db.execute(
+            "INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at) VALUES (?, ?, ?)",
+            (wallet, starting, created_at or _now()),
+        )
         await db.execute(
             "UPDATE paper_state SET starting_capital = ?, created_at = ?, "
             "equity_high_water_mark = ?, cycle_duration_days = ?, cycle_number = 1, "
