@@ -1818,8 +1818,14 @@ async def open_position(
     # structural R/R below its floor -- fail-open without known
     # pool_liquidity_usd/target/invalidation (same doctrine as
     # size_position_by_risk just above).
+    # 08/01 -- apply_swap_fee must match the simulated_fill_price call below
+    # (same order, same fee) -- real bug found live: this cap used to ignore
+    # the 1% scalping swap fee entirely, letting a tight setup's final R/R
+    # (after simulated_fill_price DID apply the fee) collapse well below the
+    # floor this function is supposed to guarantee.
     alloc = risk_guard.cap_alloc_to_price_impact(
         alloc, entry_price, target_price, invalidation_price, pool_liquidity_usd,
+        apply_swap_fee=(mode == "scalping"),
     )
     # Item #233 (30/07, real bug found live on CFI): a hard cap on the order's
     # OWN SIZE relative to the pool, independent of (and in addition to) the

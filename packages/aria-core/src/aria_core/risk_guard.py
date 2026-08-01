@@ -514,6 +514,7 @@ def _price_impact_pct(alloc_usd: float, pool_liquidity_usd: float) -> float:
 def cap_alloc_to_price_impact(
     alloc_usd: float, entry_price: float, target_price: float | None,
     invalidation_price: float | None, pool_liquidity_usd: float | None,
+    *, apply_swap_fee: bool = False,
 ) -> float:
     """Reduces ``alloc_usd`` if the price impact of THIS order on THIS pool would drop the
     structural R/R below ``PRICE_IMPACT_MIN_RR`` -- never an increase beyond the entry
@@ -522,7 +523,18 @@ def cap_alloc_to_price_impact(
     Missing/inconsistent data (target, invalidation, or liquidity absent, or a
     non-bullish structure) -> unchanged, fail-open -- the hard guardrail on pool
     liquidity already lives in ``momentum_entry._MIN_LIQUIDITY_USD``, that's not the role of
-    this function."""
+    this function.
+
+    ``apply_swap_fee`` (08/01, real bug found live -- operator caught a scalping
+    position, PLAY, sized down to $277 with a FINAL structural R/R of 0.067,
+    far below this function's own PRICE_IMPACT_MIN_RR=1.0 floor): this cap used
+    to compute its degraded-price ceiling from raw ``entry_price`` alone, never
+    accounting for ``simulated_fill_price``'s own ``DEX_SWAP_FEE_PCT`` (1%,
+    scalping mode) applied moments later on the SAME allocation -- on an
+    already-tight setup, that unanticipated 1% was enough to blow through the
+    R/R floor this function is supposed to guarantee. Must be called with the
+    SAME ``apply_swap_fee`` value as the ``simulated_fill_price`` call for the
+    same order (``paper_trader.open_position``), never independently decided."""
     if alloc_usd <= 0 or entry_price <= 0:
         return alloc_usd
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
@@ -532,7 +544,11 @@ def cap_alloc_to_price_impact(
     if target_price <= entry_price or invalidation_price >= entry_price:
         return alloc_usd  # non-bullish structure -- not the role of this function
 
-    degraded_entry = entry_price * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
+    # Same fee-then-impact order as simulated_fill_price -- the fee is a FLAT
+    # multiplier applied before the size-dependent impact, never the reverse.
+    fee_adjusted_entry = entry_price * (1.0 + DEX_SWAP_FEE_PCT) if apply_swap_fee else entry_price
+
+    degraded_entry = fee_adjusted_entry * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
     if degraded_entry < target_price:
         degraded_rr = (target_price - degraded_entry) / (degraded_entry - invalidation_price)
         if degraded_rr >= PRICE_IMPACT_MIN_RR:
@@ -544,11 +560,11 @@ def cap_alloc_to_price_impact(
     target_degraded_entry = (
         target_price + PRICE_IMPACT_MIN_RR * invalidation_price
     ) / (1.0 + PRICE_IMPACT_MIN_RR)
-    if target_degraded_entry <= entry_price:
-        return 0.0  # even an infinitesimal size wouldn't meet this floor here
+    if target_degraded_entry <= fee_adjusted_entry:
+        return 0.0  # even an infinitesimal size wouldn't meet this floor here (fee alone breaches it)
 
     k = PRICE_IMPACT_RATIO / pool_liquidity_usd
-    capped_alloc = (target_degraded_entry / entry_price - 1.0) / k
+    capped_alloc = (target_degraded_entry / fee_adjusted_entry - 1.0) / k
     return max(0.0, min(alloc_usd, capped_alloc))
 
 

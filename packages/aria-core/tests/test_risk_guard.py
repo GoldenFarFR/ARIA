@@ -543,6 +543,57 @@ class TestCapAllocToPriceImpact:
         result = risk_guard.cap_alloc_to_price_impact(alloc, entry, target, invalidation, liquidity)
         assert result == alloc
 
+    def test_apply_swap_fee_default_false_unchanged(self):
+        """apply_swap_fee non fourni -- comportement historique inchangé, même
+        résultat que sans ce paramètre du tout."""
+        alloc = risk_guard.cap_alloc_to_price_impact(50_000.0, 1.0, 1.5, 0.9, 100_000.0)
+        alloc_explicit_false = risk_guard.cap_alloc_to_price_impact(
+            50_000.0, 1.0, 1.5, 0.9, 100_000.0, apply_swap_fee=False,
+        )
+        assert alloc == alloc_explicit_false == pytest.approx(10_000.0, rel=1e-6)
+
+    def test_apply_swap_fee_true_caps_tighter_than_false(self):
+        """08/01 -- real bug fix: le frais de swap (1%, mode scalping) doit
+        réduire la marge disponible pour l'impact de taille, jamais l'ignorer.
+        Même setup (entry=1.0, target=1.06, invalidation=0.97, pool 50k$),
+        valeurs vérifiées à la main : sans frais 375$, avec frais ~123,76$."""
+        alloc_no_fee = risk_guard.cap_alloc_to_price_impact(
+            1_000.0, 1.0, 1.06, 0.97, 50_000.0, apply_swap_fee=False,
+        )
+        alloc_with_fee = risk_guard.cap_alloc_to_price_impact(
+            1_000.0, 1.0, 1.06, 0.97, 50_000.0, apply_swap_fee=True,
+        )
+        assert alloc_no_fee == pytest.approx(375.0, rel=1e-6)
+        assert alloc_with_fee == pytest.approx(123.762376, rel=1e-5)
+        assert alloc_with_fee < alloc_no_fee
+
+    def test_apply_swap_fee_integration_matches_final_fill_rr_floor(self):
+        """Le vrai test de non-régression du bug PLAY (01/08) : l'alloc plafonnée
+        AVEC apply_swap_fee=True, une fois passée dans simulated_fill_price
+        (même apply_swap_fee=True, même ordre), doit produire un R/R final >=
+        PRICE_IMPACT_MIN_RR -- jamais un effondrement comme le 0.067 observé
+        en prod. Avant ce correctif, capper SANS le frais puis remplir AVEC
+        le frais aurait donné un R/R final de ~0.63 sur cet exact setup
+        (vérifié à la main), bien sous le plancher visé."""
+        entry, target, invalidation, liquidity = 1.0, 1.06, 0.97, 50_000.0
+        alloc = risk_guard.cap_alloc_to_price_impact(
+            1_000.0, entry, target, invalidation, liquidity, apply_swap_fee=True,
+        )
+        fill_price = risk_guard.simulated_fill_price(entry, alloc, liquidity, apply_swap_fee=True)
+        final_rr = (target - fill_price) / (fill_price - invalidation)
+        assert final_rr == pytest.approx(1.0, abs=1e-6)
+
+    def test_apply_swap_fee_alone_breaches_floor_returns_zero(self):
+        """Un setup où le seul frais de swap (avant même tout impact de taille)
+        suffit à casser le plancher R/R -- doit rejeter (0.0), jamais laisser
+        passer une taille infinitésimale qui filerait quand même sous le
+        plancher une fois le frais appliqué au fill."""
+        # target_degraded_entry = (1.005 + 1.0*0.97)/2 = 0.9875 < fee_adjusted_entry (1.01)
+        alloc = risk_guard.cap_alloc_to_price_impact(
+            1_000.0, 1.0, 1.005, 0.97, 50_000.0, apply_swap_fee=True,
+        )
+        assert alloc == 0.0
+
 
 # ── 1quinquies. simulated_fill_price (20/07, #175 -- prix d'exécution dégradé) ──────
 
