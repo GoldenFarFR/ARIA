@@ -6397,6 +6397,41 @@ def test_all_pocket_wallets_gate_on_returns_five_variants_plus_two(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_all_reporting_wallets_matches_pocket_wallets_when_no_legacy_row(tmp_db):
+    """No extra paper_state row beyond the active pockets -- same tuple as
+    all_pocket_wallets(), no phantom pocket invented."""
+    await pt._ensure_tables()
+    assert await pt.all_reporting_wallets() == pt.all_pocket_wallets()
+
+
+@pytest.mark.asyncio
+async def test_all_reporting_wallets_includes_retired_pocket_with_history(tmp_db, monkeypatch):
+    """08/01 real bug (operator screenshot, "je le voit pas"): once
+    scalping_variants_enabled() replaces "scalping" in all_pocket_wallets(),
+    a legacy "scalping" paper_state row (real history, e.g. still-open
+    positions) must not vanish from reporting/risk views."""
+    import aiosqlite
+
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    await pt._ensure_tables()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at) "
+            "VALUES ('scalping', 1000000.0, '2026-07-30T00:00:00+00:00')",
+        )
+        await db.commit()
+
+    wallets = await pt.all_reporting_wallets()
+    active = pt.all_pocket_wallets()
+    assert "scalping" in wallets
+    assert set(active).issubset(set(wallets))
+    # Active pockets stay first, in the same order as all_pocket_wallets();
+    # the retired one is appended after, never reordering the active set.
+    assert wallets[: len(active)] == active
+    assert wallets[-1] == "scalping"
+
+
+@pytest.mark.asyncio
 async def test_scalping_variants_enabled_replaces_scalping_pocket_with_five(tmp_db, monkeypatch):
     """The classic "scalping" slot disappears entirely -- each of the 5
     variant pockets sources and can open its own independent position, all

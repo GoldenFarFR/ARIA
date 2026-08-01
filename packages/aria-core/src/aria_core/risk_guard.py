@@ -1080,7 +1080,12 @@ async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
     from aria_core import outgoing_pause, paper_trader
 
     total_equity = 0.0
-    for wallet in paper_trader.all_pocket_wallets():
+    # 08/01 -- all_reporting_wallets() (not all_pocket_wallets()): the MACRO
+    # breaker must sum EVERY wallet holding real paper capital, including a
+    # pocket retired from sourcing (e.g. legacy "scalping" after the 5-variant
+    # switch) whose already-open positions still move real equity. See
+    # all_reporting_wallets()'s docstring for the live bug this fixes.
+    for wallet in await paper_trader.all_reporting_wallets():
         summary = await paper_trader.portfolio_summary(wallet=wallet, price_lookup=price_lookup)
         total_equity += float(summary["equity"])
 

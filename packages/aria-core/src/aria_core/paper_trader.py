@@ -2996,6 +2996,44 @@ def all_pocket_wallets() -> tuple[str, ...]:
     return ("scalping", "swing", "vc")
 
 
+async def all_reporting_wallets() -> tuple[str, ...]:
+    """08/01 -- superset of all_pocket_wallets() for REPORTING/RISK views only,
+    never for sourcing (new positions must still only open on the pockets
+    all_pocket_wallets() returns).
+
+    Real bug found live (operator screenshot of /feedback's bilan showing only
+    7 pockets, "je le voit pas" -- the legacy "scalping" pocket had vanished):
+    switching scalping_variants_enabled() ON makes all_pocket_wallets() stop
+    returning "scalping" (the RSI-divergence pocket, retired from sourcing the
+    same day) even though it keeps managing its own already-open positions
+    (stop/TP/stagnation timeout) until they close naturally -- the pocket
+    doesn't disappear, only its sourcing does. Any wallet with a paper_state
+    row (real paper capital/history) must stay visible in reports and
+    reachable by risk controls even after its sourcing was retired, or the
+    MACRO circuit breaker silently undercounts equity and an operator has no
+    way to see or unblock it (the exact blind spot all_pocket_wallets() was
+    built to close for the 5 NEW pockets on 08/01, just missed in the other
+    direction for the one being retired).
+
+    Reads paper_state directly (not a static list) so a future retirement
+    needs no code change here -- and unions with all_pocket_wallets() to also
+    cover a pocket whose sourcing just turned on but hasn't written its first
+    paper_state row yet (observed live: scalping_v1..v5 right after the
+    container restart that activated them)."""
+    known = set(all_pocket_wallets())
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (await db.execute("SELECT DISTINCT wallet FROM paper_state")).fetchall()
+    for (wallet,) in rows:
+        if wallet:
+            known.add(wallet)
+    # Stable ordering: active pockets first (as returned by
+    # all_pocket_wallets(), never reordered), then any legacy leftover.
+    ordered = list(all_pocket_wallets())
+    for wallet in sorted(known - set(ordered)):
+        ordered.append(wallet)
+    return tuple(ordered)
+
+
 # ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
 
 def daily_trade_floor_enabled() -> bool:

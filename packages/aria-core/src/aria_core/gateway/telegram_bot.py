@@ -587,15 +587,21 @@ async def _feedback_reply() -> str:
     # must include the real unrealized part, not just the realized one.
     # 08/01 -- pocket_labels gains scalping_v1..v5 entries below (real bug:
     # this display would silently omit them once scalping_variants_enabled()
-    # is on) -- paper_trader.all_pocket_wallets() is the single source of truth.
+    # is on). Iterates all_reporting_wallets() (superset of
+    # all_pocket_wallets(), 08/01) so a pocket retired from sourcing (e.g.
+    # legacy "scalping") stays visible while it still manages open positions
+    # -- the bug the operator caught live (screenshot, "je le voit pas": the
+    # legacy scalping pocket, 7 open positions, had vanished from this exact
+    # bilan the moment the 5 variants replaced it as the sourcing target).
     pocket_labels = {
-        "scalping": "Scalping", "swing": "Swing", "vc": "VC",
+        "scalping": "Scalping (RSI, legacy)", "swing": "Swing", "vc": "VC",
         "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
         "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
         "scalping_v5": "Scalping V5 (VWAP trailing)",
     }
+    wallets = await paper_trader.all_reporting_wallets()
     pocket_lines = []
-    for wallet in paper_trader.all_pocket_wallets():
+    for wallet in wallets:
         summary = await paper_trader.portfolio_summary(
             price_lookup=paper_trader._default_price_lookup, wallet=wallet,
         )
@@ -605,12 +611,15 @@ async def _feedback_reply() -> str:
         # stats packed with " · " separators) was hard to scan -- one dash
         # per fact, on its own line, reads more cleanly on mobile Telegram.
         pocket_lines.append(
-            f"{pocket_labels[wallet]}\n"
+            f"{pocket_labels.get(wallet, wallet)}\n"
             f"- départ {summary['starting']:,.0f} $ → {summary['equity']:,.0f} $ ({sign}{pnl_total:,.0f} $)\n"
             f"- {summary['open_positions']} ouverte(s) · {summary['closed_trades']} clôturée(s)"
         )
+    # 08/01 -- pocket count in the header is now dynamic (was a hardcoded
+    # "3 portefeuilles", stale since the 27/07 3-pocket split even before
+    # today's variants -- never actually updated when the count changed).
     header = (
-        "🧪 SIMULATION — bilan paper-trading (3 portefeuilles de 1 M$ chacun)\n\n"
+        f"🧪 SIMULATION — bilan paper-trading ({len(wallets)} portefeuilles de 1 M$ chacun)\n\n"
         + "\n\n".join(pocket_lines)
         + "\n\nAucun argent réel — track record de preuve."
     )
@@ -3642,8 +3651,11 @@ async def _handle_unlock_mobile(update: Update, context: ContextTypes.DEFAULT_TY
 # 08/01 -- removed the hardcoded tuple here (real bug: /riskresume would have
 # no way to lift a circuit breaker on scalping_v1..v5 once scalping_variants_
 # enabled() is on, leaving them blocked until the next weekly reset) --
-# paper_trader.all_pocket_wallets() is now the single source of truth,
-# resolved live inside _handle_risk_resume below, never a stale import-time tuple.
+# paper_trader.all_reporting_wallets() (08/01, superset of all_pocket_wallets())
+# is now the single source of truth, resolved live inside _handle_risk_resume
+# below, never a stale import-time tuple -- a pocket retired from sourcing
+# (e.g. legacy "scalping") must stay reachable here, or a circuit breaker
+# tripped on it before the retirement could never be lifted again.
 
 
 async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3674,7 +3686,7 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     args = list(getattr(context, "args", None) or [])
     requested = args[0].strip().lower() if args else None
-    known_pockets = paper_trader.all_pocket_wallets()
+    known_pockets = await paper_trader.all_reporting_wallets()
     if requested and requested not in known_pockets:
         await _reply(
             update.message,
