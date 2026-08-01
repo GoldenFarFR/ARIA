@@ -80,7 +80,20 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # burst-controlled empirical measurement of the true sustained cap under this
 # NEW continuous two-chain load still needs to happen separately, this is not
 # a substitute for it.
-_AUTHENTICATED_MIN_INTERVAL = 2.857
+#
+# 08/01 15:46 UTC -- TEMPORARY -50% (operator decision, explicit "reduit le
+# debit de 50%... et dici 1 heure tu le remettre comme avant"): a sustained
+# Cloudflare 429 block appeared after the 5-variant scalping rollout
+# multiplied outbound volume; even after fixing the real duplication bug
+# (scalping_variants._gates_cache) and the missing API key on services/
+# ohlcv.py, the block persisted (empirically ~3.7 real req/min at the time,
+# already well under the documented 21 -- consistent with a Cloudflare
+# COOLDOWN penalty from the earlier burst, not an ongoing overage). Halving
+# throughput is a goodwill de-escalation signal, not a proven fix. NOMINAL
+# VALUE TO RESTORE: 2.857 (both this constant and _MIN_INTERVAL below) --
+# scheduled for ~16:46 UTC same day, revert in the SAME commit shape, never
+# left doubled indefinitely.
+_AUTHENTICATED_MIN_INTERVAL = 5.714
 
 
 def geckoterminal_authenticated() -> bool:
@@ -131,7 +144,10 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # see its comment) to keep the "authenticated is never slower than keyless"
 # invariant intact -- this path isn't the one active in prod today
 # (authenticated mode is), but kept consistent rather than left stale.
-_MIN_INTERVAL = 2.857
+#
+# 08/01 -- TEMPORARY -50%, same operator decision and revert plan as
+# _AUTHENTICATED_MIN_INTERVAL above. NOMINAL VALUE TO RESTORE: 2.857.
+_MIN_INTERVAL = 5.714
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
