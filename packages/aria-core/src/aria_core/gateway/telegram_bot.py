@@ -585,9 +585,17 @@ async def _feedback_reply() -> str:
     # explicit price_lookup: without it, portfolio_summary() marks every open
     # position at its COST (unrealized_pnl always 0) -- the "current" PnL requested
     # must include the real unrealized part, not just the realized one.
-    pocket_labels = {"scalping": "Scalping", "swing": "Swing", "vc": "VC"}
+    # 08/01 -- pocket_labels gains scalping_v1..v5 entries below (real bug:
+    # this display would silently omit them once scalping_variants_enabled()
+    # is on) -- paper_trader.all_pocket_wallets() is the single source of truth.
+    pocket_labels = {
+        "scalping": "Scalping", "swing": "Swing", "vc": "VC",
+        "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
+        "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
+        "scalping_v5": "Scalping V5 (VWAP trailing)",
+    }
     pocket_lines = []
-    for wallet in ("scalping", "swing", "vc"):
+    for wallet in paper_trader.all_pocket_wallets():
         summary = await paper_trader.portfolio_summary(
             price_lookup=paper_trader._default_price_lookup, wallet=wallet,
         )
@@ -3631,7 +3639,11 @@ async def _handle_unlock_mobile(update: Update, context: ContextTypes.DEFAULT_TY
         await _reply(update.message, f"Aucun compte mobile '{username}' trouvé (ou fonctionnalité non câblée sur cet hôte).")
 
 
-_RISK_RESUME_POCKETS = ("scalping", "swing", "vc")
+# 08/01 -- removed the hardcoded tuple here (real bug: /riskresume would have
+# no way to lift a circuit breaker on scalping_v1..v5 once scalping_variants_
+# enabled() is on, leaving them blocked until the next weekly reset) --
+# paper_trader.all_pocket_wallets() is now the single source of truth,
+# resolved live inside _handle_risk_resume below, never a stale import-time tuple.
 
 
 async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3656,18 +3668,21 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
     single-gesture behavior, from before the per-pocket split existed. An
     explicit ``/riskresume scalping`` (or swing/vc) targets just that one
     pocket, left untouched otherwise."""
+    from aria_core import paper_trader
+
     if not await _owner_only(update):
         return
     args = list(getattr(context, "args", None) or [])
     requested = args[0].strip().lower() if args else None
-    if requested and requested not in _RISK_RESUME_POCKETS:
+    known_pockets = paper_trader.all_pocket_wallets()
+    if requested and requested not in known_pockets:
         await _reply(
             update.message,
-            f"Poche inconnue « {requested} » — utilise scalping, swing ou vc "
-            "(ou omets l'argument pour lever les 3 poches à la fois).",
+            f"Poche inconnue « {requested} » — utilise l'une de : {', '.join(known_pockets)} "
+            "(ou omets l'argument pour toutes les lever à la fois).",
         )
         return
-    wallets = [requested] if requested else list(_RISK_RESUME_POCKETS)
+    wallets = [requested] if requested else list(known_pockets)
 
     user = update.effective_user
     lines: list[str] = []

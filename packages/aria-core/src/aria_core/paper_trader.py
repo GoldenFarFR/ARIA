@@ -2880,6 +2880,21 @@ def _default_momentum_analyzer(
     return analyzer
 
 
+def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
+    """08/01 -- wraps one of scalping_variants.py's 5 evaluate_vN functions
+    (signature ``(contract, chain)``) into the plain ``analyzer(contract)``
+    closure every pocket in the multi-pocket loop expects -- same closure
+    idiom as ``_default_momentum_analyzer`` above, deliberately NOT reused
+    directly since the variant functions are self-contained (their own hard
+    gates + candle fetch + signal), not a thin wrapper around
+    ``evaluate_momentum_entry``."""
+    async def analyzer(contract: str) -> dict | None:
+        chain = chain_by_contract.get(contract, "base")
+        return await evaluate_fn(contract, chain)
+
+    return analyzer
+
+
 def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
     """Item #157, 28/07: the VC pocket's own analyzer, routing a contract
     tagged ``bonding_entry.CHAIN_MARKER`` to ``evaluate_bonding_entry``
@@ -2943,6 +2958,42 @@ def scalping_only_sourcing_enabled() -> bool:
     return os.environ.get("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def scalping_variants_enabled() -> bool:
+    """08/01, operator's explicit call: swaps the single RSI-divergence
+    scalping pocket for 5 independent mean-reversion variants (V1-V5,
+    services/skills/scalping_variants.py -- %B Bollinger / VWAP Z-score /
+    fast Stochastic, compared side by side). OFF by default (fail-closed) --
+    while OFF, the "scalping" pocket keeps its historical RSI-divergence
+    behavior unchanged. While ON, the "scalping" wallet/pocket is REPLACED
+    (not added to) by 5 new pockets ("scalping_v1".."scalping_v5"), each its
+    own independent $1M paper wallet -- same doctrine as the existing
+    3-pocket architecture, just more pockets. Requires
+    multi_pocket_sourcing_enabled() to also be on (this gate only decides
+    WHAT the scalping slot sources with, not whether multi-pocket sourcing
+    itself runs at all)."""
+    return os.environ.get("ARIA_SCALPING_VARIANTS_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+_SCALPING_VARIANT_WALLETS = ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5")
+
+
+def all_pocket_wallets() -> tuple[str, ...]:
+    """08/01 -- single source of truth for every pocket wallet that can hold
+    real (paper) capital right now, given scalping_variants_enabled()'s
+    current state. Reused by risk_guard.py's MACRO circuit breaker,
+    paper_ledger_report.py, and telegram_bot.py's /portfolio and /riskresume
+    -- real bug found and fixed the SAME day this gate was introduced (before
+    considering the chantier done, not after): without this, the macro
+    breaker would silently sum only 3 of 7 pockets' equity, and /riskresume
+    would have no way to lift a circuit breaker on scalping_v1..v5, leaving
+    them blocked until the next weekly reset."""
+    if scalping_variants_enabled():
+        return (*_SCALPING_VARIANT_WALLETS, "swing", "vc")
+    return ("scalping", "swing", "vc")
 
 
 # ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
@@ -5165,18 +5216,41 @@ async def _run_paper_cycle_locked(
         # as the single-pocket path below.
         closed_this_cycle = {c["contract"] for c in actions["closed"]}
 
-        scalping_analyzer = _default_momentum_analyzer(
-            _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-            mode="scalping",
-        )
         swing_analyzer = _default_momentum_analyzer(
             _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
             mode="standard",
         )
 
+        # 08/01 -- scalping_variants_enabled(): the single "scalping" slot is
+        # REPLACED (not added to) by 5 independent pockets, one per variant
+        # (services/skills/scalping_variants.py) -- same doctrine as every
+        # other pocket here (own $1M wallet, own MAX_POSITIONS_SCALPING cap
+        # -- uncapped, same as the RSI-divergence mode it replaces).
+        if scalping_variants_enabled():
+            from aria_core.skills import scalping_variants
+
+            scalping_pocket_entries = tuple(
+                (
+                    wallet_name,
+                    momentum_candidates,
+                    _scalping_variant_analyzer(evaluate_fn, _momentum_chain_by_contract),
+                    "scalping",
+                    MAX_POSITIONS_SCALPING,
+                )
+                for wallet_name, evaluate_fn in scalping_variants.VARIANT_ANALYZERS.items()
+            )
+        else:
+            scalping_analyzer = _default_momentum_analyzer(
+                _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+                mode="scalping",
+            )
+            scalping_pocket_entries = (
+                ("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),
+            )
+
         # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)
         for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
-            ("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),
+            *scalping_pocket_entries,
             ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
             ("vc", vc_candidates, vc_analyzer, "standard", MAX_POSITIONS_VC),
         ):
@@ -5212,7 +5286,10 @@ async def _run_paper_cycle_locked(
                 continue
 
             # 08/01 -- see scalping_only_sourcing_enabled()'s own docstring.
-            if pocket_wallet != "scalping" and scalping_only_sourcing_enabled():
+            # ``startswith`` (not ``!=``) so this stays correct whether the
+            # scalping slot is the single "scalping" pocket or the 5
+            # "scalping_v1".."scalping_v5" pockets (scalping_variants_enabled()).
+            if not pocket_wallet.startswith("scalping") and scalping_only_sourcing_enabled():
                 continue
 
             opened_positions, _ = await _open_new_entries_for_wallet(

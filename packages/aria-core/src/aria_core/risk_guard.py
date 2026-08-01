@@ -1007,7 +1007,11 @@ def format_pocket_blocked_reminder_alert(status: dict[str, Any], wallet: str) ->
 # recoded" doctrine, unchanged).
 MACRO_CIRCUIT_BREAKER_LOSS_PCT = 0.15  # -15% of the COMBINED 3-pocket equity vs its own macro HWM
 
-_MACRO_POCKETS = ("scalping", "swing", "vc")
+# 08/01 -- removed the hardcoded tuple here (real bug: it would silently
+# blind this breaker to scalping_v1..v5's equity once scalping_variants_
+# enabled() is on) -- paper_trader.all_pocket_wallets() is now the single
+# source of truth, imported lazily inside evaluate_macro_risk() below (same
+# local-import pattern already used there for paper_trader/outgoing_pause).
 
 
 def _macro_state_path() -> Path:
@@ -1076,7 +1080,7 @@ async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
     from aria_core import outgoing_pause, paper_trader
 
     total_equity = 0.0
-    for wallet in _MACRO_POCKETS:
+    for wallet in paper_trader.all_pocket_wallets():
         summary = await paper_trader.portfolio_summary(wallet=wallet, price_lookup=price_lookup)
         total_equity += float(summary["equity"])
 

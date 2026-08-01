@@ -1,0 +1,264 @@
+"""5 scalping variant engines (V1-V5, 08/01) -- offline, no real network call.
+Indicator functions themselves are already covered by test_indicators.py --
+these tests mock them directly to exercise each variant's SIGNAL/anti-dump/
+stop-take-profit LOGIC in isolation, not the underlying math."""
+from __future__ import annotations
+
+import pytest
+
+from aria_core import momentum_entry
+from aria_core.skills import indicators, scalping_variants
+
+CONTRACT = "0x" + "a" * 40
+CHAIN = "base"
+
+
+def _pair(price=1.0, symbol="TOK", liquidity=100_000.0):
+    return momentum_entry.PairSnapshot(
+        pair_address="0xpool", price_usd=price, base_symbol=symbol, liquidity_usd=liquidity,
+    )
+
+
+def _candles(n=50):
+    from aria_core.skills.ta_levels import Candle
+
+    return [
+        Candle(ts=i, open=1.0, high=1.05, low=0.95, close=1.0, volume=1000.0) for i in range(n)
+    ]
+
+
+def _patch_gates_and_candles(monkeypatch, *, pair=None, hold=None, candles=None):
+    async def fake_hard_gates(contract, chain, *, mode="standard"):
+        return (pair if hold is None else None), None, hold
+
+    async def fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard"):
+        return candles if candles is not None else _candles()
+
+    monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", fake_fetch_candles)
+
+
+# ── shared plumbing (_gates_and_candles) ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_returns_hold_on_hard_gate_rejection(monkeypatch):
+    hold = {"action": "HOLD", "hold_reason": "blacklisted", "reasons": ["listé noir"]}
+    _patch_gates_and_candles(monkeypatch, hold=hold)
+    pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert pair is None and candles == [] and result_hold == hold
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_none_when_no_liquid_pair(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=None, hold=None)
+    pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert pair is None and candles == [] and result_hold is None
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_hold_on_insufficient_history(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_candles(10))
+    pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert pair is None and result_hold["hold_reason"] == "insufficient_candle_history"
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_returns_pair_and_candles_on_success(monkeypatch):
+    real_pair = _pair()
+    real_candles = _candles()
+    _patch_gates_and_candles(monkeypatch, pair=real_pair, candles=real_candles)
+    pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert pair is real_pair and candles is real_candles and result_hold is None
+
+
+# ── V1 -- Bollinger %B ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_v1_buys_on_confirmed_exit_from_oversold(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-0.1, 0.2]  # oversold then confirmed exit
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    assert result["mode"] == "scalping"
+    assert result["invalidation"] == pytest.approx(1.0 - 1.5 * 0.05)
+    expected_stop = 1.0 - 1.5 * 0.05
+    assert result["target"] == pytest.approx(1.0 + 2.0 * (1.0 - expected_stop))
+
+
+@pytest.mark.asyncio
+async def test_v1_never_buys_mid_collapse_without_confirmation(monkeypatch):
+    """Anti-dump: still IN the oversold zone on the LAST candle -- never a buy."""
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-0.1, -0.2]  # still oversold, no exit
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_signal"
+
+
+@pytest.mark.asyncio
+async def test_v1_no_signal_without_a_prior_oversold_reading(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [0.5, 0.6]  # never was oversold
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+
+
+@pytest.mark.asyncio
+async def test_v1_hold_on_missing_atr(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-0.1, 0.2]
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 50)
+
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "indicator_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_v1_returns_hold_dict_on_hard_gate_rejection(monkeypatch):
+    hold = {"action": "HOLD", "hold_reason": "honeypot_rejected", "reasons": ["honeypot"]}
+    _patch_gates_and_candles(monkeypatch, hold=hold)
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert result == hold
+
+
+@pytest.mark.asyncio
+async def test_v1_none_when_no_liquid_pair(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=None, hold=None)
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert result is None
+
+
+# ── V2 -- VWAP Z-score institutionnel ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_v2_buys_on_confirmed_exit_from_oversold(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-3.0, -2.0]  # oversold (<=-2.5) then confirmed exit
+    monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    result = await scalping_variants.evaluate_v2_vwap_institutional(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    expected_stop = 1.0 - 1.5 * 0.05
+    assert result["target"] == pytest.approx(1.0 + 1.5 * (1.0 - expected_stop))
+
+
+@pytest.mark.asyncio
+async def test_v2_no_buy_without_confirmation(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-3.0, -2.8]  # still oversold
+    monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
+
+    result = await scalping_variants.evaluate_v2_vwap_institutional(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+
+
+# ── V3 -- Stochastique %K ultra-réactif ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_v3_buys_on_confirmed_exit_with_structural_stop(monkeypatch):
+    from aria_core.skills.ta_levels import Candle
+
+    pair = _pair(price=1.0)
+    candles = [
+        Candle(ts=i, open=1.0, high=1.05, low=0.95, close=1.0, volume=1000.0) for i in range(48)
+    ] + [
+        Candle(ts=48, open=1.0, high=1.02, low=0.90, close=1.0, volume=1000.0),  # previous low = 0.90
+        Candle(ts=49, open=1.0, high=1.02, low=0.98, close=1.0, volume=1000.0),
+    ]
+    _patch_gates_and_candles(monkeypatch, pair=pair, candles=candles)
+    series = [None] * 48 + [10.0, 20.0]  # oversold (<=15) then confirmed exit (>15)
+    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: series)
+
+    result = await scalping_variants.evaluate_v3_stochastic(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    expected_stop = 0.90 * (1.0 - 0.005)
+    assert result["invalidation"] == pytest.approx(expected_stop)
+    assert result["target"] == pytest.approx(1.0 + 2.0 * (1.0 - expected_stop))
+
+
+@pytest.mark.asyncio
+async def test_v3_no_buy_without_confirmation(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [10.0, 12.0]  # still oversold
+    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: series)
+
+    result = await scalping_variants.evaluate_v3_stochastic(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+
+
+# ── V4 -- Combo (Bollinger ET Stochastique) ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_v4_requires_both_signals_confirmed(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: [None] * 48 + [-0.1, 0.2])
+    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: [None] * 48 + [10.0, 20.0])
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    result = await scalping_variants.evaluate_v4_combo(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    expected_stop = 1.0 - 2.0 * 0.05  # V4 uses a WIDER 2xATR stop
+    assert result["invalidation"] == pytest.approx(expected_stop)
+    assert result["target"] == pytest.approx(1.0 + 1.0 * (1.0 - expected_stop))  # 1:1 conservative TP
+
+
+@pytest.mark.asyncio
+async def test_v4_holds_when_only_one_signal_confirms(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    # Bollinger confirms exit, but Stochastic never was oversold -- combo fails.
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: [None] * 48 + [-0.1, 0.2])
+    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: [None] * 48 + [50.0, 55.0])
+
+    result = await scalping_variants.evaluate_v4_combo(CONTRACT, CHAIN)
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_signal"
+
+
+# ── V5 -- VWAP + trailing (pas de TP fixe) ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_v5_buys_with_no_fixed_target(monkeypatch):
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-3.0, -2.0]
+    monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    result = await scalping_variants.evaluate_v5_vwap_trailing(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    assert result["target"] is None  # no fixed TP -- generic trailing stop takes over
+    assert result["invalidation"] == pytest.approx(1.0 - 1.5 * 0.05)
+
+
+# ── VARIANT_ANALYZERS registry ───────────────────────────────────────────────
+
+def test_variant_analyzers_registry_has_all_5_variants():
+    assert set(scalping_variants.VARIANT_ANALYZERS) == {
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
+    }
+    for fn in scalping_variants.VARIANT_ANALYZERS.values():
+        assert callable(fn)

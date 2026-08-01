@@ -134,7 +134,9 @@ def _render_closed(p: dict) -> str:
 # too -- two different scopes on the same page, genuinely misleading once
 # more than one pocket trades. Every metric below is now computed ONE POCKET
 # AT A TIME (``_build_pocket_section``) and never cross-pocket-aggregated.
-_POCKETS = ("scalping", "swing", "vc")
+# 08/01 -- removed the hardcoded tuple here (real bug: this report would
+# silently omit scalping_v1..v5 once scalping_variants_enabled() is on) --
+# paper_trader.all_pocket_wallets() is now the single source of truth.
 
 
 async def _build_pocket_section(wallet: str, closed_limit: int) -> tuple[list[str], dict]:
@@ -205,7 +207,7 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     now = datetime.now(timezone.utc).isoformat()
     text_blocks = [f"=== Registre paper-trading ARIA — {now} ==="]
     machine_pockets: dict[str, dict] = {}
-    for wallet in _POCKETS:
+    for wallet in paper_trader.all_pocket_wallets():
         lines, pocket_machine = await _build_pocket_section(wallet, closed_limit)
         text_blocks.append("\n".join(lines))
         machine_pockets[wallet] = pocket_machine

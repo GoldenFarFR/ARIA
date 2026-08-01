@@ -6,7 +6,16 @@ import math
 
 import pytest
 
-from aria_core.skills.indicators import atr_series, bollinger_bands, ema_series, macd_series
+from aria_core.skills.indicators import (
+    atr_series,
+    bollinger_bands,
+    bollinger_percent_b,
+    ema_series,
+    macd_series,
+    stochastic_k_series,
+    vwap_series,
+    vwap_zscore_series,
+)
 from aria_core.skills.ta_levels import Candle
 
 
@@ -169,4 +178,110 @@ def test_atr_series_default_period_is_fourteen():
     candles = [Candle(ts=i, open=1, high=1.1, low=0.9, close=1.0) for i in range(20)]
     default_result = atr_series(candles)
     explicit_result = atr_series(candles, period=14)
+    assert default_result == explicit_result
+
+
+# ── bollinger_percent_b / vwap_series / vwap_zscore_series / stochastic_k_series ────
+# (08/01, 5-variant scalping comparison -- V1 Bollinger, V2/V5 VWAP, V3/V4 Stochastic)
+
+def test_bollinger_percent_b_is_half_at_the_middle_band():
+    # Fenêtre constante -- close == middle (SMA) -> %B = 0.5 exactement (à mi-chemin
+    # entre les deux bandes symétriques), quel que soit l'écart-type des 4 points précédents.
+    closes = [1.0, 5.0, 1.0, 5.0, 3.0]  # moyenne = 3.0 = dernier close
+    result = bollinger_percent_b(closes, period=5, num_std=2.0)
+    assert result[:4] == [None, None, None, None]
+    assert result[4] == pytest.approx(0.5)
+
+
+def test_bollinger_percent_b_matches_hand_computed_value():
+    # upper/lower connus (voir test_bollinger_matches_hand_computed_values) :
+    # upper=3+2*sqrt(2)~=5.828, lower=3-2*sqrt(2)~=0.172, close=5 -> %B=(5-0.172)/5.657~=0.854
+    closes = [1.0, 2.0, 3.0, 4.0, 5.0]
+    result = bollinger_percent_b(closes, period=5, num_std=2.0)
+    width = 4 * math.sqrt(2.0)
+    expected = (5.0 - (3.0 - 2 * math.sqrt(2.0))) / width
+    assert result[4] == pytest.approx(expected)
+
+
+def test_bollinger_percent_b_none_on_flat_market():
+    closes = [10.0] * 10  # marché parfaitement plat -- canal nul, jamais une division par zéro
+    result = bollinger_percent_b(closes, period=5)
+    assert all(v is None for v in result)
+
+
+def test_vwap_series_cumulative_matches_hand_computed_value():
+    candles = [
+        Candle(ts=0, open=1, high=1, low=1, close=1.0, volume=100.0),
+        Candle(ts=1, open=2, high=2, low=2, close=2.0, volume=300.0),
+    ]
+    result = vwap_series(candles)  # period=None -> cumulatif
+    # bougie 0 : typical=1.0, vwap=1.0. bougie 1 : typical=2.0 (high=low=close=2.0)
+    # cum_pv = 1*100 + 2*300 = 700, cum_vol = 400 -> vwap = 1.75
+    assert result[0] == pytest.approx(1.0)
+    assert result[1] == pytest.approx(1.75)
+
+
+def test_vwap_series_none_when_zero_volume():
+    candles = [Candle(ts=i, open=1, high=1, low=1, close=1.0, volume=0.0) for i in range(5)]
+    result = vwap_series(candles)
+    assert all(v is None for v in result)
+
+
+def test_vwap_series_rolling_window_too_short_all_none():
+    candles = [Candle(ts=i, open=1, high=1, low=1, close=1.0, volume=10.0) for i in range(3)]
+    result = vwap_series(candles, period=5)
+    assert all(v is None for v in result)
+
+
+def test_vwap_zscore_series_too_short_all_none():
+    candles = [Candle(ts=i, open=1, high=1, low=1, close=1.0, volume=10.0) for i in range(5)]
+    result = vwap_zscore_series(candles, period=20)
+    assert all(v is None for v in result)
+
+
+def test_vwap_zscore_series_none_on_perfectly_flat_market():
+    # Prix ET volume constants -- écart (close - vwap) toujours nul, écart-type nul.
+    candles = [Candle(ts=i, open=10, high=10, low=10, close=10.0, volume=100.0) for i in range(25)]
+    result = vwap_zscore_series(candles, period=20)
+    assert all(v is None for v in result)
+
+
+def test_vwap_zscore_series_negative_on_sustained_drop_below_vwap():
+    # Prix qui chute nettement sous son VWAP récent -> z-score négatif (survente).
+    # Warmup RÉEL = 2*period (le VWAP glissant lui-même doit se stabiliser
+    # avant que la fenêtre de z-score puisse s'appuyer sur des valeurs pleinement
+    # définies) -- 39 bougies stables puis une chute, period=20.
+    candles = [
+        Candle(ts=i, open=100, high=100, low=100, close=100.0, volume=100.0) for i in range(39)
+    ] + [Candle(ts=39, open=80, high=80, low=80, close=80.0, volume=100.0)]
+    result = vwap_zscore_series(candles, period=20)
+    assert result[39] is not None and result[39] < 0
+
+
+def test_stochastic_k_series_touches_zero_at_lowest_and_hundred_at_highest():
+    candles = [
+        Candle(ts=0, open=10, high=12, low=8, close=10.0),   # range [8,12] établi
+        Candle(ts=1, open=10, high=10, low=10, close=8.0),   # close == plus bas -> %K=0
+        Candle(ts=2, open=10, high=10, low=10, close=12.0),  # close == plus haut -> %K=100
+    ]
+    result = stochastic_k_series(candles, period=3)
+    assert result[2] == pytest.approx(100.0)
+
+
+def test_stochastic_k_series_none_when_range_is_zero():
+    candles = [Candle(ts=i, open=5, high=5, low=5, close=5.0) for i in range(20)]
+    result = stochastic_k_series(candles, period=14)
+    assert all(v is None for v in result)
+
+
+def test_stochastic_k_series_too_short_all_none():
+    candles = [Candle(ts=i, open=1, high=1.1, low=0.9, close=1.0) for i in range(5)]
+    result = stochastic_k_series(candles, period=14)
+    assert all(v is None for v in result)
+
+
+def test_stochastic_k_series_default_period_is_fourteen():
+    candles = [Candle(ts=i, open=1, high=1.1, low=0.9, close=1.0 + (i % 5) * 0.01) for i in range(30)]
+    default_result = stochastic_k_series(candles)
+    explicit_result = stochastic_k_series(candles, period=14)
     assert default_result == explicit_result

@@ -108,6 +108,13 @@ async def _backdate_breakeven_pending(contract: str, seconds: float) -> None:
         await db.commit()
 
 
+async def _price_lookup_one(contract: str) -> float:
+    """Trivial constant-price coroutine (08/01) -- price_lookup must be
+    awaitable, a plain lambda silently breaks the position-management loop
+    (real mistake caught while writing the 5-variant architecture tests)."""
+    return 1.0
+
+
 async def _backdate_opened_at(contract: str, hours: float) -> None:
     """Recule ``opened_at`` de ``hours`` -- simule une position ouverte depuis
     longtemps (08/01, timeout de stagnation scalping) sans attendre pour de vrai."""
@@ -6370,6 +6377,128 @@ async def test_scalping_only_sourcing_never_closes_an_already_open_swing_positio
 
     await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
     assert await pt.has_open(D)
+
+
+# ── 5-variant scalping architecture (08/01, scalping_variants_enabled) ──────
+
+def test_scalping_variants_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_SCALPING_VARIANTS_ENABLED", raising=False)
+    assert pt.scalping_variants_enabled() is False
+
+
+def test_all_pocket_wallets_gate_off_returns_classic_three():
+    assert pt.all_pocket_wallets() == ("scalping", "swing", "vc")
+
+
+def test_all_pocket_wallets_gate_on_returns_five_variants_plus_two(monkeypatch):
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    wallets = pt.all_pocket_wallets()
+    assert wallets == ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "swing", "vc")
+
+
+@pytest.mark.asyncio
+async def test_scalping_variants_enabled_replaces_scalping_pocket_with_five(tmp_db, monkeypatch):
+    """The classic "scalping" slot disappears entirely -- each of the 5
+    variant pockets sources and can open its own independent position, all
+    sharing the SAME momentum discovery pass (never a duplicated network call)."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    from aria_core.skills import candidate_ranking, scalping_variants
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_buy(contract, chain):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "mode": "scalping",
+        }
+
+    for key in scalping_variants.VARIANT_ANALYZERS:
+        monkeypatch.setitem(scalping_variants.VARIANT_ANALYZERS, key, _fake_buy)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup_one, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert wallets_opened == {"scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5"}
+    assert len(act["opened"]) == 5
+    assert await pt.get_open_positions(wallet="scalping") == []  # classic slot never sourced
+    for key in scalping_variants.VARIANT_ANALYZERS:
+        positions = await pt.get_open_positions(wallet=key)
+        assert len(positions) == 1 and positions[0]["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_scalping_variants_disabled_keeps_classic_single_scalping_pocket(tmp_db, monkeypatch):
+    """Gate OFF (default) -- byte-for-byte the pre-existing single "scalping"
+    pocket, never the 5 variants."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.delenv("ARIA_SCALPING_VARIANTS_ENABLED", raising=False)
+    from aria_core import momentum_entry
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup_one, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert "scalping" in wallets_opened  # classic single pocket sources as before
+    assert await pt.get_open_positions(wallet="scalping_v1") == []
+
+
+@pytest.mark.asyncio
+async def test_scalping_variants_stagnation_timeout_applies_to_variant_pockets(tmp_db, monkeypatch):
+    """The 08/01 stagnation timeout checks mode == "scalping", not the wallet
+    name -- a variant pocket's position (wallet="scalping_v3", mode="scalping")
+    must be just as eligible for force-close as the classic "scalping" pocket's."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [], {}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping_v3", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup_one, depeg_check=_no_depeg)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "timeout stagnation (scalping)"
 
 
 @pytest.mark.asyncio
