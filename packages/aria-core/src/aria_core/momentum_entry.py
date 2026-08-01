@@ -840,6 +840,22 @@ async def _discover_birdeye_base_tokens() -> list[str]:
     return _birdeye_cache or []
 
 
+# 08/01 -- real bug found live (operator screenshot with hundreds of tokens
+# extracted at once, 479 landed in manual_candidate_queue in a single burst):
+# manual candidates always claim the front of the discovery list up to the
+# per-cycle cap (see the comment below), which is correct for the NORMAL
+# case (1-2 contracts) but let a large one-off burst monopolize the entire
+# discovery budget for hours, starving both automated discovery AND the
+# manual backlog's own OHLCV fetch volume against GeckoTerminal (sustained
+# Cloudflare 429s traced back to this). Caps how many manual entries a SINGLE
+# cycle draws, regardless of how many are queued -- oldest first (already
+# ORDER BY added_at ASC from list_pending_manual_candidates), leaving the
+# rest of the per-cycle budget for automated sources every pass. A large
+# backlog now drains gradually over several cycles instead of dominating
+# every single one.
+MAX_MANUAL_CANDIDATES_PER_CYCLE = 15
+
+
 async def discover_momentum_candidates(
     *, chains: tuple[str, ...] = DEFAULT_CHAINS, limit_per_chain: int = _SOURCE_LIMIT_PER_CHANNEL,
 ) -> list[dict]:
@@ -895,7 +911,12 @@ async def discover_momentum_candidates(
     except Exception as exc:  # noqa: BLE001
         logger.info("discover_momentum_candidates: manual_candidates failed (%s)", exc)
         manual_entries = []
-    for entry in manual_entries:
+    # 08/01 -- see MAX_MANUAL_CANDIDATES_PER_CYCLE's own comment: caps THIS
+    # cycle's draw, never the full backlog -- reconcile_watchlist_membership
+    # below still runs on the FULL manual_entries list (zero network cost,
+    # best-effort), so an entry not drawn into discovery this cycle still
+    # gets its honeypot-watchlist membership healed if needed.
+    for entry in manual_entries[:MAX_MANUAL_CANDIDATES_PER_CYCLE]:
         _add_candidate(out, seen, chains, entry["contract"], entry["chain"])
     source_contributions["manual(/add)"] = _source_snapshot() - before
 

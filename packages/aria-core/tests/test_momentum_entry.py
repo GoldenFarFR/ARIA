@@ -798,6 +798,86 @@ async def test_discover_momentum_candidates_tolerates_manual_queue_failure(monke
     assert candidates == [{"contract": CONTRACT, "chain": "base"}]  # base_crawler survit à la panne
 
 
+@pytest.mark.asyncio
+async def test_manual_candidates_capped_per_cycle(monkeypatch):
+    """08/01 -- real bug found live (operator screenshot, 479 contracts
+    landed in the queue in one burst): manual entries used to claim the
+    front of the list WITHOUT any per-cycle cap, monopolizing the entire
+    discovery budget for hours and starving GeckoTerminal into a sustained
+    429 block. Only the oldest MAX_MANUAL_CANDIDATES_PER_CYCLE entries are
+    drawn into THIS cycle -- the rest stays queued for later cycles, and
+    automated sources always keep their own room in the budget."""
+    async def fake_base_tokens(*, limit):
+        return ["0xAUTO1"]
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+
+    from aria_core import manual_candidates as mcq
+
+    total = me.MAX_MANUAL_CANDIDATES_PER_CYCLE + 5
+    for i in range(total):
+        await mcq.add_manual_candidate(f"0xMANUAL{i:02d}" + "0" * 34, "base")
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+    manual_in_result = [c for c in candidates if c["contract"].startswith("0xmanual")]
+    assert len(manual_in_result) == me.MAX_MANUAL_CANDIDATES_PER_CYCLE
+    # Automated source still gets its slot, never fully starved by the backlog.
+    assert {"contract": "0xauto1", "chain": "base"} in candidates
+
+
+@pytest.mark.asyncio
+async def test_manual_candidates_reconcile_still_sees_full_backlog(monkeypatch):
+    """The per-cycle cap only bounds what's DRAWN into discovery -- the
+    honeypot-watchlist healing pass (zero network cost, best-effort) must
+    still run against the FULL backlog, not just the capped subset, so an
+    entry not drawn this cycle still gets its watchlist membership fixed."""
+    async def fake_base_tokens(*, limit):
+        return []
+
+    async def empty_listings():
+        return []
+
+    async def empty_birdeye():
+        return []
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", empty_listings)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "_discover_birdeye_base_tokens", empty_birdeye)
+
+    from aria_core import manual_candidates as mcq
+
+    total = me.MAX_MANUAL_CANDIDATES_PER_CYCLE + 3
+    for i in range(total):
+        await mcq.add_manual_candidate(f"0xMANUAL{i:02d}" + "0" * 34, "base")
+
+    seen_sizes = []
+
+    async def spy_reconcile(entries):
+        seen_sizes.append(len(entries))
+        return 0
+
+    monkeypatch.setattr("aria_core.manual_candidates.reconcile_watchlist_membership", spy_reconcile)
+
+    await me.discover_momentum_candidates(chains=("base",))
+    assert seen_sizes == [total]
+
+
 # ── _batch_liquidity_prefilter ───────────────────────────────────────────────────────
 
 def _batch_pair(base_address: str, liquidity_usd: float) -> PairSnapshot:
