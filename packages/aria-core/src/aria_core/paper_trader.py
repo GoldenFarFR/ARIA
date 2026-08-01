@@ -1313,6 +1313,18 @@ async def reset_portfolio(
             (starting, created_at or _now(), starting, cycle_duration_days, wallet),
         )
         await db.commit()
+    # 08/01 -- real bug found live (operator: "cest vraiment etrange quil se
+    # passe rien" -- the legacy "scalping" pocket stayed silent after an
+    # operator-triggered full reset): run_weekly_reset() always lifts this
+    # pocket's own risk_guard circuit breaker (resume_new_entries) as part of
+    # its reset, but this MANUAL reset never did -- a hard tier armed before
+    # the reset (e.g. 5 consecutive losses) silently kept blocking every new
+    # entry on a portfolio that otherwise looked completely fresh (1M$, no
+    # open positions, no error anywhere). Same fresh-start guarantee as the
+    # weekly cycle: a reset pocket must never inherit a stale block.
+    from aria_core import risk_guard
+
+    risk_guard.resume_new_entries(wallet, by="manual_reset")
 
 
 async def get_equity_high_water_mark(wallet: str = "swing") -> float:

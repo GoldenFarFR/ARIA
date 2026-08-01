@@ -1229,3 +1229,40 @@ class TestMacroCircuitBreaker:
         second = await risk_guard.evaluate_macro_risk()
         assert second.newly_triggered is True
         assert outgoing_pause.is_paused() is True
+
+
+class TestResetPortfolioLiftsCircuitBreaker:
+    @pytest.mark.asyncio
+    async def test_manual_reset_lifts_a_stale_hard_block(self, tmp_db):
+        """08/01 -- real bug found live (operator: "cest vraiment etrange quil
+        se passe rien" -- a pocket stayed silent for over an hour after a
+        full manual reset, capital fresh at 1M$, zero errors anywhere).
+        run_weekly_reset() always lifts the pocket's own circuit breaker as
+        part of its reset (resume_new_entries) -- reset_portfolio() (the
+        MANUAL reset) never did, silently leaving a pre-existing hard block
+        (e.g. 5 consecutive losses) armed on an otherwise completely fresh
+        portfolio."""
+        risk_guard.block_new_entries("scalping", "5 pertes consécutives", by="test")
+        blocked_before, _ = risk_guard.blocks_new_entries("scalping")
+        assert blocked_before is True
+
+        await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+
+        blocked_after, reason_after = risk_guard.blocks_new_entries("scalping")
+        assert blocked_after is False
+        assert reason_after is None
+
+    @pytest.mark.asyncio
+    async def test_manual_reset_scoped_to_its_own_wallet_only(self, tmp_db):
+        """Un reset sur UNE poche ne doit jamais lever le coupe-circuit d'une
+        AUTRE poche -- même isolation stricte que le reste de l'architecture
+        3+ poches (chaque wallet a son propre fichier d'état)."""
+        risk_guard.block_new_entries("scalping", "test", by="test")
+        risk_guard.block_new_entries("swing", "test", by="test")
+
+        await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+
+        blocked_scalping, _ = risk_guard.blocks_new_entries("scalping")
+        blocked_swing, _ = risk_guard.blocks_new_entries("swing")
+        assert blocked_scalping is False
+        assert blocked_swing is True  # jamais touché
