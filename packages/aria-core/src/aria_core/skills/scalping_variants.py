@@ -37,6 +37,7 @@ skips the LLM confirmation entirely when R/R and alignment are strong)."""
 from __future__ import annotations
 
 import logging
+import time
 
 from aria_core import momentum_entry
 from aria_core.skills import indicators
@@ -51,6 +52,35 @@ logger = logging.getLogger(__name__)
 _MIN_CANDLES_FOR_SIGNAL = 45
 
 _ATR_PERIOD = 14
+
+# 08/01 -- real bug found live (operator: "j'ai l'impression que sa trade
+# beaucoup moin depuis 14h"): GeckoTerminal went into a sustained HTTP 429
+# burst the moment the 5 variants went live. Root cause: paper_trader.py runs
+# each pocket (scalping_v1..v5) as an independent full pass over the SAME
+# candidate list -- every variant called _gates_and_candles(contract, chain)
+# on its own for the SAME candidate, multiplying the hard-gate + candle-fetch
+# network calls by 5x for IDENTICAL data (same contract/chain/mode="scalping"
+# -- nothing variant-specific about the fetch itself). A short-lived cache
+# keyed by (contract, chain) makes the first variant's call the only one that
+# hits the network; the other 4 reuse the exact same (pair, candles, hold)
+# tuple. TTL comfortably covers one cycle's 5 sequential pocket passes over
+# the same list (a few seconds to low minutes in practice) while never
+# serving data across cycles (candles/gates must stay fresh cycle to cycle).
+_GATES_CACHE_TTL_SECONDS = 120.0
+_GATES_CACHE_MAX_SIZE = 500
+_gates_cache: dict[tuple[str, str], tuple[float, tuple]] = {}
+
+
+def _prune_gates_cache(now: float) -> None:
+    """Opportunistic prune, called only when the cache grows past a
+    threshold -- keeps steady-state memory bounded without a background
+    task, since the short TTL means most entries are already expired by the
+    time this runs."""
+    if len(_gates_cache) <= _GATES_CACHE_MAX_SIZE:
+        return
+    expired = [k for k, (expires_at, _) in _gates_cache.items() if expires_at <= now]
+    for k in expired:
+        del _gates_cache[k]
 
 # Anti-dump confirmation: the LAST candle must show the indicator back OUT
 # of its oversold zone, the SECOND-TO-LAST candle must still show it WAS
@@ -70,7 +100,26 @@ async def _gates_and_candles(
     """Shared plumbing for all 5 variants: hard gates (same as the RSI
     scalping mode, mode="scalping") then real 15-30min candles. Returns
     ``(None, [], hold_dict)`` on any hard rejection or missing data --
-    caller returns that dict as-is, never guesses a signal without data."""
+    caller returns that dict as-is, never guesses a signal without data.
+
+    08/01 -- cached (see _gates_cache's own comment): the 5 variants are
+    evaluated on the SAME candidate independently, this used to mean 5x the
+    network calls for identical data."""
+    key = (contract.lower(), (chain or "").lower())
+    now = time.monotonic()
+    cached = _gates_cache.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    result = await _gates_and_candles_uncached(contract, chain)
+    _prune_gates_cache(now)
+    _gates_cache[key] = (now + _GATES_CACHE_TTL_SECONDS, result)
+    return result
+
+
+async def _gates_and_candles_uncached(
+    contract: str, chain: str,
+) -> tuple["momentum_entry.PairSnapshot | None", list[Candle], dict | None]:
     best_pair, _honeypot_reason, hold = await momentum_entry.evaluate_hard_gates(
         contract, chain, mode="scalping",
     )

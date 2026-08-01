@@ -13,6 +13,18 @@ CONTRACT = "0x" + "a" * 40
 CHAIN = "base"
 
 
+@pytest.fixture(autouse=True)
+def _clear_gates_cache():
+    """08/01 -- _gates_and_candles now caches per (contract, chain) across
+    calls (real bug fix, see scalping_variants._gates_cache's own comment).
+    Every test in this file reuses the SAME CONTRACT/CHAIN -- without
+    clearing between tests, the first test's mocked result would silently
+    leak into every later one instead of exercising its own mocks."""
+    scalping_variants._gates_cache.clear()
+    yield
+    scalping_variants._gates_cache.clear()
+
+
 def _pair(price=1.0, symbol="TOK", liquidity=100_000.0):
     return momentum_entry.PairSnapshot(
         pair_address="0xpool", price_usd=price, base_symbol=symbol, liquidity_usd=liquidity,
@@ -69,6 +81,56 @@ async def test_gates_and_candles_returns_pair_and_candles_on_success(monkeypatch
     _patch_gates_and_candles(monkeypatch, pair=real_pair, candles=real_candles)
     pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
     assert pair is real_pair and candles is real_candles and result_hold is None
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_second_call_reuses_cache_no_network(monkeypatch):
+    """08/01 real bug fix: the 5 variants used to each hit the network
+    independently for the SAME candidate (5x the calls for identical data,
+    root cause of a live GeckoTerminal rate-limit burst). The 2nd call for
+    the same (contract, chain) must reuse the cached result -- the mocked
+    hard-gates/fetch functions must NOT be invoked again."""
+    calls = {"hard_gates": 0, "fetch_candles": 0}
+
+    async def fake_hard_gates(contract, chain, *, mode="standard"):
+        calls["hard_gates"] += 1
+        return _pair(), None, None
+
+    async def fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard"):
+        calls["fetch_candles"] += 1
+        return _candles()
+
+    monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", fake_fetch_candles)
+
+    first = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    second = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+
+    assert calls == {"hard_gates": 1, "fetch_candles": 1}
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_cache_scoped_per_contract_and_chain(monkeypatch):
+    """A different contract (or a different chain for the same contract)
+    must never reuse another candidate's cached result."""
+    calls = {"hard_gates": 0}
+
+    async def fake_hard_gates(contract, chain, *, mode="standard"):
+        calls["hard_gates"] += 1
+        return _pair(), None, None
+
+    async def fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard"):
+        return _candles()
+
+    monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", fake_fetch_candles)
+
+    await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    await scalping_variants._gates_and_candles("0x" + "b" * 40, CHAIN)
+    await scalping_variants._gates_and_candles(CONTRACT, "ethereum")
+
+    assert calls["hard_gates"] == 3
 
 
 # ── V1 -- Bollinger %B ───────────────────────────────────────────────────────
@@ -262,3 +324,25 @@ def test_variant_analyzers_registry_has_all_5_variants():
     }
     for fn in scalping_variants.VARIANT_ANALYZERS.values():
         assert callable(fn)
+
+
+def test_prune_gates_cache_removes_only_expired_entries_past_threshold():
+    now = 1000.0
+    scalping_variants._gates_cache["fresh"] = (now + 60.0, ("kept",))
+    scalping_variants._gates_cache["stale"] = (now - 1.0, ("dropped",))
+    for i in range(scalping_variants._GATES_CACHE_MAX_SIZE):
+        scalping_variants._gates_cache[f"filler-{i}"] = (now - 1.0, ("dropped",))
+
+    scalping_variants._prune_gates_cache(now)
+
+    assert "fresh" in scalping_variants._gates_cache
+    assert "stale" not in scalping_variants._gates_cache
+    assert not any(k.startswith("filler-") for k in scalping_variants._gates_cache)
+
+
+def test_prune_gates_cache_noop_under_threshold():
+    scalping_variants._gates_cache["a"] = (1000.0 - 1.0, ("stale",))
+    scalping_variants._prune_gates_cache(1000.0)
+    # Below _GATES_CACHE_MAX_SIZE -- pruning is skipped entirely, even for an
+    # expired entry (cheap by design, next insert over threshold catches it).
+    assert "a" in scalping_variants._gates_cache
