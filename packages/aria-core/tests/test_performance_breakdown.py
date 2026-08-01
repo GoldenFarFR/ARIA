@@ -253,6 +253,15 @@ def test_key_dev_sold_buckets():
     assert pb.key_dev_sold({}) == "unknown"
 
 
+def test_key_market_cap_buckets():
+    assert pb.key_market_cap({"entry_market_cap_usd": 500_000}) == "<1M$"
+    assert pb.key_market_cap({"entry_market_cap_usd": 3_000_000}) == "1-5M$"
+    assert pb.key_market_cap({"entry_market_cap_usd": 8_000_000}) == "5-10M$"
+    assert pb.key_market_cap({"entry_market_cap_usd": 20_000_000}) == "10-50M$"
+    assert pb.key_market_cap({"entry_market_cap_usd": 100_000_000}) == ">=50M$"
+    assert pb.key_market_cap({}) == "unknown"
+
+
 def test_key_hour_of_day():
     assert pb.key_hour_of_day({"opened_at": "2026-07-20T14:30:00"}) == "14h-15h"
     assert pb.key_hour_of_day({}) == "unknown"

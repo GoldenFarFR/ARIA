@@ -257,6 +257,20 @@ def key_dev_sold(t: dict) -> str:
     return _bucket(pct, [(0.10, "<10%"), (0.30, "10-30%"), (0.60, "30-60%")], above=">=60%")
 
 
+def key_market_cap(t: dict) -> str:
+    """08/01 -- operator request: "peut etre que dans la tranche des 10 milly
+    les positions auront 10% de perf en moyenne... savoir si on peut mesurer
+    quelle tranche sera la plus efficace" -- before ever gating entries on
+    market cap, MEASURE which tranche actually performs best. Buckets chosen
+    around the 10M$ example the operator gave, on top of the finer split
+    already useful for today's micro-cap sourcing."""
+    return _bucket(
+        t.get("entry_market_cap_usd"),
+        [(1_000_000, "<1M$"), (5_000_000, "1-5M$"), (10_000_000, "5-10M$"), (50_000_000, "10-50M$")],
+        above=">=50M$",
+    )
+
+
 def _parsed_opened_at(t: dict) -> datetime | None:
     raw = t.get("opened_at")
     if not raw:
@@ -295,6 +309,7 @@ ALL_BREAKDOWNS: dict[str, Callable[[dict], str]] = {
     "Signaux techniques alignés": key_align_score,
     "Volatilité (ATR) à l'entrée": key_atr,
     "Liquidité à l'entrée": key_liquidity,
+    "Market cap à l'entrée": key_market_cap,
     "% vendu par le déployeur à l'entrée": key_dev_sold,
     "Heure d'entrée (UTC)": key_hour_of_day,
     "Jour de la semaine": key_day_of_week,

@@ -113,6 +113,9 @@ def _buy_result(
         "mode": "scalping", "strategy": "momentum",
         "reasons": [f"[{variant}] {reason}"],
         "liquidity_usd": pair.liquidity_usd, "entry_atr_pct": entry_atr_pct,
+        # 08/01 -- market cap at entry, same purely-observational field as the
+        # standard momentum pipeline (see momentum_entry.py's own comment).
+        "market_cap_usd": pair.market_cap_usd,
     }
 
 

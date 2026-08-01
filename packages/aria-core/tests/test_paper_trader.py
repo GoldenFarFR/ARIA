@@ -3795,6 +3795,24 @@ async def test_open_position_persists_vc_thesis_strategy_and_entry_liquidity(tmp
 
 
 @pytest.mark.asyncio
+async def test_open_position_persists_entry_market_cap(tmp_db):
+    """08/01 -- purely observational field (operator request: measure which
+    market-cap tranche performs best in scalping before ever gating on it)."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, entry_market_cap_usd=12_000_000.0, wallet="swing",
+    )
+    assert pos["entry_market_cap_usd"] == 12_000_000.0
+
+
+@pytest.mark.asyncio
+async def test_open_position_entry_market_cap_none_when_unprovided(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+    assert pos["entry_market_cap_usd"] is None
+
+
+@pytest.mark.asyncio
 async def test_default_analyzer_tags_strategy_vc_thesis(monkeypatch):
     from types import SimpleNamespace
 

@@ -680,7 +680,7 @@ _POS_FIELDS = (
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
-    "velocity_ref_price", "velocity_ref_price_at",
+    "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd",
 )
 
 _ADDED_COLUMNS = [
@@ -854,6 +854,16 @@ _ADDED_COLUMNS = [
     # non-bonding position or one opened before this work -- unused there.
     ("velocity_ref_price", "REAL"),
     ("velocity_ref_price_at", "TEXT"),
+    # 08/01 -- market cap at entry (operator request: "peut etre que dans la
+    # tranche des 10 milly les positions auront 10% de perf en moyenne...
+    # savoir si on peut mesurer quelle tranche sera la plus efficace" -- before
+    # ever adding a market-cap floor/gate, MEASURE first with real data rather
+    # than guess a threshold). `marketCap`/`fdv` fallback already present on
+    # every DexScreener PairSnapshot at zero extra network cost (see
+    # dexscreener.PairSnapshot.market_cap_usd) -- purely observational, never
+    # used here to size or gate a position. NULL for any position opened
+    # before this work or by an analyzer that doesn't provide it.
+    ("entry_market_cap_usd", "REAL"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -907,6 +917,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     # #155, 28/07 -- kept in parity with _ADDED_COLUMNS above.
     ("velocity_ref_price", "REAL"),
     ("velocity_ref_price_at", "TEXT"),
+    # 08/01 -- kept in parity with _ADDED_COLUMNS above.
+    ("entry_market_cap_usd", "REAL"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1666,6 +1678,7 @@ async def open_position(
     align_ema: bool | None = None,
     align_macd: bool | None = None,
     align_pattern: bool | None = None,
+    entry_market_cap_usd: float | None = None,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -1874,8 +1887,8 @@ async def open_position(
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
                liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet,
-               align_ema, align_macd, align_pattern)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               align_ema, align_macd, align_pattern, entry_market_cap_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              _now(), fill_price, qty, category or "", entry_security_json or None,
@@ -1895,7 +1908,8 @@ async def open_position(
              liquidity_rotation_volume_ratio, mode or "standard", gp_low, gp_high, wallet,
              None if align_ema is None else int(align_ema),
              None if align_macd is None else int(align_macd),
-             None if align_pattern is None else int(align_pattern)),
+             None if align_pattern is None else int(align_pattern),
+             entry_market_cap_usd),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -3252,6 +3266,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             chain=sig.get("chain") or "base",
             thesis=("; ".join(sig.get("reasons") or []) or None),
             pool_liquidity_usd=sig.get("liquidity_usd"),
+            entry_market_cap_usd=sig.get("market_cap_usd"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             strategy="momentum",
             entry_regime=sig.get("regime"),
@@ -4097,6 +4112,11 @@ async def _open_new_entries_for_wallet(
             # every momentum trade.
             thesis=sig.get("these") or "; ".join(sig.get("reasons") or []) or None,
             pool_liquidity_usd=sig.get("liquidity_usd"),
+            # 08/01 -- market cap at entry, purely observational (see
+            # entry_market_cap_usd's own comment on _ADDED_COLUMNS). None for
+            # any analyzer that doesn't provide it (e.g. the old VC-thesis
+            # pilot), never an invented value.
+            entry_market_cap_usd=sig.get("market_cap_usd"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             # 07/20 -- Formula B: the exit discipline applied depends on the
             # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),

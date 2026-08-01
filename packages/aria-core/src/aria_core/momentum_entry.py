@@ -3718,6 +3718,11 @@ async def evaluate_momentum_entry(
         # estimate the order's price impact on THIS specific pool before sizing
         # the position.
         "liquidity_usd": best.liquidity_usd,
+        # 08/01 -- market cap at entry (operator request: measure which mc
+        # tranche performs best in scalping before ever gating on it). Already
+        # present on every real DexScreener pair (marketCap/fdv fallback),
+        # zero extra network call. None if DexScreener didn't provide it.
+        "market_cap_usd": best.market_cap_usd,
         # 19/07 -- ATR as % of the entry price (Gemini cross-review) -- ``None``
         # if not computable (HOLD, insufficient warm-up period) --
         # paper_trader.py falls back to TRAIL_STOP_PCT (fixed percentage) in
