@@ -6,10 +6,10 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
-[CODE] Sujet    : reset_portfolio() ne levait jamais le coupe-circuit de risque -- poche muette après un reset manuel
+[DEPLOYE] Sujet  : reset_portfolio() ne levait jamais le coupe-circuit de risque -- poche muette après un reset manuel
 Date : 2026.08.01 / Probleme : trouvé en direct par l'opérateur ("cest vraiment etrange quil se passe rien" -- la poche legacy "scalping" restait totalement muette plus d'1h après le reset manuel complet du jour, capital pourtant frais à 1M$, zéro erreur visible). Diagnostic : `run_weekly_reset()` lève TOUJOURS le coupe-circuit de risque de la poche (`risk_guard.resume_new_entries`) dans le cadre de son reset automatique -- `reset_portfolio()` (le reset MANUEL, utilisé plus tôt aujourd'hui pour réinitialiser les 8 poches) ne le faisait JAMAIS. Un coupe-circuit dur armé AVANT le reset (5 pertes consécutives, hérité du legacy scalping) restait donc silencieusement actif sur un portefeuille par ailleurs entièrement neuf -- aucune nouvelle position possible tant qu'il n'était pas levé, sans aucun message d'erreur.
 Solution : `reset_portfolio()` appelle désormais `risk_guard.resume_new_entries(wallet, by="manual_reset")` à la fin de son exécution -- même garantie "repart neuf" que le reset hebdomadaire automatique. Correctement scopé à la seule poche réinitialisée (fichier d'état séparé par wallet, jamais de fuite vers une autre poche).
-`paper_trader.py` -- 2 nouveaux tests (`test_risk_guard.py` : coupe-circuit levé après reset manuel, isolation stricte entre poches), suite risk_guard+paper_trader+coherence verte (551 passed), suite complète relancée avant déploiement.
+`paper_trader.py` -- 2 nouveaux tests (`test_risk_guard.py` : coupe-circuit levé après reset manuel, isolation stricte entre poches), suite complète verte (8774 passed, 17 skipped), déployé (commit `eba2256a`). Blocage résiduel de la poche legacy "scalping" (hérité du reset manuel fait AVANT ce correctif, jamais rétroactif) levé manuellement une fois en prod (`risk_guard.resume_new_entries("scalping", by="manual_fix")`) -- confirmé débloquée.
 
 ------------------------------------------------------------
 
