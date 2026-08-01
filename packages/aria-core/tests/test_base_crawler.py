@@ -26,6 +26,93 @@ def test_extract_ignores_short_address():
     assert bc._extract_token_contracts(_payload(["0x1234"])) == []
 
 
+# ── _fetch_gt: shared throttle + optional API key (08/01, real bug) ─────────
+
+class _FakeGTResponse:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+class _FakeGTClient:
+    def __init__(self, captured_headers):
+        self._captured_headers = captured_headers
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get(self, url, headers=None):
+        self._captured_headers.append(headers)
+        return _FakeGTResponse(200, {"data": []})
+
+
+@pytest.mark.asyncio
+async def test_fetch_gt_calls_shared_throttle(monkeypatch):
+    """08/01 -- real bug found live (workflow research into a persistent
+    GeckoTerminal 429 block): this was a THIRD, fully uncoordinated
+    GeckoTerminal client -- must now respect the same shared throttle as
+    services/geckoterminal.py and services/ohlcv.py."""
+    throttle_calls = []
+
+    async def fake_throttle():
+        throttle_calls.append(1)
+
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.wait_for_shared_rate_limit", fake_throttle,
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "aria_core.base_crawler.httpx.AsyncClient", lambda **kw: _FakeGTClient(captured),
+    )
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+
+    await bc._fetch_gt("/networks/base/new_pools")
+
+    assert throttle_calls == [1]
+
+
+async def _fake_throttle_noop():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_gt_sends_api_key_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.wait_for_shared_rate_limit", _fake_throttle_noop,
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "aria_core.base_crawler.httpx.AsyncClient", lambda **kw: _FakeGTClient(captured),
+    )
+    monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "test-key-123")
+
+    await bc._fetch_gt("/networks/base/new_pools")
+
+    assert captured[0]["x-cg-demo-api-key"] == "test-key-123"
+
+
+@pytest.mark.asyncio
+async def test_fetch_gt_no_api_key_header_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.wait_for_shared_rate_limit", _fake_throttle_noop,
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "aria_core.base_crawler.httpx.AsyncClient", lambda **kw: _FakeGTClient(captured),
+    )
+    monkeypatch.delenv("COINGECKO_DEMO_API_KEY", raising=False)
+
+    await bc._fetch_gt("/networks/base/new_pools")
+
+    assert "x-cg-demo-api-key" not in captured[0]
+
+
 @pytest.mark.asyncio
 async def test_discover_dedupes_across_paths():
     a1, a2 = "0x" + "a" * 40, "0x" + "b" * 40

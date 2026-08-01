@@ -13,6 +13,7 @@ Read-only, no signing.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 
 import httpx
@@ -59,11 +60,32 @@ def _extract_token_contracts(payload: object) -> list[str]:
 
 
 async def _fetch_gt(path: str) -> object | None:
-    """GET GeckoTerminal (graceful degradation: None on any error, never blocking)."""
+    """GET GeckoTerminal (graceful degradation: None on any error, never blocking).
+
+    08/01 -- real bug found live (workflow research into a persistent
+    GeckoTerminal 429 block that survived every other fix): this module is a
+    THIRD, fully independent GeckoTerminal client (besides services/
+    geckoterminal.py and services/ohlcv.py) -- it never sent
+    COINGECKO_DEMO_API_KEY (keyless tier, documented as a variable
+    5-15 req/min ceiling shared across the WHOLE IP, not the fixed ~30/min
+    Demo-key tier) AND never coordinated with the shared throttle
+    (wait_for_shared_rate_limit) that every other GeckoTerminal caller in
+    this codebase already respects -- same incident class as the 21/07
+    dual-client finding in CLAUDE.md ("deux clients GeckoTerminal
+    independants... jamais coordonnes entre eux"). Called every discovery
+    cycle, this alone could account for sustained pressure independent of
+    the throttle fixes already applied elsewhere."""
+    from aria_core.services.geckoterminal import wait_for_shared_rate_limit
+
+    await wait_for_shared_rate_limit()
     url = f"{_GT_BASE}{path}"
+    headers = {"Accept": "application/json"}
+    api_key = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip()
+    if api_key:
+        headers["x-cg-demo-api-key"] = api_key
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(url, headers={"Accept": "application/json"})
+            r = await client.get(url, headers=headers)
         if r.status_code != 200:
             return None
         return r.json()
