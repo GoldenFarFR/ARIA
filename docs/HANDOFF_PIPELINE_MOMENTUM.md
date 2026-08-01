@@ -7,11 +7,11 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
-[CODE] Sujet    : services/ohlcv.py n'envoyait jamais la clé COINGECKO_DEMO_API_KEY -- tournait en tier anonyme
+[DEPLOYE] Sujet  : services/ohlcv.py n'envoyait jamais la clé COINGECKO_DEMO_API_KEY -- tournait en tier anonyme
 Date : 2026.08.01 / Probleme : trouvé en direct pendant le diagnostic d'un ralentissement (opérateur : "sa trade beaucoup moin depuis 14h", rafale 429 GeckoTerminal). `services/geckoterminal.py` envoie correctement `x-cg-demo-api-key` depuis le 18/07, mais `services/ohlcv.py` (client SÉPARÉ, celui qui génère la majorité des 429 -- 55/87 sur un échantillon de 20min) ne l'a jamais fait : `headers={"Accept": "application/json"}` en dur, jamais mis à jour lors de l'ajout de l'authentification. Tournait donc au débit anonyme (~10 req/min, chiffre vérifié lors de l'incident du 19/07) au lieu du débit Demo authentifié (~30 req/min) que son propre throttle partagé (`use_shared_throttle=True`) visait déjà.
 **Fausse piste évitée en cours de route** : le dashboard CoinGecko de l'opérateur affichait "100 req/min" pour son palier Démo -- interprété à tort comme s'appliquant à GeckoTerminal. Le code contient déjà, depuis le 19/07, l'avertissement exact de cette confusion (un incident réel identique avait produit 79% d'échec 429 en prod pendant 1h+ sur cette même fausse hypothèse) : GeckoTerminal `/onchain` a sa PROPRE grille de débit, distincte du tableau général CoinGecko -- ~30 req/min avec clé Demo, ~10/min sans. Le calibrage existant (21 req/min, 70% de marge sur 30) reste donc correct et n'a pas été changé.
 Solution : `services/ohlcv.py::_get_json` construit désormais les headers avec `x-cg-demo-api-key` si `COINGECKO_DEMO_API_KEY` est configuré (même pattern que `geckoterminal.py`), jamais inventé si absent. Clé confirmée présente en prod (vérifié via le conteneur, valeur jamais affichée). Effet attendu : ce module passe du débit anonyme au débit Demo, un gain réel (~3x) sur le service qui produisait le plus de 429 -- pas un remède miracle, mais un vrai bug corrigé.
-`services/ohlcv.py` -- 2 nouveaux tests (`test_ohlcv_client.py` : header envoyé si clé configurée, absent sinon), suite ohlcv+momentum_entry+scalping_variants+coherence verte (467 passed), suite complète relancée avant déploiement.
+`services/ohlcv.py` -- 2 nouveaux tests (`test_ohlcv_client.py` : header envoyé si clé configurée, absent sinon), suite complète verte (8765 passed, 17 skipped), déployé (commit `c937956e`).
 
 ------------------------------------------------------------
 
