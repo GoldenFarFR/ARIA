@@ -94,7 +94,16 @@ def _api_key() -> str | None:
 # 50/min = 45/min = 1.333s. The keyless tier (no key) has no separately
 # confirmed figure -- reuses the same cautious default throttle (fail-safe:
 # keyless is structurally not more generous than keyed).
-_MIN_INTERVAL = 1.333
+#
+# 02/08 -- tightened 45->40/min (1.333s->1.5s), operator's explicit call
+# after a real cluster of 18 HTTP 500s (not 429s -- a server-side error, not
+# our own rate-limit being exceeded) observed within ~4 minutes on
+# /v1/dex/token/pools. Lowering our own call rate doesn't directly explain a
+# 500, but is a reasonable precaution if CMC's backend is itself strained by
+# aggregate load across its clients -- disclosed honestly: this may not fix
+# the root cause if it's a pure transient CMC-side outage, revisit if 500s
+# keep recurring after this change.
+_MIN_INTERVAL = 1.5
 _last_request = 0.0
 _throttle_lock = asyncio.Lock()
 
