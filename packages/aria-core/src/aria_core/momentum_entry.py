@@ -2601,6 +2601,31 @@ async def evaluate_hard_gates(
     else:
         effective_min_liquidity = _MIN_LIQUIDITY_USD
     if liquidity_usd < effective_min_liquidity:
+        # 02/08 -- real bug found live (B20 diligence workflow, then confirmed
+        # the true scope is broader): DexScreener can omit the "liquidity"
+        # key entirely on a very-freshly-indexed pool (any token standard,
+        # not specific to any one), which dexscreener.py's parser turns into
+        # a plain 0.0 for backward compatibility on the widely-used
+        # `liquidity_usd` field. Without this check, that reads identically
+        # to genuinely-zero liquidity here -- rejecting a real, possibly
+        # substantial pool for the wrong reason. Still fail-closed (never a
+        # fabricated liquidity figure, same doctrine as the rest of this
+        # pipeline) -- only the REASON changes, so the operator/logs can tell
+        # "real scam-floor rejection" apart from "DexScreener hasn't caught
+        # up yet, retry later."
+        if best.liquidity_unknown:
+            await momentum_rejection_cache.record_rejection(
+                contract, chain, "liquidity_data_unavailable", liquidity_tier=liquidity_tier,
+            )
+            return None, None, {
+                "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                "price": best.price_usd,
+                "reasons": [
+                    "liquidité inconnue (DexScreener n'a pas encore indexé ce pool) -- "
+                    "rejet fail-closed, jamais une valeur fabriquée, à revoir plus tard"
+                ],
+                "hold_reason": "liquidity_data_unavailable",
+            }
         await momentum_rejection_cache.record_rejection(
             contract, chain, "insufficient_liquidity", liquidity_tier=liquidity_tier,
         )

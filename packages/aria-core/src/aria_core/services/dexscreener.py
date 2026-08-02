@@ -115,6 +115,18 @@ class PairSnapshot:
     pair_address: str = ""
     dex_id: str = ""
     liquidity_usd: float = 0.0
+    # 02/08 -- real bug found live (B20 diligence workflow): a pool's
+    # "liquidity" key can be entirely ABSENT from DexScreener's JSON (not
+    # "0" -- the key itself missing), confirmed on very-freshly-created pools
+    # (indexing lag, any quote token -- NOT specific to any one token
+    # standard despite an initial theory blaming native-ETH-quoted pools).
+    # `liquidity_usd` above stays a plain float (0.0 default, unchanged --
+    # 60+ call sites across this codebase compare it numerically, never
+    # touched here) for backward compatibility; this flag lets a caller that
+    # cares distinguish "genuinely zero liquidity" from "DexScreener hasn't
+    # indexed this pool's liquidity yet" without a risky type change on the
+    # widely-used field itself.
+    liquidity_unknown: bool = False
     volume_24h_usd: float = 0.0
     price_usd: float = 0.0
     price_change_24h: float = 0.0
@@ -200,6 +212,10 @@ def _safe_float(value: object) -> float | None:
 
 def _parse_pair(raw: dict) -> PairSnapshot:
     liq = raw.get("liquidity") or {}
+    # 02/08 -- absence, not just a zero value: the raw "liquidity" object (or
+    # its "usd" key) genuinely missing from the API response, distinct from a
+    # present-but-actually-zero value (which would read as {"usd": 0, ...}).
+    liquidity_unknown = not isinstance(raw.get("liquidity"), dict) or "usd" not in raw.get("liquidity", {})
     vol = raw.get("volume") or {}
     txns = raw.get("txns") or {}
     h24 = txns.get("h24") if isinstance(txns, dict) else {}
@@ -213,6 +229,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
         pair_address=str(raw.get("pairAddress") or ""),
         dex_id=str(raw.get("dexId") or ""),
         liquidity_usd=float(liq.get("usd") or 0),
+        liquidity_unknown=liquidity_unknown,
         volume_24h_usd=float(vol.get("h24") or 0),
         price_usd=float(raw.get("priceUsd") or 0),
         price_change_24h=float(change.get("h24") or 0),

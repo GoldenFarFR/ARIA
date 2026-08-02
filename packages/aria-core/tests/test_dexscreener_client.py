@@ -109,6 +109,69 @@ async def test_fetch_token_pairs_parses_real_shape(monkeypatch):
     assert pairs[0].pair_address == "0xpool"
     assert pairs[0].liquidity_usd == 50000.0
     assert pairs[0].price_usd == 1.5
+    assert pairs[0].liquidity_unknown is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_pairs_liquidity_key_absent_flagged_unknown(monkeypatch):
+    """02/08 -- real bug found live: DexScreener can omit the "liquidity" key
+    entirely on a very-freshly-indexed pool (any token standard, confirmed
+    NOT specific to B20 despite an initial theory). liquidity_usd stays 0.0
+    (unchanged, 60+ call sites compare it numerically) but liquidity_unknown
+    must be True so a caller that cares can distinguish this from a
+    genuinely-empty pool."""
+    url = "https://api.dexscreener.com/token-pairs/v1/base/0xtoken"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "pairAddress": "0xpool", "dexId": "uniswap",
+                        # no "liquidity" key at all
+                        "volume": {"h24": 2_000_000.0}, "priceUsd": "0.01",
+                        "baseToken": {"symbol": "TOK"}, "quoteToken": {"symbol": "WETH"},
+                    }
+                ],
+            )
+        },
+    )
+
+    pairs = await fetch_token_pairs("0xtoken", chain="base")
+
+    assert len(pairs) == 1
+    assert pairs[0].liquidity_usd == 0.0
+    assert pairs[0].liquidity_unknown is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_pairs_liquidity_genuinely_zero_not_flagged_unknown(monkeypatch):
+    """The other side of the distinction: a real, present "usd": 0 must NOT
+    be flagged unknown -- a genuinely empty pool is a real, meaningful 0."""
+    url = "https://api.dexscreener.com/token-pairs/v1/base/0xtoken"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                [
+                    {
+                        "pairAddress": "0xpool", "dexId": "uniswap",
+                        "liquidity": {"usd": 0.0},
+                        "volume": {"h24": 0.0}, "priceUsd": "0.01",
+                        "baseToken": {"symbol": "TOK"}, "quoteToken": {"symbol": "WETH"},
+                    }
+                ],
+            )
+        },
+    )
+
+    pairs = await fetch_token_pairs("0xtoken", chain="base")
+
+    assert len(pairs) == 1
+    assert pairs[0].liquidity_usd == 0.0
+    assert pairs[0].liquidity_unknown is False
 
 
 @pytest.mark.asyncio

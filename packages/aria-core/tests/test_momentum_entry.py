@@ -2923,6 +2923,33 @@ async def test_evaluate_hard_gates_rejects_on_liquidity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_evaluate_hard_gates_liquidity_unknown_gets_dedicated_reason(monkeypatch):
+    """02/08 -- real bug found live: DexScreener can omit the "liquidity" key
+    entirely on a very-freshly-indexed pool, which reads as liquidity_usd=0.0
+    downstream -- same numeric floor rejection as a genuinely-empty pool, but
+    the wrong reason (a real, possibly substantial pool rejected as if it
+    were confirmed scam-thin). Still fail-closed (rejected either way, never
+    a fabricated liquidity figure) -- only the hold_reason differs so the
+    operator/logs can tell the two cases apart."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, liquidity_unknown=True)])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "liquidity_data_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_genuinely_zero_liquidity_keeps_original_reason(monkeypatch):
+    """The other side of the distinction: liquidity_unknown=False (the
+    default) must keep producing "insufficient_liquidity", never the new
+    dedicated reason -- confirms the fix is additive, not a behavior change
+    for the overwhelming majority of real rejections."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=0.0, liquidity_unknown=False)])
+    best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
+    assert best is None and reason is None
+    assert hold["hold_reason"] == "insufficient_liquidity"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_hard_gates_none_when_no_liquid_pair(monkeypatch):
     _patch_pipeline(monkeypatch, pairs=[])
     best, reason, hold = await me.evaluate_hard_gates(CONTRACT, "base")
