@@ -410,7 +410,15 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # covers both the legacy "scalping" name (gate off) and scalping_v1..v6
     # (gate on).
     wallet = order.get("wallet") or ""
-    watch_mode = "scalping" if wallet == "swing" or paper_trader.is_scalping_pocket(wallet) else "standard"
+    # 02/08 -- "megacap" pocket added to the OR chain, deliberately NOT a
+    # replacement of this condition by uses_fine_rsi_confirmation(): this
+    # line already carries the is_scalping_pocket() fix from earlier the
+    # same day (see comment above), and a blind textual substitution here
+    # would have silently dropped that clause again, reintroducing the exact
+    # regression it just fixed for scalping_v1..v6.
+    watch_mode = "scalping" if (
+        wallet == "swing" or wallet == "megacap" or paper_trader.is_scalping_pocket(wallet)
+    ) else "standard"
     try:
         candles = await momentum_entry._fetch_candles(
             pair.pair_address, order["chain"], contract=order["contract"], pair=pair, mode=watch_mode,
@@ -823,9 +831,20 @@ def _order_uses_rsi_divergence_check(order: dict) -> bool:
     order -- pulled out standalone so the per-drain selection below (which
     needs to know this BEFORE deciding whether to spend one of its
     ``MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN`` slots on it) doesn't
-    duplicate the condition."""
+    duplicate the condition.
+
+    02/08 -- ``wallet == "swing"`` replaced by ``uses_fine_rsi_confirmation()``
+    (full substitution, safe here: this site never had an ``is_scalping_
+    pocket()`` clause to preserve, unlike ``check_rsi_divergence_watching_
+    order``'s ``watch_mode``). Local import (module-level would create a
+    cycle, same doctrine as every other ``paper_trader`` import in this
+    file)."""
+    from aria_core import paper_trader
+
     sig = json.loads(order.get("signal_json") or "{}")
-    return sig.get("limit_order_reason") == "rsi_divergence_pending" or order.get("wallet") == "swing"
+    return sig.get("limit_order_reason") == "rsi_divergence_pending" or paper_trader.uses_fine_rsi_confirmation(
+        order.get("wallet") or "swing"
+    )
 
 
 def _select_due_rsi_watch_order_ids(orders: list[dict], now: float) -> set[int]:
@@ -963,7 +982,12 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         # value reused at all 3 sites) via paper_trader.is_scalping_pocket(),
         # the single source of truth.
         _log_wallet = order.get("wallet") or ""
-        log_mode = "scalping" if _log_wallet == "swing" or paper_trader.is_scalping_pocket(_log_wallet) else "standard"
+        # 02/08 -- "megacap" added to the OR chain, same reasoning as
+        # check_rsi_divergence_watching_order's own comment: never a blind
+        # replacement of this condition, is_scalping_pocket() stays.
+        log_mode = "scalping" if (
+            _log_wallet == "swing" or _log_wallet == "megacap" or paper_trader.is_scalping_pocket(_log_wallet)
+        ) else "standard"
         if uses_rsi_divergence_check:
             # 01/08 -- MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN's own comment:
             # not this pass's turn in the rotation -- skip (same as 'wait',
@@ -1060,6 +1084,8 @@ def _wallet_position_cap(paper_trader_module, wallet: str) -> int | None:
     return {
         "swing": paper_trader_module.MAX_POSITIONS_SWING,
         "vc": paper_trader_module.MAX_POSITIONS_VC,
+        # 02/08 -- "megacap" pocket, same doctrine as swing/vc above.
+        "megacap": paper_trader_module.MAX_POSITIONS_MEGACAP,
     }.get(wallet, paper_trader_module.MAX_POSITIONS)
 
 
@@ -1264,7 +1290,7 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     return pos
 
 
-_POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC"}
+_POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC", "megacap": "MEGACAP"}
 
 # 29/07 -- operator request: the alert never stated which candle timeframe
 # the setup was analyzed on -- ``momentum_entry.evaluate_momentum_entry``'s
@@ -1277,6 +1303,10 @@ _TIMEFRAME_LABEL = {
     "scalping": "bougies 15-30min (mode scalping)",
     "swing": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
     "vc": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
+    # 02/08 -- "megacap" pocket, mode="standard" like swing/vc -- without this
+    # entry, .get() (no default) silently drops the "Analyse sur ..." line
+    # from the alert (found by a validation workflow, ronde 6).
+    "megacap": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
 }
 
 
@@ -1314,7 +1344,13 @@ def format_limit_order_placed_alert(order: dict) -> str:
     (see that function's own docstring) -- ``name`` (token symbol, on-chain
     metadata an attacker can set freely) MUST be HTML-escaped since an
     unescaped ``<``/``>``/``&`` anywhere in the text would break Telegram's
-    HTML parser for the whole message, not just the bolded title."""
+    HTML parser for the whole message, not just the bolded title.
+
+    02/08 -- local ``paper_trader`` import added (this function never had one
+    before -- module-level would create a cycle, same doctrine as every other
+    ``paper_trader`` import in this file)."""
+    from aria_core import paper_trader
+
     name = html.escape(order.get("symbol") or (order.get("contract") or "")[:10], quote=False)
     target = order["target_price"]
     try:
@@ -1365,7 +1401,7 @@ def format_limit_order_placed_alert(order: dict) -> str:
         # trigger, same misleading gap already fixed once for the
         # rsi_divergence_pending case (29/07, "elle cible le prix actuel,
         # étrange").
-        if order.get("wallet") == "swing":
+        if paper_trader.uses_fine_rsi_confirmation(order.get("wallet") or "swing"):
             lines.append(
                 "Une fois dans cette zone, ARIA cherche une divergence RSI sur bougies fines "
                 "(15-30 min) avant d'acheter -- pas un simple niveau de prix atteint."

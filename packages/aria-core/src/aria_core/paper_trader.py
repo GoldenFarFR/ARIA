@@ -57,6 +57,11 @@ MAX_POSITIONS = 30        # cash cushion + diversification -- still read by the 
 MAX_POSITIONS_VC = 5
 MAX_POSITIONS_SWING = 15
 MAX_POSITIONS_SCALPING = None  # unlimited, same doctrine as the scalping bypass above
+
+# 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established tokens,
+# mcap>=100M$) -- one position per listed token, matches the list size. See
+# fixed_watchlist_pocket_enabled() below for the gate.
+MAX_POSITIONS_MEGACAP = 10
 MODE = "trading"
 
 # 08/01 -- real bug found live (operator observation: "no gain accumulation
@@ -2409,6 +2414,13 @@ def _strategy_label(pos: dict) -> str:
         if wallet and wallet.startswith("scalping_v"):
             return wallet
         return "scalping"
+    # 02/08 -- same UX gap as the scalping_v1..v6 fix above, found the same
+    # day for the new "megacap" pocket: it shares mode="standard"/
+    # strategy="momentum" with swing, so without this it would silently show
+    # "swing trading" in every alert -- exactly what this A/B comparison
+    # pocket exists to be distinguishable from.
+    if pos.get("wallet") == "megacap":
+        return "megacap"
     return "swing trading"
 
 
@@ -3249,6 +3261,26 @@ def vc_pocket_sourcing_enabled() -> bool:
     )
 
 
+def fixed_watchlist_pocket_enabled() -> bool:
+    """02/08 -- the "megacap" pocket (fixed_watchlist.py, 10 established
+    tokens, mcap>=100M$) -- an ADDITIVE A/B comparison arm against the 6
+    scan-large scalping pockets, never a replacement for them (operator's
+    explicit call after a workflow-audited finding that a full substitution
+    would mechanically hurt the existing pipeline). Deliberately SEPARATE
+    from scalping_variants_enabled() -- flipping this never touches the 6
+    existing pockets or their sourcing.
+
+    Requires multi_pocket_sourcing_enabled() to also be on (same doctrine as
+    vc_pocket_sourcing_enabled() above) -- verified true in prod today, no
+    practical consequence, but noted here explicitly so a future session
+    doesn't have to rediscover the same ambiguity already lived once with
+    scalping_variants_enabled(). OFF by default (fail-closed, same idiom as
+    every other gate in this file)."""
+    return os.environ.get("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def scalping_variants_enabled() -> bool:
     """08/01, operator's explicit call: swaps the single RSI-divergence
     scalping pocket for 5 independent mean-reversion variants (V1-V5,
@@ -3299,6 +3331,19 @@ def is_scalping_pocket(wallet: str) -> bool:
     return wallet == "scalping" or wallet in _SCALPING_VARIANT_WALLETS
 
 
+def uses_fine_rsi_confirmation(wallet: str) -> bool:
+    """02/08 -- pockets that reconfirm a limit order by fine-grained
+    (15-30min) RSI divergence once it reaches its target zone, instead of a
+    plain price-level trigger (31/07, originally swing-only). True for swing
+    and any future mode="standard" pocket EXCEPT vc (long-horizon conviction
+    bets, no entry precision needed). Single source of truth -- avoids
+    repeating the class of bug already documented 3x in limit_orders.py for a
+    new pocket name (literal `wallet == "swing"` comparisons scattered across
+    the file, some already fixed the same day this function was added, some
+    fixed by this very function)."""
+    return wallet != "vc" and not is_scalping_pocket(wallet)
+
+
 def all_pocket_wallets() -> tuple[str, ...]:
     """08/01 -- single source of truth for every pocket wallet that can hold
     real (paper) capital right now, given scalping_variants_enabled()'s
@@ -3308,10 +3353,18 @@ def all_pocket_wallets() -> tuple[str, ...]:
     considering the chantier done, not after): without this, the macro
     breaker would silently sum only 3 of 7 pockets' equity, and /riskresume
     would have no way to lift a circuit breaker on scalping_v1..v5, leaving
-    them blocked until the next weekly reset."""
+    them blocked until the next weekly reset.
+
+    02/08 -- "megacap" appended when fixed_watchlist_pocket_enabled() is on,
+    independent of scalping_variants_enabled()'s own state (additive to both
+    branches below)."""
     if scalping_variants_enabled():
-        return (*_SCALPING_VARIANT_WALLETS, "swing", "vc")
-    return ("scalping", "swing", "vc")
+        base = (*_SCALPING_VARIANT_WALLETS, "swing", "vc")
+    else:
+        base = ("scalping", "swing", "vc")
+    if fixed_watchlist_pocket_enabled():
+        base = (*base, "megacap")
+    return base
 
 
 async def all_reporting_wallets() -> tuple[str, ...]:
@@ -5652,11 +5705,32 @@ async def _run_paper_cycle_locked(
             weekly_context=weekly_context, current_regime=current_regime,
         )
 
+        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established
+        # tokens): built unconditionally, same pattern as vc_candidates/
+        # vc_analyzer just above -- build_scalping_pocket_entries() is
+        # structurally scalping-only (every entry it returns hardcodes
+        # mode="scalping") and cannot emit a mode="standard" entry, so this
+        # pocket is NOT routed through it. Deliberately never touches that
+        # function.
+        from aria_core import fixed_watchlist
+
+        megacap_rows = await fixed_watchlist.list_watchlist_candidates()
+        megacap_candidates = [r["contract"] for r in megacap_rows]
+        megacap_chain_by_contract = {
+            **_momentum_chain_by_contract,
+            **{r["contract"]: r["chain"] for r in megacap_rows},
+        }
+        megacap_analyzer = _default_momentum_analyzer(
+            megacap_chain_by_contract, weekly_context=weekly_context,
+            current_regime=current_regime, mode="standard",
+        )
+
         # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)
         for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
             *scalping_pocket_entries,
             ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
             ("vc", vc_candidates, vc_analyzer, "standard", MAX_POSITIONS_VC),
+            ("megacap", megacap_candidates, megacap_analyzer, "standard", MAX_POSITIONS_MEGACAP),
         ):
             # 27/07 -- Phase 3: independent per-pocket risk state -- SUPERSEDES
             # the single ``risk_state`` snapshot computed above (that one
@@ -5700,6 +5774,10 @@ async def _run_paper_cycle_locked(
             if pocket_wallet == "vc" and not vc_pocket_sourcing_enabled():
                 continue
 
+            # 02/08 -- see fixed_watchlist_pocket_enabled()'s own docstring.
+            if pocket_wallet == "megacap" and not fixed_watchlist_pocket_enabled():
+                continue
+
             opened_positions, _ = await _open_new_entries_for_wallet(
                 pocket_wallet, pocket_candidates, pocket_analyzer,
                 price_lookup=price_lookup, notifier=notifier, max_new=max_new,
@@ -5713,7 +5791,7 @@ async def _run_paper_cycle_locked(
         # momentum_candidates is walked TWICE (once per pocket sharing it,
         # scalping+swing) -- reflects the real evaluation count, not just the
         # distinct-candidate count, for this purely informational log line.
-        total_candidates_evaluated = 2 * len(momentum_candidates) + len(vc_candidates)
+        total_candidates_evaluated = 2 * len(momentum_candidates) + len(vc_candidates) + len(megacap_candidates)
     else:
         # gate OFF (default), OR a caller explicitly provided its own
         # candidates/analyzer: EXACT historical single-pocket behavior --

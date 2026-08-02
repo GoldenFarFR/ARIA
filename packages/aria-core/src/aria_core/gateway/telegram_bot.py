@@ -598,6 +598,8 @@ async def _feedback_reply() -> str:
         "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
         "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
         "scalping_v5": "Scalping V5 (VWAP trailing)",
+        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established tokens).
+        "megacap": "Megacap fixe",
     }
     wallets = await paper_trader.all_reporting_wallets()
     pocket_lines = []

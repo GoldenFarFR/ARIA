@@ -1059,6 +1059,31 @@ def _get_cached_security(chain: str, contract: str):
     return security
 
 
+# 02/08 -- Base-only, exact lowercase match, hardcoded -- contains the blast
+# radius to these 2 precise addresses, never shared with
+# is_recognized_reference_asset (the shared registry, also used by
+# paper_trader_risk.py and acp_onchain_scan.py -- deliberately not widened).
+# Basescan diligence: AAVE and VIRTUAL have mint/burn gated to the canonical
+# Base bridge (0x4200...0010), same pattern already exempted for
+# cbBTC/cbETH/WBTC in smart_money.py. Covers owner_change_balance (an
+# unconditional veto below, NEVER arbitrated any other way) AND
+# mintable/hidden_owner (verified True for these 2 addresses this session) --
+# without this, a rejection on any of these 3 flags GLOBALLY blacklists the
+# contract (momentum_blacklist, no per-pocket scope), blocking even a future
+# manual /vc or any other pocket. Explicit operator decision (02/08), taken
+# after clarifying the real subject was modifying a guardrail (born from a
+# real capital-loss incident), not AAVE/VIRTUAL's legitimacy.
+# TO REVALIDATE PERIODICALLY (backlog item) -- these powers are mutable.
+_ESTABLISHED_TOKEN_SECURITY_ALLOWLIST_BASE: frozenset[str] = frozenset({
+    "0x63706e401c06ac8513145b7687a14804d17f814b",  # AAVE
+    "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b",  # VIRTUAL
+})
+
+
+def _is_allowlisted_established_token(chain: str, address: str | None) -> bool:
+    return chain == "base" and (address or "").lower() in _ESTABLISHED_TOKEN_SECURITY_ALLOWLIST_BASE
+
+
 async def _evaluate_security_verdict(security, chain: str = "base") -> tuple[bool, str, str]:
     """Shared verdict logic on an already-fetched ``TokenSecurity`` -- extracted
     (29/07, Item #212) so both the Solana synchronous path and the EVM
@@ -1112,7 +1137,7 @@ async def _evaluate_security_verdict(security, chain: str = "base") -> tuple[boo
     # directly steal funds (the owner changes a wallet's balance), not a
     # conviction signal. Zero extra call cost (same GoPlus read already done
     # above).
-    if security.owner_change_balance:
+    if security.owner_change_balance and not _is_allowlisted_established_token(chain, security.address):
         return False, "owner peut modifier le solde d'un wallet (GoPlus)", "honeypot_rejected"
     # Item #234 (30/07) -- same family as owner_change_balance above: a DORMANT
     # owner-controlled lever that looks clean at scan time but can be pulled
@@ -1143,6 +1168,10 @@ async def _evaluate_security_verdict(security, chain: str = "base") -> tuple[boo
         )
         for category, flagged, raw_reason in pattern_flags:
             if not flagged:
+                continue
+            if category in ("mintable", "hidden_owner") and _is_allowlisted_established_token(
+                chain, security.address
+            ):
                 continue
             verdict = await arbitrate_flag(security.address, chain, category, raw_reason=raw_reason)
             if not verdict.resolved or verdict.confirmed is not False:

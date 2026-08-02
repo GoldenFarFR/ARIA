@@ -1106,6 +1106,120 @@ async def test_honeypot_verdict_owner_change_balance_rejects():
 
 
 @pytest.mark.asyncio
+async def test_owner_change_balance_allowlisted_established_token_clears():
+    """02/08 -- AAVE/VIRTUAL allowlist: owner_change_balance is normally an
+    UNCONDITIONAL veto (no arbitration, unlike mintable/hidden_owner below) --
+    the allowlist is the only way an owner_change_balance=True token can ever
+    clear. Basescan diligence: both have mint/burn gated to the canonical
+    Base bridge, same pattern as the already-exempted cbBTC/cbETH/WBTC."""
+    security = FakeSecurity(
+        owner_change_balance=True,
+        address="0x63706e401c06ac8513145b7687a14804d17f814b",  # AAVE
+    )
+    clear, _reason, code = await me._evaluate_security_verdict(security, chain="base")
+    assert clear is True
+    assert code == "honeypot_clear"
+
+
+@pytest.mark.asyncio
+async def test_owner_change_balance_non_allowlisted_address_still_rejects():
+    """Negative case, proves the allowlist scope is minimal -- a random
+    address with the exact same flag is still rejected exactly as before."""
+    security = FakeSecurity(
+        owner_change_balance=True,
+        address="0x000000000000000000000000000000deadbeef",
+    )
+    clear, reason, code = await me._evaluate_security_verdict(security, chain="base")
+    assert clear is False
+    assert "solde" in reason.lower()
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_owner_change_balance_allowlist_scoped_to_base_only():
+    """The allowlist is Base-only -- the same address on a different chain
+    string must NOT be exempted (defense in depth, matches the plan's own
+    ``chain == "base"`` guard)."""
+    security = FakeSecurity(
+        owner_change_balance=True,
+        address="0x63706e401c06ac8513145b7687a14804d17f814b",  # AAVE
+    )
+    clear, _reason, code = await me._evaluate_security_verdict(security, chain="ethereum")
+    assert clear is False
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
+async def test_mintable_allowlisted_established_token_skips_arbitration(monkeypatch):
+    """02/08 -- VIRTUAL is confirmed is_mintable=True this session (real
+    GoPlus call) -- the allowlist must skip arbitrate_flag() entirely for
+    this category on this address (never even call it), not just override
+    its verdict."""
+    from aria_core.skills import source_code_audit as sca
+
+    called = {"hit": False}
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        called["hit"] = True
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="should never be reached")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    security = FakeSecurity(
+        is_mintable=True,
+        address="0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b",  # VIRTUAL
+    )
+    clear, _reason, code = await me._evaluate_security_verdict(security, chain="base")
+    assert clear is True
+    assert code == "honeypot_clear"
+    assert called["hit"] is False
+
+
+@pytest.mark.asyncio
+async def test_hidden_owner_allowlisted_established_token_skips_arbitration(monkeypatch):
+    """Same as mintable above, for hidden_owner -- both confirmed True for
+    AAVE/VIRTUAL this session."""
+    from aria_core.skills import source_code_audit as sca
+
+    called = {"hit": False}
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        called["hit"] = True
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="should never be reached")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    security = FakeSecurity(
+        hidden_owner=True,
+        address="0x63706e401c06ac8513145b7687a14804d17f814b",  # AAVE
+    )
+    clear, _reason, code = await me._evaluate_security_verdict(security, chain="base")
+    assert clear is True
+    assert code == "honeypot_clear"
+    assert called["hit"] is False
+
+
+@pytest.mark.asyncio
+async def test_allowlist_never_covers_flags_outside_its_minimal_scope(monkeypatch):
+    """Proves the allowlist scope stays minimal (plan §7's own requirement):
+    a flag NOT in {"mintable", "hidden_owner"} -- e.g. is_blacklisted -- on
+    an allowlisted address still goes through arbitrate_flag() normally,
+    never silently exempted."""
+    from aria_core.skills import source_code_audit as sca
+
+    async def fake_arbitrate(contract, chain, category, *, raw_reason=""):
+        assert category == "is_blacklisted"
+        return sca.ArbitrationVerdict(resolved=True, confirmed=True, reason="blacklist function found")
+
+    monkeypatch.setattr(sca, "arbitrate_flag", fake_arbitrate)
+    security = FakeSecurity(
+        is_blacklisted=True,
+        address="0x63706e401c06ac8513145b7687a14804d17f814b",  # AAVE, allowlisted for other flags
+    )
+    clear, _reason, code = await me._evaluate_security_verdict(security, chain="base")
+    assert clear is False
+    assert code == "honeypot_rejected"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_security_verdict_mintable_confirmed_by_llm_rejects(monkeypatch):
     """Item #234 follow-up (30/07) -- ``mintable`` joins the arbitrated
     pattern_flags family (was defined in _CATEGORY_LABELS since the original

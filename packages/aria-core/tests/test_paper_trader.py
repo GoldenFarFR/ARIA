@@ -137,6 +137,7 @@ C = "0x" + "c" * 40
 D = "0x" + "d" * 40
 E = "0x" + "e" * 40
 F = "0x" + "f" * 40
+G = "0x" + "1" * 40
 
 
 async def _no_depeg() -> float | None:
@@ -185,6 +186,13 @@ def tmp_db(tmp_path, monkeypatch):
     from aria_core import manual_candidates
 
     monkeypatch.setattr(manual_candidates, "DB_PATH", str(tmp_path / "manual_candidates.db"))
+    # 02/08 -- same DB_PATH-computed-once-at-import trap as the others above:
+    # the multi-pocket loop now also queries fixed_watchlist.
+    # list_watchlist_candidates() unconditionally (same doctrine as
+    # vc_candidates) for the "megacap" pocket.
+    from aria_core import fixed_watchlist
+
+    monkeypatch.setattr(fixed_watchlist, "DB_PATH", str(tmp_path / "fixed_watchlist.db"))
     return tmp_path
 
 
@@ -3686,6 +3694,18 @@ def test_strategy_label_legacy_scalping_wallet_unchanged():
     assert pt._strategy_label({"mode": "scalping", "strategy": "momentum", "wallet": "scalping"}) == "scalping"
 
 
+def test_strategy_label_megacap_pocket_shows_megacap_not_swing_trading():
+    """02/08 -- same UX gap as the scalping_v1..v6 fix above, found the same
+    day for the new "megacap" pocket: it shares mode="standard"/
+    strategy="momentum" with swing, so without this fix every megacap alert
+    would silently say "swing trading"."""
+    assert pt._strategy_label({"mode": "standard", "strategy": "momentum", "wallet": "megacap"}) == "megacap"
+
+
+def test_strategy_label_swing_still_swing_trading_not_confused_with_megacap():
+    assert pt._strategy_label({"mode": "standard", "strategy": "momentum", "wallet": "swing"}) == "swing trading"
+
+
 def test_format_buy_alert_shows_scalping_label():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000, "mode": "scalping"}
@@ -5537,6 +5557,109 @@ async def test_multi_pocket_gate_on_vc_pocket_sources_bonding_candidates(tmp_db,
 
 
 @pytest.mark.asyncio
+async def test_multi_pocket_gate_on_megacap_pocket_sources_from_fixed_watchlist(tmp_db, monkeypatch):
+    """02/08 -- the "megacap" pocket does NOT go through
+    build_scalping_pocket_entries() (structurally scalping-only) -- it is a
+    3rd statically-added tuple entry, built the same way as "vc" just above
+    it in the real loop. Candidates come from fixed_watchlist.
+    list_watchlist_candidates(), never momentum_candidates -- confirmed here
+    by mocking a single fixed-watchlist contract distinct from the shared
+    momentum discovery (empty this cycle)."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
+    from aria_core import fixed_watchlist
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [], {}  # no scalping/swing candidates this cycle
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_top_candidates(limit):
+        return []  # the vc pocket sources nothing this cycle (gate off anyway)
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_list_watchlist_candidates():
+        return [{"contract": G, "chain": "base", "symbol": "MEGA"}]
+
+    monkeypatch.setattr(fixed_watchlist, "list_watchlist_candidates", _fake_list_watchlist_candidates)
+
+    async def _fake_default_momentum_analyzer_factory(*args, **kwargs):
+        async def _analyzer(contract):
+            return {
+                "action": "BUY", "chain": "base", "symbol": "MEGA", "price": 1.0,
+                "target": 2.0, "invalidation": 0.9, "strategy": "momentum",
+            }
+        return _analyzer
+
+    async def _fake_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "MEGA", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "strategy": "momentum",
+        }
+
+    def _fake_default_momentum_analyzer(chain_by_contract, **kwargs):
+        # Called for scalping/swing/vc/megacap alike (build_scalping_pocket_entries
+        # also goes through this same factory with mode="scalping") -- the
+        # mode="standard" assertion belongs on the opened position below, not here.
+        return _fake_analyzer
+
+    monkeypatch.setattr(pt, "_default_momentum_analyzer", _fake_default_momentum_analyzer)
+
+    async def _price_lookup(contract, chain="base"):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    assert len(act["opened"]) == 1
+    assert act["opened"][0]["contract"] == G
+    assert act["opened"][0]["wallet"] == "megacap"
+    assert act["opened"][0]["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_multi_pocket_gate_off_megacap_never_sourced(tmp_db, monkeypatch):
+    """fixed_watchlist_pocket_enabled() OFF -- no "megacap" entry reaches
+    _open_new_entries_for_wallet at all, byte-for-byte the pre-existing
+    2-pocket (scalping/swing) + vc behavior."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.delenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", raising=False)
+    from aria_core import fixed_watchlist
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [], {}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    called = {"hit": False}
+
+    async def _fake_list_watchlist_candidates():
+        called["hit"] = True
+        return [{"contract": G, "chain": "base", "symbol": "MEGA"}]
+
+    monkeypatch.setattr(fixed_watchlist, "list_watchlist_candidates", _fake_list_watchlist_candidates)
+
+    async def _price_lookup(contract, chain="base"):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    assert act["opened"] == []
+    # fixed_watchlist IS still queried (unconditional construction, mirrors
+    # vc_candidates) -- only the OPEN attempt is gated, never the fetch.
+    assert called["hit"] is True
+
+
+@pytest.mark.asyncio
 async def test_multi_pocket_tracking_alert_sums_cash_across_all_3_pockets(tmp_db, monkeypatch):
     """29/07 -- real operator confusion ("pourquoi il y a que 1 wallet...
     il vaut 1400000 alors qu'il y a quelques heures il valait 995k"): the
@@ -6903,6 +7026,56 @@ def test_is_scalping_pocket_rejects_non_scalping_wallets():
     assert pt.is_scalping_pocket("swing") is False
     assert pt.is_scalping_pocket("vc") is False
     assert pt.is_scalping_pocket("") is False
+
+
+# ── "megacap" pocket (02/08, fixed_watchlist.py, 10 established tokens) ────
+
+def test_fixed_watchlist_pocket_enabled_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", raising=False)
+    assert pt.fixed_watchlist_pocket_enabled() is False
+
+
+def test_fixed_watchlist_pocket_enabled_on(monkeypatch):
+    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
+    assert pt.fixed_watchlist_pocket_enabled() is True
+
+
+def test_all_pocket_wallets_gate_off_with_megacap_enabled(monkeypatch):
+    """Additive to BOTH scalping_variants_enabled() branches -- flipping this
+    gate never touches the 6 existing pockets or their sourcing."""
+    monkeypatch.delenv("ARIA_SCALPING_VARIANTS_ENABLED", raising=False)
+    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
+    assert pt.all_pocket_wallets() == ("scalping", "swing", "vc", "megacap")
+
+
+def test_all_pocket_wallets_gate_on_with_megacap_enabled(monkeypatch):
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
+    wallets = pt.all_pocket_wallets()
+    assert wallets == (
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+        "swing", "vc", "megacap",
+    )
+
+
+def test_all_pocket_wallets_megacap_gate_off_no_change():
+    """Both new-behavior gates OFF -- byte-for-byte the pre-existing
+    behavior, never a 7th/9th entry by accident."""
+    assert pt.all_pocket_wallets() == ("scalping", "swing", "vc")
+
+
+def test_uses_fine_rsi_confirmation_true_for_swing_and_megacap():
+    assert pt.uses_fine_rsi_confirmation("swing") is True
+    assert pt.uses_fine_rsi_confirmation("megacap") is True
+
+
+def test_uses_fine_rsi_confirmation_false_for_vc():
+    assert pt.uses_fine_rsi_confirmation("vc") is False
+
+
+def test_uses_fine_rsi_confirmation_false_for_scalping_pockets():
+    for wallet in ("scalping", "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+        assert pt.uses_fine_rsi_confirmation(wallet) is False
 
 
 @pytest.mark.asyncio
