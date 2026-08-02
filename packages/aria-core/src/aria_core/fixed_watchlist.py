@@ -32,20 +32,25 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# Recommended activation sequence (ronde 5 of this pocket's design review):
-# start with only the 8 tokens that carry no security-guardrail exception,
-# observe a few cycles, THEN add AAVE/VIRTUAL as a 2-line follow-up commit --
-# isolates the one non-reversible risk (a global blacklist write, see
-# momentum_entry.py) from the rest of this pocket's rollout. Both are
-# included here now (implementation-complete per the approved plan); trimming
-# to 8 for the first deploy, if desired, is an operator call at deploy time.
+# Recommended activation sequence (ronde 5 of this pocket's design review),
+# APPLIED at first deploy (02/08): start with only the 8 tokens that carry no
+# security-guardrail exception, observe a few cycles, THEN add AAVE/VIRTUAL
+# back as a 2-line follow-up commit -- isolates the one non-reversible risk
+# (a global blacklist write on a bad allowlist entry, see momentum_entry.py's
+# _ESTABLISHED_TOKEN_SECURITY_ALLOWLIST_BASE) from the rest of this pocket's
+# rollout. Confirmed via a direct DB read that the `fixed_watchlist` table
+# does not exist in prod yet at the time of this trim -- no INSERT OR IGNORE
+# seed row to reconcile, safe to change the tuple outright rather than a
+# migration. To re-add: uncomment the 2 lines below, no other code change
+# needed (add_watchlist_candidate() is also available for a live, no-deploy
+# addition once the pocket is confirmed clean).
 _DEFAULT_WATCHLIST: tuple[tuple[str, str, str], ...] = (
     ("LINK", "0x88fb150bdc53a65fe94dea0c9ba0a6daf8c6e196", "base"),
     ("KAITO", "0x98d0baa52b2d063e780de12f615f963fe8537553", "base"),
     ("ICP", "0x00f3c42833c3170159af4e92dbb451fb3f708917", "base"),
     ("ENA", "0x58538e6a46e07434d7e7375bc268d3cb839c0133", "base"),
-    ("AAVE", "0x63706e401c06ac8513145b7687a14804d17f814b", "base"),
-    ("VIRTUAL", "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b", "base"),
+    # ("AAVE", "0x63706e401c06ac8513145b7687a14804d17f814b", "base"),
+    # ("VIRTUAL", "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b", "base"),
     ("WETH", "0x4200000000000000000000000000000000000006", "base"),
     ("CBBTC", "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf", "base"),
     ("WBTC", "0x0555e30da8f98308edb960aa94c0db47230d2b9c", "base"),
