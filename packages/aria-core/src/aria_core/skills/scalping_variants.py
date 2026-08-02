@@ -136,6 +136,29 @@ async def _gates_and_candles_uncached(
             f"historique de bougies insuffisant ({len(candles)} < {_MIN_CANDLES_FOR_SIGNAL})",
             "insufficient_candle_history",
         )
+    # 08/02 -- real bug found live (diagnostic workflow, operator go-ahead to
+    # fix: 7/7 closed scalping trades lost, peak_gain_pct = 0.00% in EVERY
+    # case -- the expected bounce from oversold never materialized once,
+    # in any of the 5 variants or the legacy RSI-divergence engine). Root
+    # cause: none of the 6 scalping entries had ANY trend/market-context
+    # filter -- just "the oversold indicator just exited its zone", with no
+    # check that a real bounce (not a dead-cat one inside a larger downtrend)
+    # was actually forming. Reuses momentum_entry's own _technical_alignment
+    # (EMA12>EMA26 / MACD>signal / bullish candle pattern, 0-3) and its
+    # ALREADY-established direct-buy bar (_ALIGN_SCORE_MIN_FOR_DIRECT_BUY=2,
+    # the same threshold the legacy scalping engine's direct-buy path already
+    # enforces) rather than inventing a new number -- a candidate whose
+    # broader technical context doesn't back the oversold-bounce signal is
+    # now rejected here, BEFORE any of the 5 variants even sees it (same
+    # shared-gate design as the hard security/liquidity gates above).
+    align_score, _align_reasons, _align_detail = momentum_entry._technical_alignment(candles)
+    if align_score < momentum_entry._ALIGN_SCORE_MIN_FOR_DIRECT_BUY:
+        return None, [], _hold(
+            chain, best_pair.base_symbol, best_pair.price_usd,
+            f"alignement technique insuffisant (score {align_score}/3 < "
+            f"{momentum_entry._ALIGN_SCORE_MIN_FOR_DIRECT_BUY}) -- rebond non confirmé par le contexte",
+            "no_trend_alignment",
+        )
     return best_pair, candles, None
 
 
@@ -153,8 +176,36 @@ def _rr(entry: float, stop: float, target: float) -> float:
 
 def _buy_result(
     *, pair, chain: str, entry: float, stop: float, target: float | None, reason: str, variant: str,
+    candles: list[Candle],
 ) -> dict:
-    entry_atr_pct = None
+    # 08/02 -- real bug found live (operator: 7/7 closed scalping trades lost,
+    # every one via the blind stagnation timeout, none via the ATR trailing
+    # stop): this was hardcoded to None on every variant, even the ones (V1/
+    # V2/V4/V5) that already compute a real ATR internally just to size their
+    # OWN stop -- the value was computed then thrown away, never reaching
+    # paper_trader._effective_trail_pct, which silently fell back to the
+    # generic TRAIL_STOP_PCT (15%) -- wildly too wide for scalping-scale moves
+    # (the 7 real losses were 1.7%-3.6%), so the trailing stop never actually
+    # triggered in practice. Computed HERE (once, uniformly for all 5
+    # variants including V3, which has no ATR of its own -- its stop is
+    # structural, previous-candle-low-based) rather than threading an extra
+    # parameter through each evaluate_vN, so no future variant can forget it.
+    # Same ratio convention as momentum_entry.py's own entry_atr_pct
+    # (last_atr / price, a fraction, never a raw ATR value or a *100 percent).
+    atr = _atr_value(candles)
+    entry_atr_pct = (atr / entry) if atr and entry > 0 else None
+    # 08/02 -- same fix as entry_atr_pct above, same root incident: align_score
+    # (and align_ema/align_macd/align_pattern) were NEVER populated for any
+    # scalping variant, which made risk_guard.compute_entry_alloc's
+    # conviction_size_multiplier/conviction_risk_budget_pct fall back to their
+    # own "missing signal" branch (MAX_ALLOC_MULTIPLIER, the most permissive
+    # tier -- never actually earned by a real signal). By the time
+    # _buy_result runs, _gates_and_candles_uncached has ALREADY required
+    # align_score >= momentum_entry._ALIGN_SCORE_MIN_FOR_DIRECT_BUY (2) --
+    # recomputed here (cheap, no network call, same candles already in hand)
+    # so that guarantee is reflected in the persisted signal rather than
+    # silently dropped.
+    align_score, _align_reasons, align_detail = momentum_entry._technical_alignment(candles)
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,
         "target": target, "invalidation": stop,
@@ -162,6 +213,10 @@ def _buy_result(
         "mode": "scalping", "strategy": "momentum",
         "reasons": [f"[{variant}] {reason}"],
         "liquidity_usd": pair.liquidity_usd, "entry_atr_pct": entry_atr_pct,
+        "align_score": align_score,
+        "align_ema": align_detail.get("ema_above"),
+        "align_macd": align_detail.get("macd_above"),
+        "align_pattern": align_detail.get("bullish_pattern"),
         # 08/01 -- market cap at entry, same purely-observational field as the
         # standard momentum pipeline (see momentum_entry.py's own comment).
         "market_cap_usd": pair.market_cap_usd,
@@ -206,6 +261,7 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %B confirmée ({percent_b[-2]:.2f} -> {percent_b[-1]:.2f})",
         variant="V1 Bollinger",
+    candles=candles,
     )
 
 
@@ -248,6 +304,7 @@ async def evaluate_v2_vwap_institutional(contract: str, chain: str) -> dict | No
         pair=pair, chain=chain, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f})",
         variant="V2 VWAP institutionnel",
+    candles=candles,
     )
 
 
@@ -287,6 +344,7 @@ async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %K confirmée ({k[-2]:.1f} -> {k[-1]:.1f})",
         variant="V3 Stochastique ultra-réactif",
+    candles=candles,
     )
 
 
@@ -332,6 +390,7 @@ async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
         reason=f"double confirmation Bollinger+Stochastique (%B {percent_b[-2]:.2f}->{percent_b[-1]:.2f}, "
                f"%K {k[-2]:.1f}->{k[-1]:.1f})",
         variant="V4 Combo sec",
+    candles=candles,
     )
 
 
@@ -376,6 +435,7 @@ async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, entry=entry, stop=stop, target=None,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f}), sans TP fixe",
         variant="V5 VWAP trailing",
+    candles=candles,
     )
 
 

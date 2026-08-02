@@ -39,15 +39,25 @@ def _candles(n=50):
     ]
 
 
-def _patch_gates_and_candles(monkeypatch, *, pair=None, hold=None, candles=None):
+def _patch_gates_and_candles(monkeypatch, *, pair=None, hold=None, candles=None, align_score=3):
+    """``align_score`` (08/02, new trend-alignment gate in
+    _gates_and_candles_uncached): defaults to 3/3 (strong alignment) so every
+    EXISTING test exercising a variant's own signal/anti-dump/stop logic in
+    isolation isn't incidentally blocked by this unrelated new gate -- the
+    gate's OWN behavior (rejecting on weak alignment) is tested separately,
+    with an explicit low score passed here."""
     async def fake_hard_gates(contract, chain, *, mode="standard"):
         return (pair if hold is None else None), None, hold
 
     async def fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard"):
         return candles if candles is not None else _candles()
 
+    def fake_technical_alignment(candles):
+        return align_score, [], {"ema_above": True, "macd_above": True, "bullish_pattern": True}
+
     monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)
     monkeypatch.setattr(momentum_entry, "_fetch_candles", fake_fetch_candles)
+    monkeypatch.setattr(momentum_entry, "_technical_alignment", fake_technical_alignment)
 
 
 # ── shared plumbing (_gates_and_candles) ────────────────────────────────────
@@ -133,6 +143,61 @@ async def test_gates_and_candles_cache_scoped_per_contract_and_chain(monkeypatch
     assert calls["hard_gates"] == 3
 
 
+# ── trend-alignment gate (08/02) ─────────────────────────────────────────────
+# Real bug found live: 7/7 closed scalping trades lost, peak_gain_pct = 0.00%
+# in EVERY case -- none of the 6 scalping entries (5 variants + legacy RSI-
+# divergence) had any trend/market-context filter, just "the oversold
+# indicator just exited its zone". Reuses momentum_entry._technical_alignment
+# and its already-established direct-buy bar (_ALIGN_SCORE_MIN_FOR_DIRECT_BUY).
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_rejects_weak_trend_alignment(monkeypatch):
+    pair = _pair()
+    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=1)  # below the 2/3 bar
+
+    result_pair, result_candles, hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+
+    assert result_pair is None
+    assert result_candles == []
+    assert hold is not None
+    assert hold["action"] == "HOLD"
+    assert hold["hold_reason"] == "no_trend_alignment"
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_allows_strong_trend_alignment(monkeypatch):
+    pair = _pair()
+    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=2)  # exactly at the bar
+
+    result_pair, result_candles, hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+
+    assert result_pair is pair
+    assert result_candles
+    assert hold is None
+
+
+@pytest.mark.asyncio
+async def test_v1_buy_propagates_alignment_fields(monkeypatch):
+    """The gate already required align_score >= 2 before any variant runs --
+    real bug found alongside entry_atr_pct's own: this signal was computed
+    then thrown away, never reaching risk_guard.compute_entry_alloc's sizing
+    (which fell back to its own "missing signal" MAX tier instead)."""
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=3)
+    series = [None] * 48 + [-0.1, 0.2]
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+
+    assert result["action"] == "BUY"
+    assert result["align_score"] == 3
+    assert result["align_ema"] is True
+    assert result["align_macd"] is True
+    assert result["align_pattern"] is True
+
+
 # ── V1 -- Bollinger %B ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -150,6 +215,11 @@ async def test_v1_buys_on_confirmed_exit_from_oversold(monkeypatch):
     assert result["invalidation"] == pytest.approx(1.0 - 1.5 * 0.05)
     expected_stop = 1.0 - 1.5 * 0.05
     assert result["target"] == pytest.approx(1.0 + 2.0 * (1.0 - expected_stop))
+    # 08/02 -- real bug found live: entry_atr_pct used to be hardcoded None,
+    # silently disabling the ATR trailing stop (paper_trader._effective_
+    # trail_pct fell back to the generic 15%, never activating on scalping-
+    # scale moves) -- must now be the real ratio (atr / entry).
+    assert result["entry_atr_pct"] == pytest.approx(0.05 / 1.0)
 
 
 @pytest.mark.asyncio
@@ -255,6 +325,12 @@ async def test_v3_buys_on_confirmed_exit_with_structural_stop(monkeypatch):
     expected_stop = 0.90 * (1.0 - 0.005)
     assert result["invalidation"] == pytest.approx(expected_stop)
     assert result["target"] == pytest.approx(1.0 + 2.0 * (1.0 - expected_stop))
+    # 08/02 -- V3's own stop is structural (previous-candle-low), never ATR --
+    # but entry_atr_pct must still be populated (computed uniformly in
+    # _buy_result for all 5 variants) so the trailing stop isn't blind for V3
+    # either, same real bug as V1/V2/V4/V5.
+    assert result["entry_atr_pct"] is not None
+    assert result["entry_atr_pct"] > 0
 
 
 @pytest.mark.asyncio

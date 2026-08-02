@@ -240,10 +240,27 @@ def _fresh_rr(fresh_price: float | None, target: float | None, invalidation: flo
     """R/R recomputed at the fresh price. ``None`` if the config doesn't allow a
     valid computation (missing data, or the setup is already resolved -- price
     beyond the target or already below invalidation, no more R/R to measure at
-    this stage)."""
-    if not fresh_price or fresh_price <= 0 or not target or not invalidation:
+    this stage).
+
+    08/02 -- real bug found live (diagnostic workflow: scalping_v5, "no fixed
+    TP, pure trailing stop" by design -- see scalping_variants.py's own V5
+    docstring -- had ZERO trades, ever, regardless of time elapsed): this
+    unconditionally returned ``None`` whenever ``target`` was falsy, which
+    ``_execution_rr_still_valid`` below then treats as fail-closed (never
+    executes) -- silently killing 100% of V5's BUY signals at this recheck,
+    before they ever reached a place where the rejection would even be
+    logged. A missing target isn't "R/R can't be judged", it's "R/R has no
+    upper bound by design" -- ``float(\"inf\")`` clears any finite bar
+    ``_execution_rr_still_valid`` applies, while the invalidation check right
+    below still fully applies (a setup that broke structurally is still
+    rejected, exactly as before)."""
+    if not fresh_price or fresh_price <= 0 or not invalidation:
         return None
-    if fresh_price <= invalidation or fresh_price >= target:
+    if fresh_price <= invalidation:
+        return None
+    if not target:
+        return float("inf")
+    if fresh_price >= target:
         return None
     return (target - fresh_price) / (fresh_price - invalidation)
 
@@ -5066,12 +5083,27 @@ async def _run_paper_cycle_locked(
                 # tests).
                 best_seen_price = max(high_water, pending_hw or 0.0, price)
                 peak_gain_pct = (best_seen_price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                # 08/02 -- real bug found live (operator: 7/7 closed scalping
+                # trades lost, all via THIS timeout, none via the ATR trailing
+                # stop -- see paper_trader.py's entry_atr_pct fix the same day
+                # for why the stop was structurally inert): this used to check
+                # ONLY the upside (peak_gain_pct never moved) before force-
+                # closing "at whatever the current price is" -- blind to how
+                # far the price had ALREADY dropped. A position down -3.6% is
+                # not "stagnant", it already needed the trailing stop (now
+                # repaired) to have acted -- this timeout's own job is to free
+                # up capital on a genuinely FLAT position, never to be the
+                # backstop for a real drawdown it was never designed to bound.
+                # Symmetric with SCALPING_STAGNATION_MIN_MOVE_PCT (the same
+                # threshold that already defines "no significant move" on the
+                # upside) rather than inventing a second, arbitrary constant.
+                exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
                 if (
                     hours_open is not None
                     and hours_open >= SCALPING_STAGNATION_TIMEOUT_HOURS
                     and peak_gain_pct < SCALPING_STAGNATION_MIN_MOVE_PCT
+                    and exit_gain_pct > -SCALPING_STAGNATION_MIN_MOVE_PCT
                 ):
-                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
                     exit_notes = (
                         f"Timeout de stagnation (scalping) : aucun mouvement > "
                         f"+{SCALPING_STAGNATION_MIN_MOVE_PCT:.1f}% depuis l'entrée en "

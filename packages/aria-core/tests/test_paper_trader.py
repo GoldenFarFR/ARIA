@@ -1239,6 +1239,56 @@ async def test_scalping_generic_stop_takes_priority_over_stagnation_timeout(tmp_
     assert not await pt.has_open(D)
 
 
+@pytest.mark.asyncio
+async def test_scalping_stagnation_timeout_never_fires_on_a_real_drawdown(tmp_db):
+    """08/02 -- real bug found live (diagnostic workflow: 7/7 closed scalping
+    trades lost, ALL via this timeout closing blindly at whatever the current
+    price was, none via the ATR trailing stop): a position already down
+    beyond the same threshold that defines "no significant move" on the
+    upside isn't stagnant, it's a real drawdown -- must be left for the
+    (now-repaired) trailing stop to handle, never force-closed here."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+
+    # -3% -- never moved up (peak_gain_pct stays under the 1% floor, the OLD
+    # sole condition), but already down well past the SAME 1% threshold on
+    # the downside -- must NOT be treated as "stagnant".
+    async def price_lookup(contract):
+        return 0.97
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_scalping_stagnation_timeout_still_fires_on_a_genuinely_flat_position(tmp_db):
+    """A LIGHT move within the symmetric tolerance band (here -0.5%, under the
+    1% floor on both sides) is still genuine stagnation -- the timeout must
+    keep firing for the case it was actually built for (08/01 incident:
+    positions frozen at ~0% for 19h+, capital stuck on dead setups)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000, wallet="scalping", mode="scalping",
+    )
+    await _backdate_opened_at(D, pt.SCALPING_STAGNATION_TIMEOUT_HOURS + 0.5)
+    # The real stored entry_price differs from the nominal 1.0 requested
+    # (simulated scalping swap fee applied on buy) -- compute the test price
+    # relative to what was ACTUALLY stored, not the nominal ask.
+    real_entry_price = (await pt._get_open(D))["entry_price"]
+
+    async def price_lookup(contract):
+        return real_entry_price * 0.995  # -0.5% off the REAL entry, inside the tolerance band
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "timeout stagnation (scalping)"
+    assert not await pt.has_open(D)
+
+
 # ── stop suiveur adaptatif à la volatilité (19/07, revue croisée Gemini) ────────────
 
 
@@ -4456,9 +4506,23 @@ def test_fresh_rr_none_when_setup_already_resolved():
 
 def test_fresh_rr_none_on_missing_data():
     assert pt._fresh_rr(None, 3.0, 0.5) is None
-    assert pt._fresh_rr(1.0, None, 0.5) is None
     assert pt._fresh_rr(1.0, 3.0, None) is None
     assert pt._fresh_rr(0.0, 3.0, 0.5) is None
+
+
+def test_fresh_rr_no_target_returns_infinite_when_above_invalidation():
+    """08/02 -- real bug found live: scalping_v5 ("no fixed TP, pure trailing
+    stop" by design) had this treated as missing data -> None ->
+    _execution_rr_still_valid fail-closed -> 100% of its BUY signals silently
+    killed at this recheck, regardless of price movement. A missing target
+    means "no upper bound", not "can't judge" -- float("inf") clears any
+    finite bar while the invalidation check (structural break) still applies."""
+    assert pt._fresh_rr(1.0, None, 0.5) == float("inf")
+
+
+def test_fresh_rr_no_target_still_rejects_broken_structure():
+    assert pt._fresh_rr(0.4, None, 0.5) is None  # at/below invalidation
+    assert pt._fresh_rr(0.5, None, 0.5) is None  # exactly at invalidation
 
 
 def test_execution_rr_still_valid_uses_direct_buy_bar_when_signal_was_direct(monkeypatch):
