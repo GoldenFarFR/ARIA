@@ -854,6 +854,71 @@ async def test_check_rsi_divergence_watching_sets_gap_span_on_trigger(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_sets_entry_atr_pct_on_trigger(monkeypatch):
+    """Item #253 (08/02): entry_atr_pct RE-computed here on the fresh candles
+    the divergence re-check just ran on -- last_atr/candles[-1].close.
+
+    Deliberately does NOT reuse the other tests' 6-flat-candle
+    _fake_fetch_candles: atr_series needs >= _ATR_PERIOD (14) real-range
+    candles to return anything but None -- a flat/short fixture would
+    silently prove nothing about this recomputation."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+    from aria_core.skills.ta_levels import Candle
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        return [
+            Candle(ts=i * 3600, open=10.0, high=11.0, low=9.0, close=10.0)
+            for i in range(20)
+        ]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(sig_overrides={"entry_atr_pct": 0.15})  # stale watch-candidate value
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    # True Range constant (high-low=2.0, no gap) -> ATR=2.0 exactly; last close=10.0.
+    assert sig["entry_atr_pct"] == pytest.approx(2.0 / 10.0, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_preserves_prior_entry_atr_pct_when_atr_unavailable(monkeypatch):
+    """Item #253 (08/02): '.setdefault' style -- if the fresh candle set is
+    too short for atr_series, the earlier watch-candidate value survives,
+    never erased by None."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]  # < _ATR_PERIOD
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(sig_overrides={"entry_atr_pct": 0.10})
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert sig["entry_atr_pct"] == 0.10
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_scalping_wallet(monkeypatch):
     """Item #199 (29/07): the re-check must fetch candles at the SAME
     timeframe the order was placed under, derived from `order["wallet"]`
@@ -2152,6 +2217,70 @@ async def test_execute_trigger_swing_pocket_keeps_standard_mode(monkeypatch):
     actions = await lo.process_active_orders(_price)
     assert len(actions["triggered"]) == 1
     assert actions["triggered"][0]["mode"] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_uses_watch_candidate_entry_atr_pct_even_without_trigger_recalc(monkeypatch):
+    """Item #253 (08/02), round-1-recommended proof: simulates the exact
+    intermediate deploy window the plan flags as risk-bearing (§1 shipped,
+    §2 not yet) -- check_rsi_divergence_watching_order mocked to trigger
+    WITHOUT touching sig["entry_atr_pct"] at all (as if the fresh-recompute
+    fix didn't exist). The value _sig() carries (simulating what §1's
+    watch-candidate builder would have set at order-creation time) must
+    still reach the real open position -- proof this path is already
+    risk-bearing on §1 alone, not a mere pre-trigger Telegram-estimate dict
+    as an earlier version of this plan claimed."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 0.038, _sig(entry_atr_pct=0.20), wallet="swing",
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_check_no_atr_touch(order_arg, sig_arg):
+        return "trigger"  # deliberately never touches sig["entry_atr_pct"]
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check_no_atr_touch)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+
+    positions = await paper_trader.get_open_positions(wallet="swing")
+    assert len(positions) == 1
+    assert positions[0]["entry_atr_pct"] == pytest.approx(0.20)
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_forwards_recalculated_entry_atr_pct(monkeypatch):
+    """Item #253 (08/02): proves the recalculated entry_atr_pct (mutated by
+    check_rsi_divergence_watching_order at trigger time, §2) survives all the
+    way to the opened position -- not just the original watch-candidate
+    value (_sig()'s default 0.15) frozen at order-creation time."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_check(order_arg, sig_arg):
+        sig_arg["entry_atr_pct"] = 0.30  # distinct from _sig()'s default 0.15
+        return "trigger"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+
+    positions = await paper_trader.get_open_positions(wallet="swing")
+    assert len(positions) == 1
+    assert positions[0]["entry_atr_pct"] == pytest.approx(0.30)
 
 
 @pytest.mark.asyncio

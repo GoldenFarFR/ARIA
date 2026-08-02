@@ -475,6 +475,37 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
         # trigger's real "steepness" without re-deriving it.
         sig["rsi_gap"] = detail.gap
         sig["rsi_span"] = detail.span
+        # Item #253 (08/02) -- entry_atr_pct RE-computed here on the SAME fresh,
+        # mode-aware candles the divergence re-check just ran on -- more temporally
+        # faithful than the watch-candidate's own snapshot (up to RSI_WATCH_MAX_
+        # HORIZON_CANDLES old by now). `sig` is the SAME dict object _execute_
+        # trigger reads right after (see this function's own mutate-in-place
+        # doctrine above for reasons/rsi_gap/rsi_span) -- OVERWRITES whatever the
+        # watch-candidate builder set, never additive. Falls back to that earlier
+        # value if ATR isn't computable on this fresh set (insufficient candles) --
+        # never erases a real prior value with None.
+        #
+        # Note: this uses candles[-1].close, a DIFFERENT price reference than the
+        # `current_price` _execute_trigger later persists as entry_price -- a
+        # separate DexScreener fetch, captured BEFORE this function even runs (see
+        # process_active_orders' top-of-loop `price`). Deliberately not
+        # reconciled: current_price is itself stale by several MORE network calls
+        # (pair re-fetch, holder-concentration re-check) by the time it's actually
+        # applied, so chasing exact match here would relocate staleness, not
+        # remove it -- current_price is the OLDEST of the three fetches in this
+        # call chain, not the freshest. entry_atr_pct is a ratio -- the
+        # sub-few-second drift between these fetches (same synchronous drain
+        # pass, no sleep) moves numerator and denominator together, a
+        # proportionally negligible shift well inside the clamp bounds
+        # (MIN/MAX_ATR_TRAIL_PCT, 5%-40%) and the observed production range
+        # (~0.4%-28%) -- dwarfed by the multi-hour creation-to-trigger price
+        # drift (-0.1% to -19% observed) this system already tolerates by design.
+        from aria_core.skills.indicators import atr_series
+
+        atr_values = atr_series(candles)
+        last_atr = atr_values[-1] if atr_values else None
+        if last_atr is not None and candles[-1].close:
+            sig["entry_atr_pct"] = last_atr / candles[-1].close
         return "trigger"
     return "wait"
 

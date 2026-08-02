@@ -1345,6 +1345,45 @@ class TestEffectiveTrailPct:
         assert pt._effective_trail_pct(0.50) == pt.MAX_ATR_TRAIL_PCT
 
 
+class TestSatellitePocketEligibleEntryAtrPct:
+    """Item #253 (08/02) -- _satellite_pocket_eligible reads entry_atr_pct via
+    _compute_active_stop; a missing value (the bug this chantier fixes) falls
+    back to the fixed 15% trail instead of a real ATR-calibrated one, which
+    can flip the eligibility verdict itself, not just the stop width shown
+    elsewhere. Both positions otherwise identical: entry_price=1.0,
+    high_water_price=1.0 (no latent gain), invalidation_price=0.5 (never
+    dominates the max()), target_price=2.0, strategy=momentum, entry/current
+    regime both Euphoria (gate #4 satisfied either way), price=0.90."""
+
+    def _position(self, entry_atr_pct):
+        return {
+            "strategy": "momentum", "entry_price": 1.0, "high_water_price": 1.0,
+            "invalidation_price": 0.5, "target_price": 2.0,
+            "entry_regime": "euphorie", "entry_atr_pct": entry_atr_pct,
+            "breakeven_locked": False,
+        }
+
+    def test_none_uses_fixed_stop_stays_eligible(self):
+        # trail=15% (fallback) -> active_stop=0.85, price 0.90 > 0.85 (not
+        # touched) -> remaining_rr=(2.0-0.90)/(0.90-0.85)=22.0 >= 1.5.
+        eligible, remaining_rr = pt._satellite_pocket_eligible(
+            self._position(None), price=0.90, current_regime="euphorie",
+        )
+        assert eligible is True
+        assert remaining_rr == pytest.approx(22.0)
+
+    def test_real_low_atr_tighter_stop_flips_to_ineligible(self):
+        # entry_atr_pct=0.01 -> trail clamped to MIN_ATR_TRAIL_PCT (5%) ->
+        # active_stop=0.95, price 0.90 <= 0.95 (already touched) -> never
+        # eligible -- same position, opposite verdict, purely because
+        # entry_atr_pct is now populated instead of None.
+        eligible, remaining_rr = pt._satellite_pocket_eligible(
+            self._position(0.01), price=0.90, current_regime="euphorie",
+        )
+        assert eligible is False
+        assert remaining_rr is None
+
+
 # ── TP1 ancré sur le target technique (19/07, revue croisée Gemini round 5) ─────────
 
 
@@ -4960,6 +4999,43 @@ async def test_run_cycle_places_limit_order_on_golden_pocket_watch_candidate(tmp
     assert sig["dex_security_score"] == 75.0
     assert any("score DEX fort" in r for r in sig["reasons"])
     assert len(notified) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_persists_entry_atr_pct_on_watch_candidate_limit_order(tmp_db, monkeypatch):
+    """Item #253 (08/02): the watch-candidate's entry_atr_pct (set by
+    momentum_entry.py's builders, §1) must survive the order_sig = {**sig,
+    **watch, ...} merge (paper_trader.py's create_pending_order call site) --
+    same scenario as test_run_cycle_places_limit_order_on_golden_pocket_
+    watch_candidate above, with entry_atr_pct added to the fake watch dict."""
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "HOLD", "symbol": "WATCH", "price": 1.5, "chain": "base",
+            "reasons": ["pas de setup golden pocket + divergence RSI avec R/R positif"],
+            "hold_reason": "no_entry_signal",
+            "limit_order_candidate": {
+                "target_price": 1.382, "target": 2.5, "invalidation": 1.18972,
+                "rr": 2.5, "symbol": "WATCH", "dex_security_score": 75.0,
+                "dex_security_breakdown": {}, "reason": "score DEX fort, golden pocket pas encore formé",
+                "entry_atr_pct": 0.18,
+            },
+        }
+
+    async def price_lookup(contract):
+        return 1.5
+
+    await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+
+    import json
+
+    from aria_core import limit_orders
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1
+    sig = json.loads(active[0]["signal_json"])
+    assert sig["entry_atr_pct"] == pytest.approx(0.18)
 
 
 @pytest.mark.asyncio

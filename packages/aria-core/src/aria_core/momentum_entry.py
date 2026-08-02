@@ -2850,6 +2850,23 @@ def _rsi_divergence_watch_candidate(
         return None
 
     entry = price
+    # Item #253 (08/02) -- real bug found live: entry_atr_pct (ATR% at entry,
+    # used both by paper_trader.compute_entry_alloc's risk/ATR sizing and by
+    # _effective_trail_pct's adaptive stop width) was never populated on this
+    # watch-and-wait path, only on the outright-BUY branch above -- yet this IS
+    # scalping's ONLY limit-order mechanism, so 100% of scalping positions
+    # sourced through it kept the fixed 15% trailing stop and flat conviction-
+    # tier sizing regardless of real volatility. Same formula as the BUY path
+    # (ATR / the real entry reference), computed on the SAME candles already in
+    # hand (zero extra network call, atr_series already invoked internally by
+    # _invalidation_floor_pct a few lines below on these same candles).
+    from aria_core.skills.indicators import atr_series
+
+    entry_atr_pct = None
+    _atr_values = atr_series(candles)
+    _last_atr = _atr_values[-1] if _atr_values else None
+    if _last_atr is not None and entry:
+        entry_atr_pct = _last_atr / entry
     structural_invalidation = signal.gp_low * (1 - 0.02)
     invalidation = structural_invalidation
     # 30/07, real bug found live (CFI, TIBBIR, FOLKS-on-swing -- see
@@ -2917,6 +2934,7 @@ def _rsi_divergence_watch_candidate(
         "target": target,
         "invalidation": invalidation,
         "rr": rr,
+        "entry_atr_pct": entry_atr_pct,
         "symbol": symbol,
         "limit_order_reason": "rsi_divergence_pending",
         "last_candle_ts": candles[-1].ts,
@@ -3013,6 +3031,19 @@ async def _golden_pocket_watch_candidate(
         )
         return None
     entry = signal.gp_high
+    # Item #253 (08/02) -- same fix, same reasoning as _rsi_divergence_watch_
+    # candidate's own comment above. IMPORTANT: divides by `entry` (signal.
+    # gp_high, the REAL future entry reference this watch's rr/invalidation/
+    # target are ALL already expressed against), never by `price` (still above
+    # the zone at creation time, not yet reached) -- consistent with the rr
+    # formula's own choice of reference a few lines below.
+    from aria_core.skills.indicators import atr_series
+
+    entry_atr_pct = None
+    _atr_values = atr_series(candles)
+    _last_atr = _atr_values[-1] if _atr_values else None
+    if _last_atr is not None and entry:
+        entry_atr_pct = _last_atr / entry
     structural_invalidation = signal.gp_low * (1 - 0.02)
     invalidation = structural_invalidation
     # 30/07, real bug found live -- see entry_signals.py's own comment: never
@@ -3056,6 +3087,7 @@ async def _golden_pocket_watch_candidate(
         "target": target,
         "invalidation": invalidation,
         "rr": rr,
+        "entry_atr_pct": entry_atr_pct,
         "symbol": symbol,
         "dex_security_score": dex_score.score,
         "dex_security_breakdown": {

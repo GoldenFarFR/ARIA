@@ -6531,6 +6531,31 @@ async def test_golden_pocket_watch_candidate_created_when_score_confirmed_high(m
 
 
 @pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_carries_entry_atr_pct(monkeypatch, test_settings):
+    """Item #253 (08/02): entry_atr_pct = last_atr / entry (entry=gp_high=1.382
+    here, NOT candles[-1].close -- same reference as rr/invalidation/target)."""
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal(), candles=_rising_ts_atr_candles())
+    _stub_dex_score(monkeypatch, 75.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch["entry_atr_pct"] == pytest.approx(2.0 / 1.382, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_entry_atr_pct_none_when_atr_unavailable(monkeypatch, test_settings):
+    """Fewer than _ATR_PERIOD (14) candles -- atr_series returns only Nones,
+    entry_atr_pct stays None, never fabricated."""
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal(), candles=_rising_ts_atr_candles(n=5))
+    _stub_dex_score(monkeypatch, 75.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch is not None
+    assert watch["entry_atr_pct"] is None
+
+
+@pytest.mark.asyncio
 async def test_golden_pocket_watch_candidate_absent_when_score_below_threshold(monkeypatch, test_settings):
     from aria_core import risk_guard
 
@@ -6646,6 +6671,20 @@ def _rising_ts_candles(n: int = 20, *, interval: int = 3600) -> list[Candle]:
     return [Candle(ts=i * interval, open=1, high=1, low=1, close=1) for i in range(n)]
 
 
+def _rising_ts_atr_candles(n: int = 20, *, interval: int = 3600) -> list[Candle]:
+    """Item #253 (08/02) -- unlike ``_rising_ts_candles``, real (non-flat) True
+    Range on every candle (high-low=2.0, no gap -- same construction as
+    ``test_evaluate_buy_exposes_entry_atr_pct``) so ``atr_series`` computes a
+    real, non-zero ATR here -- ``_rising_ts_candles``' flat OHLC makes
+    ``atr_series`` return exactly ``0.0``, which proves nothing about the
+    ``last_atr / entry`` formula and happens to match the truthy check
+    elsewhere in the pipeline that treats it as "absent"."""
+    return [
+        Candle(ts=i * interval, open=10.0, high=11.0, low=9.0, close=10.0)
+        for i in range(n)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_divergence(monkeypatch, test_settings):
     _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
@@ -6700,6 +6739,30 @@ async def test_rsi_divergence_watch_candidate_align_score_prevents_max_tier_fall
     assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
     assert multiplier == risk_guard.MIN_ALLOC_MULTIPLIER
     assert multiplier != risk_guard.MAX_ALLOC_MULTIPLIER
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_carries_entry_atr_pct(monkeypatch, test_settings):
+    """Item #253 (08/02): entry_atr_pct = last_atr / entry (entry=price=1.5
+    here -- current price already equals the target, the RSI pattern alone
+    is pending)."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_atr_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch["entry_atr_pct"] == pytest.approx(2.0 / 1.5, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_entry_atr_pct_none_when_atr_unavailable(monkeypatch, test_settings):
+    """Fewer than _ATR_PERIOD (14) candles -- atr_series returns only Nones,
+    entry_atr_pct stays None, never fabricated."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_atr_candles(n=5))
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch is not None
+    assert watch["entry_atr_pct"] is None
 
 
 @pytest.mark.asyncio

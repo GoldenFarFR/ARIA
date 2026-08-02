@@ -241,6 +241,16 @@ def test_key_atr_buckets():
     assert pb.key_atr({}) == "unknown"
 
 
+def test_key_atr_limit_order_position_no_longer_unknown_after_item_253():
+    """Item #253 (08/02): before this fix, every discovery_channel='limit_order'
+    position had entry_atr_pct=None -- always the "unknown" bucket, hiding
+    100% of the scalping pocket's trades from this breakdown. Confirms a
+    realistic limit_order-sourced position (entry_atr_pct now populated)
+    lands in a real bucket instead."""
+    position = {"discovery_channel": "limit_order", "entry_atr_pct": 0.12}
+    assert pb.key_atr(position) == "10-20%"
+
+
 def test_key_liquidity_buckets():
     assert pb.key_liquidity({"entry_liquidity_usd": 30_000}) == "<50k$"
     assert pb.key_liquidity({"entry_liquidity_usd": 500_000}) == ">=300k$"
