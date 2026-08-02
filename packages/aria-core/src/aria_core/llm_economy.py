@@ -263,10 +263,32 @@ def anthropic_routing_enabled() -> bool:
     return bool(getattr(settings, "aria_llm_anthropic_routing_enabled", False))
 
 
-def anthropic_depth_override(depth: LlmDepth) -> tuple[str | None, str | None]:
+# 02/08 -- separate gate for the trading role specifically (momentum_entry.py's
+# 3 entry-gate call sites), found necessary by an LLM architecture review
+# workflow: the original single flag above was TOTAL -- flipping it would move
+# conversation/VC/smart_money AND the trading gates all at once, with no way
+# to sequence "non-trading first, observe, trading later" as the operator's
+# own progressive-rollout doctrine (cadence d'observation accélérée) requires.
+# Deliberately a SEPARATE bool, not a derived one -- so trading can stay OFF
+# while the general flag is already ON (the actual planned sequence), and so
+# a future flip of ONE never silently drags the other along.
+def anthropic_routing_trading_enabled() -> bool:
+    return bool(getattr(settings, "aria_llm_anthropic_routing_trading_enabled", False))
+
+
+def anthropic_depth_override(
+    depth: LlmDepth, *, trading: bool = False,
+) -> tuple[str | None, str | None]:
     """(provider, model) override for this depth. Dormant by default -- see
-    the module comment above for the rationale and the incident this replaces."""
-    if not anthropic_routing_enabled():
+    the module comment above for the rationale and the incident this replaces.
+
+    ``trading=True`` (momentum_entry.py's 3 entry-gate call sites only) checks
+    the SEPARATE ``anthropic_routing_trading_enabled`` gate instead of the
+    general one -- see that function's docstring. Every other caller
+    (conversation, /vc, smart_money, source_code_audit) keeps using the
+    general gate, unaffected by this parameter's default."""
+    enabled = anthropic_routing_trading_enabled() if trading else anthropic_routing_enabled()
+    if not enabled:
         return (None, None)
     if depth == LlmDepth.DEVELOP:
         return ("anthropic", _ANTHROPIC_MODEL_SONNET)

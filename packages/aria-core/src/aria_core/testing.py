@@ -108,6 +108,7 @@ class AriaRuntimeSettings(BaseSettings):
     aria_llm_max_tokens_develop: int = 900
     aria_llm_model_brief: str = "grok-3-mini"
     aria_llm_anthropic_routing_enabled: bool = False  # #118, 27/07 -- dormant by default
+    aria_llm_anthropic_routing_trading_enabled: bool = False  # 02/08 -- separate trading-role gate, dormant by default
     aria_llm_cost_footer: bool = True
     aria_proactive_ideas: bool = True
     aria_epistemic_web_verify: bool = True

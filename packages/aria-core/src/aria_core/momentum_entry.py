@@ -2224,7 +2224,7 @@ async def _llm_confirm(
         # would have sufficed for the decision itself), but a systematic
         # justification gets cut off (finish_reason=length, a noisy warning log
         # for nothing) -- a safety margin, not a fix to an underlying bug.
-        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF, trading=True)
         reply = await chat_with_context(
             user, system, max_tokens=20, temperature=0.0,
             model=trading_model, provider=trading_provider,
@@ -2327,7 +2327,7 @@ async def _llm_security_gate(
         # used the global provider/fallback. #118, 27/07 -- routes through the
         # same shared SSOT as the conversational path, dormant until the
         # operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
-        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF, trading=True)
         reply = await chat_with_context(
             user, system, max_tokens=20, temperature=0.0,
             model=trading_model, provider=trading_provider,
@@ -2432,7 +2432,7 @@ async def _llm_confirm_and_gate(
         # #118, 27/07 -- routes through the same shared SSOT as the
         # conversational path and the other 2 trading call sites above,
         # dormant until the operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
-        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF)
+        trading_provider, trading_model = anthropic_depth_override(LlmDepth.BRIEF, trading=True)
         reply = await chat_with_context(
             user, system, max_tokens=20, temperature=0.0,
             model=trading_model, provider=trading_provider,

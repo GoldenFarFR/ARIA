@@ -167,9 +167,17 @@ class Settings(BaseSettings):
     # profondeur"), replaces the 3 fields above (now dead once this gate is on --
     # kept only as the historical Virtuals-catalog record, see llm_economy.py).
     # Off by default: dormant as long as OpenRouter/Grok remain the active
-    # providers, per explicit operator decision -- flipping this is the ONLY
-    # step needed to switch over, no further code change.
+    # providers, per explicit operator decision. Covers everything EXCEPT the
+    # momentum trading gates -- see aria_llm_anthropic_routing_trading_enabled
+    # below (02/08, split found necessary by an LLM architecture review
+    # workflow: a single flag couldn't sequence "non-trading first, trading
+    # later" the way the operator's progressive-rollout doctrine requires).
     aria_llm_anthropic_routing_enabled: bool = False
+    # 02/08 -- separate gate for momentum_entry.py's 3 entry-gate call sites
+    # only (llm_economy.anthropic_depth_override(..., trading=True)). Flip
+    # AFTER aria_llm_anthropic_routing_enabled has been observed stable on the
+    # non-trading roles -- never both at once on a first activation.
+    aria_llm_anthropic_routing_trading_enabled: bool = False
     image_api_key: str = ""  # xAI Imagine — scènes portrait (/avatar scene)
     image_api_model: str = "grok-imagine-image"  # 0.02$/img — quality = 0.05$/img
     aria_operator_tz: str = "Europe/Paris"  # GMT+2 — planification tweets (/x compose)
