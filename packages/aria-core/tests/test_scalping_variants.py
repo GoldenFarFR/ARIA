@@ -397,7 +397,26 @@ async def test_v4_requires_both_signals_confirmed(monkeypatch):
     assert result["action"] == "BUY"
     expected_stop = 1.0 - 2.0 * 0.05  # V4 uses a WIDER 2xATR stop
     assert result["invalidation"] == pytest.approx(expected_stop)
-    assert result["target"] == pytest.approx(1.0 + 1.0 * (1.0 - expected_stop))  # 1:1 conservative TP
+    # 08/02 -- ratio relevé de 1.0 (1:1, mathématiquement invendable, voir
+    # test_v4_tp_ratio_stays_strictly_above_the_price_impact_floor ci-dessous)
+    # à 1.3.
+    assert result["target"] == pytest.approx(1.0 + 1.3 * (1.0 - expected_stop))
+
+
+def test_v4_tp_ratio_stays_strictly_above_the_price_impact_floor():
+    """08/02 -- real critical bug found live (audit + adversarial verify
+    workflow): _V4_TP_RR_RATIO used to be exactly 1.0, EXACTLY equal to
+    risk_guard.PRICE_IMPACT_MIN_RR (1.0) -- an algebraic proof (and 7/7 real
+    prod signals confirmed) showed cap_alloc_to_price_impact then ALWAYS
+    returns 0.0 once the mandatory 1% scalping swap fee is applied,
+    regardless of liquidity/volatility -- V4 could never open a single
+    position. Must stay strictly above BOTH floors (the scalping-specific
+    one introduced the same day, and the original default) with real margin,
+    not just barely above."""
+    from aria_core import risk_guard
+
+    assert scalping_variants._V4_TP_RR_RATIO > risk_guard.PRICE_IMPACT_MIN_RR_SCALPING
+    assert scalping_variants._V4_TP_RR_RATIO > risk_guard.PRICE_IMPACT_MIN_RR
 
 
 @pytest.mark.asyncio

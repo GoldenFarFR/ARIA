@@ -3266,6 +3266,37 @@ async def test_open_position_shrinks_alloc_on_thin_pool(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_position_scalping_mode_uses_the_lower_price_impact_floor(tmp_db):
+    """08/02 -- real problem found live (audit + adversarial verify
+    workflow): scalping's tight ATR stops leave so little margin above
+    risk_guard.PRICE_IMPACT_MIN_RR (1.0) that the mandatory 1% swap fee alone
+    crushed most signals -- scalping_v2 never opened a single position in
+    17h30+ despite 4 real signals. mode="scalping" must route through
+    risk_guard.PRICE_IMPACT_MIN_RR_SCALPING (0.5), giving a strictly larger
+    allocation than the same setup under swing's unchanged default floor."""
+    await pt.reset_portfolio(1_000_000.0, wallet="swing")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+    pos_standard = await pt.open_position(
+        A, "AAA", 1.0, target_price=1.06, invalidation_price=0.97,
+        alloc_usd=1_000, pool_liquidity_usd=50_000.0, wallet="swing", mode="standard",
+    )
+    pos_scalping = await pt.open_position(
+        B, "BBB", 1.0, target_price=1.06, invalidation_price=0.97,
+        alloc_usd=1_000, pool_liquidity_usd=50_000.0, wallet="scalping", mode="scalping",
+    )
+    # Values hand-verified in test_risk_guard.py's own
+    # TestCapAllocToPriceImpact tests -- kept in sync deliberately, not
+    # re-derived independently here. mode="standard" never applies the
+    # scalping swap fee (apply_swap_fee=(mode=="scalping")), so it lands on
+    # the no-fee/default-floor value (375.0), not the with-fee one -- the
+    # comparison that matters is scalping's lower floor giving MORE room
+    # than standard's default floor on the SAME nominal setup.
+    assert pos_standard["cost_usd"] == pytest.approx(375.0, rel=1e-6)
+    assert pos_scalping["cost_usd"] == pytest.approx(495.049505, rel=1e-5)
+    assert pos_scalping["cost_usd"] > pos_standard["cost_usd"]
+
+
+@pytest.mark.asyncio
 async def test_open_position_pool_liquidity_none_unchanged(tmp_db):
     """Non-régression : ``pool_liquidity_usd`` non fourni (défaut ``None``, ex. l'ancien
     pilote VC-thesis) -- comportement inchangé, aucun rétrécissement lié à l'impact de
@@ -5378,6 +5409,7 @@ async def test_multi_pocket_gate_on_vc_pocket_sources_bonding_candidates(tmp_db,
     capital pool/reset eligibility changes with the wallet, never the exit
     discipline."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     from aria_core import bonding_entry
     from aria_core.bonding_entry import CHAIN_MARKER
     from aria_core.skills import candidate_ranking
@@ -6523,6 +6555,7 @@ async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, 
     analyzer`` path. The SAME contract (D) legitimately ends up open in BOTH
     scalping and swing at once -- proof #1 of this chantier's whole point."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     from aria_core import momentum_entry
     from aria_core.skills import candidate_ranking
 
@@ -6642,6 +6675,72 @@ async def test_scalping_only_sourcing_skips_swing_and_vc_new_entries(tmp_db, mon
 async def test_scalping_only_sourcing_off_by_default(tmp_db, monkeypatch):
     monkeypatch.delenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", raising=False)
     assert pt.scalping_only_sourcing_enabled() is False
+
+
+# 08/02 -- real gap found live (audit + adversarial verify workflow): the
+# "vc" pocket had NO mechanical guardrail enforcing its intended dormancy
+# (decided 15/07) -- it was actively sourced every cycle, its dormancy
+# resting entirely on no candidate clearing safety_screen's score>=70 bar
+# by chance.
+
+@pytest.mark.asyncio
+async def test_vc_pocket_sourcing_off_by_default(tmp_db, monkeypatch):
+    monkeypatch.delenv("ARIA_VC_POCKET_SOURCING_ENABLED", raising=False)
+    assert pt.vc_pocket_sourcing_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_vc_pocket_sourcing_gate_off_skips_vc_but_not_swing(tmp_db, monkeypatch):
+    """Deliberately narrower than scalping_only_sourcing_enabled(): this gate
+    only ever skips "vc" -- swing must keep sourcing normally even while vc
+    is gated off."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.delenv("ARIA_VC_POCKET_SOURCING_ENABLED", raising=False)
+    from aria_core import momentum_entry
+    from aria_core.skills import candidate_ranking
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_momentum_eval(
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+    ):
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_momentum_eval)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(E)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    async def _fake_vc_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "EEE", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "strategy": "vc_thesis",
+        }
+
+    monkeypatch.setattr(pt, "_default_analyzer", _fake_vc_analyzer)
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert "vc" not in wallets_opened
+    assert "swing" in wallets_opened
+    assert await pt.get_open_positions(wallet="vc") == []
 
 
 @pytest.mark.asyncio

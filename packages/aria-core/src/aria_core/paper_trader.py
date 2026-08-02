@@ -1932,9 +1932,18 @@ async def open_position(
     # the 1% scalping swap fee entirely, letting a tight setup's final R/R
     # (after simulated_fill_price DID apply the fee) collapse well below the
     # floor this function is supposed to guarantee.
+    # 08/02 -- real problem found live (audit + adversarial verify workflow):
+    # scalping's tight ATR stops (1.5-2.0x ATR) leave so little margin above
+    # the DEFAULT floor (PRICE_IMPACT_MIN_RR=1.0) that the mandatory 1% swap
+    # fee alone crushed most signals to $0-$3,600 instead of the conviction
+    # tier's intended size -- confirmed on real prod data (scalping_v2: 0/4
+    # signals ever opened). A lower floor for scalping specifically, see
+    # PRICE_IMPACT_MIN_RR_SCALPING's own comment -- swing/vc keep the
+    # unchanged default (their wider stops never needed this margin).
     alloc = risk_guard.cap_alloc_to_price_impact(
         alloc, entry_price, target_price, invalidation_price, pool_liquidity_usd,
         apply_swap_fee=(mode == "scalping"),
+        min_rr=risk_guard.PRICE_IMPACT_MIN_RR_SCALPING if mode == "scalping" else risk_guard.PRICE_IMPACT_MIN_RR,
     )
     # Item #233 (30/07, real bug found live on CFI): a hard cap on the order's
     # OWN SIZE relative to the pool, independent of (and in addition to) the
@@ -3185,6 +3194,26 @@ def scalping_only_sourcing_enabled() -> bool:
     idiom as every other gate in this file) -- meant to be temporary, not a
     permanent architecture change."""
     return os.environ.get("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def vc_pocket_sourcing_enabled() -> bool:
+    """08/02 -- real gap found live (audit + adversarial verify workflow,
+    operator go-ahead to fix): the "vc" pocket (85% thesis pocket, decided
+    dormant on the current $1M momentum test since 15/07) had NO mechanical
+    guardrail enforcing that -- it was actively sourced every cycle
+    (periodic AND WebSocket drain), its dormancy resting entirely on no
+    candidate clearing safety_screen's score>=70 bar by chance, never a
+    dedicated switch. A single qualifying candidate could have silently
+    opened a real strategy="vc_thesis" position (Formula B), contradicting
+    the operator's own 15/07 decision -- no test_coherence.py assertion
+    guarded against this either. OFF by default (fail-closed, same idiom as
+    every other gate in this file) -- matches the CURRENT intended state
+    (vc dormant) byte-for-byte; flip this ON explicitly the day the 85% VC
+    pocket is actually reactivated, never implicitly via a permissive
+    default."""
+    return os.environ.get("ARIA_VC_POCKET_SOURCING_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
@@ -5615,6 +5644,10 @@ async def _run_paper_cycle_locked(
             # scalping slot is the single "scalping" pocket or the 5
             # "scalping_v1".."scalping_v5" pockets (scalping_variants_enabled()).
             if not pocket_wallet.startswith("scalping") and scalping_only_sourcing_enabled():
+                continue
+
+            # 08/02 -- see vc_pocket_sourcing_enabled()'s own docstring.
+            if pocket_wallet == "vc" and not vc_pocket_sourcing_enabled():
                 continue
 
             opened_positions, _ = await _open_new_entries_for_wallet(

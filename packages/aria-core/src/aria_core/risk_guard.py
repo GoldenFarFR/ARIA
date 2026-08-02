@@ -482,6 +482,25 @@ PRICE_IMPACT_RATIO = 2.0  # standard AMM rule: X% of the pool -> ~2*X% price imp
 # constant, never a cross-module import).
 PRICE_IMPACT_MIN_RR = 1.0
 
+# 08/02 -- real problem found live (2-agent audit + adversarial verify
+# workflow, operator go-ahead to fix): scalping's ATR-based stops are
+# structurally MUCH tighter (1.5-2.0x ATR, often just a few % of price) than
+# swing/vc's Fibonacci/golden-pocket stops -- on a tight scalping setup, the
+# margin between the trade's own raw R/R (e.g. V2's 1.5, V1/V3's 2.0) and
+# this floor (1.0) is thin enough that the mandatory 1% scalping swap fee
+# ALONE (``apply_swap_fee=True`` below) can already push the degraded R/R
+# through the floor -- confirmed on real prod data: scalping_v2 never once
+# opened a position (0/4 real signals), v1/v3 opened positions sized down
+# to $50-$3,600 instead of the $20,000 the conviction tier intended. A
+# LOWER floor for scalping specifically gives tight-stop setups the margin
+# to survive the swap fee without weakening the guardrail's actual purpose
+# (still fully active, still fail-closed on a bad setup) for swing/vc, whose
+# wider stops never needed this margin in the first place. First pass, not
+# yet calibrated against a large sample of real scalping fills -- revisit
+# once more data accumulates (same "first pass" doctrine as
+# DEX_QUALITY_WATCH_THRESHOLD above).
+PRICE_IMPACT_MIN_RR_SCALPING = 0.5
+
 # 30/07 -- real bug found live (CFI, a real limit order): a candidate's raw R/R
 # (11.9) cleared every floor by a wide margin, but the pool's liquidity was only
 # $60k -- ``cap_alloc_to_price_impact`` above degraded the size down to a ~2%
@@ -514,10 +533,10 @@ def _price_impact_pct(alloc_usd: float, pool_liquidity_usd: float) -> float:
 def cap_alloc_to_price_impact(
     alloc_usd: float, entry_price: float, target_price: float | None,
     invalidation_price: float | None, pool_liquidity_usd: float | None,
-    *, apply_swap_fee: bool = False,
+    *, apply_swap_fee: bool = False, min_rr: float = PRICE_IMPACT_MIN_RR,
 ) -> float:
     """Reduces ``alloc_usd`` if the price impact of THIS order on THIS pool would drop the
-    structural R/R below ``PRICE_IMPACT_MIN_RR`` -- never an increase beyond the entry
+    structural R/R below ``min_rr`` -- never an increase beyond the entry
     value (same doctrine as ``size_position_by_risk``). May return ``0.0`` (no
     viable size, even infinitesimal, on this pool with this trade structure).
     Missing/inconsistent data (target, invalidation, or liquidity absent, or a
@@ -534,7 +553,14 @@ def cap_alloc_to_price_impact(
     already-tight setup, that unanticipated 1% was enough to blow through the
     R/R floor this function is supposed to guarantee. Must be called with the
     SAME ``apply_swap_fee`` value as the ``simulated_fill_price`` call for the
-    same order (``paper_trader.open_position``), never independently decided."""
+    same order (``paper_trader.open_position``), never independently decided.
+
+    ``min_rr`` (08/02, real problem found live, see PRICE_IMPACT_MIN_RR_SCALPING's
+    own comment): defaults to the module-level PRICE_IMPACT_MIN_RR (1.0,
+    unchanged behavior for swing/vc, whose wider Fibonacci/golden-pocket stops
+    never needed a lower floor) -- the caller passes a lower value for
+    scalping's tighter ATR stops, which otherwise get crushed by the mandatory
+    1% swap fee alone."""
     if alloc_usd <= 0 or entry_price <= 0:
         return alloc_usd
     if not pool_liquidity_usd or pool_liquidity_usd <= 0:
@@ -551,15 +577,13 @@ def cap_alloc_to_price_impact(
     degraded_entry = fee_adjusted_entry * (1.0 + _price_impact_pct(alloc_usd, pool_liquidity_usd))
     if degraded_entry < target_price:
         degraded_rr = (target_price - degraded_entry) / (degraded_entry - invalidation_price)
-        if degraded_rr >= PRICE_IMPACT_MIN_RR:
+        if degraded_rr >= min_rr:
             return alloc_usd  # negligible impact at this size, nothing to reduce
 
-    # Closed-form solution: exact degraded entry price for which R/R == PRICE_IMPACT_MIN_RR
-    # (derived from (target - e) / (e - invalidation) = PRICE_IMPACT_MIN_RR), then worked back
+    # Closed-form solution: exact degraded entry price for which R/R == min_rr
+    # (derived from (target - e) / (e - invalidation) = min_rr), then worked back
     # to the allocation that produces this degraded price (impact_pct linear in alloc_usd).
-    target_degraded_entry = (
-        target_price + PRICE_IMPACT_MIN_RR * invalidation_price
-    ) / (1.0 + PRICE_IMPACT_MIN_RR)
+    target_degraded_entry = (target_price + min_rr * invalidation_price) / (1.0 + min_rr)
     if target_degraded_entry <= fee_adjusted_entry:
         return 0.0  # even an infinitesimal size wouldn't meet this floor here (fee alone breaches it)
 

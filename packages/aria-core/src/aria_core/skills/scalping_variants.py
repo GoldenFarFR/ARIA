@@ -397,11 +397,27 @@ async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
 
 # ── V4 -- Combo sec (%B ET %K) ───────────────────────────────────────────────
 # Entrée : LES DEUX conditions réunies (double confirmation) -- moins de
-# trades, taux de réussite visé maximal. Stop = 2xATR (large). TP = ratio 1:1
-# (conservateur).
+# trades, taux de réussite visé maximal. Stop = 2xATR (large). TP = ratio 1:1.3
+# (relevé le 08/02, voir le commentaire ci-dessous -- 1:1 était mathématiquement
+# invendable).
 
 _V4_STOP_ATR_MULT = 2.0
-_V4_TP_RR_RATIO = 1.0
+# 08/02 -- vrai bug critique trouvé en direct (workflow d'audit + contre-
+# vérification adversariale, feu vert opérateur) : à 1.0 exactement, ce ratio
+# était EXACTEMENT égal à risk_guard.PRICE_IMPACT_MIN_RR (1.0) -- une preuve
+# algébrique montre que cap_alloc_to_price_impact retourne alors TOUJOURS 0.0,
+# quelle que soit la liquidité ou la volatilité, dès que le frais de swap
+# scalping (1%, apply_swap_fee=True) est appliqué : `target_degraded_entry`
+# se simplifie exactement à `entry_price`, tandis que `fee_adjusted_entry` est
+# strictement supérieur (`entry_price*1.01`) -- la condition de rejet immédiat
+# `target_degraded_entry <= fee_adjusted_entry` est donc TOUJOURS vraie.
+# Confirmé en données réelles de prod : 7/7 signaux BUY de V4 rejetés
+# (`buy_refused`) depuis sa création, ZÉRO position jamais ouverte en 17h30+.
+# Relevé à 1.3 (au-dessus du plancher, y compris du nouveau plancher scalping
+# PRICE_IMPACT_MIN_RR_SCALPING=0.5 introduit le même jour) -- reste le ratio
+# le plus conservateur des 5 variantes (V1=2.0, V2=1.5, V3 structurel), cohérent
+# avec la conception "double confirmation, taux de réussite visé maximal".
+_V4_TP_RR_RATIO = 1.3
 
 
 async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:

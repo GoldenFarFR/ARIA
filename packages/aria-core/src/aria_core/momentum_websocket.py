@@ -652,6 +652,27 @@ class MomentumWebsocketListener:
                     if pocket_risk_state.blocked:
                         continue
 
+                    # 08/02 -- real bug found live (audit + adversarial
+                    # verify workflow, operator go-ahead to fix): the
+                    # periodic heartbeat loop (paper_trader._run_paper_cycle_
+                    # locked) has always respected scalping_only_sourcing_
+                    # enabled() (see its own docstring), but this 30s
+                    # WebSocket drain never did -- confirmed on real prod
+                    # data with the gate ON: 50 swing limit orders actively
+                    # "watching" (most recent created 18min before the
+                    # audit), ~1500 LLM-confirmation scan_log rows on swing
+                    # over 24h, directly contradicting the operator's 08/01
+                    # intent to concentrate sourcing on scalping alone.
+                    if not pocket_wallet.startswith("scalping") and paper_trader.scalping_only_sourcing_enabled():
+                        continue
+
+                    # 08/02 -- see paper_trader.vc_pocket_sourcing_enabled()'s
+                    # own docstring -- same real gap, same fix, mirrored here
+                    # so this drain and the periodic heartbeat can never
+                    # silently diverge on this gate either.
+                    if pocket_wallet == "vc" and not paper_trader.vc_pocket_sourcing_enabled():
+                        continue
+
                     await paper_trader._open_new_entries_for_wallet(
                         pocket_wallet, pocket_candidates, pocket_analyzer,
                         price_lookup=paper_trader._default_price_lookup,

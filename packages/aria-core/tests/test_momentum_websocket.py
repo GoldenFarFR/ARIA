@@ -762,6 +762,7 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
     channel tag, exactly mirroring paper_trader._run_paper_cycle_locked's own
     multi-pocket branch."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
     listener = mw.MomentumWebsocketListener()
     listener._pending[(A, "base")] = 0.0
@@ -864,6 +865,93 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
 
 
 @pytest.mark.asyncio
+async def test_drain_multi_pocket_respects_scalping_only_and_vc_pocket_gates(monkeypatch):
+    """08/02 -- real bug found live (audit + adversarial verify workflow):
+    the periodic heartbeat loop (paper_trader._run_paper_cycle_locked) has
+    always respected scalping_only_sourcing_enabled() (operator's 08/01
+    pause), but THIS 30s WebSocket drain never checked it -- confirmed on
+    real prod data with the gate on: 50 swing limit orders actively
+    "watching" (most recent created 18min before the audit), ~1500 LLM-
+    confirmation scan_log rows on swing over 24h, directly contradicting the
+    operator's intent to concentrate sourcing on scalping alone. Same drain
+    also never checked the new vc_pocket_sourcing_enabled() gate (found the
+    same audit -- "vc" was actively sourced with no dedicated switch at
+    all). Both must now skip "swing"/"vc" here exactly as they already do
+    in the periodic loop."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    listener = mw.MomentumWebsocketListener()
+    listener._pending[(A, "base")] = 0.0
+
+    async def _passthrough_prefilter(candidates):
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    from aria_core import paper_trader, risk_guard
+    from aria_core import paper_trader_risk as risk
+    from aria_core.skills import candidate_ranking, market_sentiment
+
+    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
+
+    async def _no_depeg():
+        return 0.0
+
+    monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
+
+    async def _fake_evaluate(wallet="swing", *, price_lookup=None):
+        return _fake_portfolio_risk_state(risk_guard, wallet=wallet)
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate)
+
+    async def _fake_macro(*, price_lookup=None):
+        return risk_guard.MacroRiskState(
+            total_equity=3_000_000.0, total_high_water_mark=3_000_000.0,
+            drawdown_pct=0.0, blocked=False, newly_triggered=False,
+        )
+
+    monkeypatch.setattr(risk_guard, "evaluate_macro_risk", _fake_macro)
+
+    async def _fake_regime():
+        return market_sentiment.META_REGIME_NEUTRAL
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _fake_regime)
+
+    class _FakeRankedCandidate:
+        def __init__(self, contract: str) -> None:
+            self.contract = contract
+
+    async def _fake_top_candidates(limit):
+        return [_FakeRankedCandidate(B)]
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+
+    def _fake_analyzer_factory(chain_by_contract, **kwargs):
+        async def _analyzer(contract):
+            return None
+
+        return _analyzer
+
+    monkeypatch.setattr(paper_trader, "_default_momentum_analyzer", _fake_analyzer_factory)
+
+    captured_calls: list[dict] = []
+
+    async def _fake_open_new_entries(wallet, candidates, analyzer, **kwargs):
+        captured_calls.append({"wallet": wallet})
+        return [], 0
+
+    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
+
+    await listener._drain_once()
+
+    wallets_dispatched = {c["wallet"] for c in captured_calls}
+    assert wallets_dispatched == {"scalping"}
+    assert "swing" not in wallets_dispatched
+    assert "vc" not in wallets_dispatched
+
+
+@pytest.mark.asyncio
 async def test_drain_multi_pocket_gate_on_dispatches_six_scalping_variants_when_variants_enabled(
     monkeypatch,
 ):
@@ -877,6 +965,7 @@ async def test_drain_multi_pocket_gate_on_dispatches_six_scalping_variants_when_
     up all 6 scalping pockets once ARIA_SCALPING_VARIANTS_ENABLED is on,
     never just the legacy "scalping" wallet."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
     listener = mw.MomentumWebsocketListener()
