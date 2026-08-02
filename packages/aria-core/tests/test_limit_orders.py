@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+import asyncio
+
 from aria_core import limit_orders as lo
 from aria_core import paper_trader, risk_guard
 from aria_core.services.dexscreener import PairSnapshot
@@ -2281,6 +2283,41 @@ async def test_execute_trigger_forwards_recalculated_entry_atr_pct(monkeypatch):
     positions = await paper_trader.get_open_positions(wallet="swing")
     assert len(positions) == 1
     assert positions[0]["entry_atr_pct"] == pytest.approx(0.30)
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_waits_on_run_cycle_lock_held_elsewhere(monkeypatch):
+    """Item #31 (02/08), real race found live: unlike every other capital-
+    allocating entrypoint, the trigger path never acquired
+    paper_trader._run_cycle_lock -- proves the fix: while another coroutine
+    holds the lock (simulating a concurrent heartbeat cycle), a trigger must
+    genuinely BLOCK rather than racing ahead and opening the position
+    immediately."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="swing")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="swing")
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_check(order_arg, sig_arg):
+        return "trigger"
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_check)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    async with paper_trader._run_cycle_lock:
+        # Lock held (simulating a concurrent heartbeat cycle) -- the drain
+        # must not open the position yet.
+        task = asyncio.create_task(lo.process_active_orders(_price))
+        await asyncio.sleep(0.05)
+        assert await paper_trader.has_open("0xCHECK", wallet="swing") is False
+
+    # Lock released -- the trigger can now proceed and complete.
+    actions = await task
+    assert len(actions["triggered"]) == 1
+    assert await paper_trader.has_open("0xCHECK", wallet="swing") is True
 
 
 @pytest.mark.asyncio

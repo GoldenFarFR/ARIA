@@ -1061,7 +1061,29 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                 except Exception:  # noqa: BLE001
                     pass
         elif decision == "trigger":
-            pos = await _execute_trigger(order, sig, price, notifier)
+            # 02/08 -- real race found live (dedicated audit): unlike EVERY
+            # other capital-allocating entrypoint (run_paper_cycle,
+            # run_daily_trade_floor_cycle, _drain_multi_pocket), this trigger
+            # path never acquired paper_trader._run_cycle_lock -- the 30s
+            # websocket drain and a slower heartbeat cycle could both read
+            # has_open/position-cap/equity before either commits its
+            # open_position write. Scoped tightly to _execute_trigger alone
+            # (never the whole process_active_orders loop above/below) so a
+            # pending->watching transition or a cancel/expire decision --
+            # neither touches capital -- is never held up waiting on a
+            # possibly-long-running heartbeat cycle. `_execute_trigger`
+            # re-validates price freshness internally, so this added
+            # latency never risks a stale-price buy.
+            #
+            # Known, NOT closed by this lock (documented, not fixed here):
+            # this is an in-process asyncio.Lock -- it offers ZERO
+            # protection during a blue-green deploy's overlap window, where
+            # two full Python processes briefly run against the same
+            # bind-mounted SQLite file. Closing that gap needs a DB-level
+            # guard (unique constraint + explicit transaction), a separate,
+            # larger chantier -- see docs/HANDOFF_PIPELINE_MOMENTUM.md.
+            async with paper_trader._run_cycle_lock:
+                pos = await _execute_trigger(order, sig, price, notifier)
             if pos:
                 actions["triggered"].append(pos)
                 await mark_triggered(order["id"])
