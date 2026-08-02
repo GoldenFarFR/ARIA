@@ -87,7 +87,15 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # backlog, injected in one burst, dominating every discovery cycle's fetch
 # quota -- see manual_candidates.py's own history). The throttle itself was
 # never the actual cause.
-_AUTHENTICATED_MIN_INTERVAL = 2.857
+#
+# 08/02 -- widened again, operator decision, after live prod logs still showed
+# a sustained 429 rate (29/15min, ~54/57 of all 429s across services) even
+# with the limit_orders.py watch-check cap (08/01 entry) and the per-call
+# throttle both already in place -- confirms the real sustained cap is lower
+# than 21 req/min under Base+Ethereum's continuous two-chain load. 20 req/min
+# = 3.0s, a small further cut pending an actual burst-controlled measurement
+# of the true sustained cap (still not done, see the 26/07 comment above).
+_AUTHENTICATED_MIN_INTERVAL = 3.0
 
 
 def geckoterminal_authenticated() -> bool:
@@ -142,7 +150,12 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # 08/01 -- briefly halved then restored, same episode as
 # _AUTHENTICATED_MIN_INTERVAL above -- see its comment for the real root
 # cause found (manual-candidate backlog, not the throttle itself).
-_MIN_INTERVAL = 2.857
+#
+# 08/02 -- widened alongside _AUTHENTICATED_MIN_INTERVAL (same real incident,
+# see its comment) to keep the "authenticated is never slower than keyless"
+# invariant intact -- this path isn't the one active in prod today
+# (authenticated mode is), kept consistent rather than left stale.
+_MIN_INTERVAL = 3.0
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
