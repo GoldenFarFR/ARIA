@@ -308,6 +308,19 @@ async def test_rescan_ignores_reasonable_volume_to_liquidity_ratio(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rescan_never_flags_ratio_on_scalping_position(monkeypatch):
+    """02/08 -- operator's explicit call: same doctrine as momentum_entry.py's
+    entry-time gate, applied to the mid-holding re-check -- a scalping
+    position's fast in/out exit is never blocked/re-flagged by this ratio,
+    even at the exact same extreme reading (91x) that flags a swing/default
+    position above."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)  # cas réel BRIAN, ~91x
+    result = await risk.rescan_open_position(_position(mode="scalping"), pair=pair)
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_rescan_skips_ratio_check_when_pair_absent(monkeypatch):
     """Un price_lookup INJECTÉ (tests, pipeline momentum) ne fournit pas de paire --
     dégradation honnête, le check est sauté, jamais un appel réseau autonome."""

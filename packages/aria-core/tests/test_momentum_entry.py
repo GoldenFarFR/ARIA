@@ -4230,6 +4230,21 @@ async def test_evaluate_wash_trading_ratio_resets_below_threshold(monkeypatch):
     assert (CONTRACT, "base") not in me._ratio_breach_since
 
 
+@pytest.mark.asyncio
+async def test_evaluate_wash_trading_ratio_never_rejects_on_scalping_mode(monkeypatch):
+    """02/08 -- operator's explicit call: scalping pockets no longer rejected
+    on this ratio, sustained or not -- a fast in/out strategy can ride a
+    wash-trading-driven move and exit before any collapse. swing/vc/megacap
+    (mode="standard", covered by the two tests just above) keep the gate."""
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
+    # Two calls (same as the "sustained" test above) to prove even a
+    # confirmed-sustained breach never rejects in scalping mode -- not just a
+    # single reading escaping the confirmation window.
+    await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result.get("hold_reason") != "wash_trading_ratio"
+
+
 class TestWashTradingRatioConfirmed:
     """Tests unitaires purs de ``_wash_trading_ratio_confirmed`` -- pas besoin de
     passer par tout le pipeline pour vérifier la mécanique de confirmation elle-même."""

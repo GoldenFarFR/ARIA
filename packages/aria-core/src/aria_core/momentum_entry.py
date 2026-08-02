@@ -2627,7 +2627,21 @@ async def evaluate_hard_gates(
     # catches a buy signal not backed by real per-candle volume, even though
     # this earlier, cruder 24h floor no longer runs.
 
-    if best.liquidity_usd and best.liquidity_usd > 0:
+    # 02/08 -- operator's explicit call: wash-trading ratio no longer rejects
+    # on the scalping pockets. Rationale: a price move caused by wash-trading
+    # is not inherently harmful to a FAST in/out strategy -- scalping can ride
+    # the move and exit well before any post-pump collapse, so the ratio's
+    # only remaining value there was blocking a potentially profitable
+    # signal. The risk this guardrail actually protects against (holding
+    # through a collapse after the wash-trading stops) is specific to a
+    # LONG-HELD position -- still real for swing/megacap (same mode="standard"
+    # exit discipline, same holding-period exposure) and for vc
+    # (skills/safety_screen.py, separate call site, untouched by this
+    # condition), so the ratio stays fully enforced there. `mode` is already
+    # the same parameter used for the scalping liquidity floor just above --
+    # no new import, no risk of the momentum_entry<->paper_trader cycle this
+    # module already avoids.
+    if mode != "scalping" and best.liquidity_usd and best.liquidity_usd > 0:
         volume_to_liq = (best.volume_24h_usd or 0.0) / best.liquidity_usd
         if _wash_trading_ratio_confirmed(contract, chain, volume_to_liq):
             await momentum_rejection_cache.record_rejection(contract, chain, "wash_trading_ratio")

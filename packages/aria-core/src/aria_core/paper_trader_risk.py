@@ -229,7 +229,18 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     contract = position["contract"]
     reasons: list[str] = []
 
-    if pair is not None and pair.liquidity_usd and pair.liquidity_usd > 0:
+    # 02/08 -- same operator call as momentum_entry.py's entry-time wash-trading
+    # gate: scalping pockets no longer re-flagged on this ratio while a
+    # position is held either -- a fast in/out strategy can ride a
+    # wash-trading-driven move and exit before any post-pump collapse, so a
+    # mid-holding re-check adds no protection there. `position.get("mode")`
+    # is the same field the position was opened with (paper_position.mode),
+    # no new import needed. swing/megacap (mode="standard", same long-hold
+    # exposure as the entry-time gate's own rationale) keep this check.
+    if (
+        position.get("mode") != "scalping"
+        and pair is not None and pair.liquidity_usd and pair.liquidity_usd > 0
+    ):
         from aria_core.momentum_entry import MAX_VOLUME_TO_LIQUIDITY_RATIO
 
         volume_to_liq = (pair.volume_24h_usd or 0.0) / pair.liquidity_usd
