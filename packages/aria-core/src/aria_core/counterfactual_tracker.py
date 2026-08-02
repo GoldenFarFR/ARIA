@@ -57,6 +57,41 @@ def counterfactual_tracker_enabled() -> bool:
 # (not years of market drift unrelated to the original decision).
 REVISIT_AFTER_DAYS = 7.0
 
+# 02/08 -- pre-activation review found the previous default (20/cycle, 180min
+# interval -> 160/day) undersized by ~5x against the REAL measured inflow: a
+# live query of `counterfactual_rejection` (14 days, 07/20->08/02, DB at
+# /opt/aria-data/aria.db) shows a 823/day average -- and an ACCELERATING recent
+# trend (341 -> 1282 -> 2529+ on the last 3 days) that lines up with two entry
+# gates loosened right before it (#246 volume floor dropped 07/30, swing R/R
+# floor dropped 07/31) -- the flat 14-day average likely UNDERSTATES the near-
+# term real rate, so this is calibrated with real headroom rather than to the
+# bare average. HEARTBEAT_REVISIT_LIMIT=300/cycle x 8 cycles/day (interval_
+# minutes=180, heartbeat.py) = 2400/day capacity -- ~2.9x the 14-day average,
+# above every FULL day observed in that window (max 1282, 08/01). Cost: 300 x
+# `dexscreener._MIN_INTERVAL` (1.111s, shared throttle) = 333.3s (~5.6min) of
+# shared-throttle occupation per cycle, once every 180min (~3% of the
+# interval) -- the SAME shared lock the 15min `paper_trade_cycle` open-
+# position price refresh depends on, so this stays a small fraction of that
+# cycle's own interval rather than a value that would routinely dominate it.
+# NOT a guarantee the backlog (4434 rows already due as of 08/02) clears on
+# a fixed schedule -- if the recent elevated trend persists rather than
+# reverting to the 14-day average, capacity may still trail inflow on the
+# heaviest days. Monitor the real rate for the first week after activation
+# (`SELECT COUNT(*) FROM counterfactual_rejection WHERE revisited_at IS NULL
+# AND rejected_at <= <7d ago>`) and recalibrate this constant rather than
+# assume it is correct indefinitely.
+HEARTBEAT_REVISIT_LIMIT = 300
+
+# Defensive hard ceiling on `run_revisit_cycle(limit=...)` regardless of
+# caller (heartbeat, a future admin-triggered backfill, a careless override)
+# -- never let a single pass hold the shared DexScreener throttle
+# (`services.dexscreener._throttle`) for an unbounded stretch. 500 x 1.111s
+# ~= 9.3min -- still a small slice of any interval this cycle could run on,
+# chosen as roughly 1.7x HEARTBEAT_REVISIT_LIMIT so the normal calibrated
+# value never brushes against it, while a 10x/100x mistake would be clamped
+# rather than silently accepted.
+_MAX_LIMIT_PER_CYCLE = 500
+
 _EXCLUDED_REASONS = frozenset({
     "no_entry_signal", "ohlcv_unavailable", "blacklisted",
     "honeypot_rejected", "honeypot_unavailable", "chain_not_covered",
@@ -174,9 +209,15 @@ async def run_revisit_cycle(*, limit: int = 20) -> dict:
     -- never a second duplicated client) and record the evolution. Gated by the
     caller (``heartbeat.py``, ``ARIA_COUNTERFACTUAL_TRACKER_ENABLED``) -- this
     function doesn't check the gate itself, same pattern as the other cycles
-    (``bonding_discovery_cycle``, etc.)."""
+    (``bonding_discovery_cycle``, etc.).
+
+    ``limit`` is clamped to ``_MAX_LIMIT_PER_CYCLE`` regardless of what the
+    caller passes -- see that constant's docstring (02/08 pre-activation
+    review: no caller, present or future, should be able to hold the shared
+    DexScreener throttle for an unbounded stretch)."""
     from aria_core import paper_trader
 
+    limit = min(limit, _MAX_LIMIT_PER_CYCLE)
     due = await list_due_for_revisit(limit=limit)
     revisited = 0
     price_unavailable = 0

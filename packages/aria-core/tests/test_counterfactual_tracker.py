@@ -170,6 +170,29 @@ class TestRunRevisitCycle:
         summary = await ct.summarize_revisited()
         assert summary["by_reason"]["insufficient_liquidity"]["avg_price_change_pct"] == pytest.approx(30.0)
 
+    async def test_limit_is_clamped_to_max_per_cycle(self, monkeypatch):
+        """02/08 pre-activation review -- ``run_revisit_cycle`` must never honor a
+        caller-supplied ``limit`` above ``_MAX_LIMIT_PER_CYCLE``, regardless of
+        who passes it (heartbeat, a future admin backfill, a careless override) --
+        the shared DexScreener throttle must never be monopolized for an
+        unbounded stretch. Lowers the module ceiling for the test instead of
+        creating 501 real rows."""
+        from aria_core import paper_trader
+        from aria_core.services.dexscreener import PairSnapshot
+
+        monkeypatch.setattr(ct, "_MAX_LIMIT_PER_CYCLE", 2)
+        for i in range(5):
+            c = f"0x{i:040d}"
+            await ct.record_rejection(c, "base", f"T{i}", "insufficient_liquidity", 1.0)
+            await _backdate(c, days=8.0)
+
+        async def fake_pair_lookup(contract, *, chain="base"):
+            return PairSnapshot(pair_address="0xpool", price_usd=1.1, liquidity_usd=100_000.0, base_symbol="T")
+
+        monkeypatch.setattr(paper_trader, "_default_pair_lookup", fake_pair_lookup)
+        result = await ct.run_revisit_cycle(limit=999)
+        assert result == {"due": 2, "revisited": 2, "price_unavailable": 0}
+
     async def test_pair_lookup_failure_on_one_candidate_does_not_block_others(self, monkeypatch):
         from aria_core import paper_trader
         from aria_core.services.dexscreener import PairSnapshot

@@ -493,7 +493,7 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="counterfactual_revisit_cycle",
         name="Contrefactuel des candidats rejetes (momentum)",
-        description="Revisite les candidats REJETES par un seuil dur momentum (liquidite/volume/wash-trading/parabolique/age/profil/concentration/RVOL -- jamais no_entry_signal/ohlcv_unavailable/honeypot/blacklist, aucun contrefactuel utile pour ceux-la) apres 7 jours, refetch le prix reel actuel, enregistre l'evolution -- une simple comparaison de prix, jamais une resimulation du pipeline d'entree. But : objectiver si les seuils durs coutent de vrais gains manques (#176, 20/07). L'ENREGISTREMENT des rejets (counterfactual_tracker.record_rejection, depuis paper_trader.run_paper_cycle) reste inconditionnel, non gate -- seul ce cycle de REVISITE (appel reseau) est gate. Gate OFF par defaut.",
+        description="Revisite les candidats REJETES par un seuil dur momentum (liquidite/volume/wash-trading/parabolique/age/profil/concentration/RVOL -- jamais no_entry_signal/ohlcv_unavailable/honeypot/blacklist, aucun contrefactuel utile pour ceux-la) apres 7 jours, refetch le prix reel actuel, enregistre l'evolution -- une simple comparaison de prix, jamais une resimulation du pipeline d'entree. But : objectiver si les seuils durs coutent de vrais gains manques (#176, 20/07). L'ENREGISTREMENT des rejets (counterfactual_tracker.record_rejection, depuis paper_trader.run_paper_cycle) reste inconditionnel, non gate -- seul ce cycle de REVISITE (appel reseau) est gate. Gate OFF par defaut. Plafond 300/cycle (HEARTBEAT_REVISIT_LIMIT, recalibre 02/08 -- l'ancien defaut 20/cycle etait sous-dimensionne ~5x face au debit reel mesure, ~823 rejets/jour sur 14 jours avec une tendance recente en acceleration, cf. commentaire dans counterfactual_tracker.py).",
         interval_minutes=180,
         enabled=False,
     ),
@@ -1658,9 +1658,9 @@ class AriaHeartbeat:
                 )
 
         elif task_id == "counterfactual_revisit_cycle":
-            from aria_core.counterfactual_tracker import run_revisit_cycle
+            from aria_core.counterfactual_tracker import HEARTBEAT_REVISIT_LIMIT, run_revisit_cycle
 
-            result = await run_revisit_cycle()
+            result = await run_revisit_cycle(limit=HEARTBEAT_REVISIT_LIMIT)
             if result.get("revisited"):
                 append_memory(
                     "counterfactual_tracker",
