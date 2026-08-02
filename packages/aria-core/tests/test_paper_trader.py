@@ -3530,14 +3530,45 @@ def test_format_position_tracking_alert_shows_real_equity_when_provided():
 def test_format_position_tracking_alert_labels_combined_pockets():
     """29/07 -- real operator confusion ("pourquoi il y a que 1 wallet...
     il vaut 1400000 alors qu'il y a quelques heures il valait 995k"): the
-    header must say explicitly this is a 3-pocket combined total, not a
-    single ~$1M portfolio, whenever the caller passes combined_pockets=True."""
+    header must say explicitly this is a combined-pockets total, not a
+    single ~$1M portfolio, whenever the caller passes combined_pockets=True.
+
+    08/02 -- pocket_count is now REQUIRED to say a specific number (real bug:
+    the header used to hardcode "3 poches combinées" long after the
+    architecture grew past 3 pockets -- see the dedicated regression test
+    below for the exact incident)."""
     msg = pt.format_position_tracking_alert(
         [{"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}],
-        cash=2_000_000.0, equity=2_500_000.0, combined_pockets=True,
+        cash=2_000_000.0, equity=2_500_000.0, combined_pockets=True, pocket_count=8,
     )
-    assert "3 poches combinées" in msg
+    assert "8 poches combinées" in msg
     assert "2,500,000" in msg
+
+
+def test_format_position_tracking_alert_never_hardcodes_stale_pocket_count():
+    """08/02 -- real bug found live (operator: "pourquoi je vois 3047000
+    alors qu'on est en perte normalement ?"): the header used to say "3
+    poches combinées" as a fixed literal, regardless of how many pockets the
+    caller actually summed cash across -- stale the moment the architecture
+    grew past 3 (scalping_v1..v6 + swing + vc = 8). The label must reflect
+    whatever pocket_count the caller passes, never a hardcoded "3"."""
+    msg = pt.format_position_tracking_alert(
+        [{"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}],
+        cash=2_000_000.0, equity=2_500_000.0, combined_pockets=True, pocket_count=8,
+    )
+    assert "3 poches combinées" not in msg
+    assert "8 poches combinées" in msg
+
+
+def test_format_position_tracking_alert_combined_pockets_without_count_degrades_generic():
+    """Missing pocket_count (caller failed to compute it) -- degrade to the
+    generic label rather than rendering a broken "None poches combinées"."""
+    msg = pt.format_position_tracking_alert(
+        [{"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0, "cost_usd": 1000.0}],
+        cash=2_000_000.0, equity=2_500_000.0, combined_pockets=True, pocket_count=None,
+    )
+    assert "poches combinées" not in msg
+    assert "portefeuille papier" in msg
 
 
 def test_format_position_tracking_alert_shows_capital_and_pct_of_starting_capital():
@@ -3667,6 +3698,57 @@ async def test_run_cycle_tracking_alert_shows_real_equity_not_generic_1m(tmp_db)
     assert len(tracking_alerts) == 1
     assert "portefeuille papier 1 M$" not in tracking_alerts[0]
     assert "équité" in tracking_alerts[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_never_double_counts_a_pocket_with_no_paper_state_row(tmp_db, monkeypatch):
+    """08/02 -- real bug found live (operator: "pourquoi je vois 3047000
+    alors qu'on est en perte normalement ?"): the tracking alert's cash sum
+    used to hardcode ("scalping", "swing", "vc") -- after this same day's
+    migration folded "scalping" into "scalping_v6", cash_available("scalping")
+    silently failed open to a full untouched $1M (no paper_state row left)
+    while the REAL open position under scalping_v1 was only ever added on
+    the position-VALUE side of the equity sum, never subtracted from cash
+    anywhere -- a pure double-count that made a portfolio at a real loss
+    display as if it had GAINED money. Now sums cash across the REAL,
+    current pocket list (all_reporting_wallets()) -- proven here by opening
+    a position under scalping_v1 specifically (never "scalping", which no
+    longer exists) and checking the displayed pocket count/equity reflect
+    the real 8-pocket architecture, not a stale hardcoded 3."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v1")
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="scalping_v1", mode="scalping",
+    )
+
+    async def price_lookup(contract, **kw):
+        return 1.0  # unchanged -- isolates the double-count from any real PnL
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
+    assert len(tracking_alerts) == 1
+    msg = tracking_alerts[0]
+    # 8 real pockets (scalping_v1..v5 + scalping_v6 + swing + vc), never the
+    # stale "3" -- see all_pocket_wallets()'s own doctrine.
+    assert "8 poches combinées" in msg
+    assert "3 poches combinées" not in msg
+    # The old bug's signature: a ghost "scalping" wallet's untouched $1M
+    # (never reduced by the real ~$10,000 position under scalping_v1) added
+    # on top of that same position's own value -- equity would read
+    # ~$8,010,000 (double-counted) instead of ~$8,000,000 (8 pockets at $1M
+    # each; the small residual gap from an exact 8x starting capital is the
+    # simulated scalping swap fee on entry, not a bug -- see simulated_fill_
+    # price). A tolerance of $200 comfortably separates "correct, minor
+    # slippage" from "double-counted, off by the full position size".
+    equity_str = msg.split("équité ")[1].split(" $")[0].replace(",", "")
+    assert abs(float(equity_str) - 8_000_000.0) < 200.0
 
 
 @pytest.mark.asyncio

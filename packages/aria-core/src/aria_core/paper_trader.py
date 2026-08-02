@@ -2493,7 +2493,7 @@ async def build_open_positions_tracking_lines(*, price_lookup=None, wallet: str 
 
 def format_position_tracking_alert(
     tracked: list[dict], *, cash: float | None = None, equity: float | None = None,
-    combined_pockets: bool = False,
+    combined_pockets: bool = False, pocket_count: int | None = None,
 ) -> str:
     """PERIODIC tracking of already-open positions (#197, 07/15) -- not just on
     buy/sell. ``tracked``: list of dicts {contract, symbol, entry_price, price,
@@ -2512,15 +2512,20 @@ def format_position_tracking_alert(
 
     ``combined_pockets`` (29/07, 3-pocket architecture): ``tracked`` already
     spans EVERY pocket (position management is a single unified loop, unlike
-    per-pocket new-entry sourcing) -- the caller now sums cash across all 3
-    pockets to match (see its own comment), so the header says so explicitly
-    rather than implying a single ~$1M portfolio."""
+    per-pocket new-entry sourcing) -- the caller now sums cash across all
+    real pockets to match (see its own comment), so the header says so
+    explicitly rather than implying a single ~$1M portfolio.
+
+    ``pocket_count`` (08/02, real bug found live: the header hardcoded "3
+    poches combinées" long after the architecture grew past 3 pockets --
+    the caller now passes the REAL count it summed cash across, never a
+    stale literal)."""
     if not tracked:
         return ""
     n = len(tracked)
     position_word = "position ouverte" if n == 1 else "positions ouvertes"
     if equity is not None and cash is not None:
-        wallet_label = "3 poches combinées" if combined_pockets else "portefeuille papier"
+        wallet_label = f"{pocket_count} poches combinées" if combined_pockets and pocket_count else "portefeuille papier"
         header = (
             f"🧪 SIMULATION — suivi positions ouvertes "
             f"({wallet_label} : équité {equity:,.0f} $, cash {cash:,.0f} $, "
@@ -5236,6 +5241,7 @@ async def _run_paper_cycle_locked(
             # call; ``cash_available`` is a plain DB read (already used
             # elsewhere), never a duplicated computation.
             tracking_cash = tracking_equity = None
+            tracked_pocket_count = None
             try:
                 # 29/07 -- real bug found via operator confusion ("pourquoi il
                 # y a que 1 wallet... il vaut 1400000 alors qu'il y a
@@ -5245,13 +5251,36 @@ async def _run_paper_cycle_locked(
                 # defaulted to "swing" alone, mixing one pocket's cash with
                 # all 3 pockets' position value into a number that was
                 # neither a real single-pocket total nor a real combined one.
-                # Under the 3-pocket gate, sum cash across all 3 (each a real,
-                # independent $1M portfolio) to match what ``tracked`` already
-                # shows; gate OFF keeps the exact legacy single-pocket read.
+                #
+                # 08/02 -- real bug found live (operator: "pourquoi je vois
+                # 3047000 alors qu'on est en perte normalement ?" -- 3 real
+                # scalping pockets, v1/v3/v6, were at a combined REALIZED LOSS
+                # the same day): the 29/07 fix above hardcoded the pocket list
+                # to ("scalping", "swing", "vc") -- exactly the 3-pocket names
+                # THAT DAY's architecture had. This chantier (08/02) folded
+                # "scalping" into "scalping_v6" and added 5 more variant
+                # pockets -- "scalping" no longer has a paper_state row, so
+                # cash_available("scalping") silently fails open to a full,
+                # untouched $1M (starting_capital()'s own documented
+                # behavior with no row) while never subtracting the cost of
+                # the REAL positions actually open under scalping_v1/v3/v6 --
+                # those only showed up on the "tracked" (position-value) side
+                # of the sum, never deducted from cash. A pure double-count:
+                # equity = (ghost, still-$1M "scalping" cash) + (real
+                # position value already bought with THAT capital elsewhere)
+                # -- the same failure mode the 29/07 fix already existed to
+                # close, reopened by a hardcoded list nobody updated. Now
+                # reads the REAL, current pocket list (``all_reporting_
+                # wallets()`` -- the reporting/risk superset, not just
+                # ``all_pocket_wallets()``'s sourcing-scoped one, since a
+                # pocket retired from sourcing can still hold real open
+                # positions ``tracked`` already displays) instead of a
+                # hardcoded snapshot that silently rots every time the pocket
+                # architecture changes.
                 if multi_pocket_sourcing_enabled():
-                    tracking_cash = sum([
-                        await cash_available("scalping"), await cash_available("swing"), await cash_available("vc"),
-                    ])
+                    pockets = await all_reporting_wallets()
+                    tracking_cash = sum([await cash_available(w) for w in pockets])
+                    tracked_pocket_count = len(pockets)
                 else:
                     tracking_cash = await cash_available()
                 open_value = sum((t.get("qty") or 0.0) * (t.get("price") or 0.0) for t in tracked)
@@ -5272,7 +5301,7 @@ async def _run_paper_cycle_locked(
                 should_notify = True
             msg = format_position_tracking_alert(
                 tracked, cash=tracking_cash, equity=tracking_equity,
-                combined_pockets=multi_pocket_sourcing_enabled(),
+                combined_pockets=multi_pocket_sourcing_enabled(), pocket_count=tracked_pocket_count,
             )
             if msg and should_notify:
                 try:
