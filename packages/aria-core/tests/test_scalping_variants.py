@@ -39,13 +39,18 @@ def _candles(n=50):
     ]
 
 
-def _patch_gates_and_candles(monkeypatch, *, pair=None, hold=None, candles=None, align_score=3):
-    """``align_score`` (08/02, new trend-alignment gate in
-    _gates_and_candles_uncached): defaults to 3/3 (strong alignment) so every
+def _patch_gates_and_candles(
+    monkeypatch, *, pair=None, hold=None, candles=None, align_score=3, volume_status="confirmed",
+):
+    """``align_score`` (08/02, trend-alignment, informational/sizing only since
+    the same-day RVOL fix below): defaults to 3/3 (strong alignment) so every
     EXISTING test exercising a variant's own signal/anti-dump/stop logic in
-    isolation isn't incidentally blocked by this unrelated new gate -- the
-    gate's OWN behavior (rejecting on weak alignment) is tested separately,
-    with an explicit low score passed here."""
+    isolation isn't incidentally affected. ``volume_status`` (08/02, real HARD
+    GATE in _gates_and_candles_uncached since align_score turned out too slow
+    for scalping's candle width, see that function's own comment): defaults
+    to "confirmed" so no EXISTING test is incidentally blocked by this gate --
+    its own behavior (rejecting "not_confirmed", never rejecting "unknown")
+    is tested separately, with an explicit status passed here."""
     async def fake_hard_gates(contract, chain, *, mode="standard"):
         return (pair if hold is None else None), None, hold
 
@@ -55,9 +60,13 @@ def _patch_gates_and_candles(monkeypatch, *, pair=None, hold=None, candles=None,
     def fake_technical_alignment(candles):
         return align_score, [], {"ema_above": True, "macd_above": True, "bullish_pattern": True}
 
+    def fake_volume_confirmation(candles):
+        return volume_status, f"volume ({volume_status})", 5.0 if volume_status == "confirmed" else None
+
     monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)
     monkeypatch.setattr(momentum_entry, "_fetch_candles", fake_fetch_candles)
     monkeypatch.setattr(momentum_entry, "_technical_alignment", fake_technical_alignment)
+    monkeypatch.setattr(momentum_entry, "_check_volume_confirmation", fake_volume_confirmation)
 
 
 # ── shared plumbing (_gates_and_candles) ────────────────────────────────────
@@ -143,18 +152,26 @@ async def test_gates_and_candles_cache_scoped_per_contract_and_chain(monkeypatch
     assert calls["hard_gates"] == 3
 
 
-# ── trend-alignment gate (08/02) ─────────────────────────────────────────────
+# ── volume-confirmation gate (08/02, replaces the same-day trend-alignment
+# gate) ───────────────────────────────────────────────────────────────────
 # Real bug found live: 7/7 closed scalping trades lost, peak_gain_pct = 0.00%
 # in EVERY case -- none of the 6 scalping entries (5 variants + legacy RSI-
-# divergence) had any trend/market-context filter, just "the oversold
-# indicator just exited its zone". Reuses momentum_entry._technical_alignment
-# and its already-established direct-buy bar (_ALIGN_SCORE_MIN_FOR_DIRECT_BUY).
+# divergence) had any market-context filter, just "the oversold indicator
+# just exited its zone". First fix (trend-alignment via
+# momentum_entry._technical_alignment) was ITSELF a real bug, found by an
+# adversarial cross-review workflow and confirmed live: EMA12>EMA26 is
+# structurally too slow for scalping's candle width to ever confirm a bounce
+# that JUST formed (2.1% pass rate in a 500-scenario simulation; real prod
+# data showed scalping_v2/v4/v5 opened ZERO trades in 8h). Replaced same-day
+# with relative volume (momentum_entry._check_volume_confirmation) -- the
+# SAME gate the standard momentum pipeline already uses for this exact
+# purpose, and one that can react on the very candle the bounce forms on.
 
 
 @pytest.mark.asyncio
-async def test_gates_and_candles_rejects_weak_trend_alignment(monkeypatch):
+async def test_gates_and_candles_rejects_unconfirmed_volume(monkeypatch):
     pair = _pair()
-    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=1)  # below the 2/3 bar
+    _patch_gates_and_candles(monkeypatch, pair=pair, volume_status="not_confirmed")
 
     result_pair, result_candles, hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
 
@@ -162,13 +179,13 @@ async def test_gates_and_candles_rejects_weak_trend_alignment(monkeypatch):
     assert result_candles == []
     assert hold is not None
     assert hold["action"] == "HOLD"
-    assert hold["hold_reason"] == "no_trend_alignment"
+    assert hold["hold_reason"] == "no_volume_confirmation"
 
 
 @pytest.mark.asyncio
-async def test_gates_and_candles_allows_strong_trend_alignment(monkeypatch):
+async def test_gates_and_candles_allows_confirmed_volume(monkeypatch):
     pair = _pair()
-    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=2)  # exactly at the bar
+    _patch_gates_and_candles(monkeypatch, pair=pair, volume_status="confirmed")
 
     result_pair, result_candles, hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
 
@@ -178,13 +195,32 @@ async def test_gates_and_candles_allows_strong_trend_alignment(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v1_buy_propagates_alignment_fields(monkeypatch):
-    """The gate already required align_score >= 2 before any variant runs --
-    real bug found alongside entry_atr_pct's own: this signal was computed
-    then thrown away, never reaching risk_guard.compute_entry_alloc's sizing
-    (which fell back to its own "missing signal" MAX tier instead)."""
+async def test_gates_and_candles_never_rejects_on_unknown_volume(monkeypatch):
+    """Fail-open doctrine, same as everywhere else in this pipeline: a data
+    source with no real per-candle volume (e.g. a synthesis fallback) must
+    never be confused with "this signal is false"."""
+    pair = _pair()
+    _patch_gates_and_candles(monkeypatch, pair=pair, volume_status="unknown")
+
+    result_pair, result_candles, hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+
+    assert result_pair is pair
+    assert result_candles
+    assert hold is None
+
+
+@pytest.mark.asyncio
+async def test_v1_buy_propagates_alignment_and_volume_fields(monkeypatch):
+    """align_score/align_* stay informational/sizing-only (risk_guard's
+    conviction sizing) even though the gate above no longer hard-enforces
+    align_score -- real bug found alongside entry_atr_pct's own: these
+    signals were computed then thrown away, never reaching
+    risk_guard.compute_entry_alloc's sizing. volume_confirmed/rvol_multiple
+    (new, same-day RVOL fix) must reach the same sizing path too -- same
+    "confirmed" -> True / else -> False mapping as the standard pipeline's
+    own call site."""
     pair = _pair(price=1.0)
-    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=3)
+    _patch_gates_and_candles(monkeypatch, pair=pair, align_score=3, volume_status="confirmed")
     series = [None] * 48 + [-0.1, 0.2]
     monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
     monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
@@ -196,6 +232,8 @@ async def test_v1_buy_propagates_alignment_fields(monkeypatch):
     assert result["align_ema"] is True
     assert result["align_macd"] is True
     assert result["align_pattern"] is True
+    assert result["volume_confirmed"] is True
+    assert result["rvol_multiple"] == pytest.approx(5.0)
 
 
 # ── V1 -- Bollinger %B ───────────────────────────────────────────────────────

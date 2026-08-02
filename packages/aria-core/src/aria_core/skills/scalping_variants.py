@@ -143,21 +143,39 @@ async def _gates_and_candles_uncached(
     # cause: none of the 6 scalping entries had ANY trend/market-context
     # filter -- just "the oversold indicator just exited its zone", with no
     # check that a real bounce (not a dead-cat one inside a larger downtrend)
-    # was actually forming. Reuses momentum_entry's own _technical_alignment
-    # (EMA12>EMA26 / MACD>signal / bullish candle pattern, 0-3) and its
-    # ALREADY-established direct-buy bar (_ALIGN_SCORE_MIN_FOR_DIRECT_BUY=2,
-    # the same threshold the legacy scalping engine's direct-buy path already
-    # enforces) rather than inventing a new number -- a candidate whose
-    # broader technical context doesn't back the oversold-bounce signal is
-    # now rejected here, BEFORE any of the 5 variants even sees it (same
-    # shared-gate design as the hard security/liquidity gates above).
-    align_score, _align_reasons, _align_detail = momentum_entry._technical_alignment(candles)
-    if align_score < momentum_entry._ALIGN_SCORE_MIN_FOR_DIRECT_BUY:
+    # was actually forming.
+    #
+    # 08/02, same evening -- the first fix (EMA12>EMA26 / MACD>signal /
+    # bullish pattern via momentum_entry._technical_alignment, threshold
+    # >=2/3) was itself a real bug, found by an operator-approved adversarial
+    # cross-review workflow and independently confirmed live: EMA12/26 are
+    # structurally too slow for scalping's 15/30min candle width (EMA26 lags
+    # ~6.5h) to ever confirm a bounce that JUST formed -- a 500-scenario
+    # simulation against the real, unmocked function showed the >=2 bar was
+    # reached only 2.1% of the time, and real prod data confirmed the same
+    # starvation (scalping_v2/v4/v5: ZERO trades opened in 8h despite 16
+    # rejections each on this gate alone; v1/v3 barely got through). The
+    # gate's own INTENT (reject a dead-cat bounce not backed by real demand)
+    # is better served by relative volume -- momentum_entry's own
+    # _check_volume_confirmation, already the hard gate the standard
+    # momentum pipeline uses for exactly this purpose (RVOL >= 3.0x the prior
+    # 10-candle average, floor $2,500 on the triggering candle) -- a signal
+    # that CAN react on the same candle the bounce forms on, unlike a lagging
+    # moving average. Same 3-state doctrine reused as-is: "not_confirmed"
+    # (real data, bounce not backed by capital) rejects; "unknown" (no real
+    # per-candle volume on this data source, e.g. a synthesis fallback) never
+    # rejects -- same fail-open doctrine as everywhere else in this pipeline,
+    # never confusing "this source doesn't provide this data" with "this
+    # signal is false". align_score itself is UNCHANGED as an
+    # informational/sizing signal (still computed and propagated in
+    # _buy_result below, still feeds risk_guard's conviction sizing) -- only
+    # its use as a HARD GATE here is removed.
+    volume_status, volume_reason, _rvol = momentum_entry._check_volume_confirmation(candles)
+    if volume_status == "not_confirmed":
         return None, [], _hold(
             chain, best_pair.base_symbol, best_pair.price_usd,
-            f"alignement technique insuffisant (score {align_score}/3 < "
-            f"{momentum_entry._ALIGN_SCORE_MIN_FOR_DIRECT_BUY}) -- rebond non confirmé par le contexte",
-            "no_trend_alignment",
+            f"rebond non soutenu par le volume ({volume_reason})",
+            "no_volume_confirmation",
         )
     return best_pair, candles, None
 
@@ -206,6 +224,16 @@ def _buy_result(
     # so that guarantee is reflected in the persisted signal rather than
     # silently dropped.
     align_score, _align_reasons, align_detail = momentum_entry._technical_alignment(candles)
+    # 08/02 -- same recompute-once-more-is-cheap pattern as align_score above:
+    # by the time _buy_result runs, _gates_and_candles_uncached has ALREADY
+    # rejected "not_confirmed" (see its comment) -- status here can only be
+    # "confirmed" or "unknown". Same mapping as momentum_entry.py's own
+    # standard-pipeline call site (confirmed -> True, everything else ->
+    # False/unconfirmed) so risk_guard.compute_entry_alloc's existing
+    # volume_confirmed handling (sizing penalty on unconfirmed/unknown volume)
+    # applies identically to scalping, no new sizing code needed.
+    volume_status, _volume_reason, rvol_multiple = momentum_entry._check_volume_confirmation(candles)
+    volume_confirmed = volume_status == "confirmed"
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,
         "target": target, "invalidation": stop,
@@ -217,6 +245,8 @@ def _buy_result(
         "align_ema": align_detail.get("ema_above"),
         "align_macd": align_detail.get("macd_above"),
         "align_pattern": align_detail.get("bullish_pattern"),
+        "volume_confirmed": volume_confirmed,
+        "rvol_multiple": rvol_multiple,
         # 08/01 -- market cap at entry, same purely-observational field as the
         # standard momentum pipeline (see momentum_entry.py's own comment).
         "market_cap_usd": pair.market_cap_usd,
