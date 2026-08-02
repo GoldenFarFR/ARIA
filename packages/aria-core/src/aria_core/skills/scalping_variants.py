@@ -193,8 +193,8 @@ def _rr(entry: float, stop: float, target: float) -> float:
 
 
 def _buy_result(
-    *, pair, chain: str, entry: float, stop: float, target: float | None, reason: str, variant: str,
-    candles: list[Candle], sizing_rr: float | None = None,
+    *, pair, chain: str, contract: str, entry: float, stop: float, target: float | None, reason: str,
+    variant: str, candles: list[Candle], sizing_rr: float | None = None,
 ) -> dict:
     # 08/02 -- real bug found live (operator: 7/7 closed scalping trades lost,
     # every one via the blind stagnation timeout, none via the ATR trailing
@@ -251,6 +251,26 @@ def _buy_result(
     # signal at all". Deliberately kept a real value the ATR-based sizing can
     # use rather than switching V5 to some unrelated proxy metric.
     computed_rr = sizing_rr if sizing_rr is not None else (_rr(entry, stop, target) if target is not None else None)
+    # 08/02 -- real bug found live (100% of positions had a NULL
+    # entry_security_json, diagnostic workflow): momentum_entry.py's own
+    # BUY path got this snapshot in Item #234 (30/07), but these 5 variant
+    # engines (created 08/01, a day AFTER #234) never did -- their shared
+    # `_buy_result` builder simply never set the key. Same source, same
+    # doctrine as momentum_entry.py's own fix: reuses the TokenSecurity
+    # object ALREADY fetched by the honeypot hard gate a moment earlier
+    # (`_gates_and_candles_uncached` -> `momentum_entry.evaluate_hard_gates`
+    # -> `_check_honeypot`, which caches it under the SAME (chain, contract)
+    # key), so this costs zero extra network calls. `_get_cached_security`
+    # returns ``None`` on a cache miss/expiry (e.g. a cached `_gates_and_
+    # candles` result reused past the security cache's own shorter TTL) --
+    # `capture_entry_snapshot_from_security` degrades to an all-``None``
+    # snapshot rather than skipping the field entirely, same fail-open
+    # doctrine as momentum_entry.py's own call site.
+    from aria_core import paper_trader_risk as _risk
+
+    entry_security_json = _risk.capture_entry_snapshot_from_security(
+        momentum_entry._get_cached_security(chain, contract)
+    ).to_json()
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,
         "target": target, "invalidation": stop,
@@ -264,6 +284,7 @@ def _buy_result(
         "align_pattern": align_detail.get("bullish_pattern"),
         "volume_confirmed": volume_confirmed,
         "rvol_multiple": rvol_multiple,
+        "entry_security_json": entry_security_json,
         # 08/01 -- market cap at entry, same purely-observational field as the
         # standard momentum pipeline (see momentum_entry.py's own comment).
         "market_cap_usd": pair.market_cap_usd,
@@ -305,7 +326,7 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
         return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
     target = entry + _V1_TP_RR_RATIO * (entry - stop)
     return _buy_result(
-        pair=pair, chain=chain, entry=entry, stop=stop, target=target,
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %B confirmée ({percent_b[-2]:.2f} -> {percent_b[-1]:.2f})",
         variant="V1 Bollinger",
     candles=candles,
@@ -348,7 +369,7 @@ async def evaluate_v2_vwap_institutional(contract: str, chain: str) -> dict | No
         return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
     target = entry + _V2_TP_RR_RATIO * (entry - stop)
     return _buy_result(
-        pair=pair, chain=chain, entry=entry, stop=stop, target=target,
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f})",
         variant="V2 VWAP institutionnel",
     candles=candles,
@@ -388,7 +409,7 @@ async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
         return _hold(chain, pair.base_symbol, pair.price_usd, "stop structurel invalide", "invalid_stop")
     target = entry + _V3_TP_RR_RATIO * (entry - stop)
     return _buy_result(
-        pair=pair, chain=chain, entry=entry, stop=stop, target=target,
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %K confirmée ({k[-2]:.1f} -> {k[-1]:.1f})",
         variant="V3 Stochastique ultra-réactif",
     candles=candles,
@@ -449,7 +470,7 @@ async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
         return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
     target = entry + _V4_TP_RR_RATIO * (entry - stop)
     return _buy_result(
-        pair=pair, chain=chain, entry=entry, stop=stop, target=target,
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"double confirmation Bollinger+Stochastique (%B {percent_b[-2]:.2f}->{percent_b[-1]:.2f}, "
                f"%K {k[-2]:.1f}->{k[-1]:.1f})",
         variant="V4 Combo sec",
@@ -513,7 +534,7 @@ async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
     if stop <= 0:
         return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
     return _buy_result(
-        pair=pair, chain=chain, entry=entry, stop=stop, target=None,
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=None,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f}), sans TP fixe",
         variant="V5 VWAP trailing",
     candles=candles, sizing_rr=_V5_SIZING_RR,

@@ -3314,6 +3314,22 @@ async def evaluate_momentum_entry(
                 watch = None
             if watch:
                 watch["align_score"] = watch_align_score
+                # 08/02 -- real bug found live (100% of positions had a NULL
+                # entry_security_json, diagnostic workflow): Item #234 (30/07)
+                # added this snapshot to the outright-BUY path and to the
+                # golden-pocket watch branch just above, but never to THIS
+                # sibling branch -- the ONE actually exercised by scalping
+                # (100% of scalping positions are sourced through a limit
+                # order, and this RSI-divergence watch is scalping's only
+                # limit-order mechanism, per Item #199's own comment above).
+                # Same fix, same reasoning: without it, rescan_open_position
+                # stays a permanent no-op for every position this branch ever
+                # produces.
+                from aria_core import paper_trader_risk as _risk
+
+                watch["entry_security_json"] = _risk.capture_entry_snapshot_from_security(
+                    _get_cached_security(chain, contract)
+                ).to_json()
                 hold["limit_order_candidate"] = watch
         else:
             logger.info(

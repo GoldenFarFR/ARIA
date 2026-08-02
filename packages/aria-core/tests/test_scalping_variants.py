@@ -236,6 +236,54 @@ async def test_v1_buy_propagates_alignment_and_volume_fields(monkeypatch):
     assert result["rvol_multiple"] == pytest.approx(5.0)
 
 
+@pytest.mark.asyncio
+async def test_v1_buy_carries_entry_security_json(monkeypatch):
+    """08/02, real bug found live (100% of prod positions had a NULL
+    entry_security_json, diagnostic workflow): the 5 scalping variant
+    engines (created 08/01, a day AFTER Item #234's 30/07 fix) share this
+    ``_buy_result`` builder, which never set the key at all -- unlike
+    momentum_entry.py's own BUY path. Populates the security cache the same
+    way ``momentum_entry._check_honeypot`` would in real production (the
+    honeypot hard gate this variant's own ``_gates_and_candles`` calls
+    BEFORE this signal is ever evaluated), so this test proves REAL data
+    flows through end to end, not just that the key exists."""
+    pair = _pair(price=1.0)
+    _patch_gates_and_candles(monkeypatch, pair=pair)
+    series = [None] * 48 + [-0.1, 0.2]
+    monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: series)
+    monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
+
+    momentum_entry._security_cache.clear()
+
+    class _FakeSecurity:
+        is_honeypot = False
+        cannot_sell_all = False
+        hidden_owner = False
+        can_take_back_ownership = False
+        owner_change_balance = False
+        is_open_source = True
+        owner_address = "0x" + "2" * 40
+        slippage_modifiable = False
+        is_blacklisted = False
+        transfer_pausable = False
+
+    momentum_entry._cache_security(CHAIN, CONTRACT, _FakeSecurity())
+    try:
+        result = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+
+        assert result["action"] == "BUY"
+        raw = result.get("entry_security_json")
+        assert raw  # previously the key was absent entirely -- ``.get`` would return None
+        import json as _json
+
+        parsed = _json.loads(raw)
+        assert parsed["contract_verified"] is True
+        assert parsed["owner_address"] == "0x" + "2" * 40
+        assert parsed["is_honeypot"] is False
+    finally:
+        momentum_entry._security_cache.clear()
+
+
 # ── V1 -- Bollinger %B ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -327,6 +375,10 @@ async def test_v2_buys_on_confirmed_exit_from_oversold(monkeypatch):
     assert result["action"] == "BUY"
     expected_stop = 1.0 - 1.5 * 0.05
     assert result["target"] == pytest.approx(1.0 + 1.5 * (1.0 - expected_stop))
+    # 08/02 -- key must be present on every variant sharing _buy_result, not
+    # just V1 (see test_v1_buy_carries_entry_security_json's own comment for
+    # the full incident).
+    assert "entry_security_json" in result
 
 
 @pytest.mark.asyncio
@@ -369,6 +421,7 @@ async def test_v3_buys_on_confirmed_exit_with_structural_stop(monkeypatch):
     # either, same real bug as V1/V2/V4/V5.
     assert result["entry_atr_pct"] is not None
     assert result["entry_atr_pct"] > 0
+    assert "entry_security_json" in result
 
 
 @pytest.mark.asyncio
@@ -401,6 +454,7 @@ async def test_v4_requires_both_signals_confirmed(monkeypatch):
     # test_v4_tp_ratio_stays_strictly_above_the_price_impact_floor ci-dessous)
     # à 1.3.
     assert result["target"] == pytest.approx(1.0 + 1.3 * (1.0 - expected_stop))
+    assert "entry_security_json" in result
 
 
 def test_v4_tp_ratio_stays_strictly_above_the_price_impact_floor():
@@ -456,6 +510,7 @@ async def test_v5_buys_with_no_fixed_target(monkeypatch):
     # change to the actual exit, still pure ATR trailing stop).
     assert result["rr"] == pytest.approx(scalping_variants._V2_TP_RR_RATIO)
     assert result["rr"] == pytest.approx(1.5)
+    assert "entry_security_json" in result
 
 
 # ── VARIANT_ANALYZERS registry ───────────────────────────────────────────────

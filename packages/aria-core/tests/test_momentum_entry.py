@@ -6574,6 +6574,50 @@ async def test_rsi_divergence_watch_candidate_align_score_prevents_max_tier_fall
 
 
 @pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_carries_entry_security_json(monkeypatch, test_settings):
+    """08/02, real bug found live (100% of positions had a NULL
+    entry_security_json in prod, diagnostic workflow): this branch is the
+    ONLY limit-order path scalping ever uses (Item #199's own comment on the
+    branch above) -- Item #234 (30/07) added the entry security snapshot to
+    the outright-BUY path and to the golden-pocket watch branch, but never
+    to this sibling branch, so 100% of scalping positions (sourced through
+    it) never got one. Populates the security cache the same way
+    ``_check_honeypot`` would in real production (via ``_cache_security``)
+    so this test proves REAL data flows through end to end, not just that
+    the key is present."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+    me._security_cache.clear()
+
+    class _FakeSecurity:
+        is_honeypot = False
+        cannot_sell_all = False
+        hidden_owner = False
+        can_take_back_ownership = False
+        owner_change_balance = False
+        is_open_source = True
+        owner_address = "0x" + "1" * 40
+        slippage_modifiable = False
+        is_blacklisted = False
+        transfer_pausable = False
+
+    me._cache_security("base", CONTRACT, _FakeSecurity())
+    try:
+        result = await me.evaluate_momentum_entry(CONTRACT, "base")
+        watch = result["limit_order_candidate"]
+
+        raw = watch.get("entry_security_json")
+        assert raw  # previously absent entirely -- ``.get`` would have returned None
+        import json as _json
+
+        parsed = _json.loads(raw)
+        assert parsed["contract_verified"] is True
+        assert parsed["owner_address"] == "0x" + "1" * 40
+        assert parsed["is_honeypot"] is False
+    finally:
+        me._security_cache.clear()
+
+
+@pytest.mark.asyncio
 async def test_rsi_divergence_watch_candidate_absent_when_divergence_already_present(monkeypatch, test_settings):
     _patch_pipeline(
         monkeypatch, signal=_in_gp_no_divergence_signal(rsi_divergence=True), candles=_rising_ts_candles(),
