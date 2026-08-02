@@ -696,6 +696,72 @@ async def _reanalyze_dex_quality_for_watching(order: dict) -> bool:
     return ok
 
 
+async def _reanalyze_holder_concentration(order: dict) -> bool:
+    """08/02 -- real security gap found: ``momentum_entry.evaluate_hard_
+    gates``'s holder-concentration check (``_check_holder_concentration``,
+    top 10 EOA holders excluding pool/burn/verified contracts >= 80%) is
+    DEFERRED (``defer_holder_concentration=True``) for every candidate that
+    reaches ``evaluate_momentum_entry``, then only re-run once
+    ``signal.present`` is True (a confirmed golden-pocket + RSI setup, buy-
+    now path). A candidate routed to the limit-order path instead
+    (``signal.present`` is False by construction -- the whole premise of a
+    limit order is that the setup ISN'T confirmed yet) returns straight from
+    ``evaluate_momentum_entry`` before ever reaching that check -- neither
+    ``reanalyze_for_watching`` (honeypot-only re-check) nor
+    ``_execute_trigger`` (buy execution) ever called it. A token could
+    concentrate >= 80% in insider hands anywhere between signal detection and
+    trigger (up to 30 days for an ``rsi_divergence_pending`` order,
+    ``watch_expiry_hours``) and still get bought -- this closes that gap by
+    re-running the SAME guardrail (not a copy) at both re-analysis points.
+
+    Never applied to a bonding-curve order (``chain == bonding_entry.
+    CHAIN_MARKER``) -- pre-graduation there is no separate DEX pool/holder
+    set to rank, ``_reanalyze_bonding_for_watching`` already covers the
+    structural equivalent (``dev_holding_pct``) for that path.
+
+    Re-fetches a FRESH pair (never the signal's original, possibly stale,
+    pool_address) via the exact same pattern already used by
+    ``check_rsi_divergence_watching_order`` (``fetch_token_pairs`` +
+    ``_best_pair``) -- a pair that no longer resolves degrades fail-open
+    (below), never treated as "still concentrated".
+
+    Doctrine: FAIL-OPEN on any missing/unresolved data, matching
+    ``_check_holder_concentration`` itself (its own docstring: "only the
+    honeypot check is fail-closed in this pipeline") -- NOT the fail-closed
+    doctrine the rest of this module uses for honeypot/dex-quality re-checks.
+    Copying the honeypot's fail-closed behavior onto this specific guardrail
+    would be inventing a new, undiscussed behavior change; this function only
+    reuses ``_check_holder_concentration`` as-is. Returns ``True`` (safe to
+    proceed) or ``False`` (>= 80% confirmed, cancel/block)."""
+    from aria_core import momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    if order["chain"] == CHAIN_MARKER:
+        return True
+
+    try:
+        pairs = await momentum_entry.fetch_token_pairs(order["contract"], chain=order["chain"])
+    except Exception as exc:  # noqa: BLE001 -- fail-open, matches _check_holder_concentration's own doctrine
+        logger.info(
+            "limit_orders: holder-concentration pair lookup failed for %s (%s) -- fail-open",
+            order["contract"], exc,
+        )
+        return True
+
+    pair = momentum_entry._best_pair(pairs, order["contract"])
+    pool_address = pair.pair_address if pair is not None else ""
+    too_concentrated, reason = await momentum_entry._check_holder_concentration(
+        order["contract"], order["chain"], pool_address,
+    )
+    if too_concentrated:
+        logger.info(
+            "limit_orders: holder-concentration re-check cancelling %s -- %s",
+            order["contract"], reason,
+        )
+        return False
+    return True
+
+
 async def reanalyze_for_watching(order: dict) -> bool:
     """Single re-analysis performed ONCE, at the ``pending`` -> ``watching``
     transition (never repeated on every tick while watching -- see module
@@ -714,7 +780,16 @@ async def reanalyze_for_watching(order: dict) -> bool:
     "golden_pocket_pending"`` (``signal_json``) is routed to
     ``_reanalyze_dex_quality_for_watching`` instead -- its premise is the DEX
     composite score, not an already-confirmed golden pocket, so honeypot
-    alone isn't enough."""
+    alone isn't enough.
+
+    08/02 -- real gap found (adversarial cross-review workflow): neither
+    non-bonding branch below ever re-checked holder concentration
+    (``_reanalyze_holder_concentration``, see its own docstring) -- added
+    AFTER the honeypot/dex-quality check in both branches (cheapest/hardest
+    guardrail first, same ordering doctrine ``evaluate_hard_gates`` already
+    applies), never spent on an order that's about to be cancelled for a
+    cheaper reason anyway. Bonding orders remain untouched -- routed away
+    above before reaching either branch."""
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
@@ -725,7 +800,9 @@ async def reanalyze_for_watching(order: dict) -> bool:
     # order dict by hand without it -- never a reason to fail this guardrail.
     sig = json.loads(order.get("signal_json") or "{}")
     if sig.get("limit_order_reason") == "golden_pocket_pending":
-        return await _reanalyze_dex_quality_for_watching(order)
+        if not await _reanalyze_dex_quality_for_watching(order):
+            return False
+        return await _reanalyze_holder_concentration(order)
 
     from aria_core.momentum_entry import check_honeypot
 
@@ -736,7 +813,9 @@ async def reanalyze_for_watching(order: dict) -> bool:
             "limit_orders: re-analysis failed for %s (%s) -- cancelling", order["contract"], exc,
         )
         return False
-    return clear
+    if not clear:
+        return False
+    return await _reanalyze_holder_concentration(order)
 
 
 def _order_uses_rsi_divergence_check(order: dict) -> bool:
@@ -1110,6 +1189,21 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     # was persisting mode="standard" again. Now uses
     # paper_trader.is_scalping_pocket(), the single source of truth.
     mode = "scalping" if paper_trader.is_scalping_pocket(wallet) else "standard"
+
+    # 08/02 -- real security gap found (adversarial cross-review workflow):
+    # this trigger never re-checked holder concentration
+    # (``_reanalyze_holder_concentration``, see its own docstring) -- the
+    # ``watching`` state can persist up to 30 days (``rsi_divergence_pending``
+    # orders) after ``reanalyze_for_watching``'s own one-time re-check, wide
+    # enough for a distribution to concentrate >= 80% in insider hands after
+    # that single check without ARIA ever noticing before buying. Placed
+    # AFTER sizing (never wasted on an order the has_open/position-cap/
+    # risk_state checks above already discarded for free) and after all
+    # duplicate/cap/circuit-breaker guards, right before the buy itself --
+    # the last, hardest-to-bypass point in this pipeline.
+    if not await _reanalyze_holder_concentration(order):
+        return None
+
     pos = await paper_trader.open_position(
         order["contract"],
         order["symbol"],
@@ -1143,6 +1237,24 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
         liquidity_rotation_score=sig.get("liquidity_rotation_score"),
         liquidity_rotation_accelerating=sig.get("liquidity_rotation_accelerating"),
         liquidity_rotation_volume_ratio=sig.get("liquidity_rotation_volume_ratio"),
+        # 08/02 -- real gap found: these 6 fields were already present on
+        # ``sig`` for the momentum path (``evaluate_momentum_entry``'s
+        # unconditional return dict, or the merged watch/pending dict built
+        # from it in paper_trader.py's create_pending_order call sites) but
+        # were never forwarded here -- every limit-order-triggered position
+        # persisted them as None regardless of what the signal actually had,
+        # a pure wiring omission (identical source expressions as the two
+        # direct-buy call sites in paper_trader.py). Legitimately still None
+        # for a bonding trigger (bonding_entry.py has no golden-pocket/EMA-
+        # MACD-pattern/market-cap concept) or a golden_pocket_pending order
+        # triggered before the zone had formed at signal-creation time (sig
+        # is never recomputed at trigger) -- never fabricated here either way.
+        entry_market_cap_usd=sig.get("market_cap_usd"),
+        gp_low=sig.get("gp_low"),
+        gp_high=sig.get("gp_high"),
+        align_ema=sig.get("align_ema"),
+        align_macd=sig.get("align_macd"),
+        align_pattern=sig.get("align_pattern"),
     )
     if pos and notifier:
         try:

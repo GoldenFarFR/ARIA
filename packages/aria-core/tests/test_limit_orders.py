@@ -35,6 +35,29 @@ def _bypass_btc_cycles_network_call(monkeypatch):
     monkeypatch.setattr(btc_cycles, "fetch_current_macro_phase", _fake_fetch_current_macro_phase)
 
 
+# 08/02 -- saved BEFORE the autouse bypass fixture below ever patches
+# ``lo._reanalyze_holder_concentration`` -- the dedicated tests for that
+# guardrail (see its own section further down) restore this real reference
+# via monkeypatch to test the actual logic, rather than the neutral stub.
+_REAL_REANALYZE_HOLDER_CONCENTRATION = lo._reanalyze_holder_concentration
+
+
+@pytest.fixture(autouse=True)
+def _bypass_holder_concentration_reanalysis(monkeypatch):
+    """08/02 -- ``_reanalyze_holder_concentration`` (real Blockscout network
+    call via ``momentum_entry._check_holder_concentration``) is now invoked
+    by both ``reanalyze_for_watching`` and ``_execute_trigger`` -- neutral
+    bypass by default so no unrelated test in this file hits the network.
+    Tests dedicated to this guardrail (see its own section below) override
+    this locally, either by restoring ``_REAL_REANALYZE_HOLDER_CONCENTRATION``
+    (to test the real function) or by monkeypatching a specific True/False/
+    exception stub (to test how the two call sites react to its result)."""
+    async def _fake_reanalyze_holder_concentration(order):
+        return True
+
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _fake_reanalyze_holder_concentration)
+
+
 @pytest.fixture(autouse=True)
 def _clear_rsi_watch_rotation_state():
     """``lo._rsi_watch_check_last_at`` (01/08, per-drain rotation cap) is a
@@ -492,6 +515,234 @@ async def test_reanalyze_for_watching_plain_order_unaffected_by_golden_pocket_ro
     monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
     order = {"contract": "0xCHECK", "chain": "base", "signal_json": json.dumps({"target": 1.0})}
     assert await lo.reanalyze_for_watching(order) is True
+
+
+# ── _reanalyze_holder_concentration (08/02, real security gap) ──────────────
+#
+# The gap: momentum_entry.evaluate_hard_gates defers the holder-concentration
+# check (defer_holder_concentration=True) for every momentum candidate, and
+# evaluate_momentum_entry only re-runs it once signal.present is True (the
+# buy-now path). A candidate routed to the limit-order path instead
+# (signal.present is False, by construction) never reached that re-check --
+# neither reanalyze_for_watching (honeypot-only) nor _execute_trigger (buy
+# execution) ever called it. A token could concentrate >= 80% in insider
+# hands during the "watching" window (up to 30 days for an
+# rsi_divergence_pending order) and still get bought. These tests cover the
+# new standalone guardrail in isolation; the wiring into reanalyze_for_
+# watching/_execute_trigger is covered further below.
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_confirmed_blocks(monkeypatch):
+    """The exact scenario of the hole: a token whose top holders are
+    confirmed >= 80% concentrated (momentum_entry._check_holder_concentration
+    itself returning too_concentrated=True) must be rejected."""
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_concentration(contract, chain, pool_address):
+        return True, "top 10 holders détiennent 84.2% de l'offre (hors pool/burn)"
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _fake_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_clear_proceeds(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_concentration(contract, chain, pool_address):
+        return False, ""
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _fake_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_pair_lookup_failure_fails_open(monkeypatch):
+    """Doctrine reused from _check_holder_concentration itself -- FAIL-OPEN,
+    never the honeypot's fail-closed doctrine. A transient DexScreener
+    failure here must never cancel a watching order on its own."""
+    from aria_core import momentum_entry
+
+    called = {"concentration": False}
+
+    async def _boom(contract, *, chain="base"):
+        raise RuntimeError("network down")
+
+    async def _spy_concentration(contract, chain, pool_address):
+        called["concentration"] = True
+        return True, "should never be reached"
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _boom)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _spy_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+    assert called["concentration"] is False  # never reached -- fails open before the real check
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_no_pair_still_checks_with_empty_pool(monkeypatch):
+    """No pair resolves (e.g. a token whose only pool just drained) -- the
+    underlying check still runs, with an empty pool_address (same behavior a
+    direct evaluate_hard_gates call would see), never silently skipped."""
+    from aria_core import momentum_entry
+
+    seen_pool = {}
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return []
+
+    async def _spy_concentration(contract, chain, pool_address):
+        seen_pool["pool_address"] = pool_address
+        return False, ""
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _spy_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+    assert seen_pool["pool_address"] == ""
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_bonding_never_checks(monkeypatch):
+    """Pre-graduation there is no separate DEX pool/holder set to rank --
+    _reanalyze_bonding_for_watching already covers the structural equivalent
+    (dev_holding_pct) for that path."""
+    from aria_core import momentum_entry
+    from aria_core.bonding_entry import CHAIN_MARKER
+
+    async def _boom_if_called(contract, chain, pool_address):
+        raise AssertionError("holder concentration must never run on a bonding order")
+
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _boom_if_called)
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+
+
+# ── reanalyze_for_watching / _execute_trigger wired into holder-concentration
+#    re-analysis (08/02) -- verifies the two call sites actually invoke the
+#    guardrail and act on its result, not the guardrail's own internal logic
+#    (covered above). ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_holder_concentration_confirmed_cancels(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _too_concentrated(order):
+        return False
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _too_concentrated)
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_holder_concentration_clear_proceeds(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _clear(order):
+        return True
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _clear)
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await lo.reanalyze_for_watching(order) is True
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_holder_concentration_skipped_when_honeypot_already_cancels(monkeypatch):
+    """Cheapest/hardest guardrail first (same ordering doctrine
+    evaluate_hard_gates already applies) -- never spend a Blockscout call on
+    an order that's about to be cancelled for a cheaper reason anyway."""
+    from aria_core import momentum_entry
+
+    called = {"concentration": False}
+
+    async def _honeypot_confirmed(contract, chain):
+        return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
+
+    async def _spy_concentration(order):
+        called["concentration"] = True
+        return True
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_confirmed)
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _spy_concentration)
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await lo.reanalyze_for_watching(order) is False
+    assert called["concentration"] is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_golden_pocket_pending_holder_concentration_confirmed_cancels(monkeypatch):
+    from aria_core import momentum_entry, risk_guard
+
+    async def _honeypot_clear(contract, chain):
+        return True, "honeypot clear (GoPlus)", "honeypot_clear"
+
+    async def _fresh_score(contract, chain):
+        from aria_core import dex_composite_score as dcs
+
+        return dcs.DexSecurityScore(score=risk_guard.DEX_QUALITY_WATCH_THRESHOLD + 5.0)
+
+    async def _too_concentrated(order):
+        return False
+
+    monkeypatch.setattr(momentum_entry, "check_honeypot", _honeypot_clear)
+    monkeypatch.setattr(momentum_entry, "refresh_dex_composite_score", _fresh_score)
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _too_concentrated)
+    order = _golden_pocket_pending_order()
+    assert await lo.reanalyze_for_watching(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_for_watching_bonding_never_calls_holder_concentration_reanalysis(monkeypatch):
+    """Mirrors test_reanalyze_for_watching_bonding_routes_away_from_goplus --
+    a bonding order must never even attempt the holder-concentration
+    re-check, routed away entirely before reaching either non-bonding
+    branch."""
+    from aria_core.bonding_entry import CHAIN_MARKER
+    from aria_core.services import virtuals
+
+    called = {"concentration": False}
+
+    async def _boom_if_called(order):
+        called["concentration"] = True
+        return False
+
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _boom_if_called)
+
+    class _FakeClient:
+        async def fetch_by_address(self, token_address, chain="BASE"):
+            return _fake_bonding_token()
+
+    monkeypatch.setattr(virtuals, "virtuals_client", _FakeClient())
+
+    order = {"contract": "0xBOND", "chain": CHAIN_MARKER}
+    assert await lo.reanalyze_for_watching(order) is True
+    assert called["concentration"] is False
 
 
 # ── check_rsi_divergence_watching_order (Item #183, 28/07) ──────────────────
@@ -1917,6 +2168,180 @@ async def test_execute_trigger_gate_off_ignores_per_pocket_cap_uses_legacy_value
     actions = await lo.process_active_orders(_price)
     assert len(actions["triggered"]) == 1
     assert await paper_trader.has_open("0xCHECK", wallet="vc") is True
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_forwards_market_cap_and_alignment_fields(monkeypatch):
+    """08/02 -- real gap found: entry_market_cap_usd/gp_low/gp_high/align_ema/
+    align_macd/align_pattern were already present on ``sig`` (the momentum
+    analyzer's unconditional return dict, persisted verbatim on the order at
+    creation) but ``_execute_trigger`` never forwarded them to
+    ``open_position`` -- every limit-order-triggered position silently
+    persisted all 6 as None regardless of what the signal actually had. This
+    is the direct regression test: a signal with all 6 fields populated must
+    see them land on the resulting position unchanged. Uses wallet="vc" (not
+    "swing") deliberately -- since 31/07 every "swing" order's WATCH phase
+    routes through ``check_rsi_divergence_watching_order`` (fresh-divergence
+    re-confirmation, exercised separately by
+    ``test_execute_trigger_swing_pocket_keeps_standard_mode``), which is
+    orthogonal to what this test is regression-checking (kwarg forwarding)."""
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    sig = _sig(
+        market_cap_usd=4_200_000.0,
+        gp_low=0.0637954,
+        gp_high=0.0776245,
+        align_ema=True,
+        align_macd=False,
+        align_pattern=None,  # warm-up/insufficient data -- must survive as None, not vanish
+    )
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, sig, wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037  # at/below target -- triggers
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    pos = actions["triggered"][0]
+    assert pos["entry_market_cap_usd"] == 4_200_000.0
+    assert pos["gp_low"] == pytest.approx(0.0637954)
+    assert pos["gp_high"] == pytest.approx(0.0776245)
+    assert pos["align_ema"] == 1  # persisted as int (see open_position's int() cast)
+    assert pos["align_macd"] == 0
+    assert pos["align_pattern"] is None
+
+    # confirm it's not just the in-memory return value -- re-read from DB.
+    reread = await paper_trader.get_open_positions(wallet="vc")
+    assert len(reread) == 1
+    assert reread[0]["entry_market_cap_usd"] == 4_200_000.0
+    assert reread[0]["gp_low"] == pytest.approx(0.0637954)
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_bonding_leaves_alignment_fields_none_no_error(monkeypatch):
+    """A bonding-sourced trigger (bonding_entry.py has no golden-pocket/EMA-
+    MACD-pattern/market-cap concept) must leave all 6 fields None -- never
+    fabricated, and never an error just because the signal doesn't carry
+    them. Uses wallet="vc" for the same reason as the test above (avoids
+    the swing-only RSI-reconfirmation watch phase, orthogonal here)."""
+    from aria_core import bonding_entry
+
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    sig = _sig(total_supply=1_000_000_000.0)
+    # bonding sig has no market_cap_usd/gp_low/gp_high/align_* keys at all --
+    # _sig() base dict doesn't set them either, so .get() falls through to None.
+    for key in ("market_cap_usd", "gp_low", "gp_high", "align_ema", "align_macd", "align_pattern"):
+        sig.pop(key, None)
+    order = await lo.create_pending_order(
+        "0xCHECK", bonding_entry.CHAIN_MARKER, "CHECK", 0.038, sig, wallet="vc",
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    pos = actions["triggered"][0]
+    assert pos["entry_market_cap_usd"] is None
+    assert pos["gp_low"] is None
+    assert pos["gp_high"] is None
+    assert pos["align_ema"] is None
+    assert pos["align_macd"] is None
+    assert pos["align_pattern"] is None
+
+
+# ── _execute_trigger holder-concentration re-check (08/02, real gap) ────────
+#
+# End-to-end regression of the exact hole described at the top of this file's
+# _reanalyze_holder_concentration section: a limit order that reaches its
+# trigger must be blocked from actually buying if holder concentration is
+# confirmed >= 80% at that moment, even though the order passed every other
+# guardrail (honeypot at signal time, price back at target).
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_holder_concentration_confirmed_blocks_buy(monkeypatch):
+    """Before this fix: a limit order whose token concentrated >= 80% in
+    insider hands AFTER the original signal (or after the one-time pending
+    -> watching re-analysis) would still be bought at trigger time, since
+    neither reanalyze_for_watching nor _execute_trigger ever re-checked
+    holder concentration on this path. After this fix: the trigger is
+    blocked, the order stays in "watching" (may still resolve later if
+    conditions change, same as every other _execute_trigger soft-fail)."""
+    # wallet="vc" (not the default "swing"): since 31/07 every swing watching
+    # order resolves via a fresh RSI-divergence re-check rather than a plain
+    # price comparison (orthogonal to what's being tested here) -- vc keeps
+    # the simpler price-comparison mechanism, same reason existing tests
+    # like test_process_active_orders_watching_triggers_buy pin it explicitly.
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _too_concentrated(order_arg):
+        return False
+
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _too_concentrated)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037  # at/below target -- would otherwise trigger
+
+    actions = await lo.process_active_orders(_price)
+    assert actions["triggered"] == []
+    assert await paper_trader.has_open("0xCHECK") is False
+    active = await lo.get_active_orders()
+    assert len(active) == 1
+    assert active[0]["state"] == "watching"  # never lost, may resolve on a later pass
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_holder_concentration_clear_proceeds(monkeypatch):
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _clear(order_arg):
+        return True
+
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _clear)
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert await paper_trader.has_open("0xCHECK") is True
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_holder_concentration_network_failure_fails_open(monkeypatch):
+    """Full end-to-end path down to the real _reanalyze_holder_concentration
+    (restored via _REAL_REANALYZE_HOLDER_CONCENTRATION, not a blanket stub) --
+    a transient pair-lookup failure at trigger time must never block a buy
+    that has already cleared every other guardrail."""
+    from aria_core import momentum_entry
+
+    monkeypatch.setattr(lo, "_reanalyze_holder_concentration", _REAL_REANALYZE_HOLDER_CONCENTRATION)
+
+    async def _boom(contract, *, chain="base"):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _boom)
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="vc")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="vc")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert await paper_trader.has_open("0xCHECK") is True
 
 
 # ── format helpers ────────────────────────────────────────────────────────────
