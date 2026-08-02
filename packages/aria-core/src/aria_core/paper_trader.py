@@ -1672,10 +1672,25 @@ MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 2
 # many contracts that are simply unlucky, not genuinely broken -- fighting the
 # operator's explicit goal of observing ARIA's naturally-occurring behavior
 # rather than artificially constraining it (see MAX_POSITIONS bypass above,
-# same doctrine). 3 still catches a real repeated-failure pattern (a 3-loss
-# streak at 50% win rate is only ~12.5% likely by chance) without over-
-# suspending on normal scalping noise.
-SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 3
+# same doctrine).
+#
+# 08/02 -- REVERSED back down to 1, real incident found live (behavior audit
+# of scalping_v6's real P&L, operator go-ahead to fix): REI was rebought
+# immediately (~30min later, ~same $50k size) right after its FIRST loss
+# (stop suiveur, -$3,228), then lost again (-$2,901) on the SAME contract --
+# these 2 losses alone cost more than the whole pocket's net profit
+# ($6,236). At 3, this exact pattern (doubling down right after one loss)
+# was never even caught -- it would take a 3rd loss to trigger. The 26/07
+# statistical reasoning above is still sound in the abstract (a 2-loss
+# streak alone is common noise at ~50% win rate), but concrete data now
+# shows the COST of one bad double-down outweighs the value of allowing
+# that noise through -- the operator's own read: "trouver un compromis pour
+# supprimer au maximum les pertes ou les rendre insignifiantes". Blocks
+# re-entry on a contract after its VERY FIRST loss until a win elsewhere
+# resets the pattern -- same mechanism, just the strictest setting, no
+# longer scalping-specific in practice (matches the generic threshold's
+# intent more closely than the original swing value of 2 did).
+SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT = 1
 
 
 async def _consecutive_losses_for_contract(contract: str, *, limit: int = 20) -> int:
@@ -2374,10 +2389,25 @@ def _strategy_label(pos: dict) -> str:
     position). ``vc_thesis`` checked first since it's a fully separate pipeline
     (safety_screen/vc_analysis, never the momentum mode switch); otherwise
     falls back to the portfolio-wide scalping/standard switch persisted on
-    the position itself (``mode``, never rétroactif -- see get_trading_mode)."""
+    the position itself (``mode``, never rétroactif -- see get_trading_mode).
+
+    08/02 -- real UX gap found live (operator: "je vois beaucoup de scalping
+    mais je vois pas si c v1 v2 v3"): this predates scalping_v1..v6
+    (26/07, before the 08/01 variants split) and was never updated -- every
+    scalping position showed the same generic "scalping" label regardless of
+    which of the 6 independent comparison-arm engines actually produced it,
+    making the side-by-side comparison the whole architecture exists for
+    invisible in every Telegram alert. Now shows the real pocket
+    (``scalping_v1``..``scalping_v6``) whenever ``wallet`` carries one --
+    falls back to the old generic "scalping" for the legacy gate-OFF pocket
+    (wallet="scalping" exactly) or any caller that doesn't pass ``wallet`` at
+    all (e.g. an older cached dict), never a crash on a missing field."""
     if pos.get("strategy") == "vc_thesis":
         return "venture capital"
     if pos.get("mode") == "scalping":
+        wallet = pos.get("wallet")
+        if wallet and wallet.startswith("scalping_v"):
+            return wallet
         return "scalping"
     return "swing trading"
 
@@ -2496,6 +2526,7 @@ async def build_open_positions_tracking_lines(*, price_lookup=None, wallet: str 
             "cost_usd": p.get("cost_usd"),
             "mode": p.get("mode"),
             "strategy": p.get("strategy"),
+            "wallet": p.get("wallet"),
         })
     return [_format_tracked_position_line(t) for t in tracked]
 
@@ -4711,6 +4742,7 @@ async def _run_paper_cycle_locked(
                 "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
                 "qty": p["qty"], "cost_usd": p["cost_usd"], "price": price, "chain": p.get("chain") or "base",
                 "mode": p.get("mode"), "strategy": p.get("strategy"), "opened_at": p.get("opened_at"),
+                "wallet": p.get("wallet"),
             })
 
             # Item #105 (26/07): scalping-mode exit signal -- a confirmed

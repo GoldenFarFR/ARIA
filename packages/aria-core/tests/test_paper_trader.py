@@ -737,17 +737,21 @@ async def test_reentry_blocked_after_max_consecutive_losses_on_same_contract(tmp
 
 
 @pytest.mark.asyncio
-async def test_scalping_mode_allows_reentry_after_2_losses_but_not_3(tmp_db):
-    """Item #101 (26/07), decision operateur ("regle-le pour le scalping") :
-    seuil assoupli en scalping (3 au lieu de 2) -- raisonnement statistique,
-    pas arbitraire (win rate scalping ~50-65%, 2 pertes d'affilee arrivent par
-    pur hasard ~25% du temps sur un contrat par ailleurs viable)."""
+async def test_scalping_mode_blocks_reentry_after_a_single_loss(tmp_db):
+    """08/02 -- real incident found live (behavior audit of scalping_v6's
+    real P&L, operator go-ahead to fix): REI was rebought ~30min after its
+    FIRST loss (stop suiveur, -$3,228), same ~$50k size, then lost again
+    (-$2,901) on the SAME contract -- these 2 losses alone cost more than
+    the pocket's entire net profit. The 26/07 threshold (3, see
+    SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT's own comment for the full
+    statistical reasoning behind THAT decision) never even caught this
+    exact pattern -- it would have taken a 3rd loss. Reversed down to 1:
+    a SINGLE loss on a contract now blocks re-entry until a win elsewhere
+    resets the streak."""
     await pt.reset_portfolio(1_000_000.0)
     await pt.set_trading_mode("scalping")
     await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
     await pt.close_position(A, 0.8, reason="stop suiveur")
-    await pt.open_position(A, "AAA", 0.8, alloc_usd=50_000, wallet="swing")
-    await pt.close_position(A, 0.6, reason="stop suiveur")
 
     async def normal_signal(contract):
         return {"action": "BUY", "symbol": "AAA", "price": 0.7, "rr": 2.5, "align_score": 3}
@@ -755,20 +759,11 @@ async def test_scalping_mode_allows_reentry_after_2_losses_but_not_3(tmp_db):
     async def price_lookup(contract):
         return 0.7
 
-    # 2 pertes d'affilee -- toujours autorise en mode scalping (seuil = 3).
+    # Une seule perte -- desormais bloque immediatement en mode scalping (seuil = 1).
     act = await pt.run_paper_cycle(
         candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
     )
-    assert len(act["opened"]) == 1
-    assert await pt.has_open(A)
-
-    await pt.close_position(A, 0.5, reason="stop suiveur")
-
-    # 3 pertes d'affilee -- desormais bloque, meme en scalping.
-    act2 = await pt.run_paper_cycle(
-        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
-    )
-    assert act2["opened"] == []
+    assert act["opened"] == []
     assert not await pt.has_open(A)
 
 
@@ -3645,6 +3640,25 @@ def test_strategy_label_missing_fields_defaults_to_swing_trading():
     assert pt._strategy_label({}) == "swing trading"
 
 
+def test_strategy_label_scalping_variant_shows_the_real_pocket():
+    """08/02 -- real UX gap found live (operator: "je vois beaucoup de
+    scalping mais je vois pas si c v1 v2 v3") -- this label predates
+    scalping_v1..v6 (26/07, before the 08/01 variants split) and always
+    said the same generic "scalping" regardless of which of the 6
+    independent comparison-arm engines produced the position, making the
+    side-by-side comparison invisible in every Telegram alert."""
+    for wallet in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+        assert pt._strategy_label({"mode": "scalping", "strategy": "momentum", "wallet": wallet}) == wallet
+
+
+def test_strategy_label_legacy_scalping_wallet_unchanged():
+    """Gate OFF (scalping_variants_enabled() off): the single pocket is
+    still named exactly "scalping" -- must keep the old generic label, not
+    a redundant "scalping" duplicate of itself, and never crash on a wallet
+    that doesn't match the "scalping_v*" pattern."""
+    assert pt._strategy_label({"mode": "scalping", "strategy": "momentum", "wallet": "scalping"}) == "scalping"
+
+
 def test_format_buy_alert_shows_scalping_label():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000, "mode": "scalping"}
@@ -3682,6 +3696,23 @@ def test_format_position_tracking_alert_labels_each_position_individually():
     assert "DDD (scalping)" in msg
 
 
+def test_format_position_tracking_alert_shows_the_real_scalping_variant():
+    """08/02 -- real UX gap found live (operator: "je vois beaucoup de
+    scalping mais je vois pas si c v1 v2 v3"): two open positions from
+    DIFFERENT scalping engines (v1 vs v3) used to both show the same
+    generic "(scalping)" label, making the 6-way side-by-side comparison
+    invisible at a glance in every Telegram tracking alert."""
+    msg = pt.format_position_tracking_alert([
+        {"contract": A, "symbol": "AAA", "entry_price": 1.0, "price": 1.5, "qty": 1000.0,
+         "cost_usd": 1000.0, "mode": "scalping", "strategy": "momentum", "wallet": "scalping_v1"},
+        {"contract": D, "symbol": "DDD", "entry_price": 1.0, "price": 1.1, "qty": 1000.0,
+         "cost_usd": 1000.0, "mode": "scalping", "strategy": "momentum", "wallet": "scalping_v3"},
+    ])
+    assert "AAA (scalping_v1)" in msg
+    assert "DDD (scalping_v3)" in msg
+    assert "(scalping)" not in msg
+
+
 @pytest.mark.asyncio
 async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
@@ -3708,6 +3739,34 @@ async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp
     # this cycle's own tracking loop never carried that key, silently dropping
     # the "· détenue ..." segment on every real periodic tracking alert.
     assert any("détenue" in a for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_shows_the_real_scalping_variant_end_to_end(tmp_db):
+    """08/02 -- real UX gap found live (operator screenshot: 8 open scalping
+    positions all shown as generic "(scalping)", no way to tell v1 from v3
+    from v6 apart). End-to-end: the wallet column already on the real DB
+    row must survive all the way to the rendered Telegram line, not just
+    the direct-dict-construction test above."""
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v3")
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="scalping_v3", mode="scalping",
+    )
+
+    async def price_lookup(contract):
+        return 1.1
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
+    assert len(tracking_alerts) == 1
+    assert "DDD (scalping_v3)" in tracking_alerts[0]
+    assert "(scalping)" not in tracking_alerts[0]
 
 
 @pytest.mark.asyncio

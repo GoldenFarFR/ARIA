@@ -201,7 +201,7 @@ honeypot, aucun vrai candidat dangereux dans le lot).
 | `VC_TAKE_SEED_MULTIPLE` | 2.0x | 20/07 | — |
 | `VC_LIQUIDITY_SUDDEN_DROP_PCT` | 30% | 22/07, task #4 | — |
 | `MAX_CONSECUTIVE_LOSSES_PER_CONTRACT` | 2 | 20/07, revue croisée externe (motif : incident BRIAN du 17/07) | — |
-| `SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT` | 3 | 26/07, Item #101 | — |
+| `SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT` | 1 (revisé 08/02, était 3 depuis le 26/07 Item #101) | 08/02, incident réel REI (2 pertes consécutives -$3,228/-$2,901 sur le même contrat, rachat ~30min après la 1ère perte à quasi la même taille -- le seuil de 3 n'a jamais capté ce pattern, il aurait fallu une 3e perte) | Si le seuil à 1 supprime trop de re-entrées légitimes une fois plus de données accumulées (le raisonnement statistique du 26/07 -- 2 pertes de suite arrivent par pur hasard ~25% du temps à 50% winrate -- reste vrai en soi), remonter à 2 (le plancher générique swing) plutôt que de revenir à 3. |
 
 ## Pistes de recalibrage ouvertes (issues de la recherche du 28/07, pas encore tranchées)
 
