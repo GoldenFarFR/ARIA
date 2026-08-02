@@ -6,7 +6,7 @@
 # versionnee, le hook n'est qu'un declencheur d'une ligne).
 #
 # Role : un modele DIFFERENT de celui qui ecrit le code (jamais le meme qui
-# se juge lui-meme -- ici DeepSeek R1 via OpenRouter, jamais Claude) relit le
+# se juge lui-meme -- ici Gemini 3.1 Pro via OpenRouter, jamais Claude) relit le
 # diff qui vient de partir sur main et redige une critique structuree
 # (complexite inutile, limites a l'echelle, alternative radicale SI
 # pertinente + plan de transition obligatoire). Ecrit un rapport, rien
@@ -24,7 +24,7 @@ REPO_DIR="/opt/aria"
 REPORT_FILE="/opt/aria-data/architect-report.md"
 REVIEW_LOG="/opt/aria-data/architect-review.log"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
-MODEL="deepseek/deepseek-r1"
+MODEL="google/gemini-3.1-pro-preview"
 ZERO_SHA="0000000000000000000000000000000000000000"
 
 cd "$REPO_DIR" || exit 1

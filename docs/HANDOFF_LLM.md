@@ -59,6 +59,12 @@ Solution : decision tracee ici pour la premiere fois -- le script reste sur `dee
 
 ------------------------------------------------------------
 
+[DEPLOYE] Sujet    : Devil's Advocate CODE -- compte OpenRouter recharge (USDC) + migration Gemini appliquee
+Date : 2026.08.02 / Probleme : suite directe de l'entree ci-dessus -- compte recharge par l'operateur le 02/08 (confirme en direct : le push `f898dd69..02652ea4` est repasse en HTTP 200 apres une semaine de 402 continu), migration MODEL vers Gemini encore a faire.
+Solution : `MODEL="deepseek/deepseek-r1"` -> `MODEL="google/gemini-3.1-pro-preview"` dans `scripts/devils-advocate-review.sh` (commentaire ligne 9 aussi mis a jour) -- verifie par un vrai appel direct a l'API OpenRouter avant de committer (HTTP 200, reponse coherente). Recommandation de separation de compte OpenRouter (trading vs code-review) toujours pas actee par l'operateur, reste ouverte.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : Devil's Advocate trading -- le fallback pointait vers Claude, futur decider potentiel
 Date : 2026.08.02 / Probleme : trouve par un workflow d'arbitrage d'architecture LLM. `trade_devils_advocate.py`/`trade_loss_batch_review.py` utilisent DeepSeek R1 comme juge adversarial ("jamais le meme labo que celui qui decide") -- mais leur `fallback_model` (utilise si DeepSeek echoue) etait `anthropic/claude-haiku-4.5`. Inoffensif aujourd'hui (Grok decide), mais la trajectoire deja actee par l'operateur (migrer le decider vers Claude) rendrait ce fallback "Claude juge Claude" le jour ou DeepSeek tombe en panne APRES cette migration -- exactement le scenario qui declenche ce fallback.
 Solution : fallback change vers `meta-llama/llama-3.3-70b-instruct` (via OpenRouter) -- un 3e labo, distinct du decider actuel (xAI) ET du decider futur (Anthropic), meme famille que le fallback LLM generique deja en place ailleurs dans le projet (`llm_fallback_provider`, groq/llama-3.3-70b). Suite ciblee verte (43 tests). Reste a faire (hors scope de ce correctif ponctuel, plan complet propose par le workflow d'architecture, en attente de decision operateur) : compte OpenRouter dedie pour DeepSeek (le compte partage avec la revue de code est a sec depuis le 26/07), verification de `ANTHROPIC_API_KEY` en prod, separation du gate Anthropic par role avant tout flip.
