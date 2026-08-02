@@ -194,7 +194,7 @@ def _rr(entry: float, stop: float, target: float) -> float:
 
 def _buy_result(
     *, pair, chain: str, entry: float, stop: float, target: float | None, reason: str, variant: str,
-    candles: list[Candle],
+    candles: list[Candle], sizing_rr: float | None = None,
 ) -> dict:
     # 08/02 -- real bug found live (operator: 7/7 closed scalping trades lost,
     # every one via the blind stagnation timeout, none via the ATR trailing
@@ -234,10 +234,27 @@ def _buy_result(
     # applies identically to scalping, no new sizing code needed.
     volume_status, _volume_reason, rvol_multiple = momentum_entry._check_volume_confirmation(candles)
     volume_confirmed = volume_status == "confirmed"
+    # 08/02 -- real bug found (adversarial cross-review workflow, confirmed
+    # against the real code): V5 ("no fixed TP, pure trailing stop" by
+    # design) always passes target=None, so rr was always None too --
+    # risk_guard.conviction_size_multiplier/conviction_risk_budget_pct treat
+    # rr=None as "caller doesn't supply this signal" (a rule meant to
+    # preserve the dormant VC-thesis pilot's historical behavior, never
+    # designed for a real momentum engine), falling back to
+    # MAX_ALLOC_MULTIPLIER -- V5 received the MAXIMUM allocation (5%/$50k)
+    # on EVERY buy, with zero risk discrimination, unlike V1-V4/V6.
+    # ``sizing_rr`` (V5 only, see its own evaluate_v5_vwap_trailing) plugs
+    # this specific gap WITHOUT inventing a fake target: it's not a TP level
+    # (target stays None below, exactly as before -- the real exit is still
+    # governed purely by the ATR trailing stop, no behavior change there),
+    # only a number fed to the sizing tiers so V5 stops being treated as "no
+    # signal at all". Deliberately kept a real value the ATR-based sizing can
+    # use rather than switching V5 to some unrelated proxy metric.
+    computed_rr = sizing_rr if sizing_rr is not None else (_rr(entry, stop, target) if target is not None else None)
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,
         "target": target, "invalidation": stop,
-        "rr": _rr(entry, stop, target) if target is not None else None,
+        "rr": computed_rr,
         "mode": "scalping", "strategy": "momentum",
         "reasons": [f"[{variant}] {reason}"],
         "liquidity_usd": pair.liquidity_usd, "entry_atr_pct": entry_atr_pct,
@@ -435,6 +452,24 @@ async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
 
 _V5_STOP_ATR_MULT = 1.5
 
+# 08/02 -- real bug found (adversarial cross-review workflow): V5's rr was
+# always None (no fixed TP by design), which made risk_guard's conviction
+# sizing treat it as "no signal supplied at all" and always grant the
+# MAXIMUM allocation (5%/$50k), on every single buy, with zero risk
+# discrimination -- see _buy_result's own comment on sizing_rr for the full
+# explanation. Set to V2's OWN TP_RR_RATIO (1.5), not an arbitrary number:
+# V5 shares the exact same entry signal and stop width as V2 (same Z-score
+# VWAP oversold-bounce trigger, same _STOP_ATR_MULT=1.5), it only differs on
+# the EXIT (V2 takes profit at a fixed level, V5 lets the ATR trailing stop
+# run) -- 1.5 is the R/R V5's setup would have measured at entry if it had a
+# TP, same as its sister variant. Below MODERATE_RR_THRESHOLD (2.0,
+# risk_guard.py), so V5 can never reach the STRONG/MODERATE conviction
+# tiers this way -- deliberate: a design with no measurable upside target
+# has no real basis to claim a higher conviction tier, this only stops it
+# from defaulting to the WORST case (unconditional MAX) while still letting
+# the ATR-based sizing discriminate by this token's real volatility.
+_V5_SIZING_RR = _V2_TP_RR_RATIO
+
 
 async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
     pair, candles, hold = await _gates_and_candles(contract, chain)
@@ -465,7 +500,7 @@ async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, entry=entry, stop=stop, target=None,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f}), sans TP fixe",
         variant="V5 VWAP trailing",
-    candles=candles,
+    candles=candles, sizing_rr=_V5_SIZING_RR,
     )
 
 

@@ -3216,6 +3216,29 @@ _SCALPING_VARIANT_WALLETS = (
 )
 
 
+def is_scalping_pocket(wallet: str) -> bool:
+    """08/02 -- real bug found live (adversarial cross-review workflow,
+    operator go-ahead to fix): several callers outside this module tested
+    ``wallet == "scalping"`` literally to detect a scalping pocket -- correct
+    while ``scalping_variants_enabled()`` was off (the legacy pocket was
+    still named exactly "scalping"), but silently stopped matching anything
+    the moment the gate went on and that same history was migrated to
+    "scalping_v6" alongside 5 new "scalping_v1".."scalping_v5" pockets
+    (commit 82728d03). Real impact found by the audit: a limit-order trigger
+    on any scalping_v1..v6 pocket persisted ``mode="standard"``, silently
+    losing the scalping-specific bearish-RSI-divergence exit and swap-fee
+    simulation (limit_orders.py::_execute_trigger); the per-pocket position
+    cap fell back to the generic MAX_POSITIONS instead of the intended
+    unlimited scalping cap (limit_orders.py::_wallet_position_cap); watch-
+    phase candle re-fetches used the wrong (standard, 1h+) timeframe
+    (limit_orders.py::check_rsi_divergence_watching_order/process_active_
+    orders). Single source of truth for this specific question -- covers
+    BOTH the legacy single "scalping" wallet (gate off) AND any of the 6
+    variant wallets (gate on), so no caller needs to know which regime is
+    currently active."""
+    return wallet == "scalping" or wallet in _SCALPING_VARIANT_WALLETS
+
+
 def all_pocket_wallets() -> tuple[str, ...]:
     """08/01 -- single source of truth for every pocket wallet that can hold
     real (paper) capital right now, given scalping_variants_enabled()'s

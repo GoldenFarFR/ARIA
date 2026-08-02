@@ -364,7 +364,7 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     silent by design like every other expiry in this module, see
     ``sweep_expired``), or ``'wait'`` (still forming, or data unresolved --
     fail-open, never a cancel on a transient network failure)."""
-    from aria_core import momentum_entry
+    from aria_core import momentum_entry, paper_trader
 
     invalidation = sig.get("invalidation")
     last_candle_ts = sig.get("last_candle_ts")
@@ -398,7 +398,19 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # scalping WALLET/capital -- that pocket's own independent trading is
     # entirely unaffected) confirms the precise entry timing within the
     # already-targeted zone. VC unaffected (falls through to "standard").
-    watch_mode = "scalping" if order.get("wallet") in ("scalping", "swing") else "standard"
+    #
+    # 08/02 -- real bug found live (adversarial cross-review workflow): this
+    # tested wallet == "scalping" literally, which stopped matching anything
+    # once scalping_variants_enabled() migrated that pocket's history to
+    # "scalping_v6" alongside 5 new scalping_v1..v5 pockets the same day --
+    # every scalping-variant order silently fell through to "standard" (1h+
+    # candles) instead of the intended fine-grained (15-30min) re-fetch, the
+    # exact defeat this timeframe-aware mode= was built to prevent. Now uses
+    # paper_trader.is_scalping_pocket(), the single source of truth that
+    # covers both the legacy "scalping" name (gate off) and scalping_v1..v6
+    # (gate on).
+    wallet = order.get("wallet") or ""
+    watch_mode = "scalping" if wallet == "swing" or paper_trader.is_scalping_pocket(wallet) else "standard"
     try:
         candles = await momentum_entry._fetch_candles(
             pair.pair_address, order["chain"], contract=order["contract"], pair=pair, mode=watch_mode,
@@ -778,6 +790,8 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
     cancellation that originally used it (``is_market_dead``) was removed
     30/07, Item #251 (operator's explicit call) -- see that function's own
     former docstring, still in git history, for the removed rationale."""
+    from aria_core import paper_trader
+
     actions: dict = {"expired": 0, "entered_watching": 0, "cancelled": 0, "triggered": []}
 
     expired = await sweep_expired()
@@ -861,6 +875,16 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         # to confirm within that zone. Scalping's own orders are UNCHANGED
         # (still gated on limit_order_reason exactly as before).
         uses_rsi_divergence_check = _order_uses_rsi_divergence_check(order)
+        # 08/02 -- real bug found live (adversarial cross-review workflow):
+        # the 3 logging call sites below tested wallet == "scalping" literally,
+        # which stopped matching once scalping_variants_enabled() migrated
+        # that pocket's history to "scalping_v6" alongside scalping_v1..v5 --
+        # every real scalping-variant order was logged mode="standard",
+        # corrupting the v1..v6 comparison log. Computed once here (same
+        # value reused at all 3 sites) via paper_trader.is_scalping_pocket(),
+        # the single source of truth.
+        _log_wallet = order.get("wallet") or ""
+        log_mode = "scalping" if _log_wallet == "swing" or paper_trader.is_scalping_pocket(_log_wallet) else "standard"
         if uses_rsi_divergence_check:
             # 01/08 -- MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN's own comment:
             # not this pass's turn in the rotation -- skip (same as 'wait',
@@ -883,7 +907,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
             await rsi_divergence_log.record_divergence(
                 order["contract"], order["chain"], symbol=order.get("symbol"),
                 wallet=order.get("wallet"),
-                mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
+                mode=log_mode,
                 outcome="expired_unconfirmed",
             )
             continue
@@ -894,7 +918,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                 await rsi_divergence_log.record_divergence(
                     order["contract"], order["chain"], symbol=order.get("symbol"),
                     wallet=order.get("wallet"),
-                    mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
+                    mode=log_mode,
                     outcome="cancelled_unconfirmed",
                 )
             if notifier:
@@ -916,7 +940,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                     await rsi_divergence_log.record_divergence(
                         order["contract"], order["chain"], symbol=order.get("symbol"),
                         wallet=order.get("wallet"),
-                        mode="scalping" if order.get("wallet") in ("scalping", "swing") else "standard",
+                        mode=log_mode,
                         gap=sig.get("rsi_gap"), span=sig.get("rsi_span"),
                         outcome="bought_via_limit_order",
                     )
@@ -944,8 +968,17 @@ def _wallet_position_cap(paper_trader_module, wallet: str) -> int | None:
     (5/15/unlimited)."""
     if not paper_trader_module.multi_pocket_sourcing_enabled():
         return paper_trader_module.MAX_POSITIONS
+    # 08/02 -- real bug found live (adversarial cross-review workflow): the
+    # dict below only ever matched the literal "scalping" key, which stopped
+    # matching once scalping_variants_enabled() migrated that pocket's
+    # history to "scalping_v6" alongside scalping_v1..v5 -- every real
+    # scalping-variant order fell back to the generic MAX_POSITIONS (30)
+    # instead of the intended unlimited scalping cap. is_scalping_pocket()
+    # checked first (covers both the legacy "scalping" name and
+    # scalping_v1..v6) before the swing/vc lookup.
+    if paper_trader_module.is_scalping_pocket(wallet):
+        return paper_trader_module.MAX_POSITIONS_SCALPING
     return {
-        "scalping": paper_trader_module.MAX_POSITIONS_SCALPING,
         "swing": paper_trader_module.MAX_POSITIONS_SWING,
         "vc": paper_trader_module.MAX_POSITIONS_VC,
     }.get(wallet, paper_trader_module.MAX_POSITIONS)
@@ -1068,7 +1101,15 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     # the direct-buy 3-pocket loop already uses (paper_trader.py's own
     # ``pocket_mode`` tuple: "scalping" for that one pocket, "standard" for
     # swing/vc) -- never a third, independently-invented mapping.
-    mode = "scalping" if wallet == "scalping" else "standard"
+    #
+    # 08/02 -- real bug found live (adversarial cross-review workflow): this
+    # tested wallet == "scalping" literally -- exactly the SAME bug as the
+    # 29/07 fix above, reintroduced the same day scalping_variants_enabled()
+    # migrated that pocket's history to "scalping_v6" alongside 5 new
+    # scalping_v1..v5 pockets. Every scalping-variant limit-order trigger
+    # was persisting mode="standard" again. Now uses
+    # paper_trader.is_scalping_pocket(), the single source of truth.
+    mode = "scalping" if paper_trader.is_scalping_pocket(wallet) else "standard"
     pos = await paper_trader.open_position(
         order["contract"],
         order["symbol"],

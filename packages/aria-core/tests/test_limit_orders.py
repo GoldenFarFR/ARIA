@@ -661,6 +661,36 @@ async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_sw
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_scalping_variant_wallet(monkeypatch):
+    """08/02 -- real bug found live (adversarial cross-review workflow): this
+    used to test wallet == "scalping" literally, which stopped matching any
+    of the 6 real scalping_v1..v6 pockets once scalping_variants_enabled()
+    migrated their history -- every scalping-variant watch order silently
+    re-fetched standard (1h+) candles instead of the intended fine-grained
+    (15-30min) ones."""
+    from aria_core import momentum_entry
+
+    captured_mode = {}
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, mode="standard", **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        captured_mode["mode"] = mode
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order(wallet="scalping_v3")
+    await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert captured_mode["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_refetches_with_standard_mode_for_vc_wallet(monkeypatch):
     """VC unaffected by the 31/07 swing change -- still standard mode."""
     from aria_core import momentum_entry
@@ -1018,6 +1048,43 @@ async def test_process_active_orders_logs_expired_rsi_divergence(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["outcome"] == "expired_unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_logs_scalping_mode_for_scalping_variant_wallet(monkeypatch):
+    """08/02 -- real bug found live (adversarial cross-review workflow): the
+    logged mode= used to test wallet == "scalping" literally, which stopped
+    matching any of the 6 real scalping_v1..v6 pockets -- every real
+    scalping-variant order got logged mode="standard", corrupting the
+    v1..v6 comparison log."""
+    from aria_core import rsi_divergence_log
+
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="scalping_v2")
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+        wallet="scalping_v2",
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        return "expire"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert len(calls) == 1
+    assert calls[0]["mode"] == "scalping"
 
 
 @pytest.mark.asyncio
@@ -1673,6 +1740,17 @@ async def test_wallet_position_cap_gate_on_maps_to_real_per_pocket_caps(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_wallet_position_cap_gate_on_maps_scalping_variant_wallets(monkeypatch):
+    """08/02 -- real bug found live (adversarial cross-review workflow): the
+    dict this function used to build only matched the literal "scalping"
+    key -- every real scalping_v1..v6 pocket fell back to the generic
+    MAX_POSITIONS (30) instead of the intended unlimited scalping cap."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    for wallet in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+        assert lo._wallet_position_cap(paper_trader, wallet) == paper_trader.MAX_POSITIONS_SCALPING is None
+
+
+@pytest.mark.asyncio
 async def test_execute_trigger_books_into_the_orders_own_wallet(monkeypatch):
     """Gate ON: a triggered limit order must book into the SAME pocket it was
     placed for, never a hardcoded "swing"."""
@@ -1711,6 +1789,30 @@ async def test_execute_trigger_scalping_pocket_sets_scalping_mode(monkeypatch):
     actions = await lo.process_active_orders(_price)
     assert len(actions["triggered"]) == 1
     assert actions["triggered"][0]["wallet"] == "scalping"
+    assert actions["triggered"][0]["mode"] == "scalping"
+
+
+@pytest.mark.asyncio
+async def test_execute_trigger_scalping_variant_pocket_sets_scalping_mode(monkeypatch):
+    """08/02 -- real bug found live (adversarial cross-review workflow),
+    exact regression of the 29/07 fix above: this used to test
+    wallet == "scalping" literally, which stopped matching once
+    scalping_variants_enabled() migrated that pocket's history to
+    "scalping_v6" alongside 5 new scalping_v1..v5 pockets -- every real
+    scalping-variant limit-order trigger silently persisted mode="standard"
+    again, losing the scalping exit discipline."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate_portfolio_risk)
+    await paper_trader.reset_portfolio(1_000_000.0, wallet="scalping_v3")
+    order = await lo.create_pending_order("0xCHECK", "base", "CHECK", 0.038, _sig(), wallet="scalping_v3")
+    await lo.transition_to_watching(order["id"])
+
+    async def _price(contract, *, chain="base"):
+        return 0.037
+
+    actions = await lo.process_active_orders(_price)
+    assert len(actions["triggered"]) == 1
+    assert actions["triggered"][0]["wallet"] == "scalping_v3"
     assert actions["triggered"][0]["mode"] == "scalping"
 
 

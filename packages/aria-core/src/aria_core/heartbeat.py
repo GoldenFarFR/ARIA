@@ -1367,7 +1367,21 @@ class AriaHeartbeat:
             # resets (judged on a rolling history instead, per the plan's own
             # decision), so it's not in this loop. Each wallet is fully
             # independent: a due/reset failure on one never blocks the other.
-            for wallet in ("swing", "scalping"):
+            #
+            # 08/02 -- real bug found live (adversarial cross-review
+            # workflow): this literal tuple was never updated when
+            # scalping_variants_enabled() migrated the "scalping" pocket's
+            # history to "scalping_v6" alongside 5 new scalping_v1..v5
+            # pockets the same day -- weekly_cycle_due(wallet="scalping")
+            # silently read a paper_state row that no longer exists (falls
+            # back to _now(), so elapsed_days stays ~0), meaning the +10%/1M$
+            # weekly protocol (permanently mandated by CLAUDE.md) never ran
+            # for any of the 6 real scalping pockets again. Now sourced
+            # dynamically from all_pocket_wallets() (self-healing against any
+            # future pocket add/rename/retire, same fix pattern as the
+            # equity double-count bug earlier this session) -- "vc" excluded
+            # explicitly, same as before.
+            for wallet in (w for w in paper_trader.all_pocket_wallets() if w != "vc"):
                 if not await paper_trader.weekly_cycle_due(wallet=wallet):
                     continue
                 report = await paper_trader.run_weekly_reset(wallet=wallet)

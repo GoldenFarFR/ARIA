@@ -6694,6 +6694,30 @@ def test_all_pocket_wallets_gate_on_returns_six_variants_plus_two(monkeypatch):
     )
 
 
+# 08/02 -- real bug found live (adversarial cross-review workflow): several
+# callers outside this module tested wallet == "scalping" literally, which
+# stopped matching once scalping_variants_enabled() migrated that pocket's
+# history to "scalping_v6" alongside 5 new scalping_v1..v5 pockets (real
+# impact: limit_orders.py's trigger/watch-mode/position-cap logic and
+# heartbeat.py's weekly review loop, see docs/HANDOFF_PIPELINE_MOMENTUM.md).
+# is_scalping_pocket() is the single source of truth any future caller
+# should use instead of a hardcoded comparison.
+
+def test_is_scalping_pocket_matches_legacy_name():
+    assert pt.is_scalping_pocket("scalping") is True
+
+
+def test_is_scalping_pocket_matches_all_6_variant_wallets():
+    for wallet in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+        assert pt.is_scalping_pocket(wallet) is True
+
+
+def test_is_scalping_pocket_rejects_non_scalping_wallets():
+    assert pt.is_scalping_pocket("swing") is False
+    assert pt.is_scalping_pocket("vc") is False
+    assert pt.is_scalping_pocket("") is False
+
+
 @pytest.mark.asyncio
 async def test_all_reporting_wallets_matches_pocket_wallets_when_no_legacy_row(tmp_db):
     """No extra paper_state row beyond the active pockets -- same tuple as

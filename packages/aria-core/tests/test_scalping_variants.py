@@ -428,6 +428,15 @@ async def test_v5_buys_with_no_fixed_target(monkeypatch):
     assert result["action"] == "BUY"
     assert result["target"] is None  # no fixed TP -- generic trailing stop takes over
     assert result["invalidation"] == pytest.approx(1.0 - 1.5 * 0.05)
+    # 08/02 -- real bug found (adversarial cross-review workflow): rr used to
+    # be None here (no fixed target), which made risk_guard's conviction
+    # sizing treat V5 as "no signal supplied at all" and always grant the
+    # MAXIMUM allocation on every buy. Must now be a real, non-None value
+    # (V2's own TP_RR_RATIO, same entry signal/stop width) so V5 stops being
+    # exempt from risk-based sizing -- target itself stays None (no behavior
+    # change to the actual exit, still pure ATR trailing stop).
+    assert result["rr"] == pytest.approx(scalping_variants._V2_TP_RR_RATIO)
+    assert result["rr"] == pytest.approx(1.5)
 
 
 # ── VARIANT_ANALYZERS registry ───────────────────────────────────────────────
