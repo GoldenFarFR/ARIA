@@ -2,9 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   agentChat,
   getForexMajors,
-  getPaperWallet,
   type ForexMajorPair,
-  type PaperWallet,
 } from '../api'
 
 // Minimal shape of the Web Speech API's SpeechRecognition -- not in TS's
@@ -48,8 +46,10 @@ function getSpeechRecognitionCtor(): (new () => MinimalSpeechRecognition) | null
  *    crypto events; no other asset class has a real backend source, so
  *    none is fabricated for those (the crypto trending-pairs ticker feed
  *    was removed 27/07, operator decision)
- *  - the portfolio panel shows the real paper-trading aggregate (getPaperWallet),
- *    never a fake position list
+ *  - the portfolio panel (was: real paper-trading aggregate via getPaperWallet)
+ *    was pulled 08/02, operator call -- the fictional-capital number was
+ *    actively misrepresenting ARIA's real track record while pockets are
+ *    still being calibrated; comes back once a real wallet replaces it
  *  - branch-tip labels route to real destinations (the member sign-in
  *    button, in-page modals) instead of demo-only handlers
  *  - the ask-input at the bottom (`.ao-ask`) IS the real ARIA chat: it posts
@@ -1244,10 +1244,6 @@ export function OrganismHero() {
     () => new Set<MarketCategory>(['event', 'forex']),
   )
 
-  const [wallet, setWallet] = useState<PaperWallet | null>(null)
-  const [walletError, setWalletError] = useState(false)
-  const [walletLoaded, setWalletLoaded] = useState(false)
-
   // --- Engine lifecycle -----------------------------------------------------
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1308,23 +1304,13 @@ export function OrganismHero() {
     }
   }, [])
 
-  // --- Real paper-trading wallet (replaces the mockup's fake position list) -
-  useEffect(() => {
-    let alive = true
-    getPaperWallet()
-      .then((w) => {
-        if (alive) setWallet(w)
-      })
-      .catch(() => {
-        if (alive) setWalletError(true)
-      })
-      .finally(() => {
-        if (alive) setWalletLoaded(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
+  // 08/02 -- operator explicit call: the paper-trading widget below was pulled
+  // from the public page entirely (not just fixed) -- the fictional-capital
+  // number was actively misrepresenting ARIA's real track record while the
+  // pockets are still being calibrated (see docs/HANDOFF_PIPELINE_MOMENTUM.md,
+  // 08/02 entries). Comes back once a real wallet with real capital replaces
+  // it -- never before then. Fetch removed, not just hidden -- no point
+  // calling an endpoint whose result is never rendered.
 
   // --- Category filter (Market modal) ---------------------------------------
   const setActiveCategories = useCallback((next: Set<MarketCategory>) => {
@@ -1486,46 +1472,14 @@ export function OrganismHero() {
 
       <canvas ref={canvasRef} className="ao-canvas" aria-hidden="true" />
 
-      <div className="ao-pc" ref={portfolioElRef} role="group" aria-label="Portefeuille paper-trading ARIA">
-        <div className="ao-pc-head">
-          <span className={`ao-pc-dot${wallet ? ' is-live' : ''}`} aria-hidden="true" />
-          <span className="ao-pc-title">Portefeuille paper-trading</span>
-        </div>
-        {wallet ? (
-          <>
-            <ul className="ao-pc-list">
-              <li className="ao-pc-row">
-                <span className="ao-pc-k">Capital de départ</span>
-                <span className="ao-pc-v">${wallet.starting.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-              </li>
-              <li className="ao-pc-row">
-                <span className="ao-pc-k">Valeur actuelle</span>
-                <span className="ao-pc-v">${wallet.equity.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-              </li>
-              <li className="ao-pc-row">
-                <span className="ao-pc-k">Rendement</span>
-                <span className={`ao-pc-v ${wallet.return_pct >= 0 ? 'is-pos' : 'is-neg'}`}>
-                  {wallet.return_pct >= 0 ? '+' : ''}
-                  {wallet.return_pct.toFixed(1)}%
-                </span>
-              </li>
-              <li className="ao-pc-row">
-                <span className="ao-pc-k">Positions ouvertes</span>
-                <span className="ao-pc-v">{wallet.open_positions}</span>
-              </li>
-              <li className="ao-pc-row">
-                <span className="ao-pc-k">Taux de réussite</span>
-                <span className="ao-pc-v">{wallet.win_rate != null ? `${Math.round(wallet.win_rate * 100)}%` : '—'}</span>
-              </li>
-            </ul>
-            <div className="ao-pc-note">{wallet.disclaimer}</div>
-          </>
-        ) : (
-          <div className="ao-pc-empty">
-            {walletLoaded ? (walletError ? 'Portefeuille indisponible pour le moment.' : 'Aucune donnée pour le moment.') : 'Chargement…'}
-          </div>
-        )}
-      </div>
+      {/* 08/02 -- operator explicit call: paper-trading widget removed from the
+          public page (not just fixed) until real capital replaces the fictional
+          number, see the useEffect removal comment above for the full why.
+          Container kept (empty, ref intact) -- the background canvas animation
+          still computes a collision box around it, removing the element
+          outright would need that layout logic touched too, out of scope for
+          a quick removal. */}
+      <div className="ao-pc" ref={portfolioElRef} aria-hidden="true" />
 
       <div className="ao-nodes">
         {navTips.map((tip) => {

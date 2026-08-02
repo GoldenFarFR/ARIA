@@ -3333,11 +3333,20 @@ async def all_reporting_wallets() -> tuple[str, ...]:
     built to close for the 5 NEW pockets on 08/01, just missed in the other
     direction for the one being retired).
 
+    08/02 -- real bug found live (public paper-wallet endpoint fix, first
+    caller to ever reach this function on a completely virgin DB before any
+    other paper_trader function had run): unlike every other public function
+    in this module, this one never called _ensure_tables() first -- fine as
+    long as SOMETHING else had already created paper_state, but a genuinely
+    empty DB raised "no such table: paper_state" outright. Now consistent
+    with the rest of the module.
+
     Reads paper_state directly (not a static list) so a future retirement
     needs no code change here -- and unions with all_pocket_wallets() to also
     cover a pocket whose sourcing just turned on but hasn't written its first
     paper_state row yet (observed live: scalping_v1..v5 right after the
     container restart that activated them)."""
+    await _ensure_tables()
     known = set(all_pocket_wallets())
     async with aiosqlite.connect(DB_PATH) as db:
         rows = await (await db.execute("SELECT DISTINCT wallet FROM paper_state")).fetchall()

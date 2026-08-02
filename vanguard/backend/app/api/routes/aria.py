@@ -261,7 +261,33 @@ async def paper_wallet():
     """
     from aria_core import paper_trader
 
-    summary = await paper_trader.portfolio_summary()
+    # 08/02 -- real bug found live (audit + adversarial verify workflow,
+    # curl+DB proof): portfolio_summary()'s default wallet="swing" is a
+    # 27/07 leftover from the pre-scalping_v1..v6 3-pocket architecture --
+    # "swing" has never had a single position, so this endpoint silently
+    # showed a pristine untouched $1,000,000/+0.0%/0-position portfolio to
+    # EVERY visitor (no auth, homepage hero widget) while ARIA had actually
+    # made 10 real (paper) trades across scalping_v1/v3/v6 and lost on ALL
+    # of them (~-$1,816 realized, ~$68k deployed across 8 open positions).
+    # Aggregated across every real pocket now, same pattern already correct
+    # in paper_ledger_report.py::_build_pocket_section/telegram_bot.py's own
+    # feedback reply -- win_rate/return_pct recomputed from the TRUE summed
+    # totals, never averaged across pockets (a naive average of per-pocket
+    # win rates would misweight a pocket with 1 trade against one with 50).
+    wallets = await paper_trader.all_reporting_wallets()
+    summaries = [await paper_trader.portfolio_summary(wallet=w) for w in wallets]
+    starting = sum(s["starting"] for s in summaries)
+    equity = sum(s["equity"] for s in summaries)
+    realized_pnl = sum(s["realized_pnl"] for s in summaries)
+    unrealized_pnl = sum(s["unrealized_pnl"] for s in summaries)
+    open_positions = sum(s["open_positions"] for s in summaries)
+    closed_trades = sum(s["closed_trades"] for s in summaries)
+    total_wins = sum(
+        round(s["win_rate"] / 100.0 * s["closed_trades"]) for s in summaries if s["win_rate"] is not None
+    )
+    win_rate = (total_wins / closed_trades * 100.0) if closed_trades else None
+    return_pct = (equity / starting - 1.0) * 100.0 if starting else 0.0
+
     closed = await paper_trader.get_closed_positions(limit=50)
     history = [
         {
@@ -273,17 +299,17 @@ async def paper_wallet():
         for p in closed
     ]
     return {
-        "starting": summary["starting"],
-        "equity": summary["equity"],
-        "return_pct": summary["return_pct"],
-        "realized_pnl": summary["realized_pnl"],
-        "unrealized_pnl": summary["unrealized_pnl"],
-        "open_positions": summary["open_positions"],
-        "closed_trades": summary["closed_trades"],
-        "win_rate": summary["win_rate"],
+        "starting": starting,
+        "equity": equity,
+        "return_pct": return_pct,
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "open_positions": open_positions,
+        "closed_trades": closed_trades,
+        "win_rate": win_rate,
         "history": history,
         "disclaimer": (
-            "Portefeuille de suivi (paper), 1 000 000 $ fictifs, prix on-chain réels. "
+            "Portefeuille de suivi (paper), 1 000 000 $ fictifs par poche, prix on-chain réels. "
             "Informationnel, pas un conseil. Aucun rendement garanti."
         ),
     }

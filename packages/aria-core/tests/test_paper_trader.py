@@ -6887,6 +6887,19 @@ async def test_all_reporting_wallets_matches_pocket_wallets_when_no_legacy_row(t
 
 
 @pytest.mark.asyncio
+async def test_all_reporting_wallets_never_crashes_on_a_genuinely_virgin_db(tmp_db):
+    """08/02 -- real bug found live (public paper-wallet endpoint fix): unlike
+    every other public function in this module, this one never called
+    _ensure_tables() first -- invisible in every OTHER test in this file
+    because they all call _ensure_tables()/reset_portfolio() beforehand, but
+    a genuinely empty DB (no paper_trader function ever called yet, the
+    real first-request-ever scenario) raised "no such table: paper_state"
+    outright. Deliberately does NOT call _ensure_tables() itself first --
+    that's the whole point of this test."""
+    assert await pt.all_reporting_wallets() == pt.all_pocket_wallets()
+
+
+@pytest.mark.asyncio
 async def test_all_reporting_wallets_includes_retired_pocket_with_history(tmp_db, monkeypatch):
     """08/01 real bug (operator screenshot, "je le voit pas"): once
     scalping_variants_enabled() replaces "scalping" in all_pocket_wallets(),
