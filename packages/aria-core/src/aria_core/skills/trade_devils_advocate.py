@@ -130,10 +130,22 @@ async def _review_one(position: dict, *, llm) -> dict:
     # Same choice as the Devil's Advocate that reviews the code (DeepSeek R1
     # via OpenRouter) -- a model from a different lab than the one that made
     # the decision, never the same one judging itself.
+    #
+    # 02/08 -- fallback deliberately NOT Claude anymore (found by an LLM
+    # architecture review workflow): the trading decider is Grok today, but
+    # the operator's already-decided trajectory is to migrate the decider to
+    # Claude -- a Claude fallback here would silently become "Claude judges
+    # Claude" on the exact day DeepSeek is down AND the decider has already
+    # migrated, defeating the whole point of this mechanism. Meta/Llama is a
+    # third lab, distinct from both the current decider (xAI) and the future
+    # one (Anthropic) -- same family already used as this project's generic
+    # LLM fallback (llm_fallback_provider, groq/llama-3.3-70b, see
+    # docs/HANDOFF_LLM.md 25/07), reused here rather than introducing a 4th
+    # lab just for this one call site.
     raw = await llm(
         prompt, _REVIEW_SYSTEM, max_tokens=500, temperature=0.0,
         provider="openrouter", model="deepseek/deepseek-r1",
-        fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
+        fallback_provider="openrouter", fallback_model="meta-llama/llama-3.3-70b-instruct",
     )
 
     verdict = "sound"

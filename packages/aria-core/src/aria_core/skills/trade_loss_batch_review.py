@@ -155,10 +155,14 @@ async def _review_batch(positions: list[dict], batch_number: int, *, llm) -> dic
     # Same choice as trade_devils_advocate.py -- a model from a different lab
     # than the one that made the trading decisions, never the same one judging
     # itself.
+    #
+    # 02/08 -- fallback deliberately NOT Claude (see trade_devils_advocate.py's
+    # own comment on the identical fallback change, same reasoning: never let
+    # the judge's fallback quietly become the future decider's own lab).
     raw = await llm(
         prompt, _REVIEW_SYSTEM, max_tokens=700, temperature=0.0,
         provider="openrouter", model="deepseek/deepseek-r1",
-        fallback_provider="openrouter", fallback_model="anthropic/claude-haiku-4.5",
+        fallback_provider="openrouter", fallback_model="meta-llama/llama-3.3-70b-instruct",
     )
 
     pattern_found = False
