@@ -315,7 +315,9 @@ async def test_migrate_legacy_wallet_rows_moves_every_scoped_table(tmp_db, monke
         )
         await db.execute(
             "INSERT INTO paper_weekly_cycle (wallet, cycle_number, started_at, target_equity, start_capital) "
-            "VALUES ('scalping', 1, '2026-08-01T00:00:00', 1_100_000.0, 1_000_000.0)"
+            # SQLite doesn't understand Python's "_" thousands-separator literal syntax
+            # in a raw SQL string (unlike a real bound parameter) -- must be plain digits.
+            "VALUES ('scalping', 1, '2026-08-01T00:00:00', 1100000.0, 1000000.0)"
         )
         await db.execute(
             "INSERT INTO momentum_scan_log (contract, chain, hold_reason, wallet, scanned_at) "
