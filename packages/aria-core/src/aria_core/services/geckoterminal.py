@@ -95,7 +95,15 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # than 21 req/min under Base+Ethereum's continuous two-chain load. 20 req/min
 # = 3.0s, a small further cut pending an actual burst-controlled measurement
 # of the true sustained cap (still not done, see the 26/07 comment above).
-_AUTHENTICATED_MIN_INTERVAL = 3.0
+#
+# 08/02 (later same day) -- widened AGAIN, operator decision, after a live
+# post-deploy sample at 20 req/min still showed a near-total failure rate
+# (28/29 GeckoTerminal calls -> 429 in the 20 minutes right after a redeploy,
+# 32 in the following 20-min window too) -- 20 req/min was still above the
+# real sustained cap under current load. 15 req/min = 4.0s. Still not the
+# burst-controlled empirical measurement called for above -- this remains an
+# incremental de-escalation, not a calibrated final value.
+_AUTHENTICATED_MIN_INTERVAL = 4.0
 
 
 def geckoterminal_authenticated() -> bool:
@@ -155,7 +163,10 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # see its comment) to keep the "authenticated is never slower than keyless"
 # invariant intact -- this path isn't the one active in prod today
 # (authenticated mode is), kept consistent rather than left stale.
-_MIN_INTERVAL = 3.0
+#
+# 08/02 (later same day) -- widened again alongside _AUTHENTICATED_MIN_INTERVAL,
+# same reason, same invariant.
+_MIN_INTERVAL = 4.0
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
