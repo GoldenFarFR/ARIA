@@ -961,7 +961,7 @@ class FakeGeckoTerminalClient:
 
     def __init__(
         self, *, pool_for_token=None, pool_created_at=None, ohlcv=None, reserve_usd_for_token=None,
-        pool_error_for_token=None,
+        pool_error_for_token=None, ohlcv_intraday=None,
     ):
         self._pool_for_token = pool_for_token or {}
         self._pool_created_at = pool_created_at or {}
@@ -971,6 +971,10 @@ class FakeGeckoTerminalClient:
         # D'INFRASTRUCTURE GeckoTerminal (timeout/429/erreur serveur) plutôt que
         # le verdict de donnée par défaut "aucun pool trouvé pour ce token".
         self._pool_error_for_token = pool_error_for_token or {}
+        # #157, revived 08/02 : returned only when the caller passes
+        # skip_daily=True -- proves the parameter actually reaches this point
+        # instead of being silently absorbed (``ohlcv`` stays the fallback).
+        self._ohlcv_intraday = ohlcv_intraday or {}
         self.get_ohlcv_calls: list[tuple[str, dict]] = []  # (pool_address, kwargs reçus) -- #182, 15/07
 
     async def resolve_primary_pool(self, token_address, **kwargs):
@@ -987,6 +991,8 @@ class FakeGeckoTerminalClient:
 
     async def get_ohlcv(self, pool_address, **kwargs):
         self.get_ohlcv_calls.append((pool_address, kwargs))  # #182, 15/07 -- correctif de vitesse
+        if kwargs.get("skip_daily") and pool_address in self._ohlcv_intraday:
+            return self._ohlcv_intraday[pool_address]
         return self._ohlcv.get(pool_address, OHLCVResult(candles=[], available=False, error="indisponible"))
 
 
@@ -2814,6 +2820,175 @@ class TestOhlcvSingleTierSpeedFix:
         pool_address, kwargs = gecko.get_ohlcv_calls[0]
         assert pool_address == POOL_X
         assert kwargs.get("min_useful_candles") == 1
+
+
+class TestIntradayOhlcvGranularity:
+    """#157, revived 08/02, real bug found live 14/07: a token with a long
+    enough history (>= 20 daily candles) always got valued at the daily
+    step, even for trades on the same civil day -- silent `buy_price ==
+    sell_price`, `pnl_usd` at 0.0 with no existing guard catching it
+    (`unpriced_legs=0`, tx_hash pricing untried here -- hash not mocked,
+    like most real swaps with no direct stablecoin leg)."""
+
+    _TOKEN = "0x" + "7" * 40
+    _POOL = "0x" + "8" * 40
+
+    @pytest.mark.asyncio
+    async def test_same_day_trades_use_intraday_ohlcv_not_daily(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0, base=datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc))
+        sell_ts = _dt(0, base=datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc))  # same civil day, 18h later
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=self._TOKEN, ts=buy_ts, amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=self._TOKEN, ts=sell_ts, amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+
+        # "Daily" OHLCV (skip_daily=False): a SINGLE price for the whole day
+        # -- reproduces the bug (buy_price == sell_price despite an 18h gap).
+        daily = _flat_ohlcv(1.0, start=_dt(-1))
+        # "Intraday" OHLCV (skip_daily=True): genuinely different morning/evening prices.
+        intraday_candles = [
+            Candle(ts=int(buy_ts.timestamp()), open=1.0, high=1.0, low=1.0, close=1.0, volume=100.0),
+            Candle(ts=int(sell_ts.timestamp()), open=3.0, high=3.0, low=3.0, close=3.0, volume=100.0),
+        ]
+        intraday = OHLCVResult(candles=intraday_candles, available=True)
+
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={self._TOKEN: self._POOL},
+            pool_created_at={self._TOKEN: _dt(-5)},
+            ohlcv={self._POOL: daily},
+            ohlcv_intraday={self._POOL: intraday},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.available is True
+        assert card.closed_trades_count == 1
+        assert card.unpriced_legs == 0
+        # Bug fixed: the two prices differ (1.0 vs 3.0), not a silent 0.0.
+        assert card.realized_pnl_usd == pytest.approx(10.0 * (3.0 - 1.0))
+        assert card.flat_pricing_suspect_count == 0
+        assert any(
+            pool == self._POOL and kwargs.get("skip_daily") is True
+            for pool, kwargs in gecko.get_ohlcv_calls
+        )
+
+    @pytest.mark.asyncio
+    async def test_trades_on_different_days_do_not_force_intraday(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0)
+        sell_ts = _dt(5)  # different civil day -- no intraday overlap
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=self._TOKEN, ts=buy_ts, amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=self._TOKEN, ts=sell_ts, amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={self._TOKEN: self._POOL},
+            pool_created_at={self._TOKEN: _dt(-10)},
+            ohlcv={self._POOL: _flat_ohlcv(1.0, start=_dt(-10), n=200)},
+        )
+
+        await sm.score_wallets([WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus())
+
+        assert any(
+            pool == self._POOL and kwargs.get("skip_daily") in (False, None)
+            for pool, kwargs in gecko.get_ohlcv_calls
+        )  # skip_daily NOT triggered -- unchanged behavior
+
+
+class TestFlatPricingGuard:
+    """#157, revived 08/02: an explicit, NEVER blocking signal when two
+    identical prices come out despite different timestamps (defense in
+    depth independent of the granularity fix above)."""
+
+    _TOKEN = "0x" + "7" * 40
+    _POOL = "0x" + "8" * 40
+
+    @pytest.mark.asyncio
+    async def test_guard_fires_on_genuinely_identical_prices(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        buy_ts = _dt(0)
+        sell_ts = _dt(0.5)
+
+        transfers = TokenTransfersResult(
+            transfers=[
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=self._TOKEN, ts=buy_ts, amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=self._TOKEN, ts=sell_ts, amount=10.0, tx_hash="0xsell"),
+            ],
+            available=True,
+        )
+        client = FakeBlockscoutClient(transfers={WALLET_A: transfers})
+        # Deliberately flat market -- even with fine granularity, the two
+        # prices are genuinely identical (not a daily-candle artifact).
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={self._TOKEN: self._POOL},
+            pool_created_at={self._TOKEN: _dt(-5)},
+            ohlcv={self._POOL: _flat_ohlcv(1.0, start=_dt(-5))},
+            ohlcv_intraday={self._POOL: _flat_ohlcv(1.0, start=_dt(-5))},
+        )
+
+        report = await sm.score_wallets(
+            [WALLET_A], client=client, gecko=gecko, llm=_fake_llm, goplus=_clean_goplus(),
+        )
+
+        card = report.wallets[0]
+        assert card.flat_pricing_suspect_count == 1
+        assert card.disqualified is False  # signal, never a block
+        assert card.available is True
+
+    @pytest.mark.asyncio
+    async def test_guard_never_fires_on_two_unpriced_legs(self, monkeypatch):
+        """Requested in review (14/07): `None == None` is true in Python --
+        the guard must NEVER confuse two unpriced legs (already counted via
+        `unpriced_legs`) with a genuinely suspect flat price. Test at the
+        lowest possible level: `_fifo_match` is monkeypatched to return a
+        `ClosedTrade` with BOTH prices `None` (deliberately bypasses
+        `_fifo_match`'s normal guarantee to prove the `is not None` filter
+        protects even if that guarantee changed elsewhere)."""
+        fake_closed_trade = sm.ClosedTrade(
+            token_address=self._TOKEN,
+            buy_ts=_dt(0),
+            sell_ts=_dt(0.5),
+            token_amount=10.0,
+            buy_price=None,  # type: ignore[arg-type]
+            sell_price=None,  # type: ignore[arg-type]
+        )
+
+        def _fake_fifo_match(token_address, buys, sells, price_lookup, **kwargs):
+            return sm._TokenFIFOResult(
+                token_address=token_address, closed_trades=[fake_closed_trade], unpriced_legs=0, open_position_amount=0.0,
+            )
+
+        monkeypatch.setattr(sm, "_fifo_match", _fake_fifo_match)
+
+        transfers_by_token = {
+            f"base:{self._TOKEN}": [
+                _transfer(from_addr=FUNDER, to_addr=WALLET_A, token=self._TOKEN, ts=_dt(0), amount=10.0, tx_hash="0xbuy"),
+                _transfer(from_addr=WALLET_A, to_addr=FUNDER, token=self._TOKEN, ts=_dt(0.5), amount=10.0, tx_hash="0xsell"),
+            ],
+        }
+        gecko = FakeGeckoTerminalClient(
+            pool_for_token={self._TOKEN: self._POOL},
+            pool_created_at={self._TOKEN: _dt(-5)},
+            ohlcv={self._POOL: _flat_ohlcv(1.0, start=_dt(-5))},
+        )
+
+        result = await sm._analyze_wallet_multi_token(WALLET_A, transfers_by_token, gecko=gecko)
+
+        assert result.flat_priced_trade_tokens == []  # never fires on None == None
 
 
 class TestCopyTradingWiring:

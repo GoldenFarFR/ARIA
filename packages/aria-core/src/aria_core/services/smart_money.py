@@ -1495,6 +1495,7 @@ class _MultiTokenResult:
     resolved_pool_addresses: set[str] = field(default_factory=set)
     thin_liquidity_tokens: list[str] = field(default_factory=list)  # 15/07, Gemini review -- anti-dust/scam-pool defense
     unmatched_sell_events: int = 0  # 15/07, Gemini review -- rebasing transparency, cf. `_TokenFIFOResult`
+    flat_priced_trade_tokens: list[str] = field(default_factory=list)  # #157, revived 08/02 -- same-day-trade flat-price guard
     # Freezing of transient errors (15/07, Gemini review -- layer 2/3 blind
     # spot): composite key ("{chain}:{address}") of tokens whose GeckoTerminal
     # pool resolution failed this pass for an INFRASTRUCTURE cause
@@ -1626,6 +1627,17 @@ async def _analyze_wallet_multi_token(
         if not buys:
             continue
 
+        # #157, revived 08/02 -- real bug found live 14/07: a token with a
+        # long enough history always gets GeckoTerminal's daily rung first,
+        # even when this wallet has multiple trades on the SAME civil day --
+        # they then all land on the same candle, `buy_price == sell_price`
+        # silently, `pnl_usd` becomes 0.0 with no existing guard catching it.
+        # `needs_intraday` forces a finer granularity (`skip_daily=True`) as
+        # soon as >=2 distinct timestamps (buys AND sells combined) of THIS
+        # token fall on the same UTC civil date.
+        all_ts = [ts for ts, _amt, _hash in buys + sells]
+        needs_intraday = len({ts.date() for ts in all_ts}) < len(all_ts)
+
         # Resolves the token's REAL pool (not the token contract itself --
         # two different things in an AMM, cf. `resolve_primary_pool`). Serves
         # both OHLCV valuation and multi-token wash-trading exclusion (#157,
@@ -1698,6 +1710,7 @@ async def _analyze_wallet_multi_token(
             # deliberately left untouched in this change.
             _candles = await fetch_candles(
                 pool_meta.pool_address, chain, contract=token_addr, gecko_client=gecko, min_useful_candles=1,
+                skip_daily=needs_intraday,
             )
             ohlcv = (
                 OHLCVResult(candles=_candles, available=True, error=None)
@@ -1818,6 +1831,25 @@ async def _analyze_wallet_multi_token(
             result.closed_trades.extend(fifo.closed_trades)
             result.unpriced_legs += fifo.unpriced_legs
             result.unmatched_sell_events += fifo.unmatched_sell_events
+
+            # #157, revived 08/02, defense in depth: signals (never blocks)
+            # when a closed trade ends with buy_price == sell_price exactly
+            # while buy_ts != sell_ts -- neither tx_hash pricing nor
+            # pool+OHLCV (even with `skip_daily` above) guarantee sufficient
+            # granularity in every case, this stays an independent check.
+            # `is not None` on both sides is an interface-level guarantee
+            # here (`ClosedTrade.buy_price`/`sell_price` are non-Optional,
+            # `_fifo_match` only ever produces a `ClosedTrade` once both
+            # resolved -- an unpriced leg is counted via `unpriced_legs`
+            # instead, never reaches `closed_trades`) rather than a reachable
+            # production case, kept for defense-in-depth consistency with
+            # the rest of this function's style.
+            if any(
+                t.buy_price is not None and t.sell_price is not None
+                and t.buy_price == t.sell_price and t.buy_ts != t.sell_ts
+                for t in fifo.closed_trades
+            ):
+                result.flat_priced_trade_tokens.append(token_addr)
 
         if pool_meta.available and pool_meta.created_at:
             earliest_buy_ts = min(ts for ts, _amt, _hash in buys)
@@ -2335,6 +2367,7 @@ class WalletScoreCard:
     pool_lookup_errors: int = 0  # tokens with no resolved GeckoTerminal pool (#157, 14/07 -- diagnostic)
     gecko_dexscreener_gap_count: int = 0  # among them, DexScreener sees a pair GeckoTerminal missed (#157, 14/07)
     cmc_price_recovery_count: int = 0  # among them, priced via CoinMarketCap after GeckoTerminal failed (#157, 14/07)
+    flat_pricing_suspect_count: int = 0  # tokens with buy_price == sell_price despite different timestamps -- signal, never blocking (#157, revived 08/02)
     # Anti-dust/scam-pool defense (15/07, Gemini review): tokens whose pool
     # was resolved but whose confirmed liquidity is below
     # WEIGHTS.min_pool_liquidity_usd_for_pricing -- not priced (diagnostic
@@ -2648,6 +2681,11 @@ def _format_card_for_prompt(card: WalletScoreCard) -> str:
         lines.append(
             f"Dont {card.cmc_price_recovery_count} valorisé(s) via CoinMarketCap après échec GeckoTerminal "
             "(3e couche de pricing, #157)."
+        )
+    if card.flat_pricing_suspect_count:
+        lines.append(
+            f"⚠️ {card.flat_pricing_suspect_count} token(s) avec un prix d'achat et de vente identique malgré "
+            "des horodatages différents (signal de granularité de prix insuffisante, pas un jugement sur le résultat)."
         )
     lines.append(f"Win rate : {card.win_rate:.0%}" if card.win_rate is not None else "Win rate : indisponible")
     lines.append(
@@ -3081,6 +3119,7 @@ async def score_wallets(
         card.pool_lookup_errors = multi.pool_lookup_errors
         card.gecko_dexscreener_gap_count = len(multi.gecko_dexscreener_gap_tokens)
         card.cmc_price_recovery_count = len(multi.cmc_recovered_tokens)
+        card.flat_pricing_suspect_count = len(multi.flat_priced_trade_tokens)
         card.thin_liquidity_pricing_skipped_count = len(multi.thin_liquidity_tokens)
         card.unmatched_sell_events = multi.unmatched_sell_events
         card.transient_pricing_errors = len(multi.transient_pricing_error_tokens)

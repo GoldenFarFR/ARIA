@@ -259,6 +259,7 @@ class OHLCVClient:
     async def get_ohlcv(
         self, pool_address: str, *, network: str = DEFAULT_NETWORK,
         min_useful_candles: int = _MIN_USEFUL_CANDLES, mode: str = "standard",
+        skip_daily: bool = False,
     ) -> OHLCVResult:
         """Fetches the best available OHLCV series for a pool.
 
@@ -283,6 +284,18 @@ class OHLCVClient:
         15min -> 30min ladder instead -- see ``_ladder_for_mode``. Default
         ``"standard"`` is the original 1D/4H/1H ladder, unchanged behavior
         for every existing caller.
+
+        ``skip_daily`` (#157, revived 08/02 -- real bug found live 14/07): a
+        token with a long enough history (>= `min_useful_candles` daily
+        candles) always got the daily rung first, even when a caller (e.g.
+        wallet-scoring) has multiple trades on the SAME civil day -- valuing
+        them all against one candle/day silently collapses `buy_price` and
+        `sell_price` onto the same point, `pnl_usd` becomes 0.0 with no
+        existing guard (`unpriced_legs`, tx_hash pricing) catching it. `True`
+        excludes the `"day"` rung from the ladder walked. `False` by default
+        -- unchanged behavior for every existing caller. Naturally a no-op
+        under `mode="scalping"` (that ladder has no daily rung to begin
+        with).
 
         26/07 -- operator-found gap (real prod incident, GeckoTerminal 429s
         during a 40-candidate scan burst): a real network/rate-limit/server
@@ -310,7 +323,11 @@ class OHLCVClient:
         best: OHLCVResult | None = None
         last_error: str | None = None
 
-        for period, aggregate, limit, label in _ladder_for_mode(mode):
+        ladder = _ladder_for_mode(mode)
+        if skip_daily:
+            ladder = tuple(step for step in ladder if step[0] != "day")
+
+        for period, aggregate, limit, label in ladder:
             data, error = await self._get_json(
                 f"/networks/{network}/pools/{pool}/ohlcv/{period}",
                 {"aggregate": aggregate, "limit": limit},

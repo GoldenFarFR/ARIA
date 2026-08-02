@@ -1913,6 +1913,31 @@ async def test_fetch_candles_uses_geckoterminal_first(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_candles_forwards_skip_daily_to_geckoterminal_stage(monkeypatch):
+    """#157, revived 08/02 -- real gap found by an adversarial validation
+    workflow before this test existed: smart_money.py calls the PUBLIC
+    `fetch_candles` wrapper (aliased from `_fetch_candles`), not
+    `_fetch_candles_impl` directly. `skip_daily` must reach the wrapper's own
+    signature and be threaded all the way through to the GeckoTerminal stage
+    -- a version that only added it to `_fetch_candles_impl` would raise
+    `TypeError: unexpected keyword argument 'skip_daily'` on every call from
+    smart_money.py."""
+    from aria_core.services import geckoterminal as gt
+
+    captured = {}
+
+    async def fake_gt_ohlcv(pool_address, *, network, skip_daily=False, **_kwargs):
+        captured["skip_daily"] = skip_daily
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    await me._fetch_candles("0xpool", "base", skip_daily=True)
+
+    assert captured["skip_daily"] is True
+
+
+@pytest.mark.asyncio
 async def test_fetch_candles_rejects_price_inconsistent_candles(monkeypatch):
     """Item #222 (30/07), real incident found live in guardian-mode audit:
     GeckoTerminal returned genuinely wrong OHLCV (~$1900 scale) for a pool

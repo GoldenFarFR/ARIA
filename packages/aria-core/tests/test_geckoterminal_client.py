@@ -137,6 +137,27 @@ async def test_get_ohlcv_forwards_min_useful_candles_to_wide_client(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_get_ohlcv_forwards_skip_daily_to_wide_client(monkeypatch):
+    # #157, revived 08/02, real bug found live 14/07 (intraday trades valued
+    # at the daily step) -- skip_daily must reach services.ohlcv.ohlcv_client,
+    # never stay stuck at its False default.
+    from aria_core.services import ohlcv as ohlcv_module
+
+    captured = {}
+
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", skip_daily=False, **_kwargs):
+        captured["skip_daily"] = skip_daily
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=False, error="vide")
+
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
+    await client.get_ohlcv("0xpool", skip_daily=True)
+
+    assert captured["skip_daily"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_ohlcv_omits_min_useful_candles_when_not_passed(monkeypatch):
     # Aucune régression pour les appelants existants -- ne passe rien de
     # nouveau au client sous-jacent quand le paramètre n'est pas fourni,

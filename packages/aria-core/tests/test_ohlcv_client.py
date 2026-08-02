@@ -439,3 +439,45 @@ async def test_no_api_key_header_when_not_configured(monkeypatch):
 
     assert captured
     assert "x-cg-demo-api-key" not in captured[0]
+
+
+# ── skip_daily (#157, revived 08/02, real bug found live 14/07 -- intraday
+# trades valued at the daily step, identical prices for different trades on
+# the same day) ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_skip_daily_never_returns_daily_even_with_plenty_of_candles(monkeypatch):
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    # 1D would easily provide enough candles (120 >> threshold) -- but
+    # skip_daily must exclude it entirely from the walked ladder, never fall
+    # back onto it.
+    _patch(
+        monkeypatch,
+        {
+            _url("day"): FakeResponse(200, _payload(_rows(120))),
+            _url("hour"): [FakeResponse(200, _payload(_rows(30))), FakeResponse(200, _payload(_rows(240)))],
+        },
+    )
+    res = await client.get_ohlcv(POOL, skip_daily=True)
+    assert res.available is True
+    assert res.timeframe == "4H"  # never "1D", even though the daily rung would normally "win"
+
+
+@pytest.mark.asyncio
+async def test_skip_daily_no_fine_granularity_available_degrades_honestly(monkeypatch):
+    """Most important case: if NEITHER 4H NOR 1H is available either, never a
+    silent fallback to the excluded daily rung, never a crash -- an honest
+    `available=False`."""
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    _patch(
+        monkeypatch,
+        {
+            _url("day"): FakeResponse(200, _payload(_rows(120))),  # available but excluded by skip_daily
+            _url("hour"): [FakeResponse(404), FakeResponse(404)],  # 4H then 1H, both unavailable
+        },
+    )
+    res = await client.get_ohlcv(POOL, skip_daily=True)
+    assert res.available is False
+    assert res.candles == []
+    assert res.timeframe is None
+    assert res.error  # explicit message, never a daily candle silently reintroduced

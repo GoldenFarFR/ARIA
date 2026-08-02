@@ -411,6 +411,7 @@ class GeckoTerminalClient:
         network: str = NETWORK,
         min_useful_candles: int | None = None,
         mode: str = "standard",
+        skip_daily: bool = False,
         **_kwargs: object,
     ) -> OHLCVResult:
         """Delegates to ``services.ohlcv.ohlcv_client`` -- 14/07 fix (#157):
@@ -433,9 +434,11 @@ class GeckoTerminalClient:
         ``mode`` (Item #101, 26/07): ``"scalping"`` is passed through to reach
         ``services/ohlcv.py``'s dedicated 15min/30min sub-hour ladder --
         default ``"standard"`` is the original day/4h/1h ladder, unchanged
-        behavior for every existing caller. ``**_kwargs`` absorbs any
-        inherited period/aggregate/limit (no caller in production currently
-        passes them) without raising.
+        behavior for every existing caller. ``skip_daily`` (#157, revived
+        08/02) is passed through to ``services/ohlcv.py`` -- ``False`` by
+        default, unchanged behavior for every existing caller. ``**_kwargs``
+        absorbs any inherited period/aggregate/limit (no caller in production
+        currently passes them) without raising.
 
         26/07 -- real gap found while adding Ethereum to the momentum
         pipeline's ``DEFAULT_CHAINS``: ``GECKO_NETWORK_SLUGS`` existed since
@@ -455,7 +458,9 @@ class GeckoTerminalClient:
             extra["min_useful_candles"] = min_useful_candles
 
         gecko_network = GECKO_NETWORK_SLUGS.get(network, network)
-        wide = await _wide_ohlcv_client.get_ohlcv(pool_address, network=gecko_network, mode=mode, **extra)
+        wide = await _wide_ohlcv_client.get_ohlcv(
+            pool_address, network=gecko_network, mode=mode, skip_daily=skip_daily, **extra
+        )
         if not wide.available or not wide.candles:
             return OHLCVResult(candles=[], available=False, error=wide.error or UNAVAILABLE)
         return OHLCVResult(candles=wide.candles, available=True, error=None)

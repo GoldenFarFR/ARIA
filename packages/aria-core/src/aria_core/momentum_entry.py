@@ -1644,6 +1644,7 @@ def _wash_trading_ratio_confirmed(contract: str, chain: str, volume_to_liq: floa
 async def _fetch_candles_impl(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
+    skip_daily: bool = False,
 ) -> list[Candle]:
     """SIX-stage OHLCV cascade (16/07, explicit operator request: "I want
     everything wired even if they do the same thing, a highway not a country
@@ -1725,7 +1726,13 @@ async def _fetch_candles_impl(
     calls per token) now that wallet-scoring is routed through this shared
     cascade instead of calling GeckoTerminal directly. No other stage
     (CoinMarketCap/Mobula/DexPaprika/Codex/Dune) accepts this parameter --
-    each already requests its own fixed, provider-appropriate candle count."""
+    each already requests its own fixed, provider-appropriate candle count.
+
+    ``skip_daily`` (#157, revived 08/02): same rationale and same scope as
+    ``min_useful_candles`` right above -- forwarded ONLY to this first
+    GeckoTerminal stage (excludes its daily rung, see
+    ``ohlcv.OHLCVClient.get_ohlcv``'s own docstring), `False` by default, no
+    other stage accepts or needs this parameter."""
     if gecko_client is None:
         from aria_core.services.geckoterminal import geckoterminal_client
 
@@ -1734,6 +1741,8 @@ async def _fetch_candles_impl(
     gecko_kwargs = {"network": chain, "mode": mode}
     if min_useful_candles is not None:
         gecko_kwargs["min_useful_candles"] = min_useful_candles
+    if skip_daily:
+        gecko_kwargs["skip_daily"] = True
 
     if not _provider_in_cooldown("geckoterminal"):
         try:
@@ -1956,6 +1965,7 @@ def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) 
 async def _fetch_candles(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
+    skip_daily: bool = False,
 ) -> list[Candle]:
     """Thin wrapper around ``_fetch_candles_impl`` (the real 6-stage cascade,
     docstring there) -- adds the ``_candles_price_consistent`` sanity check
@@ -1967,10 +1977,18 @@ async def _fetch_candles(
     complexity of resuming mid-cascade isn't worth it for what live data
     shows is a rare, single-provider, single-pool incident) -- a real
     tradeoff, but always the SAFE side of it: an extra HOLD is never worse
-    than a signal built on a nonsensical price scale."""
+    than a signal built on a nonsensical price scale.
+
+    ``skip_daily`` (#157, revived 08/02) is forwarded as-is to
+    ``_fetch_candles_impl`` -- this wrapper's own price-consistency check
+    never interacts with it (it only compares the LAST candle's close to
+    ``pair.price_usd``, unaffected by which rung of the ladder produced that
+    candle), and stays permanently fail-open here anyway since
+    smart_money.py's wallet-scoring caller never passes ``pair=``."""
     candles = await _fetch_candles_impl(
         pool_address, chain, contract=contract, pair=pair, mode=mode,
         gecko_client=gecko_client, min_useful_candles=min_useful_candles,
+        skip_daily=skip_daily,
     )
     if candles and not _candles_price_consistent(candles, pair):
         logger.warning(
