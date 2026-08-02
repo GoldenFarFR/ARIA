@@ -4201,12 +4201,21 @@ async def _open_new_entries_for_wallet(
         # for_contract`` reads the contract's history across ALL pockets) --
         # a repeated-failure pattern on a contract is a fact about the
         # CONTRACT, not about which pocket happened to hold it.
-        loss_streak = await _consecutive_losses_for_contract(contract)
+        # 08/02 -- operator explicit call (live incident, a hard portfolio
+        # circuit breaker having just armed on scalping_v3): see
+        # risk_guard.paper_risk_circuit_breakers_disabled()'s own docstring --
+        # this per-contract cooldown falls under the same "risk management
+        # circuit breaker, not fraud detection" umbrella, skipped entirely
+        # (never even queried) when the gate is on.
+        from aria_core import risk_guard
+
+        circuit_breakers_disabled = risk_guard.paper_risk_circuit_breakers_disabled()
+        loss_streak = 0 if circuit_breakers_disabled else await _consecutive_losses_for_contract(contract)
         loss_streak_threshold = (
             SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT if trading_mode == "scalping"
             else MAX_CONSECUTIVE_LOSSES_PER_CONTRACT
         )
-        if loss_streak >= loss_streak_threshold:
+        if not circuit_breakers_disabled and loss_streak >= loss_streak_threshold:
             funnel["contract_loss_streak"] = funnel.get("contract_loss_streak", 0) + 1
             await counterfactual_tracker.record_rejection(
                 contract, sig.get("chain") or "base", sig.get("symbol", ""),

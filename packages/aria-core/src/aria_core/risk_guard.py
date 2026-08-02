@@ -857,17 +857,55 @@ def resume_new_entries(wallet: str, *, by: int | str | None = None) -> dict[str,
     return new_entry_block_status(wallet)
 
 
+def paper_risk_circuit_breakers_disabled() -> bool:
+    """08/02 -- operator explicit call, live incident: "les coupe circuit ne
+    servent à rien à paper test puisque on améliore et reconstruit en temps
+    réel ... tu peux les supprimer". Scoped to the automated PAPER (fictional
+    capital) risk circuit breakers ONLY -- the per-pocket drawdown/consecutive-
+    loss breaker (this module) and the per-contract re-entry cooldown
+    (paper_trader.SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT/
+    MAX_CONSECUTIVE_LOSSES_PER_CONTRACT). Deliberately does NOT touch
+    ``outgoing_pause`` (the real manual kill-switch, /stop) -- that one is a
+    human decision, never an automated one, and stays fully active regardless
+    of this flag. Also never touches any hard security gate (honeypot,
+    blacklist, holder concentration, liquidity floor) -- those protect
+    against buying a scam, not against a losing streak, and the operator's
+    own reasoning ("on améliore et reconstruit en temps réel") applies only
+    to risk-management circuit breakers, never to fraud detection.
+
+    OFF by default (fail-closed, same idiom as every other gate in this
+    file) so a future deploy that forgets to set this env var gets the safe
+    behavior (breakers active) -- flip ON explicitly, same doctrine as every
+    other "temporarily loosen a guardrail for observation" gate already in
+    this codebase (see paper_trader.scalping_only_sourcing_enabled's own
+    comment for the same idiom). MUST be revisited before any real-capital
+    transition -- the day capital becomes real, CLAUDE.md's absolute rule
+    on human validation applies in full, unconditionally, and this flag
+    (scoped to fictional paper capital only) has no bearing on that."""
+    return os.environ.get("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def blocks_new_entries(wallet: str) -> tuple[bool, str | None]:
     """``(blocked, reason)`` -- combines THIS POCKET's dedicated circuit
     breaker AND ``outgoing_pause`` (a global pause blocks new paper entries
     in EVERY pocket at once -- the real kill-switch stays global by
     construction, unlike the per-pocket breaker) WITHOUT ever confusing the
     two mechanisms in the reported reason. Fail-closed on unreadable state
-    ("money" doctrine)."""
+    ("money" doctrine).
+
+    08/02 -- see paper_risk_circuit_breakers_disabled()'s own docstring: when
+    ON, the per-pocket breaker below is skipped entirely -- outgoing_pause
+    (the manual kill-switch) is checked FIRST and always still applies,
+    regardless of this flag."""
     from aria_core import outgoing_pause
 
     if outgoing_pause.is_paused():
         return True, "ARIA en pause globale (kill-switch sortant) — aucune nouvelle position paper tant que /start n'est pas donné."
+
+    if paper_risk_circuit_breakers_disabled():
+        return False, None
 
     status = new_entry_block_status(wallet)
     if not status["readable"]:
@@ -930,7 +968,14 @@ async def evaluate_portfolio_risk(wallet: str, *, price_lookup=None) -> Portfoli
     already_blocked = status["blocked"]
     hard_breach = drawdown_pct >= HARD_DRAWDOWN_PCT or consecutive_losses >= HARD_CONSECUTIVE_LOSSES
     newly_triggered_hard = False
-    if hard_breach and not already_blocked and status["readable"]:
+    # 08/02 -- see paper_risk_circuit_breakers_disabled()'s own docstring: not
+    # just "ignore an armed breaker" (blocks_new_entries already does that) --
+    # skip ARMING it in the first place, so the hourly "still armed" reminder
+    # and the ARMED/LIFTED Telegram alerts stop firing too. The soft-tier
+    # alert/sizing-reduction below is deliberately left untouched: it never
+    # blocks a trade, only informs and trims size, so it doesn't fall under
+    # the operator's "circuit breaker" framing.
+    if hard_breach and not already_blocked and status["readable"] and not paper_risk_circuit_breakers_disabled():
         reason = (
             f"drawdown {drawdown_pct:.1%} depuis le plus haut d'équité ({hwm:,.0f} $)"
             if drawdown_pct >= HARD_DRAWDOWN_PCT
@@ -1018,7 +1063,15 @@ def should_send_pocket_reminder(wallet: str) -> bool:
     qu'aucun rappel n'a été envoyé depuis au moins ``REMINDER_INTERVAL_
     SECONDS``. Jamais vrai pour le palier SOUPLE (celui-ci n'empêche aucune
     entrée, seulement une taille réduite -- pas la situation "ARIA arrête de
-    trader" que ce rappel cible)."""
+    trader" que ce rappel cible).
+
+    08/02 -- voir le docstring de paper_risk_circuit_breakers_disabled() : un
+    fichier d'état déjà armé AVANT l'activation de ce gate resterait
+    "blocked" indéfiniment (ce gate empêche seulement un NOUVEL armement, pas
+    l'état déjà persisté) -- sans ce garde, le rappel horaire continuerait
+    d'alerter sur un coupe-circuit qui n'a plus aucun effet réel."""
+    if paper_risk_circuit_breakers_disabled():
+        return False
     status = new_entry_block_status(wallet)
     if not status["readable"] or not status["blocked"]:
         return False

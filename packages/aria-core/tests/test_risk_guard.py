@@ -1169,6 +1169,80 @@ class TestPerPocketDrawdownIsolation:
         assert vc_state.blocked is False
 
 
+# ── 5bis. paper_risk_circuit_breakers_disabled (08/02) -- operator explicit
+#      call, live incident (a hard breaker just armed on scalping_v3 while
+#      the operator was watching): "les coupe circuit ne servent à rien à
+#      paper test ... tu peux les supprimer". Scoped to the automated risk
+#      circuit breakers only -- never outgoing_pause (manual kill-switch),
+#      never any fraud-detection gate (honeypot/blacklist/concentration). ──
+
+
+class TestPaperRiskCircuitBreakersDisabled:
+    def test_off_by_default(self, monkeypatch):
+        monkeypatch.delenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", raising=False)
+        assert risk_guard.paper_risk_circuit_breakers_disabled() is False
+
+    @pytest.mark.asyncio
+    async def test_gate_on_never_arms_the_hard_breaker(self, tmp_db, monkeypatch):
+        """Same setup as test_hard_drawdown_blocks_new_entries_until_manual_
+        resume above (-20% drawdown) -- with the gate on, must never arm at
+        all (not just "ignored", never even written to the state file)."""
+        monkeypatch.setenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "true")
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
+        await pt.close_position(A, 0.2)  # perte de 200k sur 250k -> équité 800k, DD 20%
+
+        state = await risk_guard.evaluate_portfolio_risk("swing")
+        assert state.drawdown_pct >= risk_guard.HARD_DRAWDOWN_PCT
+        assert state.blocked is False
+        assert state.newly_triggered_hard is False
+
+        blocked, reason = risk_guard.blocks_new_entries("swing")
+        assert blocked is False
+        assert reason is None
+
+    @pytest.mark.asyncio
+    async def test_gate_on_ignores_a_breaker_already_armed_before_the_gate(self, tmp_db, monkeypatch):
+        """Real scenario: the breaker armed BEFORE the operator turned the gate
+        on (exactly the scalping_v3 incident) -- the already-persisted armed
+        state must be ignored too, not just prevented from arming going
+        forward."""
+        monkeypatch.delenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", raising=False)
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
+        await pt.close_position(A, 0.2)
+        state = await risk_guard.evaluate_portfolio_risk("swing")
+        assert state.blocked is True  # armed for real, gate still off here
+
+        monkeypatch.setenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "true")
+        blocked, reason = risk_guard.blocks_new_entries("swing")
+        assert blocked is False
+        assert reason is None
+
+    def test_gate_on_never_touches_the_manual_kill_switch(self, monkeypatch):
+        """outgoing_pause (/stop) is a human decision, never an automated
+        one -- must stay fully authoritative regardless of this flag."""
+        from aria_core import outgoing_pause
+
+        monkeypatch.setenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "true")
+        monkeypatch.setattr(outgoing_pause, "is_paused", lambda: True)
+        blocked, reason = risk_guard.blocks_new_entries("swing")
+        assert blocked is True
+        assert reason is not None and "pause globale" in reason
+
+    @pytest.mark.asyncio
+    async def test_gate_on_silences_the_hourly_reminder(self, tmp_db, monkeypatch):
+        monkeypatch.delenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", raising=False)
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=250_000, wallet="swing")
+        await pt.close_position(A, 0.2)
+        await risk_guard.evaluate_portfolio_risk("swing")
+        assert risk_guard.should_send_pocket_reminder("swing") is True  # gate off: real reminder
+
+        monkeypatch.setenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "true")
+        assert risk_guard.should_send_pocket_reminder("swing") is False
+
+
 # ── 6. Coupe-circuit MACRO (27/07, Phase 3) -- agrège l'équité des 3 poches,
 #      backstop pour un krach CORRÉLÉ où chaque poche reste individuellement sous
 #      son propre seuil HARD_DRAWDOWN_PCT (20%). ────────────────────────────────

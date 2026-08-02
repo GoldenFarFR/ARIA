@@ -767,6 +767,33 @@ async def test_scalping_mode_blocks_reentry_after_a_single_loss(tmp_db):
     assert not await pt.has_open(A)
 
 
+@pytest.mark.asyncio
+async def test_paper_risk_circuit_breakers_disabled_skips_the_per_contract_cooldown(tmp_db, monkeypatch):
+    """08/02 -- operator explicit call, live incident (a hard portfolio
+    circuit breaker had just armed on scalping_v3): "les coupe circuit ne
+    servent à rien à paper test ... tu peux les supprimer". Same exact setup
+    as test_scalping_mode_blocks_reentry_after_a_single_loss above (a single
+    loss would normally block re-entry in scalping mode) -- with the gate
+    on, the cooldown is never even queried, the re-entry goes through."""
+    monkeypatch.setenv("ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED", "true")
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.set_trading_mode("scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+    await pt.close_position(A, 0.8, reason="stop suiveur")
+
+    async def normal_signal(contract):
+        return {"action": "BUY", "symbol": "AAA", "price": 0.7, "rr": 2.5, "align_score": 3}
+
+    async def price_lookup(contract):
+        return 0.7
+
+    act = await pt.run_paper_cycle(
+        candidates=[A], analyzer=normal_signal, price_lookup=price_lookup, depeg_check=_no_depeg,
+    )
+    assert len(act["opened"]) == 1
+    assert await pt.has_open(A)
+
+
 # ── rsi_divergence_log wiring (Item #247, 30/07) ─────────────────────────────
 
 @pytest.mark.asyncio
