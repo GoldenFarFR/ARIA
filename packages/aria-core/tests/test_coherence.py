@@ -309,6 +309,26 @@ def test_claude_md_declares_permanent_norms():
         assert norm in claude, f"la norme permanente '{norm}' a disparu de CLAUDE.md"
 
 
+# Ceiling set right after the 03/08 compaction pass (690 lines/~180KB -> 329
+# lines/~75KB). 100KB leaves real headroom for organic growth before the next
+# pass is needed -- see "Routeur CLAUDE.md" section for where new content goes
+# instead of being appended here.
+MAX_CLAUDE_MD_SIZE_BYTES = 100 * 1024
+
+
+def test_claude_md_stays_under_size_budget():
+    """Garde-fou anti-dérive (03/08) -- CLAUDE.md a déjà atteint ~600 Ko avant une compaction
+    complète devenue nécessaire (22/07) ; ce test avertit tôt plutôt que d'attendre le prochain
+    rattrapage géant."""
+    content = _read("CLAUDE.md")
+    size = len(content.encode("utf-8"))
+    assert size <= MAX_CLAUDE_MD_SIZE_BYTES, (
+        f"CLAUDE.md fait {size / 1024:.0f} Ko (> {MAX_CLAUDE_MD_SIZE_BYTES / 1024:.0f} Ko) -- "
+        "voir la table 'Routeur CLAUDE.md' avant d'ajouter du contenu ici : la plupart du "
+        "nouveau contenu devrait aller dans un docs/HANDOFF_<composant>.md, pas s'empiler ici."
+    )
+
+
 def test_attack_simulation_present():
     """Simulation d'attaque quotidienne + fix de validation (corps non-UTF8) verrouillés."""
     assert (REPO / "vanguard" / "backend" / "security_sim" / "harness.py").is_file(), (
