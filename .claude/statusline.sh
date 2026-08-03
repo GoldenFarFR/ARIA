@@ -43,12 +43,14 @@ else
   reco="🟢 Sonnet xhigh (🔴 Opus si wallet/sécu)"
 fi
 
-# --- Checkpoint session (compteur de messages tous les 1000) ---------------
-# Affiche l'approche du prochain checkpoint auto (« chk NN/1000 ») pour que l'opérateur
-# le voie venir ; le hook UserPromptSubmit injecte le rappel pile au 1000e.
+# --- Checkpoint session (compteur de messages, cf. session-checkpoint.sh) --
+# Affiche l'approche du prochain checkpoint auto pour que l'opérateur le voie venir ;
+# le hook UserPromptSubmit injecte le rappel pile au Ne message. Valeur synchronisée
+# à la main avec INTERVAL dans session-checkpoint.sh -- pas de source commune, donc
+# toute modification de l'un doit être répercutée sur l'autre dans le même commit.
 chk=""
 cf="${dir}/.claude/.msg-counter"
-CHECKPOINT_INTERVAL=1000
+CHECKPOINT_INTERVAL=150
 if [ -f "$cf" ]; then
   cn=$(cat "$cf" 2>/dev/null)
   case "$cn" in

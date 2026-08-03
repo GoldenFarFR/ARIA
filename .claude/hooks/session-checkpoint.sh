@@ -19,7 +19,10 @@ cat >/dev/null 2>&1 || true
 
 ROOT="${CLAUDE_PROJECT_DIR:-/home/user/ARIA}"
 COUNTER="$ROOT/.claude/.msg-counter"
-INTERVAL=1000
+# 150, pas 1000 (03/08, avis Fable 5) -- a 1000 le rappel ne se declenchait quasiment
+# jamais avant la fin d'une session, ce qui sapait la discipline HANDOFF-par-composant
+# (CLAUDE.md "Regles absolues") plutot que de la faire respecter.
+INTERVAL=150
 
 mkdir -p "$ROOT/.claude" 2>/dev/null || true
 

@@ -123,3 +123,9 @@ Solution : format HANDOFF-par-composant gravé le 22/07 (décision opérateur ex
 [ETAT ACTUEL] Sujet    : Règle "repo full français" (22/07) inversée par "repo content en anglais" (23/07)
 Date : 2026.07.22→23  /  Probleme : le 22/07, une fausse alerte (libellés français vus sur une capture Telegram, introuvables dans le code réellement déployé — en fait une traduction d'affichage côté client Telegram, code source resté anglais) a mené à trancher "Claude Code reste full français dans ce repo", écartant explicitement une suggestion inverse le même jour.
 Solution : position inversée le 23/07 après clarification du scope réel (repo public lu par une audience externe non-francophone vs conversation opérateur, qui reste en français) — nouveau code/commentaires/docstrings/commits/entrées CLAUDE.md/HANDOFF en anglais depuis le 23/07 ; historique antérieur non traduit rétroactivement — cf. CLAUDE.md "Règles absolues".
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : `/rewind` (Claude Code) ne restaure jamais `aria.db` ni l'état on-chain
+Date : 2026.08.03  /  Probleme : `/rewind` restaure des checkpoints de fichiers/conversation locaux au dépôt — aucune session n'a encore vérifié s'il couvre aussi l'état runtime (base SQLite `/opt/aria-data/aria.db`, wallet, positions ouvertes). Un rewind après un déploiement réel ou une écriture DB créerait une divergence silencieuse : le code reviendrait en arrière, la DB/l'on-chain non.
+Solution : garde-fou documenté avant tout usage réel — `/rewind` = fichiers/conversation UNIQUEMENT, jamais `aria.db`/wallet/positions/état on-chain. Avant tout rewind sur ce projet, vérifier explicitement qu'aucun déploiement/écriture DB n'a eu lieu entre le point visé et maintenant ; sinon, traiter comme une opération destructive nécessitant confirmation opérateur explicite (cf. protocole de sécurité — actions hard-to-reverse).
