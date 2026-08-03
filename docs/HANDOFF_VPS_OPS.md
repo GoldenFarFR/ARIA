@@ -99,3 +99,27 @@ CLAUDE.md, passe de compaction du 03/08) — plus de dispatch multi-VPS depuis l
 **Mode Plan avant exécution sur chaque VPS (décision opérateur explicite, 12/07)** : avant d'envoyer une nouvelle tâche à un VPS, l'opérateur bascule la session cible en mode **"Plan"** (`Shift+Tab`). Le dispatch doit demander explicitement d'élaborer un plan sans exécuter. Le VPS renvoie son plan à l'opérateur, qui le relaie au commandement pour relecture avant tout « go ».
 
 **La relecture d'un plan VPS doit être une vraie relecture critique, pas un tampon (décision opérateur explicite, 14/07).** Chercher activement de vrais trous techniques (effets de bord d'une généralisation, ex. 14/07 — généraliser un contrôle anti-wash-trading d'UN token à TOUS les tokens d'un wallet cassait silencieusement l'exclusion du pool/routeur DEX).
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : Exception de gouvernance "GitHub propre" — portée et élargissements successifs
+Date : 2026.07.10→11  /  Probleme : —
+Solution : décision opérateur explicite du 10/07 accorde à Claude Code le dernier mot sur le seul périmètre "GitHub propre, automatisé et cohérent" (code mort, docs qui dérivent, garde-fous mécaniques), sans redemander avant chaque suppression/correction dans ce périmètre. Élargie le 11/07 à tous les repos GoldenFarFR + suppression de branches/fermeture de PR orphelines (contenu déjà fusionné ailleurs, "ahead 0" vérifié) — toujours gatée par le classifieur de sécurité de session (nom explicite de la cible exigé). Ne s'étend jamais aux garde-fous (permission_mode/wallet_guard/regles-uniques/config.toml), au capital réel, ni aux opérations git destructives — cf. CLAUDE.md "Règles absolues".
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : Incident fondateur "session cloud n'a pas d'accès VPS direct" — affirmation jamais revérifiée
+Date : 2026.07.17  /  Probleme : CLAUDE.md affirmait à plusieurs reprises (11/07 au 16/07) qu'une session cloud n'a pas d'accès réseau direct au VPS — jamais recontrôlé après le constat du 08/07 documentant pourtant déjà l'inverse pour une session tournant depuis /opt/aria. Plusieurs jours de dispatch VPS et de contournements (endpoints diagnostic dédiés) ont potentiellement été bâtis sur une prémisse jamais revérifiée.
+Solution : un simple docker ps/pwd/curl 127.0.0.1 le 17/07 a confirmé que la limite ne s'appliquait pas à cette session — a mené à la norme "Vérifier avant d'affirmer, systématiquement" gravée dans CLAUDE.md (Règles absolues) et à la levée du dispatch multi-VPS le 03/08.
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : Dérive de la pratique HANDOFF (par date puis par composant) — 12/07 à 22/07
+Date : 2026.07.12→22  /  Probleme : la pratique HANDOFF (alors par date) était active et respectée du 07/07 au 11/07, puis s'est arrêtée net après le 11/07 — les 11 jours suivants (12/07 au 22/07) sont partis directement et intégralement dans CLAUDE.md, portant le fichier à 5358 lignes (~600 Ko) avant qu'une compaction complète ne soit nécessaire pour rattraper le retard.
+Solution : format HANDOFF-par-composant gravé le 22/07 (décision opérateur explicite) — une entrée = 3 lignes, écrite AU MOMENT MÊME du correctif, jamais différée ; `docs/HANDOFF-2026-07-17.md` (dernier fichier par-date) supprimé le 17/07, contenu réparti par sujet.
+
+------------------------------------------------------------
+
+[ETAT ACTUEL] Sujet    : Règle "repo full français" (22/07) inversée par "repo content en anglais" (23/07)
+Date : 2026.07.22→23  /  Probleme : le 22/07, une fausse alerte (libellés français vus sur une capture Telegram, introuvables dans le code réellement déployé — en fait une traduction d'affichage côté client Telegram, code source resté anglais) a mené à trancher "Claude Code reste full français dans ce repo", écartant explicitement une suggestion inverse le même jour.
+Solution : position inversée le 23/07 après clarification du scope réel (repo public lu par une audience externe non-francophone vs conversation opérateur, qui reste en français) — nouveau code/commentaires/docstrings/commits/entrées CLAUDE.md/HANDOFF en anglais depuis le 23/07 ; historique antérieur non traduit rétroactivement — cf. CLAUDE.md "Règles absolues".
