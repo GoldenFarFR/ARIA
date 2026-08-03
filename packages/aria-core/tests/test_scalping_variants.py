@@ -400,7 +400,7 @@ async def test_v1_none_when_no_liquid_pair(monkeypatch):
 async def test_v2_buys_on_confirmed_exit_from_oversold(monkeypatch):
     pair = _pair(price=1.0)
     _patch_gates_and_candles(monkeypatch, pair=pair)
-    series = [None] * 48 + [-3.0, -2.0]  # oversold (<=-2.5) then confirmed exit
+    series = [None] * 48 + [-2.5, -1.5]  # oversold (<=-2.0) then confirmed exit
     monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
     monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
 
@@ -422,7 +422,7 @@ async def test_v2_buys_on_confirmed_exit_from_oversold(monkeypatch):
 async def test_v2_no_buy_without_confirmation(monkeypatch):
     pair = _pair(price=1.0)
     _patch_gates_and_candles(monkeypatch, pair=pair)
-    series = [None] * 48 + [-3.0, -2.8]  # still oversold
+    series = [None] * 48 + [-2.5, -2.3]  # still oversold
     monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
 
     result = await scalping_variants.evaluate_v2_vwap_institutional(CONTRACT, CHAIN)
@@ -490,7 +490,7 @@ async def test_v4_requires_both_signals_confirmed(monkeypatch):
     pair = _pair(price=1.0)
     _patch_gates_and_candles(monkeypatch, pair=pair)
     monkeypatch.setattr(indicators, "bollinger_percent_b", lambda closes, **kw: [None] * 48 + [-0.1, 0.2])
-    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: [None] * 48 + [10.0, 20.0])
+    monkeypatch.setattr(indicators, "stochastic_k_series", lambda candles, **kw: [None] * 48 + [15.0, 25.0])
     monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
 
     result = await scalping_variants.evaluate_v4_combo(CONTRACT, CHAIN)
@@ -544,7 +544,7 @@ async def test_v4_holds_when_only_one_signal_confirms(monkeypatch):
 async def test_v5_buys_with_no_fixed_target(monkeypatch):
     pair = _pair(price=1.0)
     _patch_gates_and_candles(monkeypatch, pair=pair)
-    series = [None] * 48 + [-3.0, -2.0]
+    series = [None] * 48 + [-2.5, -1.5]
     monkeypatch.setattr(indicators, "vwap_zscore_series", lambda candles, **kw: series)
     monkeypatch.setattr(indicators, "atr_series", lambda candles, **kw: [None] * 49 + [0.05])
 

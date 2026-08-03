@@ -380,10 +380,18 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
 
 
 # ── V2 -- VWAP Z-score "institutionnel" ──────────────────────────────────────
-# Entrée : Z-score VWAP <= -2.5 puis confirmation de sortie. Stop = 1.5xATR.
+# Entrée : Z-score VWAP <= -2.0 puis confirmation de sortie. Stop = 1.5xATR.
 # TP = ratio fixe 1:1.5 (sortie plus rapide, conviction volume).
 
-_V2_OVERSOLD_ZSCORE = -2.5
+# 03/08 -- relaxed from -2.5 to -2.0 (real data, operator request after V2/V5
+# sat at zero trades for 3 days straight): live-measured on 13 currently-
+# scanned candidates (~780 fine-candle data points) -- -2.5 is crossed only
+# 1.4% of the time (11/780), vs. 5.3% at -2.0 (41/780), a ~3.8x increase.
+# Still meaningfully stricter than V1's %B<=0 (6.5%) or V3's %K<=15 (16.8%,
+# both of which DID trade in the same window) -- keeps V2/V5's "institutional
+# capitulation" character, just no longer rare enough to sit at zero. V4's
+# combo threshold deliberately left untouched (separate operator decision).
+_V2_OVERSOLD_ZSCORE = -2.0
 _V2_STOP_ATR_MULT = 1.5
 _V2_TP_RR_RATIO = 1.5
 
@@ -468,6 +476,20 @@ async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
 # (relevé le 08/02, voir le commentaire ci-dessous -- 1:1 était mathématiquement
 # invendable).
 
+# 03/08 -- dedicated (not shared with V1/_V1_OVERSOLD_THRESHOLD or
+# V3/_V3_OVERSOLD_K) thresholds, operator request after V4 sat at zero trades
+# for 3 days: live-measured on 13 currently-scanned candidates (~780 fine-
+# candle data points), %B<=0.0 alone hits 6.5% of the time and %K<=15.0 alone
+# hits 16.8% -- if independent, their intersection (what V4 actually needs,
+# BOTH on the SAME candle) is ~1.1%, consistent with 0 trades observed. Widened
+# to %B<=0.1 (11.4% alone) and %K<=20.0 (20.6% alone), intersection ~2.3% --
+# roughly doubles V4's odds while it stays the strictest of the 5 variants by
+# a clear margin (V1 alone 6.5%, V3 alone 16.8%). Deliberately separate
+# constants from V1/V3's own -- widening V4's combo must never silently
+# loosen V1 or V3, which already trade fine at their original thresholds.
+_V4_BOLLINGER_THRESHOLD = 0.1
+_V4_STOCHASTIC_K_THRESHOLD = 20.0
+
 _V4_STOP_ATR_MULT = 2.0
 # 08/02 -- vrai bug critique trouvé en direct (workflow d'audit + contre-
 # vérification adversariale, feu vert opérateur) : à 1.0 exactement, ce ratio
@@ -500,8 +522,8 @@ async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
         return _hold(
             chain, pair.base_symbol, pair.price_usd, "indicateurs non calculables (warmup)", "indicator_unavailable",
         )
-    bollinger_signal = percent_b[-2] <= _V1_OVERSOLD_THRESHOLD and percent_b[-1] > _V1_OVERSOLD_THRESHOLD
-    stochastic_signal = k[-2] <= _V3_OVERSOLD_K and k[-1] > _V3_OVERSOLD_K
+    bollinger_signal = percent_b[-2] <= _V4_BOLLINGER_THRESHOLD and percent_b[-1] > _V4_BOLLINGER_THRESHOLD
+    stochastic_signal = k[-2] <= _V4_STOCHASTIC_K_THRESHOLD and k[-1] > _V4_STOCHASTIC_K_THRESHOLD
     if not (bollinger_signal and stochastic_signal):
         return _hold(
             chain, pair.base_symbol, pair.price_usd,
