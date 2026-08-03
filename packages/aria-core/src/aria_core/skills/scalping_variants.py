@@ -135,6 +135,24 @@ async def _gates_and_candles_uncached(
     candles = await momentum_entry._fetch_candles(
         best_pair.pair_address, chain, contract=contract, pair=best_pair, mode="scalping",
     )
+    # 03/08 -- 9-pocket diagnostic (docs/HANDOFF_LLM.md, blind LLM comparison):
+    # the OHLCV cascade's last candle is the one CURRENTLY forming, not yet
+    # closed (standard behavior of every real-time OHLCV provider in this
+    # cascade -- GeckoTerminal/Mobula/DexPaprika all report the in-progress
+    # candle as the latest point; `Candle.ts` isn't reliably a real close-time
+    # epoch across all of them, some report it as a plain index, so comparing
+    # it to "now" per-provider would be fragile). Every evaluate_vN below
+    # reads candles[-1]/candles[-2] for its oversold-then-confirmed-exit
+    # signal -- on the UNTRIMMED series that means confirming a bounce against
+    # a candle still mid-formation, i.e. buying into an intra-candle pump
+    # before it's actually confirmed to hold. Trimmed HERE, once, for all 5
+    # variants (same centralization doctrine as align_score/entry_atr_pct in
+    # _buy_result below) -- never trade signal computed on an unclosed candle,
+    # same industry-standard practice Fable 5/Qwen3.7-Max both flagged
+    # independently. Checked against the threshold AFTER trimming, not before
+    # -- a batch that just barely cleared 45 candles must not silently fall
+    # under it once the unclosed one is dropped.
+    candles = candles[:-1]
     if len(candles) < _MIN_CANDLES_FOR_SIGNAL:
         return None, [], _hold(
             chain, best_pair.base_symbol, best_pair.price_usd,
@@ -283,6 +301,19 @@ def _buy_result(
     # matches THIS variant's own oscillator lookback (passed by each
     # evaluate_vN below), never a single uniform N -- see chasing_filter_
     # shadow.py's own module docstring for why.
+    #
+    # 03/08 -- conscious choice (flagged by Fable 5's review, not left as a
+    # silent side effect): ``candles`` here is the TRIMMED series (still-
+    # forming last candle dropped, see _gates_and_candles_uncached). A purer
+    # "true recent low" would look at the untrimmed series (an intra-candle
+    # dip IS a real low, unlike a reversal signal which needs a close to be
+    # trustworthy) -- but this filter is purely informational (never a gate),
+    # and threading a second, untrimmed candle list through the whole
+    # gates->evaluate_vN->_buy_result chain for a log-only signal isn't
+    # worth the added complexity. Accepted trade-off: this shadow signal is
+    # now measured against the last CONFIRMED low, one candle more
+    # conservative than before -- revisit if the shadow census data shows
+    # this materially changes its read.
     recent_low = recent_low_from_candles(candles, recent_low_window)
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,

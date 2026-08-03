@@ -1344,6 +1344,40 @@ class TestEffectiveTrailPct:
         # 50 % d'ATR * 2.5 = 125 %, largement au-dessus du plafond 40 % -> clampé.
         assert pt._effective_trail_pct(0.50) == pt.MAX_ATR_TRAIL_PCT
 
+    # ── mode="scalping" (03/08, 9-pocket diagnostic, docs/HANDOFF_LLM.md) ──
+    # les bornes partagées ci-dessus etaient pensees pour le swing/standard --
+    # non atteintes par les pertes reelles de scalping (1,7%-3,6%, toutes sous
+    # l'ancien plancher 5%).
+
+    def test_scalping_mode_none_still_falls_back_to_fixed_default(self):
+        assert pt._effective_trail_pct(None, mode="scalping") == pt.TRAIL_STOP_PCT
+
+    def test_scalping_mode_mid_range_uses_dedicated_multiplier(self):
+        # 3 % d'ATR * 2.5 = 7.5 %, dans les bornes scalping [1.5 %, 10 %].
+        assert pt._effective_trail_pct(0.03, mode="scalping") == pytest.approx(0.075)
+
+    def test_scalping_mode_low_atr_clamped_to_scalping_floor(self):
+        # 0.5 % d'ATR * 2.5 = 1.25 %, sous le plancher scalping 1.5 % -> clampé.
+        assert pt._effective_trail_pct(0.005, mode="scalping") == pt.MIN_ATR_TRAIL_PCT_SCALPING
+
+    def test_scalping_mode_high_atr_clamped_to_scalping_ceiling(self):
+        # 50 % d'ATR * 2.5 = 125 %, largement au-dessus du plafond scalping 10 % -> clampé.
+        assert pt._effective_trail_pct(0.50, mode="scalping") == pt.MAX_ATR_TRAIL_PCT_SCALPING
+
+    def test_scalping_floor_is_stricter_than_standard_floor(self):
+        # meme entry_atr_pct, le mode scalping doit produire un stop PLUS SERRE
+        # que le mode standard -- exactement le point du diagnostic (le plancher
+        # standard 5% ne se declenchait jamais sur des mouvements de 1,7%-3,6%).
+        atr = 0.01
+        assert pt._effective_trail_pct(atr, mode="scalping") < pt._effective_trail_pct(atr, mode=None)
+
+    def test_non_scalping_mode_string_keeps_standard_bounds(self):
+        # toute valeur de mode autre que "scalping" (y compris "standard")
+        # garde le comportement historique partage -- jamais un changement
+        # de comportement pour un appelant qui passe explicitement "standard".
+        assert pt._effective_trail_pct(0.01, mode="standard") == pt.MIN_ATR_TRAIL_PCT
+        assert pt._effective_trail_pct(0.50, mode="standard") == pt.MAX_ATR_TRAIL_PCT
+
 
 class TestSatellitePocketEligibleEntryAtrPct:
     """Item #253 (08/02) -- _satellite_pocket_eligible reads entry_atr_pct via

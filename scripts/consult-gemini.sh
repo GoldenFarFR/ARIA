@@ -29,6 +29,18 @@
 #    lower practical cap keeps cost bounded) + finish_reason now read and
 #    surfaced -- a silent truncation would otherwise contradict the
 #    operator's explicit "exhaustive over concise" instruction unnoticed.
+#
+# 08/03 -- raised again, 20000 -> 96000, after switching MODEL to Claude
+# Fable 5. Root cause found in the official Claude API docs (not guessed):
+# on Fable 5, internal reasoning ("thinking") is ALWAYS on and cannot be
+# disabled, and max_tokens is a single hard cap shared by that hidden
+# reasoning AND the visible response text combined -- on a long/complex
+# prompt (this script's own diffs/plans routinely are), the reasoning alone
+# can consume the entire 20000 budget, leaving zero tokens for the answer
+# (empty response, still billed -- confirmed live, one such call cost
+# $0.88 for nothing). 96000 leaves generous headroom under Fable 5's real
+# 128000-token ceiling while keeping a bound on worst-case cost given this
+# model's $50/MTok output price.
 # 2. "[VERIFIE, ligne X]" replaced by a verbatim quote requirement -- a line
 #    number is only ever knowable if the input happens to be a diff with
 #    hunk headers; a verbatim substring is checkable on ANY plain text.
@@ -134,7 +146,7 @@ PAYLOAD=$(jq -n \
   --arg session_id "consult-gemini-manual-$$" \
   '{
     model: $model,
-    max_tokens: 20000,
+    max_tokens: 96000,
     messages: [
       {role: "system", content: $system},
       {role: "user", content: $user}

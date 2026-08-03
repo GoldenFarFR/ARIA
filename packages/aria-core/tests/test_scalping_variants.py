@@ -94,12 +94,39 @@ async def test_gates_and_candles_hold_on_insufficient_history(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gates_and_candles_trims_the_still_forming_last_candle(monkeypatch):
+    """03/08 -- 9-pocket diagnostic (docs/HANDOFF_LLM.md): the OHLCV cascade's
+    last candle is still forming, not closed -- every evaluate_vN must reason
+    on candles that are ALL closed. Fetching exactly N candles must yield
+    N-1 to the caller."""
+    real_candles = _candles(50)
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=real_candles)
+    _, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert result_hold is None
+    assert len(candles) == len(real_candles) - 1
+
+
+@pytest.mark.asyncio
+async def test_gates_and_candles_exactly_at_threshold_before_trim_still_rejected(monkeypatch):
+    """A batch that just barely clears _MIN_CANDLES_FOR_SIGNAL (45) on the
+    fetched, UNTRIMMED count must be rejected once the still-forming candle
+    is dropped (44 < 45) -- the threshold check must run AFTER trimming, not
+    before (exactly the trap this test guards against regressing to)."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_candles(scalping_variants._MIN_CANDLES_FOR_SIGNAL))
+    pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
+    assert pair is None and result_hold["hold_reason"] == "insufficient_candle_history"
+
+
+@pytest.mark.asyncio
 async def test_gates_and_candles_returns_pair_and_candles_on_success(monkeypatch):
     real_pair = _pair()
     real_candles = _candles()
     _patch_gates_and_candles(monkeypatch, pair=real_pair, candles=real_candles)
     pair, candles, result_hold = await scalping_variants._gates_and_candles(CONTRACT, CHAIN)
-    assert pair is real_pair and candles is real_candles and result_hold is None
+    # 03/08 -- the last fetched candle is trimmed (still forming, not closed
+    # -- see _gates_and_candles_uncached's own comment), so `candles` is the
+    # fetched list MINUS its last entry, never the same object anymore.
+    assert pair is real_pair and candles == real_candles[:-1] and result_hold is None
 
 
 @pytest.mark.asyncio
@@ -409,11 +436,17 @@ async def test_v3_buys_on_confirmed_exit_with_structural_stop(monkeypatch):
     from aria_core.skills.ta_levels import Candle
 
     pair = _pair(price=1.0)
+    # 03/08 -- _gates_and_candles_uncached now trims the LAST candle (still
+    # forming, not closed -- see that function's own comment), so the fed
+    # list has 50 entries but the code under test only ever sees the first
+    # 49. ts=49 (last) is the one trimmed away; ts=47 (candles_tronque[-2]
+    # once trimmed) carries the distinctive low used as V3's structural stop.
     candles = [
-        Candle(ts=i, open=1.0, high=1.05, low=0.95, close=1.0, volume=1000.0) for i in range(48)
+        Candle(ts=i, open=1.0, high=1.05, low=0.95, close=1.0, volume=1000.0) for i in range(47)
     ] + [
-        Candle(ts=48, open=1.0, high=1.02, low=0.90, close=1.0, volume=1000.0),  # previous low = 0.90
-        Candle(ts=49, open=1.0, high=1.02, low=0.98, close=1.0, volume=1000.0),
+        Candle(ts=47, open=1.0, high=1.02, low=0.90, close=1.0, volume=1000.0),  # previous low = 0.90
+        Candle(ts=48, open=1.0, high=1.02, low=0.98, close=1.0, volume=1000.0),
+        Candle(ts=49, open=1.0, high=1.02, low=0.99, close=1.0, volume=1000.0),  # trimmed away
     ]
     _patch_gates_and_candles(monkeypatch, pair=pair, candles=candles)
     series = [None] * 48 + [10.0, 20.0]  # oversold (<=15) then confirmed exit (>15)

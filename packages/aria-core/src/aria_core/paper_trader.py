@@ -219,6 +219,21 @@ ATR_TRAIL_MULTIPLIER = 2.5
 MIN_ATR_TRAIL_PCT = 0.05
 MAX_ATR_TRAIL_PCT = 0.40
 
+# 03/08 -- 9-pocket diagnostic (blind LLM comparison, docs/HANDOFF_LLM.md):
+# the bounds above were designed 07/19 for the standard/swing pipeline, BEFORE
+# scalping existed (added 26/07) -- scalping inherited them unchanged. Real
+# data confirmed the mismatch: scalping_variants.py's own 08/02 comment
+# documents 7/7 closed scalping losses moving 1.7%-3.6%, entirely BELOW the
+# shared 5% floor -- the ATR trailing stop never actually triggered for any
+# of them in practice, every one closed via the blind stagnation timeout
+# instead. Same multiplier (2.5x, no evidence yet to change it), narrower
+# bounds sized to scalping-scale moves. Calibrated on only 7 real trades --
+# a small sample, explicitly NOT treated as final; revisit once more
+# scalping trade data accumulates.
+ATR_TRAIL_MULTIPLIER_SCALPING = 2.5
+MIN_ATR_TRAIL_PCT_SCALPING = 0.015
+MAX_ATR_TRAIL_PCT_SCALPING = 0.10
+
 # 07/20 -- price freshness at execution (Gemini cross-review, replaces an initial
 # blind %-threshold design -- fixed the SAME evening after a 2nd review pass).
 # ``sig["price"]`` is captured at the very start of ``evaluate_momentum_entry``
@@ -329,19 +344,31 @@ VC_DEV_SOLD_DELTA_ALERT_PCT = 10.0
 VC_LIQUIDITY_SUDDEN_DROP_PCT = 0.3
 
 
-def _effective_trail_pct(entry_atr_pct: float | None) -> float:
+def _effective_trail_pct(entry_atr_pct: float | None, *, mode: str | None = None) -> float:
     """Trailing stop width for ONE position: fixed ``TRAIL_STOP_PCT`` if
     ``entry_atr_pct`` is missing/invalid (unchanged historical behavior), otherwise
     ``ATR_TRAIL_MULTIPLIER * entry_atr_pct`` bounded to ``[MIN_ATR_TRAIL_PCT,
-    MAX_ATR_TRAIL_PCT]``."""
+    MAX_ATR_TRAIL_PCT]``.
+
+    ``mode="scalping"`` (03/08, 9-pocket diagnostic) switches to the
+    scalping-dedicated multiplier/bounds -- the shared ones were sized for
+    the standard/swing pipeline and left the trailing stop unable to trigger
+    on real scalping-scale moves (see the constants' own comment). Any other
+    value (``None``/``"standard"``/anything else) keeps the historical
+    shared bounds -- unchanged behavior for every existing caller."""
     if entry_atr_pct is None or entry_atr_pct <= 0:
         return TRAIL_STOP_PCT
+    if mode == "scalping":
+        return max(
+            MIN_ATR_TRAIL_PCT_SCALPING,
+            min(MAX_ATR_TRAIL_PCT_SCALPING, ATR_TRAIL_MULTIPLIER_SCALPING * entry_atr_pct),
+        )
     return max(MIN_ATR_TRAIL_PCT, min(MAX_ATR_TRAIL_PCT, ATR_TRAIL_MULTIPLIER * entry_atr_pct))
 
 
 def _compute_active_stop(
     *, entry_price: float, entry_atr_pct: float | None, high_water_price: float | None,
-    invalidation_price: float | None, breakeven_locked: bool,
+    invalidation_price: float | None, breakeven_locked: bool, mode: str | None = None,
 ) -> tuple[float, str]:
     """ACTIVE stop for a position -- the highest of the ATR trailing stop, the
     original invalidation, and the locked breakeven (extracted from the
@@ -355,7 +382,7 @@ def _compute_active_stop(
     (``_run_paper_cycle_locked``) ratchets the high itself BEFORE calling this
     function; a READ-ONLY caller (e.g. satellite pocket eligibility at the
     weekly reset) deliberately uses it as-is, without advancing the ratchet."""
-    trail_pct = _effective_trail_pct(entry_atr_pct)
+    trail_pct = _effective_trail_pct(entry_atr_pct, mode=mode)
     high_water = high_water_price or entry_price
     trailing_stop = high_water * (1 - trail_pct)
     active_stop = trailing_stop
@@ -420,6 +447,7 @@ def _satellite_pocket_eligible(
         high_water_price=pos.get("high_water_price"),
         invalidation_price=pos.get("invalidation_price"),
         breakeven_locked=bool(pos.get("breakeven_locked")),
+        mode=pos.get("mode"),
     )
     if price <= active_stop:
         return False, None  # ATR stop already touched -- never eligible
@@ -4032,7 +4060,7 @@ def compute_entry_alloc(
         )
         entry_atr_pct = sig.get("entry_atr_pct")
         if risk_budget_pct is not None and entry_atr_pct:
-            trail_pct = _effective_trail_pct(entry_atr_pct)
+            trail_pct = _effective_trail_pct(entry_atr_pct, mode=sig.get("mode"))
             base_alloc_usd = risk_guard.size_by_risk_budget(
                 risk_budget_pct, trail_pct, start,
                 ceiling_usd=conviction_mult * ALLOC_PCT * start,
@@ -5156,7 +5184,7 @@ async def _run_paper_cycle_locked(
                     except Exception:  # noqa: BLE001
                         pass
 
-            trail_pct = _effective_trail_pct(p.get("entry_atr_pct"))
+            trail_pct = _effective_trail_pct(p.get("entry_atr_pct"), mode=p.get("mode"))
             prev_high_water = p.get("high_water_price") or p["entry_price"]
             prev_pending = p.get("pending_high_water")
             prev_pending_since = p.get("pending_high_water_since")
@@ -5193,7 +5221,7 @@ async def _run_paper_cycle_locked(
             active_stop, stop_source = _compute_active_stop(
                 entry_price=entry_price, entry_atr_pct=p.get("entry_atr_pct"),
                 high_water_price=high_water, invalidation_price=invalidation,
-                breakeven_locked=breakeven_locked,
+                breakeven_locked=breakeven_locked, mode=p.get("mode"),
             )
 
             if active_stop and price <= active_stop:
