@@ -131,13 +131,15 @@ ${DIFF_CONTENT}${DIFF_TRUNCATED}"
     --arg model "$MODEL" \
     --arg system "$SYSTEM_PROMPT" \
     --arg user "$USER_CONTENT" \
+    --arg session_id "devils-advocate-${MAIN_LOCAL_SHA}" \
     '{
       model: $model,
       max_tokens: 4000,
       messages: [
         {role: "system", content: $system},
         {role: "user", content: $user}
-      ]
+      ],
+      session_id: $session_id
     }')
 
   RESP_TMP=$(mktemp /tmp/architect-response.XXXXXX.json)
@@ -146,6 +148,8 @@ ${DIFF_CONTENT}${DIFF_TRUNCATED}"
     -X POST https://openrouter.ai/api/v1/chat/completions \
     -H "Authorization: Bearer $OR_KEY" \
     -H "Content-Type: application/json" \
+    -H "HTTP-Referer: https://github.com/GoldenFarFR/aria-vanguard" \
+    -H "X-Title: ARIA Devil's Advocate" \
     -d "$PAYLOAD")
   unset OR_KEY
 
