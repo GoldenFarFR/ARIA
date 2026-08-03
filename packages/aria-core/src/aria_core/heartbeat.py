@@ -1507,7 +1507,7 @@ class AriaHeartbeat:
 
             result = await agent_wallet_pilot_cycle.run_agent_wallet_pilot_cycle()
             outcome = result.get("outcome")
-            if outcome in ("ok", "failed", "blocked"):
+            if outcome in ("ok", "failed", "blocked", "security_unverifiable"):
                 append_memory(
                     "agent_wallet_pilot",
                     f"[pilot RÉEL] {result.get('symbol', '?')} -> {outcome} "

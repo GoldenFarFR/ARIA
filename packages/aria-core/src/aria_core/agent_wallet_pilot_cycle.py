@@ -112,6 +112,17 @@ async def run_agent_wallet_pilot_cycle() -> dict:
             logger.info("agent_wallet_pilot_cycle: evaluation of %s failed (%s)", contract, exc)
             continue
         if not sig or sig.get("action") != "BUY":
+            # 03/08 -- distinct from a normal HOLD: ARIA couldn't verify
+            # holder concentration at all (free/Pro path AND paid x402
+            # fallback both failed), not that she checked and found a real
+            # over-concentration. Real capital -- surfaced immediately
+            # rather than silently moving to the next candidate.
+            if sig and sig.get("hold_reason") == "holder_concentration_unverifiable":
+                return {
+                    "outcome": "security_unverifiable",
+                    "contract": contract,
+                    "symbol": sig.get("symbol", ""),
+                }
             continue
 
         result = await agent_wallet_pilot.attempt_swap(
@@ -162,5 +173,13 @@ def format_agent_wallet_swap_alert(result: dict) -> str:
         return (
             "🔴 ARGENT RÉEL — pilote agent-wallet\n"
             f"Swap bloqué : {result.get('reason', '')}"
+        )
+    if outcome == "security_unverifiable":
+        return (
+            "🔴 ARGENT RÉEL — pilote agent-wallet\n"
+            f"ACHAT REFUSÉ {symbol} — sécurité invérifiable\n"
+            f"Contrat {result.get('contract', '')}\n"
+            "Aucun moyen de vérifier la concentration des détenteurs (service gratuit ET payant "
+            "indisponibles) -- achat refusé par prudence, jamais à l'aveugle."
         )
     return ""

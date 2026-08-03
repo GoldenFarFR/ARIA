@@ -2676,6 +2676,27 @@ def format_sell_alert(closed: dict) -> str:
     return "\n".join(lines)
 
 
+def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str, chain: str) -> str:
+    """03/08 -- new dedicated alert: `momentum_entry._check_holder_concentration`
+    now fails CLOSED (refuses the candidate) when neither the free/Pro path
+    nor the paid x402 fallback can confirm holder concentration, instead of
+    silently letting the candidate through as it did before this date.
+    Distinct from the normal ``holder_concentration`` HOLD (a confirmed
+    over-concentration verdict) -- this one means ARIA COULDN'T CHECK at
+    all, an event rare and significant enough to warrant its own alert
+    rather than folding into the silent per-cycle funnel counter."""
+    name = html.escape(symbol or (contract or "")[:10], quote=False)
+    lines = [
+        "🧪 SIMULATION — portefeuille papier 1 M$",
+        f"<b>ACHAT REFUSÉ {name} — sécurité invérifiable</b>",
+        "Aucun moyen de vérifier la concentration des détenteurs (service gratuit ET payant indisponibles) -- achat refusé par prudence, jamais à l'aveugle.",
+    ]
+    if contract:
+        lines.append(f"DexScreener : {token_url(contract, chain=chain or 'base')}")
+    lines.append("Aucun argent réel.")
+    return "\n".join(lines)
+
+
 def format_partial_exit_alert(partial: dict) -> str:
     name = partial.get("symbol") or (partial.get("contract") or "")[:10]
     pnl = partial.get("pnl_usd") or 0.0
@@ -4174,6 +4195,16 @@ async def _open_new_entries_for_wallet(
         if sig.get("action") != "BUY":
             reason_code = sig.get("hold_reason") or "unspecified"
             funnel[reason_code] = funnel.get(reason_code, 0) + 1
+            # 03/08 -- dedicated alert, distinct from the silent per-cycle
+            # funnel counter above: this specific HOLD means ARIA couldn't
+            # verify holder concentration at all (both the free/Pro path and
+            # the paid x402 fallback failed), not that she checked and found
+            # a real risk -- rare and significant enough to surface
+            # immediately rather than wait for a cycle summary.
+            if reason_code == "holder_concentration_unverifiable" and notifier:
+                await notifier(format_holder_concentration_unverifiable_alert(
+                    contract=contract, symbol=sig.get("symbol") or "", chain=sig.get("chain") or "base",
+                ))
             # 07/20 -- #176 (learning track b): same choke point as the funnel
             # above (already THE only place that sees every HOLD, momentum
             # AND websocket -- momentum_websocket.py routes through this same

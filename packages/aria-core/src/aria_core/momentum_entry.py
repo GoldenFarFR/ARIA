@@ -1464,15 +1464,31 @@ async def _check_project_profile(chain: str, contract: str, pair: PairSnapshot) 
     return False, "aucun profil DexScreener ni listing CoinGecko"
 
 
+# 03/08 -- distinct marker for "couldn't verify" vs "verified and too
+# concentrated" -- both are (True, reason) tuples but callers must fire a
+# dedicated alert only for the former (see the two call sites below).
+_HOLDER_DATA_UNAVAILABLE_REASON = (
+    "sécurité du token invérifiable (holders indisponibles, gratuit et payant) -- achat refusé par prudence"
+)
+
+
 async def _check_holder_concentration(contract: str, chain: str, pool_address: str) -> tuple[bool, str]:
     """``(too_concentrated, reason)`` -- rejects if the top
     ``_TOP_N_HOLDERS_FOR_CONCENTRATION`` EOA holders (excluding the liquidity pool,
     burn/dead addresses, AND VERIFIED smart contracts) together hold >=
     ``_MAX_TOP_HOLDERS_CONCENTRATION_PCT``% of the supply.
 
-    FAIL-OPEN if the data is unavailable (never a rejection) -- only the
-    honeypot check is fail-closed in this pipeline. Coverage limited to EVM
-    chains indexed by Blockscout (Base confirmed; Solana is structurally not
+    03/08 -- FAIL-CLOSED if holder data is unavailable from BOTH the free/Pro
+    path and the paid x402 fallback (was fail-open until this date). Operator
+    decision after a security-review workflow found this was the one path
+    where an x402 provider's mere unavailability -- not even malice -- could
+    silently let a candidate through this hard guardrail on both the real
+    pilot and paper trading. Returns ``(True, _HOLDER_DATA_UNAVAILABLE_REASON)``
+    in that case -- callers distinguish it from a genuine over-concentration
+    verdict to fire a dedicated alert (see ``_HOLDER_DATA_UNAVAILABLE_REASON``
+    usage at both call sites) rather than silently folding it into the normal
+    "holder_concentration" rejection bucket. Coverage limited to EVM chains
+    indexed by Blockscout (Base confirmed; Solana is structurally not
     covered, Blockscout being an EVM explorer -- honest degradation via
     ``get_blockscout_client``, never a block on something the tool can't read).
 
@@ -1528,11 +1544,11 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     else:
         metadata = await client.get_token_metadata(contract)
         if not metadata.available or not metadata.total_supply or metadata.decimals is None:
-            return False, ""
+            return True, _HOLDER_DATA_UNAVAILABLE_REASON
 
         raw_holders = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
-            return False, ""
+            return True, _HOLDER_DATA_UNAVAILABLE_REASON
 
         decimals = metadata.decimals
         total_supply = metadata.total_supply
@@ -1550,7 +1566,7 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
             ))
 
     if not entries:
-        return False, ""
+        return True, _HOLDER_DATA_UNAVAILABLE_REASON
 
     excluded = {a.lower() for a in _BURN_ADDRESSES} | {(pool_address or "").lower()}
     ranked = sorted(
@@ -2751,11 +2767,13 @@ async def evaluate_hard_gates(
             contract, chain, best.pair_address,
         )
         if too_concentrated:
-            await momentum_rejection_cache.record_rejection(contract, chain, "holder_concentration")
+            unverifiable = concentration_reason == _HOLDER_DATA_UNAVAILABLE_REASON
+            reason_code = "holder_concentration_unverifiable" if unverifiable else "holder_concentration"
+            await momentum_rejection_cache.record_rejection(contract, chain, reason_code)
             return None, None, {
                 "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
                 "price": best.price_usd, "reasons": [concentration_reason],
-                "hold_reason": "holder_concentration",
+                "hold_reason": reason_code,
             }
 
     clear, honeypot_reason, honeypot_code = await _check_honeypot(
@@ -3490,11 +3508,13 @@ async def evaluate_momentum_entry(
     if too_concentrated:
         from aria_core import momentum_rejection_cache
 
-        await momentum_rejection_cache.record_rejection(contract, chain, "holder_concentration")
+        unverifiable = concentration_reason == _HOLDER_DATA_UNAVAILABLE_REASON
+        reason_code = "holder_concentration_unverifiable" if unverifiable else "holder_concentration"
+        await momentum_rejection_cache.record_rejection(contract, chain, reason_code)
         return {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons + [concentration_reason],
-            "hold_reason": "holder_concentration",
+            "hold_reason": reason_code,
         }
 
     align_score, align_reasons, align_detail = _technical_alignment(candles)

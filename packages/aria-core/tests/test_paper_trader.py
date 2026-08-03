@@ -3552,6 +3552,18 @@ def test_format_sell_alert_no_close_notes_no_crash():
     assert "Pourquoi" not in sell
 
 
+def test_format_holder_concentration_unverifiable_alert_mentions_symbol_and_reason():
+    alert = pt.format_holder_concentration_unverifiable_alert(contract=A, symbol="AAA", chain="base")
+    assert "AAA" in alert
+    assert "invérifiable" in alert
+    assert "Aucun argent réel." in alert
+
+
+def test_format_holder_concentration_unverifiable_alert_falls_back_to_contract_prefix():
+    alert = pt.format_holder_concentration_unverifiable_alert(contract=A, symbol="", chain="base")
+    assert A[:10] in alert
+
+
 def test_format_partial_exit_alert_includes_close_notes():
     partial = pt.format_partial_exit_alert(
         {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": 500, "pnl_pct": 50.0,
@@ -6689,6 +6701,80 @@ async def test_open_new_entries_for_wallet_records_scan_on_hold(tmp_db):
     assert row["price"] == pytest.approx(1.5)
     assert row["mode"] == "standard"
     assert row["wallet"] == "swing"
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_notifies_on_holder_concentration_unverifiable(tmp_db):
+    """03/08 -- dedicated alert for the new fail-closed HOLD (distinct from
+    the silent per-cycle funnel counter used for every other HOLD reason)."""
+    from aria_core import risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _hold_analyzer(contract):
+        return {
+            "action": "HOLD", "chain": "base", "symbol": "TOK", "price": 1.5,
+            "hold_reason": "holder_concentration_unverifiable", "mode": "standard",
+        }
+
+    async def _price_lookup(contract):
+        return 1.5
+
+    notified = []
+
+    async def _notifier(message):
+        notified.append(message)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], _hold_analyzer,
+        price_lookup=_price_lookup, notifier=_notifier, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    assert len(notified) == 1
+    assert "TOK" in notified[0]
+    assert "invérifiable" in notified[0]
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_no_notification_on_normal_hold(tmp_db):
+    """Non-regression: a normal HOLD (any other reason) must never fire this
+    new alert -- only the specific unverifiable-security reason does."""
+    from aria_core import risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _hold_analyzer(contract):
+        return {
+            "action": "HOLD", "chain": "base", "symbol": "TOK", "price": 1.5,
+            "hold_reason": "holder_concentration", "mode": "standard",
+        }
+
+    async def _price_lookup(contract):
+        return 1.5
+
+    notified = []
+
+    async def _notifier(message):
+        notified.append(message)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], _hold_analyzer,
+        price_lookup=_price_lookup, notifier=_notifier, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    assert notified == []
 
 
 @pytest.mark.asyncio

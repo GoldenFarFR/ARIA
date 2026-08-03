@@ -3657,7 +3657,10 @@ def _holder(address, percentage, *, is_contract=None, is_verified=None):
 
 class TestCheckHolderConcentration:
     @pytest.mark.asyncio
-    async def test_fail_open_when_data_unavailable(self, monkeypatch):
+    async def test_fail_closed_when_data_unavailable(self, monkeypatch):
+        """03/08 -- was fail-open until this date (operator decision after a
+        security-review workflow found this could let an unverifiable
+        candidate through on both the real pilot and paper trading)."""
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult
 
@@ -3666,18 +3669,20 @@ class TestCheckHolderConcentration:
             lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
         )
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
-        assert too_concentrated is False
-        assert reason == ""
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
 
     @pytest.mark.asyncio
-    async def test_fail_open_when_no_total_supply(self, monkeypatch):
+    async def test_fail_closed_when_no_total_supply(self, monkeypatch):
+        """03/08 -- was fail-open until this date, see test_fail_closed_when_data_unavailable."""
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult
 
         result = TokenHoldersResult(holders=[_holder("0xabc", 90.0)], total_supply=None, available=True)
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
-        assert too_concentrated is False
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
 
     @pytest.mark.asyncio
     async def test_excludes_pool_and_burn_addresses_from_concentration(self, monkeypatch):
@@ -3819,7 +3824,9 @@ class TestCheckHolderConcentration:
         assert called["x402"] is False
 
     @pytest.mark.asyncio
-    async def test_x402_fallback_fails_open_when_metadata_unavailable(self, monkeypatch):
+    async def test_x402_fallback_fails_closed_when_metadata_unavailable(self, monkeypatch):
+        """03/08 -- was fail-open until this date, see TestCheckHolderConcentration's
+        own test_fail_closed_when_data_unavailable."""
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
 
@@ -3828,11 +3835,12 @@ class TestCheckHolderConcentration:
         )
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
-        assert too_concentrated is False
-        assert reason == ""
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
 
     @pytest.mark.asyncio
-    async def test_x402_fallback_fails_open_when_no_holders_returned(self, monkeypatch):
+    async def test_x402_fallback_fails_closed_when_no_holders_returned(self, monkeypatch):
+        """03/08 -- was fail-open until this date."""
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
 
@@ -3849,8 +3857,8 @@ class TestCheckHolderConcentration:
             "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
         )
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
-        assert too_concentrated is False
-        assert reason == ""
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
 
     @pytest.mark.asyncio
     async def test_x402_fallback_computes_percentage_and_rejects_over_threshold(self, monkeypatch):

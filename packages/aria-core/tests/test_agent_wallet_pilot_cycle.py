@@ -152,6 +152,38 @@ async def test_no_candidate_when_all_hold(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_security_unverifiable_returned_and_stops_the_cycle(monkeypatch):
+    """03/08 -- distinct from a normal HOLD: real capital, surfaced
+    immediately (return, not continue to the next candidate) rather than
+    silently moving on."""
+    async def fake_summary():
+        return _summary()
+
+    async def fake_size(*, balance_fn):
+        return 0.03
+
+    async def fake_discover(*, chains):
+        return [{"contract": "0xa", "chain": "base"}, {"contract": "0xb", "chain": "base"}]
+
+    async def fake_evaluate(contract, chain):
+        return {
+            "action": "HOLD", "chain": "base", "symbol": "TOK",
+            "hold_reason": "holder_concentration_unverifiable",
+        }
+
+    async def fake_cooldown(contract, *, within_minutes, structural_within_minutes=None):
+        return False
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_sizing.size_trade_usd", fake_size)
+    monkeypatch.setattr("aria_core.momentum_entry.discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr("aria_core.momentum_entry.evaluate_momentum_entry", fake_evaluate)
+    monkeypatch.setattr("aria_core.agent_wallet_log.recent_failed_swap", fake_cooldown)
+    result = await cycle.run_agent_wallet_pilot_cycle()
+    assert result == {"outcome": "security_unverifiable", "contract": "0xa", "symbol": "TOK"}
+
+
+@pytest.mark.asyncio
 async def test_evaluate_exception_on_one_candidate_does_not_stop_cycle(monkeypatch):
     async def fake_summary():
         return _summary()
@@ -330,3 +362,12 @@ def test_alert_blocked_includes_reason():
 @pytest.mark.parametrize("outcome", ["disabled", "no_candidate", "position_open"])
 def test_alert_empty_for_non_notable_outcomes(outcome):
     assert cycle.format_agent_wallet_swap_alert({"outcome": outcome}) == ""
+
+
+def test_alert_security_unverifiable_marked_real_money_and_mentions_symbol():
+    text = cycle.format_agent_wallet_swap_alert(
+        {"outcome": "security_unverifiable", "symbol": "TOK", "contract": "0xa"}
+    )
+    assert "ARGENT RÉEL" in text
+    assert "TOK" in text
+    assert "invérifiable" in text
