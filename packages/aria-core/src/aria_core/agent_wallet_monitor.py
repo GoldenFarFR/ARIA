@@ -936,7 +936,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     if not agent_wallet_monitor_enabled():
         return {"outcome": "skipped_disabled"}
 
-    from aria_core import agent_wallet_log, outgoing_pause, x402_budget
+    from aria_core import agent_wallet_log, custody_pause, x402_budget
 
     try:
         logged = await agent_wallet_log.list_transactions(limit=500)
@@ -998,12 +998,19 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
         for m in movements:
             if m.classification != "unexpected_outflow":
                 continue
-            if not outgoing_pause.is_paused():
+            # Item #62 (08/03): arms the DEDICATED custody flag, never the
+            # shared outgoing_pause -- a false positive here (as happened
+            # live, a misclassified OpenRouter recharge) used to also
+            # silently freeze paper trading (momentum_websocket.py's drain)
+            # for hours, even though paper has zero custody surface. See
+            # custody_pause.py's own module docstring for the full incident
+            # and the two-workflow analysis behind this split.
+            if not custody_pause.is_paused():
                 pause_reason = (
                     f"Sortie non initiee par ARIA detectee automatiquement "
                     f"(wallet {m.wallet_name}, tx {m.tx_hash})"
                 )
-                outgoing_pause.pause(by="auto:agent_wallet_monitor", reason=pause_reason)
+                custody_pause.pause(by="auto:agent_wallet_monitor", reason=pause_reason)
                 try:
                     from aria_core import kill_incident_log
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from aria_core import kill_incident_log, outgoing_pause
+from aria_core import custody_pause, kill_incident_log, outgoing_pause
 from aria_core.gateway import telegram_bot
 from aria_core.paths import configure_data_dir
 
@@ -151,11 +151,13 @@ def _fake_result(tx_hash: str):
 @pytest.mark.asyncio
 async def test_outflow_confirm_reject_keeps_pause_and_logs_nothing(monkeypatch):
     """"PAS autorisé" (approved=False) must never touch the pause state --
-    it was already armed automatically, this branch just confirms it stays."""
+    it was already armed automatically, this branch just confirms it stays.
+    Item #62 (08/03): the auto-arm/outflow_confirm pair now uses the
+    dedicated custody_pause flag, not the shared outgoing_pause."""
     _set_owner(monkeypatch)
     monkeypatch.setattr(telegram_bot, "is_admin", lambda uid: True)
     tx_hash = "0xabc"
-    outgoing_pause.pause(by="auto:agent_wallet_monitor", reason=f"... tx {tx_hash}")
+    custody_pause.pause(by="auto:agent_wallet_monitor", reason=f"... tx {tx_hash}")
 
     async def _fake_resolve_approval(approval_id, approved, by):
         assert approved is False
@@ -170,7 +172,7 @@ async def test_outflow_confirm_reject_keeps_pause_and_logs_nothing(monkeypatch):
 
     await telegram_bot._handle_callback(update, FakeContext())
 
-    assert outgoing_pause.is_paused() is True
+    assert custody_pause.is_paused() is True
     assert "toujours actif" in query.edited_texts[0].lower() or "kill-switch" in query.edited_texts[0].lower()
     assert await kill_incident_log.list_incidents() == []
 
@@ -183,7 +185,7 @@ async def test_outflow_confirm_approve_rejects_non_owner(monkeypatch):
     _set_owner(monkeypatch)
     monkeypatch.setattr(telegram_bot, "is_admin", lambda uid: True)  # non-owner admin
     tx_hash = "0xabc"
-    outgoing_pause.pause(by="auto:agent_wallet_monitor", reason=f"... tx {tx_hash}")
+    custody_pause.pause(by="auto:agent_wallet_monitor", reason=f"... tx {tx_hash}")
 
     async def _fake_resolve_approval(approval_id, approved, by):
         assert approved is True
@@ -198,7 +200,7 @@ async def test_outflow_confirm_approve_rejects_non_owner(monkeypatch):
 
     await telegram_bot._handle_callback(update, FakeContext())
 
-    assert outgoing_pause.is_paused() is True  # never lifted by a non-owner
+    assert custody_pause.is_paused() is True  # never lifted by a non-owner
     assert query.answered_alerts  # a "seul le owner..." alert was shown
     assert await kill_incident_log.list_incidents() == []
 
@@ -208,7 +210,7 @@ async def test_outflow_confirm_approve_as_owner_with_matching_tx_lifts_pause(mon
     _set_owner(monkeypatch)
     monkeypatch.setattr(telegram_bot, "is_admin", lambda uid: True)
     tx_hash = "0xabc123"
-    outgoing_pause.pause(
+    custody_pause.pause(
         by="auto:agent_wallet_monitor",
         reason=f"Sortie non initiee par ARIA detectee automatiquement (wallet w, tx {tx_hash})",
     )
@@ -225,7 +227,7 @@ async def test_outflow_confirm_approve_as_owner_with_matching_tx_lifts_pause(mon
 
     await telegram_bot._handle_callback(update, FakeContext())
 
-    assert outgoing_pause.is_paused() is False
+    assert custody_pause.is_paused() is False
     history = await kill_incident_log.list_incidents()
     assert len(history) == 1
     assert history[0]["event_type"] == "lifted"
@@ -241,7 +243,7 @@ async def test_outflow_confirm_approve_stale_tx_never_lifts_a_different_incident
     monkeypatch.setattr(telegram_bot, "is_admin", lambda uid: True)
     stale_tx = "0xstale"
     fresh_tx = "0xfresh"
-    outgoing_pause.pause(
+    custody_pause.pause(
         by="auto:agent_wallet_monitor",
         reason=f"Sortie non initiee par ARIA detectee automatiquement (wallet w, tx {fresh_tx})",
     )
@@ -258,7 +260,7 @@ async def test_outflow_confirm_approve_stale_tx_never_lifts_a_different_incident
 
     await telegram_bot._handle_callback(update, FakeContext())
 
-    assert outgoing_pause.is_paused() is True  # still paused -- for the FRESH incident
+    assert custody_pause.is_paused() is True  # still paused -- for the FRESH incident
     assert await kill_incident_log.list_incidents() == []
 
 

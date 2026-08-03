@@ -63,7 +63,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Sequence
 
-from aria_core import agent_wallet_log, outgoing_pause
+from aria_core import agent_wallet_log, custody_pause, outgoing_pause
 from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 from aria_core.paths import data_dir
 
@@ -1410,9 +1410,12 @@ def blocks_swing_swaps() -> tuple[bool, str | None]:
     """``(blocked, reason)`` -- combines the dedicated swing breaker AND
     ``outgoing_pause`` (a global ``/stop`` also blocks new swing swaps) WITHOUT
     confusing the two in the reported reason. Fail-closed on unreadable state
-    ("money" doctrine, strict=True)."""
+    ("money" doctrine, strict=True). Item #62 (08/03): also checks the
+    dedicated ``custody_pause`` auto-arm flag -- either one blocks."""
     if outgoing_pause.is_paused(strict=True):
         return True, outgoing_pause.blocked_notice("Ce swap smart-swing")
+    if custody_pause.is_paused():
+        return True, custody_pause.blocked_notice("Ce swap smart-swing")
 
     status = swing_breaker_status()
     if not status["readable"]:

@@ -7,7 +7,7 @@ import pytest
 
 from aria_core import agent_wallet_cdp_adapter as adapter
 from aria_core import agent_wallet_monitor as monitor
-from aria_core import kill_incident_log, outgoing_pause
+from aria_core import custody_pause, kill_incident_log, outgoing_pause
 from aria_core.paths import configure_data_dir
 from aria_core.services.blockscout import (
     AddressInfo,
@@ -790,11 +790,14 @@ async def test_run_cycle_arms_kill_switch_immediately_on_fresh_unexpected_outflo
     async def _notifier(text):
         pass
 
-    assert outgoing_pause.is_paused() is False
+    # Item #62 (08/03): the auto-arm now targets the DEDICATED custody flag,
+    # never the shared outgoing_pause -- paper trading must stay unaffected.
+    assert custody_pause.is_paused() is False
     await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
 
-    assert outgoing_pause.is_paused() is True
-    st = outgoing_pause.pause_status()
+    assert custody_pause.is_paused() is True
+    assert outgoing_pause.is_paused() is False  # never touched by the auto-arm
+    st = custody_pause.pause_status()
     assert st["by"] == "auto:agent_wallet_monitor"
     assert "0xoutflow_arm" in st["reason"]
 
@@ -876,9 +879,11 @@ async def test_run_cycle_logs_kill_incident_on_fresh_arm(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_cycle_does_not_log_kill_incident_when_already_paused(monkeypatch):
     """No pause() call happens on an already-paused ARIA -- so no redundant
-    incident row either (the existing incident already covers it)."""
+    incident row either (the existing incident already covers it). Item #62
+    (08/03): the auto-arm checks custody_pause, not outgoing_pause -- arm
+    THAT flag to exercise the "already paused" branch."""
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
-    outgoing_pause.pause(by="manual-owner", reason="deja en pause")
+    custody_pause.pause(by="manual-owner", reason="deja en pause")
     transfer = TokenTransfer(
         tx_hash="0xoutflow_no_dup", from_address=monitor.MONITORED_WALLET_ADDRESS, to_address="0xunknown",
         token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",

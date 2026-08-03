@@ -51,7 +51,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from aria_core import agent_wallet_log, outgoing_pause
+from aria_core import agent_wallet_log, custody_pause, outgoing_pause
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +145,17 @@ async def attempt_swap(
             reason="ARIA_AGENT_WALLET_PILOT_ENABLED désactivé (fail-closed par défaut)",
         )
 
+    # Item #62 (08/03): checks BOTH the manual /stop flag and the dedicated
+    # custody auto-arm flag -- either one blocks a real swap.
     if outgoing_pause.is_paused(strict=True):
         return await _blocked(
             chain, token_in, token_out, amount_in_usd,
             reason=outgoing_pause.blocked_notice("Ce swap agent-wallet"),
+        )
+    if custody_pause.is_paused():
+        return await _blocked(
+            chain, token_in, token_out, amount_in_usd,
+            reason=custody_pause.blocked_notice("Ce swap agent-wallet"),
         )
 
     if amount_in_usd <= 0:
@@ -282,10 +289,17 @@ async def attempt_transfer(
             ),
         )
 
+    # Item #62 (08/03): checks BOTH the manual /stop flag and the dedicated
+    # custody auto-arm flag -- either one blocks a real transfer.
     if outgoing_pause.is_paused(strict=True):
         return await _blocked_transfer(
             chain, to_address, amount_usd,
             reason=outgoing_pause.blocked_notice("Ce transfert agent-wallet"),
+        )
+    if custody_pause.is_paused():
+        return await _blocked_transfer(
+            chain, to_address, amount_usd,
+            reason=custody_pause.blocked_notice("Ce transfert agent-wallet"),
         )
 
     if amount_usd <= 0:

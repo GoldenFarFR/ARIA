@@ -27,7 +27,7 @@ from aria_core.identity import (
     official_telegram_bot_username,
     official_x_url,
 )
-from aria_core import outgoing_pause, risk_guard
+from aria_core import custody_pause, outgoing_pause, risk_guard
 from aria_core.integrations.host_hooks import check_rate_limit, reset_operator_failed_attempts
 from aria_core.runtime import settings
 # Wallet card/report formatting (#157 follow-up, 15/07) -- factored into
@@ -420,8 +420,14 @@ def _admin_username_label() -> str:
 async def _handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     # Owner + active pause → /start lifts the kill-switch (operator decision).
-    if user and is_owner(user.id) and outgoing_pause.is_paused():
+    # Item #62 (08/03): lifts BOTH flags -- the manual /stop is deliberately
+    # kept as the single, simple "resume everything" lever, still covering
+    # the separate custody_pause (agent_wallet_monitor.py's auto-arm) even
+    # though that flag is never ARMED by /stop itself (only by the auto
+    # detector, or lifted individually via an outflow_confirm approval).
+    if user and is_owner(user.id) and (outgoing_pause.is_paused() or custody_pause.is_paused()):
         outgoing_pause.resume(by=user.id)
+        custody_pause.resume(by=user.id)
         await _reply(
             update.message,
             "▶️ ARIA reprend — actions sortantes réactivées (pause levée via /start).",
@@ -526,12 +532,22 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         sorties = f"⏸ EN PAUSE {outgoing_pause.since_label()}"
     else:
         sorties = "actives ▶️"
+    # Item #62 (08/03): reported separately from the manual /stop flag above
+    # -- custody_pause never touches paper trading, only real-money paths.
+    cpst = custody_pause.pause_status()
+    if not cpst["readable"]:
+        custody = "⚠️ état illisible — dépenses réelles gelées (fail-closed)"
+    elif cpst["paused"]:
+        custody = f"⏸ EN PAUSE {custody_pause.since_label()}"
+    else:
+        custody = "actives ▶️"
     await _reply(
         update.message,
         f"ARIA — Status (opérateur)\n"
         f"Build commit: {commit}\n"
         f"Your ID: {user.id if user else '?'} — admin ✅\n"
         f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
+        f"Custody (dépenses réelles wallet agent): {custody}\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
@@ -2338,10 +2354,15 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif not is_owner(query.from_user.id):
             await query.answer("Seul le owner peut lever cette pause.", show_alert=True)
         else:
-            pst = outgoing_pause.pause_status()
+            # Item #62 (08/03): outflow_confirm arms/lifts the DEDICATED
+            # custody_pause flag (agent_wallet_monitor.py's auto-arm target),
+            # never the shared outgoing_pause -- lifting this alert must
+            # never accidentally touch the separate manual /stop flag (which
+            # still gates paper trading too, by design).
+            pst = custody_pause.pause_status()
             reason = str(pst.get("reason") or "")
             if pst.get("paused") and tx_hash and tx_hash in reason:
-                outgoing_pause.resume(by=str(query.from_user.id))
+                custody_pause.resume(by=str(query.from_user.id))
                 await _record_kill_incident(
                     event_type="lifted", by=query.from_user.id,
                     reason=f"Confirmation Telegram (outflow_confirm #{approval_id})",
@@ -2350,7 +2371,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.edit_message_text(
                     _format_tg(
                         f"✅ Confirmé : mouvement autorisé par toi (#{approval_id})\n"
-                        "▶️ Kill-switch levé — actions sortantes réactivées."
+                        "▶️ Kill-switch de custody levé — dépenses réelles réactivées."
                     ),
                 )
             else:
@@ -3620,11 +3641,13 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """/resume — lifts the kill-switch (owner only). Explicit alias of /start while paused."""
     if not await _owner_only(update):
         return
-    if not outgoing_pause.is_paused():
+    # Item #62 (08/03): same both-flags lift as /start, see its own comment.
+    if not (outgoing_pause.is_paused() or custody_pause.is_paused()):
         await _reply(update.message, "▶️ ARIA n'était pas en pause — rien à reprendre.")
         return
     user = update.effective_user
     outgoing_pause.resume(by=user.id if user else None)
+    custody_pause.resume(by=user.id if user else None)
     await _record_kill_incident(
         event_type="lifted", by=user.id if user else None, reason="Reprise manuelle /resume (owner)",
     )

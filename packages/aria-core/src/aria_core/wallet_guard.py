@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Any, Callable
 
-from aria_core import outgoing_pause
+from aria_core import custody_pause, outgoing_pause
 from aria_core.approvals import create_approval
 from aria_core.memory import append_memory
 from aria_core.skills.acp_cli import client_fund_job, trade_tokens
@@ -83,7 +83,13 @@ async def escalate_spend(
     # Kill-switch (fail-closed for money): paused OR if the state is unreadable/corrupted,
     # we don't even create the escalation. Callers (acp_client_actions, _handle_test_spend)
     # already catch SpendEscalationError and display the message.
-    _spend_block = outgoing_pause.money_block_reason("Cette dépense")
+    # Item #62 (08/03): checks BOTH the manual /stop flag (outgoing_pause)
+    # and the dedicated custody auto-arm flag (custody_pause) -- either one
+    # blocks real spending, but only outgoing_pause is shared with paper
+    # trading now.
+    _spend_block = outgoing_pause.money_block_reason("Cette dépense") or custody_pause.money_block_reason(
+        "Cette dépense"
+    )
     if _spend_block:
         raise SpendEscalationError(_spend_block)
     if action not in WALLET_ACTIONS:
@@ -179,7 +185,9 @@ async def resolve_spend(approval_id: str, approved: bool, admin_id: str) -> str:
     # spend while ARIA is paused OR the state is unreadable. The entry stays pending (no claim)
     # -> re-executable after /start. A refusal stays allowed (no money leaves).
     if approved:
-        _spend_block = outgoing_pause.money_block_reason(f"L'exécution de la dépense #{approval_id}")
+        _spend_block = outgoing_pause.money_block_reason(
+            f"L'exécution de la dépense #{approval_id}"
+        ) or custody_pause.money_block_reason(f"L'exécution de la dépense #{approval_id}")
         if _spend_block:
             return _spend_block
     decision = "approved" if approved else "rejected"
