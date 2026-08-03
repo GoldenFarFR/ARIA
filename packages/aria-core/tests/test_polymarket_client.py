@@ -380,6 +380,95 @@ async def test_list_liquid_events_filters_market_with_zero_own_liquidity_in_a_li
 
 
 @pytest.mark.asyncio
+async def test_list_liquid_events_filters_grouped_market_with_missing_liquidity_and_pinned_50_50(monkeypatch):
+    """03/08, second incident of the same family as #224 above, found live
+    while auditing the paper portfolio: grouped multi-outcome events ("what
+    will happen before GTA VI?") report a real, high per-market volume (so
+    #224's own check doesn't catch them) but have NO `liquidity` key at all
+    and a price permanently pinned at exactly 0.5/0.5. Confirmed live: their
+    CLOB order book returns HTTP 404 -- never actually traded."""
+    # The EVENT itself carries a real, valid liquidity figure (as observed
+    # live) -- the individual market has none of its own, so it falls back
+    # to the event's figure (>= threshold, passes #224's own check) even
+    # though nothing was ever traded on THIS market specifically.
+    markets_payload = [
+        {
+            "question": "Will Jesus Christ return before GTA VI?",
+            "clobTokenIds": json.dumps(["t1", "t2"]),
+            "outcomePrices": json.dumps(["0.5", "0.5"]),
+            "volume": "11922530.08",
+            # no "liquidity" key at all here -- structurally absent, not zero
+        },
+        {
+            "question": "Will NVIDIA be the largest?",
+            "clobTokenIds": json.dumps(["t3", "t4"]),
+            "outcomePrices": json.dumps(["0.075", "0.925"]),
+            "volume": "2524361.36",
+            "liquidity": "63720.56",
+        },
+    ]
+    _patch_client(
+        monkeypatch,
+        FakeResponse(200, _liquid_event_payload(volume=23_601_472.98, liquidity=1_540_714.98, markets=markets_payload)),
+    )
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(min_volume_usd=50_000.0, min_liquidity_usd=20_000.0)
+
+    assert [m.question for m in markets] == ["Will NVIDIA be the largest?"]
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_missing_liquidity_but_real_price_is_not_filtered(monkeypatch):
+    """Non-regression: a market with no `liquidity` key but a price that is
+    NOT pinned exactly at 0.5/0.5 is a real (if thin) market, not the
+    placeholder pattern -- must not be filtered by the new check."""
+    markets_payload = [
+        {
+            "question": "Will X happen?",
+            "clobTokenIds": json.dumps(["t1", "t2"]),
+            "outcomePrices": json.dumps(["0.505", "0.495"]),
+            "volume": "100000.0",
+            # no "liquidity" key -- falls back to the event-level liquidity below
+        },
+    ]
+    _patch_client(
+        monkeypatch,
+        FakeResponse(200, _liquid_event_payload(volume=200_000.0, liquidity=50_000.0, markets=markets_payload)),
+    )
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(min_volume_usd=50_000.0, min_liquidity_usd=20_000.0)
+
+    assert [m.question for m in markets] == ["Will X happen?"]
+
+
+@pytest.mark.asyncio
+async def test_list_liquid_events_pinned_50_50_with_real_own_liquidity_is_not_filtered(monkeypatch):
+    """Non-regression: a market pinned at 0.5/0.5 but WITH a real own
+    liquidity figure is not the placeholder pattern this check targets --
+    only the missing-liquidity-key combination is a reliable signal."""
+    markets_payload = [
+        {
+            "question": "Will X happen?",
+            "clobTokenIds": json.dumps(["t1", "t2"]),
+            "outcomePrices": json.dumps(["0.5", "0.5"]),
+            "volume": "100000.0",
+            "liquidity": "40000.0",
+        },
+    ]
+    _patch_client(
+        monkeypatch,
+        FakeResponse(200, _liquid_event_payload(volume=200_000.0, liquidity=50_000.0, markets=markets_payload)),
+    )
+
+    client = PolymarketClient()
+    markets = await client.list_liquid_events(min_volume_usd=50_000.0, min_liquidity_usd=20_000.0)
+
+    assert [m.question for m in markets] == ["Will X happen?"]
+
+
+@pytest.mark.asyncio
 async def test_list_liquid_events_filters_resolution_too_far(monkeypatch):
     from datetime import datetime, timedelta, timezone
 

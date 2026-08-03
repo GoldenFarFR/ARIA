@@ -472,12 +472,23 @@ async def open_bet(
         return None
     await _ensure_tables()
     if await has_open_position(market.event_slug, market.question):
+        logger.info("polymarket open_bet refused (already positioned): %s", market.question)
         return None
     if len(await get_open_positions()) >= MAX_OPEN_POSITIONS:
+        logger.info("polymarket open_bet refused (position cap reached): %s", market.question)
         return None
 
     entry_price = await _resolve_entry_price(market, judgment.side)
     if entry_price is None or entry_price <= 0.0 or entry_price >= 1.0:
+        # 03/08 (Polymarket portfolio audit): a BET decision that dies here
+        # was previously invisible -- the judgment log records the decision,
+        # but never whether a position actually opened. Confirmed live: 7 of
+        # the 10 BET decisions logged since 30/07 never became a position,
+        # with no trace of why.
+        logger.info(
+            "polymarket open_bet refused (no valid entry price, resolved=%s): %s",
+            entry_price, market.question,
+        )
         return None
 
     equity = await cash_available()
@@ -485,6 +496,7 @@ async def open_bet(
     cash = await cash_available()
     size_usd = min(size_usd, cash)
     if size_usd <= 1.0:  # not worth booking a near-zero position
+        logger.info("polymarket open_bet refused (size rounds to ~0, size_usd=%.2f): %s", size_usd, market.question)
         return None
 
     shares = size_usd / entry_price

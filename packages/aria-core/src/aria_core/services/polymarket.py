@@ -496,6 +496,28 @@ class PolymarketClient:
                 if m_volume_f < min_volume_usd or m_liquidity_f < min_liquidity_usd:
                     continue
 
+                # 03/08, second incident of the same family as #224 above,
+                # found live while auditing the paper portfolio: grouped
+                # multi-outcome events ("what will happen before GTA VI?" --
+                # Jesus Christ return / Trump out / China invades Taiwan /
+                # bitcoin $1m) report a real, high per-market `volume`
+                # (hundreds of thousands to millions of $, clears the check
+                # above) yet have NO `liquidity` key at all in the raw Gamma
+                # payload (not just zero -- structurally absent) and an
+                # `outcomePrices` permanently pinned at exactly 0.5/0.5.
+                # Confirmed live: their CLOB order book returns "No
+                # orderbook exists for the requested token id" (HTTP 404) --
+                # never a real traded market, regardless of the volume
+                # figure. #224's own-liquidity check doesn't catch this
+                # because it falls back to the event-level liquidity when
+                # the market has none, which can be non-null. This is a
+                # narrower, cheap (no extra network call) signal: liquidity
+                # key absent on THIS market AND its price sitting exactly on
+                # the untouched 50/50 default is a reliable sign nothing was
+                # ever really traded on it.
+                if m.get("liquidity") is None and yes_price is not None and abs(yes_price - 0.5) < 1e-6:
+                    continue
+
                 candidates.append(
                     PolymarketCandidateMarket(
                         event_title=str(event.get("title") or ""),
