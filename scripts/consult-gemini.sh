@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# consult-gemini.sh -- manual, on-demand second opinion via Gemini 3.1 Pro
-# (OpenRouter). Item #65 (08/03), operator request: distinct from
+# consult-gemini.sh -- manual, on-demand second opinion (model behind MODEL
+# below, originally Gemini 3.1 Pro, switched to Claude Fable 5 on 08/03 --
+# filename kept as-is, it's the operator's established name for this tool).
+# Item #65 (08/03), operator request: distinct from
 # devils-advocate-review.sh's automatic post-push hook (which runs
 # unattended on every push to main with a fixed "Devil's Advocate" role) --
-# this one is invoked ONLY when the operator explicitly asks for a Gemini
-# second opinion on a specific plan, mid-conversation, synchronous (the
+# this one is invoked ONLY when the operator explicitly asks for a second
+# opinion on a specific plan, mid-conversation, synchronous (the
 # caller waits for the answer, never detached). Reuses the exact same
-# verified pattern (model, auth, headers) as the existing post-push
+# verified pattern (auth, headers, OpenRouter) as the existing post-push
 # mechanism -- same doctrine on why: a model and lab different from the one
 # writing the code, never Claude judging itself.
 #
 # Usage: cat plan.txt | scripts/consult-gemini.sh
 #        echo "some plan text" | scripts/consult-gemini.sh
 #
-# Reads the prompt from stdin, prints Gemini's raw response to stdout.
+# Reads the prompt from stdin, prints the model's raw response to stdout.
 # Same "verify before acting" doctrine as the post-push report applies to
 # whatever comes back -- an external model's opinion is a second opinion to
 # check against the real code, never gospel.
@@ -40,11 +42,24 @@
 #    model's self-labeling on faith. A prompt-level instruction alone
 #    cannot GUARANTEE honesty, only ask for it -- this is the mechanical
 #    backstop the workflow flagged as the real gap.
+# 08/03 -- switched to Claude Fable 5 (operator decision) after a 2-test
+# blind comparison (docs/HANDOFF_LLM.md) where it won both tests -- only
+# model to link the v3 execution bug to a wider pattern, only one to catch
+# the shared stop-geometry inconsistency, only one to land on the correct
+# figure (2 consecutive losses, not 3) on an already-solved problem. Cost
+# ~$0.28/call (~35x GLM) -- accepted explicitly for RARE use only (hard
+# unblocks), never a Gemini replacement for routine second opinions.
+# KNOWN RISK, not fully mitigated: a SEPARATE 9-model comparison (same
+# HANDOFF file) found this same model returns EMPTY content on at least one
+# long/complex prompt (HTTP 200, still billed $0.88) -- the script's own
+# "reponse vide"/finish_reason guard below already surfaces this loudly
+# rather than silently, but a wasted paid call on a hard, long prompt
+# (exactly this script's use case) remains a real possibility to watch for.
 set -uo pipefail
 
 REPO_DIR="/opt/aria"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
-MODEL="google/gemini-3.1-pro-preview"
+MODEL="anthropic/claude-fable-5"
 
 RAW_PROMPT="$(cat)"
 
@@ -87,7 +102,7 @@ if [ -z "$OR_KEY" ]; then
 fi
 
 SYSTEM_PROMPT=$(cat <<'PROMPT_EOF'
-Tu es un second avis technique independant (Gemini), consulte manuellement par un operateur humain sur un projet de trading crypto autonome (ARIA, agent IA sur Base). Ton role : donner un avis honnete et direct sur le plan/le code/la question soumise -- confirme ce qui tient a la lecture des faits fournis, challenge ce qui ne tient pas, propose des corrections concretes si necessaire. Ne sois jamais complaisant et ne valide jamais par defaut. Si le plan est deja solide, dis-le clairement plutot que d'inventer une critique pour remplir une reponse.
+Tu es un second avis technique independant, consulte manuellement par un operateur humain sur un projet de trading crypto autonome (ARIA, agent IA sur Base). Ton role : donner un avis honnete et direct sur le plan/le code/la question soumise -- confirme ce qui tient a la lecture des faits fournis, challenge ce qui ne tient pas, propose des corrections concretes si necessaire. Ne sois jamais complaisant et ne valide jamais par defaut. Si le plan est deja solide, dis-le clairement plutot que d'inventer une critique pour remplir une reponse.
 
 REGLE ABSOLUE -- CONSTAT VERIFIE vs HYPOTHESE (bidirectionnelle, jamais a sens unique) :
 - Tu ne recois PEUT-ETRE qu'un extrait/diff, jamais forcement le code/dossier complet. N'invente jamais l'existence, l'absence, ou le comportement d'un element (une fonction, un fichier, un appelant) que tu n'as pas vu litteralement dans le texte fourni.
@@ -229,7 +244,7 @@ done < <(
 )
 
 if [ "$UNVERIFIED_CITATIONS" -gt 0 ]; then
-  echo "ATTENTION -- ${UNVERIFIED_CITATIONS} citation(s) marquee(s) [VERIFIE] par Gemini n'ont PAS ete retrouvees telles quelles dans le texte envoye -- possible hallucination de citation, relis ces passages avec prudence avant d'agir dessus." >&2
+  echo "ATTENTION -- ${UNVERIFIED_CITATIONS} citation(s) marquee(s) [VERIFIE] n'ont PAS ete retrouvees telles quelles dans le texte envoye -- possible hallucination de citation, relis ces passages avec prudence avant d'agir dessus." >&2
 fi
 
 echo "$RESPONSE_CONTENT"
