@@ -4043,6 +4043,46 @@ async def test_tracked_snapshot_reflects_partial_exit_from_the_same_cycle(tmp_db
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_keeps_position_in_tracking_when_price_unavailable(tmp_db):
+    """03/08, real bug found live (operator: "il y a un beug sur lequité il y
+    a juste une centaine de perte pas autant") -- a position whose price
+    lookup fails (delisted/illiquid pool, real case: RAGE) used to vanish
+    from `tracked` entirely (bare `continue`) even though its cost stayed
+    deducted from cash, silently under-reporting combined equity by its full
+    cost basis with zero indication anything was wrong. It must now stay
+    visible, mark-to-last-known (entry_price), flagged `price_unavailable`."""
+    await pt.reset_portfolio(1_000_000.0)
+    # invalidation_price=0.5 (50% risk distance) + the 2%-of-capital risk cap
+    # (open_position -> size_position_by_risk) clamps the requested 50_000
+    # down to 40_000 -- same arithmetic as the sibling partial-exit test
+    # above, unrelated to what's actually under test here.
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=50_000, wallet="swing")
+
+    async def price_lookup(contract):
+        return None  # pool delisted/illiquid -- exactly the real RAGE symptom
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    assert len(act["tracked"]) == 1
+    tracked = act["tracked"][0]
+    assert tracked["price_unavailable"] is True
+    assert tracked["price"] == pytest.approx(1.0)  # entry_price fallback, never dropped/zeroed
+    assert tracked["cost_usd"] == pytest.approx(40_000)
+
+    tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
+    assert len(tracking_alerts) == 1
+    assert "prix indisponible" in tracking_alerts[0]
+    assert "40,000" in tracking_alerts[0]
+    # never a fabricated +0.0% P&L on a position whose real price is unknown
+    assert "P&L latent" not in tracking_alerts[0].split("prix indisponible")[1].split("\n")[0]
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_tracking_alert_throttled_to_every_other_cycle(tmp_db):
     """17/07, demande opérateur explicite : réduire de moitié le bruit Telegram de
     l'alerte de suivi -- un cycle qui suit de trop près le précédent (même position
