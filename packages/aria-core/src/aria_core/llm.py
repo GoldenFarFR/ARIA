@@ -294,7 +294,14 @@ def _headers_for_route(route: LlmRoute) -> dict[str, str]:
         headers["HTTP-Referer"] = "https://github.com/GoldenFarFR/aria-vanguard"
         from aria_core.narrative import llm_provider_title
 
-        headers["X-Title"] = llm_provider_title()
+        # 08/03 -- OpenRouter renamed this header to X-OpenRouter-Title
+        # (PR #11857/#11991, 2026-04-24) -- send BOTH: the new name for the
+        # current dashboard/ranking behavior, the old one kept for backward
+        # compatibility with any cache/proxy still reading it. Costs nothing,
+        # avoids a silent "Inconnu" regression if either name stops working.
+        title = llm_provider_title()
+        headers["X-OpenRouter-Title"] = title
+        headers["X-Title"] = title
     return headers
 
 

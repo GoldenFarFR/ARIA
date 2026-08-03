@@ -149,6 +149,7 @@ ${DIFF_CONTENT}${DIFF_TRUNCATED}"
     -H "Authorization: Bearer $OR_KEY" \
     -H "Content-Type: application/json" \
     -H "HTTP-Referer: https://github.com/GoldenFarFR/aria-vanguard" \
+    -H "X-OpenRouter-Title: ARIA Devil's Advocate" \
     -H "X-Title: ARIA Devil's Advocate" \
     -d "$PAYLOAD")
   unset OR_KEY
