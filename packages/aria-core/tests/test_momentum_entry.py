@@ -4494,6 +4494,32 @@ async def test_evaluate_hold_has_no_entry_atr_pct(monkeypatch):
     assert result.get("entry_atr_pct") is None
 
 
+# ── recent_low (08/03, Item #65, anti-chasing shadow filter) ────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_buy_exposes_recent_low(monkeypatch):
+    """Golden-pocket lookback window (25 candles) -- min(low) over the last
+    25 of the 26 varying-low fixture candles, so this proves the MINIMUM is
+    picked, not just "some low"."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(
+        monkeypatch, signal=strong, align=(2, []), candles=_varying_low_candles(),
+    )
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "BUY"
+    assert result["recent_low"] == pytest.approx(7.0, rel=1e-6)
+    assert result["recent_low_window"] == 25
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hold_has_no_recent_low(monkeypatch):
+    weak = EntrySignal(present=True, entry=1.5, invalidation=1.4, target=1.6, rr=0.5)
+    _patch_pipeline(monkeypatch, signal=weak, confirm_gate=("HOLD", "non confirmé (mock test)"))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result.get("recent_low") is None
+
+
 @pytest.mark.asyncio
 async def test_evaluate_threads_live_price_as_execution_price_to_detect_entry(monkeypatch):
     """19/07 -- trouvaille réelle en vérifiant la légitimité d'un trade (GITLAWB, demande
@@ -6608,6 +6634,19 @@ async def test_golden_pocket_watch_candidate_entry_atr_pct_none_when_atr_unavail
 
 
 @pytest.mark.asyncio
+async def test_golden_pocket_watch_candidate_carries_recent_low(monkeypatch, test_settings):
+    """Item #65 (08/03): same window (25) as the standard BUY path -- min(low)
+    over the 25-candle varying-low fixture."""
+    _patch_pipeline(monkeypatch, signal=_pending_zone_signal(), candles=_varying_low_candles())
+    _stub_dex_score(monkeypatch, 75.0)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch["recent_low"] == pytest.approx(7.0, rel=1e-6)
+    assert watch["recent_low_window"] == 25
+
+
+@pytest.mark.asyncio
 async def test_golden_pocket_watch_candidate_absent_when_score_below_threshold(monkeypatch, test_settings):
     from aria_core import risk_guard
 
@@ -6723,6 +6762,20 @@ def _rising_ts_candles(n: int = 20, *, interval: int = 3600) -> list[Candle]:
     return [Candle(ts=i * interval, open=1, high=1, low=1, close=1) for i in range(n)]
 
 
+def _varying_low_candles(n: int = 26, *, interval: int = 3600) -> list[Candle]:
+    """Item #65 (08/03), anti-chasing shadow filter: real VARYING lows (never
+    flat, same doctrine as ``_rising_ts_atr_candles`` -- a constant low would
+    make ``recent_low_from_candles`` trivially correct without proving the
+    window actually picks the MINIMUM). The lowest low sits at index 2 (7.0),
+    well inside a 25-candle window from the end, so a test can assert the
+    exact expected value rather than just "not None"."""
+    lows = [10.0, 9.0, 7.0, 11.0, 12.0] + [10.0 + (i % 3) for i in range(n - 5)]
+    return [
+        Candle(ts=i * interval, open=lows[i] + 1, high=lows[i] + 2, low=lows[i], close=lows[i] + 1)
+        for i in range(n)
+    ]
+
+
 def _rising_ts_atr_candles(n: int = 20, *, interval: int = 3600) -> list[Candle]:
     """Item #253 (08/02) -- unlike ``_rising_ts_candles``, real (non-flat) True
     Range on every candle (high-low=2.0, no gap -- same construction as
@@ -6815,6 +6868,18 @@ async def test_rsi_divergence_watch_candidate_entry_atr_pct_none_when_atr_unavai
     watch = result["limit_order_candidate"]
     assert watch is not None
     assert watch["entry_atr_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_carries_recent_low(monkeypatch, test_settings):
+    """Item #65 (08/03): same window (25) as the golden-pocket watch and the
+    standard BUY path -- min(low) over the 25-candle varying-low fixture."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_varying_low_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    watch = result["limit_order_candidate"]
+    assert watch["recent_low"] == pytest.approx(7.0, rel=1e-6)
+    assert watch["recent_low_window"] == 25
 
 
 @pytest.mark.asyncio

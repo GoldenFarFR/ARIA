@@ -306,6 +306,13 @@ async def test_v1_buys_on_confirmed_exit_from_oversold(monkeypatch):
     # trail_pct fell back to the generic 15%, never activating on scalping-
     # scale moves) -- must now be the real ratio (atr / entry).
     assert result["entry_atr_pct"] == pytest.approx(0.05 / 1.0)
+    # Item #65 (08/03), anti-chasing shadow filter: V1 (Bollinger) uses the
+    # Bollinger/VWAP window (20), not the Stochastique one (14) -- see
+    # chasing_filter_shadow.RECENT_LOW_WINDOW_BOLLINGER_VWAP. Actual min-low
+    # math is covered exhaustively in test_chasing_filter_shadow.py; this
+    # just proves the right window is wired for this variant.
+    assert result["recent_low"] == pytest.approx(0.95)
+    assert result["recent_low_window"] == 20
 
 
 @pytest.mark.asyncio
@@ -379,6 +386,9 @@ async def test_v2_buys_on_confirmed_exit_from_oversold(monkeypatch):
     # just V1 (see test_v1_buy_carries_entry_security_json's own comment for
     # the full incident).
     assert "entry_security_json" in result
+    # Item #65 (08/03): V2 (VWAP) uses the Bollinger/VWAP window (20).
+    assert result["recent_low"] == pytest.approx(0.95)
+    assert result["recent_low_window"] == 20
 
 
 @pytest.mark.asyncio
@@ -422,6 +432,11 @@ async def test_v3_buys_on_confirmed_exit_with_structural_stop(monkeypatch):
     assert result["entry_atr_pct"] is not None
     assert result["entry_atr_pct"] > 0
     assert "entry_security_json" in result
+    # Item #65 (08/03), anti-chasing shadow filter: V3 (Stochastique) uses
+    # its own period (14, RECENT_LOW_WINDOW_STOCHASTIC) -- min(low) over the
+    # last 14 of these 50 candles is 0.90 (index 48), inside that window.
+    assert result["recent_low"] == pytest.approx(0.90)
+    assert result["recent_low_window"] == 14
 
 
 @pytest.mark.asyncio
@@ -455,6 +470,10 @@ async def test_v4_requires_both_signals_confirmed(monkeypatch):
     # à 1.3.
     assert result["target"] == pytest.approx(1.0 + 1.3 * (1.0 - expected_stop))
     assert "entry_security_json" in result
+    # Item #65 (08/03): V4 combines %B (period 20) and %K (period 14) --
+    # uses the wider of the two windows (20), never a uniform N=14.
+    assert result["recent_low"] == pytest.approx(0.95)
+    assert result["recent_low_window"] == 20
 
 
 def test_v4_tp_ratio_stays_strictly_above_the_price_impact_floor():
@@ -510,6 +529,9 @@ async def test_v5_buys_with_no_fixed_target(monkeypatch):
     # change to the actual exit, still pure ATR trailing stop).
     assert result["rr"] == pytest.approx(scalping_variants._V2_TP_RR_RATIO)
     assert result["rr"] == pytest.approx(1.5)
+    # Item #65 (08/03): V5 (VWAP) uses the Bollinger/VWAP window (20).
+    assert result["recent_low"] == pytest.approx(0.95)
+    assert result["recent_low_window"] == 20
     assert "entry_security_json" in result
 
 

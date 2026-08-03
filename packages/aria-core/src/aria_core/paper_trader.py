@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from aria_core import momentum_funnel_log
+from aria_core import chasing_filter_shadow, momentum_funnel_log
 from aria_core.paths import aria_db_path
 from aria_core.services.dexscreener import token_url
 
@@ -4467,6 +4467,21 @@ async def _open_new_entries_for_wallet(
         # to this specific guard), never reached in production.
         if fresh_price and fresh_price > 0:
             price = fresh_price
+
+        # Item #65 (08/03), anti-chasing shadow filter -- logs what several
+        # candidate thresholds would have decided on the FRESH price we're
+        # about to actually buy at, never blocking anything (see
+        # chasing_filter_shadow.py's own module docstring). Best-effort:
+        # never raises into this real trading cycle.
+        try:
+            await chasing_filter_shadow.record_check(
+                contract, sig.get("chain") or "base", wallet=wallet, source="direct_buy",
+                recent_low=sig.get("recent_low"), recent_low_window=sig.get("recent_low_window"),
+                execution_price=price, symbol=sig.get("symbol"),
+                variant=(sig.get("reasons") or [None])[0],
+            )
+        except Exception as exc:  # noqa: BLE001 -- shadow logging must never break a real cycle
+            logger.info("paper_cycle: chasing_filter_shadow.record_check failed (%s)", exc)
 
         pos = await open_position(
             contract,

@@ -80,6 +80,10 @@ import logging
 import time
 
 from aria_core import momentum_blacklist
+from aria_core.chasing_filter_shadow import (
+    RECENT_LOW_WINDOW_GOLDEN_POCKET,
+    recent_low_from_candles,
+)
 from aria_core.services.coingecko import coingecko_client
 from aria_core.services.dexscreener import (
     PairSnapshot,
@@ -2910,6 +2914,12 @@ def _rsi_divergence_watch_candidate(
     _last_atr = _atr_values[-1] if _atr_values else None
     if _last_atr is not None and entry:
         entry_atr_pct = _last_atr / entry
+    # Item #65 (08/03), anti-chasing shadow filter (informational only, see
+    # chasing_filter_shadow.py's own docstring) -- same window as the
+    # standard BUY path (golden-pocket lookback, 25 candles), same "cheap,
+    # no network call, same candles already in hand" doctrine as entry_atr_pct
+    # just above.
+    recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
     structural_invalidation = signal.gp_low * (1 - 0.02)
     invalidation = structural_invalidation
     # 30/07, real bug found live (CFI, TIBBIR, FOLKS-on-swing -- see
@@ -2978,6 +2988,8 @@ def _rsi_divergence_watch_candidate(
         "invalidation": invalidation,
         "rr": rr,
         "entry_atr_pct": entry_atr_pct,
+        "recent_low": recent_low,
+        "recent_low_window": RECENT_LOW_WINDOW_GOLDEN_POCKET,
         "symbol": symbol,
         "limit_order_reason": "rsi_divergence_pending",
         "last_candle_ts": candles[-1].ts,
@@ -3087,6 +3099,12 @@ async def _golden_pocket_watch_candidate(
     _last_atr = _atr_values[-1] if _atr_values else None
     if _last_atr is not None and entry:
         entry_atr_pct = _last_atr / entry
+    # Item #65 (08/03), anti-chasing shadow filter (informational only, see
+    # chasing_filter_shadow.py's own docstring) -- same window as the
+    # standard BUY path (golden-pocket lookback, 25 candles), same "cheap,
+    # no network call, same candles already in hand" doctrine as entry_atr_pct
+    # just above.
+    recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
     structural_invalidation = signal.gp_low * (1 - 0.02)
     invalidation = structural_invalidation
     # 30/07, real bug found live -- see entry_signals.py's own comment: never
@@ -3131,6 +3149,8 @@ async def _golden_pocket_watch_candidate(
         "invalidation": invalidation,
         "rr": rr,
         "entry_atr_pct": entry_atr_pct,
+        "recent_low": recent_low,
+        "recent_low_window": RECENT_LOW_WINDOW_GOLDEN_POCKET,
         "symbol": symbol,
         "dex_security_score": dex_score.score,
         "dex_security_breakdown": {
@@ -3616,6 +3636,13 @@ async def evaluate_momentum_entry(
     # (local computation on candles already in hand) -- no dedicated gate
     # needed.
     entry_atr_pct = None
+    # Item #65 (08/03), anti-chasing shadow filter (informational only,
+    # logged by the caller -- paper_trader.py/limit_orders.py -- NEVER a
+    # rejection gate here): distance to the recent low, golden-pocket
+    # lookback window (25 candles, RECENT_LOW_WINDOW_GOLDEN_POCKET) -- this
+    # is the standard momentum/swing/megacap path, distinct from the
+    # scalping-variant engines' own windows (scalping_variants.py).
+    recent_low = None
     if action == "BUY":
         from aria_core.skills.indicators import atr_series
 
@@ -3623,6 +3650,7 @@ async def evaluate_momentum_entry(
         last_atr = atr_values[-1] if atr_values else None
         if last_atr is not None and best.price_usd:
             entry_atr_pct = last_atr / best.price_usd
+        recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
 
     # 07/23 -- liquidity-rotation signal, computed on every BUY (see the
     # "liquidity_rotation_*" fields on the returned dict below for the
@@ -3883,6 +3911,11 @@ async def evaluate_momentum_entry(
         # paper_trader.py falls back to TRAIL_STOP_PCT (fixed percentage) in
         # this case, never a fabricated stop.
         "entry_atr_pct": entry_atr_pct,
+        # Item #65 (08/03), anti-chasing shadow filter -- informational only,
+        # see chasing_filter_shadow.py's own docstring. None whenever action
+        # != "BUY" (never computed above in that case).
+        "recent_low": recent_low,
+        "recent_low_window": RECENT_LOW_WINDOW_GOLDEN_POCKET if recent_low is not None else None,
         # 19/07 -- True (RVOL confirmed) / False (volume data absent, conviction
         # penalty to apply to sizing) / None (BUY stage never reached) --
         # risk_guard.conviction_size_multiplier treats False as a cap at the

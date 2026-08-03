@@ -40,6 +40,11 @@ import logging
 import time
 
 from aria_core import momentum_entry
+from aria_core.chasing_filter_shadow import (
+    RECENT_LOW_WINDOW_BOLLINGER_VWAP,
+    RECENT_LOW_WINDOW_STOCHASTIC,
+    recent_low_from_candles,
+)
 from aria_core.skills import indicators
 from aria_core.skills.ta_levels import Candle
 
@@ -195,6 +200,7 @@ def _rr(entry: float, stop: float, target: float) -> float:
 def _buy_result(
     *, pair, chain: str, contract: str, entry: float, stop: float, target: float | None, reason: str,
     variant: str, candles: list[Candle], sizing_rr: float | None = None,
+    recent_low_window: int = 20,
 ) -> dict:
     # 08/02 -- real bug found live (operator: 7/7 closed scalping trades lost,
     # every one via the blind stagnation timeout, none via the ATR trailing
@@ -271,6 +277,13 @@ def _buy_result(
     entry_security_json = _risk.capture_entry_snapshot_from_security(
         momentum_entry._get_cached_security(chain, contract)
     ).to_json()
+    # Item #65 (08/03), anti-chasing shadow filter: distance to the recent
+    # low, informational only -- logged by the caller (paper_trader.py /
+    # limit_orders.py), NEVER a rejection gate here. ``recent_low_window``
+    # matches THIS variant's own oscillator lookback (passed by each
+    # evaluate_vN below), never a single uniform N -- see chasing_filter_
+    # shadow.py's own module docstring for why.
+    recent_low = recent_low_from_candles(candles, recent_low_window)
     return {
         "action": "BUY", "chain": chain, "symbol": pair.base_symbol, "price": entry,
         "target": target, "invalidation": stop,
@@ -288,6 +301,8 @@ def _buy_result(
         # 08/01 -- market cap at entry, same purely-observational field as the
         # standard momentum pipeline (see momentum_entry.py's own comment).
         "market_cap_usd": pair.market_cap_usd,
+        "recent_low": recent_low,
+        "recent_low_window": recent_low_window,
     }
 
 
@@ -329,7 +344,7 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %B confirmée ({percent_b[-2]:.2f} -> {percent_b[-1]:.2f})",
         variant="V1 Bollinger",
-    candles=candles,
+    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
     )
 
 
@@ -372,7 +387,7 @@ async def evaluate_v2_vwap_institutional(contract: str, chain: str) -> dict | No
         pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f})",
         variant="V2 VWAP institutionnel",
-    candles=candles,
+    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
     )
 
 
@@ -412,7 +427,7 @@ async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
         reason=f"sortie de survente %K confirmée ({k[-2]:.1f} -> {k[-1]:.1f})",
         variant="V3 Stochastique ultra-réactif",
-    candles=candles,
+    candles=candles, recent_low_window=RECENT_LOW_WINDOW_STOCHASTIC,
     )
 
 
@@ -474,7 +489,7 @@ async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
         reason=f"double confirmation Bollinger+Stochastique (%B {percent_b[-2]:.2f}->{percent_b[-1]:.2f}, "
                f"%K {k[-2]:.1f}->{k[-1]:.1f})",
         variant="V4 Combo sec",
-    candles=candles,
+    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
     )
 
 
@@ -537,7 +552,7 @@ async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
         pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=None,
         reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f}), sans TP fixe",
         variant="V5 VWAP trailing",
-    candles=candles, sizing_rr=_V5_SIZING_RR,
+    candles=candles, sizing_rr=_V5_SIZING_RR, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
     )
 
 

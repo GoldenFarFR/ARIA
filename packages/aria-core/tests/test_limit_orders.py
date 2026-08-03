@@ -920,6 +920,112 @@ async def test_check_rsi_divergence_watching_preserves_prior_entry_atr_pct_when_
     assert sig["entry_atr_pct"] == 0.10
 
 
+# ── Item #65 (08/03), anti-chasing shadow filter -- recent_low recomputed on trigger ──
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_sets_recent_low_on_trigger(monkeypatch):
+    """Same 'recompute on the fresh candles just re-checked' doctrine as
+    entry_atr_pct above -- needs >= RECENT_LOW_WINDOW_GOLDEN_POCKET (25)
+    candles with a REAL varying low (never flat) to prove the minimum is
+    actually picked, not just "some low"."""
+    from aria_core import momentum_entry
+    from aria_core.chasing_filter_shadow import RECENT_LOW_WINDOW_GOLDEN_POCKET
+    from aria_core.skills import entry_signals
+    from aria_core.skills.ta_levels import Candle
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    lows = [10.0, 9.0, 7.0, 11.0, 12.0] + [10.0 + (i % 3) for i in range(21)]  # 26 candles, min=7.0
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        return [
+            Candle(ts=i * 3600, open=lows[i] + 1, high=lows[i] + 2, low=lows[i], close=lows[i] + 1)
+            for i in range(len(lows))
+        ]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(sig_overrides={"recent_low": 5.0, "recent_low_window": 25})  # stale
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert sig["recent_low"] == pytest.approx(7.0, rel=1e-6)
+    assert sig["recent_low_window"] == RECENT_LOW_WINDOW_GOLDEN_POCKET
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_preserves_prior_recent_low_when_unavailable(monkeypatch):
+    """'.setdefault' style -- same doctrine as entry_atr_pct's own
+    preservation test: too few fresh candles never erases the earlier
+    watch-candidate value with None."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]  # < window (25)
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(sig_overrides={"recent_low": 5.0, "recent_low_window": 25})
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert sig["recent_low"] == 5.0
+    assert sig["recent_low_window"] == 25
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_logs_shadow_check_on_trigger(monkeypatch):
+    """The statistically dominant execution path (per the 08/03 workflow
+    review) gets its own shadow observation, distinct source from
+    paper_trader.py's direct-buy one -- never bloquant, purely logged."""
+    from aria_core import chasing_filter_shadow, momentum_entry
+    from aria_core.skills import entry_signals
+    from aria_core.skills.ta_levels import Candle
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        return [Candle(ts=i * 3600, open=11.0, high=12.0, low=10.0, close=11.0) for i in range(26)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=18)
+
+    calls = []
+
+    async def _fake_record_check(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+    monkeypatch.setattr(chasing_filter_shadow, "record_check", _fake_record_check)
+
+    order, sig = _rsi_watch_order(wallet="swing")
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+
+    assert len(calls) == 1
+    assert calls[0]["contract"] == "0xCHECK"
+    assert calls[0]["wallet"] == "swing"
+    assert calls[0]["source"] == "limit_order_trigger"
+    assert calls[0]["execution_price"] == pytest.approx(11.0)
+
+
 @pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_refetches_with_scalping_mode_for_scalping_wallet(monkeypatch):
     """Item #199 (29/07): the re-check must fetch candles at the SAME

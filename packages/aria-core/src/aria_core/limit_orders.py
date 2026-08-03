@@ -506,6 +506,33 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
         last_atr = atr_values[-1] if atr_values else None
         if last_atr is not None and candles[-1].close:
             sig["entry_atr_pct"] = last_atr / candles[-1].close
+        # Item #65 (08/03), anti-chasing shadow filter: same "recompute on
+        # fresh candles, never erase a real prior value with None" doctrine
+        # as entry_atr_pct just above -- this is the STATISTICALLY DOMINANT
+        # execution path (most watching orders trigger through here, not a
+        # direct buy, per the 08/03 workflow review), so it gets its own
+        # shadow observation, distinct from paper_trader.py's direct-buy one.
+        from aria_core.chasing_filter_shadow import (
+            RECENT_LOW_WINDOW_GOLDEN_POCKET,
+            recent_low_from_candles,
+        )
+
+        fresh_recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
+        if fresh_recent_low is not None:
+            sig["recent_low"] = fresh_recent_low
+            sig["recent_low_window"] = RECENT_LOW_WINDOW_GOLDEN_POCKET
+        try:
+            from aria_core import chasing_filter_shadow
+
+            await chasing_filter_shadow.record_check(
+                order["contract"], order.get("chain") or "base",
+                wallet=order.get("wallet") or "swing", source="limit_order_trigger",
+                recent_low=sig.get("recent_low"), recent_low_window=sig.get("recent_low_window"),
+                execution_price=candles[-1].close, symbol=sig.get("symbol"),
+                variant=(sig.get("reasons") or [None])[0],
+            )
+        except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real trigger
+            logger.info("limit_orders: chasing_filter_shadow.record_check failed (%s)", exc)
         return "trigger"
     return "wait"
 

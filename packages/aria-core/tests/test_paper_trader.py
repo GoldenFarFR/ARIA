@@ -6740,6 +6740,53 @@ async def test_open_new_entries_for_wallet_records_scan_on_buy(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_logs_chasing_filter_shadow_check(tmp_db, monkeypatch):
+    """Item #65 (08/03), anti-chasing shadow filter: logged right before
+    open_position, on the FRESH execution price -- never blocking anything."""
+    from aria_core import chasing_filter_shadow, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "TOK", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+            "recent_low": 0.95, "recent_low_window": 25,
+            "reasons": ["V3 Stochastique ultra-réactif"],
+        }
+
+    async def _price_lookup(contract):
+        return 1.01  # slightly fresher than the signal's own 1.0
+
+    calls = []
+
+    async def _fake_record_check(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(chasing_filter_shadow, "record_check", _fake_record_check)
+
+    await pt.reset_portfolio(1_000_000.0)
+    opened_positions, opened = await pt._open_new_entries_for_wallet(
+        "swing", [A], _buy_analyzer,
+        price_lookup=_price_lookup, notifier=None, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    assert opened == 1
+    assert len(calls) == 1
+    assert calls[0]["contract"] == A
+    assert calls[0]["wallet"] == "swing"
+    assert calls[0]["source"] == "direct_buy"
+    assert calls[0]["recent_low"] == 0.95
+    assert calls[0]["recent_low_window"] == 25
+    assert calls[0]["execution_price"] == pytest.approx(1.01)
+
+
+@pytest.mark.asyncio
 async def test_open_new_entries_for_wallet_records_scan_on_buy_refused(tmp_db, monkeypatch):
     """A portfolio-level constraint refuses the buy (open_position itself
     returns None -- e.g. insufficient cash, NOT a signal quality issue,
