@@ -25,6 +25,16 @@ Solution : `crontab -l` revérifié en direct le 03/08 (passe de compaction CLAU
 
 ------------------------------------------------------------
 
+[ETAT ACTUEL] Sujet    : Procédure réutilisable — audit workflow avant de compacter une section sensible de CLAUDE.md
+Date : 2026.08.03  /  Probleme : —
+Solution : lors de la passe de compaction du 03/08, une première tentative manuelle de compresser la section "Règles absolues" a silencieusement perdu 12 éléments substantiels (états par défaut de gates, verrous `test_coherence`, bornes chiffrées, une clause de sécurité sur une adresse codée en dur, un jalon futur) — une seule relecture humaine ne les a pas tous vus non plus avant qu'un workflow dédié les trouve. Procédure qui a fonctionné, réutilisable telle quelle pour toute future compaction d'une section sensible (garde-fous, capital réel) :
+1. Un premier agent (`fetch-original`) lit le fichier réel et retourne le texte ORIGINAL verbatim de la section concernée — jamais de mémoire/résumé.
+2. Un deuxième agent (`diff-audit`) reçoit l'ORIGINAL + la version PROPOSÉE dans son prompt, et audite élément par élément (chaque gate, chaque borne chiffrée, chaque nom de fichier/fonction cité) — consigne explicite : lister toute perte réelle avec citation des deux côtés, ou dire "aucune perte" si c'est le cas ; terminer par un verdict tranché SÛR À COMMITTER / CORRECTIONS NÉCESSAIRES.
+3. Un troisième agent (`pointer-check`) vérifie que chaque nouveau pointeur `docs/HANDOFF_*.md` introduit par la compaction résout vers du contenu réel (lit les fichiers cibles), et propose une entrée HANDOFF prête à coller pour tout ce qui manque.
+Coût : 2 agents pour l'audit + 1 pour le pointer-check (respecte le plafond de 2 agents/workflow en les regroupant en 2 phases, `Diff-audit`/`Pointer-check`, chacune sous ce plafond). Sur les points où l'audit trouve un vrai choix (pas juste une perte accidentelle) — ex. le périmètre exact d'une exception de gouvernance, ou un déclencheur qui contredisait une autre règle du texte source — l'agent doit explicitement dire "à faire valider par l'opérateur", jamais trancher seul en silence.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : "Avocat du Diable" — critique architecturale post-push, conception et premier test
 Date : 2026.07.18  /  Probleme : feu vert opérateur direct (après conception croisée avec Gemini) pour un critique automatique de chaque push sur `main`, distinct de la veille Research (pensée convergente, bornée au diff, pas de pivot).
 Solution : hook `.git/hooks/pre-push` (stub non versionné) appelle `scripts/devils-advocate-review.sh` (versionné), envoie le diff en arrière-plan détaché à DeepSeek R1 via OpenRouter (modèle/lab différent de celui qui écrit le code), reçoit aussi une carte légère de `docs/aria-learning-inbox/` (noms de fichiers seulement). Rapport écrasé à chaque push (`/opt/aria-data/architect-report.md`, hors repo public), log technique séparé append-only. Échec de génération → marqueur `[ÉCHEC DE GÉNÉRATION DU RAPPORT]` explicite, jamais un contenu halluciné silencieux. Agent "Architecte" (relecture de plan avant codage) volontairement pas construit — tester d'abord la valeur du seul critique post-push.

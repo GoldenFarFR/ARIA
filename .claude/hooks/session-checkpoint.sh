@@ -82,4 +82,30 @@ EOF
   )
 fi
 
+# ── Rappel PROACTIF de taille CLAUDE.md (03/08) ───────────────────────────────────────
+# test_coherence.py casse la CI a 100 Ko (garde-fou tardif) -- ce bloc alerte plus tot,
+# a 80% du plafond, pour permettre une mini-passe de nettoyage au fil de l'eau plutot
+# qu'un gros rattrapage (cf. l'incident du 22/07 : 690 lignes/~600 Ko avant compaction).
+SIZE_SOFT_THRESHOLD=81920  # 80 Ko, 80% du plafond dur de 100 Ko (test_coherence.py)
+CLAUDE_MD="$ROOT/CLAUDE.md"
+SIZE_REMINDED="$ROOT/.claude/.claude-md-size-reminded"
+
+if [ -f "$CLAUDE_MD" ]; then
+  current_size=$(wc -c < "$CLAUDE_MD" 2>/dev/null | tr -d '[:space:]')
+  case "$current_size" in ''|*[!0-9]*) current_size=0 ;; esac
+
+  last_reminded=$(cat "$SIZE_REMINDED" 2>/dev/null | tr -d '[:space:]')
+  case "$last_reminded" in ''|*[!0-9]*) last_reminded=0 ;; esac
+
+  if [ "$current_size" -ge "$SIZE_SOFT_THRESHOLD" ] && [ "$current_size" -gt "$last_reminded" ]; then
+    printf '%s\n' "$current_size" > "$SIZE_REMINDED" 2>/dev/null || true
+    ko=$((current_size / 1024))
+    cat <<EOF
+📏 CLAUDE.md fait ~${ko} Ko (seuil doux 80 Ko, plafond dur CI 100 Ko).
+Affiche à l'opérateur UNE SEULE LIGNE : « 📏 CLAUDE.md approche sa taille limite (~${ko} Ko/100 Ko) — une passe de nettoyage serait utile. »
+Puis CONTINUE normalement. Voir la table "Routeur CLAUDE.md" pour classer le contenu avant d'ajouter quoi que ce soit ici.
+EOF
+  fi
+fi
+
 exit 0

@@ -6,6 +6,9 @@
   "permissions": {
     "deny": ["Read(**/.env*)"]
   },
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "60"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -13,6 +16,16 @@
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-compact-reminder.sh",
+            "timeout": 5
           }
         ]
       }
