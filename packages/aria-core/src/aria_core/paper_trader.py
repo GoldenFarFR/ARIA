@@ -58,7 +58,7 @@ MAX_POSITIONS_VC = 5
 MAX_POSITIONS_SWING = 15
 MAX_POSITIONS_SCALPING = None  # unlimited, same doctrine as the scalping bypass above
 
-# 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established tokens,
+# 02/08 -- "megacap" pocket (fixed_watchlist.py, 8 established tokens,
 # mcap>=100M$) -- one position per listed token, matches the list size. See
 # fixed_watchlist_pocket_enabled() below for the gate.
 MAX_POSITIONS_MEGACAP = 10
@@ -2515,6 +2515,20 @@ def _format_tracked_position_line(t: dict) -> str:
     # afterward and no longer faithfully represent the size decided AT THE
     # TIME of the buy).
     pct_of_capital = (cost / STARTING_CAPITAL_USD * 100.0) if STARTING_CAPITAL_USD else 0.0
+    # 03/08 -- ``price_unavailable`` (real bug, "il y a un beug sur l'équité"):
+    # the equity sum needs SOME number for this position (mark-to-last-known,
+    # see the caller's own comment), but showing it as a fake "+0.0%/$0 P&L"
+    # would fabricate a fact this pipeline never actually observed -- doctrine
+    # is "say unavailable + why", never invent a data point. Capital stays
+    # visible, P&L/percent line is replaced with an explicit disclosure.
+    if t.get("price_unavailable"):
+        line = (
+            f"{name} ({_strategy_label(t)}) : prix indisponible (pool introuvable/illiquide) · "
+            f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
+        )
+        if t.get("contract"):
+            line += f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+        return line
     # 26/07 -- per-position label, not a single header one: this alert can
     # list positions opened under DIFFERENT strategies/modes at once (a
     # standard/swing position still open while the portfolio-wide switch has
@@ -3062,6 +3076,7 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 50) -> tuple[list[s
 def _default_momentum_analyzer(
     chain_by_contract: dict[str, str], weekly_context: dict | None = None,
     current_regime: str | None = None, *, relaxed: bool = False, mode: str = "standard",
+    waive_holder_concentration: bool = False,
 ):
     """Closes over the contract->chain table built at sourcing time (#194) --
     keeps the historical ``analyzer(contract)`` signature unchanged, no
@@ -3079,6 +3094,12 @@ def _default_momentum_analyzer(
     ``evaluate_momentum_entry`` -- ``"standard"`` (default, unchanged) or
     ``"scalping"`` (resolved ONCE per cycle by the caller via
     ``get_trading_mode()``, a portfolio-wide switch, never per-candidate).
+
+    ``waive_holder_concentration`` (03/08, real bug found live: KAITO churned
+    16 pending orders in a single day, "regarde kaito"): forwarded as-is to
+    ``evaluate_momentum_entry`` -- only the "megacap" pocket sets this
+    (hand-curated established-token watchlist, structurally fails the
+    insider-concentration heuristic on legitimate CEX/treasury EOA holders).
 
     24/07, bonding-entry chantier: a contract tagged ``bonding_entry.
     CHAIN_MARKER`` in ``chain_by_contract`` is routed to
@@ -3107,7 +3128,7 @@ def _default_momentum_analyzer(
             )
         result = await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
-            relaxed=relaxed, mode=mode,
+            relaxed=relaxed, mode=mode, waive_holder_concentration=waive_holder_concentration,
         )
         momentum_timing.record_evaluation(contract, chain, result.get("action") if result else None)
         return result
@@ -3311,7 +3332,7 @@ def vc_pocket_sourcing_enabled() -> bool:
 
 
 def fixed_watchlist_pocket_enabled() -> bool:
-    """02/08 -- the "megacap" pocket (fixed_watchlist.py, 10 established
+    """02/08 -- the "megacap" pocket (fixed_watchlist.py, 8 established
     tokens, mcap>=100M$) -- an ADDITIVE A/B comparison arm against the 6
     scan-large scalping pockets, never a replacement for them (operator's
     explicit call after a workflow-audited finding that a full substitution
@@ -4870,6 +4891,30 @@ async def _run_paper_cycle_locked(
                 continue
 
             if not price or price <= 0:
+                # 03/08 -- real bug found live (operator: "il y a un beug sur
+                # l'équité, il y a juste une centaine de perte pas autant"):
+                # RAGE (position 99, wallet swing) lost its DexScreener pool
+                # entirely (pairs: null -- illiquid/rugged, not a transient
+                # API hiccup) so `price` stayed None every cycle. This bare
+                # `continue` dropped the position from `tracked` outright --
+                # its $50,000 cost is already deducted from cash (see
+                # cash_available's own formula) but its value never got
+                # added back via `open_value`, silently under-reporting
+                # combined equity by its full cost basis. Still `continue`s
+                # right after (trailing stop / profit-taking genuinely can't
+                # run without a real price), but the position is now recorded
+                # with its entry price as a mark-to-last-known approximation
+                # (never a fabricated P&L -- see ``price_unavailable`` in
+                # ``_format_tracked_position_line``, which suppresses the
+                # +0.0% line a naive fallback would otherwise show) so the
+                # capital stays visible in both the alert and the equity sum
+                # instead of vanishing.
+                tracked.append({
+                    "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
+                    "qty": p["qty"], "cost_usd": p["cost_usd"], "price": p["entry_price"],
+                    "chain": p.get("chain") or "base", "mode": p.get("mode"), "strategy": p.get("strategy"),
+                    "opened_at": p.get("opened_at"), "wallet": p.get("wallet"), "price_unavailable": True,
+                })
                 continue
 
             # #197 -- provisional: removed below if the position closes
@@ -5779,7 +5824,7 @@ async def _run_paper_cycle_locked(
             weekly_context=weekly_context, current_regime=current_regime,
         )
 
-        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established
+        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 8 established
         # tokens): built unconditionally, same pattern as vc_candidates/
         # vc_analyzer just above -- build_scalping_pocket_entries() is
         # structurally scalping-only (every entry it returns hardcodes
@@ -5797,6 +5842,7 @@ async def _run_paper_cycle_locked(
         megacap_analyzer = _default_momentum_analyzer(
             megacap_chain_by_contract, weekly_context=weekly_context,
             current_regime=current_regime, mode="standard",
+            waive_holder_concentration=True,
         )
 
         # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)

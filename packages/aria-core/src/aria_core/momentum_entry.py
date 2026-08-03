@@ -3222,6 +3222,7 @@ async def refresh_dex_composite_score(contract: str, chain: str):
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
+    waive_holder_concentration: bool = False,
 ) -> dict | None:
     """Momentum entry decision (#194) for ``contract`` on ``chain``.
 
@@ -3502,8 +3503,18 @@ async def evaluate_momentum_entry(
     # setup is confirmed to exist, never before. VC-thesis path (unified_entry.py)
     # is unaffected: it never sets defer_holder_concentration, so it still gets
     # this guardrail at its original place inside evaluate_hard_gates.
-    too_concentrated, concentration_reason = await _check_holder_concentration(
-        contract, chain, best.pair_address,
+    #
+    # 03/08 -- ``waive_holder_concentration`` (real bug found live, operator:
+    # "regarde kaito"): the "megacap" pocket (fixed_watchlist.py, a HAND-
+    # CURATED list of already-established tokens) structurally fails this
+    # check -- real Blockscout data on KAITO shows its top 2 EOA holders alone
+    # hold ~55% of supply (CEX/treasury wallets, not memecoin insiders), and
+    # the check's "verified contract" exemption never covers a plain EOA.
+    # Same waiver applied at the limit-order re-checks, see
+    # ``limit_orders._reanalyze_holder_concentration``'s own docstring.
+    too_concentrated, concentration_reason = (
+        (False, "") if waive_holder_concentration
+        else await _check_holder_concentration(contract, chain, best.pair_address)
     )
     if too_concentrated:
         from aria_core import momentum_rejection_cache

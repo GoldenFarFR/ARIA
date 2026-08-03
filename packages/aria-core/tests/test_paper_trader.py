@@ -5250,7 +5250,7 @@ async def test_daily_floor_opens_small_tagged_trades_when_behind(tmp_db, monkeyp
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         assert relaxed is True  # the floor must always evaluate in relaxed mode
         return _floor_buy_sig(symbol=contract[:4])
 
@@ -5298,7 +5298,7 @@ async def test_daily_floor_feeds_a_real_pacing_context_to_the_analyzer(tmp_db, m
 
     captured = {}
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         captured["weekly_context"] = weekly_context
         return _floor_buy_sig(symbol=contract[:4])
 
@@ -5335,7 +5335,7 @@ async def test_daily_floor_forwards_the_portfolio_wide_trading_mode(tmp_db, monk
 
     captured = {}
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         captured["mode"] = mode
         return _floor_buy_sig(symbol=contract[:4])
 
@@ -5398,7 +5398,7 @@ async def test_daily_floor_never_crashes_on_candidate_already_open_in_another_po
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         return _floor_buy_sig(symbol=contract[:4])
 
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
@@ -5577,7 +5577,7 @@ async def test_default_momentum_analyzer_routes_bonding_chain_to_bonding_entry(m
         bonding_called_with["contract"] = contract
         return {"action": "HOLD", "chain": CHAIN_MARKER, "hold_reason": "test"}
 
-    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         momentum_called_with["contract"] = contract
         momentum_called_with["chain"] = chain
         return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
@@ -5838,7 +5838,7 @@ async def test_default_momentum_analyzer_records_verdict_for_cross_path_dedup(mo
 
     momentum_timing._recent_evaluations.clear()
 
-    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
 
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_momentum_eval)
@@ -5858,7 +5858,7 @@ async def test_default_momentum_analyzer_records_none_verdict_without_crashing(m
 
     momentum_timing._recent_evaluations.clear()
 
-    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def fake_momentum_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         return None
 
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_momentum_eval)
@@ -6979,7 +6979,7 @@ async def test_multi_pocket_gate_off_default_sourcing_matches_pre_chantier_behav
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
@@ -7019,7 +7019,7 @@ async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
     async def _fake_momentum_eval(
-        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False,
     ):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
@@ -7085,7 +7085,7 @@ async def test_scalping_only_sourcing_skips_swing_and_vc_new_entries(tmp_db, mon
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
     async def _fake_momentum_eval(
-        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False,
     ):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
@@ -7159,7 +7159,7 @@ async def test_vc_pocket_sourcing_gate_off_skips_vc_but_not_swing(tmp_db, monkey
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
     async def _fake_momentum_eval(
-        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard",
+        contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False,
     ):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
@@ -7406,7 +7406,7 @@ async def test_scalping_variants_enabled_replaces_scalping_pocket_with_six(tmp_d
     # so it needs its own fake too. swing/vc go through this SAME function
     # (mode="standard") -- gated on mode here so this scalping-only test
     # doesn't accidentally also open a swing/vc position via the same mock.
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         if mode != "scalping":
             return {"action": "HOLD", "chain": chain, "symbol": "DDD", "price": 1.0, "hold_reason": "test_stub"}
         return {
@@ -7495,7 +7495,7 @@ async def test_build_scalping_pocket_entries_v6_uses_legacy_analyzer(monkeypatch
 
     captured: list[dict] = []
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         captured.append({"contract": contract, "mode": mode})
         return None
 
@@ -7522,7 +7522,7 @@ async def test_scalping_variants_disabled_keeps_classic_single_scalping_pocket(t
 
     monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
 
-    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard"):
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False):
         return {
             "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,

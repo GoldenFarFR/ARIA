@@ -754,6 +754,13 @@ def _rsi_watch_order(**overrides):
     sig = {
         "limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19,
         "last_candle_ts": 5 * 3600,
+        # 03/08 -- real bug fix (granularity-mismatch realignment, see
+        # ``check_rsi_divergence_watching_order``'s own comment): every
+        # existing test here exercises the STEADY-STATE watch behavior
+        # (trigger/expire/wait), already past the one-time realignment --
+        # ``test_check_rsi_divergence_watching_realigns_candle_ts_on_first_check``
+        # is the one test that explicitly omits this to cover that first pass.
+        "watch_candle_ts_aligned": True,
     }
     sig.update(overrides.pop("sig_overrides", {}))
     base = {"contract": "0xCHECK", "chain": "base", "target_price": 1.5, "signal_json": json.dumps(sig)}
@@ -1225,6 +1232,36 @@ async def test_check_rsi_divergence_watching_expires_past_candle_horizon(monkeyp
 
     order, sig = _rsi_watch_order()
     assert await lo.check_rsi_divergence_watching_order(order, sig) == "expire"
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_realigns_candle_ts_on_first_check(monkeypatch):
+    """03/08 -- real bug found live ("jai limpression que dautre token le
+    font aussi dans megacap"): a fresh order's ``last_candle_ts`` comes from
+    the STANDARD-mode signal that created it (day/4h/1h candles), but this
+    function always refetches FINE candles (``watch_mode``) -- comparing
+    them without realigning first made ~55 fine candles already "new" on the
+    very first real check, expiring instantly regardless of real elapsed
+    time. The first check (no ``watch_candle_ts_aligned`` yet) must instead
+    realign silently and return "wait", never "expire" -- even though the
+    raw candle count here (25, same fixture as the expiry test above) would
+    otherwise blow well past the 20-candle horizon."""
+    from aria_core import momentum_entry
+    from aria_core.skills.ta_levels import Candle
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        return [Candle(ts=(6 + i) * 3600, open=1, high=1, low=1, close=1) for i in range(25)]
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+
+    order, sig = _rsi_watch_order(id=1, sig_overrides={"watch_candle_ts_aligned": False})
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+    assert sig["watch_candle_ts_aligned"] is True
+    assert sig["last_candle_ts"] == 30 * 3600  # candles[-1].ts, the fine-grained resolution's own last tick
 
 
 @pytest.mark.asyncio

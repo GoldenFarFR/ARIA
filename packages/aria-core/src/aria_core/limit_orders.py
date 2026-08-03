@@ -429,6 +429,35 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     if not candles:
         return "wait"
 
+    # 03/08 -- real bug found live (operator: "jai limpression que dautre
+    # token le font aussi dans megacap" -- confirmed empirically: LINK/WETH/
+    # cbBTC/cbETH churned a fresh order every ~15 minutes, dozens of times/
+    # day, across swing AND megacap, never a real trigger). Root cause: the
+    # golden-pocket signal that CREATED this order was detected on the
+    # standard-mode ladder (day/4h/1h, ``last_candle_ts`` set from THAT
+    # granularity -- see ``_rsi_divergence_watch_candidate``'s own comment on
+    # why it can be ~20 DAYS wide), but the watch phase above always refetches
+    # fine-grained 15-30min candles (``watch_mode``, operator decision 31/07).
+    # Counting "new candles since last_candle_ts" against a timestamp from a
+    # coarser resolution is comparing apples to oranges: verified live on
+    # LINK, a single 30min-candle refetch already had 55 candles past a
+    # `last_candle_ts` set from a daily close -- 2.75x past the 20-candle
+    # horizon on the VERY FIRST watch check, regardless of real elapsed time.
+    # Fixed by re-anchoring ONCE, on the first check at this (possibly new)
+    # resolution -- ``watch_candle_ts_aligned`` marks that it's already been
+    # done, so every later check counts real newly-elapsed FINE candles, the
+    # comparison the horizon was always meant to measure. Self-healing for
+    # every order already stuck in the loop (missing key on an old order ==
+    # not yet aligned), no migration needed.
+    if not sig.get("watch_candle_ts_aligned"):
+        sig["last_candle_ts"] = candles[-1].ts
+        sig["watch_candle_ts_aligned"] = True
+        try:
+            await _persist_signal_json(order["id"], sig)
+        except Exception as exc:  # noqa: BLE001 -- best-effort, retried next check if it fails
+            logger.info("limit_orders: rsi-divergence candle-ts realign failed for %s (%s)", order["contract"], exc)
+        return "wait"
+
     if last_candle_ts is not None:
         new_candles = sum(1 for c in candles if c.ts > last_candle_ts)
         if new_candles > momentum_entry.RSI_WATCH_MAX_HORIZON_CANDLES:
@@ -653,6 +682,22 @@ async def transition_to_watching(order_id: int) -> None:
     await _set_state(order_id, "watching")
 
 
+async def _persist_signal_json(order_id: int, sig: dict) -> None:
+    """03/08 -- introduced for the ``watch_candle_ts_aligned`` realignment
+    below (see ``check_rsi_divergence_watching_order``'s own comment): the
+    only mutation to an order's ``signal_json`` after creation, previously
+    unnecessary since ``sig["reasons"]`` mutations (Item #199, 29/07)
+    surface only through the in-memory dict a caller already holds, never
+    re-read from disk within the same cycle."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pending_limit_order SET signal_json = ? WHERE id = ?",
+            (json.dumps(sig), order_id),
+        )
+        await db.commit()
+
+
 async def mark_triggered(order_id: int) -> None:
     await _set_state(order_id, "triggered")
 
@@ -807,11 +852,27 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
     Copying the honeypot's fail-closed behavior onto this specific guardrail
     would be inventing a new, undiscussed behavior change; this function only
     reuses ``_check_holder_concentration`` as-is. Returns ``True`` (safe to
-    proceed) or ``False`` (>= 80% confirmed, cancel/block)."""
+    proceed) or ``False`` (>= 80% confirmed, cancel/block).
+
+    03/08 -- real bug found live (operator: "regarde kaito", 16 pending orders
+    created/cancelled for KAITO in a single day, all ``reanalysis_failed``):
+    the "megacap" pocket (``fixed_watchlist.py``, a HAND-CURATED list of
+    already-established tokens like LINK/KAITO/ICP/ENA, never a raw scanned
+    candidate) structurally fails this guardrail. Real Blockscout data on
+    KAITO: its top 2 EOA holders alone hold ~55% of supply (almost certainly
+    CEX hot wallets / treasury, not memecoin insiders) -- this check's
+    "verified contract" exemption only covers a multisig/staking CONTRACT,
+    never an EOA, so a legitimately concentrated established token can never
+    pass it. Waived for ``wallet == "megacap"`` only -- every other guardrail
+    in this pipeline (honeypot, blacklist, liquidity floor) still applies
+    unchanged, this concentration check alone is the mismatched one for an
+    already hand-vetted watchlist of established tokens."""
     from aria_core import momentum_entry
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
+        return True
+    if order.get("wallet") == "megacap":
         return True
 
     try:
