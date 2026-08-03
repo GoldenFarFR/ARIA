@@ -88,6 +88,10 @@ class TwitterApiIoTweet:
     reply_count: int
     retweet_count: int
     quote_count: int
+    # 03/08 -- added for token_cashtag_engagement.py (needs to search tweet
+    # bodies for a token's own symbol). Additive field, default "" so every
+    # existing caller (x_substance.py) is unaffected.
+    text: str = ""
 
 
 def is_twitterapi_io_configured() -> bool:
@@ -231,6 +235,7 @@ async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[Twi
                 reply_count=int(item.get("replyCount") or 0),
                 retweet_count=int(item.get("retweetCount") or 0),
                 quote_count=int(item.get("quoteCount") or 0),
+                text=str(item.get("text") or ""),
             )
         )
     return tweets or None

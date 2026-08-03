@@ -745,6 +745,89 @@ async def get_token_early_buyers(
 
 
 # ---------------------------------------------------------------------------
+# 03/08 -- "sell concentration vs spread" (real due-diligence session, C-MEM
+# case: a token's price falling off a peak can mean a distributed community
+# taking profit -- healthy -- or one whale dumping -- a red flag. Neither
+# insider_wallets.py (initial distribution recipients only) nor
+# sybil_cluster.py (holder count, not sell activity) answers this: it needs
+# who actually SOLD, and how concentrated that selling was, on the token's
+# `dex.trades` SELL side (`token_sold_address`, the mirror of
+# `token_bought_address` used by the early-buyers query above).
+SELL_DISTRIBUTION_QUERY_TEMPLATE = """
+SELECT taker AS wallet_address, SUM(amount_usd) AS total_sold_usd
+FROM dex.trades
+WHERE blockchain = '{blockchain}'
+  AND token_sold_address = {token_address}
+  AND block_time >= NOW() - INTERVAL '{lookback_days}' day
+GROUP BY taker
+ORDER BY total_sold_usd DESC
+LIMIT {limit}
+"""
+
+
+def build_sell_distribution_query(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 100,
+) -> str:
+    """Builds the query for the largest sellers (by USD sold) of ONE specific
+    token over the lookback window. Same validation/bare-hex-literal doctrine
+    as ``build_token_early_buyers_query`` (external contract input, real
+    anti-injection check required)."""
+    if not contract or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, contract):
+        raise ValueError(f"invalid EVM contract address: {contract!r}")
+    if not blockchain or not re.fullmatch(r"[a-z0-9_-]+", blockchain):
+        raise ValueError("invalid blockchain")
+    if not isinstance(lookback_days, int) or lookback_days <= 0:
+        raise ValueError("lookback_days must be a positive integer")
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+
+    return SELL_DISTRIBUTION_QUERY_TEMPLATE.format(
+        blockchain=blockchain, token_address=contract.lower(), lookback_days=lookback_days, limit=limit,
+    )
+
+
+@dataclass
+class SellerRecord:
+    address: str
+    total_sold_usd: float
+
+
+@dataclass
+class SellDistributionResult:
+    sellers: list[SellerRecord] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_token_sell_distribution(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 100,
+    performance: str = "small",
+) -> SellDistributionResult:
+    """Largest sellers (by USD sold) of a specific token, sorted highest to
+    lowest -- same dome doctrine as the rest of this module: without a key,
+    invalid address, or failure at any step -> ``available=False``, never an
+    exception, never a fabricated seller."""
+    try:
+        sql = build_sell_distribution_query(
+            contract, blockchain=blockchain, lookback_days=lookback_days, limit=limit,
+        )
+    except ValueError as exc:
+        return SellDistributionResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return SellDistributionResult(available=False, error=exec_result.error)
+
+    sellers = [
+        SellerRecord(address=row["wallet_address"], total_sold_usd=float(row["total_sold_usd"]))
+        for row in exec_result.rows
+        if isinstance(row.get("wallet_address"), str) and row["wallet_address"]
+        and row.get("total_sold_usd") is not None
+    ]
+    return SellDistributionResult(sellers=sellers, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
 # 22/07 -- "disguised liquidity exit" (picked up from stress-test Part 11 --
 # a proposal evaluated hypothetically, never coded before this day).
 # Objective: spot wallets that received a DIRECT distribution from the

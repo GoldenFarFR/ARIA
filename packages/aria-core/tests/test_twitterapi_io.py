@@ -219,6 +219,44 @@ async def test_last_tweets_success_real_shape(_fresh):
 
 
 @pytest.mark.asyncio
+async def test_last_tweets_parses_text_field(_fresh):
+    """03/08 -- ``text`` added for token_cashtag_engagement.py."""
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success",
+            "tweets": [
+                {
+                    "createdAt": "2026-07-21T17:12:03.000000Z",
+                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                    "text": "Big news for $CMEM today!",
+                },
+            ],
+        },
+    )
+    tweets = await tw.fetch_last_tweets("crynuxio")
+    assert tweets[0].text == "Big news for $CMEM today!"
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_missing_text_field_defaults_to_empty(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success",
+            "tweets": [
+                {
+                    "createdAt": "2026-07-21T17:12:03.000000Z",
+                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                },
+            ],
+        },
+    )
+    tweets = await tw.fetch_last_tweets("crynuxio")
+    assert tweets[0].text == ""
+
+
+@pytest.mark.asyncio
 async def test_last_tweets_respects_max_results(_fresh):
     _FakeAsyncClient._response = _FakeResponse(
         200,

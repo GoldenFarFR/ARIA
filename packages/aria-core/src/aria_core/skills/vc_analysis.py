@@ -229,6 +229,8 @@ def _build_untrusted_context(
     website_substance: "WebsiteSubstanceVerdict | None" = None,
     docs_substance: "DocsSubstanceVerdict | None" = None,
     x_substance: "XSubstanceVerdict | None" = None,
+    sell_distribution: "SellDistributionVerdict | None" = None,
+    token_cashtag_engagement: "TokenCashtagEngagementVerdict | None" = None,
 ) -> str:
     """Assembles the factual block (untrusted data) from facts already collected.
 
@@ -464,6 +466,16 @@ def _build_untrusted_context(
     if x_substance and x_substance.signal:
         lines.append(f"Substance X (âge du compte, signal réduit) : {_sanitize(x_substance.signal, 20)}")
         for pt in x_substance.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if sell_distribution and sell_distribution.signal:
+        lines.append(f"Distribution de vente (concentrée vs étalée) : {_sanitize(sell_distribution.signal, 20)}")
+        for pt in sell_distribution.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if token_cashtag_engagement and token_cashtag_engagement.signal:
+        lines.append(
+            f"Engagement récent sur LE TOKEN (pas le produit) : {_sanitize(token_cashtag_engagement.signal, 20)}"
+        )
+        for pt in token_cashtag_engagement.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
     # Legitimacy context (JUDGED flags, not raw): mint authority, launchpad,
     # liquidity depth, dev wallet behavior.
@@ -1105,6 +1117,12 @@ _GITHUB_SUBSTANCE_TTL_DAYS = 7.0
 _X_SUBSTANCE_TTL_DAYS = 7.0
 _WEBSITE_SUBSTANCE_TTL_DAYS = 15.0
 _DOCS_SUBSTANCE_TTL_DAYS = 15.0
+# 03/08 -- sell distribution (Dune, paid query) and token-cashtag engagement
+# (TwitterAPI.io) move faster than Website/Docs but not as fast as a
+# honeypot check -- short enough to catch a real change of state within a
+# day, long enough to avoid re-paying for a Dune query on every scan.
+_SELL_DISTRIBUTION_TTL_DAYS = 1.0
+_TOKEN_CASHTAG_ENGAGEMENT_TTL_DAYS = 1.0
 
 
 async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerdict | None":
@@ -1260,6 +1278,75 @@ async def _fetch_x_substance(ctx: TokenScanContext) -> "XSubstanceVerdict | None
         return None
 
 
+async def _fetch_sell_distribution(ctx: TokenScanContext) -> "SellDistributionVerdict | None":
+    """03/08 -- "sell concentration vs spread" (C-MEM case: a real due-diligence
+    session showed a token's price falling off a peak can mean a distributed
+    community taking profit, or one whale dumping -- identical from
+    mcap/liquidity alone). Reuses `ctx.contract`, no project link needed."""
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.sell_distribution import (
+        SellDistributionFacts, gather_sell_distribution_facts, judge_sell_distribution,
+    )
+
+    try:
+        cached = await external_signal_cache.get_cached(
+            "sell_distribution", ctx.contract, ttl_days=_SELL_DISTRIBUTION_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_sell_distribution(SellDistributionFacts(**cached))
+        facts = await gather_sell_distribution_facts(ctx.contract)
+        if facts.available:
+            await external_signal_cache.store("sell_distribution", ctx.contract, dataclasses.asdict(facts))
+        return judge_sell_distribution(facts)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: sell distribution failed (%s)", exc)
+        return None
+
+
+async def _fetch_token_cashtag_engagement(ctx: TokenScanContext) -> "TokenCashtagEngagementVerdict | None":
+    """03/08 -- "token cashtag engagement" (C-MEM case: a credible dev plus a
+    credible product said NOTHING about whether the account was still
+    talking about the TOKEN specifically -- the last mention of its cashtag
+    was 2.5 months old). Reuses the same X-handle extraction as
+    `_fetch_x_substance` (never duplicated) and `ctx.best_pair.base_symbol`
+    for the token's own symbol. None if no X link declared or symbol unknown."""
+    import dataclasses
+
+    from aria_core.conviction_research import _extract_x_handle
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.token_cashtag_engagement import (
+        TokenCashtagEngagementFacts, gather_token_cashtag_engagement_facts, judge_token_cashtag_engagement,
+    )
+
+    links = ctx.best_pair.project_links if ctx.best_pair else []
+    handle = None
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        handle = _extract_x_handle(str(link.get("url") or ""))
+        if handle:
+            break
+    symbol = ctx.best_pair.base_symbol if ctx.best_pair else None
+    if not handle or not symbol:
+        return None
+    cache_key = f"{handle.lower()}:{symbol.lower()}"
+    try:
+        cached = await external_signal_cache.get_cached(
+            "token_cashtag_engagement", cache_key, ttl_days=_TOKEN_CASHTAG_ENGAGEMENT_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_token_cashtag_engagement(TokenCashtagEngagementFacts(**cached))
+        facts = await gather_token_cashtag_engagement_facts(handle, symbol)
+        if facts.available:
+            await external_signal_cache.store("token_cashtag_engagement", cache_key, dataclasses.asdict(facts))
+        return judge_token_cashtag_engagement(facts)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: token cashtag engagement failed (%s)", exc)
+        return None
+
+
 async def analyze_vc_with_context(
     contract: str, lang: str = "fr"
 ) -> tuple[VCResult, TokenScanContext]:
@@ -1314,10 +1401,13 @@ async def analyze_vc_with_context(
     website_substance = await _fetch_website_substance(ctx)
     docs_substance = await _fetch_docs_substance(ctx)
     x_substance = await _fetch_x_substance(ctx)
+    sell_distribution = await _fetch_sell_distribution(ctx)
+    token_cashtag_engagement = await _fetch_token_cashtag_engagement(ctx)
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
         market_alerts_digest, conviction_research, github_substance,
         website_substance, docs_substance, x_substance,
+        sell_distribution, token_cashtag_engagement,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"

@@ -1459,6 +1459,95 @@ async def test_fetch_x_substance_degrades_to_none_on_error(monkeypatch):
     assert await vc._fetch_x_substance(ctx) is None
 
 
+# ── _fetch_sell_distribution / _fetch_token_cashtag_engagement (03/08, cas C-MEM) ──
+
+
+@pytest.mark.asyncio
+async def test_fetch_sell_distribution_uses_contract_directly(monkeypatch):
+    ctx = _base_ctx()
+
+    from aria_core.skills.sell_distribution import SellDistributionFacts, SellDistributionVerdict
+
+    async def _fake_gather(contract, **kwargs):
+        assert contract == ADDR
+        return SellDistributionFacts(available=False)  # available=False -> cache store skippé
+
+    monkeypatch.setattr("aria_core.skills.sell_distribution.gather_sell_distribution_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.sell_distribution.judge_sell_distribution",
+        lambda facts: SellDistributionVerdict(signal="concern", points=["ok"]),
+    )
+
+    result = await vc._fetch_sell_distribution(ctx)
+    assert result.signal == "concern"
+
+
+@pytest.mark.asyncio
+async def test_fetch_sell_distribution_degrades_to_none_on_error(monkeypatch):
+    ctx = _base_ctx()
+
+    async def _boom(*a, **k):
+        raise RuntimeError("panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.sell_distribution.gather_sell_distribution_facts", _boom)
+    assert await vc._fetch_sell_distribution(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_uses_handle_and_symbol(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    from aria_core.skills.token_cashtag_engagement import (
+        TokenCashtagEngagementFacts, TokenCashtagEngagementVerdict,
+    )
+
+    async def _fake_gather(handle, symbol, **kwargs):
+        assert handle == "acmeproject"
+        assert symbol == "TOK"
+        return TokenCashtagEngagementFacts(available=False)  # cache store skippé
+
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.gather_token_cashtag_engagement_facts", _fake_gather,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.judge_token_cashtag_engagement",
+        lambda facts: TokenCashtagEngagementVerdict(signal="concern", points=["ok"]),
+    )
+
+    result = await vc._fetch_token_cashtag_engagement(ctx)
+    assert result.signal == "concern"
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_none_when_no_x_link():
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "Website", "url": "https://myproject.xyz"}]
+    assert await vc._fetch_token_cashtag_engagement(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_none_when_no_symbol(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+    ctx.best_pair.base_symbol = ""
+    assert await vc._fetch_token_cashtag_engagement(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_degrades_to_none_on_error(monkeypatch):
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    async def _boom(*a, **k):
+        raise RuntimeError("panne réseau")
+
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.gather_token_cashtag_engagement_facts", _boom,
+    )
+    assert await vc._fetch_token_cashtag_engagement(ctx) is None
+
+
 # ── Item #40 : cache persisté (external_signal_cache) devant les 4 fetch ────
 
 
@@ -1591,6 +1680,137 @@ def test_website_docs_x_substance_absent_when_none():
     assert "Substance Website" not in text
     assert "Substance Docs" not in text
     assert "Substance X" not in text
+
+
+def test_sell_distribution_and_token_cashtag_engagement_appear_in_untrusted_context():
+    from aria_core.skills.sell_distribution import SellDistributionVerdict
+    from aria_core.skills.token_cashtag_engagement import TokenCashtagEngagementVerdict
+
+    ctx = _base_ctx()
+    text = vc._build_untrusted_context(
+        ctx, [],
+        sell_distribution=SellDistributionVerdict(signal="concern", points=["vente concentrée sur 1 wallet"]),
+        token_cashtag_engagement=TokenCashtagEngagementVerdict(
+            signal="concern", points=["silence de 75 jours sur le token"],
+        ),
+    )
+
+    assert "Distribution de vente" in text and "vente concentrée sur 1 wallet" in text
+    assert "Engagement récent sur LE TOKEN" in text and "silence de 75 jours sur le token" in text
+
+
+def test_sell_distribution_and_token_cashtag_engagement_absent_when_none():
+    ctx = _base_ctx()
+    text = vc._build_untrusted_context(ctx, [])
+    assert "Distribution de vente" not in text
+    assert "Engagement récent sur LE TOKEN" not in text
+
+
+# ── cache persisté pour sell_distribution / token_cashtag_engagement (03/08) ──
+
+
+@pytest.mark.asyncio
+async def test_fetch_sell_distribution_stores_in_cache_on_fresh_available_scan(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.sell_distribution import SellDistributionFacts, SellDistributionVerdict
+
+    ctx = _base_ctx()
+
+    async def _fake_gather(contract, **kwargs):
+        return SellDistributionFacts(available=True, sellers_examined=10, top_seller_share=0.1)
+
+    monkeypatch.setattr("aria_core.skills.sell_distribution.gather_sell_distribution_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.sell_distribution.judge_sell_distribution",
+        lambda facts: SellDistributionVerdict(signal="neutral", points=["ok"]),
+    )
+
+    await vc._fetch_sell_distribution(ctx)
+
+    cached = await external_signal_cache.get_cached("sell_distribution", ADDR, ttl_days=1.0)
+    assert cached is not None
+    assert cached["sellers_examined"] == 10
+
+
+@pytest.mark.asyncio
+async def test_fetch_sell_distribution_never_stores_unavailable_result(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.sell_distribution import SellDistributionFacts, SellDistributionVerdict
+
+    ctx = _base_ctx()
+
+    async def _fake_gather(contract, **kwargs):
+        return SellDistributionFacts(available=False, error="panne réseau")
+
+    monkeypatch.setattr("aria_core.skills.sell_distribution.gather_sell_distribution_facts", _fake_gather)
+    monkeypatch.setattr(
+        "aria_core.skills.sell_distribution.judge_sell_distribution",
+        lambda facts: SellDistributionVerdict(signal="unknown", points=[]),
+    )
+
+    await vc._fetch_sell_distribution(ctx)
+
+    cached = await external_signal_cache.get_cached("sell_distribution", ADDR, ttl_days=1.0)
+    assert cached is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_stores_in_cache_keyed_by_handle_and_symbol(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.token_cashtag_engagement import (
+        TokenCashtagEngagementFacts, TokenCashtagEngagementVerdict,
+    )
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    async def _fake_gather(handle, symbol, **kwargs):
+        return TokenCashtagEngagementFacts(available=True, tweets_scanned=20, days_since_last_mention=5)
+
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.gather_token_cashtag_engagement_facts", _fake_gather,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.judge_token_cashtag_engagement",
+        lambda facts: TokenCashtagEngagementVerdict(signal="positive", points=["ok"]),
+    )
+
+    await vc._fetch_token_cashtag_engagement(ctx)
+
+    cached = await external_signal_cache.get_cached(
+        "token_cashtag_engagement", "acmeproject:tok", ttl_days=1.0,
+    )
+    assert cached is not None
+    assert cached["days_since_last_mention"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_cashtag_engagement_never_stores_unavailable_result(monkeypatch):
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.token_cashtag_engagement import (
+        TokenCashtagEngagementFacts, TokenCashtagEngagementVerdict,
+    )
+
+    ctx = _base_ctx()
+    ctx.best_pair.project_links = [{"label": "X (Twitter)", "url": "https://x.com/acmeproject"}]
+
+    async def _fake_gather(handle, symbol, **kwargs):
+        return TokenCashtagEngagementFacts(available=False, error="panne réseau")
+
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.gather_token_cashtag_engagement_facts", _fake_gather,
+    )
+    monkeypatch.setattr(
+        "aria_core.skills.token_cashtag_engagement.judge_token_cashtag_engagement",
+        lambda facts: TokenCashtagEngagementVerdict(signal="unknown", points=[]),
+    )
+
+    await vc._fetch_token_cashtag_engagement(ctx)
+
+    cached = await external_signal_cache.get_cached(
+        "token_cashtag_engagement", "acmeproject:tok", ttl_days=1.0,
+    )
+    assert cached is None
 
 
 # ── Diligence produit Virtuals (fiche virtuals.io, audit 11/07) ────────────────

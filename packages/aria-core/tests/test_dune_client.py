@@ -759,6 +759,135 @@ class TestGetTokenEarlyBuyers:
         assert result.error
 
 
+class TestBuildSellDistributionQuery:
+    def test_substitutes_contract_lowercased(self):
+        checksummed = "0x" + WETH_BASE[2:].upper()
+        sql = dune.build_sell_distribution_query(checksummed, blockchain="base")
+        assert WETH_BASE in sql
+        assert "blockchain = 'base'" in sql
+
+    def test_token_address_emitted_as_bare_hex_literal_not_quoted(self):
+        """Même doctrine que ``token_bought_address`` -- ``token_sold_address``
+        est aussi ``varbinary`` dans ``dex.trades``, jamais entre guillemets."""
+        sql = dune.build_sell_distribution_query(WETH_BASE)
+        assert f"token_sold_address = {WETH_BASE}" in sql
+        assert f"token_sold_address = '{WETH_BASE}'" not in sql
+
+    def test_rejects_malformed_contract(self):
+        with pytest.raises(ValueError):
+            dune.build_sell_distribution_query("not-an-address")
+
+    def test_rejects_invalid_blockchain(self):
+        with pytest.raises(ValueError):
+            dune.build_sell_distribution_query(WETH_BASE, blockchain="base; DROP TABLE x")
+
+    def test_rejects_non_positive_lookback_days(self):
+        with pytest.raises(ValueError):
+            dune.build_sell_distribution_query(WETH_BASE, lookback_days=0)
+
+    def test_rejects_non_positive_limit(self):
+        with pytest.raises(ValueError):
+            dune.build_sell_distribution_query(WETH_BASE, limit=0)
+
+
+class TestGetTokenSellDistribution:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_token_sell_distribution(WETH_BASE)
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_contract_unavailable_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_token_sell_distribution("not-an-address")
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_sellers_sorted(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"wallet_address": FUNDER, "total_sold_usd": 400.0},
+                                {"wallet_address": WETH_BASE, "total_sold_usd": 100.0},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_token_sell_distribution(WETH_BASE, limit=5)
+
+        assert result.available is True
+        assert [s.address for s in result.sellers] == [FUNDER, WETH_BASE]
+        assert result.sellers[0].total_sold_usd == pytest.approx(400.0)
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"wallet_address": ""},
+                                {"no_wallet_field": True},
+                                {"wallet_address": FUNDER, "total_sold_usd": None},
+                                {"wallet_address": WETH_BASE, "total_sold_usd": 50.0},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_token_sell_distribution(WETH_BASE)
+
+        assert result.available is True
+        assert [s.address for s in result.sellers] == [WETH_BASE]
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_token_sell_distribution(WETH_BASE)
+
+        assert result.available is False
+        assert result.error
+
+
 DEPLOYER = "0x1b4f6290434821211d8313aa19317449f80bbd89"
 
 
