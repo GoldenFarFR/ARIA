@@ -1,6 +1,6 @@
 """Plafond de dépense x402 -- 5$/semaine, décision opérateur explicite (16/07).
-Vérifie le plafond dur, l'absence de throttle artificiel, et la remise à zéro
-hebdomadaire calendaire."""
+Vérifie le plafond dur, l'absence de throttle artificiel, et la fenêtre
+glissante de 7 jours (calendaire jusqu'au 03/08, voir week_start's docstring)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -84,7 +84,12 @@ async def test_no_artificial_daily_throttle_below_cap():
 
 
 @pytest.mark.asyncio
-async def test_weekly_reset_on_new_calendar_week():
+async def test_weekly_reset_on_rolling_window():
+    """03/08 -- renamed from test_weekly_reset_on_new_calendar_week: the
+    window is now rolling (now - 7 days), not a calendar week. Unaffected
+    by the change -- a spend 8 days old falls outside a 7-day window either
+    way, this test still proves the same thing (an old spend no longer
+    counts)."""
     last_week = datetime.now(timezone.utc) - timedelta(days=8)
     await budget.record_spend(resource="old", amount_usd=5.0, status="ok")
     # Force l'horodatage de la ligne insérée dans le passé (semaine précédente).
@@ -153,3 +158,90 @@ async def test_record_spend_contract_defaults_empty_no_regression():
     rows = await budget.list_spends()
     assert rows[0]["contract"] == ""
     assert rows[0]["token_symbol"] == ""
+
+
+# ── try_reserve/settle (03/08, atomic reserve-then-settle replacing the old
+# can_spend/record_spend check-then-act pair for concurrent-safe callers) ────
+
+@pytest.mark.asyncio
+async def test_try_reserve_returns_id_and_counts_against_budget_before_settle():
+    reservation_id = await budget.try_reserve(1.0, resource="r", provider="p")
+    assert reservation_id is not None
+    status = await budget.weekly_status()
+    assert status["spent_usd"] == pytest.approx(1.0)
+    assert status["remaining_usd"] == pytest.approx(4.0)
+
+
+@pytest.mark.asyncio
+async def test_try_reserve_refuses_over_cap():
+    reservation_id = await budget.try_reserve(5.01, resource="r", provider="p")
+    assert reservation_id is None
+    status = await budget.weekly_status()
+    assert status["spent_usd"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_try_reserve_refuses_non_positive_amount():
+    assert await budget.try_reserve(0.0, resource="r", provider="p") is None
+    assert await budget.try_reserve(-1.0, resource="r", provider="p") is None
+
+
+@pytest.mark.asyncio
+async def test_settle_ok_persists_final_status_and_pay_to():
+    reservation_id = await budget.try_reserve(1.0, resource="r", provider="p")
+    await budget.settle(reservation_id, status="ok", pay_to="0xrecipient")
+    rows = await budget.list_spends()
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["pay_to"] == "0xrecipient"
+
+
+@pytest.mark.asyncio
+async def test_settle_failed_releases_the_reservation_but_stays_traced():
+    """A 'failed' settlement releases the reserved budget (no money actually
+    moved) -- same doctrine as record_spend's own 'failed' status never
+    counting against the cap -- but the attempt stays traced, never a
+    silently deleted row."""
+    reservation_id = await budget.try_reserve(1.0, resource="r", provider="p")
+    await budget.settle(reservation_id, status="failed", reason="solde insuffisant")
+    status = await budget.weekly_status()
+    assert status["spent_usd"] == 0.0
+    assert status["remaining_usd"] == 5.0
+    rows = await budget.list_spends()
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["reason"] == "solde insuffisant"
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_ages_out_of_the_budget():
+    """A reservation that crashes before settle() must not freeze the
+    budget forever -- it ages out after PENDING_TIMEOUT_MINUTES."""
+    old = datetime.now(timezone.utc) - timedelta(minutes=budget.PENDING_TIMEOUT_MINUTES + 1)
+    reservation_id = await budget.try_reserve(1.0, resource="r", provider="p")
+    import aiosqlite
+
+    async with aiosqlite.connect(str(budget.aria_db_path())) as db:
+        await db.execute(
+            "UPDATE x402_spend_log SET created_at = ? WHERE id = ?",
+            (old.isoformat(), reservation_id),
+        )
+        await db.commit()
+
+    status = await budget.weekly_status()
+    assert status["spent_usd"] == 0.0
+    assert status["remaining_usd"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reservations_never_both_succeed_past_the_cap():
+    """03/08 -- reproduces the real incident: two amounts each individually
+    affordable (3.0$ against a 5.0$ cap) but whose SUM exceeds it. Without
+    real atomicity (BEGIN IMMEDIATE), both could read "budget still free"
+    before either recorded its spend -- exactly what motivated this fix."""
+    import asyncio
+
+    results = await asyncio.gather(
+        budget.try_reserve(3.0, resource="race1", provider="p1"),
+        budget.try_reserve(3.0, resource="race2", provider="p2"),
+    )
+    accepted = [r for r in results if r is not None]
+    assert len(accepted) == 1
