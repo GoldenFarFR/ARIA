@@ -2464,6 +2464,8 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
+    ("off", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
+    ("on", "▶️ Reprend le paper trading après /off"),
     ("order", "Liste les ordres limite en cours (pending/watching), par poche"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
     ("polymarket", "Portefeuille papier Polymarket (équité, positions ouvertes, dernières résolutions)"),
@@ -3654,6 +3656,40 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 
+async def _handle_paper_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/off -- Item #64 (08/03): runtime pause of ALL paper-trading scanning/
+    sourcing (every pocket: scalping/swing/vc/megacap), instant, no redeploy.
+    Owner-only, same gate as /stop. Structurally distinct from /stop
+    (outgoing_pause/custody_pause, real-money-only, per Item #62's own split
+    -- this NEVER touches those, it exists purely to silence data-provider
+    load during manual debugging)."""
+    if not await _owner_only(update):
+        return
+    from aria_core import paper_pause
+
+    user = update.effective_user
+    paper_pause.pause(by=user.id if user else None, reason="Pause manuelle /off (owner)")
+    await _reply(
+        update.message,
+        "⏸ Paper trading en pause -- scan/sourcing des 4 poches (scalping/swing/vc/megacap) suspendu.\n"
+        "N'affecte ni /stop ni le capital réel (aucun lien). Envoie /on pour reprendre.",
+    )
+
+
+async def _handle_paper_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/on -- lifts the /off pause. Owner-only."""
+    if not await _owner_only(update):
+        return
+    from aria_core import paper_pause
+
+    if not paper_pause.is_paused():
+        await _reply(update.message, "▶️ Paper trading n'était pas en pause -- rien à reprendre.")
+        return
+    user = update.effective_user
+    paper_pause.resume(by=user.id if user else None)
+    await _reply(update.message, "▶️ Paper trading reprend -- scan/sourcing des 4 poches réactivé.")
+
+
 _DEFAULT_OPERATOR_MOBILE_USERNAME = "operator"
 
 
@@ -3763,6 +3799,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
+    app.add_handler(CommandHandler("off", _handle_paper_off))
+    app.add_handler(CommandHandler("on", _handle_paper_on))
     app.add_handler(CommandHandler("unlockmobile", _handle_unlock_mobile))
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))

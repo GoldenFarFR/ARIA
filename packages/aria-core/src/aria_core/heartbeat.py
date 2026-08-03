@@ -638,15 +638,28 @@ def _sync_x_curiosity_enabled() -> None:
                 # Internal $1M simulation: OFF by default. The operator starts the
                 # proof run (20 days) by setting ARIA_PAPER_TRADING_ENABLED=1 in
                 # .env (deliberate LLM cost). No real money, no outward-facing surface.
-                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on",
+                # Item #64 (08/03): also honors the runtime /off toggle
+                # (paper_pause) -- a manual debugging pause, distinct from the env
+                # var, flips instantly without a redeploy.
+                from aria_core import paper_pause
+
+                task.enabled = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
                 )
             if task.id == "momentum_discovery_cycle":
                 # 07/22 -- same gate as paper_trade_cycle: it's the same $1M test
                 # decoupled into two cycles (discovery vs monitoring), not a
                 # separate feature.
-                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on",
+                from aria_core import paper_pause
+
+                task.enabled = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
                 )
             if task.id == "paper_weekly_review_cycle":
                 # 18/07 -- meme gate que paper_trade_cycle : c'est le meme test, pas une
@@ -654,18 +667,27 @@ def _sync_x_curiosity_enabled() -> None:
                 # paper_trader.weekly_cycle_due() est faux -- cadence horaire ci-dessus,
                 # pas hebdomadaire, uniquement pour ne jamais rater le seuil de 7j de plus
                 # d'une heure.
-                task.enabled = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on",
+                from aria_core import paper_pause
+
+                task.enabled = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
                 )
             if task.id == "daily_trade_floor_cycle":
                 # 07/23 -- diagnostic floor: needs BOTH the master paper-trading
                 # gate (it only makes sense while the $1M test runs) AND its own
                 # dedicated ARIA_DAILY_TRADE_FLOOR_ENABLED (checked again inside
                 # run_daily_trade_floor_cycle, defence in depth).
+                from aria_core import paper_pause
                 from aria_core.paper_trader import daily_trade_floor_enabled
 
-                paper_on = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on",
+                paper_on = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
             if task.id == "goplus_watchlist_cycle":
@@ -673,8 +695,13 @@ def _sync_x_curiosity_enabled() -> None:
                 # daily_trade_floor_cycle above: this cycle only serves the
                 # momentum pipeline, so it needs BOTH the master paper-trading
                 # gate AND its own dedicated ARIA_GOPLUS_WATCHLIST_ENABLED.
-                paper_on = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on",
+                from aria_core import paper_pause
+
+                paper_on = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
                 )
                 watchlist_on = os.environ.get("ARIA_GOPLUS_WATCHLIST_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",

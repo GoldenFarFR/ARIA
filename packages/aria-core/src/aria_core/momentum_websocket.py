@@ -170,7 +170,14 @@ def momentum_websocket_enabled() -> bool:
 def _paper_trading_enabled() -> bool:
     """Explicitly re-checked before every trigger -- this path bypasses
     ``heartbeat._tick()``, which normally does this check for
-    ``paper_trade_cycle``."""
+    ``paper_trade_cycle``. Item #64 (08/03): also honors the runtime
+    ``/off`` toggle (``paper_pause``) -- distinct from
+    ``ARIA_PAPER_TRADING_ENABLED`` (env var, needs a redeploy), this one
+    flips instantly for a manual debugging pause."""
+    from aria_core import paper_pause
+
+    if paper_pause.is_paused():
+        return False
     return os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
