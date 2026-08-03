@@ -137,222 +137,54 @@ Monorepo `github.com/GoldenFarFR/ARIA`. Liés : `aria-ops` (privé), `template-g
 - **`aria-brain` (mémoire libre d'ARIA, repo privé `GoldenFarFR/aria-brain`) — EN LIGNE, gate ON.** ARIA s'exprime librement et sans censure ; Claude Code garde un rôle de VÉRIFICATION (jamais un fait technique littéral sans vérification) et de correction de trajectoire, jamais d'édition/censure du contenu. Hors des chemins de fait/grounding (`truth_ledger`) — pure expression. Règle de véracité : 99% réel / 1% spéculation tolérée uniquement si marquée « IMAGINATION : ». Détail : `docs/HANDOFF_TELEGRAM.md`.
 - **Item #108 — Polymarket paper trading, CODE COMPLET, gate `ARIA_POLYMARKET_PAPER_ENABLED` — VÉRIFIER l'état réel avant de s'y fier (déjà trouvé ON en prod le 03/08, doc historique disait OFF).** "Système de probabilité de qualité" : ARIA ne parie que si sa probabilité estimée atteint `MIN_WIN_PROBABILITY=0.85`, mesurée par `VOTE_COUNT=3` votes LLM qui doivent CONVERGER (`MAX_VOTE_SPREAD=0.15`). Portefeuille papier 100k$ (Kelly fractionnaire 0.25x, plafond dur 5%). **Cadence et volume réels à vérifier dans le code avant de citer un chiffre** (`polymarket_paper_trader.CANDIDATES_PER_CYCLE`, `heartbeat.py` interval du cycle `polymarket_paper_cycle`) — ont déjà divergé de la doc une fois. **03/08 : deux bugs de sécurité réels trouvés et corrigés** (marché placeholder à prix figé qui laissait passer un edge fictif ; filtre de découverte per-market complété) — détail complet, historique, et l'état du portefeuille réel : `docs/HANDOFF_POLYMARKET.md`. Capital réel/KYC hors scope, paper uniquement, décision opérateur explicite.
 
-## Protocole d'entraînement hebdomadaire (décision opérateur explicite, 18/07, gravé)
-**Remplace intégralement le protocole 30j/7j/14j ci-dessous, qui n'est plus actif.**
-**ARIA repart à 1M$ CHAQUE semaine. Objectif : atteindre 1,1M$ (+10%), VALIDÉ chaque
-semaine — que la semaine précédente ait réussi ou échoué.** Ce n'est plus une porte de
-sortie unique à franchir une fois (30j puis 7j de confirmation puis réel) mais une
-boucle d'ENTRAÎNEMENT répétée : chaque semaine est son propre test, jugée sur elle-même,
-puis remise à zéro. Confirmé explicitement par l'opérateur : cette boucle remplace le
-protocole 30j/7j/14j **comme méthode d'entraînement ET de décision** vers le capital réel
-(le pilote 10$ Coinbase Agent Wallet) — le critère précis de passage au réel (ex. N
-semaines validées d'affilée) reste à définir une fois plusieurs semaines de résultats
-réels observées, pas encore tranché.
+## État actif — test paper-trading 1M$ (protocole hebdomadaire, 18/07)
+**ARIA repart à 1M$ CHAQUE semaine. Objectif : +10% (1,1M$), VALIDÉ chaque semaine**,
+que la précédente ait réussi ou échoué — boucle d'ENTRAÎNEMENT répétée, pas une porte
+de sortie unique. Le critère précis de passage au capital réel (pilote 10$ Coinbase)
+reste à définir une fois plusieurs semaines validées d'affilée observées — pas encore
+tranché. Processus tant que ce n'est pas encore fiable : revoir chaque résultat AVEC
+l'opérateur en fin de semaine, diagnostiquer et corriger les vraies failles trouvées,
+observer la semaine suivante.
 
-**Précision opérateur explicite (18/07)** : pas de seuil chiffré fixé pour l'instant, et
-volontairement -- l'objectif immédiat est qu'ARIA réussisse D'ABORD le test +10%
-CHAQUE semaine, de façon répétée. Le processus, tant que ce n'est pas encore le cas :
-à la fin de chaque semaine, revoir le résultat (validé ou non) AVEC l'opérateur,
-diagnostiquer les vraies failles trouvées (comme l'incident BRIAN du 17/07, ou les 3
-leviers sélectivité/conviction/rythme + le frein à main ajoutés le 18/07), les corriger,
-puis observer la semaine suivante -- même boucle diagnostique déjà en place, formalisée
-comme la méthode explicite jusqu'à nouvel ordre. Le critère de passage au réel ne sera
-discuté qu'une fois qu'ARIA valide la semaine de façon fiable, pas avant.
+Mécanique (`paper_trader.py`) : `run_weekly_reset()` force-clôture au prix RÉEL du
+marché, archive tout dans `paper_position_archive` (jamais détruit), enregistre le
+verdict (`paper_weekly_cycle`), repart à 1M$/0 position. Câblé au heartbeat
+(`paper_weekly_review_cycle`, même gate `ARIA_PAPER_TRADING_ENABLED` que le cycle
+principal). Aucun argent réel, aucune signature — couvert par la règle absolue
+("test pur, sans validation humaine" pour le capital 100% fictif).
 
-**Mécanique (`packages/aria-core/src/aria_core/paper_trader.py`)** : `weekly_cycle_due()`
-détecte les 7 jours écoulés depuis `paper_state.created_at` ; `run_weekly_reset()` (1)
-force-clôture au prix RÉEL du marché toute position encore ouverte (mark-to-market,
-jamais un prix inventé — dégrade sur le prix d'entrée si indisponible), (2) calcule le
-verdict `validated = équité finale >= objectif`, (3) **archive tout l'historique de la
-semaine dans `paper_position_archive`** (jamais détruit, contrairement à
-`reset_portfolio()` qui DROP la table et reste réservée à un déclenchement opérateur
-manuel explicite), (4) enregistre le verdict dans `paper_weekly_cycle` (track record
-permanent, une ligne par semaine), (5) repart à 1M$/0 position/cycle suivant, (6) lève le
-coupe-circuit de risque dédié (`risk_guard`) pour la semaine fraîche. Câblé au heartbeat
-sous `paper_weekly_review_cycle` (vérifié toutes les 60min, agit seulement si le seuil de
-7j est atteint), même gate `ARIA_PAPER_TRADING_ENABLED` que `paper_trade_cycle` — aucune
-étape manuelle supplémentaire pour l'activer, déjà actif dès que le paper-trading l'est.
-Notifié sur le même canal Telegram (`_notify_telegram_trading`) que les alertes
-achat/vente. Aucun argent réel, aucune signature — la boucle entière reste dans le
-périmètre déjà couvert par la règle absolue ("test pur, sans validation humaine" pour le
-capital 100% fictif).
+**Critère d'entrée du test (#194)** : momentum/technique (golden pocket + divergence
+RSI + R/R positif), pas le filtre VC-thesis — décision opérateur du 15/07, objectif
+DIAGNOSTIQUE (pousser ARIA à se tromper pour comprendre comment elle trade, pas
+d'abord un test de rentabilité). Détail complet du pipeline réel (à jour, revérifié
+à chaque changement) : bloc "Processus d'achat momentum — réponse de référence"
+plus bas dans ce fichier — ne pas reconstruire depuis cette section.
+**Chantier de fusion VC/Swing (`unified_entry.py`) en cours, DORMANT, PAS ACTIF** —
+tant que non déployé, le pipeline momentum seul reste actif en prod. Détail :
+`docs/HANDOFF_PIPELINE_MOMENTUM.md`.
 
-**Historique (protocole 30j/7j/14j, actif du 15/07 au 18/07, jamais réécrit ci-dessous —
-archive, pas une instruction encore active)** : le test visait 30j minimum ±1M$, +7j de
-confirmation si bénéfice avant de débloquer le réel 10$ Coinbase Agent Wallet, ou
-réajustement + cycles de 14j jusqu'à réussite si échec. Démarré pour de vrai le 16/07 au
-soir (reset `a75acef65a89`, cf. section dédiée plus bas). Le critère « ≥80 trades
-clôturés ET ≥180 jours » (ex-case #1 du barème `docs/protocole-argent-reel.md`) avait déjà
-été supprimé le 16/07 au profit de ce protocole — cette suppression reste valide, le
-barème continue de compter 7 cases (renumérotées).
+**Multi-chaînes pour CE TEST (Base/Solana/Robinhood), aucune limite** — décision
+opérateur du 15/07, honeypot GoPlus reste le seul garde-fou dur, vérifié multi-chaînes.
+**⚠️ Désactiver Solana avant tout passage au capital réel** (l'opérateur ne finance pas
+de wallet SOL) — rien à faire maintenant, juste à revérifier explicitement au moment
+de préparer la transition papier → réel, ne jamais supposer que ça survit tel quel.
 
-**Priorité unique jusqu'au démarrage (décision opérateur explicite, 15/07)** :
-plus aucune tâche annexe tant que cette échéance n'est pas atteinte — tout
-l'effort (cloud + VPS Principal/Secondaire/Research) va vers le câblage
-d'ARIA pour qu'elle soit prête à trader ce test (sourcing de candidats réel,
-#186/#187, tout ce qui bloque encore le pipeline paper-trading). Construire
-de nouveaux clients API / nouvelles briques reste autorisé et encouragé, mais
-uniquement s'ils servent directement cet objectif — pas de veille/diligence
-hors-sujet, pas de backlog "confort" en attendant. Les tâches déjà en cours
-sans lien direct (ex. #13 positionnement, #82 canal directives, #145 test à
-l'aveugle) restent en pause jusqu'à nouvel ordre, pas abandonnées.
+## Mandat permanent — atouts/points faibles d'une IA qui trade (15/07, boucle continue)
+Jusqu'à ce que l'opérateur juge ARIA prête : (1) vérifier que les vrais atouts d'une
+IA-trader (dispo 24/7, cohérence de critères, traçabilité parfaite) sont VRAIMENT
+exploités, pas supposés ; (2) chercher activement les points faibles propres à une IA
+(hallucination, sur-ajustement, **vulnérabilité à l'injection de prompt adversariale**
+— angle jamais audité en profondeur) et les combler, jamais laisser en simple constat.
+Preuves comparatives/vérifiées uniquement, jamais un portrait de gagnants (biais du
+survivant écarté). Détail continu : `docs/aria-learning-inbox/`.
 
-**Pivot critère d'entrée pour le test 1M$ (#194, décision opérateur explicite,
-15/07, gravé) — remplace le filtre VC-thesis par un critère momentum/technique
-pour CE TEST SPÉCIFIQUEMENT.** Déclenché par l'opérateur montrant en direct
-le classement trending DexScreener Base (des dizaines de tokens réels,
-liquides, actifs — PAMPU/MYRAD/aeon/GITLAWB/LFI/BASEMATE/CNX/BOTCOIN/SAIRI/
-KellyClaude/ODAI/OVPP/SUPERGEMMA/TSG/ClawBank etc.) : le filtre `safety_screen`
-(score≥70, liquidité≥30k$, holders connus, verdict SAFE — pensé pour sourcer
-des "vrais builders cachés" pour la poche VC 85%) n'est PAS le bon critère
-pour la poche trading/spéculation — un pari technique/momentum sur un token
-déjà liquide qui bouge est un métier différent d'un pari de conviction sur un
-builder précoce.
-- **⚠️ Chantier de remplacement en cours (22/07, décision opérateur explicite) —
-  CODE, DORMANT, PAS ENCORE ACTIF.** Ce pivot #194 (critère purement technique)
-  est en train d'être amendé par un crible unifié VC/Swing (`unified_entry.py`)
-  qui juge conviction fondamentale ET setup technique sur le même candidat,
-  poches cumulables (option "fusion complète" choisie explicitement par
-  l'opérateur). Garde-fous durs extraits dans `momentum_entry.evaluate_hard_
-  gates` (réutilisés, zéro régression), `paper_trader.has_open()` accepte déjà
-  un paramètre `strategy` optionnel (rétrocompatible, prérequis du cumul).
-  **Tant que cette note n'est pas mise à jour vers DEPLOYE, le reste de cette
-  section (critère 100% technique ci-dessous) reste EXACT et actif en prod** —
-  `run_paper_cycle` utilise toujours `momentum_entry.evaluate_momentum_entry`
-  via `_default_momentum_analyzer`. Reste à faire avant activation : sizing par
-  poche + plafond de concentration partagé (cumul), câblage de la boucle
-  `_run_paper_cycle_locked` pour consommer 0-2 signaux par candidat,
-  observabilité (badge VC/Swing), tests d'intégration bout-en-bout, stress-test
-  multi-agents (reporté à une session dédiée, 10 agents répartis en 2 workflows
-  de 5 max chacun pour respecter le plafond ci-dessous). Détail complet :
-  `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entrée du 22/07).
-- **Nouveau critère pour ce test** : alignement technique (EMA/MACD/Bollinger/
-  patterns de bougies, golden pocket + divergence RSI — déjà tout construit
-  dans `indicators.py`/`entry_signals.py`, jamais câblé comme porte d'entrée)
-  + R/R positif (cible/invalidation) + signaux positifs additionnels (buzz/
-  anticipation d'annonce — `radar_x.py`/`market_sentiment.py`, en bonus,
-  jamais bloquant si la donnée manque pour un petit token).
-- **Seul garde-fou dur conservé** : le détecteur honeypot/arnaque technique
-  (GoPlus) — coût quasi nul, protège contre un piège détectable même sur un
-  pur pari momentum. Décision opérateur explicite après question directe.
-  Rien d'autre du filtre VC-thesis ne s'applique à ce nouveau chemin.
-- **Bonding (Virtuals pré-graduation) : différé, "on verra plus tard"**
-  (décision opérateur explicite) — ce nouveau critère porte sur les tokens
-  Base standards (`network="base"`) uniquement, la niche bonding n'est pas
-  touchée par ce chantier.
-- **Pour ce test précis, 100% du capital 1M$ passe par ce nouveau critère**
-  (pas de split 85/15 pendant le test) — décision opérateur explicite
-  ("avec le test des 1 million c'est 100% trading").
-- **Objectif explicite du test, à ne jamais perdre de vue en construisant** :
-  ce n'est pas d'abord un test de rentabilité — c'est un test DIAGNOSTIQUE.
-  L'opérateur veut **pousser ARIA à faire des erreurs ou être surprise**,
-  pour comprendre comment elle trade réellement, avant d'affiner. Construire
-  un pipeline permissif et rapide sert cet objectif ; sur-filtrer par excès
-  de prudence le dessert.
-- **Vitesse et anticipation, exigence opérateur explicite** ("si il y a de
-  l'argent à gagner ARIA doit y être avant tout le monde") : le pipeline
-  actuel était trop lent (`c'est trop long`) en plus d'être trop restrictif.
-  Le nouveau chemin doit rester léger/rapide (scan déterministe TA+R/R+
-  honeypot en premier, LLM réservé à la confirmation finale si besoin,
-  jamais une analyse `/vc` complète pour chaque candidat) et favoriser les
-  signaux de momentum/buzz FRAIS (qui commencent à se former) plutôt qu'un
-  mouvement déjà bien avancé que tout le monde a déjà vu.
-- **Ce qui NE change PAS** : le filtre `safety_screen`/honeypot verrouillé par
-  `test_coherence.py` reste intact et actif pour la poche VC 85% (thèse
-  builders précoces) et pour tout capital réel futur — ce pivot est scopé au
-  pipeline de sourcing du test paper-trading 1M$ uniquement, jamais un
-  affaiblissement du garde-fou lui-même. `risk_guard.py` (#186, coupe-circuit
-  + plafond de risque) reste pleinement actif, indépendant de la source des
-  candidats.
-- **Multi-chaînes, aucune limite Base (décision opérateur explicite, 15/07,
-  gravé)** : "aucune limite base, solana, robinhood tous !" — pour CE TEST
-  (paper-trading 1M$), le pipeline momentum n'est plus limité à Base.
-  **Vérifié en direct avant d'accepter** (jamais supposé) : GoPlus (le seul
-  garde-fou dur conservé) supporte réellement Solana (`id: "solana"`) ET
-  "Robinhood" (chaîne réelle, `id: "4663"`, présente dans la vraie liste
-  `supported_chains` de l'API) EN PLUS de Base — le garde-fou honeypot peut
-  donc suivre l'élargissement sans être affaibli. DexScreener est également
-  nativement multi-chaînes (confirmé par appel réel : `search`/`token-pairs`
-  acceptent n'importe quel `chainId`, "robinhood" est un chainId réel qui
-  répond). **Travail réel restant, pas un simple changement de config** :
-  `_default_price_lookup`/`_default_analyzer` dans `paper_trader.py`
-  appellent aujourd'hui `scan_base_token` (spécifique Base) — à généraliser
-  pour accepter un `chain`/`chainId` et utiliser DexScreener directement
-  (déjà multi-chaînes) plutôt que le wrapper Base-only. La couverture OHLCV/TA
-  (GeckoTerminal) sur des chaînes exotiques comme "Robinhood" est incertaine —
-  dégradation honnête si indisponible (jamais une donnée inventée), pas un
-  blocage. Base reste la priorité #1 (tout existe déjà), Solana en second
-  (couverture GoPlus/DexScreener confirmée), "Robinhood" et au-delà en best-
-  effort selon ce que les mêmes clients couvrent réellement.
-- **⚠️ Rappel pour la transition capital réel (décision opérateur explicite, 20/07) :
-  désactiver Solana avant tout passage en réel.** "on scanne Solana mais quand on
-  passera au réel il faudra pensé a le désactiver car je ne vais pas alimenté en sol"
-  — le multi-chaînes ci-dessus (15/07) reste voulu et actif pour le PAPIER (valeur
-  diagnostique, aucun capital réel en jeu, cf. philosophie du volume de données
-  juste en dessous). Mais l'opérateur ne compte PAS financer de wallet en SOL —
-  donc le jour où le pipeline momentum (ou une extension de lui) alimente une
-  EXÉCUTION réelle au-delà du pilote agent-wallet actuel (déjà structurellement
-  Base-only, `agent_wallet_cdp_adapter.py`, aucun changement nécessaire de ce
-  côté-là), le sourcing Solana devra être coupé explicitement AVANT ce
-  basculement — jamais suppposer que "multi-chaînes" survit tel quel au passage
-  papier → réel. Aucune action requise maintenant (rien à construire, gate déjà
-  scopé au paper-trading) — seulement un point à revérifier explicitement au
-  moment de préparer la transition, pour ne pas le découvrir après coup.
-- **Philosophie du volume de données (décision opérateur explicite, 15/07)** :
-  "plus on a de données à traiter, plus on peut réparer" — cohérent avec
-  l'objectif diagnostique du test (pousser ARIA à agir/se tromper pour
-  apprendre) : privilégier un sourcing large plutôt qu'un filtre étroit, tant
-  que le seul garde-fou dur (honeypot) reste actif sur chaque chaîne touchée.
-
-**Mandat permanent VPS Research — atouts/points faibles d'une IA qui trade
-(décision opérateur explicite, 15/07, gravé) : boucle continue, jamais un
-audit ponctuel, jusqu'à ce que l'opérateur juge ARIA prête.** Deux volets,
-tenus à jour en continu dans `docs/aria-learning-inbox/` (méthode déjà
-posée le 12/07 : uniquement des preuves comparatives/vérifiées, jamais un
-portrait de gagnants — biais du survivant écarté) :
-1. **Atouts propres à une IA-trader** (vs. un humain) : catalogue et vérifie
-   qu'ARIA les exploite VRAIMENT (pas supposé) — disponibilité 24/7 sans
-   fatigue, cohérence des critères d'un cycle à l'autre, capacité de
-   simulation/backtest illimitée avant capital réel, traitement simultané de
-   sources de données qu'un humain ne peut pas croiser à la main, traçabilité
-   parfaite (`truth_ledger`). Pour chaque atout : est-il pleinement exploité
-   ou seulement partiellement câblé ?
-2. **Points faibles propres à une IA** (distincts des biais humains déjà
-   couverts par #191 — psychologie/émotions) : hallucination/fabrication de
-   données, sur-ajustement à des motifs qui ne généralisent pas hors
-   backtest, fragilité face à un régime de marché jamais vu, **vulnérabilité
-   à la manipulation adversariale/injection de prompt** (un projet malveillant
-   qui façonnerait son nom/site/métadonnées on-chain pour biaiser le
-   raisonnement LLM d'ARIA — angle non encore audité en profondeur, #117 n'a
-   testé que n=2 prompts), dépendance à un seul fournisseur de modèle/donnée,
-   coût/latence des appels LLM. Chaque point faible réel trouvé doit être
-   comblé (code, prompt, ou garde-fou) — jamais laissé en simple constat.
-**Ne jamais s'arrêter après une passe** : combler ce qui est trouvé, puis
-reprendre la recherche sur l'angle suivant. Le seul critère d'arrêt est la
-confirmation opérateur qu'ARIA est prête.
-
-**Veille permanente Base / Jesse Pollak / Base Build (décision opérateur explicite, 16/07,
-gravé) : à vérifier en début de session, jamais un one-shot** — sans démarcher personne
-tant que le test 1M$ n'est pas concluant (jalon de déverrouillage inchangé). **Historique
-complet déplacé le 24/07** (mandat de veille, plan d'installation Base en 5 phases,
-écosystème x402/Bazaar chiffré, changement de leadership Pollak→Cobie, Cybercentry candidat
-#199, tests #202, point du 22/07 sur les actions tokenisées/conditions Base Batches 2026) :
-`docs/aria-learning-inbox/2026-07-24-veille-base-x402-historique-consolide.md` (fidélité
-totale, rien perdu). **Dernier état encore actionnable** : décision #199 (quelle ressource
-x402 payer en premier — Cybercentry, 0,02$/appel, reste le candidat le plus concret) toujours
-pas tranchée par l'opérateur ; Base Batches/CDP Builder Grants restent à revérifier
-périodiquement (voir aussi `docs/aria-learning-inbox/2026-07-16-veille-base-198-jesse-pollak-leadership-grants.md`
-et `2026-07-17-veille-base-198-request-for-builders-ai-agents.md`, déjà à jour au 17/07).
-- **Diligence launchpads pour une future tokenisation d'ARIA (27/07, aucune action engagée)** :
-  déclenchée par l'incident de compromission du compte X de Bankr.bot. 6 candidats évalués
-  (Bankr, Virtuals, Clanker, Flaunch, Robinhood Chain/Noxa, Coinbase/Base) sur tokenomics
-  anti-dump/sécurité/traction réelle/investissement direct — **Clanker recommandé** (LP
-  verrouillée jusqu'en 2100, croissance +37%/mois, audit réel, racheté par Farcaster/Neynar) ;
-  Bankr et Virtuals écartés (incidents sécurité récurrents / déclin structurel -95% revenus
-  malgré Virtuals Ventures comme piste alternative d'investissement). Diligence complète et
-  sourcée : `docs/aria-learning-inbox/2026-07-27-diligence-launchpads-tokenisation-aria.md`.
-  **Fiche de référence VIVANTE** (à reprendre périodiquement, une question de vigilance par
-  launchpad sur son point faible identifié) : `docs/base-blockchain-launchpads.md`.
+## Veille Base / écosystème (16/07, à vérifier en début de session)
+Sans démarcher personne tant que le test 1M$ n'est pas concluant. Historique complet
+(plan Base, x402/Bazaar, leadership Pollak→Cobie) déplacé le 24/07 :
+`docs/aria-learning-inbox/2026-07-24-veille-base-x402-historique-consolide.md`.
+Diligence launchpads pour une future tokenisation d'ARIA (Clanker recommandé, aucune
+action engagée) : `docs/base-blockchain-launchpads.md` (fiche vivante, à reprendre
+périodiquement).
 
 ## Plan momentum mi-juillet — exécuté intégralement (archivé)
 Le plan de bataille posé le 15/07 pour lancer le pipeline momentum (#194 pivot,
