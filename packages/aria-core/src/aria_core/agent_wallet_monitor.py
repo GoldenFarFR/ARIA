@@ -15,6 +15,12 @@ classified as:
     movement) -- nothing abnormal.
   - "external_deposit": incoming funds not initiated by ARIA (e.g. the
     operator funds the wallet manually) -- normal, logged for traceability.
+    03/08: for a TOKEN (not native ETH, not official USDC), this now also
+    triggers `_is_unsolicited_scam_token()` -- if the token has no real
+    DexScreener market, it's reclassified "suspicious_token" and PERMANENTLY
+    banned from the momentum trading pipeline (`momentum_blacklist`), same as
+    a lookalike ETH/USDC. A genuine manual deposit (real liquidity, e.g. the
+    operator buying VIRTUAL via the Coinbase app directly) is never affected.
   - "internal_transfer": movement (either direction) whose counterparty is
     ANOTHER wallet ARIA/the operator already controls (cf.
     `_KNOWN_ADDRESS_NAMES` -- the Smart Accounts, the delegated spender, the
@@ -513,6 +519,51 @@ def _normalize_symbol(symbol: str) -> str:
     return stripped.strip().upper()
 
 
+# 03/08 -- operator request: automatically ban (never just alert) any token
+# deposited on the agent wallet(s) that ARIA never bought herself AND that
+# has no real market -- the exact signature of an airdrop/dust-attack scam.
+# Verified live the same day: 9 confirmed phishing tokens received on the
+# pilot wallet (DEXHorizon, HOLO, GDWS, a token literally named "Claude",
+# BYZAN, plus lookalike ETH/USDC) all had zero real DexScreener liquidity,
+# while the operator's own legitimate manual VIRTUAL deposit (bought via the
+# Coinbase app directly, "Acheter"/"Echanger" -- never routed through ARIA's
+# own `agent_wallet_log`, so classified "external_deposit" just like a scam
+# would be) had 30 real pairs, 397k$-415k$ liquidity. A plain liquidity floor
+# separates the two reliably -- Blockscout's own `reputation`/`is_scam`
+# fields were checked first and found useless here (return "ok"/False for
+# every one of the 9 confirmed scams above, no better than chance).
+_UNSOLICITED_SCAM_LIQUIDITY_FLOOR_USD = 1000.0
+
+
+async def _is_unsolicited_scam_token(token_address: str | None, *, chain: str) -> bool:
+    """True if ``token_address`` has no real DexScreener market (no pair at
+    all, or every pair's liquidity below ``_UNSOLICITED_SCAM_LIQUIDITY_FLOOR_USD``).
+    Fail-open on lookup failure (network error, DexScreener down) -- a price
+    lookup that can't complete must NEVER ban a legitimate token, same
+    doctrine as every other anti-manipulation guard in this project (cf.
+    wallet-scoring's fail-open-on-unknown / fail-closed-on-confirmed-bad).
+    The official USDC contract is exempted BEFORE any network call --
+    it's the pilot's own reference currency, never a candidate for this
+    check, and this guard must never depend on DexScreener listing it."""
+    from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
+
+    if not token_address:
+        return False
+    if token_address.lower() == USDC_BASE_ADDRESS.lower():
+        return False
+    try:
+        from aria_core.services.dexscreener import fetch_tokens_batch
+
+        pairs = await fetch_tokens_batch([token_address], chain=chain)
+    except Exception as exc:  # noqa: BLE001 -- a lookup failure must never ban a legitimate token
+        logger.warning(
+            "agent_wallet_monitor: liquidity check failed for %s: %s", token_address, exc,
+        )
+        return False
+    best_liquidity = max((p.liquidity_usd or 0.0) for p in pairs) if pairs else 0.0
+    return best_liquidity < _UNSOLICITED_SCAM_LIQUIDITY_FLOOR_USD
+
+
 def _lookalike_target(symbol: str | None, token_address: str | None) -> str | None:
     """Returns the name of the REAL asset being impersonated (``"ETH"``/``"USDC"``)
     if the transfer's symbol resembles one of the tracked assets once
@@ -672,6 +723,19 @@ async def check_wallet_activity(
                     asset_label = f"{asset_label} (FAUX {lookalike} -- contrat non officiel)"
                     classification = "suspicious_token"
                     matched_spend = None  # a spoofed token never inherits x402 info
+                elif (
+                    ev["direction"] == "in"
+                    and classification == "external_deposit"
+                    and await _is_unsolicited_scam_token(ev.get("token_address"), chain=chain)
+                ):
+                    # 03/08 -- unsolicited deposit (ARIA never bought this herself)
+                    # with zero real market -- classic airdrop/dust-attack scam,
+                    # distinct from the lookalike-ETH/USDC case above. A LEGITIMATE
+                    # manual deposit (operator buying via the Coinbase app
+                    # directly) never triggers this: it always has real liquidity.
+                    asset_label = f"{asset_label} (AUCUNE LIQUIDITE REELLE -- scam probable)"
+                    classification = "suspicious_token"
+                    matched_spend = None
             else:
                 # 07/22 -- no known_x402_spends here: an x402 payment settles in
                 # USDC (cf. x402_budget), never in native ETH -- x402 classification/
@@ -711,6 +775,28 @@ async def check_wallet_activity(
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
                             "agent_wallet_monitor: failed to log to phishing_blacklist: %s", exc,
+                        )
+                    # 03/08 -- operator request: ban the contract PERMANENTLY from
+                    # the momentum trading pipeline too (`is_blacklisted()` is
+                    # already checked first in `evaluate_momentum_entry`), not just
+                    # logged for traceability -- silent, no notification (same as
+                    # the rest of this cycle's deposit handling).
+                    try:
+                        from aria_core import momentum_blacklist
+
+                        reason = (
+                            f"Depot non sollicite sur wallet agent -- usurpe {lookalike} "
+                            f"(homoglyphe Unicode), scan automatique 03/08"
+                            if lookalike else
+                            "Depot non sollicite sur wallet agent, aucune liquidite DexScreener "
+                            "reelle -- scan automatique 03/08"
+                        )
+                        await momentum_blacklist.add_to_blacklist(
+                            ev.get("token_address") or "", chain, reason,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "agent_wallet_monitor: failed to add to momentum_blacklist: %s", exc,
                         )
 
     return fresh

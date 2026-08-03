@@ -1513,6 +1513,126 @@ async def test_legit_token_never_recorded_in_phishing_blacklist(monkeypatch):
     assert await monitor.list_phishing_addresses() == []
 
 
+# ── Bannissement automatique des dépôts non sollicités sans marché réel
+# (03/08, demande opérateur : "je veut que tous les wallet soit scanner pour
+# etre sur que c'est contrat soit bannit des quil entre") -- distinct du cas
+# lookalike ETH/USDC ci-dessus, couvre tout scam générique (nom de site,
+# usurpation de marque...) via un plancher de liquidité DexScreener réelle.
+
+def _isolate_momentum_blacklist(monkeypatch, tmp_path):
+    from aria_core import momentum_blacklist
+
+    monkeypatch.setattr(momentum_blacklist, "DB_PATH", str(tmp_path / "momentum_blacklist_test.db"))
+    return momentum_blacklist
+
+
+@pytest.mark.asyncio
+async def test_unsolicited_token_with_no_liquidity_banned_from_momentum_pipeline(monkeypatch, tmp_path):
+    momentum_blacklist = _isolate_momentum_blacklist(monkeypatch, tmp_path)
+    transfer = TokenTransfer(
+        tx_hash="0xscam1", from_address="0xscammer", to_address=WALLET,
+        token_address="0xscamcontract1", token_symbol="DEXHorizon", token_name="DEX Horizon",
+        amount=25.0, timestamp="2026-08-03T10:50:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return []  # aucune paire reelle -- exactement le cas des scams confirmes le 03/08
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "suspicious_token"
+    assert await momentum_blacklist.is_blacklisted("0xscamcontract1", "base")
+
+
+@pytest.mark.asyncio
+async def test_unsolicited_token_with_low_liquidity_banned(monkeypatch, tmp_path):
+    momentum_blacklist = _isolate_momentum_blacklist(monkeypatch, tmp_path)
+    transfer = TokenTransfer(
+        tx_hash="0xscam2", from_address="0xscammer", to_address=WALLET,
+        token_address="0xscamcontract2", token_symbol="GDWS", token_name="Global Digital Water Supply",
+        amount=25.0, timestamp="2026-08-01T15:53:00Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return [_FakePairSnapshot(base_address="0xscamcontract2", price_usd=0.01, liquidity_usd=50.0)]
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "suspicious_token"
+    assert await momentum_blacklist.is_blacklisted("0xscamcontract2", "base")
+
+
+@pytest.mark.asyncio
+async def test_operator_manual_deposit_with_real_liquidity_not_banned(monkeypatch, tmp_path):
+    """Reproduit le cas réel du 03/08 -- l'opérateur achète VIRTUAL manuellement
+    via l'app Coinbase (jamais via `agent_wallet_log`, donc classé
+    "external_deposit" comme un scam le serait) mais le token a une vraie
+    liquidité (397k$-415k$ vérifiés en direct) -- ne doit JAMAIS être banni."""
+    momentum_blacklist = _isolate_momentum_blacklist(monkeypatch, tmp_path)
+    transfer = TokenTransfer(
+        tx_hash="0xvirtual1", from_address="0xoperator", to_address=WALLET,
+        token_address="0xvirtualprotocol", token_symbol="VIRTUAL", token_name="Virtuals Protocol",
+        amount=200.0, timestamp="2026-07-30T21:40:11Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        return [_FakePairSnapshot(base_address="0xvirtualprotocol", price_usd=0.56, liquidity_usd=397_000.0)]
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "external_deposit"
+    assert not await momentum_blacklist.is_blacklisted("0xvirtualprotocol", "base")
+    assert await monitor.list_phishing_addresses() == []
+
+
+@pytest.mark.asyncio
+async def test_unsolicited_token_liquidity_lookup_failure_never_bans(monkeypatch, tmp_path):
+    momentum_blacklist = _isolate_momentum_blacklist(monkeypatch, tmp_path)
+    transfer = TokenTransfer(
+        tx_hash="0xscam3", from_address="0xscammer", to_address=WALLET,
+        token_address="0xscamcontract3", token_symbol="BYZAN", token_name="Byzanlink",
+        amount=9000.0, timestamp="2026-07-25T16:51:33Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def fake_fetch_tokens_batch(addresses, *, chain="base"):
+        raise RuntimeError("dexscreener down")
+
+    monkeypatch.setattr(
+        "aria_core.services.dexscreener.fetch_tokens_batch", fake_fetch_tokens_batch,
+    )
+    result = await monitor.check_wallet_activity(wallet_address=WALLET)
+    assert result[0].classification == "external_deposit"
+    assert not await momentum_blacklist.is_blacklisted("0xscamcontract3", "base")
+
+
+@pytest.mark.asyncio
+async def test_official_usdc_never_liquidity_checked_or_banned(monkeypatch, tmp_path):
+    """Preuve d'exemption : aucun mock de `fetch_tokens_batch` -- si le code
+    tentait un vrai appel réseau pour l'adresse USDC officielle, ce test
+    échouerait (pas de réseau en environnement de test)."""
+    momentum_blacklist = _isolate_momentum_blacklist(monkeypatch, tmp_path)
+    assert not await monitor._is_unsolicited_scam_token(USDC_ADDR, chain="base")
+    assert not await momentum_blacklist.is_blacklisted(USDC_ADDR, "base")
+
+
 # ── "internal_transfer" -- reconnaissance des wallets ARIA/opérateur (23/07) ──
 # Incident réel : une alerte "SORTIE NON INITIÉE PAR ARIA" s'est déclenchée sur
 # un paiement x402 légitime -- l'opérateur a demandé qu'ARIA reconnaisse SES
