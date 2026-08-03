@@ -40,7 +40,14 @@
 # (empty response, still billed -- confirmed live, one such call cost
 # $0.88 for nothing). 96000 leaves generous headroom under Fable 5's real
 # 128000-token ceiling while keeping a bound on worst-case cost given this
-# model's $50/MTok output price.
+# model's $50/MTok output price. Raising max_tokens ALONE was insufficient
+# (reproduced live -- still empty at 96000): per OpenRouter's own reasoning
+# docs, without an explicit `reasoning` object OpenRouter applies its own
+# default effort ratio against max_tokens for the hidden reasoning budget,
+# not a fixed headroom -- there was never a guaranteed floor left for the
+# visible answer. Added `reasoning: {effort: "medium"}` (a separate top-
+# level field, not nested under max_tokens) so the split is explicit: ~50%
+# of budget to reasoning, leaving a real, guaranteed floor for the response.
 # 2. "[VERIFIE, ligne X]" replaced by a verbatim quote requirement -- a line
 #    number is only ever knowable if the input happens to be a diff with
 #    hunk headers; a verbatim substring is checkable on ANY plain text.
@@ -147,6 +154,7 @@ PAYLOAD=$(jq -n \
   '{
     model: $model,
     max_tokens: 96000,
+    reasoning: {effort: "medium"},
     messages: [
       {role: "system", content: $system},
       {role: "user", content: $user}
