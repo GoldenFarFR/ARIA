@@ -3,15 +3,21 @@ week, spent STRATEGICALLY ("never run short, but spend enough to optimize
 the speed of accumulating data").
 
 Concrete translation of this instruction:
-  - Hard cap, never exceeded (`can_spend`/`record_spend` — fail-closed: when
+  - Hard cap, never exceeded (`try_reserve`/`settle` — fail-closed: when
     in doubt about the balance already consumed, refuse rather than risk
     exceeding it).
   - NO artificial throttle below the cap: the speed of durable knowledge
     accumulation is precisely the goal ("optimize the speed") — the only
     legitimate brake is the "one fact, once" discipline (deduplication), not
     a daily drip-feed imposed by this module.
-  - Calendar sliding week (Monday 00:00 UTC), not a cumulative total since
-    forever.
+  - Rolling 7-day window (now - 7 days), not a calendar week and not a
+    cumulative total since forever. Was a calendar week (Monday 00:00 UTC)
+    until 03/08 -- security-review workflow finding: a calendar boundary let
+    up to ~2x the cap be spent in a few minutes around the reset. NOTE for
+    any future session: `x_research_budget.py`/`blockscout_credit_budget.py`
+    still document (and use) the OLD calendar-week design "by doctrine,
+    matching x402_budget.py" -- this module intentionally diverges from them
+    now; don't silently re-align one onto the other without a fresh decision.
 
 Structurally separate from `wallet_guard.py`/`agent_wallet_log.py` — same
 doctrine as `sepolia_autonomous.py`/`bonding_trade_log.py`: this cap neither
@@ -21,9 +27,14 @@ a larger scale. Scope strictly limited to x402 data/API micropayments
 on its own separate path (CLAUDE.md, 07/16).
 
 Append-only (same pattern as `agent_directive_log`/`agent_wallet_log`): no
-UPDATE/DELETE function here, every attempt (`status` in {"ok", "blocked",
-"failed"}) stays traced forever, never silent.
-"""
+DELETE function here, every attempt (`status` in {"ok", "blocked", "failed",
+"pending"}) stays traced forever, never silent. 03/08 -- `try_reserve`/
+`settle` (two-step atomic reserve-then-settle, replacing the old
+`can_spend`/`record_spend` check-then-act) is the one place that UPDATEs a
+row (a "pending" reservation resolving to "ok"/"failed") -- see their own
+docstrings for why a race condition made the old pair unsafe under
+concurrent callers (confirmed real: two parallel workflow sub-agents both
+passed a budget check before either had recorded its spend)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -103,26 +114,51 @@ async def _ensure_table() -> None:
 
 
 def week_start(now: datetime | None = None) -> datetime:
-    """Start of the current calendar week (Monday 00:00 UTC)."""
+    """Start of the ROLLING 7-day window (now - 7 days), NOT a calendar week.
+
+    03/08 -- was a calendar week (Monday 00:00 UTC) until this date --
+    security-review workflow finding: a calendar boundary lets up to ~2x
+    the cap be spent in a few minutes around the reset (Sunday night +
+    Monday morning both count as "fresh"). A rolling window has no such
+    edge -- the sum always covers exactly the trailing 7 days, wherever
+    "now" falls. Name kept as ``week_start`` (not renamed) -- every caller
+    across the codebase already imports it by this name."""
     ref = now if now is not None else datetime.now(timezone.utc)
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
-    monday = ref - timedelta(days=ref.weekday())
-    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    return ref - timedelta(days=7)
+
+
+# 03/08 -- how long a "pending" reservation (try_reserve, never settled)
+# still counts against the budget before being treated as abandoned/failed.
+# Comfortably above the real HTTP timeouts already observed in this
+# pipeline (12-25s) -- long enough that a genuinely in-flight payment is
+# never double-counted as free budget, short enough that a crashed process
+# doesn't freeze real budget for the rest of the week.
+PENDING_TIMEOUT_MINUTES = 5
 
 
 async def spent_this_week(now: datetime | None = None) -> float:
-    """Sum of spends ACTUALLY made (status='ok') since the start of the
-    current calendar week. 'blocked'/'failed' attempts never count against
-    the cap -- only a payment actually settled consumes the budget."""
+    """Sum of spends ACTUALLY made (status='ok') PLUS any still-in-flight
+    reservation (status='pending', younger than PENDING_TIMEOUT_MINUTES)
+    within the trailing rolling 7-day window. 'blocked'/'failed' attempts
+    never count against the cap. A 'pending' row is included so that two
+    concurrent callers can't both see "budget still free" while one of them
+    is mid-flight (see try_reserve's own docstring) -- a stale 'pending'
+    (crashed before settle()) ages out on its own after the timeout, never
+    permanently freezing the budget."""
     await _ensure_table()
-    start = week_start(now).isoformat()
+    ref = now if now is not None else datetime.now(timezone.utc)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    start = week_start(ref).isoformat()
+    pending_cutoff = (ref - timedelta(minutes=PENDING_TIMEOUT_MINUTES)).isoformat()
     async with aiosqlite.connect(str(aria_db_path())) as db:
         row = await (
             await db.execute(
                 "SELECT COALESCE(SUM(amount_usd), 0) FROM x402_spend_log "
-                "WHERE status = 'ok' AND created_at >= ?",
-                (start,),
+                "WHERE created_at >= ? AND (status = 'ok' OR (status = 'pending' AND created_at >= ?))",
+                (start, pending_cutoff),
             )
         ).fetchone()
     return float(row[0]) if row else 0.0
@@ -171,6 +207,68 @@ async def record_spend(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (resource, provider, amount_usd, status, reason, now, pay_to, contract, token_symbol),
+        )
+        await db.commit()
+
+
+async def try_reserve(
+    amount_usd: float, *, resource: str, provider: str = "", contract: str = "", token_symbol: str = "",
+) -> int | None:
+    """Atomically checks the budget AND reserves ``amount_usd`` in one SQLite
+    transaction (``BEGIN IMMEDIATE`` -- a file-level lock, unlike an
+    in-process ``asyncio.Lock`` which does NOT protect two separate
+    processes/containers calling this at the same time -- confirmed the
+    real cause of a 03/08 incident: two parallel workflow sub-agents, two
+    separate Python processes, each with its own event loop, both read "budget
+    still free" before either had recorded a spend).
+
+    Returns the reservation's row id (status='pending') if accepted, ``None``
+    if refused (nothing reserved -- the caller logs its own 'blocked' via
+    ``record_spend`` as before). Replaces the old check-then-act pair
+    (``can_spend`` then, much later, ``record_spend``) for any caller that
+    needs the reservation to actually hold against a concurrent caller --
+    ``can_spend``/``record_spend`` themselves are kept unchanged (still used
+    by read-only callers/diagnostics), just no longer safe for a real
+    reserve-then-spend sequence under concurrency.
+
+    Caller MUST eventually call ``settle(reservation_id, status=...)`` --
+    an un-settled reservation still counts against the budget for up to
+    ``PENDING_TIMEOUT_MINUTES`` (see ``spent_this_week``), then ages out on
+    its own (never a permanent freeze on a crash mid-payment)."""
+    await _ensure_table()
+    if amount_usd <= 0:
+        return None
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(str(aria_db_path()), isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            spent = await spent_this_week(now)
+            if amount_usd > max(0.0, WEEKLY_CAP_USD - spent):
+                await db.execute("COMMIT")
+                return None
+            cur = await db.execute(
+                """
+                INSERT INTO x402_spend_log
+                  (resource, provider, amount_usd, status, created_at, contract, token_symbol)
+                VALUES (?, ?, ?, 'pending', ?, ?, ?)
+                """,
+                (resource, provider, amount_usd, now.isoformat(), contract, token_symbol),
+            )
+            await db.execute("COMMIT")
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+        return cur.lastrowid
+
+
+async def settle(reservation_id: int, *, status: str, reason: str = "", pay_to: str = "") -> None:
+    """Resolves a ``try_reserve`` reservation to its final outcome --
+    ``status`` in {"ok", "failed"}, never back to "pending"."""
+    await _ensure_table()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            "UPDATE x402_spend_log SET status = ?, reason = ?, pay_to = ? WHERE id = ?",
+            (status, reason, pay_to, reservation_id),
         )
         await db.commit()
 

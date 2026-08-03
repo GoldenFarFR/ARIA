@@ -50,6 +50,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -93,6 +94,28 @@ _USDC_DECIMALS = 1_000_000  # native Base USDC -- 6 decimals
 # party): accepted forms for Base mainnet, flat (v1 schema, services/x402.py)
 # or CAIP-2 (v2).
 _ALLOWED_NETWORKS = {"base", "eip155:8453"}
+
+# 03/08 -- security-review workflow finding: nothing bounded a single
+# provider from requesting up to the entire remaining weekly budget in one
+# call. Hard per-transaction cap, checked IN ADDITION to (never instead of)
+# the weekly cap -- ~3.3x the most expensive provider actually in prod today
+# (Quick Intel, $0.03/call), leaving room for a future provider without
+# needing to retouch this constant on every addition.
+MAX_TRANSACTION_USD = 0.10
+
+# 03/08 -- same workflow finding: only the NETWORK was ever checked against
+# an allowlist, not the provider's own domain -- any URL could be called.
+# Derived from the domain alone (``urlparse(url).hostname``), never touching
+# any of the 7 existing callers' own call signature. Verified against each
+# service's real URL constant before listing here, not guessed.
+_ALLOWED_PROVIDER_DOMAINS = frozenset({
+    "x402.twit.sh",                                          # services/twitsh.py
+    "api.blockscout.com",                                     # services/blockscout_x402.py
+    "x402-cybercentry-wallet-verification.up.railway.app",    # services/cybercentry.py
+    "x402.quickintel.io",                                     # services/quickintel.py
+    "x402.ottoai.services",                                   # services/ottoai.py, services/otto_ai.py
+    "blockrun.ai",                                             # services/blockrun_kalshi.py
+})
 
 
 @dataclass(frozen=True)
@@ -307,6 +330,17 @@ async def fetch_paid_resource(
     BOTH the unpaid challenge request and the paid retry (the provider must
     see the identical request both times, or it could charge for one token
     while returning data for another)."""
+    # 03/08 -- checked BEFORE even the unpaid challenge request (not just
+    # before payment): a non-whitelisted domain never receives ANY request,
+    # not even a free one -- minor information-leak-avoidance, zero cost.
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname not in _ALLOWED_PROVIDER_DOMAINS:
+        return await _blocked(
+            resource, provider, 0.0,
+            reason=f"domaine non autorisé ({hostname!r}) -- jamais d'appel hors de l'allowlist",
+            contract=contract, token_symbol=token_symbol,
+        )
+
     fetch_kwargs: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     if json_body is not None:
         fetch_kwargs["json_body"] = json_body
@@ -356,6 +390,17 @@ async def fetch_paid_resource(
             contract=contract, token_symbol=token_symbol,
         )
 
+    # 03/08 -- security-review workflow finding: nothing bounded a single
+    # provider's REQUESTED amount before this point -- checked before the
+    # weekly cap (a provider could otherwise request up to the entire
+    # remaining budget in one call and still pass ``can_spend``).
+    if amount_usd > MAX_TRANSACTION_USD:
+        return await _blocked(
+            resource, provider, amount_usd,
+            reason=f"montant {amount_usd}$ > plafond dur par transaction {MAX_TRANSACTION_USD}$",
+            contract=contract, token_symbol=token_symbol,
+        )
+
     # 17/07 -- settlement address of the 402, already known here (no extra
     # network call): logged with every attempt so agent_wallet_monitor.py
     # can correlate a detected on-chain movement with an already-known x402
@@ -372,7 +417,16 @@ async def fetch_paid_resource(
             pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
 
-    if not await x402_budget.can_spend(amount_usd):
+    # 03/08 -- atomic reserve, replacing can_spend() (check-then-act, unsafe
+    # under concurrent callers -- see try_reserve's own docstring for the
+    # real incident that motivated this). Reserves BEFORE the real balance
+    # check/signature/paid fetch below -- any failure from here on MUST
+    # settle() this reservation (never leave it "pending", it would still
+    # count against the budget for PENDING_TIMEOUT_MINUTES).
+    reservation_id = await x402_budget.try_reserve(
+        amount_usd, resource=resource, provider=provider, contract=contract, token_symbol=token_symbol,
+    )
+    if reservation_id is None:
         return await _blocked(
             resource, provider, amount_usd,
             reason=f"plafond hebdomadaire x402 dépassé ({amount_usd}$ demandé)",
@@ -382,31 +436,23 @@ async def fetch_paid_resource(
     try:
         balance_usd = await balance_fn()
     except Exception as exc:  # noqa: BLE001
-        return await _blocked(
-            resource, provider, amount_usd,
-            reason=f"solde réel indisponible (fail-closed) : {exc}",
-            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
-        )
+        reason = f"solde réel indisponible (fail-closed) : {exc}"
+        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
     if balance_usd is None:
-        return await _blocked(
-            resource, provider, amount_usd,
-            reason="solde réel indisponible (fail-closed) : balance_fn a renvoyé None",
-            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
-        )
+        reason = "solde réel indisponible (fail-closed) : balance_fn a renvoyé None"
+        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
     if amount_usd > balance_usd:
-        return await _blocked(
-            resource, provider, amount_usd,
-            reason=f"montant {amount_usd}$ > solde réel {balance_usd}$",
-            pay_to=pay_to, contract=contract, token_symbol=token_symbol,
-        )
+        reason = f"montant {amount_usd}$ > solde réel {balance_usd}$"
+        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
 
     try:
         payment_header = await pay_fn(requirement)
     except Exception as exc:  # noqa: BLE001
-        await x402_budget.record_spend(
-            resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason=f"signature échouée : {exc}", pay_to=pay_to,
-            contract=contract, token_symbol=token_symbol,
+        await x402_budget.settle(
+            reservation_id, status="failed", reason=f"signature échouée : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
@@ -418,28 +464,23 @@ async def fetch_paid_resource(
             url, method=method, headers={payment_header_name: payment_header}, **fetch_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
-        await x402_budget.record_spend(
-            resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason=f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : {exc}", pay_to=pay_to,
-            contract=contract, token_symbol=token_symbol,
+        await x402_budget.settle(
+            reservation_id, status="failed",
+            reason=f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
     if paid.status_code == 402:
-        await x402_budget.record_spend(
-            resource=resource, provider=provider, amount_usd=amount_usd,
-            status="failed", reason="toujours 402 après paiement (règlement refusé)", pay_to=pay_to,
-            contract=contract, token_symbol=token_symbol,
+        await x402_budget.settle(
+            reservation_id, status="failed",
+            reason="toujours 402 après paiement (règlement refusé)", pay_to=pay_to,
         )
         return X402ExecutionResult(
             status="failed", reason="toujours 402 après paiement", amount_usd=amount_usd,
             http_status=402,
         )
 
-    await x402_budget.record_spend(
-        resource=resource, provider=provider, amount_usd=amount_usd, status="ok", pay_to=pay_to,
-        contract=contract, token_symbol=token_symbol,
-    )
+    await x402_budget.settle(reservation_id, status="ok", pay_to=pay_to)
     return X402ExecutionResult(
         status="ok", amount_usd=amount_usd, http_status=paid.status_code, body=paid.body,
     )

@@ -28,6 +28,21 @@ def _not_paused(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _allow_test_domains(monkeypatch):
+    """03/08 -- this file tests the generic payment MECHANISM, not any real
+    provider's own allowlist membership -- widened here (not in prod) so
+    fictitious test domains (example.com, etc.) aren't rejected by the new
+    domain allowlist gate, same doctrine as the two fixtures above."""
+    monkeypatch.setattr(
+        executor, "_ALLOWED_PROVIDER_DOMAINS",
+        executor._ALLOWED_PROVIDER_DOMAINS | {
+            "example.com", "cybercentry.example", "v2provider.example", "macro.lonestaroracle.xyz",
+        },
+    )
+    yield
+
+
 def _payment_required_body(*, amount="10000", asset="USDC", network="base") -> bytes:
     return json.dumps({
         "x402Version": 1,
@@ -130,8 +145,14 @@ async def test_disallowed_network_blocked():
 
 @pytest.mark.asyncio
 async def test_over_weekly_cap_blocked():
+    """03/08 -- amount kept UNDER MAX_TRANSACTION_USD (0.10$) so this test
+    exercises the weekly cap specifically, not the newer per-transaction
+    cap -- the weekly budget is pre-consumed via a direct spend so the
+    remaining balance can't cover even this small amount."""
+    await budget.record_spend(resource="prior", amount_usd=4.95, status="ok")
+
     async def fake_fetch(url, *, method="GET", headers=None):
-        return HttpResult(status_code=402, body=_payment_required_body(amount="6000000"))  # 6$
+        return HttpResult(status_code=402, body=_payment_required_body(amount="80000"))  # 0.08$
 
     result = await executor.fetch_paid_resource(
         "https://example.com/data", resource="test", balance_fn=_never_called_balance,
@@ -268,8 +289,14 @@ async def test_successful_payment_returns_ok_and_records_spend():
 @pytest.mark.asyncio
 async def test_contract_and_token_symbol_recorded_on_success_and_when_blocked():
     """19/07, #143 -- transmis tel quel jusqu'au journal, sur le succès ET sur un
-    blocage (ex. plafond hebdo dépassé) -- un paiement REFUSÉ pour un token doit
-    rester tout aussi traçable qu'un paiement réussi."""
+    échec après réservation (ex. solde réel insuffisant) -- un paiement REFUSÉ
+    pour un token doit rester tout aussi traçable qu'un paiement réussi.
+
+    03/08 -- status is now "failed" (not "blocked") for this specific case:
+    the budget WAS reserved (try_reserve succeeded, amount fit the cap) but
+    the payment itself couldn't proceed (real balance insufficient) --
+    "blocked" is reserved for a refusal BEFORE any reservation (bad domain,
+    over cap, bad network)."""
     async def fake_fetch(url, *, method="GET", headers=None):
         if headers and executor.X_PAYMENT_HEADER in headers:
             return HttpResult(status_code=200, body=b"paid content")
@@ -299,7 +326,7 @@ async def test_contract_and_token_symbol_recorded_on_success_and_when_blocked():
         contract="0x" + "c" * 40, token_symbol="MCADE",
     )
     spends = await budget.list_spends()
-    assert spends[0]["status"] == "blocked"
+    assert spends[0]["status"] == "failed"
     assert spends[0]["contract"] == "0x" + "c" * 40
     assert spends[0]["token_symbol"] == "MCADE"
 
