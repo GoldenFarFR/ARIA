@@ -772,6 +772,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED",
     "ARIA_PAPER_TRADING_ENABLED",
     "ARIA_POLYMARKET_PAPER_ENABLED",
+    # 08/03 -- dedicated, separate gate for services/polymarket_execution.py
+    # (real-order execution adapter, diligence only). Never set in any
+    # environment today -- two external preconditions (operator relocation
+    # effective + lawyer confirmation) must hold first, per CLAUDE.md.
+    "ARIA_POLYMARKET_REAL_TRADING_ENABLED",
     "ARIA_PUMP_DUMP_AUTOPSY_ENABLED",
     "ARIA_QUICKINTEL_ENABLED",
     "ARIA_RELAY_AUTOREPLY_ENABLED",

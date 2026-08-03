@@ -40,4 +40,10 @@ regexes = [
   # identifier, never a secret value. Matched narrowly by name (not a path
   # allowlist) so the rest of the file stays fully scanned.
   '''_MAX_TOP10_HOLDER_PCT''',
+  # 08/03, test_polymarket_execution.py: a deliberately fake, self-labeled
+  # test value (`secret_key = "0xTHIS_MUST_NEVER_APPEAR_IN_LOGS_..."`) used
+  # to assert a real private key never appears in a log line -- the
+  # variable name plus hex-like suffix trips the generic-api-key detector.
+  # Matched by the distinctive fake value itself, never a real secret.
+  '''THIS_MUST_NEVER_APPEAR_IN_LOGS''',
 ]
