@@ -517,13 +517,22 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
             recent_low_from_candles,
         )
 
-        fresh_recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
-        if fresh_recent_low is not None:
-            sig["recent_low"] = fresh_recent_low
-            sig["recent_low_window"] = RECENT_LOW_WINDOW_GOLDEN_POCKET
+        # 08/03 -- adversarial workflow review (post-deploy audit): the
+        # recent_low recompute itself sat OUTSIDE any try/except here, the
+        # one asymmetry vs. every other call in this function (pair/price
+        # lookups above are all wrapped). A raise here would abort this
+        # whole 30s drain pass (caught one level up by momentum_websocket.
+        # _drain_once's own wrapper, never crashing the service) but would
+        # also prevent the very trigger it was meant to observe -- a narrow
+        # but real contradiction of "shadow logging never blocks a trade".
+        # Now wrapped like its neighbors, same doctrine.
         try:
             from aria_core import chasing_filter_shadow
 
+            fresh_recent_low = recent_low_from_candles(candles, RECENT_LOW_WINDOW_GOLDEN_POCKET)
+            if fresh_recent_low is not None:
+                sig["recent_low"] = fresh_recent_low
+                sig["recent_low_window"] = RECENT_LOW_WINDOW_GOLDEN_POCKET
             await chasing_filter_shadow.record_check(
                 order["contract"], order.get("chain") or "base",
                 wallet=order.get("wallet") or "swing", source="limit_order_trigger",

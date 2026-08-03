@@ -53,7 +53,18 @@ RECENT_LOW_WINDOW_BOLLINGER_VWAP = 20
 RECENT_LOW_WINDOW_GOLDEN_POCKET = 25
 
 
+_ensured_db_paths: set[str] = set()
+
+
 async def _ensure_table() -> None:
+    # 08/03 -- Gemini second-opinion review (scripts/consult-gemini.sh):
+    # re-issuing CREATE TABLE/INDEX IF NOT EXISTS on every real BUY was
+    # redundant DDL on a hot path -- skipped once this process has confirmed
+    # the table exists FOR THE CURRENT DB_PATH. Keyed by path (not a plain
+    # bool) so a DB_PATH change (e.g. between tests, each monkeypatching a
+    # distinct tmp_path) is never masked by a stale flag from a previous path.
+    if DB_PATH in _ensured_db_paths:
+        return
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
@@ -86,6 +97,7 @@ async def _ensure_table() -> None:
             "ON chasing_filter_shadow_log (wallet)"
         )
         await db.commit()
+    _ensured_db_paths.add(DB_PATH)
 
 
 def _column_for_threshold(threshold_pct: float) -> str | None:
