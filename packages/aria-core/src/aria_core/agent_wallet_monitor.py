@@ -152,6 +152,15 @@ _KNOWN_ADDRESS_NAMES: dict[str, str] = {
 _THIRD_PARTY_ADDRESS_NAMES: dict[str, str] = {
     "0x0929222bC7Cc533aecC1ccFe9d9Bd6ecbB0CBF43".lower(): "Codex.io (paiement verification compte, confirme operateur 29/07)",
     "0x79aD858cDff50ca6728D2531894001F221e805c7".lower(): "Codex.io - frais de reglement (meme paiement, 29/07)",
+    # OpenRouter -- each recharge appears to use a distinct deposit address
+    # sharing the same "...0Ff6" suffix (payment-processor pattern, not a
+    # fixed address) -- confirmed operateur 08/02 (20 USDC) and 08/01 (20
+    # USDC), both approved via the interactive outflow confirmation. A
+    # future recharge will very likely use YET ANOTHER prefix and won't
+    # match this entry -- labeling is a readability aid for these two
+    # already-resolved alerts, never a guarantee against a future one.
+    "0xdfd0aA6F750B92618E65bed84b8077a520660Ff6".lower(): "OpenRouter (recharge USDC, confirme operateur 08/02)",
+    "0xdfd056b89df165453D6c30c1Cb80d3167EaA0Ff6".lower(): "OpenRouter (recharge USDC, confirme operateur 08/01)",
 }
 
 
