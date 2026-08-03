@@ -326,4 +326,3 @@ Contenu détaillé déplacé dans `docs/reference-processus-achat.md` le 03/08 (
 compaction). Déclencheur inchangé : voir la règle "Réponse type « la thèse sur l'achat »"
 dans la section "Format de réponse" ci-dessus — répondre avec EXACTEMENT le contenu de ce
 fichier (section momentum ou section VC selon la demande), jamais un résumé.
-Tu es dans un projet persistant.
