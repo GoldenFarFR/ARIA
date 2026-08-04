@@ -77,12 +77,6 @@ Solution : token vérifiablement renoncé (owner_address vide + aucune porte dé
 
 ------------------------------------------------------------
 
-[DEPLOYE] Sujet    : Vraie structure de facturation GoPlus trouvee (facture par token, pas par appel)
-Date : 2026.07.21 / Probleme : calibrage initial du throttle base sur un test empirique en rafale (blocage a la 11e requete) sans comprendre pourquoi - le dashboard reel revele un palier gratuit 150 CU/min, 15 CU par token EVM verifie, soit 10 req/min reelles.
-Solution : throttle recalibre a 6.667s (90% de 10/min) ; bug d'auth corrige au passage (mauvais nom d'en-tete access-token au lieu de Authorization: Bearer, l'endpoint restait tolerant donc le bug etait invisible) - services/goplus.py (commit 40a86db6d932)
-
-------------------------------------------------------------
-
 [DEPLOYE] Sujet    : Coupe-circuit reactif + retry cible sur honeypot no_data
 Date : 2026.07.21 / Probleme : aucun coupe-circuit sur pannes GoPlus repetees ; un verdict honeypot_unavailable propre mais vide (no_data) n'etait jamais retente alors qu'il correspondait le plus souvent a un simple delai d'indexation (quasi tous les faux negatifs re-testes juste apres etaient en fait des tokens valides).
 Solution : coupe-circuit 5 echecs consecutifs -> pause 5min ; retry cible unique apres 8s sur no_data uniquement (jamais en boucle, jamais sur une vraie panne reseau deja couverte ailleurs) - services/goplus.py, momentum_entry.py (commits 284f5946 / fc4291d3)

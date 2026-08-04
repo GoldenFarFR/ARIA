@@ -5,12 +5,6 @@
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 
-[DEPLOYE] Sujet    : Mauvais nom de champ — smart-money tournait à vide
-Date : 2026.07.14  /  Probleme : token.get("address") au lieu de address_hash — token_address toujours None depuis la mise en place de l'analyse smart-money
-Solution : corrigé, tests re-mockés sur le vrai schéma API réel. Leçon : tester tout nouveau client d'API externe contre un VRAI appel avant de le considérer terminé — blockscout.py (85e4c16d)
-
-------------------------------------------------------------
-
 [DEPLOYE] Sujet    : Panne infra confondue avec absence légitime de donnée
 Date : 2026.07.15  /  Probleme : une panne GeckoTerminal transitoire figeait un token "sans prix" pour toujours dans le scan incrémental
 Solution : distinction explicite panne transitoire (retenté au prochain passage) vs absence légitime de donnée — smart_money.py (cf. historique git 15/07)
