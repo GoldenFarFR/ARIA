@@ -1982,6 +1982,48 @@ def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) 
     return (1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO) <= ratio <= _CANDLE_PRICE_CONSISTENCY_RATIO
 
 
+# 04/08 -- operator idea ("un seul appel d'analyse qui distribue toutes les
+# données nécessaires par timeframe"): scalping_v1..v6 all share the SAME
+# candidate slice each cycle (build_scalping_pocket_entries's own
+# shared_candidates) and the SAME mode="scalping" candle resolution -- yet
+# each pocket's own analyzer independently re-fetched candles for the SAME
+# (pool, mode) from GeckoTerminal, un-mutualized, unlike the sibling
+# _security_cache/_pair_snapshot_cache caches just above (same short-TTL
+# doctrine, 60s -- long enough to cover one drain/cycle pass across every
+# pocket, short enough to never serve a stale read on the next real cycle).
+# Scoped by (chain, pool, mode, skip_daily) -- never by contract alone, the
+# candle SHAPE genuinely differs by mode/skip_daily. Bypassed entirely when
+# ``min_useful_candles``/``gecko_client`` are explicitly passed
+# (smart_money.py's wallet-scoring path, Item #186 -- a distinct speed-tuned
+# or test-doubled request never shared across pockets) -- never a wrong
+# cache hit for a caller asking for something different.
+_CANDLES_CACHE_TTL_SECONDS = 60.0
+_candles_cache: dict[tuple[str, str, str, bool], tuple[float, list[Candle]]] = {}
+
+
+def _cache_candles(
+    chain: str, pool_address: str, mode: str, skip_daily: bool, candles: list[Candle],
+) -> None:
+    now = time.monotonic()
+    key = (chain, pool_address.lower(), mode, skip_daily)
+    _candles_cache[key] = (now, candles)
+    expired = [k for k, (ts, _c) in _candles_cache.items() if (now - ts) >= _CANDLES_CACHE_TTL_SECONDS]
+    for k in expired:
+        del _candles_cache[k]
+
+
+def _get_cached_candles(
+    chain: str, pool_address: str, mode: str, skip_daily: bool,
+) -> list[Candle] | None:
+    cached = _candles_cache.get((chain, pool_address.lower(), mode, skip_daily))
+    if cached is None:
+        return None
+    ts, candles = cached
+    if (time.monotonic() - ts) >= _CANDLES_CACHE_TTL_SECONDS:
+        return None
+    return candles
+
+
 async def _fetch_candles(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
@@ -2004,7 +2046,19 @@ async def _fetch_candles(
     never interacts with it (it only compares the LAST candle's close to
     ``pair.price_usd``, unaffected by which rung of the ladder produced that
     candle), and stays permanently fail-open here anyway since
-    smart_money.py's wallet-scoring caller never passes ``pair=``."""
+    smart_money.py's wallet-scoring caller never passes ``pair=``.
+
+    04/08 -- short-TTL cache read/write (see ``_candles_cache``'s own
+    comment above) wraps the cascade call: a cache hit skips
+    ``_fetch_candles_impl`` (and its network calls) entirely, a miss falls
+    through to the real cascade exactly as before and populates the cache
+    on a non-empty result (never a `[]`/rejected result -- a transient
+    failure must stay retryable next call, not get frozen in the cache)."""
+    cacheable = pool_address and min_useful_candles is None and gecko_client is None
+    if cacheable:
+        cached = _get_cached_candles(chain, pool_address, mode, skip_daily)
+        if cached is not None:
+            return cached
     candles = await _fetch_candles_impl(
         pool_address, chain, contract=contract, pair=pair, mode=mode,
         gecko_client=gecko_client, min_useful_candles=min_useful_candles,
@@ -2020,6 +2074,8 @@ async def _fetch_candles(
             1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO, _CANDLE_PRICE_CONSISTENCY_RATIO,
         )
         return []
+    if cacheable and candles:
+        _cache_candles(chain, pool_address, mode, skip_daily, candles)
     return candles
 
 

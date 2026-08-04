@@ -180,6 +180,17 @@ def _reset_pair_snapshot_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_candles_cache():
+    """04/08 -- ``_candles_cache`` is a module-level dict keyed by (chain,
+    pool, mode, skip_daily), shared across every ``_fetch_candles`` caller.
+    Same trap as ``_reset_pair_snapshot_cache``/``_reset_holders_cache``
+    above -- almost every test in this file reuses the SAME pool address."""
+    me._candles_cache.clear()
+    yield
+    me._candles_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch):
     """21/07 -- ``_check_honeypot`` peut désormais attendre réellement
     (``_HONEYPOT_NO_DATA_RETRY_DELAY_S``) avant un retry ciblé sur ``no_data`` --
@@ -2684,6 +2695,127 @@ async def test_fetch_candles_scalping_falls_back_to_dexpaprika(monkeypatch):
     assert result == dp_candles
 
 
+# ── _fetch_candles : cache court-terme partagé entre poches (04/08) ────────────────
+
+@pytest.mark.asyncio
+async def test_fetch_candles_cache_hit_skips_network_call(monkeypatch):
+    """04/08, operator idea ("un seul appel d'analyse qui distribue toutes
+    les données nécessaires par timeframe"): a second call for the SAME
+    (chain, pool, mode) within the TTL must never touch the network again --
+    the whole point of mutualizing candles across scalping_v1..v6 (soon v7),
+    which all share the same candidate slice and mode="scalping"."""
+    from aria_core.services import geckoterminal as gt
+
+    gt_calls = 0
+    gt_candles = _plain_candles(3)
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        nonlocal gt_calls
+        gt_calls += 1
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    first = await me._fetch_candles("0xpool", "base", mode="scalping")
+    second = await me._fetch_candles("0xpool", "base", mode="scalping")
+
+    assert first == gt_candles
+    assert second == gt_candles
+    assert gt_calls == 1  # second call served entirely from cache
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_cache_scoped_by_mode(monkeypatch):
+    """The SAME pool under a DIFFERENT mode (standard vs scalping) must never
+    hit -- the candle shape genuinely differs (day/4h/1h vs 15/30min), a
+    cross-mode cache hit would silently corrupt whichever signal reads it."""
+    from aria_core.services import geckoterminal as gt
+
+    gt_calls = 0
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        nonlocal gt_calls
+        gt_calls += 1
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    await me._fetch_candles("0xpool", "base", mode="standard")
+    await me._fetch_candles("0xpool", "base", mode="scalping")
+
+    assert gt_calls == 2  # never shared across modes
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_cache_expires_after_ttl():
+    """Same expiry-simulation pattern as ``test_pair_snapshot_cache_expires_
+    after_ttl`` -- backdates the cached entry's timestamp past the TTL
+    rather than sleeping for real."""
+    key = ("base", "0xpool", "scalping", False)
+    candles = _plain_candles(2)
+    ts = time.monotonic() - me._CANDLES_CACHE_TTL_SECONDS - 1
+    me._candles_cache[key] = (ts, candles)
+
+    assert me._get_cached_candles("base", "0xpool", "scalping", False) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_cache_bypassed_with_min_useful_candles(monkeypatch):
+    """Item #186's wallet-scoring path passes ``min_useful_candles`` for a
+    distinct, speed-tuned request -- must never read from or write to the
+    shared pocket cache, and must never poison it for a later pocket call
+    with default parameters."""
+    from aria_core.services import geckoterminal as gt
+
+    gt_calls = 0
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        nonlocal gt_calls
+        gt_calls += 1
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    await me._fetch_candles("0xpool", "base", mode="standard", min_useful_candles=1)
+    await me._fetch_candles("0xpool", "base", mode="standard", min_useful_candles=1)
+    # Default caller, no cache poisoned by the two calls above -- this 3rd
+    # call is itself a normal cacheable call and DOES populate the cache,
+    # exactly as any other default caller would.
+    await me._fetch_candles("0xpool", "base", mode="standard")
+
+    assert gt_calls == 3  # the min_useful_candles calls never read from a cache either
+    assert list(me._candles_cache.keys()) == [("base", "0xpool", "standard", False)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_cache_never_caches_empty_result(monkeypatch):
+    """A failed/empty cascade result must never be cached -- the next call
+    has to stay a real retry, not get frozen as a permanent 'unavailable'."""
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import coinmarketcap as cmc
+    from aria_core.services import mobula
+    from aria_core.services import dexpaprika as dp
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
+
+    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
+        return cmc.OHLCVResult(candles=[], available=False, error=None)
+
+    async def fake_dp_ohlcv(pool_address, *, network, mode="standard"):
+        return dp.OHLCVResult(candles=[], available=False, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
+    monkeypatch.setattr(mobula, "mobula_configured", lambda: False)
+    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
+
+    result = await me._fetch_candles("0xpool", "base")
+
+    assert result == []
+    assert me._candles_cache == {}
+
+
 # ── _fetch_candles : coupe-circuit adaptatif par fournisseur (#95, 19/07) ───────────
 
 @pytest.mark.asyncio
@@ -2711,9 +2843,16 @@ async def test_fetch_candles_provider_cooldown_skips_after_threshold_failures(mo
 
     assert me._PROVIDER_FAIL_THRESHOLD == 3
     for _ in range(3):
+        # 04/08 -- the new short-TTL candles cache (_candles_cache) would
+        # otherwise short-circuit repeat calls after CoinMarketCap's own
+        # (non-empty) fallback result -- cleared each iteration so this test
+        # keeps exercising REAL repeated calls, its whole point, independent
+        # of that unrelated optimization.
+        me._candles_cache.clear()
         await me._fetch_candles("0xpool", "base")
     assert gt_calls == 3  # les 3 premiers échecs déclenchent bien la pause
 
+    me._candles_cache.clear()
     result = await me._fetch_candles("0xpool", "base")
     assert result == cmc_candles
     assert gt_calls == 3  # 4e appel : GeckoTerminal sauté, pas retenté
@@ -2740,6 +2879,10 @@ async def test_fetch_candles_provider_recovers_after_success(monkeypatch):
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
 
     for _ in range(5):
+        # 04/08 -- same cache-vs-repeat-calls reasoning as the cooldown test
+        # above: cleared each iteration so a successful middle call doesn't
+        # short-circuit the two failures that follow it.
+        me._candles_cache.clear()
         await me._fetch_candles("0xpool", "base")
     assert gt_calls == 5  # jamais sauté -- le succès du milieu a remis le compteur à zéro
     assert not me._provider_in_cooldown("geckoterminal")
