@@ -4397,19 +4397,51 @@ async def _open_new_entries_for_wallet(
                             watch["target_price"], order_sig, wallet=wallet,
                             expiry_hours=watch.get("watch_expiry_hours"),
                         )
-                        if notifier:
-                            await notifier(limit_orders.format_limit_order_placed_alert(order))
-                        # 04/08 -- pilot chart screenshot (scalping_v6/v7
-                        # only, see limit_order_chart.py's own docstring for
-                        # the scope decision). Best-effort, self-contained
-                        # try/except -- never allowed to affect the outer
-                        # except below, which is reserved for order-placement
-                        # failures.
-                        try:
-                            from aria_core import limit_order_chart
-                            await limit_order_chart.maybe_send_order_chart(order, order_sig)
-                        except Exception:  # noqa: BLE001 -- purely visual, never blocking
-                            pass
+                        # 04/08 -- operator-reported Telegram noise (live:
+                        # "j'ai que des graphiques" / "c'est pas un trade
+                        # c'est une tombe vivante"), quantified same session
+                        # (MAG7.ssi: 6 consecutive cancellations since 08/03;
+                        # scalping_v6/v7 both alerting on a byte-identical
+                        # target/invalidation in the same cycle). Two
+                        # independent NOTIFICATION-only checks -- see
+                        # limit_orders.py's own constants comment: the order
+                        # above is ALWAYS created regardless (each pocket's
+                        # trigger/exit logic must run independently, and the
+                        # operator explicitly removed any R/R-based gate on
+                        # order creation itself on 31/07, Item #252) -- only
+                        # whether to ALSO spam Telegram is gated here.
+                        order_chain = sig.get("chain") or "base"
+                        order_reason = order_sig.get("limit_order_reason", "")
+                        suppress_repeat = await limit_orders.should_suppress_repeat_notification(
+                            contract, order_chain, order_reason,
+                        )
+                        suppress_sibling = (not suppress_repeat) and await limit_orders.has_recent_sibling_notification(
+                            contract, order_chain, watch["target_price"], order_reason, exclude_wallet=wallet,
+                        )
+                        if not (suppress_repeat or suppress_sibling):
+                            if notifier:
+                                await notifier(limit_orders.format_limit_order_placed_alert(order))
+                            # 04/08 -- chart screenshot (scalping_v6/v7 pilot,
+                            # then extended to every pocket, see limit_order_
+                            # chart.py's own docstring for the scope decision).
+                            # Best-effort, self-contained try/except -- never
+                            # allowed to affect the outer except below, which
+                            # is reserved for order-placement failures.
+                            try:
+                                from aria_core import limit_order_chart
+                                await limit_order_chart.maybe_send_order_chart(order, order_sig)
+                            except Exception:  # noqa: BLE001 -- purely visual, never blocking
+                                pass
+                        elif suppress_repeat:
+                            logger.info(
+                                "paper_cycle: suppressing repeat notification for %s/%s (%s consecutive cancellations)",
+                                contract[:10], order_reason, limit_orders.REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD,
+                            )
+                        else:
+                            logger.info(
+                                "paper_cycle: suppressing sibling-duplicate notification for %s/%s (wallet=%s)",
+                                contract[:10], order_reason, wallet,
+                            )
                 except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
                     logger.info("paper_cycle: could not place golden-pocket watch order for %s (%s)", contract, exc)
             continue

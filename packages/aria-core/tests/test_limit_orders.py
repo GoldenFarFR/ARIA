@@ -3335,3 +3335,149 @@ def test_format_limit_order_cancelled_alert_labels_known_reasons():
 # +18.3% past its original technical target). Test coverage removed along
 # with it -- see limit_orders.py's own comment where the floor used to live
 # for the full context and the disclosed, accepted tradeoff.
+
+
+# ── Telegram notification-noise fixes (04/08) -- never gate order creation ──
+
+@pytest.mark.asyncio
+async def test_has_recent_sibling_notification_true_for_matching_sibling():
+    """scalping_v6/v7 sharing the 120s candle cache produce byte-identical
+    target/invalidation -- a sibling pocket's very recent order on the same
+    reason must be detected as a duplicate."""
+    await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.4218,
+        _sig(limit_order_reason="rsi_divergence_pending"), wallet="scalping_v6",
+    )
+    result = await lo.has_recent_sibling_notification(
+        "0xMAG7", "base", 0.42181, "rsi_divergence_pending", exclude_wallet="scalping_v7",
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_recent_sibling_notification_false_for_same_wallet():
+    await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.4218,
+        _sig(limit_order_reason="rsi_divergence_pending"), wallet="scalping_v6",
+    )
+    result = await lo.has_recent_sibling_notification(
+        "0xMAG7", "base", 0.4218, "rsi_divergence_pending", exclude_wallet="scalping_v6",
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_recent_sibling_notification_false_for_different_reason():
+    await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.4218,
+        _sig(limit_order_reason="golden_pocket_pending"), wallet="scalping_v6",
+    )
+    result = await lo.has_recent_sibling_notification(
+        "0xMAG7", "base", 0.4218, "rsi_divergence_pending", exclude_wallet="scalping_v7",
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_recent_sibling_notification_false_beyond_tolerance():
+    await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.40,
+        _sig(limit_order_reason="rsi_divergence_pending"), wallet="scalping_v6",
+    )
+    result = await lo.has_recent_sibling_notification(
+        "0xMAG7", "base", 0.4218, "rsi_divergence_pending", exclude_wallet="scalping_v7",
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_recent_sibling_notification_false_outside_window():
+    import aiosqlite
+
+    order = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.4218,
+        _sig(limit_order_reason="rsi_divergence_pending"), wallet="scalping_v6",
+    )
+    async with aiosqlite.connect(lo.DB_PATH) as db:
+        await db.execute(
+            "UPDATE pending_limit_order SET created_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (order["id"],),
+        )
+        await db.commit()
+    result = await lo.has_recent_sibling_notification(
+        "0xMAG7", "base", 0.4218, "rsi_divergence_pending", exclude_wallet="scalping_v7",
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_recent_consecutive_cancellations_counts_matching_reason():
+    for _ in range(3):
+        order = await lo.create_pending_order(
+            "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+        )
+        await lo.mark_cancelled(order["id"], "expired")
+    count = await lo.recent_consecutive_cancellations("0xMAG7", "base", "rsi_divergence_pending")
+    assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_recent_consecutive_cancellations_stops_at_triggered():
+    order1 = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+    )
+    await lo.mark_triggered(order1["id"])
+    order2 = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+    )
+    await lo.mark_cancelled(order2["id"], "expired")
+    count = await lo.recent_consecutive_cancellations("0xMAG7", "base", "rsi_divergence_pending")
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_recent_consecutive_cancellations_ignores_different_reason():
+    order = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="golden_pocket_pending"), wallet="swing",
+    )
+    await lo.mark_cancelled(order["id"], "expired")
+    count = await lo.recent_consecutive_cancellations("0xMAG7", "base", "rsi_divergence_pending")
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_should_suppress_repeat_notification_threshold():
+    """Real case: MAG7.ssi's 3rd consecutive cancellation should suppress
+    the 4th attempt's notification, but not the 1st/2nd."""
+    for _ in range(2):
+        order = await lo.create_pending_order(
+            "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+        )
+        await lo.mark_cancelled(order["id"], "expired")
+    assert await lo.should_suppress_repeat_notification("0xMAG7", "base", "rsi_divergence_pending") is False
+
+    order = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+    )
+    await lo.mark_cancelled(order["id"], "expired")
+    assert await lo.should_suppress_repeat_notification("0xMAG7", "base", "rsi_divergence_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_should_suppress_repeat_notification_never_gates_order_creation():
+    """The decisive invariant (operator's own 31/07 decision, Item #252):
+    repeat failures must NEVER block a new order from being created --
+    only the notification is suppressed."""
+    for _ in range(3):
+        order = await lo.create_pending_order(
+            "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+        )
+        await lo.mark_cancelled(order["id"], "expired")
+    assert await lo.should_suppress_repeat_notification("0xMAG7", "base", "rsi_divergence_pending") is True
+    # A new order can still be created normally -- has_active_order only
+    # blocks a STILL-OPEN order in the same pocket, unaffected by history.
+    assert await lo.has_active_order("0xMAG7", "base", wallet="swing") is False
+    new_order = await lo.create_pending_order(
+        "0xMAG7", "base", "MAG7", 0.42, _sig(limit_order_reason="rsi_divergence_pending"), wallet="swing",
+    )
+    assert new_order["state"] == "pending"

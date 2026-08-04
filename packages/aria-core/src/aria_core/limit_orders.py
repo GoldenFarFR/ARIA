@@ -77,6 +77,28 @@ LIMIT_ORDER_EXPIRY_HOURS = 3.0  # short-lived -- momentum setups go stale fast
 # scratch, kept consistent with that already-calibrated scaling factor.
 LIMIT_ORDER_EXPIRY_HOURS_SCALPING = 1.0
 
+# 04/08 -- Telegram notification-noise fixes (operator-reported live: "j'ai
+# que des graphiques" / "c'est pas un trade c'est une tombe vivante"),
+# quantified same session -- MAG7.ssi alone: 6 consecutive `cancelled`
+# rsi_divergence_pending orders since 08/03, scalping_v6/v7 both placing an
+# order with BYTE-IDENTICAL target/invalidation in the same cycle (they
+# share momentum_entry's 120s candle cache, see scalping_variants.py) --
+# 285 limit orders/3h system-wide, each now also sending a chart screenshot
+# (limit_order_chart.py, added earlier the same day) turns an already-heavy
+# text-alert volume into a wall of near-duplicate photos.
+#
+# Deliberately NEVER touches order creation, the R/R estimate, or whether an
+# order can trigger/buy -- both fixes below only gate the TELEGRAM
+# NOTIFICATION (text alert + chart). The operator explicitly removed the R/R
+# floor gating watch-order CREATION on 31/07 (Item #252, a nominally-bad-R/R
+# DRV setup still profited +18.3% via the trailing-stop/staged-TP exit) --
+# reintroducing any form of R/R- or "this contract keeps failing"-based
+# suppression of the underlying trading logic would directly contradict that
+# decision. These constants only reduce repeated NOISE, nothing else.
+SIBLING_NOTIFICATION_DEDUPE_WINDOW_SECONDS = 300  # same heartbeat cycle, generous margin
+SIBLING_NOTIFICATION_TARGET_TOLERANCE = 0.001  # 0.1% -- float noise, not a real price difference
+REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD = 3  # 3 consecutive cancellations, same contract+reason
+
 # Item #158, 28/07: a bonding-curve token still sitting near
 # bonding_entry._MIN_LIQUIDITY_USD (5,000$, #167) moves too erratically for a
 # "wait for the price to come back down" mechanism to mean anything -- the
@@ -666,6 +688,98 @@ async def has_active_order(contract: str, chain: str, *, wallet: str = "swing") 
         ) as cur:
             row = await cur.fetchone()
     return row is not None
+
+
+async def has_recent_sibling_notification(
+    contract: str, chain: str, target_price: float, reason: str, *,
+    exclude_wallet: str, window_seconds: int = SIBLING_NOTIFICATION_DEDUPE_WINDOW_SECONDS,
+    tolerance: float = SIBLING_NOTIFICATION_TARGET_TOLERANCE,
+) -> bool:
+    """True if a DIFFERENT pocket already placed (and presumably notified)
+    an order for the SAME underlying setup -- same contract/chain/reason,
+    ``target_price`` within ``tolerance`` relative difference -- within the
+    last ``window_seconds``. Real, observed case (04/08): scalping_v6 and
+    scalping_v7 independently detect the identical golden-pocket/RSI-
+    divergence signal in the same cycle (they share momentum_entry's 120s
+    candle cache) and produce byte-identical target/invalidation values --
+    a human sees this as "the same alert, sent twice."
+
+    Never affects order CREATION -- the caller still creates its own
+    ``pending_limit_order`` row for THIS pocket regardless (each pocket's
+    own trigger/exit logic must run independently later); this only tells
+    the caller whether ALSO sending a Telegram notification would be a
+    redundant duplicate of one a sibling pocket already sent."""
+    await _ensure_table()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT target_price, signal_json FROM pending_limit_order "
+            "WHERE contract = ? AND chain = ? AND wallet != ? AND created_at >= ? "
+            "ORDER BY created_at DESC LIMIT 10",
+            (contract, chain, exclude_wallet, cutoff),
+        ) as cur:
+            rows = await cur.fetchall()
+    for row in rows:
+        other_target = row["target_price"]
+        if not other_target or not target_price:
+            continue
+        if abs(other_target - target_price) / target_price > tolerance:
+            continue
+        try:
+            other_sig = json.loads(row["signal_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if other_sig.get("limit_order_reason") == reason:
+            return True
+    return False
+
+
+async def recent_consecutive_cancellations(contract: str, chain: str, reason: str, *, lookback: int = 10) -> int:
+    """How many of the most recent RESOLVED orders (across ALL pockets) for
+    this contract+chain+reason were consecutively 'cancelled', walking back
+    from the newest until a 'triggered' one (for the same reason) breaks the
+    streak. Rows for a DIFFERENT reason are skipped, never counted and never
+    breaking the streak -- a swing-pocket order's resolution says nothing
+    about a scalping-pocket order's own history on the same token.
+
+    Real, observed case (04/08): MAG7.ssi placed 6 consecutive
+    ``rsi_divergence_pending`` orders since 08/03, ALL cancelled, across
+    swing AND scalping_v6/v7 -- a genuinely repeat-failing setup that kept
+    re-triggering a fresh Telegram chart+alert every single time."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT state, signal_json FROM pending_limit_order "
+            "WHERE contract = ? AND chain = ? AND state IN ('cancelled', 'triggered') "
+            "ORDER BY created_at DESC LIMIT ?",
+            (contract, chain, lookback),
+        ) as cur:
+            rows = await cur.fetchall()
+    count = 0
+    for row in rows:
+        try:
+            sig = json.loads(row["signal_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            sig = {}
+        if sig.get("limit_order_reason") != reason:
+            continue
+        if row["state"] == "cancelled":
+            count += 1
+        else:
+            break
+    return count
+
+
+async def should_suppress_repeat_notification(
+    contract: str, chain: str, reason: str, *, threshold: int = REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD,
+) -> bool:
+    """True once ``recent_consecutive_cancellations`` reaches ``threshold`` --
+    the order itself is still created and can still trigger/buy normally
+    (see this module's own constants comment: never a trading-logic gate,
+    Telegram noise reduction only)."""
+    return await recent_consecutive_cancellations(contract, chain, reason) >= threshold
 
 
 async def create_pending_order(

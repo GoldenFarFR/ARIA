@@ -7893,3 +7893,117 @@ async def test_multi_pocket_gate_on_never_splits_an_explicit_caller(tmp_db, monk
     assert act["opened"][0]["wallet"] == "swing"
     assert await pt.get_open_positions(wallet="scalping") == []
     assert await pt.get_open_positions(wallet="vc") == []
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_suppresses_sibling_duplicate_notification(tmp_db):
+    """04/08 real case, operator-reported live ("j'ai que des graphiques"):
+    scalping_v6/v7 independently detect the identical golden-pocket/RSI-
+    divergence setup (byte-identical target/invalidation -- they share
+    momentum_entry's 120s candle cache) -- only the FIRST pocket to place
+    its order should also notify; the second pocket's order is still
+    created (each pocket's own trigger/exit logic must run independently)."""
+    from aria_core import risk_guard, limit_orders
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="scalping_v6", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "HOLD", "symbol": "MAG7", "price": 0.4218, "chain": "base",
+            "reasons": ["golden pocket atteinte, divergence RSI pas encore confirmee"],
+            "hold_reason": "no_entry_signal",
+            "limit_order_candidate": {
+                "target_price": 0.4218, "target": 0.4234, "invalidation": 0.4103,
+                "rr": 0.14, "symbol": "MAG7", "limit_order_reason": "rsi_divergence_pending",
+            },
+        }
+
+    async def price_lookup(contract):
+        return 0.4218
+
+    notified_v6 = []
+    notified_v7 = []
+
+    async def notifier_v6(msg):
+        notified_v6.append(msg)
+
+    async def notifier_v7(msg):
+        notified_v7.append(msg)
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt._open_new_entries_for_wallet(
+        "scalping_v6", [A], fake_analyzer,
+        price_lookup=price_lookup, notifier=notifier_v6, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+    await pt._open_new_entries_for_wallet(
+        "scalping_v7", [A], fake_analyzer,
+        price_lookup=price_lookup, notifier=notifier_v7, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 2  # both pockets still get their own order
+    assert len(notified_v6) == 1  # first pocket notifies normally
+    assert len(notified_v7) == 0  # second pocket's duplicate suppressed
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_suppresses_repeat_failure_notification(tmp_db):
+    """04/08 real case (MAG7.ssi, 6 consecutive cancellations since 08/03):
+    once a contract+reason has failed REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD
+    times in a row, a fresh watch order still gets CREATED (never gated --
+    the operator explicitly removed any R/R-based creation gate on 31/07,
+    Item #252) but no longer spams a new Telegram notification."""
+    from aria_core import risk_guard, limit_orders
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    await pt.reset_portfolio(1_000_000.0)
+    for _ in range(limit_orders.REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD):
+        order = await limit_orders.create_pending_order(
+            A, "base", "MAG7", 0.42,
+            {"limit_order_reason": "rsi_divergence_pending"}, wallet="swing",
+        )
+        await limit_orders.mark_cancelled(order["id"], "expired")
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "HOLD", "symbol": "MAG7", "price": 0.4218, "chain": "base",
+            "reasons": ["golden pocket atteinte, divergence RSI pas encore confirmee"],
+            "hold_reason": "no_entry_signal",
+            "limit_order_candidate": {
+                "target_price": 0.4218, "target": 0.4234, "invalidation": 0.4103,
+                "rr": 0.14, "symbol": "MAG7", "limit_order_reason": "rsi_divergence_pending",
+            },
+        }
+
+    async def price_lookup(contract):
+        return 0.4218
+
+    notified = []
+
+    async def notifier(msg):
+        notified.append(msg)
+
+    await pt._open_new_entries_for_wallet(
+        "swing", [A], fake_analyzer,
+        price_lookup=price_lookup, notifier=notifier, max_new=99,
+        using_default_price_lookup=False, closed_this_cycle=set(),
+        weekly_context=None, risk_state=risk_state, discovery_channel=None,
+        trading_mode="standard", max_positions_cap=None, funnel={},
+    )
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1  # the new order IS created, never gated
+    assert notified == []  # but the repeat-failure notification is suppressed
