@@ -537,14 +537,38 @@ _RVOL_CONFIRMATION_MULTIPLIER = 3.0
 # a restatement, while the trial is active.
 _RVOL_MIN_TRIGGER_VOLUME_USD = 2_500.0
 
+# 08/04 -- real gap found by a 2-agent audit workflow: this HARD REJECTION
+# floor was calibrated for daily/1h/4h candles (see the comment above -- "on
+# a daily candle, the entry floor... had so far almost always validated an
+# order of magnitude higher"), never scoped by mode, and unlike the other
+# scalping-scoped constants fixed the same day this one is a REJECT, not a
+# sizing downgrade -- the most severe of this family of bugs. scalping_
+# variants.py's own comment on this exact call site already notes candles
+# here are 15/30min, dozens of times shorter than daily -- the SAME absolute
+# floor calibrated for a full day's worth of concentrated volume has no
+# reason to hold on a fraction of that window. First-pass value: anchored on
+# _MIN_VOLUME_24H_USD (the entry gate's own 24h floor) rather than an
+# arbitrary fraction -- a genuine RVOL>=3x bounce concentrating at least a
+# whole day's minimum-acceptable volume into ONE 15/30min candle is still a
+# meaningful signal of real capital, not dust. Not yet backtested against
+# real scalping RVOL data -- backlog task to revisit once enough trades
+# accumulate (same doctrine as the ATR-trail bounds, calibrated on only 7
+# trades 08/03).
+_RVOL_MIN_TRIGGER_VOLUME_USD_SCALPING = 500.0
 
-def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str, float | None]:
+
+def _check_volume_confirmation(candles: list[Candle], *, mode: str | None = None) -> tuple[str, str, float | None]:
     """``(status, reason, rvol)`` -- ``status`` in {"confirmed", "not_confirmed", "unknown"},
     cf. the comment above for the full 3-state doctrine. ``rvol`` (07/23,
     performance-breakdown tracking) is the real relative-volume multiple,
     previously only formatted into ``reason`` as text -- ``None`` whenever
     ``status == "unknown"`` (no real number could be computed), never an
-    invented value."""
+    invented value.
+
+    ``mode`` (08/04): scalping uses its own dedicated trigger-volume floor
+    (see ``_RVOL_MIN_TRIGGER_VOLUME_USD_SCALPING``'s own comment) instead of
+    the swing-calibrated default -- same ``mode == "scalping"`` switch
+    already used throughout this module/``risk_guard``/``entry_signals``."""
     if len(candles) < _RVOL_BASELINE_WINDOW + 1:
         return "unknown", "historique insuffisant pour établir une référence de volume", None
 
@@ -554,12 +578,15 @@ def _check_volume_confirmation(candles: list[Candle]) -> tuple[str, str, float |
     if baseline_avg <= 0:
         return "unknown", "aucun volume réel disponible sur cette source (repli synthèse/Dune)", None
 
+    min_trigger_volume = (
+        _RVOL_MIN_TRIGGER_VOLUME_USD_SCALPING if mode == "scalping" else _RVOL_MIN_TRIGGER_VOLUME_USD
+    )
     rvol = trigger_volume / baseline_avg
-    if rvol >= _RVOL_CONFIRMATION_MULTIPLIER and trigger_volume < _RVOL_MIN_TRIGGER_VOLUME_USD:
+    if rvol >= _RVOL_CONFIRMATION_MULTIPLIER and trigger_volume < min_trigger_volume:
         return (
             "not_confirmed",
             f"volume relatif {rvol:.1f}x >= {_RVOL_CONFIRMATION_MULTIPLIER:.0f}x MAIS bougie "
-            f"déclenchante {trigger_volume:,.0f}$ < {_RVOL_MIN_TRIGGER_VOLUME_USD:,.0f}$ -- "
+            f"déclenchante {trigger_volume:,.0f}$ < {min_trigger_volume:,.0f}$ -- "
             "ratio élevé sur une référence trop effondrée, pas un vrai flux de capital",
             rvol,
         )
@@ -3783,7 +3810,7 @@ async def evaluate_momentum_entry(
     volume_confirmed: bool | None = None
     rvol_multiple: float | None = None
     if action == "BUY":
-        volume_status, volume_reason, rvol_multiple = _check_volume_confirmation(candles)
+        volume_status, volume_reason, rvol_multiple = _check_volume_confirmation(candles, mode=mode)
         if volume_status == "not_confirmed" and not floor_trade:
             # 07/23 -- floor mode waives the RVOL reject (a quality/timing bar,
             # not a safety one) so a low-relative-volume "dead volume" pick is

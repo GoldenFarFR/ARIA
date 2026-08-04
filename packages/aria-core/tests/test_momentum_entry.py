@@ -3036,7 +3036,7 @@ def _patch_pipeline(
     # 19/07 -- RVOL mocké "confirmed" par défaut (aucun rejet, aucun malus de sizing) :
     # ce fichier teste le pipeline déterministe/R-R en amont, pas ce garde (couvert par
     # ses propres tests dédiés plus bas).
-    monkeypatch.setattr(me, "_check_volume_confirmation", lambda candles_arg: volume_status)
+    monkeypatch.setattr(me, "_check_volume_confirmation", lambda candles_arg, *, mode=None: volume_status)
     # 17/07 -- garde de sécurité final mocké PASS par défaut : ce fichier teste le
     # pipeline déterministe/R-R en amont, pas ce garde (couvert par ses propres tests
     # dédiés plus bas) -- sans ce mock, chaque test BUY échouerait en environnement de
@@ -4267,6 +4267,35 @@ class TestCheckVolumeConfirmation:
         status, _reason, rvol = me._check_volume_confirmation(candles)
         assert status == "confirmed"
         assert rvol == pytest.approx(3.125)
+
+    # ── plancher dédié scalping (08/04, gap trouvé par un workflow d'audit) ──────────
+
+    def test_scalping_mode_rejected_by_swing_floor_passes_with_scalping_floor(self):
+        """08/04, real gap found live: moyenne=100, déclencheur=800 -> RVOL 8x
+        (largement >= 3x) MAIS 800$ < 2500$ (plancher swing) -- rejeté sans
+        mode. Avec mode="scalping" (plancher 500$), le MÊME déclencheur passe
+        -- preuve que le rejet dur ne dépend plus d'un plancher calibré pour
+        des bougies journalières sur des bougies 15/30min."""
+        candles = _volume_candles([100.0] * 10, 800.0)
+        swing_status, _reason, _rvol = me._check_volume_confirmation(candles)
+        scalping_status, _reason, _rvol = me._check_volume_confirmation(candles, mode="scalping")
+        assert swing_status == "not_confirmed"
+        assert scalping_status == "confirmed"
+
+    def test_scalping_mode_still_rejects_below_its_own_floor(self):
+        """Le plancher scalping (500$) reste un vrai plancher -- un déclencheur
+        encore plus faible (200$) reste rejeté même en mode scalping."""
+        candles = _volume_candles([50.0] * 10, 200.0)  # RVOL 4x, sous 500$
+        status, reason, rvol = me._check_volume_confirmation(candles, mode="scalping")
+        assert status == "not_confirmed"
+        assert "500" in reason
+        assert rvol == pytest.approx(4.0)
+
+    def test_unknown_mode_falls_back_to_swing_floor(self):
+        candles = _volume_candles([100.0] * 10, 800.0)
+        for mode in (None, "standard", "vc"):
+            status, _reason, _rvol = me._check_volume_confirmation(candles, mode=mode)
+            assert status == "not_confirmed"
 
 
 @pytest.mark.asyncio

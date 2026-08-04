@@ -549,15 +549,38 @@ def _apply_regime_to_tp_stages(
 BREAKEVEN_FLOOR_TP1_RATIO = 0.5
 BREAKEVEN_FLOOR_MIN_PCT = 0.08
 
+# 08/04 -- real gap found by a 2-agent audit workflow: BREAKEVEN_FLOOR_MIN_PCT
+# was calibrated 07/20, before scalping existed, and never scoped by mode --
+# same class of bug as the ATR invalidation floor and trailing stop before
+# their own 08/04/08/03 fixes. Scalping's TP1 distance (stage1_pct above,
+# anchored on the setup's real technical target) sits in the low single-to-
+# double-digit percent range given the now-corrected ATR invalidation floor
+# (entry_signals.MIN/MAX_ATR_INVALIDATION_PCT_SCALPING, 1.5%-10%) -- 0.5x
+# that distance is typically 1-5%, almost always BELOW the 8% swing floor,
+# which then dominates every time. Result: the breakeven safety net this
+# mechanism exists to provide almost never actually engages on scalping.
+# Same ~4x reduction ratio already used for the ATR invalidation floor
+# (5%->1.5%, 40%->10%) -- kept consistent with that already-calibrated scale,
+# not re-derived from scratch.
+BREAKEVEN_FLOOR_MIN_PCT_SCALPING = 0.02
 
-def _breakeven_floor_threshold(target_price: float | None, entry_price: float | None) -> float | None:
+
+def _breakeven_floor_threshold(
+    target_price: float | None, entry_price: float | None, *, mode: str | None = None,
+) -> float | None:
     """Gain threshold (fraction, e.g. ``0.08`` = +8%) beyond which breakeven
     locks in -- ``None`` if no valid entry price (never a computation on
-    missing data)."""
+    missing data).
+
+    ``mode`` (08/04): scalping uses its own dedicated floor (see
+    ``BREAKEVEN_FLOOR_MIN_PCT_SCALPING``'s own comment) instead of the
+    swing-calibrated default -- same ``mode == "scalping"`` switch already
+    used by ``_effective_trail_pct``/``risk_guard._rr_thresholds``."""
     if not entry_price or entry_price <= 0:
         return None
     stage1_pct = _effective_tp_stages(target_price, entry_price)[0]
-    return max(BREAKEVEN_FLOOR_TP1_RATIO * stage1_pct, BREAKEVEN_FLOOR_MIN_PCT)
+    floor_pct = BREAKEVEN_FLOOR_MIN_PCT_SCALPING if mode == "scalping" else BREAKEVEN_FLOOR_MIN_PCT
+    return max(BREAKEVEN_FLOOR_TP1_RATIO * stage1_pct, floor_pct)
 
 
 # 07/20 -- TIME confirmation of the high water mark (replaces the
@@ -4597,9 +4620,21 @@ async def _open_new_entries_for_wallet(
                         )
                         order_sig["historical_trigger_rate"] = hist_rate
                         order_sig["historical_trigger_sample"] = hist_sample
+                        # 08/04 -- real gap found live: unlike the golden-pocket/
+                        # RSI-watch sibling branch above (which already passes
+                        # expiry_hours=watch.get("watch_expiry_hours")), this
+                        # price-drift path never forwarded one at all, silently
+                        # falling back to the flat swing-calibrated 3h for every
+                        # mode -- see limit_orders.LIMIT_ORDER_EXPIRY_HOURS_
+                        # SCALPING's own comment for the full rationale.
+                        drift_expiry_hours = (
+                            limit_orders.LIMIT_ORDER_EXPIRY_HOURS_SCALPING
+                            if sig.get("mode") == "scalping"
+                            else None
+                        )
                         order = await limit_orders.create_pending_order(
                             contract, sig.get("chain") or "base", sig.get("symbol", ""), price, order_sig,
-                            wallet=wallet,
+                            wallet=wallet, expiry_hours=drift_expiry_hours,
                         )
                         if notifier:
                             await notifier(limit_orders.format_limit_order_placed_alert(order))
@@ -5347,7 +5382,7 @@ async def _run_paper_cycle_locked(
             # reading, without the confirmation the high_water ratchet
             # already applies).
             entry_price = p["entry_price"]
-            flash_threshold = _breakeven_floor_threshold(p.get("target_price"), entry_price)
+            flash_threshold = _breakeven_floor_threshold(p.get("target_price"), entry_price, mode=p.get("mode"))
             breakeven_locked = bool(p.get("breakeven_locked"))
             if not breakeven_locked and entry_price and flash_threshold is not None:
                 prev_be_pending = p.get("breakeven_pending_since")

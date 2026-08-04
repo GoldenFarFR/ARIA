@@ -61,6 +61,22 @@ DB_PATH = str(aria_db_path())
 LIMIT_ORDER_WATCH_TRIGGER_MULT = 1.10  # enters "watching" once price <= target * 1.10
 LIMIT_ORDER_EXPIRY_HOURS = 3.0  # short-lived -- momentum setups go stale fast
 
+# 08/04 -- real gap found by a 2-agent audit workflow (diligence #9's sibling
+# findings): the "price drifted upward" limit-order path (paper_trader.py's
+# ``_open_new_entries_for_wallet``) never passed ``expiry_hours`` to
+# ``create_pending_order``, silently falling back to the flat 3h above for
+# EVERY mode -- unlike its sibling golden-pocket/RSI-watch path, which
+# already scales its own expiry dynamically off the real candle interval
+# (see momentum_entry._rsi_divergence_watch_candidate's ``watch_expiry_hours``).
+# Scalping candles are 15-30min (momentum_entry._fetch_candles' mode=
+# "scalping" Mobula tier) vs swing's daily/4h/1h cascade -- the flat 3h
+# represents 6-12 scalping candles, several times longer than the ~2-4
+# candles a genuinely fast pullback should resolve within. Same ~3-4x
+# reduction ratio already used for the ATR invalidation floor (entry_signals.
+# MIN/MAX_ATR_INVALIDATION_PCT_SCALPING, 08/04) -- not re-derived from
+# scratch, kept consistent with that already-calibrated scaling factor.
+LIMIT_ORDER_EXPIRY_HOURS_SCALPING = 1.0
+
 # Item #158, 28/07: a bonding-curve token still sitting near
 # bonding_entry._MIN_LIQUIDITY_USD (5,000$, #167) moves too erratically for a
 # "wait for the price to come back down" mechanism to mean anything -- the

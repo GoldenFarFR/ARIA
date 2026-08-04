@@ -1623,6 +1623,33 @@ def test_breakeven_floor_threshold_none_without_entry_price():
     assert pt._breakeven_floor_threshold(1.4, 0.0) is None
 
 
+def test_breakeven_floor_threshold_scalping_mode_uses_lower_floor():
+    """08/04, real gap found live: a typical scalping TP1 (target 1.03, +3%,
+    consistent with the now-corrected ATR invalidation floor's tighter range)
+    gives 50%*3%=1.5%, clamped by the 8% swing floor without mode -- the
+    breakeven safety net this mechanism exists to provide almost never
+    engages on scalping as a result. With mode="scalping", the dedicated 2%
+    floor takes over instead, still above the raw 1.5% but far below 8%."""
+    swing_threshold = pt._breakeven_floor_threshold(1.03, 1.0)
+    scalping_threshold = pt._breakeven_floor_threshold(1.03, 1.0, mode="scalping")
+    assert swing_threshold == pytest.approx(pt.BREAKEVEN_FLOOR_MIN_PCT)
+    assert scalping_threshold == pytest.approx(pt.BREAKEVEN_FLOOR_MIN_PCT_SCALPING)
+    assert scalping_threshold < swing_threshold
+
+
+def test_breakeven_floor_threshold_scalping_mode_still_uses_ratio_when_above_its_floor():
+    """Un TP1 large (+40%, cas rare mais possible en scalping) doit toujours
+    utiliser 50% de la distance réelle même en mode scalping -- le plancher
+    dédié n'écrase jamais un seuil déjà légitimement au-dessus de lui."""
+    threshold = pt._breakeven_floor_threshold(1.4, 1.0, mode="scalping")
+    assert threshold == pytest.approx(0.20)  # 50% * 40%, identique au cas swing
+
+
+def test_breakeven_floor_threshold_unknown_mode_falls_back_to_swing_floor():
+    for mode in (None, "standard", "vc"):
+        assert pt._breakeven_floor_threshold(1.03, 1.0, mode=mode) == pytest.approx(pt.BREAKEVEN_FLOOR_MIN_PCT)
+
+
 @pytest.mark.asyncio
 async def test_breakeven_floor_single_touch_starts_candidacy_not_yet_locked(tmp_db):
     """20/07 -- confirmation temporelle (revue croisée externe, corrige l'asymétrie
@@ -1697,6 +1724,59 @@ async def test_breakeven_floor_locks_after_sustained_touch_and_protects_against_
     assert closed["exit_price"] == pytest.approx(0.95)
     assert "Point mort verrouillé" in closed["close_notes"]
     assert "+20%" in closed["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_scalping_mode_starts_candidacy_below_swing_floor(tmp_db):
+    """08/04, real gap found live: TP1 ~= +3% from the REAL entry (target
+    1.0403, entry_price becomes 1.01 after open_position's scalping-mode 1%
+    DEX buy fee -- see risk_guard.DEX_SWAP_FEE_PCT) -> raw threshold
+    50%*3%=1.5%. Without mode, the 8% swing floor dominates -- this setup
+    would never start candidacy at all. With mode="scalping" (2% floor), a
+    price of 1.031 (~+2.08% from the real 1.01 entry) DOES touch the flash
+    threshold (1.01*1.02=1.0302) and starts candidacy -- proves the safety
+    net actually engages on a realistic scalping setup instead of being
+    structurally unreachable."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, target_price=1.0403, invalidation_price=0.97, alloc_usd=500.0,
+        wallet="scalping_v6", mode="scalping",
+    )
+
+    prices = {"v": 1.031}  # touche le seuil flash scalping (1.01*1.02=1.0302)
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 0  # candidature seulement, pas encore verrouillé
+    assert pos["breakeven_pending_since"] is not None
+
+
+@pytest.mark.asyncio
+async def test_breakeven_floor_same_price_never_starts_candidacy_without_scalping_mode(tmp_db):
+    """Même target_price (1.0403), même prix touché (1.031, ~+3.1% -- swing
+    n'applique aucun frais d'achat, entry_price reste exactement 1.0), mode
+    "standard" -- le plancher swing (8%, seuil 1.08) domine, la candidature ne
+    démarre JAMAIS à ce prix. Preuve que le fix précédent est bien scopé au
+    mode, jamais un changement de comportement global."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, target_price=1.0403, invalidation_price=0.97, alloc_usd=90_000, wallet="swing",
+    )
+
+    prices = {"v": 1.031}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["closed"] == []
+    pos = await pt._get_open(D)
+    assert pos["breakeven_locked"] == 0
+    assert pos["breakeven_pending_since"] is None  # jamais entré en candidature
 
 
 @pytest.mark.asyncio
@@ -5007,6 +5087,70 @@ async def test_run_cycle_places_limit_order_on_small_upward_drift_check_case(tmp
     order_sig = _json.loads(active[0]["signal_json"])
     assert order_sig["estimated_alloc_usd"] > 0
     assert order_sig["estimated_alloc_pct"] > 0
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_price_drift_limit_order_uses_scalping_expiry(tmp_db, monkeypatch):
+    """08/04, real gap found live: unlike its golden-pocket/RSI-watch sibling
+    (already mode-aware), this price-drift path never forwarded expiry_hours
+    at all -- silently falling back to the flat 3h swing-calibrated default
+    for scalping too. Same setup as the CHECK case above, just mode="scalping"
+    -- the resulting order's expires_at must reflect the dedicated ~1h
+    scalping window, never the swing 3h."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "CHECK", "price": 0.038, "target": 0.06,
+            "invalidation": 0.03, "rr": 2.75, "align_score": 3, "chain": "base",
+            "mode": "scalping",
+        }
+
+    async def price_lookup(contract):
+        return 0.044
+
+    before = datetime.now(timezone.utc)
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+
+    from aria_core import limit_orders
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1
+    expires_at = datetime.fromisoformat(active[0]["expires_at"])
+    delta_hours = (expires_at - before).total_seconds() / 3600.0
+    assert delta_hours == pytest.approx(limit_orders.LIMIT_ORDER_EXPIRY_HOURS_SCALPING, abs=0.05)
+    assert delta_hours < limit_orders.LIMIT_ORDER_EXPIRY_HOURS  # jamais le flat 3h swing
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_price_drift_limit_order_keeps_swing_expiry_unchanged(tmp_db, monkeypatch):
+    """Comportement INCHANGÉ pour tout mode autre que scalping (None/"standard") --
+    même setup, sans mode="scalping", doit garder le flat 3h historique."""
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", _REAL_EXECUTION_RR_STILL_VALID)
+    await pt.reset_portfolio(1_000_000.0)
+
+    async def fake_analyzer(contract):
+        return {
+            "action": "BUY", "symbol": "CHECK", "price": 0.038, "target": 0.06,
+            "invalidation": 0.03, "rr": 2.75, "align_score": 3, "chain": "base",
+        }
+
+    async def price_lookup(contract):
+        return 0.044
+
+    before = datetime.now(timezone.utc)
+    act = await pt.run_paper_cycle(candidates=[A], analyzer=fake_analyzer, price_lookup=price_lookup)
+    assert act["opened"] == []
+
+    from aria_core import limit_orders
+
+    active = await limit_orders.get_active_orders()
+    assert len(active) == 1
+    expires_at = datetime.fromisoformat(active[0]["expires_at"])
+    delta_hours = (expires_at - before).total_seconds() / 3600.0
+    assert delta_hours == pytest.approx(limit_orders.LIMIT_ORDER_EXPIRY_HOURS, abs=0.05)
 
 
 @pytest.mark.asyncio

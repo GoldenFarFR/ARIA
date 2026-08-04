@@ -60,7 +60,7 @@ def _patch_gates_and_candles(
     def fake_technical_alignment(candles):
         return align_score, [], {"ema_above": True, "macd_above": True, "bullish_pattern": True}
 
-    def fake_volume_confirmation(candles):
+    def fake_volume_confirmation(candles, *, mode=None):
         return volume_status, f"volume ({volume_status})", 5.0 if volume_status == "confirmed" else None
 
     monkeypatch.setattr(momentum_entry, "evaluate_hard_gates", fake_hard_gates)

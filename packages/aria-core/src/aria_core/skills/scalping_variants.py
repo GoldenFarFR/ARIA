@@ -182,9 +182,12 @@ async def _gates_and_candles_uncached(
     # is better served by relative volume -- momentum_entry's own
     # _check_volume_confirmation, already the hard gate the standard
     # momentum pipeline uses for exactly this purpose (RVOL >= 3.0x the prior
-    # 10-candle average, floor $2,500 on the triggering candle) -- a signal
-    # that CAN react on the same candle the bounce forms on, unlike a lagging
-    # moving average. Same 3-state doctrine reused as-is: "not_confirmed"
+    # 10-candle average, floor $2,500 on the triggering candle for swing/
+    # daily-scale candles, $500 with mode="scalping" -- 08/04 fix, see that
+    # function's own comment; this call's candles are 15/30min, dozens of
+    # times shorter than daily, so the swing floor never applied here before
+    # the fix) -- a signal that CAN react on the same candle the bounce forms
+    # on, unlike a lagging moving average. Same 3-state doctrine reused as-is: "not_confirmed"
     # (real data, bounce not backed by capital) rejects; "unknown" (no real
     # per-candle volume on this data source, e.g. a synthesis fallback) never
     # rejects -- same fail-open doctrine as everywhere else in this pipeline,
@@ -193,7 +196,7 @@ async def _gates_and_candles_uncached(
     # informational/sizing signal (still computed and propagated in
     # _buy_result below, still feeds risk_guard's conviction sizing) -- only
     # its use as a HARD GATE here is removed.
-    volume_status, volume_reason, _rvol = momentum_entry._check_volume_confirmation(candles)
+    volume_status, volume_reason, _rvol = momentum_entry._check_volume_confirmation(candles, mode="scalping")
     if volume_status == "not_confirmed":
         return None, [], _hold(
             chain, best_pair.base_symbol, best_pair.price_usd,
@@ -256,7 +259,7 @@ def _buy_result(
     # False/unconfirmed) so risk_guard.compute_entry_alloc's existing
     # volume_confirmed handling (sizing penalty on unconfirmed/unknown volume)
     # applies identically to scalping, no new sizing code needed.
-    volume_status, _volume_reason, rvol_multiple = momentum_entry._check_volume_confirmation(candles)
+    volume_status, _volume_reason, rvol_multiple = momentum_entry._check_volume_confirmation(candles, mode="scalping")
     volume_confirmed = volume_status == "confirmed"
     # 08/02 -- real bug found (adversarial cross-review workflow, confirmed
     # against the real code): V5 ("no fixed TP, pure trailing stop" by
