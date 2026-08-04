@@ -299,6 +299,16 @@ def test_reference_tokens_excluded_covers_known_lst():
     assert "0x97be14dd8f994a5364573bc035d85309e7cb34de" in excluded  # JitoSOL (bridged)
 
 
+def test_reference_tokens_excluded_covers_wsteth():
+    """08/04 -- the exact "real gap" the 24/07 audit documented finally
+    recurring live: 4 separate swing/scalping limit orders sourced on
+    wstETH (near-deterministic ETH-staking derivative, no token-specific
+    edge) in 3 days, one with a 1.2%/327-order historical trigger rate --
+    verified against the real open order's own contract address."""
+    excluded = me.reference_tokens_excluded("base")
+    assert "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452" in excluded  # wstETH
+
+
 def test_reference_tokens_excluded_covers_eurc():
     """24/07 -- found live in the exact same audit sweep that caught JitoSOL:
     a real "floor" position was opened on EURC (Circle, EUR stablecoin) --

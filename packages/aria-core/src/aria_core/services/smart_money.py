@@ -119,6 +119,15 @@ _WRAPPED_NATIVE_ADDRESSES: frozenset[str] = frozenset({
 _LST_ADDRESSES_BY_CHAIN: dict[str, frozenset[str]] = {
     "base": frozenset({
         "0x97be14dd8f994a5364573bc035d85309e7cb34de",  # JitoSOL (bridged) -- confirmed live, 24/07
+        # 08/04 -- the exact "real gap" documented above finally recurring
+        # live: 4 separate swing/scalping limit orders sourced on wstETH in
+        # 3 days (contract confirmed against the real open order,
+        # historical_trigger_rate("rsi_divergence_pending", wallet="swing")
+        # verified at 1.2%/327 orders -- a near-deterministic ETH-staking
+        # derivative producing "golden pocket"/"RSI divergence" chart
+        # patterns that are really just ETH's own chart, no token-specific
+        # edge, disguised as a Base momentum candidate).
+        "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452",  # wstETH -- confirmed live, 08/04
     }),
 }
 
