@@ -1197,9 +1197,53 @@ class TestGetPriceHistory:
 
         result = await dune.get_price_history(WETH_BASE)
 
+        # 04/08 -- fixed: an unparseable bucket used to keep the row with a
+        # fabricated ts=0 (real bug found live: Dune's actual format wasn't
+        # parseable at all, every row silently got ts=0). Now skipped like
+        # any other malformed field, never a fabricated timestamp.
         assert result.available is True
-        assert len(result.candles) == 1  # la 1re ligne (open=None) est ignorée, la 2e garde ts=0
-        assert result.candles[0].ts == 0
+        assert len(result.candles) == 0  # both rows dropped: open=None, then an unparseable bucket
+
+    @pytest.mark.asyncio
+    async def test_real_bucket_format_with_utc_suffix_parses(self, monkeypatch):
+        """04/08 -- real bug found live (operator OHLCV-quality audit): Dune's
+        actual returned ``bucket`` format is ``"2026-08-02 19:00:00.000 UTC"``
+        (a trailing " UTC" suffix, not "Z"/an offset) -- the old parser never
+        matched it and silently produced ts=0 on every row (confirmed live,
+        WETH/base, 49/49 candles). Locks in the fix: the real format parses
+        to a real, non-zero, correctly-ordered timestamp."""
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"bucket": "2026-08-02 19:00:00.000 UTC", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1},
+                                {"bucket": "2026-08-02 20:00:00.000 UTC", "open": 1.1, "high": 1.3, "low": 1.0, "close": 1.25},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_price_history(WETH_BASE)
+
+        assert result.available is True
+        assert len(result.candles) == 2
+        assert result.candles[0].ts != 0
+        assert result.candles[1].ts > result.candles[0].ts
+        assert result.candles[1].ts - result.candles[0].ts == 3600
 
     @pytest.mark.asyncio
     async def test_execution_failure_propagates_unavailable(self, monkeypatch):

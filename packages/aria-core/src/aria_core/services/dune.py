@@ -1040,14 +1040,32 @@ async def get_price_history(
         except (TypeError, ValueError):
             continue
         bucket = row.get("bucket")
-        ts = 0
+        ts: int | None = None
         if isinstance(bucket, str):
             import datetime
 
+            # 04/08 -- real bug found live (operator OHLCV-quality audit
+            # across the whole cascade): Dune's real returned format is
+            # "2026-08-02 19:00:00.000 UTC" (a trailing " UTC" SUFFIX, not
+            # "Z" or a "+00:00" offset) -- the old .replace("Z", "+00:00")
+            # never matched it, ``fromisoformat`` raised on every single row,
+            # and the caught exception fell back to ``ts=0`` -- silently
+            # producing 49/49 candles all timestamped at the Unix epoch,
+            # confirmed live (WETH/base). ``ts=0`` was then treated as a
+            # valid timestamp by every caller (RSI/gap-detection/expiry all
+            # depend on ts deltas) -- exactly the "fabricated data" this
+            # module's own docstring says never to do, just for time instead
+            # of price. Now: strip the " UTC" suffix (only known real
+            # format) before parsing, and on ANY parse failure, SKIP the row
+            # (never fabricate ts=0) -- same fail-closed doctrine as the
+            # open/high/low/close parse failure just above.
+            normalized = bucket.replace("Z", "+00:00").replace(" UTC", "+00:00")
             try:
-                ts = int(datetime.datetime.fromisoformat(bucket.replace("Z", "+00:00")).timestamp())
+                ts = int(datetime.datetime.fromisoformat(normalized).timestamp())
             except ValueError:
-                ts = 0
+                ts = None
+        if ts is None:
+            continue
         candles.append(Candle(ts=ts, open=open_, high=high, low=low, close=close, volume=0.0))
 
     return DunePriceHistoryResult(candles=candles, available=True, error=None)
