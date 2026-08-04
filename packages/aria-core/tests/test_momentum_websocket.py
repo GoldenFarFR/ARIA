@@ -1063,11 +1063,11 @@ async def test_drain_multi_pocket_respects_scalping_only_and_vc_pocket_gates(mon
 
 
 @pytest.mark.asyncio
-async def test_drain_multi_pocket_gate_on_dispatches_six_scalping_variants_when_variants_enabled(
+async def test_drain_multi_pocket_gate_on_dispatches_seven_scalping_variants_when_variants_enabled(
     monkeypatch,
 ):
     """08/01 -- real bug found live: this drain used to hardcode its own
-    single "scalping" wallet entry, never updated when scalping_v1..v6 were
+    single "scalping" wallet entry, never updated when scalping_v1..v7 were
     introduced -- it kept feeding the legacy pocket through this 30s drain,
     invisible to and duplicate of the periodic heartbeat's own multi-pocket
     construction (642 limit orders / 3 open positions on "scalping" found
@@ -1138,7 +1138,7 @@ async def test_drain_multi_pocket_gate_on_dispatches_six_scalping_variants_when_
     by_wallet = {c["wallet"]: c for c in captured_calls}
     assert set(by_wallet) == {
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "swing", "vc",
+        "scalping_v7", "swing", "vc",
     }
     # every scalping-variant pocket (v1..v6) shares the SAME candidate list --
     # the legacy "scalping" wallet is never sourced through this drain again.

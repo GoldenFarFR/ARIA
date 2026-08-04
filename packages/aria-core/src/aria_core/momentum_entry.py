@@ -2937,9 +2937,23 @@ RSI_WATCH_MIN_SPAN = 15
 RSI_WATCH_MAX_SPAN = 20
 RSI_WATCH_MAX_HORIZON_CANDLES = 20
 
+# 08/04, scalping_v7: forward-return backtest run on real closed-order candles
+# this session (25 occurrences, 4 tokens, ~2.5 days) found the CURRENT window
+# above (15-20) has the WORST win rate of every window tested (40% at short
+# horizons), while a narrower [4-10] window scored 85-90%. Honest caveat, not
+# hidden: this sample is small and the occurrences are autocorrelated (same
+# few tokens revisited) -- directionally suggestive, not statistically
+# proven. Isolated to its OWN dedicated pocket (scalping_v7) rather than
+# applied globally, specifically so this unproven-at-scale window can be
+# compared side by side against the operator-validated 15-20 window (v6) on
+# real forward trades, never silently replacing it everywhere at once.
+RSI_WATCH_MIN_SPAN_V7 = 4
+RSI_WATCH_MAX_SPAN_V7 = 10
+
 
 def _rsi_divergence_watch_candidate(
     contract: str, signal, symbol: str, price: float, candles: list,
+    *, rsi_watch_span: tuple[int, int] | None = None,
 ) -> dict | None:
     """Item #183 (28/07), watch-RSI-divergence: builds the payload for a
     watch-and-wait limit order when the price has ALREADY reached the golden
@@ -3049,11 +3063,19 @@ def _rsi_divergence_watch_candidate(
                 1.0, min(720.0, (interval_seconds * RSI_WATCH_MAX_HORIZON_CANDLES) / 3600.0)
             )
 
+    # 08/04, scalping_v7: resolved ONCE here (creation time), then persisted
+    # on the returned dict (rsi_watch_min_span/max_span below) rather than
+    # re-derived from the wallet at every later check -- limit_orders.check_
+    # rsi_divergence_watching_order reads it straight off the order's own
+    # signal JSON, same doctrine as every other per-order snapshot field
+    # (entry_atr_pct, recent_low) this function already sets.
+    min_span, max_span = rsi_watch_span or (RSI_WATCH_MIN_SPAN, RSI_WATCH_MAX_SPAN)
+
     logger.info(
         "momentum_entry: rsi-divergence watch CREATED for %s -- price=%.6g already in golden "
         "pocket (%.6g-%.6g), waiting up to %d candles (expiry ~%.1fh) for a divergence with span %d-%d",
         contract, price, signal.gp_low, signal.gp_high,
-        RSI_WATCH_MAX_HORIZON_CANDLES, watch_expiry_hours, RSI_WATCH_MIN_SPAN, RSI_WATCH_MAX_SPAN,
+        RSI_WATCH_MAX_HORIZON_CANDLES, watch_expiry_hours, min_span, max_span,
     )
 
     return {
@@ -3068,6 +3090,14 @@ def _rsi_divergence_watch_candidate(
         "limit_order_reason": "rsi_divergence_pending",
         "last_candle_ts": candles[-1].ts,
         "watch_expiry_hours": watch_expiry_hours,
+        # 08/04, scalping_v7: the span window THIS order must confirm within
+        # -- defaults to the same operator-validated 15-20 window for every
+        # pocket that doesn't override it (rsi_watch_span=None), so an order
+        # row from before this field existed (sig.get() fallback in
+        # limit_orders.py) behaves identically to one with these two fields
+        # explicitly set to 15/20.
+        "rsi_watch_min_span": min_span,
+        "rsi_watch_max_span": max_span,
         # Item #234 (30/07), operator feedback ("je ne vois pas la cible
         # d'achat, une fourchette serait appréciée") -- this watch type has no
         # single buy-trigger price to reach (entry == current price already,
@@ -3080,7 +3110,7 @@ def _rsi_divergence_watch_candidate(
         "reason": (
             f"prix déjà dans la golden pocket ({signal.gp_low:.6g}-{signal.gp_high:.6g}) mais "
             "divergence RSI pas encore confirmée -- ordre limite posé, surveillance de sa "
-            f"formation (span {RSI_WATCH_MIN_SPAN}-{RSI_WATCH_MAX_SPAN} bougies) plutôt qu'un rejet"
+            f"formation (span {min_span}-{max_span} bougies) plutôt qu'un rejet"
         ),
     }
 
@@ -3278,7 +3308,7 @@ async def refresh_dex_composite_score(contract: str, chain: str):
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
-    waive_holder_concentration: bool = False,
+    waive_holder_concentration: bool = False, rsi_watch_span: tuple[int, int] | None = None,
 ) -> dict | None:
     """Momentum entry decision (#194) for ``contract`` on ``chain``.
 
@@ -3295,6 +3325,16 @@ async def evaluate_momentum_entry(
     skipping it is a pure speed/cost win, not a safety regression. The
     honeypot/security hard gates (``evaluate_hard_gates``) are UNCHANGED and
     fully active regardless of mode.
+
+    ``rsi_watch_span`` (08/04, scalping_v7): overrides the trigger window for
+    the RSI-divergence watch-and-wait mechanism (``_rsi_divergence_watch_
+    candidate``) on a PER-CALL basis -- ``None`` (default) keeps the module-
+    level ``RSI_WATCH_MIN_SPAN``/``RSI_WATCH_MAX_SPAN`` (15-20, the operator-
+    validated window every other pocket still uses), unchanged for every
+    existing caller. Threaded through so a single caller (``paper_trader.
+    build_scalping_pocket_entries``) can give one pocket -- and only that one
+    -- a different span, without touching the global constants any other
+    pocket relies on.
 
     ``relaxed`` (07/23, daily-trade-floor diagnostic, default ``False`` =
     strictly unchanged behavior): when ``True``, the SOFT/technical bars are
@@ -3521,6 +3561,7 @@ async def evaluate_momentum_entry(
             try:
                 watch = _rsi_divergence_watch_candidate(
                     contract, signal, best.base_symbol, best.price_usd, candles,
+                    rsi_watch_span=rsi_watch_span,
                 )
             except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
                 logger.info("momentum_entry: rsi-divergence watch candidate failed for %s (%s)", contract, exc)

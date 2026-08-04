@@ -797,6 +797,67 @@ async def test_check_rsi_divergence_watching_triggers_on_span_within_window(monk
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_uses_per_order_span_override(monkeypatch):
+    """08/04, scalping_v7: an order carrying its own rsi_watch_min_span/
+    max_span (set at creation by momentum_entry._rsi_divergence_watch_
+    candidate when the caller overrode rsi_watch_span) must be judged
+    against THAT window, never the module-level default -- span=7 sits
+    OUTSIDE the default 15-20 window (would 'wait') but INSIDE v7's 4-10
+    window (must 'trigger')."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=7)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(
+        wallet="scalping_v7",
+        sig_overrides={"rsi_watch_min_span": 4, "rsi_watch_max_span": 10},
+    )
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "trigger"
+    assert "fenêtre 4-10" in sig["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_falls_back_to_default_span_when_absent(monkeypatch):
+    """Same span=7 as above, but no override on sig (every pocket except
+    v7) -- must judge against the module-level 15-20 default and 'wait',
+    proving the fallback wasn't silently dropped by the override plumbing."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=5.0, span=7)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    assert await lo.check_rsi_divergence_watching_order(order, sig) == "wait"
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_replaces_stale_reasons_on_trigger(monkeypatch):
     """29/07 -- real bug found via operator screenshot comparison (chart vs.
     buy thesis): ``sig["reasons"]`` used to keep the ORIGINAL watch-creation
@@ -2986,6 +3047,24 @@ def test_format_limit_order_placed_alert_shows_timeframe_per_pocket():
     order["wallet"] = "swing"
     text = lo.format_limit_order_placed_alert(order)
     assert "1h+" in text
+
+
+def test_format_limit_order_placed_alert_shows_timeframe_for_every_scalping_variant():
+    """08/04 -- real bug found while wiring scalping_v7: _TIMEFRAME_LABEL only
+    ever had a literal "scalping" key, so this line silently vanished for
+    EVERY scalping-variant order (v1..v6) since scalping_variants_enabled()
+    shipped 08/01 -- never caught because the test above only ever exercised
+    the legacy "scalping" name. Covers all 7 variants plus the legacy name."""
+    for wallet in (
+        "scalping", "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4",
+        "scalping_v5", "scalping_v6", "scalping_v7",
+    ):
+        order = {
+            "contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038,
+            "wallet": wallet,
+        }
+        text = lo.format_limit_order_placed_alert(order)
+        assert "15-30min" in text, f"missing timeframe line for wallet={wallet}"
 
 
 def test_format_limit_order_placed_alert_shows_estimated_size():

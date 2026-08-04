@@ -6967,6 +6967,23 @@ async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_diverge
 
 
 @pytest.mark.asyncio
+async def test_evaluate_momentum_entry_forwards_rsi_watch_span_override(monkeypatch, test_settings):
+    """08/04, scalping_v7: evaluate_momentum_entry's own rsi_watch_span kwarg
+    must reach the watch candidate it builds -- this is the ONE hop
+    _default_momentum_analyzer relies on to give v7's pocket a different
+    trigger window than every other pocket without touching the module-level
+    constants."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(
+        CONTRACT, "base", rsi_watch_span=(me.RSI_WATCH_MIN_SPAN_V7, me.RSI_WATCH_MAX_SPAN_V7),
+    )
+    watch = result["limit_order_candidate"]
+    assert watch["rsi_watch_min_span"] == 4
+    assert watch["rsi_watch_max_span"] == 10
+
+
+@pytest.mark.asyncio
 async def test_rsi_divergence_watch_candidate_align_score_prevents_max_tier_fallback(monkeypatch, test_settings):
     """Item #221 (29/07), the actual bug behind the operator's observation:
     every scalping position triggered from a limit order (100% of them go
@@ -7185,3 +7202,34 @@ def test_rsi_divergence_watch_candidate_rr_avoids_1_decimal_rounding_artifacts()
 
     assert watch is not None
     assert watch["rr"] == pytest.approx(1.25, abs=1e-4)
+
+
+def test_rsi_divergence_watch_candidate_default_span_matches_module_constants():
+    """08/04, scalping_v7: rsi_watch_span=None (every pocket except v7) must
+    persist the operator-validated 15-20 window on the returned dict --
+    limit_orders.check_rsi_divergence_watching_order reads these fields at
+    trigger time, so a wrong default here would silently widen/narrow every
+    existing pocket's real trigger behavior."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(),
+    )
+    assert watch["rsi_watch_min_span"] == me.RSI_WATCH_MIN_SPAN
+    assert watch["rsi_watch_max_span"] == me.RSI_WATCH_MAX_SPAN
+    assert "span 15-20 bougies" in watch["reason"]
+
+
+def test_rsi_divergence_watch_candidate_honors_explicit_span_override():
+    """08/04, scalping_v7: the ONE caller that overrides rsi_watch_span
+    (build_scalping_pocket_entries's v7 arm) must see it reflected both in
+    the persisted fields (what the eventual limit order carries) and in the
+    human-readable reason text (what the operator sees in the Telegram
+    alert) -- never a mismatch between the two."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(),
+        rsi_watch_span=(me.RSI_WATCH_MIN_SPAN_V7, me.RSI_WATCH_MAX_SPAN_V7),
+    )
+    assert watch["rsi_watch_min_span"] == 4
+    assert watch["rsi_watch_max_span"] == 10
+    assert "span 4-10 bougies" in watch["reason"]

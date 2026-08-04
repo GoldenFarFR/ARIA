@@ -3076,7 +3076,7 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 50) -> tuple[list[s
 def _default_momentum_analyzer(
     chain_by_contract: dict[str, str], weekly_context: dict | None = None,
     current_regime: str | None = None, *, relaxed: bool = False, mode: str = "standard",
-    waive_holder_concentration: bool = False,
+    waive_holder_concentration: bool = False, rsi_watch_span: tuple[int, int] | None = None,
 ):
     """Closes over the contract->chain table built at sourcing time (#194) --
     keeps the historical ``analyzer(contract)`` signature unchanged, no
@@ -3100,6 +3100,12 @@ def _default_momentum_analyzer(
     ``evaluate_momentum_entry`` -- only the "megacap" pocket sets this
     (hand-curated established-token watchlist, structurally fails the
     insider-concentration heuristic on legitimate CEX/treasury EOA holders).
+
+    ``rsi_watch_span`` (08/04, scalping_v7): forwarded as-is to
+    ``evaluate_momentum_entry`` -- ``None`` (default) leaves every pocket on
+    the operator-validated 15-20 window; only ``build_scalping_pocket_
+    entries``'s scalping_v7 arm sets this, to (4, 10), see momentum_entry.py's
+    own constants for the empirical rationale.
 
     24/07, bonding-entry chantier: a contract tagged ``bonding_entry.
     CHAIN_MARKER`` in ``chain_by_contract`` is routed to
@@ -3129,6 +3135,7 @@ def _default_momentum_analyzer(
         result = await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
             relaxed=relaxed, mode=mode, waive_holder_concentration=waive_holder_concentration,
+            rsi_watch_span=rsi_watch_span,
         )
         momentum_timing.record_evaluation(contract, chain, result.get("action") if result else None)
         return result
@@ -3206,7 +3213,7 @@ def build_scalping_pocket_entries(
     Gate OFF (``scalping_variants_enabled()`` False): byte-for-byte the
     historical single "scalping" pocket, full candidate list, unchanged.
 
-    Gate ON: 6 pockets, not 5 -- ``scalping_v6`` (08/01, operator's explicit
+    Gate ON: 7 pockets, not 6 -- ``scalping_v6`` (08/01, operator's explicit
     call, "le scalping met le à part en v6") is the SAME legacy RSI-
     divergence engine (``_default_momentum_analyzer(mode="scalping")``) the
     single "scalping" pocket always used, kept as its own comparison arm
@@ -3214,10 +3221,24 @@ def build_scalping_pocket_entries(
     paper_position/pending_limit_order/momentum_scan_log/rsi_divergence_log
     rows, risk_guard_state file) was migrated wallet "scalping" ->
     "scalping_v6" in the same rollout (one-off migration, see
-    docs/HANDOFF_PIPELINE_MOMENTUM.md), never re-created from zero. All 6
-    scalping pockets (v1..v6) share the SAME truncated candidate slice --
-    see MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE's own comment."""
+    docs/HANDOFF_PIPELINE_MOMENTUM.md), never re-created from zero.
+
+    ``scalping_v7`` (08/04): SAME legacy engine as v6, byte-for-byte, except
+    it overrides the RSI-divergence watch's trigger span (``rsi_watch_span``
+    -> ``momentum_entry.RSI_WATCH_MIN_SPAN_V7``/``MAX_SPAN_V7``, 4-10 instead
+    of v6's 15-20) -- a real code change (not just a config flip) was
+    required because that window used to be a single pair of module-level
+    constants shared by every pocket; see ``evaluate_momentum_entry``'s own
+    docstring for how the override threads through. A fresh pocket rather
+    than a retune of v6 itself, specifically so the two windows can be
+    compared side by side on real forward trades (see the constants'
+    comment in momentum_entry.py for the backtest that motivated this and
+    its honest small-sample caveat) -- v6 is NOT retired, NOT touched.
+
+    All 7 scalping pockets (v1..v7) share the SAME truncated candidate slice
+    -- see MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE's own comment."""
     if scalping_variants_enabled():
+        from aria_core import momentum_entry
         from aria_core.skills import scalping_variants
 
         shared_candidates = momentum_candidates[:MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE]
@@ -3235,8 +3256,14 @@ def build_scalping_pocket_entries(
             chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
             mode="scalping",
         )
+        v7_analyzer = _default_momentum_analyzer(
+            chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
+            mode="scalping",
+            rsi_watch_span=(momentum_entry.RSI_WATCH_MIN_SPAN_V7, momentum_entry.RSI_WATCH_MAX_SPAN_V7),
+        )
         return entries + (
             ("scalping_v6", shared_candidates, legacy_analyzer, "scalping", MAX_POSITIONS_SCALPING),
+            ("scalping_v7", shared_candidates, v7_analyzer, "scalping", MAX_POSITIONS_SCALPING),
         )
 
     scalping_analyzer = _default_momentum_analyzer(
@@ -3375,6 +3402,10 @@ _SCALPING_VARIANT_WALLETS = (
     # kept as its own comparison arm rather than retired, see
     # build_scalping_pocket_entries's own docstring.
     "scalping_v6",
+    # scalping_v7 (08/04) -- same legacy engine as v6, narrower RSI-divergence
+    # watch span (4-10 vs v6's 15-20), see build_scalping_pocket_entries's
+    # own docstring for the empirical rationale.
+    "scalping_v7",
 )
 
 

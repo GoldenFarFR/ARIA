@@ -355,8 +355,10 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     level to wait for.
 
     Returns ``'trigger'`` (a divergence just confirmed WITH a span inside
-    the operator-validated window, ``momentum_entry.RSI_WATCH_MIN_SPAN``-
-    ``RSI_WATCH_MAX_SPAN`` -- never a looser span, even if one forms first),
+    the order's own trigger window -- ``sig["rsi_watch_min_span"/"max_span"]``
+    if set (scalping_v7, 08/04), else the operator-validated default
+    ``momentum_entry.RSI_WATCH_MIN_SPAN``-``RSI_WATCH_MAX_SPAN`` every other
+    pocket still uses -- never a looser span, even if one forms first),
     ``'cancel'`` (price broke below the invalidation -- the golden pocket
     setup itself died while waiting), ``'expire'`` (the candle-count horizon
     elapsed with no qualifying divergence -- ``RSI_WATCH_MAX_HORIZON_
@@ -493,14 +495,24 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
                 "limit_orders: rsi-divergence last-seen persist failed for %s (%s)",
                 order["contract"], exc,
             )
+    # 08/04, scalping_v7: the trigger window is no longer a single global
+    # pair of constants -- momentum_entry._rsi_divergence_watch_candidate
+    # persists the window THIS order was created under (rsi_watch_min_span/
+    # max_span) at creation time (see that function's own comment). Read
+    # from `sig`, never re-derived from the wallet here -- falls back to the
+    # module-level constants (15-20) for any order predating this field or
+    # from a pocket that never overrides it, so every pocket except v7
+    # behaves byte-for-byte as before.
+    watch_min_span = sig.get("rsi_watch_min_span") or momentum_entry.RSI_WATCH_MIN_SPAN
+    watch_max_span = sig.get("rsi_watch_max_span") or momentum_entry.RSI_WATCH_MAX_SPAN
     if (
         detail.present and detail.span is not None
-        and momentum_entry.RSI_WATCH_MIN_SPAN <= detail.span <= momentum_entry.RSI_WATCH_MAX_SPAN
+        and watch_min_span <= detail.span <= watch_max_span
     ):
         logger.info(
             "limit_orders: rsi-divergence CONFIRMED for %s -- span=%d gap=%s (window %d-%d)",
             order["contract"], detail.span, detail.gap,
-            momentum_entry.RSI_WATCH_MIN_SPAN, momentum_entry.RSI_WATCH_MAX_SPAN,
+            watch_min_span, watch_max_span,
         )
         # 29/07 -- real bug found via operator screenshot comparison (chart
         # vs. buy thesis): ``sig["reasons"]`` still held the ORIGINAL
@@ -516,8 +528,8 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
         gap_str = f"{detail.gap:.1f}" if detail.gap is not None else "n/a"
         sig["reasons"] = [
             f"Divergence RSI haussière CONFIRMÉE (span {detail.span} bougies, "
-            f"force {gap_str} points RSI, fenêtre {momentum_entry.RSI_WATCH_MIN_SPAN}-"
-            f"{momentum_entry.RSI_WATCH_MAX_SPAN}) -- prix déjà dans la golden pocket."
+            f"force {gap_str} points RSI, fenêtre {watch_min_span}-"
+            f"{watch_max_span}) -- prix déjà dans la golden pocket."
         ]
         # Item #247 (30/07): the numeric gap/span of the divergence that just
         # confirmed -- same mutate-in-place doctrine as the reasons text
@@ -1474,7 +1486,6 @@ _POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC", "megacap"
 # one field always correctly synced to the real analysis mode since the
 # 29/07 mode-sync fix (see limit_orders._execute_trigger's own comment).
 _TIMEFRAME_LABEL = {
-    "scalping": "bougies 15-30min (mode scalping)",
     "swing": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
     "vc": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
     # 02/08 -- "megacap" pocket, mode="standard" like swing/vc -- without this
@@ -1482,6 +1493,26 @@ _TIMEFRAME_LABEL = {
     # from the alert (found by a validation workflow, ronde 6).
     "megacap": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
 }
+
+_SCALPING_TIMEFRAME_LABEL = "bougies 15-30min (mode scalping)"
+
+
+def _timeframe_label_for_wallet(wallet: str | None) -> str | None:
+    """08/04 -- real bug found while wiring scalping_v7: this dict used to
+    carry a literal "scalping" key, which stopped matching the moment
+    scalping_variants_enabled() migrated that pocket to scalping_v1..v6 (same
+    bug class as _wallet_position_cap's own 08/02 fix, never applied here) --
+    ``_TIMEFRAME_LABEL.get(order.get("wallet"))`` (no default) has been
+    silently returning ``None`` for every scalping-variant order since 08/01,
+    dropping the "Analyse sur ..." line from their alert with no error.
+    ``paper_trader`` imported locally (not at module level) -- same
+    circular-import avoidance as every other cross-reference to it in this
+    file (see ``_wallet_position_cap``)."""
+    from aria_core import paper_trader
+
+    if wallet and paper_trader.is_scalping_pocket(wallet):
+        return _SCALPING_TIMEFRAME_LABEL
+    return _TIMEFRAME_LABEL.get(wallet)
 
 
 def format_limit_order_placed_alert(order: dict) -> str:
@@ -1619,7 +1650,7 @@ def format_limit_order_placed_alert(order: dict) -> str:
     elif isinstance(hist_sample, int) and hist_sample > 0:
         lines.append(f"Taux de déclenchement historique : pas assez d'historique ({hist_sample} ordres résolus)")
 
-    timeframe = _TIMEFRAME_LABEL.get(order.get("wallet"))
+    timeframe = _timeframe_label_for_wallet(order.get("wallet"))
     if timeframe:
         lines.append(f"Analyse sur {timeframe}")
 

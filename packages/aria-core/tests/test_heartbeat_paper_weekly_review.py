@@ -93,9 +93,9 @@ async def test_paper_weekly_review_cycle_skips_wallet_not_due(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_paper_weekly_review_cycle_covers_all_6_scalping_variants_when_gate_on(monkeypatch):
+async def test_paper_weekly_review_cycle_covers_all_7_scalping_variants_when_gate_on(monkeypatch):
     """The exact regression this fix targets: with scalping_variants_enabled()
-    on, all_pocket_wallets() replaces "scalping" with scalping_v1..v6 -- the
+    on, all_pocket_wallets() replaces "scalping" with scalping_v1..v7 -- the
     weekly loop must follow, never keep looking for a "scalping" row that no
     longer exists."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
@@ -119,7 +119,8 @@ async def test_paper_weekly_review_cycle_covers_all_6_scalping_variants_when_gat
     await heartbeat.aria_heartbeat._run_task("paper_weekly_review_cycle")
 
     assert set(due_calls) == {
-        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6", "swing",
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
+        "scalping_v7", "swing",
     }
     assert "scalping" not in due_calls
     assert "vc" not in due_calls
