@@ -1552,6 +1552,86 @@ def _timeframe_label_for_wallet(wallet: str | None) -> str | None:
     return _TIMEFRAME_LABEL.get(wallet)
 
 
+def _order_health_grid_lines(order: dict, sig: dict) -> list[str]:
+    """08/04 -- deterministic sentinel, étage 1 (operator request: "je veux
+    que Fable soit ma sentinelle sur les ordres" -- resolved as: Fable's own
+    judgment criteria on the CHAMPZ/wstETH orders it reviewed live this
+    session, encoded ONCE as fixed rules rather than a per-order LLM call,
+    consistent with the standing Fable-consultation doctrine ("rare, real
+    blocker only, never routine use", CLAUDE.md). Zero quota cost, real-time,
+    runs on every order forever -- more reliable than an LLM re-judgment too
+    (no hallucination risk on an arithmetic threshold).
+
+    Covers what's cheaply computable synchronously from data already on
+    ``order``/``sig`` at alert-creation time -- 3 criteria Fable also named
+    (tier/taille coherence, cross-pocket duplicates, size vs pool liquidity)
+    need either an async DB query or pool data not currently stored on the
+    signal and are deliberately deferred (Task #27 backlog), not silently
+    dropped: a shorter, honest grid beats a fabricated check.
+
+    A missing input for a given criterion skips that line entirely (never a
+    fabricated ✅/⚠️ on absent data, same doctrine as every other degraded-data
+    path in this file)."""
+    from aria_core import momentum_entry, paper_trader, risk_guard
+    from aria_core.skills import entry_signals
+
+    wallet = order.get("wallet") or "swing"
+    scalping = paper_trader.is_scalping_pocket(wallet)
+    checks: list[tuple[bool, str]] = []
+
+    contract = (order.get("contract") or "").lower()
+    chain = order.get("chain") or "base"
+    if contract:
+        is_reference = contract in momentum_entry.reference_tokens_excluded(chain)
+        checks.append((not is_reference, "sous-jacent hors actif de référence (LST/wrapped/stable)"))
+
+    rr = sig.get("rr")
+    if isinstance(rr, (int, float)):
+        _conviction_thr, moderate_thr = risk_guard._rr_thresholds("scalping" if scalping else None)
+        checks.append((rr >= moderate_thr, f"R/R {rr:.2f} >= seuil MODERATE ({moderate_thr:.1f})"))
+
+    target_price = order.get("target_price")
+    invalidation = sig.get("invalidation")
+    if (
+        scalping and isinstance(target_price, (int, float)) and target_price > 0
+        and isinstance(invalidation, (int, float))
+    ):
+        inval_pct = abs(target_price - invalidation) / target_price
+        ok = entry_signals.MIN_ATR_INVALIDATION_PCT_SCALPING <= inval_pct <= entry_signals.MAX_ATR_INVALIDATION_PCT_SCALPING
+        checks.append((
+            ok,
+            f"invalidation à {inval_pct:.1%} (borne scalping "
+            f"{entry_signals.MIN_ATR_INVALIDATION_PCT_SCALPING:.1%}-"
+            f"{entry_signals.MAX_ATR_INVALIDATION_PCT_SCALPING:.1%})",
+        ))
+
+    entry_atr_pct = sig.get("entry_atr_pct")
+    sell_target = sig.get("target")
+    if (
+        isinstance(entry_atr_pct, (int, float)) and entry_atr_pct > 0
+        and isinstance(sell_target, (int, float))
+        and isinstance(target_price, (int, float)) and target_price > 0
+    ):
+        target_dist_pct = abs(sell_target - target_price) / target_price
+        checks.append((
+            target_dist_pct >= entry_atr_pct,
+            f"cible à {target_dist_pct:.1%} de la pose (>= 1x ATR {entry_atr_pct:.1%})",
+        ))
+
+    expiry_h = sig.get("watch_expiry_hours")
+    if scalping and isinstance(expiry_h, (int, float)):
+        checks.append((
+            expiry_h <= momentum_entry.RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING,
+            f"expiry {expiry_h:.0f}h <= plafond scalping ({momentum_entry.RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING:.0f}h)",
+        ))
+
+    if not checks:
+        return []
+    n_bad = sum(1 for ok, _ in checks if not ok)
+    header = "Grille de contrôle : tout cohérent" if n_bad == 0 else f"Grille de contrôle : {n_bad} point(s) à vérifier"
+    return [header, *[f"{'✅' if ok else '⚠️'} {label}" for ok, label in checks]]
+
+
 def format_limit_order_placed_alert(order: dict) -> str:
     """29/07 -- operator feedback: this alert only showed the target price,
     never the current price nor any context on the setup itself (R/R,
@@ -1707,6 +1787,7 @@ def format_limit_order_placed_alert(order: dict) -> str:
         lines.append(line)
 
     lines.append(expiry_line)
+    lines.extend(_order_health_grid_lines(order, sig))
     if order.get("contract"):
         lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
     return "\n".join(lines)

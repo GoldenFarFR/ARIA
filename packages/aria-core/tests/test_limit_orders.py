@@ -3196,6 +3196,133 @@ def test_format_limit_order_placed_alert_escapes_html_special_chars_in_symbol():
     assert "&lt;script&gt;" in text
 
 
+def test_health_grid_omitted_when_nothing_computable():
+    """No signal_json, no contract -- every criterion needs at least one
+    piece of data, so the whole grid (including its header) must be absent
+    rather than an empty/misleading block."""
+    order = {"symbol": "CHECK", "target_price": 0.038}
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Grille de contrôle" not in text
+
+
+def test_health_grid_flags_reference_asset():
+    """08/04 -- the exact wstETH case: a reference asset (LST) that reached
+    the alert stage (e.g. an order placed before the sourcing exclusion
+    landed) must be flagged, not silently look like any other candidate."""
+    order = {
+        "contract": "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452", "chain": "base",
+        "symbol": "wstETH", "target_price": 2319.39, "wallet": "swing",
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Grille de contrôle" in text
+    assert "⚠️ sous-jacent hors actif de référence" in text
+
+
+def test_health_grid_passes_for_a_real_candidate_contract():
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 0.038, "wallet": "swing",
+        "signal_json": json.dumps({"rr": 3.9}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "✅ sous-jacent hors actif de référence" in text
+
+
+def test_health_grid_flags_rr_below_moderate_threshold():
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 0.038, "wallet": "swing",
+        "signal_json": json.dumps({"rr": 0.7}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert f"⚠️ R/R 0.70 >= seuil MODERATE ({risk_guard.MODERATE_RR_THRESHOLD:.1f})" in text
+
+
+def test_health_grid_passes_rr_at_scalping_moderate_threshold():
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 0.038, "wallet": "scalping_v6",
+        "signal_json": json.dumps({"rr": 1.4}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert f"✅ R/R 1.40 >= seuil MODERATE ({risk_guard.MODERATE_RR_THRESHOLD_SCALPING:.1f})" in text
+
+
+def test_health_grid_flags_invalidation_outside_scalping_bounds():
+    """target_price=1.0, invalidation=0.5 -> 50% away, way outside the
+    1.5%-10% scalping band -- must flag, scalping wallet only."""
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 1.0, "wallet": "scalping_v6",
+        "signal_json": json.dumps({"invalidation": 0.5}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "⚠️ invalidation à 50.0%" in text
+
+
+def test_health_grid_skips_invalidation_check_outside_scalping():
+    """The 1.5%-10% band is scalping-specific (swing's invalidation floor is
+    a different mechanism entirely) -- never applied to a swing order."""
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 1.0, "wallet": "swing",
+        "signal_json": json.dumps({"invalidation": 0.5}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "invalidation à" not in text
+
+
+def test_health_grid_flags_target_closer_than_one_atr():
+    """entry_atr_pct=0.05 (5% ATR), sig["target"] only 1% away from the buy
+    trigger -- a target this close to noise isn't a real setup."""
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 1.0, "wallet": "scalping_v6",
+        "signal_json": json.dumps({"entry_atr_pct": 0.05, "target": 1.01}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "⚠️ cible à 1.0% de la pose (>= 1x ATR 5.0%)" in text
+
+
+def test_health_grid_flags_expiry_above_scalping_ceiling():
+    """08/04, Lot C: RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING already clamps new
+    orders at creation time -- this criterion catches any order that
+    predates the fix (or a future regression) still showing a stale,
+    inflated expiry."""
+    from aria_core import momentum_entry
+
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 0.038, "wallet": "scalping_v6",
+        "signal_json": json.dumps({"watch_expiry_hours": 235.0}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert (
+        f"⚠️ expiry 235h <= plafond scalping "
+        f"({momentum_entry.RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING:.0f}h)"
+    ) in text
+
+
+def test_health_grid_header_reflects_all_clear():
+    order = {
+        "contract": "0xCHECK", "chain": "base", "symbol": "CHECK",
+        "target_price": 0.038, "wallet": "swing",
+        "signal_json": json.dumps({"rr": 3.9}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Grille de contrôle : tout cohérent" in text
+
+
+def test_health_grid_header_counts_bad_points():
+    order = {
+        "contract": "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452", "chain": "base",
+        "symbol": "wstETH", "target_price": 2319.39, "wallet": "swing",
+        "signal_json": json.dumps({"rr": 0.7}),
+    }
+    text = lo.format_limit_order_placed_alert(order)
+    assert "Grille de contrôle : 2 point(s) à vérifier" in text
+
+
 def test_format_limit_order_cancelled_alert_labels_known_reasons():
     order = {"contract": "0xCHECK", "chain": "base", "symbol": "CHECK", "target_price": 0.038}
     text = lo.format_limit_order_cancelled_alert(order, "invalidation_crossed")
