@@ -289,23 +289,23 @@ def test_referenced_docs_exist():
 def test_claude_md_declares_established_facts_block():
     """Le bloc 'faits établis' (anti-questions répétées) doit rester présent dans CLAUDE.md."""
     claude = _read("CLAUDE.md")
-    assert "NE PAS re-demander" in claude, "le bloc 'Faits établis' a disparu de CLAUDE.md"
+    assert "DO NOT re-ask" in claude, "le bloc 'Established facts' a disparu de CLAUDE.md"
     assert "etat-systeme-cable.md" in claude, "CLAUDE.md ne pointe plus vers la fiche d'état câblé"
 
 
 def test_claude_md_documents_automation():
     """Une session neuve doit être CONSCIENTE des automatismes (hook + garde-fou + CI)."""
     claude = _read("CLAUDE.md")
-    assert "Automatismes en place" in claude, "la section 'Automatismes en place' a disparu de CLAUDE.md"
+    assert "Automations in place" in claude, "la section 'Automations in place' a disparu de CLAUDE.md"
     assert "session-start.sh" in claude, "CLAUDE.md ne documente pas le hook de démarrage"
     assert "test_coherence" in claude, "CLAUDE.md ne documente pas le garde-fou de cohérence"
 
 
 def test_claude_md_declares_permanent_norms():
-    """Le bloc 'Normes permanentes' (qualité/fluidité/UX…) doit rester présent — appliqué à chaque build."""
+    """Le bloc 'Permanent norms' (qualité/fluidité/UX…) doit rester présent — appliqué à chaque build."""
     claude = _read("CLAUDE.md")
-    assert "Normes permanentes" in claude, "la section 'Normes permanentes' a disparu de CLAUDE.md"
-    for norm in ("Qualité", "Fluidité", "Graphique", "Robustesse", "Accessibilité", "Protection des données"):
+    assert "Permanent norms" in claude, "la section 'Permanent norms' a disparu de CLAUDE.md"
+    for norm in ("Quality", "Fluidity", "Visuals / UX", "Robustness", "Accessibility", "User data protection"):
         assert norm in claude, f"la norme permanente '{norm}' a disparu de CLAUDE.md"
 
 
