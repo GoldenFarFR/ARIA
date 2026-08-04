@@ -1761,12 +1761,22 @@ async def _fetch_candles_impl(
     "no other provider has sub-hour granularity" -- a live test in the prod
     container on real scalping candidates (period="15m"/"30m") confirmed
     Mobula DOES return real sub-hour candles for Base, and a separate
-    due-diligence workflow confirmed the same for DexPaprika. Tried 15m first
+    due-diligence workflow confirmed the same for DexPaprika. Codex.io was
+    added as the last scalping tier on 04/08 (real 15m/30m bars, the best
+    small-cap coverage of the cascade, hard-bounded by its own monthly
+    scalping sub-budget -- see ``_scalping_fallbacks``). Tried 15m first
     (matches the standard scalping candle width), then 30m if 15m comes back
     empty -- a degradation to 30m is always logged explicitly (never a silent
-    granularity swap the caller can't see). Only if Mobula's own 15m/30m
-    AND DexPaprika's own 15m/30m all fail does this skip honestly
-    (``[]`` -> HOLD, "OHLCV unavailable").
+    granularity swap the caller can't see). Only if Mobula, DexPaprika AND
+    Codex all fail does this skip honestly (``[]`` -> HOLD, "OHLCV
+    unavailable").
+
+    04/08 -- the two mode-specific chains were split into explicit
+    functions (operator suggestion, validated): ``_try_gecko_stage`` (the
+    one genuinely shared stage) then ``_scalping_fallbacks`` /
+    ``_standard_fallbacks``. Same clients, same shared adaptive circuit
+    breaker (a provider in cooldown is in cooldown for BOTH cascades) --
+    only the control flow was separated, never a duplicated client.
 
     ``gecko_client`` (29/07, Item #186): optional injection point, defaults
     to the real module-wide singleton -- lets another caller (smart_money.py's
@@ -1790,6 +1800,28 @@ async def _fetch_candles_impl(
     GeckoTerminal stage (excludes its daily rung, see
     ``ohlcv.OHLCVClient.get_ohlcv``'s own docstring), `False` by default, no
     other stage accepts or needs this parameter."""
+    gecko_candles = await _try_gecko_stage(
+        pool_address, chain, mode=mode, gecko_client=gecko_client,
+        min_useful_candles=min_useful_candles, skip_daily=skip_daily,
+    )
+    if gecko_candles is not None:
+        return gecko_candles
+
+    if mode == "scalping":
+        return await _scalping_fallbacks(pool_address, chain, contract=contract)
+    return await _standard_fallbacks(pool_address, chain, contract=contract, pair=pair)
+
+
+async def _try_gecko_stage(
+    pool_address: str, chain: str, *, mode: str, gecko_client=None,
+    min_useful_candles: int | None = None, skip_daily: bool = False,
+) -> list[Candle] | None:
+    """Stage 1 of BOTH cascades (04/08 split, see ``_fetch_candles_impl``):
+    the one stage the scalping and standard paths genuinely share. Returns
+    the candles on success, ``None`` when the caller should fall through to
+    its mode-specific fallback chain -- same shared adaptive circuit breaker
+    as every other stage (a provider in cooldown is in cooldown for both
+    cascades, never per-mode)."""
     if gecko_client is None:
         from aria_core.services.geckoterminal import geckoterminal_client
 
@@ -1814,70 +1846,112 @@ async def _fetch_candles_impl(
             _record_provider_outcome("geckoterminal", ok=False)
     else:
         logger.info("_fetch_candles: GeckoTerminal paused (adaptive circuit breaker), falling back directly")
+    return None
 
-    if mode == "scalping":
-        # 26/07 -- real Mobula fallback, see docstring. CoinMarketCap/
-        # DexScreener synthesis/Dune stay skipped in this mode (confirmed no
-        # sub-hour granularity), but Mobula's real 15m/30m candles were
-        # verified live and are worth trying before giving up.
-        if contract:
-            from aria_core.services import mobula
 
-            if mobula.mobula_configured() and not _provider_in_cooldown("mobula"):
-                for period in ("15m", "30m"):
-                    try:
-                        mobula_result = await mobula.get_ohlcv(contract, blockchain=chain, period=period)
-                    except Exception as exc:  # noqa: BLE001
+async def _scalping_fallbacks(pool_address: str, chain: str, *, contract: str = "") -> list[Candle]:
+    """Scalping cascade after GeckoTerminal (04/08 split): Mobula 15m/30m ->
+    DexPaprika 15m/30m -> Codex.io 15m/30m -> honest ``[]``. CoinMarketCap/
+    DexScreener synthesis/Dune are deliberately absent (confirmed no sub-hour
+    granularity -- feeding day-scale candles to a scalping RSI(10) would
+    corrupt the read without any visible error)."""
+    # 26/07 -- real Mobula fallback. CoinMarketCap/DexScreener synthesis/Dune
+    # stay skipped in this mode (confirmed no sub-hour granularity), but
+    # Mobula's real 15m/30m candles were verified live and are worth trying
+    # before giving up.
+    if contract:
+        from aria_core.services import mobula
+
+        if mobula.mobula_configured() and not _provider_in_cooldown("mobula"):
+            for period in ("15m", "30m"):
+                try:
+                    mobula_result = await mobula.get_ohlcv(contract, blockchain=chain, period=period)
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        "_fetch_candles: Mobula scalping fallback (%s) %s/%s failed (%s)",
+                        period, chain, pool_address[:10], exc,
+                    )
+                    mobula_result = None
+                if mobula_result is not None and mobula_result.available and mobula_result.candles:
+                    _record_provider_outcome("mobula", ok=True)
+                    if period == "15m":
                         logger.info(
-                            "_fetch_candles: Mobula scalping fallback (%s) %s/%s failed (%s)",
-                            period, chain, pool_address[:10], exc,
+                            "_fetch_candles: Mobula scalping fallback (real 15min candles) %s/%s",
+                            chain, pool_address[:10],
                         )
-                        mobula_result = None
-                    if mobula_result is not None and mobula_result.available and mobula_result.candles:
-                        _record_provider_outcome("mobula", ok=True)
-                        if period == "15m":
-                            logger.info(
-                                "_fetch_candles: Mobula scalping fallback (real 15min candles) %s/%s",
-                                chain, pool_address[:10],
-                            )
-                        else:
-                            logger.info(
-                                "_fetch_candles: Mobula scalping fallback DEGRADED to %s "
-                                "(15m unavailable) %s/%s", period, chain, pool_address[:10],
-                            )
-                        return mobula_result.candles
-                    # 27/07 -- Item #126: same "stop, don't compound" principle
-                    # as ohlcv.py's Item #121 fix -- a REAL network error at
-                    # 15m (429/timeout/5xx) applies to the whole endpoint for
-                    # THIS contract regardless of period, escalating to 30m
-                    # only wastes a doomed retry. Only "no candles at 15m"
-                    # (network_error=False, a clean empty response) still
-                    # escalates to 30m as before.
-                    if mobula_result is not None and mobula_result.network_error:
-                        break
-                _record_provider_outcome("mobula", ok=False)
+                    else:
+                        logger.info(
+                            "_fetch_candles: Mobula scalping fallback DEGRADED to %s "
+                            "(15m unavailable) %s/%s", period, chain, pool_address[:10],
+                        )
+                    return mobula_result.candles
+                # 27/07 -- Item #126: same "stop, don't compound" principle
+                # as ohlcv.py's Item #121 fix -- a REAL network error at
+                # 15m (429/timeout/5xx) applies to the whole endpoint for
+                # THIS contract regardless of period, escalating to 30m
+                # only wastes a doomed retry. Only "no candles at 15m"
+                # (network_error=False, a clean empty response) still
+                # escalates to 30m as before.
+                if mobula_result is not None and mobula_result.network_error:
+                    break
+            _record_provider_outcome("mobula", ok=False)
 
-        # 26/07 -- DexPaprika, last-resort tier even in scalping mode (Item
-        # #130): verified live (3-agent due-diligence workflow) to support
-        # real 15m/30m candles on Base, same doctrine as the Mobula fallback
-        # above -- never primary, only tried after GeckoTerminal/Mobula both
-        # come up empty.
-        if not _provider_in_cooldown("dexpaprika"):
-            from aria_core.services import dexpaprika
+    # 26/07 -- DexPaprika, formerly the last scalping tier (Item #130):
+    # verified live (3-agent due-diligence workflow) to support real 15m/30m
+    # candles on Base -- never primary, only tried after GeckoTerminal/Mobula
+    # both come up empty. 04/08 caveat, measured live: this provider serves
+    # NO candles at all (any timeframe) below an internal, undocumented
+    # activity floor (empty somewhere between $21k and $257k of 24h volume)
+    # -- exactly the small-cap profile scalping candidates usually have,
+    # hence the Codex tier right below.
+    if not _provider_in_cooldown("dexpaprika"):
+        from aria_core.services import dexpaprika
 
+        try:
+            dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain, mode="scalping")
+        except Exception as exc:  # noqa: BLE001
+            logger.info("_fetch_candles: DexPaprika scalping fallback %s/%s failed (%s)", chain, pool_address[:10], exc)
+            dp_result = None
+        if dp_result is not None and dp_result.available and dp_result.candles:
+            _record_provider_outcome("dexpaprika", ok=True)
+            logger.info("_fetch_candles: DexPaprika scalping fallback (real candles) %s/%s", chain, pool_address[:10])
+            return dp_result.candles
+        if dp_result is None or not dp_result.available:
+            _record_provider_outcome("dexpaprika", ok=False)
+
+    # 04/08 -- Codex.io as the LAST scalping tier (operator "go" after a live
+    # coverage test): the only provider in this cascade that served real 15m
+    # candles on the pipeline's own low-volume open positions (ROBO $21k/24h:
+    # 101 candles fresh to ~3min) where DexPaprika is empty by design (see
+    # above) and Mobula's free budget is tiny (2,000 OHLCV calls/month).
+    # Spent only once everything cheaper has failed, and hard-bounded by its
+    # own monthly scalping sub-budget inside services/codex.py (fail-closed:
+    # the slice runs out -> this stage skips, the cascade degrades honestly).
+    if not _provider_in_cooldown("codex"):
+        from aria_core.services import codex
+
+        if codex.codex_configured():
             try:
-                dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain, mode="scalping")
+                codex_result = await codex.get_ohlcv(pool_address, network=chain, mode="scalping")
             except Exception as exc:  # noqa: BLE001
-                logger.info("_fetch_candles: DexPaprika scalping fallback %s/%s failed (%s)", chain, pool_address[:10], exc)
-                dp_result = None
-            if dp_result is not None and dp_result.available and dp_result.candles:
-                _record_provider_outcome("dexpaprika", ok=True)
-                logger.info("_fetch_candles: DexPaprika scalping fallback (real candles) %s/%s", chain, pool_address[:10])
-                return dp_result.candles
-            if dp_result is None or not dp_result.available:
-                _record_provider_outcome("dexpaprika", ok=False)
-        return []
+                logger.info("_fetch_candles: Codex.io scalping fallback %s/%s failed (%s)", chain, pool_address[:10], exc)
+                codex_result = None
+            if codex_result is not None and codex_result.available and codex_result.candles:
+                _record_provider_outcome("codex", ok=True)
+                logger.info("_fetch_candles: Codex.io scalping fallback (real candles) %s/%s", chain, pool_address[:10])
+                return codex_result.candles
+            if codex_result is None or not codex_result.available:
+                _record_provider_outcome("codex", ok=False)
+    return []
 
+
+async def _standard_fallbacks(
+    pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
+) -> list[Candle]:
+    """Standard cascade after GeckoTerminal (04/08 split): CoinMarketCap ->
+    Mobula -> DexPaprika -> Codex.io -> DexScreener degraded synthesis ->
+    Dune -> honest ``[]`` (stage rationale in ``_fetch_candles_impl``'s
+    docstring)."""
     from aria_core.services import coinmarketcap
 
     # 04/08 -- real bug found live: this endpoint needs the TOKEN contract
@@ -1943,9 +2017,9 @@ async def _fetch_candles_impl(
     # DexPaprika -- Codex's free-tier budget (10,000 req/month) is by far the
     # scarcest of any provider in this cascade (see services/codex.py's own
     # module docstring), so it is spent only once everything cheaper/higher-
-    # volume has already failed. Standard mode only -- never wired into
-    # scalping (too costly a budget for that call volume).
-    if mode != "scalping" and not _provider_in_cooldown("codex"):
+    # volume has already failed. (04/08: the scalping cascade now has its own
+    # sub-budgeted Codex tier -- see ``_scalping_fallbacks``.)
+    if not _provider_in_cooldown("codex"):
         from aria_core.services import codex
 
         if codex.codex_configured():
