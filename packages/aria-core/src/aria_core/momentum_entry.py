@@ -3499,6 +3499,15 @@ async def evaluate_momentum_entry(
         hold = {
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons, "hold_reason": "no_entry_signal",
+            # 04/08 -- real bug found live (operator: "je vois pas de
+            # screenshot", chart pilot deployed the same session): the OTHER
+            # "pool_address" added to THIS function's final `return {...}`
+            # (way below) is never reached from here -- 100% of scalping
+            # limit orders are sourced through THIS early `return hold`
+            # (Item #199's own comment above confirms it), so that other
+            # field was dead for the one caller (limit_order_chart.py) that
+            # actually needed it. Added here too, at the actual return path.
+            "pool_address": best.pair_address,
         }
         # Item #182 (28/07), golden-pocket liberation (operator-confirmed,
         # "l'objectif d'avoir un score plus strict c'est de liberer le golden

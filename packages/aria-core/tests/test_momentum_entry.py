@@ -6967,6 +6967,25 @@ async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_diverge
 
 
 @pytest.mark.asyncio
+async def test_evaluate_momentum_entry_hold_carries_pool_address_for_limit_order_watch(monkeypatch, test_settings):
+    """04/08 -- real bug found live (operator: "je vois pas de screenshot",
+    same-session chart pilot): pool_address was only added to this
+    function's FINAL `return {...}` (unreachable from this HOLD+watch path,
+    which returns early at its own `return hold`) -- limit_order_chart.py's
+    screenshot silently no-opped on every single scalping limit order (100%
+    of them go through exactly this path, per Item #199's own comment
+    above) despite pool_address never being None in reality. Asserted on
+    the OUTER `result` (== `sig` in paper_trader.py, what limit_order_chart
+    actually reads), never on `watch`/`limit_order_candidate` alone."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["limit_order_candidate"] is not None
+    assert result["pool_address"] == "0xpool"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_momentum_entry_forwards_rsi_watch_span_override(monkeypatch, test_settings):
     """08/04, scalping_v7: evaluate_momentum_entry's own rsi_watch_span kwarg
     must reach the watch candidate it builds -- this is the ONE hop
