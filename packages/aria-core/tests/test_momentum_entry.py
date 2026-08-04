@@ -4613,6 +4613,46 @@ async def test_evaluate_holds_when_ohlcv_unavailable(monkeypatch):
     assert result["hold_reason"] == "ohlcv_unavailable"
 
 
+def _candles_with_trailing_gap(*, n_normal: int = 15, normal_interval: int = 900, gap: int = 40000) -> list[Candle]:
+    """08/04 -- real bug found live: a thin/low-volume token can go several
+    nominal candle slots without a single trade, so the candle series has a
+    genuinely wide LAST gap even though the median cadence is normal
+    (AIXBT/scalping_v7 confirmed live: ~15min median, ~11h last gap)."""
+    ts = [i * normal_interval for i in range(n_normal)]
+    ts.append(ts[-1] + gap)
+    return [Candle(ts=t, open=1, high=1, low=1, close=1) for t in ts]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_momentum_entry_holds_on_scalping_candle_gap_too_wide(monkeypatch):
+    """A scalping candidate whose most recent candle gap dwarfs its own
+    median cadence isn't a real scalping setup (not enough flow) -- HOLD
+    honestly rather than feed a distorted RSI/ATR into the rest of the
+    pipeline."""
+    _patch_pipeline(monkeypatch, candles=_candles_with_trailing_gap())
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "scalping_candle_gap_too_wide"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_momentum_entry_ignores_candle_gap_in_standard_mode(monkeypatch):
+    """swing/vc/megacap tolerate multi-day gaps by design (daily candles) --
+    the scalping-only continuity gate must never fire for them."""
+    _patch_pipeline(monkeypatch, candles=_candles_with_trailing_gap())
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["hold_reason"] != "scalping_candle_gap_too_wide"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_momentum_entry_scalping_passes_with_normal_cadence(monkeypatch):
+    """A scalping candidate with a genuinely even cadence must never be
+    rejected by the continuity gate -- it only fires on a real outlier gap."""
+    _patch_pipeline(monkeypatch, candles=_rising_ts_candles(interval=900))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result["hold_reason"] != "scalping_candle_gap_too_wide"
+
+
 @pytest.mark.asyncio
 async def test_evaluate_holds_when_no_entry_signal(monkeypatch):
     _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
@@ -7307,6 +7347,76 @@ def test_rsi_divergence_watch_candidate_expiry_falls_back_on_single_candle():
     from aria_core.limit_orders import LIMIT_ORDER_EXPIRY_HOURS
 
     assert watch["watch_expiry_hours"] == LIMIT_ORDER_EXPIRY_HOURS
+
+
+def test_rsi_divergence_watch_candidate_expiry_uses_median_not_last_gap():
+    """08/04, real bug found live: a thin-liquidity token can go several
+    nominal candle slots without a trade, so the LAST gap alone reflects
+    that trading silence, not the real cadence. The median stays anchored on
+    the typical 900s (15min) interval even with one outlier gap at the end
+    -- the old code (last-pair-only) would have scaled this to ~450h."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _candles_with_trailing_gap(normal_interval=900, gap=40000),
+    )
+    # 20 candles x 900s median / 3600 = 5h, not the ~450h a last-pair-only
+    # read of the trailing 40000s gap would have produced.
+    assert watch["watch_expiry_hours"] == pytest.approx(5.0, rel=0.05)
+
+
+def test_rsi_divergence_watch_candidate_expiry_capped_for_scalping_mode():
+    """08/04: the generic 1h-720h clamp does nothing to protect scalping's
+    "hours, not weeks" horizon (calibrated for swing's daily candles) -- a
+    scalping candidate must never exceed RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING
+    even on a genuinely coarse (e.g. hourly-degraded) candle fetch."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(interval=3600), mode="scalping",
+    )
+    # Uncapped this would be 20h (20 candles x 1h) -- must clamp to the
+    # scalping ceiling instead.
+    assert watch["watch_expiry_hours"] == me.RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING
+
+
+def test_rsi_divergence_watch_candidate_expiry_not_capped_outside_scalping_mode():
+    """The scalping ceiling must never leak into swing/vc/megacap -- 20
+    hourly candles legitimately stays at ~20h for every other mode."""
+    signal = _in_gp_no_divergence_signal()
+    watch = me._rsi_divergence_watch_candidate(
+        CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(interval=3600),
+    )
+    assert watch["watch_expiry_hours"] == pytest.approx(20.0, rel=0.05)
+
+
+class TestMedianCandleIntervalSeconds:
+    """08/04 -- pure-function coverage for the helper both the expiry fix
+    and the scalping continuity gate rely on."""
+
+    def test_none_below_two_candles(self):
+        assert me._median_candle_interval_seconds([]) is None
+        assert me._median_candle_interval_seconds(
+            [Candle(ts=0, open=1, high=1, low=1, close=1)]
+        ) is None
+
+    def test_robust_to_single_trailing_outlier_gap(self):
+        candles = _candles_with_trailing_gap(n_normal=15, normal_interval=900, gap=40000)
+        assert me._median_candle_interval_seconds(candles) == pytest.approx(900.0)
+
+    def test_matches_constant_interval_when_evenly_spaced(self):
+        candles = _rising_ts_candles(interval=3600)
+        assert me._median_candle_interval_seconds(candles) == pytest.approx(3600.0)
+
+    def test_ignores_non_positive_gaps(self):
+        """A duplicate/out-of-order timestamp (defensive only, shouldn't
+        happen on real provider data) must never poison the median with a
+        zero or negative gap."""
+        candles = [
+            Candle(ts=0, open=1, high=1, low=1, close=1),
+            Candle(ts=900, open=1, high=1, low=1, close=1),
+            Candle(ts=900, open=1, high=1, low=1, close=1),  # duplicate ts
+            Candle(ts=1800, open=1, high=1, low=1, close=1),
+        ]
+        assert me._median_candle_interval_seconds(candles) == pytest.approx(900.0)
 
 
 def test_rsi_divergence_watch_candidate_rr_avoids_1_decimal_rounding_artifacts():

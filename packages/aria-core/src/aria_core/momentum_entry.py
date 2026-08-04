@@ -2987,6 +2987,53 @@ RSI_WATCH_MAX_HORIZON_CANDLES = 20
 RSI_WATCH_MIN_SPAN_V7 = 4
 RSI_WATCH_MAX_SPAN_V7 = 10
 
+# 08/04 -- absolute ceiling for the RSI-divergence watch expiry on scalping
+# pockets specifically (see _median_candle_interval_seconds/gap-continuity
+# fix below). The generic 1h-720h clamp in _rsi_divergence_watch_candidate
+# was calibrated for swing's daily candles (720h = 30 daily candles' worth of
+# slack) -- it does nothing to protect scalping's "hours, not weeks" horizon.
+# 12h chosen as a generous multiple (~2.4x) over the intended ~5h (20
+# candles x 15min) so a legitimate 30min-degraded fetch (10h) still fits,
+# while a data-gap-inflated estimate in the hundreds of hours gets capped.
+RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING = 12.0
+
+# 08/04 -- scalping continuity gate (evaluate_momentum_entry): a candidate is
+# rejected (HOLD) if its most recent candle gap exceeds this multiple of its
+# own median cadence. 4x chosen to tolerate a couple of genuinely quiet
+# candles (thin but real scalping activity) while still catching the
+# multi-hour silences observed live (AIXBT: median ~15min, worst gap ~11h,
+# a ~44x ratio -- nowhere near this threshold's tolerance band).
+_SCALPING_MAX_CANDLE_GAP_MULTIPLIER = 4.0
+
+# 08/04 -- real bug found live (operator report, "480h expiry" on scalping
+# watches): a low-volume/thin-liquidity token can have NO trade (no candle
+# emitted) for several consecutive nominal candle slots -- the gap between
+# the two MOST RECENT candles then reflects that trading silence, not the
+# provider's actual granularity. Confirmed empirically (AIXBT/scalping_v7,
+# MAMO/scalping_v6): genuinely 15min-labeled candles with the LAST gap
+# stretching to 5-12h because nothing traded in between. Used by both the
+# expiry fix (median instead of last-pair) and the scalping continuity gate
+# in evaluate_momentum_entry (reject a candidate whose most recent gap is a
+# multiple of its own typical cadence -- not really a scalping setup if
+# nothing traded for hours).
+def _median_candle_interval_seconds(candles: list) -> float | None:
+    """Median of the gaps between consecutive candle timestamps -- robust to
+    a handful of missing (no-trade) slots as long as most of the recent
+    window traded normally, unlike a single last-pair gap which one silent
+    period can blow up arbitrarily. ``None`` if fewer than 2 candles."""
+    if len(candles) < 2:
+        return None
+    gaps = sorted(
+        candles[i].ts - candles[i - 1].ts for i in range(1, len(candles))
+        if candles[i].ts > candles[i - 1].ts
+    )
+    if not gaps:
+        return None
+    mid = len(gaps) // 2
+    if len(gaps) % 2:
+        return float(gaps[mid])
+    return (gaps[mid - 1] + gaps[mid]) / 2.0
+
 
 def _rsi_divergence_watch_candidate(
     contract: str, signal, symbol: str, price: float, candles: list,
@@ -3116,20 +3163,29 @@ def _rsi_divergence_watch_candidate(
     # calibrated for a price-drift pullback, not a multi-candle wait): the
     # candle GRANULARITY here isn't fixed (standard mode escalates
     # day(120)->4h(180)->1h(240), see _fetch_candles docstring) -- 20 daily
-    # candles is ~20 days, not 20 hours. Derived from the REAL interval
-    # between this candidate's own last two candles, so the safety net
-    # roughly matches the candle-count horizon regardless of which rung of
-    # the cascade supplied them. Falls back to LIMIT_ORDER_EXPIRY_HOURS if
-    # fewer than 2 candles or a non-positive interval (defensive only).
+    # candles is ~20 days, not 20 hours. Derived from the candidate's
+    # MEDIAN inter-candle interval (08/04, was the raw last-pair gap --
+    # real bug found live: a thin/low-volume token can go several nominal
+    # slots without a single trade, so the LAST gap alone measures that
+    # trading silence, not the provider's actual granularity; the median
+    # stays anchored on the typical cadence as long as most of the recent
+    # window traded normally -- see _median_candle_interval_seconds). Falls
+    # back to LIMIT_ORDER_EXPIRY_HOURS if fewer than 2 candles or no valid
+    # gap (defensive only).
     from aria_core.limit_orders import LIMIT_ORDER_EXPIRY_HOURS
 
     watch_expiry_hours = LIMIT_ORDER_EXPIRY_HOURS
-    if len(candles) >= 2:
-        interval_seconds = candles[-1].ts - candles[-2].ts
-        if interval_seconds > 0:
-            watch_expiry_hours = max(
-                1.0, min(720.0, (interval_seconds * RSI_WATCH_MAX_HORIZON_CANDLES) / 3600.0)
-            )
+    median_interval_seconds = _median_candle_interval_seconds(candles)
+    if median_interval_seconds:
+        watch_expiry_hours = max(
+            1.0, min(720.0, (median_interval_seconds * RSI_WATCH_MAX_HORIZON_CANDLES) / 3600.0)
+        )
+        # 08/04 -- scalping-specific ceiling on top of the generic 1h-720h
+        # clamp above (calibrated for swing's daily candles, does nothing
+        # for scalping's "hours, not weeks" horizon on its own). See
+        # RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING's own comment.
+        if mode == "scalping":
+            watch_expiry_hours = min(watch_expiry_hours, RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING)
 
     # 08/04, scalping_v7: resolved ONCE here (creation time), then persisted
     # on the returned dict (rsi_watch_min_span/max_span below) rather than
@@ -3537,6 +3593,37 @@ async def evaluate_momentum_entry(
             "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
             "price": best.price_usd, "reasons": reasons, "hold_reason": "ohlcv_unavailable",
         }
+
+    # 08/04, scalping continuity gate -- real bug found live (same
+    # investigation as RSI_WATCH_MAX_EXPIRY_HOURS_SCALPING above): a token
+    # whose recent candles have a gap several times wider than its own
+    # typical cadence went several nominal slots without a single trade.
+    # RSI/ATR/golden-pocket below all implicitly assume evenly-spaced
+    # candles -- fed a gap like that, a "period=10" RSI is no longer reading
+    # 10 comparable time slices, it's reading 9 normal ones and one that
+    # silently spans hours, corrupting the read (not just the watch expiry
+    # fixed above). A token this thin isn't a scalping candidate by
+    # definition (not enough flow) -- HOLD honestly rather than trade a
+    # distorted signal. swing/vc/megacap are unaffected (daily/no candle
+    # cadence assumption baked into their thresholds the same way, but
+    # their setups already tolerate multi-hour/day gaps by design).
+    if mode == "scalping":
+        median_gap = _median_candle_interval_seconds(candles)
+        if median_gap and len(candles) >= 2:
+            max_gap = max(
+                candles[i].ts - candles[i - 1].ts for i in range(1, len(candles))
+            )
+            if max_gap > _SCALPING_MAX_CANDLE_GAP_MULTIPLIER * median_gap:
+                reasons.append(
+                    f"scalping -- trou de {max_gap / 60:.0f}min dans les bougies récentes "
+                    f"(cadence typique {median_gap / 60:.0f}min) -- flux insuffisant, "
+                    "signal non fiable"
+                )
+                return {
+                    "action": "HOLD", "chain": chain, "symbol": best.base_symbol,
+                    "price": best.price_usd, "reasons": reasons,
+                    "hold_reason": "scalping_candle_gap_too_wide",
+                }
 
     # 19/07 -- passes the REALLY executable price (real-time DexScreener,
     # best.price_usd) as the entry reference for R/R -- a real finding while
