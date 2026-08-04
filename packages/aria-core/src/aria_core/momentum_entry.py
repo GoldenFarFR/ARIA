@@ -4015,6 +4015,12 @@ async def evaluate_momentum_entry(
         # which mode produced this signal ("standard"/"scalping").
         "mode": mode,
         "chain": chain,
+        # 04/08 -- lets a caller (limit_order_chart.py's screenshot pilot)
+        # refetch this exact pool's candles via momentum_entry.fetch_candles
+        # WITHOUT re-resolving the pool from the contract (which would cost a
+        # network call) -- reuses the short-TTL candles cache instead, almost
+        # always still warm right after this same scan.
+        "pool_address": best.pair_address,
         "entry_security_json": entry_security_json,
         "symbol": best.base_symbol,
         "price": best.price_usd,

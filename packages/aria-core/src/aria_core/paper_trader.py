@@ -4368,6 +4368,17 @@ async def _open_new_entries_for_wallet(
                         )
                         if notifier:
                             await notifier(limit_orders.format_limit_order_placed_alert(order))
+                        # 04/08 -- pilot chart screenshot (scalping_v6/v7
+                        # only, see limit_order_chart.py's own docstring for
+                        # the scope decision). Best-effort, self-contained
+                        # try/except -- never allowed to affect the outer
+                        # except below, which is reserved for order-placement
+                        # failures.
+                        try:
+                            from aria_core import limit_order_chart
+                            await limit_order_chart.maybe_send_order_chart(order, order_sig)
+                        except Exception:  # noqa: BLE001 -- purely visual, never blocking
+                            pass
                 except Exception as exc:  # noqa: BLE001 -- never breaks the cycle
                     logger.info("paper_cycle: could not place golden-pocket watch order for %s (%s)", contract, exc)
             continue

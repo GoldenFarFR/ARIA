@@ -10,7 +10,7 @@ import io
 
 from PIL import Image
 
-from aria_core.skills.chart_render import render_price_chart_png
+from aria_core.skills.chart_render import render_price_chart_png, render_scenario_png
 from aria_core.skills.ta_levels import Candle
 
 _PREFIX = "data:image/png;base64,"
@@ -87,3 +87,31 @@ def test_single_candle_handled():
     uri = render_price_chart_png([Candle(0, 10.0, 12.0, 9.0, 11.0, 10.0)])
     raw = _decode(uri)
     assert raw[:4] == b"\x89PNG"
+
+
+def test_scenario_png_returns_valid_png_datauri():
+    uri = render_scenario_png(_candles(), entry=110.0, invalidation=95.0, target=130.0)
+    raw = _decode(uri)
+    assert raw[:4] == b"\x89PNG"
+
+
+def test_scenario_png_horizon_label_none_keeps_default_weeks_wording():
+    """04/08 -- horizon_label defaults to None: zero behavior change for the
+    existing callers (thesis_journal/marketing_video/vc_analysis), which
+    never pass it."""
+    default_uri = render_scenario_png(_candles(), entry=110.0, target=130.0, horizon_weeks=4)
+    explicit_none_uri = render_scenario_png(
+        _candles(), entry=110.0, target=130.0, horizon_weeks=4, horizon_label=None,
+    )
+    assert default_uri == explicit_none_uri
+
+
+def test_scenario_png_horizon_label_override_changes_output():
+    """04/08, scalping limit-order screenshot pilot: a custom label (e.g.
+    "quelques heures") must actually change the rendered text, not be
+    silently ignored."""
+    default_uri = render_scenario_png(_candles(), entry=110.0, target=130.0, horizon_weeks=4)
+    custom_uri = render_scenario_png(
+        _candles(), entry=110.0, target=130.0, horizon_weeks=4, horizon_label="quelques heures",
+    )
+    assert default_uri != custom_uri

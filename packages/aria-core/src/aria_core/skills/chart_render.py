@@ -185,6 +185,7 @@ def render_scenario_png(
     target: float | None = None,
     markers: list | None = None,
     horizon_weeks: int = 4,
+    horizon_label: str | None = None,
     width: int = 680,
     height: int = 300,
 ) -> str:
@@ -196,7 +197,14 @@ def render_scenario_png(
     bearish scenario (toward the invalidation) from the entry point, as a
     shaded zone + dashed paths. This is a clearly labeled **simulation**,
     never a forecast (dome). Deterministic, offline. Empty -> neutral PNG.
-    """
+
+    ``horizon_label`` (04/08, scalping limit-order screenshot pilot):
+    overrides the displayed "N sem." text when the caller's own timeframe
+    genuinely isn't weeks (a scalping setup plays out in hours, not weeks --
+    showing "SIMULATION 1 sem." there would be a fabricated-sounding unit,
+    not just an imprecise one). ``None`` (default) keeps the original
+    "{horizon_weeks} sem." wording -- zero behavior change for existing
+    callers (thesis_journal/marketing_video/vc_analysis)."""
     width = max(_MIN_W, int(width))
     height = max(_MIN_H, int(height))
     if not candles:
@@ -334,7 +342,8 @@ def render_scenario_png(
 
     # Honest labels.
     draw.text((plot_l + 2, 5), "OHLCV reel  ·  MA7", fill=_DX_TEXT)
-    draw.text((hist_r + 4, 5), f"SIMULATION {horizon_weeks} sem. (scenario)", fill=_DX_TEXT)
+    sim_label = horizon_label if horizon_label is not None else f"{horizon_weeks} sem."
+    draw.text((hist_r + 4, 5), f"SIMULATION {sim_label} (scenario)", fill=_DX_TEXT)
     draw.text((plot_l + 2, vol_t - 1), "Vol", fill=_DX_TEXT)
     return _data_uri(img)
 
