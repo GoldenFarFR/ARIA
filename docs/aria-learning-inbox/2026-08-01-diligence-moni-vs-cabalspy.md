@@ -1,61 +1,65 @@
-# Diligence — Moni API vs CabalSpy (sourcing wallet-scoring), 01/08/2026
+# Diligence — Moni API vs CabalSpy (wallet-scoring sourcing), 08/01/2026
 
-> Instantané daté, pas une fiche vivante. Suite directe de la diligence CabalSpy du
-> 23/07 (`docs/HANDOFF_WALLET_SCORING.md`), qui avait écarté Moni sur la seule base de sa
-> doc publique ("aucun des deux n'a de labels smart money"). L'opérateur a fourni une
-> vraie clé API Moni (`profile.moni.ai`, palier gratuit) le 01/08 — cette fiche est le
-> premier test réel avec authentification, jamais fait avant. **Aucune clé/valeur secrète
-> n'apparaît ici**, conforme à la doctrine repo public.
+> Dated snapshot, not a living document. Direct follow-up to the CabalSpy
+> diligence from 07/23 (`docs/HANDOFF_WALLET_SCORING.md`), which had ruled out
+> Moni based solely on its public doc ("neither has smart money labels"). The
+> operator provided a real Moni API key (`profile.moni.ai`, free tier) on 08/01
+> -- this fiche is the first real test with authentication, never done before.
+> **No key/secret value appears here**, per public-repo doctrine.
 
-## Ce que l'API propose réellement (vérifié en direct, pas la doc seule)
+## What the API actually offers (verified live, not just the doc)
 
-Base URL confirmée : `https://api.discover.getmoni.io/api/v3/` (distincte du domaine
-principal `moni.ai` — trouvée via `apiguide`/`llms.txt`, jamais assumée). Authentification :
-header `Api-Key`. Latence excellente et stable : 80-130ms sur 5 appels successifs (moyenne
-~92ms). Palier gratuit avec un vrai rate-limit (429 "Rate limit exceeded" observé après
-2-3 appels rapprochés — non chiffré précisément, un délai de ~15s a suffi à débloquer).
+Confirmed base URL: `https://api.discover.getmoni.io/api/v3/` (distinct from the
+main `moni.ai` domain -- found via `apiguide`/`llms.txt`, never assumed).
+Authentication: `Api-Key` header. Excellent, stable latency: 80-130ms over 5
+consecutive calls (average ~92ms). Free tier with a real rate-limit (429 "Rate
+limit exceeded" observed after 2-3 rapid calls -- not precisely quantified, a
+~15s delay was enough to clear it).
 
-Endpoints réels testés (`accounts/{username}/info/full/`, `projects/raw/`) — données
-retournées par compte X/Twitter :
-- `moniScore` : score composite continu (pas une catégorie)
-- `smartsCount` / `smartMentionsCount` : volume d'engagement par des comptes "smart"
-- `smartTier` / `smartTags` : **catégorisation** (ex. "Exchange") -- confirmée PRÉSENTE et
-  remplie sur un compte de projet/exchange (`RobinhoodCrypto`), mais **toujours vide/null**
-  sur les 3 wallets individuels testés ci-dessous
-- `mlProjectPrediction` : score ML de probabilité qu'un compte soit un vrai "projet" crypto
-  (vu à 95% sur un exemple réel du flux `projects/raw/`)
+Real endpoints tested (`accounts/{username}/info/full/`, `projects/raw/`) --
+data returned per X/Twitter account:
+- `moniScore`: continuous composite score (not a category)
+- `smartsCount` / `smartMentionsCount`: engagement volume from "smart" accounts
+- `smartTier` / `smartTags`: **categorization** (e.g. "Exchange") -- confirmed
+  PRESENT and populated on a project/exchange account (`RobinhoodCrypto`), but
+  **always empty/null** on the 3 individual wallets tested below
+- `mlProjectPrediction`: ML score for the probability that an account is a real
+  crypto "project" (seen at 95% on a real example from the `projects/raw/` feed)
 
-## Comparaison directe sur les mêmes entités (CabalSpy wallets "kol" -> Moni via leur handle X)
+## Direct comparison on the same entities (CabalSpy "kol" wallets -> Moni via their X handle)
 
-3 wallets tirés au hasard du flux réel `cabalspy.list_wallets("base", wallet_type="kol")`
-(238 wallets reçus), chacun avec un handle X déjà attaché par CabalSpy -- interrogés ensuite
-sur Moni avec ce même handle :
+3 wallets randomly drawn from the real `cabalspy.list_wallets("base", wallet_type="kol")`
+feed (238 wallets received), each already carrying an X handle attached by
+CabalSpy -- then queried on Moni with that same handle:
 
-| Wallet (CabalSpy type="kol") | Handle X | Moni `moniScore` | Moni `smartsCount` | Moni `smartTier`/`smartTags` |
+| Wallet (CabalSpy type="kol") | X handle | Moni `moniScore` | Moni `smartsCount` | Moni `smartTier`/`smartTags` |
 |---|---|---|---|---|
 | Kaz1m | KZMKBL | 81 | 8 | `null` / `[]` |
 | blanker | 0xblanker | 1850 | 165 | `null` / `[]` |
 | milady | milady | 57 | 3 | `null` / `[]` |
 
-**Constat net, sur preuve directe (pas la doc seule)** : pour les 3 wallets individuels
-labellisés "kol" par CabalSpy, Moni fournit un score continu et un compteur d'engagement,
-mais **jamais de catégorisation exploitable** (`smartTier`/`smartTags` vides) -- ce champ
-semble réservé aux comptes de PROJETS/exchanges (confirmé positif sur `RobinhoodCrypto`),
-pas aux wallets/KOLs individuels que `/walletqueue`/`/walletscore` ont besoin de
-catégoriser.
+**Clear finding, on direct evidence (not just the doc)**: for the 3 individual
+wallets labeled "kol" by CabalSpy, Moni provides a continuous score and an
+engagement count, but **never usable categorization** (`smartTier`/`smartTags`
+empty) -- this field appears reserved for PROJECT/exchange accounts (confirmed
+positive on `RobinhoodCrypto`), not for the individual wallets/KOLs that
+`/walletqueue`/`/walletscore` need to categorize.
 
 ## Verdict
 
-**La diligence du 23/07 se confirme, cette fois sur preuve directe plutôt que la doc
-seule** : CabalSpy reste le bon choix pour le sourcing wallet-scoring (catégorie directe
-"kol"/"smart"/"whale" par wallet, exploitable sans transformation). Moni ne remplace pas
-ce rôle -- son intérêt potentiel serait ailleurs (score de momentum social continu par
-compte X, découverte de projets récents via `projects/raw/` + `mlProjectPrediction`),
-non exploré plus loin ici, hors scope de cette diligence.
+**The 07/23 diligence is confirmed, this time on direct evidence rather than the
+doc alone**: CabalSpy remains the right choice for wallet-scoring sourcing
+(direct category "kol"/"smart"/"whale" per wallet, usable without
+transformation). Moni does not replace this role -- its potential value would
+lie elsewhere (continuous social momentum score per X account, recent-project
+discovery via `projects/raw/` + `mlProjectPrediction`), not explored further
+here, out of scope for this diligence.
 
-## Branches ouvertes (jamais creusées, juste banquées)
+## Open branches (never dug into, just banked)
 
-- `projects/raw/` (flux de projets récents + score ML "vrai projet") pourrait être une
-  source de découverte complémentaire à `launchpad_discovery.py` -- angle non évalué.
-- Rate-limit précis du palier gratuit Moni jamais mesuré rigoureusement (juste observé
-  qu'il existe et qu'un court délai suffit) -- à calibrer si un usage réel était envisagé.
+- `projects/raw/` (feed of recent projects + "real project" ML score) could be a
+  complementary discovery source to `launchpad_discovery.py` -- angle not
+  evaluated.
+- Moni's free-tier rate-limit was never rigorously measured (just observed that
+  it exists and a short delay is enough) -- to calibrate if real usage were ever
+  considered.

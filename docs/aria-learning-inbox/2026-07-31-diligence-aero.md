@@ -1,391 +1,395 @@
-# Diligence maximaliste — Aerodrome Finance (AERO), 31/07/2026
+# Maximalist Diligence — Aerodrome Finance (AERO), 07/31/2026
 
-> Instantané daté, pas une fiche vivante — figé au 31/07/2026, à revérifier avant toute
-> citation d'un chiffre précis si repris plus tard. Contexte : conviction long terme
-> proposée par l'opérateur pour du capital hodlé en EVM sur Base, distincte de la thèse
-> rendement/yield déjà tranchée ailleurs. Méthode : fan-out 26 agents (1 scope + 5 recherche
-> + 20 récupération de sources), **vérification croisée faite manuellement par cette session
-> après arrêt volontaire du workflow avant sa propre phase de vérification automatique**
-> (décision opérateur explicite, 31/07 — garder Scope/Search/Fetch en fan-out large, mais
-> reprendre la main sur Verify/Synthèse pour éviter le gaspillage d'agents, cf.
-> `feedback_workflow_keep_verify_synthesize_manual` dans la mémoire persistante). Chaque
-> affirmation ci-dessous cite sa source ; les divergences entre sources sont signalées
-> explicitement plutôt que masquées.
+> Dated snapshot, not a living sheet — frozen as of 07/31/2026, to be rechecked before
+> citing any precise figure if reused later. Context: long-term conviction thesis
+> proposed by the operator for capital held in EVM on Base, distinct from the
+> yield/return thesis already settled elsewhere. Method: 26-agent fan-out (1 scope + 5
+> research + 20 source retrieval), **cross-verification done manually by this session
+> after voluntarily halting the workflow before its own automatic verification phase**
+> (explicit operator decision, 07/31 — keep Scope/Search/Fetch in wide fan-out, but
+> take back manual control of Verify/Synthesize to avoid wasting agents, cf.
+> `feedback_workflow_keep_verify_synthesize_manual` in persistent memory). Every
+> claim below cites its source; divergences between sources are flagged explicitly
+> rather than hidden.
 
-## 1. Mécanique du protocole
+## 1. Protocol mechanics
 
-**ve(3,3)** : les utilisateurs verrouillent AERO pour recevoir `veAERO` (un NFT), avec un
-pouvoir de vote proportionnel au montant et à la durée du lock (jusqu'à 4 ans pour le
-maximum). Chaque semaine (epoch), les détenteurs de veAERO votent pour diriger les nouvelles
-émissions vers des pools de liquidité précis — plus un pool reçoit de votes, plus il reçoit
-d'émissions, ce qui attire de la liquidité et du volume, qui génère des frais reversés aux
-votants. Point structurant confirmé par la donnée primaire DefiLlama : **100% du revenu
-protocolaire est reversé aux votants veAERO**, un modèle "zéro fuite" — aucune part n'est
-retenue par une trésorerie ou une équipe ([DefiLlama — Aerodrome](https://defillama.com/protocol/aerodrome)).
+**ve(3,3)**: users lock AERO to receive `veAERO` (an NFT), with voting power
+proportional to the amount and duration of the lock (up to 4 years for the
+maximum). Each week (epoch), veAERO holders vote to direct new emissions
+toward specific liquidity pools — the more votes a pool receives, the more
+emissions it gets, which attracts liquidity and volume, which generates fees
+paid back to voters. Structuring point confirmed by DefiLlama's primary data:
+**100% of protocol revenue is paid back to veAERO voters**, a "zero leakage"
+model — no share is retained by a treasury or a team
+([DefiLlama — Aerodrome](https://defillama.com/protocol/aerodrome)).
 
-**Slipstream** (le module de liquidité concentrée façon Uniswap v3) : deux sources
-convergent sur un lancement **le 22 avril 2024** avec citation directe et datée
-([CCN, 22/04/2024](https://www.ccn.com/analysis/crypto/base-aerodrome-finance-slipstream-tvl-2-billion/)) ;
-une troisième source dit "mars 2024" sans date précise
-([wiki technique fullstack-development](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md))
-— divergence mineure, la date du 22/04 datée et citée l'emporte. Le code de Slipstream est
-un **fork direct du Slipstream de Velodrome**, lui-même adapté de l'architecture Uniswap V3
-(core/periphery), confirmé sur le dépôt GitHub officiel
+**Slipstream** (the concentrated-liquidity module, Uniswap v3-style): two
+sources converge on a launch **on April 22, 2024** with a direct, dated
+citation
+([CCN, 04/22/2024](https://www.ccn.com/analysis/crypto/base-aerodrome-finance-slipstream-tvl-2-billion/));
+a third source says "March 2024" with no precise date
+([fullstack-development technical wiki](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md))
+— minor divergence, the dated and cited 04/22 date takes precedence. The
+Slipstream code is a **direct fork of Velodrome's Slipstream**, itself
+adapted from the Uniswap V3 architecture (core/periphery), confirmed on the
+official GitHub repository
 ([github.com/aerodrome-finance/slipstream](https://github.com/aerodrome-finance/slipstream)).
-Slipstream vise les paires stables/peu volatiles ; les pools variables classiques
-d'Aerodrome restent utilisés pour les paires plus volatiles/peu liquides
+Slipstream targets stable/low-volatility pairs; Aerodrome's classic variable
+pools remain used for more volatile/less liquid pairs
 ([CCN](https://www.ccn.com/analysis/crypto/base-aerodrome-finance-slipstream-tvl-2-billion/)).
 
-**Licence du code** : les contrats Core/Periphery restent en GPL-2.0-or-later (hérité des
-dépendances Uniswap V3), mais le dossier Gauge (qui route les émissions/récompenses) est en
-**Business Source License 1.1** — donc pas totalement open-source, une licence restrictive
-sur la partie qui gère l'argent
-([PERMISSIONS.md, GitHub officiel](https://github.com/aerodrome-finance/contracts/blob/main/PERMISSIONS.md)).
+**Code license**: the Core/Periphery contracts remain under GPL-2.0-or-later
+(inherited from the Uniswap V3 dependencies), but the Gauge folder (which
+routes emissions/rewards) is under the **Business Source License 1.1** — so
+not fully open-source, a restrictive license on the part that handles the
+money
+([PERMISSIONS.md, official GitHub](https://github.com/aerodrome-finance/contracts/blob/main/PERMISSIONS.md)).
 
 ## 2. Tokenomics
 
-**Supply initiale et distribution** : 500M AERO au lancement (août 2023), dont 450M (90%)
-verrouillés en veAERO dès le départ. 40% du supply initial (200M tokens) a été airdroppé aux
-détenteurs de veVELO (Velodrome) existants, réservé aux wallets détenant au moins 1000 veVELO
-(~3 500 wallets éligibles) — deux sources indépendantes convergent exactement sur ce chiffre
-([Medium officiel AerodromeFi](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91) ;
-[wiki technique](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md)).
-L'allocation équipe est verrouillée en veAERO sur un vesting de 2 à 4 ans.
+**Initial supply and distribution**: 500M AERO at launch (August 2023), of which 450M
+(90%) were locked in veAERO from day one. 40% of the initial supply (200M tokens) was
+airdropped to existing veVELO (Velodrome) holders, restricted to wallets holding at
+least 1000 veVELO (~3,500 eligible wallets) — two independent sources converge exactly
+on this figure
+([official AerodromeFi Medium](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91);
+[technical wiki](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md)).
+The team allocation is locked in veAERO on a 2-to-4-year vesting schedule.
 
-**Répartition détaillée de l'allocation** — deux instantanés à des dates différentes
-donnent des chiffres légèrement différents (cohérent avec des émissions cumulatives qui
-font évoluer les pourcentages relatifs dans le temps, pas une contradiction) :
-- Snapshot Tokenomist : Gauge Emissions 67,81% / Airdrop 9,47% / Rebase 5,00% /
-  Ecosystem-Public Goods 4,97% / Foundation-Team (mint initial) 4,50% + (nouveau mint) 3,52%
-  / Grants 2,37% / Voter Incentives 1,89% / Genesis LP 0,47%
+**Detailed allocation breakdown** — two snapshots at different dates give slightly
+different figures (consistent with cumulative emissions shifting the relative
+percentages over time, not a contradiction):
+- Tokenomist snapshot: Gauge Emissions 67.81% / Airdrop 9.47% / Rebase 5.00% /
+  Ecosystem-Public Goods 4.97% / Foundation-Team (initial mint) 4.50% + (new mint) 3.52%
+  / Grants 2.37% / Voter Incentives 1.89% / Genesis LP 0.47%
   ([Tokenomist](https://tokenomist.ai/aerodrome-finance)).
-- Snapshot Tokenomics.com (02/2026) : Gauge Emissions 65,44% / Airdrop 10,17% /
-  Foundation-Team 8,61% / Rebase 5,37% / Ecosystem 5,34% / Grants 2,54% / Voter Incentives
-  2,03% / Genesis LP 0,51% ([Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)).
+- Tokenomics.com snapshot (02/2026): Gauge Emissions 65.44% / Airdrop 10.17% /
+  Foundation-Team 8.61% / Rebase 5.37% / Ecosystem 5.34% / Grants 2.54% / Voter Incentives
+  2.03% / Genesis LP 0.51% ([Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)).
 
-**Émissions** — convergence forte sur 3 sources indépendantes : 10M AERO/epoch au
-lancement (2% du supply initial), phase "Take-off" avec +3%/epoch pendant les 14 premiers
-epochs (pic légèrement au-dessus de 15M AERO), puis phase "Cruise" avec décroissance de
--1%/epoch
-([Medium officiel](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91) ;
-[wiki technique](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md) ;
+**Emissions** — strong convergence across 3 independent sources: 10M AERO/epoch at
+launch (2% of initial supply), a "Take-off" phase with +3%/epoch for the first 14
+epochs (peaking slightly above 15M AERO), then a "Cruise" phase with -1%/epoch decay
+([official Medium](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91);
+[technical wiki](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md);
 [Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)).
 
-**"Aero Fed"** : à partir d'environ l'epoch 67 (quand les émissions hebdomadaires tombent
-sous 9M AERO), les votants veAERO prennent le contrôle direct de la politique monétaire —
-ils peuvent augmenter les émissions de +0,01% du supply total par epoch, les diminuer de
--0,01%, ou maintenir le statu quo. Les bornes citées varient légèrement selon la source :
-0,52% annualisé minimum et 52% annualisé maximum sont citées de façon cohérente sur 3
-sources, une source précise le mécanisme comme un maximum de 1%/semaine (52%/an)
-et un minimum de 0,01%/semaine (0,52%/an)
-([wiki technique](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md) ;
-[Medium officiel](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91) ;
-[Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)) — **implication clé** :
-l'inflation à long terme n'est plus fixée par un code immuable mais devient un objet de vote
-communautaire, avec un plafond haut (52%/an) largement supérieur au taux actuel.
+**"Aero Fed"**: starting around epoch 67 (when weekly emissions fall below 9M AERO),
+veAERO voters take direct control of monetary policy — they can raise emissions by
++0.01% of total supply per epoch, lower them by -0.01%, or hold the status quo. The
+cited bounds vary slightly by source: a 0.52% annualized minimum and a 52% annualized
+maximum are cited consistently across 3 sources, one source specifies the mechanism as
+a maximum of 1%/week (52%/year) and a minimum of 0.01%/week (0.52%/year)
+([technical wiki](https://github.com/fullstack-development/blockchain-wiki-en/blob/main/protocols/aerodrome/README.md);
+[official Medium](https://medium.com/@aerodromefi/aerodrome-launch-tokenomics-30b546654a91);
+[Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)) — **key
+implication**: long-term inflation is no longer set by immutable code but becomes a
+subject of community vote, with a high ceiling (52%/year) far above the current rate.
 
-**Supply actuel** : supply total **non plafonné** ("infinite" selon Tokenomist), supply
-circulant à **978,88M AERO** (quasiment le double du supply initial de 500M, par cumul des
-émissions depuis août 2023) contre un market cap de 417,90M$ et une valorisation pleinement
-diluée de 668,36M$ — deux sources indépendantes citent exactement le même chiffre de
-circulant (978,88M/978 879 231), signe d'une donnée fiable issue de la même source primaire
-sous-jacente ([DefiLlama](https://defillama.com/protocol/aerodrome) ; [Tokenomist](https://tokenomist.ai/aerodrome-finance)).
+**Current supply**: total supply **uncapped** ("infinite" per Tokenomist), circulating
+supply at **978.88M AERO** (nearly double the initial supply of 500M, from cumulative
+emissions since August 2023) against a market cap of $417.90M and a fully diluted
+valuation of $668.36M — two independent sources cite exactly the same circulating
+figure (978.88M/978,879,231), a sign of reliable data drawn from the same underlying
+primary source ([DefiLlama](https://defillama.com/protocol/aerodrome); [Tokenomist](https://tokenomist.ai/aerodrome-finance)).
 
-**Signal économique à surveiller** (DefiLlama, méthodologie propre) : les incitations
-tokenisées annualisées (137,76M$) **dépassent actuellement** le revenu protocolaire
-annualisé (120,54M$), produisant un "earnings" négatif de -17,22M$/an selon ce calcul — le
-protocole distribue aujourd'hui plus en émissions qu'il ne génère de revenu réel
+**Economic signal to watch** (DefiLlama, own methodology): annualized tokenized
+incentives ($137.76M) **currently exceed** annualized protocol revenue ($120.54M),
+producing negative "earnings" of -$17.22M/year by this calculation — the protocol is
+currently distributing more in emissions than it generates in real revenue
 ([DefiLlama](https://defillama.com/protocol/aerodrome)).
 
-## 3. Position de marché réelle
+## 3. Actual market position
 
-**TVL** — les chiffres varient fortement selon le moment du snapshot (normal, la TVL
-fluctue), listés chronologiquement pour montrer la trajectoire réelle plutôt qu'un chiffre
-figé trompeur :
-- Janvier 2024 : ~120M$ ([The Block, via TradingView](https://tr.tradingview.com/news/the_block%3Ad3d3c4d57094b%3A0-aerodrome-tops-1-billion-in-deposits-dominating-defi-on-base))
-- Avril 2024 : ~790M$ (~la moitié de l'ATH de TVL de Base à l'époque, 1,64Md$)
+**TVL** — figures vary widely depending on the snapshot moment (normal, TVL
+fluctuates), listed chronologically to show the actual trajectory rather than a
+misleading fixed number:
+- January 2024: ~$120M ([The Block, via TradingView](https://tr.tradingview.com/news/the_block%3Ad3d3c4d57094b%3A0-aerodrome-tops-1-billion-in-deposits-dominating-defi-on-base))
+- April 2024: ~$790M (~half of Base's TVL ATH at the time, $1.64B)
   ([CCN](https://www.ccn.com/analysis/crypto/base-aerodrome-finance-slipstream-tvl-2-billion/))
-- Août 2025 : ~602M$ ([DWF Labs](https://www.dwf-labs.com/research/has-aerodrome-finance-become-the-leading-defi-protocol-on-base))
-- The Block (date non précisée dans l'article lui-même) : >1 milliard$ de dépôts, ~50% du
-  TVL total de Base et >50% du TVL DeFi de Base
+- August 2025: ~$602M ([DWF Labs](https://www.dwf-labs.com/research/has-aerodrome-finance-become-the-leading-defi-protocol-on-base))
+- The Block (date not specified in the article itself): >$1 billion in deposits, ~50%
+  of Base's total TVL and >50% of Base's DeFi TVL
   ([The Block](https://tr.tradingview.com/news/the_block%3Ad3d3c4d57094b%3A0-aerodrome-tops-1-billion-in-deposits-dominating-defi-on-base))
-- Janvier 2026 : ~1,3Md$, ~70% de toute la liquidité DEX de Base
+- January 2026: ~$1.3B, ~70% of all of Base's DEX liquidity
   ([Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees))
-- Juin 2026 (snapshot DefiLlama cité par un tiers) : ~453,76M$
+- June 2026 (DefiLlama snapshot cited by a third party): ~$453.76M
   ([CryptoDaily](https://cryptodaily.co.uk/2026/06/aero-base-proxy-liquidity))
-- Snapshot DefiLlama le plus frais (au moment de cette diligence) : **268,6M$, en baisse de
-  13,4% sur 30 jours** ([DefiLlama](https://defillama.com/protocol/aerodrome))
-- Slipstream seul (liquidité concentrée) : 131,81M$ TVL, -22% sur 30 jours
+- Freshest DefiLlama snapshot (as of this diligence): **$268.6M, down 13.4% over 30
+  days** ([DefiLlama](https://defillama.com/protocol/aerodrome))
+- Slipstream alone (concentrated liquidity): $131.81M TVL, -22% over 30 days
   ([DefiLlama — Slipstream](https://defillama.com/protocol/aerodrome-slipstream))
 
-**Lecture honnête de cette trajectoire** : forte croissance 2024-janvier 2026 (120M$ →
-1,3Md$), puis **repli net** depuis (1,3Md$ → 453M$ → 268M$ au dernier snapshot) — une baisse
-d'environ 80% depuis le pic de janvier 2026. Ce n'est pas nécessairement disqualifiant (le
-marché crypto entier peut avoir reculé sur la période) mais c'est un vrai signal à ne pas
-passer sous silence pour une thèse "conviction long terme".
+**Honest read of this trajectory**: strong growth 2024-January 2026 ($120M →
+$1.3B), then a **sharp pullback** since ($1.3B → $453M → $268M at the latest
+snapshot) — a decline of roughly 80% since the January 2026 peak. This is not
+necessarily disqualifying (the entire crypto market may have pulled back over the
+period), but it is a real signal that should not be glossed over for a "long-term
+conviction" thesis.
 
-**Domination sur Base** : Aerodrome reste le plus gros DEX de Base par TVL, volume et frais,
-devant Uniswap et Aave sur ce réseau
+**Dominance on Base**: Aerodrome remains the largest DEX on Base by TVL, volume, and
+fees, ahead of Uniswap and Aave on this network
 ([The Block](https://tr.tradingview.com/news/the_block%3Ad3d3c4d57094b%3A0-aerodrome-tops-1-billion-in-deposits-dominating-defi-on-base)).
-A réalisé near-2x le volume du top pool Uniswap avec environ la moitié de sa TVL ; frais
-7 jours dépassant Curve et PancakeSwap malgré moins d'un tiers de leur TVL respective
+Delivered near-2x the volume of the top Uniswap pool with roughly half its TVL; 7-day
+fees exceeding Curve and PancakeSwap despite less than a third of their respective TVL
 ([DWF Labs](https://www.dwf-labs.com/research/has-aerodrome-finance-become-the-leading-defi-protocol-on-base)).
-Volume 30 jours de 9,02Md$ (comparable à Solana Orca/Raydium) selon le snapshot DWF Labs,
-contre 11,2Md$ pour Slipstream seul et 12,4Md$ pour Aerodrome global selon un snapshot
-DefiLlama plus récent (juin 2026) — encore une fois, des chiffres qui bougent avec le temps,
-pas une contradiction.
+30-day volume of $9.02B (comparable to Solana's Orca/Raydium) per the DWF Labs
+snapshot, versus $11.2B for Slipstream alone and $12.4B for Aerodrome overall per a
+more recent DefiLlama snapshot (June 2026) — again, figures that move over time, not a
+contradiction.
 
-**Revenu protocolaire** : 30 jours ~6,12-6,22M$ de frais, ~4,19-4,42M$ de revenu
-protocolaire net, annualisé ~160M$ de frais / ~120M$ de revenu (trailing year)
-([DefiLlama](https://defillama.com/protocol/aerodrome)). Frais cumulés depuis le lancement
-(août 2023) : 295M$ ([Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)).
-**Tendance trimestrielle en déclin sur Slipstream** : Q3 2025 59,06M$ de revenu brut → Q4
-2025 34,97M$ → Q1 2026 19,53M$ → Q2 2026 25,16M$ (léger rebond) → Q3 2026 partiel 5,18M$
-([DefiLlama — Slipstream](https://defillama.com/protocol/aerodrome-slipstream)) — tendance
-baissière nette depuis le pic de Q3 2025, cohérente avec la baisse de TVL documentée
-ci-dessus.
+**Protocol revenue**: 30-day ~$6.12-6.22M in fees, ~$4.19-4.42M in net protocol
+revenue, annualized ~$160M in fees / ~$120M in revenue (trailing year)
+([DefiLlama](https://defillama.com/protocol/aerodrome)). Cumulative fees since launch
+(August 2023): $295M ([Tokenomics.com](https://tokenomics.com/articles/aerodrome-tokenomics-how-aero-captures-100-of-protocol-fees)).
+**Declining quarterly trend on Slipstream**: Q3 2025 $59.06M gross revenue → Q4
+2025 $34.97M → Q1 2026 $19.53M → Q2 2026 $25.16M (slight rebound) → Q3 2026 partial $5.18M
+([DefiLlama — Slipstream](https://defillama.com/protocol/aerodrome-slipstream)) — clear
+downward trend since the Q3 2025 peak, consistent with the TVL decline documented
+above.
 
-**Intégration Coinbase** : Coinbase a intégré Aerodrome directement dans son application
-principale et offre du trading sans frais sur Aerodrome via l'abonnement Coinbase One
+**Coinbase integration**: Coinbase has integrated Aerodrome directly into its main app
+and offers fee-free trading on Aerodrome via a Coinbase One subscription
 ([DWF Labs](https://www.dwf-labs.com/research/has-aerodrome-finance-become-the-leading-defi-protocol-on-base)).
 
-**Dépendance structurelle à Base** : Aerodrome opère à 100% sur Base (aucune diversification
-multi-chaîne à ce jour, hors le projet de fusion 2026 détaillé section 10) — confirmé
-directement par la donnée DefiLlama elle-même ([DefiLlama](https://defillama.com/protocol/aerodrome)).
-Un commentateur qualifie explicitement cette dépendance de "risque structurel" — la
-croissance d'Aerodrome est mécaniquement plafonnée par celle de Base elle-même
+**Structural dependence on Base**: Aerodrome operates 100% on Base (no multi-chain
+diversification to date, aside from the 2026 merger project detailed in section 10) —
+confirmed directly by DefiLlama's own data ([DefiLlama](https://defillama.com/protocol/aerodrome)).
+One commentator explicitly labels this dependence a "structural risk" — Aerodrome's
+growth is mechanically capped by Base's own growth
 ([CryptoDaily](https://cryptodaily.co.uk/2026/06/aero-base-proxy-liquidity)).
 
-## 4. Sécurité
+## 4. Security
 
-**Deux niveaux d'audit à ne pas confondre** — c'est la nuance la plus importante trouvée
-dans cette diligence, quasi-absente du contenu marketing :
+**Two audit levels not to be conflated** — this is the most important nuance found
+in this diligence, nearly absent from the marketing content:
 
-1. **Audit EtherAuthority (05/06/2024)** — porte **uniquement sur le contrat ERC-20 AERO**
-   lui-même (`Aero.sol`, adresse `0x940181a94a35a4569e4529a3cdfb74e38fd98631` sur Base), PAS
-   sur le protocole complet (Router/Voter/veAERO/gauges). Résultat : 0 critique, 0 haute,
-   0 moyenne, 1 basse, 2 informationnelles — verdict "Passed". Point notable soulevé par
-   l'auditeur lui-même : le contrat a une adresse `minter` qui peut frapper des tokens sans
-   limite (pas de plafond de supply au niveau du contrat) — signalé explicitement comme un
-   "risque business" de centralisation, le contrat n'est "pas totalement décentralisé" à
-   cause de ce contrôle du propriétaire. L'auditeur note aussi ne pas avoir reçu de scripts
-   de test automatisés pour ce contrat — l'analyse s'est appuyée sur du statique/manuel
-   (Slither, Solhint, Remix), pas une suite de tests vérifiée
-   ([rapport PDF EtherAuthority](https://etherauthority.io/wp-content/uploads/2024/06/Aerodrome-AERO.pdf)).
+1. **EtherAuthority audit (06/05/2024)** — covers **only the AERO ERC-20 contract**
+   itself (`Aero.sol`, address `0x940181a94a35a4569e4529a3cdfb74e38fd98631` on Base), NOT
+   the full protocol (Router/Voter/veAERO/gauges). Result: 0 critical, 0 high,
+   0 medium, 1 low, 2 informational — verdict "Passed". Notable point raised by
+   the auditor itself: the contract has a `minter` address that can mint tokens without
+   limit (no supply cap at the contract level) — explicitly flagged as a
+   centralization "business risk," the contract is "not fully decentralized" due
+   to this owner control. The auditor also notes not having received automated test
+   scripts for this contract — the analysis relied on static/manual review
+   (Slither, Solhint, Remix), not a verified test suite
+   ([EtherAuthority PDF report](https://etherauthority.io/wp-content/uploads/2024/06/Aerodrome-AERO.pdf)).
 
-2. **Le protocole complet (Router/Voter/veAERO/gauges/Slipstream) n'a PAS d'audit
-   indépendant propre à Aerodrome** — la page de sécurité officielle elle-même dirige vers
-   la sécurité de **Velodrome V2**, dont Aerodrome hérite l'architecture des contrats et la
-   maintenance sécuritaire complète. Pas de bug bounty Aerodrome-spécifique non plus — les
-   chercheurs en sécurité sont redirigés vers le programme Velodrome
-   ([aerodrome.finance/security, page officielle](https://aerodrome.finance/security)).
-   Cohérent avec DefiLlama qui liste "Audits: No" pour la page Slipstream spécifiquement
-   ([DefiLlama — Slipstream](https://defillama.com/protocol/aerodrome-slipstream)) — la
-   catégorisation DefiLlama ne compte probablement pas un audit hérité comme un audit
-   "propre" au produit listé, cohérence plutôt que contradiction. Le dépôt GitHub des
-   contrats mentionne malgré tout un programme de bug bounty Immunefi actif et des tests
-   d'invariants Echidna, sans que ce point ait été vérifié directement sur la page Immunefi
-   elle-même dans cette diligence
+2. **The full protocol (Router/Voter/veAERO/gauges/Slipstream) has NO independent
+   audit of its own specific to Aerodrome** — the official security page itself points to
+   the security of **Velodrome V2**, from which Aerodrome inherits the contract
+   architecture and full security maintenance. No Aerodrome-specific bug bounty
+   either — security researchers are redirected to the Velodrome program
+   ([aerodrome.finance/security, official page](https://aerodrome.finance/security)).
+   Consistent with DefiLlama, which lists "Audits: No" for the Slipstream page
+   specifically ([DefiLlama — Slipstream](https://defillama.com/protocol/aerodrome-slipstream)) —
+   DefiLlama's categorization likely does not count an inherited audit as an audit
+   "of its own" for the listed product, consistency rather than contradiction. The contracts'
+   GitHub repository nonetheless mentions an active Immunefi bug bounty program and
+   Echidna invariant tests, though this point was not verified directly on the Immunefi
+   page itself within this diligence
    ([github.com/aerodrome-finance/slipstream](https://github.com/aerodrome-finance/slipstream)).
 
-**Statut des clés admin — PAS pleinement décentralisé malgré le narratif ve(3,3)** :
-- Un multisig "Protocol Team" (`0xE6A41fE61E7a1996B59d508661e3f524d6A32075`) détient le rôle
-  Team dans Minter et VotingEscrow, la gestion des frais sur tous les pools, la propriété du
-  Factory Registry, et le contrôle initial de ProtocolGovernor et EpochGovernor.
-- Un multisig "EmergencyCouncil" séparé (`0x99249b10593fCa1Ae9DAE6D4819F1A6dae5C013D`) peut
-  **tuer ou ranimer unilatéralement un gauge** (couper la distribution de récompenses à un
-  pool précis à volonté) et gérer des ajustements d'urgence.
-- Le rôle "Vetoer" n'est **pas encore renoncé** — intention future seulement, énoncée dans
-  la doc officielle elle-même.
-- ProtocolGovernor est actuellement contrôlé par l'équipe, avec un plan (non encore réalisé
-  au moment de cette diligence) de le remplacer par un contrat OpenZeppelin Governor modifié.
-- Le minting d'AERO est restreint au seul contrat Minter, qui distribue au contrat Voter
-  pour les émissions de gauge — le mécanisme d'émission est donc verrouillé par contrat, pas
-  frappable manuellement par une clé admin.
+**Admin key status — NOT fully decentralized despite the ve(3,3) narrative**:
+- A "Protocol Team" multisig (`0xE6A41fE61E7a1996B59d508661e3f524d6A32075`) holds the Team
+  role in Minter and VotingEscrow, fee management on all pools, ownership of the
+  Factory Registry, and initial control of ProtocolGovernor and EpochGovernor.
+- A separate "EmergencyCouncil" multisig (`0x99249b10593fCa1Ae9DAE6D4819F1A6dae5C013D`) can
+  **unilaterally kill or revive a gauge** (cut reward distribution to a
+  specific pool at will) and manage emergency adjustments.
+- The "Vetoer" role has **not yet been renounced** — future intent only, stated in
+  the official docs themselves.
+- ProtocolGovernor is currently controlled by the team, with a plan (not yet realized
+  at the time of this diligence) to replace it with a modified OpenZeppelin Governor contract.
+- AERO minting is restricted to the sole Minter contract, which distributes to the Voter
+  contract for gauge emissions — the emission mechanism is therefore locked by contract, not
+  manually mintable by an admin key.
 
-([PERMISSIONS.md, dépôt officiel](https://github.com/aerodrome-finance/contracts/blob/main/PERMISSIONS.md))
+([PERMISSIONS.md, official repository](https://github.com/aerodrome-finance/contracts/blob/main/PERMISSIONS.md))
 
-**Incident de sécurité réel confirmé (novembre 2025)** : plus d'1 million $ volé en environ
-une heure, via un **détournement DNS** du registrar de domaine (NameSilo/Box Domains) —
-**pas un exploit de smart contract**. Les utilisateurs étaient incités à signer des
-autorisations malveillantes déguisées en simple confirmation "1", que l'attaquant utilisait
-ensuite pour drainer ETH/WETH/USDC et d'autres tokens des wallets connectés. Aerodrome a
-redirigé les utilisateurs vers des miroirs basés sur ENS (plutôt que DNS) comme accès plus
-sûr pendant l'incident. Post-mortem technique publié par Halborn, une société de sécurité
-Web3 reconnue ([Halborn](https://www.halborn.com/blog/post/explained-the-aerodrome-finance-hack-november-2025)).
-**Lecture honnête** : l'infrastructure Web2/DNS reste un vecteur d'attaque démontré et réel,
-distinct de la sécurité on-chain du protocole lui-même.
+**Confirmed real security incident (November 2025)**: over $1 million stolen in roughly
+one hour, via a **DNS hijack** of the domain registrar (NameSilo/Box Domains) —
+**not a smart contract exploit**. Users were tricked into signing malicious
+authorizations disguised as a simple "1" confirmation, which the attacker then used
+to drain ETH/WETH/USDC and other tokens from connected wallets. Aerodrome
+redirected users to ENS-based mirrors (rather than DNS) as a safer access point during
+the incident. Technical post-mortem published by Halborn, a recognized Web3
+security firm ([Halborn](https://www.halborn.com/blog/post/explained-the-aerodrome-finance-hack-november-2025)).
+**Honest read**: Web2/DNS infrastructure remains a demonstrated and real attack vector,
+distinct from the protocol's own on-chain security.
 
-## 5. Équipe et gouvernance
+## 5. Team and governance
 
-**Dromos Labs** est l'entité derrière à la fois Aerodrome (Base) et Velodrome (Optimism).
-**Alexander Cutler** (co-fondateur/CEO) est la seule figure publiquement identifiée pendant
-longtemps — le reste de l'équipe est resté pseudonyme/anonyme, y compris en interne : Cutler
-lui-même n'a appris les vrais noms de certains collègues qu'**un mois avant novembre 2025**,
-"nous avons globalement maintenu cette anonymat au sein de l'équipe jusqu'à quasiment ce
-point". La raison invoquée du passage vers des identités publiques : rassurer les
-législateurs et cadres de la finance institutionnelle, méfiants des développeurs pseudonymes
+**Dromos Labs** is the entity behind both Aerodrome (Base) and Velodrome (Optimism).
+**Alexander Cutler** (co-founder/CEO) was the only publicly identified figure for a
+long time — the rest of the team remained pseudonymous/anonymous, including internally: Cutler
+himself only learned the real names of some colleagues **one month before November 2025**,
+"we broadly maintained this anonymity within the team until almost that
+point." The stated reason for the move to public identities: to reassure
+lawmakers and institutional finance executives, who are wary of pseudonymous developers
 ([DL News](https://www.dlnews.com/articles/defi/aerodrome-founder-talks-aero-uniswap-feud-pseudonymity/)).
 
-**"Feud" avec Uniswap** : Cutler a critiqué publiquement et à plusieurs reprises la
-proposition de "fee switch" d'Uniswap (qui détournerait le revenu protocolaire des
-fournisseurs de liquidité vers les détenteurs de token) — présenté par Cutler lui-même comme
-du "benchmarking compétitif légitime" plutôt qu'une querelle personnelle. Un ancien délégué
-Uniswap a réagi publiquement, qualifiant l'annonce concurrente d'Aerodrome
-d'"impressionnante mais peu convaincante" vu les critiques précédentes
+**"Feud" with Uniswap**: Cutler has publicly and repeatedly criticized
+Uniswap's "fee switch" proposal (which would redirect protocol revenue from
+liquidity providers to token holders) — framed by Cutler himself as
+"legitimate competitive benchmarking" rather than a personal quarrel. A former Uniswap
+delegate publicly reacted, calling Aerodrome's competing announcement
+"impressive but unconvincing" given the earlier criticism
 ([DL News](https://www.dlnews.com/articles/defi/aerodrome-founder-talks-aero-uniswap-feud-pseudonymity/)).
 
-**Concentration du pouvoir de vote** : environ **54% du supply circulant d'AERO est
-verrouillé en veAERO**, concentrant la gouvernance et réduisant le flottant liquide, selon
-une recherche tierce (TokenIntel) citée par CryptoDaily
-([CryptoDaily](https://cryptodaily.co.uk/2026/06/aero-base-proxy-liquidity)) — cohérent avec
-les 90% verrouillés au lancement, ce taux ayant naturellement baissé avec la dilution par
-émissions continues.
+**Concentration of voting power**: roughly **54% of AERO's circulating supply is
+locked in veAERO**, concentrating governance and reducing the liquid float, per
+third-party research (TokenIntel) cited by CryptoDaily
+([CryptoDaily](https://cryptodaily.co.uk/2026/06/aero-base-proxy-liquidity)) — consistent with
+the 90% locked at launch, this rate having naturally declined with dilution from
+ongoing emissions.
 
-## 6. Investisseurs institutionnels
+## 6. Institutional investors
 
-**Coinbase Ventures / Base Ecosystem Fund** a investi dans AERO en **février 2024**,
-provoquant un bond du prix de 0,09$ à 0,62$ en une semaine après l'annonce
-([The Currency Analytics](https://thecurrencyanalytics.com/altcoins/coinbases-20m-investment-in-aero-fuels-growth-potential-147255) ;
-confirmé par [thedefiant.io](https://thedefiant.io/news/defi/aerodrome-founder-denies-that-coinbase-stabbed-them-in-the-back)).
-Le montant de **20 millions $** est cité par plusieurs sources presse indépendantes
-(CoinDesk, BitcoinWorld, CoinMarketCap) mais n'a pas pu être confirmé sur une source
-strictement primaire dans cette diligence (à traiter comme "très probable, largement
-repris" plutôt que "certain à 100%").
+**Coinbase Ventures / Base Ecosystem Fund** invested in AERO in **February 2024**,
+triggering a price jump from $0.09 to $0.62 within a week of the announcement
+([The Currency Analytics](https://thecurrencyanalytics.com/altcoins/coinbases-20m-investment-in-aero-fuels-growth-potential-147255);
+confirmed by [thedefiant.io](https://thedefiant.io/news/defi/aerodrome-founder-denies-that-coinbase-stabbed-them-in-the-back)).
+The amount of **$20 million** is cited by several independent press sources
+(CoinDesk, BitcoinWorld, CoinMarketCap) but could not be confirmed against a
+strictly primary source in this diligence (to be treated as "very likely, widely
+repeated" rather than "100% certain").
 
-**Controverse "Coinbase nous a poignardé dans le dos"** — contexte complet : Coinbase a
-lancé sa fonctionnalité "Verified Pools" **sur Uniswap V4 plutôt que sur Aerodrome**, malgré
-son investissement, provoquant un backlash communautaire. Cutler dément que ce choix soit dû
-à une limitation technique : il affirme qu'Aerodrome a délibérément choisi de ne pas
-prioriser la construction pour Verified Pools car l'usage restait non prouvé ("notre
-priorité est d'être le meilleur sur le marché, pas le premier"), et que la conception
-modulaire d'Aerodrome permettrait d'ajouter ce type de pool si besoin. Cutler affirme que la
-relation avec Coinbase reste étroite et coopérative malgré ce choix — communication
-quotidienne fréquente, et **Coinbase reste l'un des plus gros verrouilleurs de veAERO**
+**"Coinbase stabbed us in the back" controversy** — full context: Coinbase
+launched its "Verified Pools" feature **on Uniswap V4 rather than on Aerodrome**, despite
+its investment, sparking community backlash. Cutler denies that this choice was due
+to a technical limitation: he states that Aerodrome deliberately chose not to
+prioritize building for Verified Pools because usage remained unproven ("our
+priority is to be best in market, not first"), and that Aerodrome's
+modular design would allow this type of pool to be added if needed. Cutler states that the
+relationship with Coinbase remains close and cooperative despite this choice — frequent
+daily communication, and **Coinbase remains one of the largest veAERO lockers**
 ([The Defiant](https://thedefiant.io/news/defi/aerodrome-founder-denies-that-coinbase-stabbed-them-in-the-back)).
-Contexte de prix au moment de cet article : Aerodrome 875M$ TVL / 30M$ volume 24h vs
-Uniswap 4,1Md$ TVL / 266M$ volume 24h sur Base — AERO se négociait à 0,53$ contre un ATH de
-2,21$ en décembre (mention divergente de l'ATH réel, voir section 8).
+Price context at the time of this article: Aerodrome $875M TVL / $30M 24h volume vs.
+Uniswap $4.1B TVL / $266M 24h volume on Base — AERO was trading at $0.53 against an ATH of
+$2.21 in December (a divergent mention of the real ATH, see section 8).
 
-## 7. Concurrence et positionnement
+## 7. Competition and positioning
 
-Aerodrome domine Base face à Uniswap v3/v4 et Aave sur les trois métriques (TVL, volume,
-frais) selon DefiLlama/The Block, mais le lancement de "Verified Pools" par Coinbase
-**sur Uniswap V4** (et non Aerodrome) montre que l'avantage n'est pas total même auprès de
-son propre partenaire stratégique — Uniswap reste une menace concurrentielle réelle et
-active sur Base (4,1Md$ TVL cité vs Aerodrome ~875M$ à la même date de comparaison). Par
-ailleurs, la comparaison directe avec **Velodrome** (le protocole jumeau sur Optimism, même
-équipe) montre une asymétrie considérable : Aerodrome ~475,9M$ TVL contre Velodrome ~39M$
-TVL au moment d'un rapport donné — Aerodrome a largement supplanté son protocole d'origine
-en importance ([TheDefiant](https://thedefiant.io/news/defi/dromos-labs-merges-aerodrome-and-velodrome-into-new-dex-aero)).
+Aerodrome dominates Base against Uniswap v3/v4 and Aave on all three metrics (TVL, volume,
+fees) per DefiLlama/The Block, but Coinbase's launch of "Verified Pools"
+**on Uniswap V4** (and not Aerodrome) shows that the advantage is not total even with
+its own strategic partner — Uniswap remains a real and active competitive
+threat on Base ($4.1B TVL cited vs. Aerodrome ~$875M at the same comparison date). In
+addition, a direct comparison with **Velodrome** (the twin protocol on Optimism, same
+team) shows a considerable asymmetry: Aerodrome ~$475.9M TVL against Velodrome ~$39M
+TVL at the time of a given report — Aerodrome has largely surpassed its origin protocol
+in importance ([TheDefiant](https://thedefiant.io/news/defi/dromos-labs-merges-aerodrome-and-velodrome-into-new-dex-aero)).
 
-## 8. Historique de prix et volatilité
+## 8. Price history and volatility
 
-ATH cité à **2,38$ le 12 avril 2024**, après une hausse d'environ +2300% depuis début mars
-2024, avec citation directe et datée
+ATH cited at **$2.38 on April 12, 2024**, after a rise of roughly +2300% since early March
+2024, with a direct, dated citation
 ([CCN](https://www.ccn.com/analysis/crypto/base-aerodrome-finance-slipstream-tvl-2-billion/)).
-Une autre source (article sur la controverse Coinbase, non daté précisément) mentionne un
-ATH de **2,21$ "en décembre"** — chiffre différent, non résolu avec certitude dans cette
-diligence : pourrait référencer un ATH local distinct (un rebond de décembre) plutôt que
-l'ATH absolu d'avril 2024, mais ceci n'est pas confirmé, à vérifier si le chiffre exact
-importe pour une décision. Prix cité à 0,53$ au moment de cet article (repli >75% depuis
-l'ATH d'avril 2024).
+Another source (article on the Coinbase controversy, not precisely dated) mentions an
+ATH of **$2.21 "in December"** — a different figure, not resolved with certainty in this
+diligence: could reference a separate local ATH (a December rebound) rather than
+the absolute April 2024 ATH, but this is not confirmed, to be verified if the exact figure
+matters for a decision. Price cited at $0.53 at the time of that article (>75% pullback since
+the April 2024 ATH).
 
-## 9. Risques structurels identifiés
+## 9. Identified structural risks
 
-1. **Dilution inflationniste continue** : supply non plafonné, circulant déjà proche du
-   double du supply initial en ~3 ans, et les incitations annualisées dépassent
-   actuellement le revenu réel généré (-17,22M$/an selon la méthodologie DefiLlama) —
+1. **Ongoing inflationary dilution**: uncapped supply, circulating already close to
+   double the initial supply in ~3 years, and annualized incentives currently exceed
+   the real revenue generated (-$17.22M/year per DefiLlama's methodology) —
    section 2.
-2. **Dépendance totale à Base** : 100% du TVL sur une seule chaîne, la croissance
-   d'Aerodrome est mécaniquement plafonnée par celle de Base — section 3, signalé
-   explicitement par un analyste tiers comme un "problème structurel de proxy".
-3. **Gouvernance non pleinement décentralisée** : multisig équipe non renoncé, rôle Vetoer
-   non renoncé, EmergencyCouncil qui peut tuer un gauge unilatéralement — section 4.
-4. **Vecteur d'attaque Web2/DNS démontré** : l'incident de novembre 2025 (>1M$ volé) montre
-   que la sécurité opérationnelle (registrar de domaine, frontend) reste un vrai risque
-   distinct de la sécurité on-chain — section 4.
-5. **Absence d'audit indépendant propre au protocole complet** : Aerodrome hérite
-   entièrement de la sécurité de Velodrome V2, jamais audité en tant que tel dans sa version
-   actuelle — section 4.
-6. **Repli net de la TVL et du revenu depuis le pic de janvier 2026** : ~-80% de TVL et
-   tendance de revenu trimestriel en baisse nette sur Slipstream — section 3.
-7. **Concentration de la gouvernance** : ~54% du supply circulant verrouillé en veAERO,
-   pouvoir de vote concentré entre gros holders (dont Coinbase Ventures) — section 5.
+2. **Total dependence on Base**: 100% of TVL on a single chain, Aerodrome's
+   growth is mechanically capped by that of Base — section 3, explicitly
+   flagged by a third-party analyst as a "structural proxy problem."
+3. **Governance not fully decentralized**: team multisig not renounced, Vetoer role
+   not renounced, EmergencyCouncil that can unilaterally kill a gauge — section 4.
+4. **Demonstrated Web2/DNS attack vector**: the November 2025 incident (>$1M stolen) shows
+   that operational security (domain registrar, frontend) remains a real risk
+   distinct from on-chain security — section 4.
+5. **No independent audit of its own for the full protocol**: Aerodrome entirely
+   inherits Velodrome V2's security, never audited as such in its current
+   version — section 4.
+6. **Net decline in TVL and revenue since the January 2026 peak**: ~-80% TVL and
+   a clearly declining quarterly revenue trend on Slipstream — section 3.
+7. **Governance concentration**: ~54% of circulating supply locked in veAERO,
+   voting power concentrated among large holders (including Coinbase Ventures) — section 5.
 
-## 10. Développement majeur 2026 — la fusion Aerodrome + Velodrome en "Aero"
+## 10. Major 2026 development — the Aerodrome + Velodrome merger into "Aero"
 
-**C'est le fait le plus structurant trouvé dans cette diligence, confirmé de façon
-indépendante par 4 sources distinctes** (un blog spécialisé, CoinDesk, The Defiant, et une
-quatrième source secondaire) — un développement qui change fondamentalement la nature de la
-conviction "AERO" :
+**This is the most structuring fact found in this diligence, independently confirmed
+by 4 distinct sources** (a specialized blog, CoinDesk, The Defiant, and a
+fourth secondary source) — a development that fundamentally changes the nature of the
+"AERO" conviction:
 
-- **Annonce le 12 novembre 2025**, lors d'un événement de lancement à New York. Aerodrome
-  (Base) et Velodrome (Optimism) fusionnent en une seule plateforme/marque unifiée appelée
-  **"Aero"**, développée par Dromos Labs
-  ([CoinDesk](https://www.coindesk.com/tech/2025/11/13/leading-base-dex-aerodrome-merges-into-aero-in-major-overhaul) ;
-  [The Defiant](https://thedefiant.io/news/defi/dromos-labs-merges-aerodrome-and-velodrome-into-new-dex-aero) ;
+- **Announced on November 12, 2025**, at a launch event in New York. Aerodrome
+  (Base) and Velodrome (Optimism) are merging into a single unified platform/brand called
+  **"Aero,"** developed by Dromos Labs
+  ([CoinDesk](https://www.coindesk.com/tech/2025/11/13/leading-base-dex-aerodrome-merges-into-aero-in-major-overhaul);
+  [The Defiant](https://thedefiant.io/news/defi/dromos-labs-merges-aerodrome-and-velodrome-into-new-dex-aero);
   [HashBasis](https://www.hashbasis.xyz/blog/aerodrome-velodrome-protocols-set-to-merge-in-2026)).
-- **Migration prévue au T2 2026.**
-- **Un nouveau token remplacera intégralement AERO et VELO.** Ratio de conversion :
-  détenteurs AERO reçoivent **94,5%** du nouveau supply, détenteurs VELO **5,5%** — ratio
-  basé sur un partage de revenu sur 52 semaines (Aerodrome 260M$ vs Velodrome 15M$).
-- **Nouvelle architecture "Metadex 03"** (remplace Metadex 02) : un "Revenue Engine" (REV)
-  consolidant plusieurs flux de frais (swap, frontend, bridge, agrégateur, automatisation,
-  marketplace, lancement, enchères MEV), et un "Adaptive Emissions Rate" (AER) conçu pour
-  **réduire la dilution du token** en ne payant que les incitations de liquidité
-  nécessaires.
-- **Slipstream V3** intègre directement une enchère MEV dans l'AMM lui-même.
-- **Expansion multi-chaîne** : au-delà de Base et Optimism, extension prévue vers
-  Ethereum mainnet et la chaîne Arc de Circle.
-- Les protocoles Aerodrome et Velodrome existants continueront de fonctionner après le
-  lancement d'Aero, **mais ne recevront plus de support/développement de Dromos Labs**.
-- Positionnement stratégique énoncé par Cutler : "Aero est à l'avant-garde d'un système
-  financier meilleur, plus rapide et moins cher que le système en place" — présenté comme
-  une refonte structurante, pas un simple rebranding.
+- **Migration planned for Q2 2026.**
+- **A new token will fully replace AERO and VELO.** Conversion ratio:
+  AERO holders receive **94.5%** of the new supply, VELO holders **5.5%** — a ratio
+  based on a 52-week revenue split (Aerodrome $260M vs. Velodrome $15M).
+- **New "Metadex 03" architecture** (replaces Metadex 02): a "Revenue Engine" (REV)
+  consolidating several fee streams (swap, frontend, bridge, aggregator, automation,
+  marketplace, launch, MEV auctions), and an "Adaptive Emissions Rate" (AER) designed to
+  **reduce token dilution** by paying only the liquidity incentives that are
+  necessary.
+- **Slipstream V3** integrates an MEV auction directly into the AMM itself.
+- **Multi-chain expansion**: beyond Base and Optimism, expansion is planned toward
+  Ethereum mainnet and Circle's Arc chain.
+- The existing Aerodrome and Velodrome protocols will continue to function after
+  Aero's launch, **but will no longer receive support/development from Dromos Labs**.
+- Strategic positioning stated by Cutler: "Aero is at the forefront of a
+  better, faster, and cheaper financial system than the one in place" — presented as
+  a structuring overhaul, not a simple rebranding.
 
-**Implication directe pour une thèse "conviction long terme sur AERO"** : détenir AERO
-aujourd'hui, c'est en réalité parier sur un token qui sera **remplacé** par un nouveau token
-unifié d'ici le T2 2026, avec un ratio de conversion déjà fixé (94,5%). La thèse de
-conviction doit donc porter sur le NOUVEAU token/protocole "Aero" et sa nouvelle mécanique
-anti-dilution (AER), pas uniquement sur AERO tel qu'il existe aujourd'hui — un point que le
-contenu marketing/vulgarisé (CoinGecko Learn, guides génériques) ne mentionne pas du tout,
-uniquement trouvé via le fan-out large de sources spécialisées.
+**Direct implication for a "long-term conviction on AERO" thesis**: holding AERO
+today actually means betting on a token that will be **replaced** by a new unified
+token by Q2 2026, with a conversion ratio already fixed (94.5%). The conviction
+thesis must therefore focus on the NEW "Aero" token/protocol and its new
+anti-dilution mechanism (AER), not solely on AERO as it exists today — a point that the
+marketing/simplified content (CoinGecko Learn, generic guides) does not mention at all,
+found only via the wide fan-out of specialized sources.
 
-## Synthèse — signaux positifs et signaux d'alerte, sans complaisance
+## Synthesis — positive signals and warning signals, without complacency
 
-**Signaux positifs réels** :
-- Position de dominance confirmée et multi-sourcée sur Base (premier DEX par TVL/volume/
-  frais, loin devant Uniswap et Aave sur ce réseau)
-- 100% du revenu réel reversé aux détenteurs qui verrouillent (pas de fuite vers une
-  trésorerie opaque)
-- Intégration directe dans l'app Coinbase + trading sans frais via Coinbase One — alignement
-  stratégique fort avec l'écosystème Base
-- Roadmap 2026 ambitieuse et concrète (fusion Aero, mécanisme anti-dilution AER,
-  expansion multi-chaîne) plutôt qu'un projet stagnant
-- Équipe qui accepte la transparence croissante (identités publiques) plutôt que de rester
-  opaque indéfiniment
+**Real positive signals**:
+- Confirmed, multi-sourced dominant position on Base (top DEX by TVL/volume/
+  fees, far ahead of Uniswap and Aave on this network)
+- 100% of real revenue paid back to locking holders (no leakage to an
+  opaque treasury)
+- Direct integration into the Coinbase app + fee-free trading via Coinbase One — strong
+  strategic alignment with the Base ecosystem
+- Ambitious and concrete 2026 roadmap (Aero merger, AER anti-dilution mechanism,
+  multi-chain expansion) rather than a stagnant project
+- A team embracing growing transparency (public identities) rather than remaining
+  opaque indefinitely
 
-**Signaux d'alerte réels, non négociables à ignorer** :
-- Repli de TVL/revenu d'environ 80% depuis le pic de janvier 2026 au moment de cette
-  diligence — pas juste une baisse de prix cyclique, une vraie contraction d'activité
-- Incitations tokenisées qui dépassent déjà le revenu réel (-17,22M$/an) — un modèle qui
-  distribue plus qu'il ne gagne, à surveiller pour savoir si "Aero"/AER (section 10) corrige
-  réellement ce problème ou le reporte seulement
-- Gouvernance PAS pleinement décentralisée malgré le narratif ve(3,3) (multisig équipe,
-  EmergencyCouncil, Vetoer non renoncé)
-- Aucun audit indépendant du protocole complet — sécurité entièrement héritée de Velodrome V2
-- Incident de sécurité réel et récent (nov. 2025, >1M$ volé, vecteur DNS) — la sécurité
-  opérationnelle reste un vrai point faible démontré, pas hypothétique
-- **Le token AERO tel qu'il existe aujourd'hui a une durée de vie annoncée** (fusion vers
-  "Aero" au T2 2026) — toute conviction doit être réévaluée à la lumière du nouveau
-  protocole, pas figée sur le token actuel
+**Real warning signals, non-negotiable to ignore**:
+- TVL/revenue pullback of roughly 80% since the January 2026 peak as of this
+  diligence — not just a cyclical price decline, a real contraction in activity
+- Tokenized incentives that already exceed real revenue (-$17.22M/year) — a model that
+  distributes more than it earns, to be monitored to see whether "Aero"/AER (section 10)
+  actually fixes this problem or merely defers it
+- Governance NOT fully decentralized despite the ve(3,3) narrative (team multisig,
+  EmergencyCouncil, Vetoer not renounced)
+- No independent audit of the full protocol — security entirely inherited from Velodrome V2
+- Real and recent security incident (Nov. 2025, >$1M stolen, DNS vector) — operational
+  security remains a real, demonstrated weakness, not hypothetical
+- **AERO as it exists today has an announced expiration date** (merger into
+  "Aero" in Q2 2026) — any conviction must be re-evaluated in light of the new
+  protocol, not frozen on the current token
 
-**Verdict de cette session (pas une recommandation d'investissement, une lecture technique)** :
-la dominance et l'alignement stratégique avec Base sont réels et bien documentés, mais la
-thèse "conviction long terme sur AERO" doit explicitement intégrer que (a) le token va être
-remplacé d'ici le T2 2026 et (b) le modèle économique actuel distribue plus qu'il ne gagne au
-moment de cette diligence. Point de vigilance à se reposer périodiquement : la fusion "Aero"
-a-t-elle eu lieu comme prévu au T2 2026, le mécanisme AER a-t-il réellement réduit la
-dilution, et la tendance de TVL/revenu s'est-elle stabilisée ou continue-t-elle de se
-dégrader ?
+**This session's verdict (not an investment recommendation, a technical read)**:
+Aerodrome's dominance and strategic alignment with Base are real and well documented, but the
+"long-term conviction on AERO" thesis must explicitly account for the facts that (a) the token will be
+replaced by Q2 2026 and (b) the current economic model distributes more than it earns as
+of this diligence. Point to revisit periodically: did the "Aero" merger
+happen as planned in Q2 2026, did the AER mechanism actually reduce
+dilution, and has the TVL/revenue trend stabilized or does it continue to
+deteriorate?

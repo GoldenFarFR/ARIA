@@ -1,275 +1,273 @@
-# Roadmap ARIA — Août 2026
+# ARIA Roadmap — August 2026
 
-> Instantané daté (02/08/2026), pas une fiche vivante à maintenir indéfiniment — à
-> reprendre/réviser lors du bilan hebdomadaire ou si le contexte change fortement.
-> Construite à partir de faits vérifiés en base (`/opt/aria-data/aria.db`), du code réel,
-> de CLAUDE.md et de la mémoire persistante — cross-checkée par deux tours de workflow de
-> revue adversariale (cohérence + complétude, doctrine du projet) avant validation
-> opérateur. Volontairement **pas réduite à un seul axe financier** (bénéfices, intérêt
-> composé, sources de revenu) — décision opérateur explicite du 02/08 : la roadmap doit
-> couvrir toute la largeur du projet.
+> Dated snapshot (02/08/2026), not a living document to maintain indefinitely — to be
+> revisited/revised at the weekly review or if context changes significantly.
+> Built from facts verified in the database (`/opt/aria-data/aria.db`), the real code,
+> CLAUDE.md, and persistent memory — cross-checked by two rounds of an adversarial review
+> workflow (consistency + completeness, project doctrine) before operator validation.
+> Deliberately **not reduced to a single financial axis** (profit, compound interest,
+> revenue sources) — explicit operator decision of 02/08: the roadmap must cover the
+> full breadth of the project.
 
-**Cadre chapeau, valable pour les 7 axes** : doctrine « ARIA d'abord, token ensuite » —
-performance réelle → utilité → identité → communauté → token. Aucun axe secondaire ne
-doit inverser cet ordre (ex. précipiter une tokenisation ou une notoriété externe avant
-que la performance et l'utilité soient prouvées).
-
----
-
-## Vue d'ensemble — 7 axes en parallèle
-
-1. **Performance** — le test hebdomadaire +10%, répété jusqu'à validation fiable ; la
-   qualité démontrée par chaque poche conditionne directement la taille du capital réel
-   qu'elle recevra ensuite (voir axe 1).
-2. **Identité & présence** — voix, avatar, mémoire libre (aria-brain).
-3. **Sécurité & robustesse** — angle mort adversarial, garde-fous de gouvernance,
-   prérequis avant tout capital réel.
-4. **Écosystème & réseau** — Base, x402/Bazaar, tokenisation potentielle, visibilité
-   externe.
-5. **Infrastructure & autonomie technique** — CDP, LLM, dépendance API, wallet-scoring.
-6. **Gouvernance & hygiène** — backlog, HANDOFF, mécanismes de revue adversariale
-   (actuellement en partie cassés — voir axe 6), cadence de déploiement.
-7. **Sources de revenu** — une dimension parmi les six autres, pas la seule boussole.
-
-**Override permanent, prime sur toute cette séquence** : un correctif de sécurité (faille,
-secret exposé, garde-fou cassé) se déploie immédiatement, jamais mis en attente d'un
-créneau de roadmap (CLAUDE.md, « Cadence de déploiement »).
+**Overarching framework, valid for all 7 axes**: "ARIA first, token later" doctrine —
+real performance → utility → identity → community → token. No secondary axis should
+invert this order (e.g. rushing tokenization or external visibility before
+performance and utility are proven).
 
 ---
 
-## Axe 1 — Performance (test hebdomadaire +10%)
+## Overview — 7 parallel axes
 
-**État réel au 02/08** : aucune semaine `validated=1` sur `paper_weekly_cycle` à ce jour
-(3 lignes seulement — swing, vc, scalping_v6 ; les autres poches n'ont encore jamais
-bouclé un cycle complet). Dernier cycle complet : swing -0.51% (9 trades, 22% winrate),
-scalping_v6 +2.20% (18 trades, 78% winrate). **Jugement opérateur explicite (02/08) : pour
-l'instant, décevant côté poches.**
+1. **Performance** — the weekly +10% test, repeated until reliably validated; the
+   quality each pocket demonstrates directly determines the amount of real capital it
+   will receive next (see axis 1).
+2. **Identity & presence** — voice, avatar, free memory (aria-brain).
+3. **Security & robustness** — adversarial blind spot, governance guardrails,
+   prerequisite before any real capital.
+4. **Ecosystem & network** — Base, x402/Bazaar, potential tokenization, external
+   visibility.
+5. **Infrastructure & technical autonomy** — CDP, LLM, API dependency, wallet-scoring.
+6. **Governance & hygiene** — backlog, HANDOFF, adversarial review mechanisms
+   (currently partly broken — see axis 6), deployment cadence.
+7. **Revenue sources** — one dimension among the other six, not the sole compass.
 
-**Lien direct avec le capital réel à venir** : le cap du pilote réel n'est plus figé à
-10-15$ — la direction envisagée est **3 Smart Wallets réels distincts (scalping / swing /
-vc), ~50$ chacun**, mais leur taille finale dépendra de la **qualité démontrée par chaque
-poche papier respective**, pas d'un montant décidé à l'avance. Une poche qui continue de
-décevoir reçoit moins (voire rien) ; une poche qui prouve sa discipline peut recevoir
-plus. C'est donc l'axe 1 — pas une décision de calendrier — qui fixe le rythme réel de
-cet axe 5/7.
-
-**Ce soir (02/08, ~21h50Z)** : les 4 poches (scalping v1-v6, swing, vc, megacap) sourcent
-désormais toutes en parallèle — `ARIA_SCALPING_ONLY_SOURCING_ENABLED` désactivé,
-`ARIA_VC_POCKET_SOURCING_ENABLED` activé, 3 correctifs déployés (entry_atr_pct, wash-
-trading scalping-only, angle mort liquidité DexScreener/B20, throttle CoinMarketCap, race
-`_execute_trigger`). Vérification programmée à 22h51Z.
-
-**Semaine 1 (03-09/08)** — point structurel à garder en tête : le reset de swing/vc/
-scalping_v6 tombe le **08/08**, en plein milieu de la fenêtre. Le bilan du 09/08 jugera un
-cycle vieux d'à peine ~1 jour sous pipeline corrigé — ne pas le lire comme une semaine
-pleine. Priorités immédiates :
-- Revérifier v2/v4/v5 dès maintenant (déjà 28h à zéro trade) plutôt qu'attendre 24-48h (#22).
-- Diagnostiquer le blocage réel du wallet-scoring (oscillation sur 3-4 wallets, logs
-  02/08 21h02-21h25) — pas une simple lenteur, possible récidive du bug corrigé le 23/07 (#32).
-
-**Semaines 2-4** : cycle diagnostic → correction → observation (doctrine du 18/07,
-inchangée) — chaque semaine jugée sur elle-même, aucun seuil de semaines consécutives
-n'est fixé à ce jour.
-
-**Jalon daté dans le mois — premier utilisateur externe (~13/08)** : plan opérateur
-d'onboarder un premier utilisateur externe qui copie les trades d'ARIA (~50$), bloqué par
-la règle absolue « aucun encaissement avant validation avocat ». À statuer AVANT
-l'échéance, pas après (#54).
-
-**Fin de mois** : si le +10% est validé de façon répétée, rouvrir la discussion sur le
-critère de passage à plus de capital réel — aucun chiffre n'est tranché aujourd'hui.
-Prérequis à traiter avant toute extension : désactiver Solana, statuer sur les
-coupe-circuits de risque actuellement désactivés en paper, reprendre le backlog de
-durcissement agent-wallet (#49).
+**Permanent override, takes priority over this entire sequence**: a security fix (flaw,
+exposed secret, broken guardrail) deploys immediately, never held for a roadmap slot
+(CLAUDE.md, "Deployment cadence").
 
 ---
 
-## Axe 2 — Identité & présence
+## Axis 1 — Performance (weekly +10% test)
 
-Vision opérateur du 15/07, jamais construite mais jamais oubliée : au-delà d'une
-investisseuse, ARIA doit devenir à terme une présence reconnaissable — voix, avatar,
-présence X — avec une frontière de goût déjà gravée (jamais suggestif/dénudé/sexualisé,
+**Real state as of 02/08**: no `validated=1` week on `paper_weekly_cycle` to date
+(only 3 rows — swing, vc, scalping_v6; the other pockets have never yet completed a
+full cycle). Last completed cycle: swing -0.51% (9 trades, 22% winrate),
+scalping_v6 +2.20% (18 trades, 78% winrate). **Explicit operator judgment (02/08):
+disappointing on the pocket side for now.**
+
+**Direct link to upcoming real capital**: the real pilot's cap is no longer fixed at
+10-15$ — the direction under consideration is **3 distinct real Smart Wallets
+(scalping / swing / vc), ~50$ each**, but their final size will depend on the
+**quality each pocket demonstrates on paper**, not an amount decided in advance. A
+pocket that keeps disappointing gets less (or nothing); a pocket that proves its
+discipline can get more. So it is axis 1 — not a calendar decision — that sets the
+real pace of this 5/7 axis.
+
+**Tonight (02/08, ~21:50Z)**: all 4 pockets (scalping v1-v6, swing, vc, megacap) are
+now sourcing in parallel — `ARIA_SCALPING_ONLY_SOURCING_ENABLED` disabled,
+`ARIA_VC_POCKET_SOURCING_ENABLED` enabled, 3 fixes deployed (entry_atr_pct,
+scalping-only wash-trading, DexScreener/B20 liquidity blind spot, CoinMarketCap
+throttle, `_execute_trigger` race). Verification scheduled for 22:51Z.
+
+**Week 1 (03-09/08)** — structural point to keep in mind: the swing/vc/
+scalping_v6 reset lands on **08/08**, right in the middle of the window. The 09/08
+review will judge a cycle barely ~1 day old under the corrected pipeline — don't read
+it as a full week. Immediate priorities:
+- Recheck v2/v4/v5 right now (already 28h at zero trades) rather than waiting 24-48h (#22).
+- Diagnose the real wallet-scoring blockage (oscillating on 3-4 wallets, logs
+  02/08 21:02-21:25) — not simple slowness, possibly a recurrence of the bug fixed on 23/07 (#32).
+
+**Weeks 2-4**: diagnose → fix → observe cycle (18/07 doctrine, unchanged) — each week
+judged on its own, no threshold of consecutive weeks set to date.
+
+**Dated milestone this month — first external user (~13/08)**: operator plan to
+onboard a first external user who copy-trades ARIA (~50$), blocked by the absolute
+rule "no payment collection before lawyer validation." To be decided BEFORE the
+deadline, not after (#54).
+
+**End of month**: if the +10% is repeatedly validated, reopen the discussion on the
+criterion for moving to more real capital — no figure is set today. Prerequisites to
+address before any extension: disable Solana, decide on the risk circuit-breakers
+currently disabled in paper mode, resume the agent-wallet hardening backlog (#49).
+
+---
+
+## Axis 2 — Identity & presence
+
+Operator vision from 15/07, never built but never forgotten: beyond being an investor,
+ARIA should eventually become a recognizable presence — voice, avatar, X presence —
+with a taste boundary already carved in stone (never suggestive/nude/sexualized,
 10/07).
 
-- **Ce mois-ci, diligence seule, pas de construction** : stack TTS réaliste (coût,
-  latence, qualité) + **avatar parlant (HeyGen)** + **cadence de publication X gated par
-  revue humaine + kill-switch étendu** (#45/#53 — les trois volets de la vision banquée du
-  22/07, pas seulement la voix). Décider après diligence si un prototype se justifie.
-- **aria-brain** (mémoire libre, une page/jour) reste actif — doctrine 99% réel / 1%
-  spéculation marquée explicitement inchangée, aucune action requise ce mois-ci sauf
-  incident.
-- **`knowledge/dna.yaml`** : tension architecturale jamais tranchée depuis le 21/07
-  (multi-ancrage identité/mémoire suggéré par la recherche externe vs fusion en un seul
-  fichier voulue par l'opérateur) — à trancher avant tout futur refactor (#50).
+- **This month, diligence only, no building**: realistic TTS stack (cost,
+  latency, quality) + **talking avatar (HeyGen)** + **X posting cadence gated by
+  human review + extended kill-switch** (#45/#53 — the three pillars of the vision banked on
+  22/07, not just voice). Decide after diligence whether a prototype is warranted.
+- **aria-brain** (free memory, one page/day) remains active — 99% real / 1%
+  explicitly-marked speculation doctrine unchanged, no action required this month except
+  on incident.
+- **`knowledge/dna.yaml`**: architectural tension never settled since 21/07
+  (multi-anchor identity/memory suggested by external research vs. merging into a single
+  file as the operator wants) — to be settled before any future refactor (#50).
 
 ---
 
-## Axe 3 — Sécurité & robustesse
+## Axis 3 — Security & robustness
 
-Mandat permanent VPS Research (15/07) : catalogue et vérifie que les atouts propres à une
-IA-trader sont VRAIMENT exploités, et que les points faibles propres à une IA sont trouvés
-puis comblés — jusqu'à ce que l'opérateur juge ARIA prête.
+Permanent VPS Research mandate (15/07): catalogs and verifies that the strengths unique to
+an AI-trader are TRULY exploited, and that the weaknesses unique to an AI are found
+and then addressed — until the operator judges ARIA ready.
 
-- **Vulnérabilité adversariale/prompt-injection on-chain** — un projet malveillant qui
-  façonnerait son nom/site/métadonnées pour biaiser le jugement LLM d'ARIA. Testé
-  seulement à n=2 prompts le 17/07 (#117). Ce mois-ci : élargir l'échantillon,
-  documenter, combler tout point faible réel trouvé (#44).
-- **Backlog de durcissement agent-wallet #215-#230, jamais repris** — directement
-  pertinent maintenant que 3 Smart Wallets réels sont envisagés (axe 1). Prioriser #224
-  (allowance ERC-20 jamais illimitée + simulation pré-signature avant tout swap réel) et
-  #221 (audit que rien ne peut élargir le périmètre swap-only du pilote) (#49).
-- **Prérequis avant capital réel étendu** : coupe-circuits de risque paper actuellement
-  désactivés (le commit lui-même dit « MUST be revisited before any real-capital
-  transition ») ; Solana à désactiver avant toute extension du pipeline vers une
-  exécution réelle au-delà du pilote agent-wallet déjà Base-only.
-
----
-
-## Axe 4 — Écosystème & réseau
-
-- **Veille Base/Jesse Pollak** (permanente depuis le 16/07) : décision #199 (quelle
-  ressource x402 payer en premier — Cybercentry, 0,02$/appel) toujours en attente d'un
-  tranchage opérateur (#36).
-- **Diligence tokenisation ARIA, approfondir Clanker** (diligence de surface du 27/07) :
-  creuser la mécanique exacte du lock LP et la gouvernance réelle avant toute décision (#41).
-- **Visibilité/reconnaissance dans l'écosystème AI-agent crypto — ambition générale, pas
-  de cible nommée** (clarifié par l'opérateur le 02/08 : « ai16z » n'était qu'une image,
-  pas un objectif littéral). Contexte factuel utile gardé en tête, vérifié le 02/08:
-  « ai16z » n'existe plus sous ce nom depuis janvier 2025 (rebrandé **ElizaOS**, à la
-  demande d'a16z le vrai VC) et fait l'objet d'une class-action active depuis le
-  22/04/2026 (allégation de fraude, 2,6Md$) — un acteur du paysage à connaître, pas une
-  cible à viser en ce moment précis vu la turbulence. Direction concrète : construire la
-  reconnaissance par la preuve (track record public, performance, présence — axes 1/2),
-  pas par un rapprochement calculé avec un acteur précis.
-- **Monad** (chaîne candidate) — EVM/GoPlus/DexScreener OK, mais Blockscout non-officiel
-  reste un vrai bloquant. À revérifier périodiquement (#52).
+- **Adversarial/prompt-injection vulnerability on-chain** — a malicious project that
+  would craft its name/site/metadata to bias ARIA's LLM judgment. Tested
+  only at n=2 prompts on 17/07 (#117). This month: expand the sample,
+  document, address any real weakness found (#44).
+- **Agent-wallet hardening backlog #215-#230, never resumed** — directly
+  relevant now that 3 real Smart Wallets are being considered (axis 1). Prioritize #224
+  (ERC-20 allowance never unlimited + pre-signature simulation before any real swap) and
+  #221 (audit that nothing can widen the pilot's swap-only scope) (#49).
+- **Prerequisite before extended real capital**: paper risk circuit-breakers currently
+  disabled (the commit itself says "MUST be revisited before any real-capital
+  transition"); Solana to be disabled before any extension of the pipeline toward
+  real execution beyond the already Base-only agent-wallet pilot.
 
 ---
 
-## Axe 5 — Infrastructure & autonomie technique
+## Axis 4 — Ecosystem & network
 
-- **Migration LLM vers Claude (Haiku 4.5 + Sonnet 5)** — direction actée, gate désormais
-  séparé par rôle (`ARIA_LLM_ANTHROPIC_ROUTING_ENABLED` / `..._TRADING_ENABLED`, commit du
-  02/08). Séquence avant tout flip réel : compte OpenRouter dédié pour DeepSeek, vérifier
-  `ANTHROPIC_API_KEY` en prod, gate général d'abord (observer), gate trading en dernier (#48).
-- **Smart Account CDP (Spend Permissions + Paymaster)** — direction actée, ~10 jours de
-  conception déjà faits. Prochaine étape (wrapper `eth_account.BaseAccount`) nécessite des
-  sessions hardware-in-the-loop avec le Tangem physique de l'opérateur — à planifier
-  explicitement (#35). Devient plus concret maintenant que 3 Smart Wallets réels sont
-  envisagés (axe 1).
-- **unified_entry.py** (#194 amendé, crible VC/Swing unifié) — CODE, dormant depuis le
-  22/07, à moitié fait. Décider ce mois-ci : reprendre, ou geler explicitement (#33).
-- **Wallet-scoring vers le seuil ~500** — 9 wallets uniques / 775 lignes au 02/08, très en
-  dessous. Lié au diagnostic de blocage de l'axe 1 (#40).
-- **Réduction de dépendance API** — identifier ce mois-ci UN candidat concret (#42).
-
----
-
-## Axe 6 — Gouvernance & hygiène
-
-**Urgent, trouvé aujourd'hui** : le mécanisme Avocat du Diable (`scripts/devils-advocate-
-review.sh`, revue de code post-push) est **cassé depuis le 26/07** (compte OpenRouter à
-sec, HTTP 402) — et le même compte partagé alimente aussi le juge adversarial trading
-(`trade_devils_advocate.py`/`trade_loss_batch_review.py`). Les deux garde-fous de
-gouvernance sont hors service silencieusement depuis une semaine. Action opérateur requise
-en premier (recharger le compte), puis migration déjà décidée mais jamais tracée vers
-Gemini pour le hook code (#47).
-
-- Backlog remis à 10-15 items pending le 02/08 (norme du 09/07) — à réalimenter dès qu'il
-  redescend.
-- HANDOFF par composant : pratique active, vérifier qu'aucun nouveau composant ne reste
-  sans fichier dédié.
-- Cadence de déploiement direct vs batch : doctrine du 18/07 déjà appliquée sans
-  incident ce mois-ci (3 correctifs groupés dans un même déploiement le 02/08).
+- **Base/Jesse Pollak watch** (ongoing since 16/07): decision #199 (which
+  x402 resource to pay for first — Cybercentry, 0,02$/call) still awaiting an
+  operator ruling (#36).
+- **ARIA tokenization diligence, dig deeper into Clanker** (surface diligence from 27/07):
+  dig into the exact LP lock mechanics and real governance before any decision (#41).
+- **Visibility/recognition in the AI-agent crypto ecosystem — general ambition, no
+  named target** (clarified by the operator on 02/08: "ai16z" was only an image,
+  not a literal objective). Useful factual context kept in mind, verified 02/08:
+  "ai16z" no longer exists under that name since January 2025 (rebranded **ElizaOS**, at
+  the request of a16z the real VC) and has been subject to an active class-action since
+  22/04/2026 (fraud allegation, 2,6Md$) — a landscape player worth knowing, not a
+  target to aim for at this precise moment given the turbulence. Concrete direction: build
+  recognition through proof (public track record, performance, presence — axes 1/2),
+  not through a calculated alignment with a specific player.
+- **Monad** (candidate chain) — EVM/GoPlus/DexScreener OK, but the unofficial Blockscout
+  remains a real blocker. To be rechecked periodically (#52).
 
 ---
 
-## Axe 7 — Sources de revenu (une dimension parmi les six autres)
+## Axis 5 — Infrastructure & technical autonomy
 
-- **x402 seller** (`/api/x402/walletscore`) — code complet, dormant. Seule étape
-  restante : le test d'auto-paiement testnet de l'opérateur lui-même.
-- **Élargir le catalogue vendable** — recherche/scoping seul ce mois-ci. **Blocage
-  contractuel réel trouvé** : aucun des fournisseurs utilisés (GoPlus, Blockscout,
-  CabalSpy, TwitterAPI.io) n'autorise explicitement la revente de données dérivées —
-  GoPlus et CabalSpy sont carrément restrictifs. Écrire pour obtenir une permission écrite
-  avant tout élargissement (#51).
-- **Mindshare Rewards** — le split de revenu est **déjà décidé** (5-8% Mindshare, 4-7%
-  buybacks/burn préféré, reste → trésorerie/dev/compute/voix/avatar/infra, plafond dur
-  15% de redistribution) — ce qui reste ouvert n'est QUE le mécanisme de paiement sortant
-  automatisé multi-destinataires (qui valide, plafond, anti-abus) (#43).
-
----
-
-## Branches ouvertes — brainstorm génératif (02/08)
-
-Sur demande opérateur explicite ("plus d'imagination"), workflow dédié à la pure
-génération d'idées (pas une vérification factuelle) — deux angles distincts, mêmes
-frontières que la doctrine « multiplier les branches » du 10/07 (jamais rien qui
-toucherait `wallet_guard`/`permission_mode`/capital réel/secrets).
-
-**6 pistes à fort potentiel, coût de premier pas quasi nul** (toutes construites sur une
-brique déjà existante et vérifiée dans le code, jamais un chantier from scratch) :
-
-1. **Registre public des refus** — exposer (délai 1 semaine) les candidats rejetés + leur
-   contrefactuel déjà calculé (`/counterfactual`). Matérialise « preuve avant promesse ».
-   Zéro concurrent observé (aixbt et les autres agents ne montrent que leurs bons appels) (#55).
-2. **Index différentiel ARIA vs marché** — contextualise le bilan hebdomadaire (axe 1)
-   contre un benchmark simple, au lieu d'un chiffre isolé (#56).
-3. **Desks en compétition** — narrer scalping/swing/vc/megacap comme des équipes
-   distinctes dans le rapport hebdo, réutilise une segmentation déjà en base (#57).
-4. **`x402_trust_score.py` comme 2e produit vendable** — moteur complet et testé, jamais
-   branché en prod ; calcul propriétaire (pas une revente de donnée tierce) donc
-   **débloque un produit x402 sans attendre la permission GoPlus/CabalSpy** (#51) (#58).
-5. **`pump_dump_autopsy.py` → aria-brain** — texte déjà produit, jamais poussé vers la
-   mémoire libre. Coût le plus bas de toute la liste (#59).
-6. **« Wallet Passport » public** — combine 4 briques d'identité/réputation qui ne se
-   parlent jamais (Farcaster, Basenames, CabalSpy, smart_money) en une fiche narrative,
-   zéro coût API nouveau, teaser naturel pour walletscore x402 (#60).
-
-**Autres pistes banquées, pas encore scopées** (coût plus élevé ou dépendance externe,
-gardées pour une future itération) : Trade Cards générées automatiquement (réutilise
-`chart_render.render_scenario_png`), Mode Replay d'une décision passée (`thesis_journal`/
-`truth_ledger`), terminal gated abonnés pour interroger ARIA sur un token Base précis,
-watchlist smart-money comme avantage abonné visible, client Kalshi (`blockrun_kalshi.py`,
-construit, zéro appelant) comme 2e marché de prédiction, `insider_wallets.py`/
-`deployer_history.py` comme produit x402 distinct, élargissement de `arena_signal.py`
-au-delà du seul BTC, `liquidity_rotation.py` pour prioriser l'ordre d'évaluation des
-candidats (jamais les seuils de décision), clustering Sybil par graphe complet (recherche
-déjà faite le 15/07, jamais implémentée — le plus coûteux de la liste).
+- **LLM migration to Claude (Haiku 4.5 + Sonnet 5)** — direction settled, gate now
+  split by role (`ARIA_LLM_ANTHROPIC_ROUTING_ENABLED` / `..._TRADING_ENABLED`, commit from
+  02/08). Sequence before any real flip: dedicated OpenRouter account for DeepSeek, verify
+  `ANTHROPIC_API_KEY` in prod, general gate first (observe), trading gate last (#48).
+- **CDP Smart Account (Spend Permissions + Paymaster)** — direction settled, ~10 days of
+  design already done. Next step (`eth_account.BaseAccount` wrapper) requires
+  hardware-in-the-loop sessions with the operator's physical Tangem — to be planned
+  explicitly (#35). Becomes more concrete now that 3 real Smart Wallets are
+  being considered (axis 1).
+- **unified_entry.py** (amended #194, unified VC/Swing screen) — CODE, dormant since
+  22/07, half done. Decide this month: resume, or explicitly freeze (#33).
+- **Wallet-scoring toward the ~500 threshold** — 9 unique wallets / 775 rows as of 02/08, well
+  below. Linked to axis 1's blockage diagnosis (#40).
+- **API dependency reduction** — identify ONE concrete candidate this month (#42).
 
 ---
 
-## Backlog actif (24 items pending au 02/08, TaskList #22/#32-#60)
+## Axis 6 — Governance & hygiene
 
-| # | Sujet | Axe |
+**Urgent, found today**: the Devil's Advocate mechanism (`scripts/devils-advocate-
+review.sh`, post-push code review) has been **broken since 26/07** (OpenRouter account
+out of funds, HTTP 402) — and the same shared account also feeds the adversarial trading
+judge (`trade_devils_advocate.py`/`trade_loss_batch_review.py`). Both governance
+guardrails have been silently out of service for a week. Operator action required
+first (top up the account), then the migration already decided but never tracked toward
+Gemini for the code hook (#47).
+
+- Backlog brought back to 10-15 pending items on 02/08 (09/07 norm) — to be replenished as soon as it
+  drops back down.
+- HANDOFF per component: active practice, verify that no new component remains
+  without a dedicated file.
+- Direct vs batch deployment cadence: 18/07 doctrine already applied without
+  incident this month (3 fixes grouped into a single deployment on 02/08).
+
+---
+
+## Axis 7 — Revenue sources (one dimension among the other six)
+
+- **x402 seller** (`/api/x402/walletscore`) — complete code, dormant. Only remaining
+  step: the operator's own testnet self-payment test.
+- **Expand the sellable catalog** — research/scoping only this month. **Real
+  contractual blocker found**: none of the providers used (GoPlus, Blockscout,
+  CabalSpy, TwitterAPI.io) explicitly authorizes reselling derived data —
+  GoPlus and CabalSpy are flatly restrictive. Write to obtain written permission
+  before any expansion (#51).
+- **Mindshare Rewards** — the revenue split is **already decided** (5-8% Mindshare, 4-7%
+  buybacks/burn preferred, remainder → treasury/dev/compute/voice/avatar/infra, hard cap
+  15% redistribution) — what remains open is ONLY the automated multi-recipient
+  outgoing payment mechanism (who validates, cap, anti-abuse) (#43).
+
+---
+
+## Open branches — generative brainstorm (02/08)
+
+At explicit operator request ("more imagination"), a workflow dedicated to pure
+idea generation (not fact verification) — two distinct angles, the same
+boundaries as the "multiply the branches" doctrine from 10/07 (never anything that
+would touch `wallet_guard`/`permission_mode`/real capital/secrets).
+
+**6 high-potential leads, near-zero first-step cost** (all built on an already
+existing, code-verified brick, never a from-scratch project):
+
+1. **Public registry of rejections** — expose (1-week delay) rejected candidates + their
+   already-computed counterfactual (`/counterfactual`). Materializes "proof before promise."
+   Zero competitor observed (aixbt and other agents only show their good calls) (#55).
+2. **ARIA vs. market differential index** — contextualizes the weekly report (axis 1)
+   against a simple benchmark, instead of an isolated figure (#56).
+3. **Desks in competition** — narrate scalping/swing/vc/megacap as distinct
+   teams in the weekly report, reuses a segmentation already in the database (#57).
+4. **`x402_trust_score.py` as a 2nd sellable product** — complete, tested engine, never
+   wired into prod; proprietary computation (not a resale of third-party data), so it
+   **unlocks an x402 product without waiting on GoPlus/CabalSpy permission** (#51) (#58).
+5. **`pump_dump_autopsy.py` → aria-brain** — text already produced, never pushed to
+   free memory. Lowest cost on the whole list (#59).
+6. **Public "Wallet Passport"** — combines 4 identity/reputation bricks that never
+   talk to each other (Farcaster, Basenames, CabalSpy, smart_money) into a narrative
+   sheet, zero new API cost, natural teaser for x402 walletscore (#60).
+
+**Other banked leads, not yet scoped** (higher cost or external dependency,
+kept for a future iteration): auto-generated Trade Cards (reuses
+`chart_render.render_scenario_png`), Replay Mode for a past decision (`thesis_journal`/
+`truth_ledger`), gated subscriber terminal to query ARIA on a specific Base token,
+smart-money watchlist as a visible subscriber perk, Kalshi client (`blockrun_kalshi.py`,
+built, zero callers) as a 2nd prediction market, `insider_wallets.py`/
+`deployer_history.py` as a distinct x402 product, expanding `arena_signal.py`
+beyond BTC alone, `liquidity_rotation.py` to prioritize the evaluation order of
+candidates (never the decision thresholds), full-graph Sybil clustering (research
+already done on 15/07, never implemented — the most expensive item on the list).
+
+---
+
+## Active backlog (24 pending items as of 02/08, TaskList #22/#32-#60)
+
+| # | Subject | Axis |
 |---|---|---|
-| #22 | Revérifier v2/v4/v5, supprimer si toujours inactives | 1 |
-| #32 | Diagnostiquer wallet_scan_queue bloqué | 1/5 |
-| #33 | Trancher le sort de unified_entry.py | 5 |
-| #34 | Restaurer cadence Polymarket paper | 6 |
-| #35 | Planifier session dédiée Smart Account CDP | 1/5 |
-| #36 | Trancher veille Base #199 (ressource x402) | 4 |
-| #37 | Rappel : désactiver Solana avant capital réel | 3 |
-| #38 | Décider du sort des coupe-circuits désactivés | 3 |
-| #39 | Suivre le reset hebdo du 08/08 (cycle tronqué) | 1 |
-| #40 | Revérifier avancement wallet-scoring vers 500 | 5 |
-| #41 | Diligence approfondie Clanker | 4 |
-| #42 | Identifier un candidat de réduction dépendance API | 5 |
-| #43 | Trancher mécanisme de paiement Mindshare Rewards | 7 |
-| #44 | Creuser vulnérabilité adversariale on-chain | 3 |
-| #45 | Diligence stack voix pour ARIA | 2 |
-| #46 | Élargir le catalogue x402 vendable | 7 |
-| #47 | Recharger le compte OpenRouter (Avocat du Diable cassé) | 6 |
-| #48 | Séquencer le flip du routing LLM Anthropic | 5 |
-| #49 | Reprendre le backlog agent-wallet #215-#230 | 1/3 |
-| #50 | Trancher la tension architecturale dna.yaml | 2 |
-| #51 | Permission de revente x402 (GoPlus/Blockscout/CabalSpy) | 7 |
-| #52 | Revisiter Monad comme chaîne candidate | 4 |
-| #53 | Scoper avatar HeyGen + cadence X gated | 2 |
-| #54 | Décider du portail de custody, premier utilisateur externe | 1 |
-| #55 | Scoper le registre public des refus | 2/4 |
-| #56 | Scoper l'index différentiel ARIA vs marché | 1 |
-| #57 | Scoper la narration "desks en compétition" | 2/4 |
-| #58 | Brancher x402_trust_score.py comme 2e produit vendable | 7 |
-| #59 | Pousser pump_dump_autopsy.py vers aria-brain | 2 |
-| #60 | Scoper le "Wallet Passport" public | 2/4/7 |
+| #22 | Recheck v2/v4/v5, remove if still inactive | 1 |
+| #32 | Diagnose blocked wallet_scan_queue | 1/5 |
+| #33 | Decide the fate of unified_entry.py | 5 |
+| #34 | Restore Polymarket paper cadence | 6 |
+| #35 | Schedule dedicated Smart Account CDP session | 1/5 |
+| #36 | Settle Base watch #199 (x402 resource) | 4 |
+| #37 | Reminder: disable Solana before real capital | 3 |
+| #38 | Decide the fate of the disabled circuit-breakers | 3 |
+| #39 | Track the 08/08 weekly reset (truncated cycle) | 1 |
+| #40 | Recheck wallet-scoring progress toward 500 | 5 |
+| #41 | In-depth Clanker diligence | 4 |
+| #42 | Identify one concrete API-dependency-reduction candidate | 5 |
+| #43 | Decide Mindshare Rewards payment mechanism | 7 |
+| #44 | Dig into on-chain adversarial vulnerability | 3 |
+| #45 | Voice stack diligence for ARIA | 2 |
+| #46 | Expand the sellable x402 catalog | 7 |
+| #47 | Top up the OpenRouter account (Devil's Advocate broken) | 6 |
+| #48 | Sequence the Anthropic LLM routing flip | 5 |
+| #49 | Resume the agent-wallet backlog #215-#230 | 1/3 |
+| #50 | Settle the dna.yaml architectural tension | 2 |
+| #51 | x402 resale permission (GoPlus/Blockscout/CabalSpy) | 7 |
+| #52 | Revisit Monad as a candidate chain | 4 |
+| #53 | Scope HeyGen avatar + gated X cadence | 2 |
+| #54 | Decide on the custody portal, first external user | 1 |
+| #55 | Scope the public registry of rejections | 2/4 |
+| #56 | Scope the ARIA vs. market differential index | 1 |
+| #57 | Scope the "desks in competition" narration | 2/4 |
+| #58 | Wire x402_trust_score.py as a 2nd sellable product | 7 |
+| #59 | Push pump_dump_autopsy.py to aria-brain | 2 |
+| #60 | Scope the public "Wallet Passport" | 2/4/7 |

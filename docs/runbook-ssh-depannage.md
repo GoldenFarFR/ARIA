@@ -1,61 +1,63 @@
-# Runbook — dépannage SSH VPS (clé cassée/perdue/mal copiée)
+# Runbook — VPS SSH troubleshooting (broken/lost/miscopied key)
 
-> **Repo PUBLIC — jamais d'IP/secret/accès en clair ici.** Cette procédure est volontairement
-> générique (pas d'IP/nom réel) — extrait de `CLAUDE.md` le 03/08 (passe de compaction).
+> **PUBLIC repo — never a real IP/secret/access here.** This procedure is deliberately
+> generic (no real IP/name) — extracted from `CLAUDE.md` on 08/03 (compaction pass).
 
-Si l'accès SSH à un VPS depuis un poste opérateur casse (clé compromise, clé mal copiée, accès perdu),
-suivre cet ordre — **ne jamais rien supprimer/révoquer avant d'avoir confirmé qu'un accès de
-remplacement fonctionne réellement** (même règle que toute rotation de secret) :
+If SSH access to a VPS from an operator machine breaks (compromised key, miscopied key,
+lost access), follow this order — **never delete/revoke anything before confirming a
+replacement access actually works** (same rule as any secret rotation):
 
-1. **Générer une clé propre** : `ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\<nom>"`. Le nom du
-   fichier n'a aucune importance fonctionnelle pour OpenSSH — préférer un nom **sans espace** (voir
+1. **Generate a clean key**: `ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\<name>"`. The
+   file name has no functional bearing for OpenSSH — prefer a name **without spaces** (see
    point 5).
-2. **Trouver un accès de secours** pour poser la nouvelle clé publique sur le VPS, dans cet ordre de
-   préférence : (a) une session Claude Code déjà active sur le VPS (accès shell direct, pas besoin de
-   SSH) ; (b) un autre appareil déjà autorisé (récupérer sa clé privée depuis le gestionnaire de mots
-   de passe, la rejouer temporairement sur le poste bloqué) ; (c) la console web de l'hébergeur (KVM/
-   VNC — passe par le login système/PAM, **indépendant** du réglage SSH `PasswordAuthentication no`,
-   sauf si le mot de passe root a aussi été verrouillé au niveau système, auquel cas seul le support de
-   l'hébergeur peut aider) ; (d) en dernier recours, contacter le support de l'hébergeur.
-   **Ne jamais cliquer sur une option de réinstallation d'image dans un panneau d'hébergeur** — ça
-   efface le serveur entier.
-3. **Ajouter la nouvelle clé publique** à `~/.ssh/authorized_keys` sur le VPS (append, toujours après
-   une sauvegarde `cp` du fichier, jamais d'écrasement direct).
-4. **Vérifier que le nouvel accès fonctionne** (nouvelle fenêtre de terminal) avant de retirer quoi
-   que ce soit de `authorized_keys`.
-5. **Pièges de copier-coller Windows rencontrés en pratique** :
-   - Un copier-coller depuis un gestionnaire de mots de passe (champ texte libre/note, pas un type
-     "Clé SSH" dédié) peut aplatir une clé privée multi-lignes en une seule ligne (retours à la ligne
-     remplacés par des espaces) → `ssh` renvoie `invalid format`. Correctif : extraire uniquement les
-     caractères base64 valides et reconstruire les 3 lignes (`BEGIN`/corps/`END`), écrire en ASCII sans
-     BOM (`[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`).
-   - Un nom de fichier de clé **avec espace** casse `~/.ssh/config` (nécessite des guillemets autour du
-     chemin `IdentityFile`) et casse aussi le client SSH interne de Claude Code (point suivant) →
-     préférer un nom sans espace dès le départ.
-   - Coller un bloc PowerShell multi-lignes (here-string `@"..."@`) dans un terminal peut s'exécuter
-     ligne par ligne au lieu du bloc entier et casser le fichier généré → préférer une suite de
-     commandes `Set-Content`/`Add-Content` (une ligne = une commande complète), plus robuste au collage.
-   - Toujours corriger les permissions du fichier de clé sur Windows avant usage :
-     `icacls <fichier> /inheritance:r` puis `icacls <fichier> /grant:r "<utilisateur>:(F)"` — utiliser
-     `(F)` et non `(R)`, sinon impossible de corriger le fichier ensuite.
-   - Le client SSH intégré à Claude Code (connexions distantes) n'est **pas** OpenSSH natif — il ne lit
-     jamais `~/.ssh/config` et ne comprend pas le `~` sur Windows dans le champ "Fichier d'identité" :
-     y renseigner le **chemin absolu complet** (`C:\Users\<utilisateur>\.ssh\<fichier>`), jamais `~/...`.
-   - Claude Code peut réécrire `~/.ssh/config` en enregistrant sa propre configuration de connexion et
-     supprimer une ligne `IdentityFile` ajoutée manuellement — revérifier `config` après tout
-     enregistrement dans l'interface de connexion SSH de Claude Code (un agent SSH Windows ayant mémorisé
-     la clé peut masquer temporairement le problème — `ssh` marche quand même sans `IdentityFile` tant
-     que l'agent tourne, mais ce n'est pas fiable après un redémarrage : remettre la ligne quand même).
-6. **Gestionnaire de mots de passe (type Bitwarden)** : stocker une clé SSH dans le type d'élément
-   dédié "Clé SSH" (pas une note/champ personnalisé texte libre) pour éviter le point 5 — ce type
-   préserve le format correctement à l'export/copie. Si l'outil ne permet que de **générer** une
-   nouvelle clé (pas d'import), ajouter cette clé générée au VPS puis migrer dessus (mêmes étapes 2-4),
-   plutôt que de forcer un import qui échoue.
-7. **Une fois le nouvel accès confirmé et en usage réel**, retirer l'ancienne clé de
-   `authorized_keys`, supprimer les fichiers de clé locaux devenus inutiles, et mettre à jour/supprimer
-   toute entrée obsolète dans le gestionnaire de mots de passe.
+2. **Find a fallback access path** to place the new public key on the VPS, in this order of
+   preference: (a) an already-active Claude Code session on the VPS (direct shell access, no
+   SSH needed); (b) another already-authorized device (pull its private key from the password
+   manager, temporarily replay it on the blocked machine); (c) the hosting provider's web
+   console (KVM/VNC — goes through the system login/PAM, **independent** of the SSH
+   `PasswordAuthentication no` setting, unless the root password has also been locked at the
+   system level, in which case only the hosting provider's support can help); (d) as a last
+   resort, contact the hosting provider's support.
+   **Never click a "reinstall image" option in a hosting panel** — it wipes the entire server.
+3. **Add the new public key** to `~/.ssh/authorized_keys` on the VPS (append, always after a
+   `cp` backup of the file, never a direct overwrite).
+4. **Verify the new access works** (new terminal window) before removing anything from
+   `authorized_keys`.
+5. **Windows copy-paste pitfalls encountered in practice**:
+   - A copy-paste from a password manager (free-text field/note, not a dedicated "SSH Key"
+     type) can flatten a multi-line private key into a single line (line breaks replaced by
+     spaces) → `ssh` returns `invalid format`. Fix: extract only the valid base64 characters
+     and rebuild the 3 lines (`BEGIN`/body/`END`), write as ASCII without a BOM
+     (`[System.IO.File]::WriteAllText(..., [System.Text.Encoding]::ASCII)`).
+   - A key file name **with a space** breaks `~/.ssh/config` (requires quoting the
+     `IdentityFile` path) and also breaks Claude Code's internal SSH client (next point) →
+     prefer a name without spaces from the start.
+   - Pasting a multi-line PowerShell block (here-string `@"..."@`) into a terminal can execute
+     line by line instead of as a whole block and corrupt the generated file → prefer a series
+     of `Set-Content`/`Add-Content` commands (one line = one complete command), more robust to
+     pasting.
+   - Always fix the key file's permissions on Windows before use:
+     `icacls <file> /inheritance:r` then `icacls <file> /grant:r "<user>:(F)"` — use `(F)`, not
+     `(R)`, otherwise the file can't be fixed afterward.
+   - Claude Code's built-in SSH client (remote connections) is **not** native OpenSSH — it
+     never reads `~/.ssh/config` and doesn't understand `~` on Windows in the "Identity File"
+     field: enter the **full absolute path** there (`C:\Users\<user>\.ssh\<file>`), never
+     `~/...`.
+   - Claude Code can rewrite `~/.ssh/config` when saving its own connection configuration and
+     drop an `IdentityFile` line added manually — recheck `config` after any save in Claude
+     Code's SSH connection interface (a Windows SSH agent that has cached the key can
+     temporarily mask the problem — `ssh` still works without `IdentityFile` as long as the
+     agent is running, but this isn't reliable after a reboot: put the line back anyway).
+6. **Password manager (e.g. Bitwarden-type)**: store an SSH key in the dedicated "SSH Key"
+   item type (not a free-text note/custom field) to avoid point 5 — this type preserves the
+   format correctly on export/copy. If the tool only supports **generating** a new key (no
+   import), add that generated key to the VPS and migrate to it (same steps 2-4), rather than
+   forcing an import that fails.
+7. **Once the new access is confirmed and in real use**, remove the old key from
+   `authorized_keys`, delete local key files that are no longer needed, and update/remove any
+   stale entry in the password manager.
 
-**Rappel sécurité** : si le contenu d'une clé privée a été affiché en clair quelque part (capture
-d'écran, chat, log), la traiter comme compromise immédiatement — générer une nouvelle paire, ne jamais
-réutiliser l'ancienne au-delà d'un pont temporaire vers son remplacement. **IP et détails d'accès VPS
-restent privés, dans `aria-ops`** — cette procédure est volontairement générique (pas d'IP/nom réel).
+**Security reminder**: if a private key's contents were ever displayed in the clear anywhere
+(screenshot, chat, log), treat it as compromised immediately — generate a new pair, never
+reuse the old one beyond a temporary bridge to its replacement. **VPS IP and access details
+stay private, in `aria-ops`** — this procedure is deliberately generic (no real IP/name).
