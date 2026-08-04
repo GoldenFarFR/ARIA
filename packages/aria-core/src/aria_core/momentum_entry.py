@@ -2963,7 +2963,7 @@ RSI_WATCH_MAX_SPAN_V7 = 10
 
 def _rsi_divergence_watch_candidate(
     contract: str, signal, symbol: str, price: float, candles: list,
-    *, rsi_watch_span: tuple[int, int] | None = None,
+    *, rsi_watch_span: tuple[int, int] | None = None, mode: str | None = None,
 ) -> dict | None:
     """Item #183 (28/07), watch-RSI-divergence: builds the payload for a
     watch-and-wait limit order when the price has ALREADY reached the golden
@@ -2987,7 +2987,17 @@ def _rsi_divergence_watch_candidate(
     any chain ``evaluate_momentum_entry`` already covers.
 
     Returns ``None`` on any unresolvable input (no zone, no candles) --
-    fail-open, same doctrine as ``_golden_pocket_watch_candidate``."""
+    fail-open, same doctrine as ``_golden_pocket_watch_candidate``.
+
+    ``mode`` (04/08, real bug found live): this function computes its OWN
+    invalidation independently of ``detect_entry``'s (the ``signal`` passed in
+    only supplies gp_low/gp_high/range_high, never its invalidation field) --
+    it therefore needs its OWN ``mode`` forward to ``_invalidation_floor_pct``
+    for the scalping-dedicated ATR floor bounds to actually apply. Per this
+    function's own docstring, it's scalping's ONLY limit-order mechanism (100%
+    of scalping positions are sourced through it) -- this is the real call
+    site the diligence's 3 pinned -5.0% orders came from, not ``detect_entry``
+    itself."""
     if (
         signal.gp_low is None or signal.gp_high is None or signal.range_high is None
         or not candles or price is None
@@ -3012,6 +3022,27 @@ def _rsi_divergence_watch_candidate(
     _last_atr = _atr_values[-1] if _atr_values else None
     if _last_atr is not None and entry:
         entry_atr_pct = _last_atr / entry
+    # 04/08, significance filter (diligence #9/#7, Fable cross-check): a
+    # golden-pocket window narrower than the token's own natural ATR noise
+    # band isn't a real technical structure -- it's price oscillating inside
+    # its normal volatility, RSI divergence and all. Scoped to scalping only
+    # (mode=="scalping"): v1-v5 use a wholly separate signal engine
+    # (scalping_variants.py) that never calls this function, so this filter
+    # structurally never touches them; v6/v7 are this function's only real
+    # callers (Item #199's own docstring). ``range_low`` defensively
+    # rechecked here (never asserted by the caller's own guard above, unlike
+    # ``range_high``) -- fail-open (no filter applied) rather than a crash on
+    # an edge case entry_signals itself never actually produces uncoupled.
+    if mode == "scalping" and entry_atr_pct and signal.range_low is not None:
+        range_width = signal.range_high - signal.range_low
+        atr_abs = entry_atr_pct * entry
+        if range_width < 2.0 * atr_abs:
+            logger.info(
+                "momentum_entry: rsi-divergence watch REJECTED for %s -- range %.6g "
+                "narrower than 2x ATR (%.6g), indistinguishable from noise",
+                contract, range_width, 2.0 * atr_abs,
+            )
+            return None
     # Item #65 (08/03), anti-chasing shadow filter (informational only, see
     # chasing_filter_shadow.py's own docstring) -- same window as the
     # standard BUY path (golden-pocket lookback, 25 candles), same "cheap,
@@ -3026,7 +3057,7 @@ def _rsi_divergence_watch_candidate(
     # volatility floor allows, regardless of how close gp_low happens to be.
     from aria_core.skills.entry_signals import _invalidation_floor_pct
 
-    atr_floor_pct = _invalidation_floor_pct(candles)
+    atr_floor_pct = _invalidation_floor_pct(candles, mode=mode)
     if atr_floor_pct is not None and entry > 0:
         invalidation = min(invalidation, entry * (1 - atr_floor_pct))
     target = signal.range_high
@@ -3492,7 +3523,7 @@ async def evaluate_momentum_entry(
     # (10) instead of the swing default (14) -- see evaluate_momentum_entry's
     # docstring.
     entry_period = SCALPING_RSI_PERIOD if mode == "scalping" else _RSI_PERIOD
-    signal = detect_entry(candles, execution_price=best.price_usd, period=entry_period)
+    signal = detect_entry(candles, execution_price=best.price_usd, period=entry_period, mode=mode)
     reasons.extend(signal.reasons)
     if not signal.present or signal.rr is None or signal.rr <= 0:
         reasons.append("pas de setup golden pocket + divergence RSI avec R/R positif")
@@ -3580,7 +3611,7 @@ async def evaluate_momentum_entry(
             try:
                 watch = _rsi_divergence_watch_candidate(
                     contract, signal, best.base_symbol, best.price_usd, candles,
-                    rsi_watch_span=rsi_watch_span,
+                    rsi_watch_span=rsi_watch_span, mode=mode,
                 )
             except Exception as exc:  # noqa: BLE001 -- fail-open, never blocks the HOLD path
                 logger.info("momentum_entry: rsi-divergence watch candidate failed for %s (%s)", contract, exc)

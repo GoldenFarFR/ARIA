@@ -121,6 +121,37 @@ class TestConvictionSizeMultiplier:
             assert risk_guard.conviction_size_multiplier(rr, 3) <= risk_guard.MAX_ALLOC_MULTIPLIER
 
 
+# ── 1ter-bis. mode="scalping" (08/04, diligence #9 -- seuils R/R dédiés) ────────────
+
+class TestConvictionSizeMultiplierScalpingMode:
+    def test_swing_rr_never_reaches_scalping_conviction_tier_without_mode(self):
+        """Un R/R typique scalping (ex. 1.8, sous le seuil swing 2.5 ET sous le
+        seuil swing modéré 2.0) retombe au palier FAIBLE sans ``mode`` --
+        exactement le bug diagnostiqué (88-91% des ordres v6/v7 au plancher 2%)."""
+        assert risk_guard.conviction_size_multiplier(1.8, 3) == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_same_rr_reaches_moderate_tier_with_scalping_mode(self):
+        """Le MÊME R/R (1.8), avec ``mode="scalping"``, dépasse le seuil modéré
+        scalping (1.4) sans atteindre le seuil fort scalping (2.2) -- palier
+        MODÉRÉ, la variable redevient discriminante."""
+        assert risk_guard.conviction_size_multiplier(1.8, 3, mode="scalping") == risk_guard.MODERATE_ALLOC_MULTIPLIER
+
+    def test_scalping_conviction_threshold_reaches_strong_tier(self):
+        assert risk_guard.conviction_size_multiplier(2.2, 3, mode="scalping") == risk_guard.MAX_ALLOC_MULTIPLIER
+        assert risk_guard.conviction_size_multiplier(2.5, 3, mode="scalping") == risk_guard.MAX_ALLOC_MULTIPLIER  # au-delà aussi, jamais un 4e palier
+
+    def test_scalping_below_moderate_threshold_stays_weak(self):
+        assert risk_guard.conviction_size_multiplier(1.0, 3, mode="scalping") == risk_guard.MIN_ALLOC_MULTIPLIER
+
+    def test_unknown_mode_falls_back_to_swing_thresholds(self):
+        """Toute valeur autre que ``"scalping"`` (``None``, ``"standard"``,
+        ``"vc"``...) garde le comportement swing d'origine, inchangé -- seul
+        le pipeline scalping passe explicitement ``mode="scalping"``."""
+        for mode in (None, "standard", "vc"):
+            assert risk_guard.conviction_size_multiplier(2.0, 3, mode=mode) == risk_guard.MODERATE_ALLOC_MULTIPLIER
+            assert risk_guard.conviction_size_multiplier(1.8, 3, mode=mode) == risk_guard.MIN_ALLOC_MULTIPLIER
+
+
 # ── 1ter. fundamental_score (19/07, décision opérateur "s'ajoute en ET") ────────────
 
 class TestConvictionSizeMultiplierFundamental:
@@ -316,6 +347,12 @@ class TestConvictionRiskBudgetPct:
         )
         assert budget == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
 
+    def test_scalping_mode_uses_scalping_thresholds(self):
+        """R/R 1.8 : palier faible sans mode, modéré avec mode="scalping" --
+        même bascule que conviction_size_multiplier, propagée jusqu'ici."""
+        assert risk_guard.conviction_risk_budget_pct(1.8, 3) == risk_guard.CONVICTION_RISK_BUDGET_WEAK_PCT
+        assert risk_guard.conviction_risk_budget_pct(1.8, 3, mode="scalping") == risk_guard.CONVICTION_RISK_BUDGET_MODERATE_PCT
+
 
 class TestConvictionTierLabel:
     def test_none_signal_returns_none(self):
@@ -339,6 +376,11 @@ class TestConvictionTierLabel:
             2.5, 3, fundamental_score=1.0, dex_security_score=10.0,
         )
         assert label == "weak"
+
+    def test_scalping_mode_uses_scalping_thresholds(self):
+        assert risk_guard.conviction_tier_label(1.8, 3) == "weak"
+        assert risk_guard.conviction_tier_label(1.8, 3, mode="scalping") == "moderate"
+        assert risk_guard.conviction_tier_label(2.2, 3, mode="scalping") == "strong"
 
 
 class TestSizeByRiskBudget:

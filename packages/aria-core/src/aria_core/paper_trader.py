@@ -4123,13 +4123,20 @@ def compute_entry_alloc(
     if vc_alloc_usd is not None:
         base_alloc_usd = vc_alloc_usd
     else:
+        # 08/04 -- mode= forwarded so a scalping signal is judged against
+        # the scalping-dedicated R/R thresholds (risk_guard._rr_thresholds),
+        # never the swing ones a scalping R/R almost never reaches by
+        # construction (see risk_guard.MODERATE_RR_THRESHOLD_SCALPING's own
+        # comment for the full diligence).
         risk_budget_pct = risk_guard.conviction_risk_budget_pct(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
             volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
+            mode=sig.get("mode"),
         )
         conviction_mult = risk_guard.conviction_size_multiplier(
             sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
             volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
+            mode=sig.get("mode"),
         )
         entry_atr_pct = sig.get("entry_atr_pct")
         if risk_budget_pct is not None and entry_atr_pct:
@@ -4143,6 +4150,7 @@ def compute_entry_alloc(
     conviction_tier = risk_guard.conviction_tier_label(
         sig.get("rr"), sig.get("align_score"), fundamental_score=sig.get("potential_score"),
         volume_confirmed=sig.get("volume_confirmed"), dex_security_score=sig.get("dex_security_score"),
+        mode=sig.get("mode"),
     )
     # 07/18 (continued, "handbrake" validated after review) -- once the
     # weekly target is already reached, halves NEW entries (never to zero):

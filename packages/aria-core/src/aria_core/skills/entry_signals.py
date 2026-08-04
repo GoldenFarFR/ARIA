@@ -292,12 +292,52 @@ ATR_INVALIDATION_MULTIPLIER = 2.5
 MIN_ATR_INVALIDATION_PCT = 0.05
 MAX_ATR_INVALIDATION_PCT = 0.40
 
+# 04/08 -- real bug found live (operator diligence, cross-checked against
+# entry_signals): this floor was NEVER scoped by mode, exactly the same gap
+# as the trailing stop before its 03/08 fix (see paper_trader.py's
+# ATR_TRAIL_MULTIPLIER_SCALPING/MIN_ATR_TRAIL_PCT_SCALPING/MAX_ATR_TRAIL_PCT_
+# SCALPING -- same bounds, same doctrine, mirrored here). Confirmed
+# empirically on 3 real scalping_v6/v7 limit orders (CLANKER/MPP/a third),
+# all pinned to exactly -5.0% invalidation -- the 5% swing-calibrated floor
+# dominated every single one on scalping's much tighter ATR (15-30min
+# candles). This is the mechanism that determines the R/R shown to the
+# operator and used to calibrate risk_guard's conviction thresholds --
+# leaving it unscoped silently biased that entire distribution.
+ATR_INVALIDATION_MULTIPLIER_SCALPING = 2.5
+MIN_ATR_INVALIDATION_PCT_SCALPING = 0.015
+MAX_ATR_INVALIDATION_PCT_SCALPING = 0.10
 
-def _invalidation_floor_pct(candles: list[Candle]) -> float | None:
+
+def _invalidation_floor_pct_from_ratio(atr_ratio: float, *, mode: str | None = None) -> float:
+    """Pure clamp/multiplier logic -- no candles required. Split out (04/08)
+    from ``_invalidation_floor_pct`` specifically so an OFFLINE/retroactive
+    recomputation (e.g. a one-off script recalculating historical R/R from
+    persisted ``entry_atr_pct``, never real candles) can import this EXACT
+    function instead of reimplementing the formula -- a duplicated copy would
+    silently diverge from this one the day either changes (operator-mandated
+    process guardrail, diligence #9/#6)."""
+    if mode == "scalping":
+        return max(
+            MIN_ATR_INVALIDATION_PCT_SCALPING,
+            min(MAX_ATR_INVALIDATION_PCT_SCALPING, ATR_INVALIDATION_MULTIPLIER_SCALPING * atr_ratio),
+        )
+    return max(
+        MIN_ATR_INVALIDATION_PCT,
+        min(MAX_ATR_INVALIDATION_PCT, ATR_INVALIDATION_MULTIPLIER * atr_ratio),
+    )
+
+
+def _invalidation_floor_pct(candles: list[Candle], *, mode: str | None = None) -> float | None:
     """ATR-derived floor on how close the invalidation may sit to the entry
     price, as a fraction. ``None`` if ATR isn't computable yet (insufficient
     candles) -- caller falls back to the pre-existing fixed-2%-below-gp_low
-    behavior, never a fabricated distance."""
+    behavior, never a fabricated distance.
+
+    ``mode`` (04/08): scalping uses its own dedicated bounds/multiplier (see
+    the module-level constants above) instead of the swing-calibrated
+    defaults -- same ``mode == "scalping"`` switch already used by
+    ``paper_trader._effective_trail_pct``. The actual clamp/multiplier logic
+    lives in ``_invalidation_floor_pct_from_ratio`` (see its own docstring)."""
     from aria_core.skills.indicators import atr_series
 
     atr_values = atr_series(candles)
@@ -307,10 +347,7 @@ def _invalidation_floor_pct(candles: list[Candle]) -> float | None:
     close = candles[-1].close
     if not close or close <= 0:
         return None
-    return max(
-        MIN_ATR_INVALIDATION_PCT,
-        min(MAX_ATR_INVALIDATION_PCT, ATR_INVALIDATION_MULTIPLIER * (last_atr / close)),
-    )
+    return _invalidation_floor_pct_from_ratio(last_atr / close, mode=mode)
 
 
 def detect_entry(
@@ -320,6 +357,7 @@ def detect_entry(
     tolerance: float = 0.03,
     execution_price: float | None = None,
     period: int = _RSI_PERIOD,
+    mode: str | None = None,
 ) -> EntrySignal:
     """Detects the "golden pocket + RSI divergence" setup over <= ``lookback`` candles.
 
@@ -327,6 +365,11 @@ def detect_entry(
     ``bullish_rsi_divergence`` -- default ``_RSI_PERIOD`` (14, swing/standard
     mode), unchanged behavior for every existing caller. The scalping mode
     passes ``SCALPING_RSI_PERIOD`` (10) instead.
+
+    ``mode`` (04/08): forwarded to ``_invalidation_floor_pct`` so scalping
+    gets its own dedicated ATR floor bounds instead of the swing-calibrated
+    defaults -- unchanged behavior for every existing caller that doesn't
+    pass it (``None`` keeps the original swing bounds).
 
     ``present`` only if the current price is in (or very close to) the deep
     Fibonacci zone AND a bullish RSI divergence is present. Then provides
@@ -414,7 +457,7 @@ def detect_entry(
     # allows, regardless of how close gp_low happens to be to the entry
     # price. Takes the LOWER of the two -- a naturally wide Fibonacci
     # structure is never tightened, only a dangerously narrow one is widened.
-    atr_floor_pct = _invalidation_floor_pct(candles)
+    atr_floor_pct = _invalidation_floor_pct(candles, mode=mode)
     if atr_floor_pct is not None and entry > 0:
         invalidation = min(invalidation, entry * (1 - atr_floor_pct))
     target = fib["high"]

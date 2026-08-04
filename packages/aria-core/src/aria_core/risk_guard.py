@@ -121,6 +121,64 @@ CONVICTION_ALIGN_SCORE_THRESHOLD = 2
 # THRESHOLD`` already independent since the start of this work.
 MODERATE_RR_THRESHOLD = 2.0
 
+# 08/04 -- scalping-dedicated thresholds (operator diligence + Fable 5 cross-
+# review, same session as the ATR-trail scalping fix of 08/03): the two
+# constants above were calibrated for swing BEFORE scalping existed, and the
+# 5 legacy scalping variants' R/R never realistically reaches them (v2/v4/v5
+# have a FIXED R/R by construction, 1.3-1.5, structurally below MODERATE_RR_
+# THRESHOLD).
+#
+# FIRST calibration pass (same day, since superseded) used 1059 pending
+# limit orders' persisted R/R at face value -- p50=0.42/p75=0.99/p90=1.70.
+# Fable 5's SECOND diligence pass (same day) found a DEEPER bug upstream:
+# the ATR invalidation floor computing those very R/R values was itself
+# NEVER scoped by mode (entry_signals.MIN/MAX_ATR_INVALIDATION_PCT, exactly
+# the same gap as the ATR-trail before its 08/03 fix) -- confirmed live on 3
+# real orders all pinned to exactly -5.0% invalidation. That bug silently
+# UNDERSTATED every scalping R/R (a wider-than-necessary swing-calibrated
+# floor inflates the risk denominator). Fixed first (entry_signals.
+# ATR_INVALIDATION_MULTIPLIER_SCALPING/MIN/MAX_ATR_INVALIDATION_PCT_
+# SCALPING, 08/04) -- see entry_signals.py's own comment -- along with a
+# range>=2xATR significance filter (rejects setups indistinguishable from
+# ATR noise) BEFORE this second, real calibration pass, per the operator's
+# explicit process guardrail (never calibrate on a knowingly biased
+# distribution).
+#
+# RETROACTIVE recalculation (04/08, scripted, entry_signals.
+# _invalidation_floor_pct_from_ratio imported directly -- never a
+# reimplementation of the formula): re-derives what R/R WOULD have been with
+# the corrected floor + filter, from ``pending_limit_order.signal_json``'s
+# persisted gp_low/entry_atr_pct/target/target_price (real candles aren't
+# stored per historical order -- ATR/close is approximated by the persisted
+# entry_atr_pct, ATR/entry-price, a close proxy since the two are evaluated
+# moments apart in the live pipeline; range_width is reconstructed from
+# target/gp_low via the FIXED 0.786 Fibonacci ratio, an exact algebraic
+# identity, not a guess). entry_atr_pct was only persisted starting 08/02
+# (Item #253) -- of 1164 v6+v7 pending orders, 848 predate it and are
+# excluded outright (missing field, never estimated), 2 more are filtered by
+# the new significance filter, 23 more have no valid post-fix R/R (broken
+# structural consistency) -- final population n=291 (v6: 233, v7: 58), the
+# HONEST sample size this calibration actually rests on (smaller than the
+# first pass's 1059 -- explicitly NOT backfilled with a guess). New
+# distribution: p50=0.66/p75=1.38/p90=2.24 (v6-only: p75=1.46/p90=2.28; v7-
+# only: p75=1.00/p90=1.65) -- roughly DOUBLE the biased first pass at every
+# percentile, confirming the floor bug had been suppressing scalping R/R
+# across the board, not just the 3 orders it was directly caught on.
+#
+# Calibrated on this corrected sample's p75/p90 (rounded to 1 decimal) -- a
+# scalping R/R is a RELATIVE ranking of setup quality, never an absolute
+# expectancy (a setup's real exit runs through the ATR trailing stop/staged
+# TP, which can blow past its own nominal target -- see the DRV case, R/R
+# 0.066 realized +18.3%, Item #252 31/07). First-pass thresholds on an
+# already-small n=291 sample, deliberately NOT auto-recalibrated on a
+# rolling window (that would silently hand out 5% to "the best of a bad
+# batch" even when the whole flow degrades) -- fixed constants, backlog task
+# to revisit once significantly more entry_atr_pct-populated orders
+# accumulate (same doctrine as the ATR-trail bounds, calibrated on only 7
+# trades 08/03).
+MODERATE_RR_THRESHOLD_SCALPING = 1.4
+CONVICTION_RR_THRESHOLD_SCALPING = 2.2
+
 MIN_ALLOC_MULTIPLIER = 0.4       # 5% * 0.4 = 2% of starting capital (weak tier)
 MODERATE_ALLOC_MULTIPLIER = 0.7  # 5% * 0.7 = 3.5% of starting capital (moderate tier)
 MAX_ALLOC_MULTIPLIER = 1.0       # 5% * 1.0 = 5% of starting capital (strong tier, hard cap)
@@ -199,10 +257,21 @@ DEX_SECURITY_REJECT_THRESHOLD = 15.0
 DEX_QUALITY_WATCH_THRESHOLD = 70.0
 
 
+def _rr_thresholds(mode: str | None) -> tuple[float, float]:
+    """(conviction_threshold, moderate_threshold) for ``mode`` -- scalping
+    gets its own dedicated pair (see ``MODERATE_RR_THRESHOLD_SCALPING``'s own
+    comment for the full calibration rationale), every other mode (including
+    ``None``, unchanged historical behavior) keeps the swing-calibrated
+    ``CONVICTION_RR_THRESHOLD``/``MODERATE_RR_THRESHOLD``."""
+    if mode == "scalping":
+        return CONVICTION_RR_THRESHOLD_SCALPING, MODERATE_RR_THRESHOLD_SCALPING
+    return CONVICTION_RR_THRESHOLD, MODERATE_RR_THRESHOLD
+
+
 def conviction_size_multiplier(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
-    dex_security_score: float | None = None,
+    dex_security_score: float | None = None, mode: str | None = None,
 ) -> float:
     """Multiplier applied to ``ALLOC_PCT`` (5%, ``paper_trader.py``) -- never
     beyond ``MAX_ALLOC_MULTIPLIER`` (1.0 = 5% of capital, the hard cap requested
@@ -247,10 +316,17 @@ def conviction_size_multiplier(
     setup with only one -- underestimating the cumulative risk) -- one flag alone ->
     MODERATE tier (3.5%); two or more at once -> direct drop to the WEAK tier (2%),
     never a 4th tier below (the ``MIN_ALLOC_MULTIPLIER`` floor remains the true floor,
-    regardless of the number of vetoes)."""
+    regardless of the number of vetoes).
+
+    ``mode`` (08/04): ``"scalping"`` switches the R/R thresholds to the
+    scalping-dedicated pair (see ``_rr_thresholds``) -- the swing-calibrated
+    ones are almost never reached by a scalping setup by construction (see
+    ``MODERATE_RR_THRESHOLD_SCALPING``'s own comment). Any other value
+    (``None`` included) keeps the original swing thresholds, unchanged."""
     if rr is None or align_score is None:
         return MAX_ALLOC_MULTIPLIER
-    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+    conviction_threshold, moderate_threshold = _rr_thresholds(mode)
+    if rr >= conviction_threshold and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
         weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
@@ -260,7 +336,7 @@ def conviction_size_multiplier(
         if flags == 1:
             return MODERATE_ALLOC_MULTIPLIER
         return MAX_ALLOC_MULTIPLIER
-    if rr >= MODERATE_RR_THRESHOLD:
+    if rr >= moderate_threshold:
         return MODERATE_ALLOC_MULTIPLIER
     return MIN_ALLOC_MULTIPLIER
 
@@ -292,7 +368,7 @@ CONVICTION_RISK_BUDGET_WEAK_PCT = 0.005      # 0.5% -- WEAK tier
 def conviction_risk_budget_pct(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
-    dex_security_score: float | None = None,
+    dex_security_score: float | None = None, mode: str | None = None,
 ) -> float | None:
     """Risk budget (fraction of capital) for the conviction tier of THIS
     signal -- same tiering and same stacking of the (now up to three) vetoes as
@@ -300,10 +376,14 @@ def conviction_risk_budget_pct(
     tiers change: a risk budget in %, not a multiplier on a flat allocation). ``None``
     if ``rr``/``align_score`` are missing -- signals to the caller to fall back
     on ``conviction_size_multiplier`` (historical behavior), never an invented
-    budget for lack of a signal."""
+    budget for lack of a signal.
+
+    ``mode`` (08/04): same scalping-dedicated threshold switch as
+    ``conviction_size_multiplier`` -- see that function's own docstring."""
     if rr is None or align_score is None:
         return None
-    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+    conviction_threshold, moderate_threshold = _rr_thresholds(mode)
+    if rr >= conviction_threshold and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
         weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
@@ -313,7 +393,7 @@ def conviction_risk_budget_pct(
         if flags == 1:
             return CONVICTION_RISK_BUDGET_MODERATE_PCT
         return CONVICTION_RISK_BUDGET_STRONG_PCT
-    if rr >= MODERATE_RR_THRESHOLD:
+    if rr >= moderate_threshold:
         return CONVICTION_RISK_BUDGET_MODERATE_PCT
     return CONVICTION_RISK_BUDGET_WEAK_PCT
 
@@ -330,14 +410,18 @@ def conviction_risk_budget_pct(
 def conviction_tier_label(
     rr: float | None, align_score: int | None, *,
     fundamental_score: float | None = None, volume_confirmed: bool | None = None,
-    dex_security_score: float | None = None,
+    dex_security_score: float | None = None, mode: str | None = None,
 ) -> str | None:
     """Conviction tier label for THIS signal -- ``None`` if ``rr``/``align_score``
     are missing (never an invented tier for lack of a signal, e.g. the old
-    VC-thesis pilot)."""
+    VC-thesis pilot).
+
+    ``mode`` (08/04): same scalping-dedicated threshold switch as
+    ``conviction_size_multiplier`` -- see that function's own docstring."""
     if rr is None or align_score is None:
         return None
-    if rr >= CONVICTION_RR_THRESHOLD and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
+    conviction_threshold, moderate_threshold = _rr_thresholds(mode)
+    if rr >= conviction_threshold and align_score >= CONVICTION_ALIGN_SCORE_THRESHOLD:
         weak_fundamentals = fundamental_score is not None and fundamental_score < FUNDAMENTAL_WEAK_THRESHOLD
         unconfirmed_volume = volume_confirmed is False
         weak_dex_security = dex_security_score is not None and dex_security_score < DEX_SECURITY_WEAK_THRESHOLD
@@ -347,7 +431,7 @@ def conviction_tier_label(
         if flags == 1:
             return "moderate"
         return "strong"
-    if rr >= MODERATE_RR_THRESHOLD:
+    if rr >= moderate_threshold:
         return "moderate"
     return "weak"
 

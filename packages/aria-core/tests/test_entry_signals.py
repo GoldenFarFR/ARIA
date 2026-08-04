@@ -433,3 +433,67 @@ def test_execution_price_reproduces_gitlawb_real_trade_magnitude():
 
     assert signal_based.rr > exec_based.rr  # le close (plus proche de l'invalidation) gonfle le R/R
     assert exec_based.rr > 1  # reste un R/R favorable, juste moins extrême
+
+
+# ── plancher ATR d'invalidation, borne dédiée scalping (04/08) ────────────────
+
+def test_invalidation_floor_pct_from_ratio_matches_manual_clamp():
+    """Fonction pure (pas de candles) exposée spécifiquement pour qu'un script
+    offline (recalcul rétroactif #8, diligence #9) importe la VRAIE formule au
+    lieu de la réimplémenter -- verrouille son comportement exact contre toute
+    dérive silencieuse future."""
+    # swing : 2.5*0.10=0.25, dans les bornes [0.05,0.40] -- jamais clampé
+    assert entry_signals._invalidation_floor_pct_from_ratio(0.10) == pytest.approx(0.25)
+    # scalping : même ratio, bornes différentes [0.015,0.10] -- clampé au max
+    assert entry_signals._invalidation_floor_pct_from_ratio(0.10, mode="scalping") == pytest.approx(0.10)
+    # swing : ratio minuscule -- clampé au plancher 5%
+    assert entry_signals._invalidation_floor_pct_from_ratio(0.001) == pytest.approx(entry_signals.MIN_ATR_INVALIDATION_PCT)
+    # scalping : même ratio minuscule -- clampé à SON propre plancher, plus bas
+    assert entry_signals._invalidation_floor_pct_from_ratio(0.001, mode="scalping") == pytest.approx(
+        entry_signals.MIN_ATR_INVALIDATION_PCT_SCALPING
+    )
+
+
+def test_invalidation_floor_scalping_narrower_than_swing():
+    """Bug réel trouvé en direct (diligence #9, 3 ordres v6/v7 tous pinnés à
+    -5.0% pile) : le plancher ATR n'était jamais scopé par mode, comme
+    l'ancien trailing stop avant sa correction du 03/08. Mêmes candles, deux
+    modes -> deux planchers différents : le mode par défaut (swing) clampe
+    vers le haut à 5% ; le mode scalping (bornes 1.5%-10%, calibrées sur des
+    bougies 15-30min) laisse passer la vraie valeur ATR-dérivée sans la
+    forcer artificiellement à un plancher taillé pour des bougies journalières."""
+    base = 100.0
+    step = 1.2  # ATR/close converge vers ~1.2% -> plancher brut 2.5*1.2% = 3%
+    closes = [base if i % 2 == 0 else base + step for i in range(30)]
+    candles = _candles(closes)
+
+    swing_floor = entry_signals._invalidation_floor_pct(candles)
+    scalping_floor = entry_signals._invalidation_floor_pct(candles, mode="scalping")
+
+    assert swing_floor == pytest.approx(entry_signals.MIN_ATR_INVALIDATION_PCT)  # clampé à 5%
+    assert scalping_floor < swing_floor  # jamais clampé au même plancher que le swing
+    assert entry_signals.MIN_ATR_INVALIDATION_PCT_SCALPING <= scalping_floor <= entry_signals.MAX_ATR_INVALIDATION_PCT_SCALPING
+
+
+def test_invalidation_floor_mode_none_matches_swing_default():
+    """``mode=None`` (tout appelant existant non touché par ce changement) doit
+    reproduire EXACTEMENT le comportement d'avant -- même valeur qu'un appel
+    sans le paramètre ``mode`` du tout."""
+    candles = _candles(_setup_series())
+    assert entry_signals._invalidation_floor_pct(candles) == entry_signals._invalidation_floor_pct(candles, mode=None)
+    assert entry_signals._invalidation_floor_pct(candles, mode="standard") == entry_signals._invalidation_floor_pct(candles, mode=None)
+
+
+def test_detect_entry_scalping_mode_uses_narrower_invalidation_floor():
+    """Bout-en-bout via ``detect_entry`` (pas juste la fonction interne) : le
+    même setup golden-pocket+divergence produit une invalidation DIFFÉRENTE
+    (donc un R/R différent) selon le mode -- preuve que le paramètre est bien
+    câblé jusqu'au bout, pas seulement testé en isolation."""
+    candles = _candles(_setup_series())
+    swing_signal = detect_entry(candles, lookback=25)
+    scalping_signal = detect_entry(candles, lookback=25, mode="scalping")
+
+    assert swing_signal.present and scalping_signal.present
+    # Le scalping ne peut jamais élargir l'invalidation au-delà de la structurelle --
+    # seul un plancher PLUS ÉTROIT peut la rapprocher de l'entrée (jamais l'inverse).
+    assert scalping_signal.invalidation >= swing_signal.invalidation

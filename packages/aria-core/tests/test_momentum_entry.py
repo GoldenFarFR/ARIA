@@ -7058,6 +7058,85 @@ async def test_rsi_divergence_watch_candidate_entry_atr_pct_none_when_atr_unavai
 
 
 @pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_scalping_mode_uses_narrower_invalidation_floor(monkeypatch, test_settings):
+    """04/08, real bug found live (diligence #9, 3 real scalping_v6/v7 orders
+    pinned to exactly -5.0%): this function computes its OWN invalidation
+    independently of ``detect_entry``'s (the ``signal`` passed in only
+    supplies gp_low/gp_high/range_high, never an invalidation field) -- it
+    needs its OWN ``mode`` forwarded to ``_invalidation_floor_pct``, or the
+    scalping-dedicated ATR floor never applies on scalping's REAL limit-order
+    creation path (100% of scalping positions per this function's own
+    docstring). Same candles/signal, only ``mode`` differs: ATR (0.3) over the
+    candles' own close (1.5, ``_invalidation_floor_pct``'s normalization
+    reference -- NOT the ``entry``/price argument, a distinct value on the
+    outright-BUY path but identical here by fixture construction) gives a raw
+    floor of 50%, clamped to swing's 40% max (invalidation sits well below
+    entry) vs scalping's OWN 10% max (narrow enough that the structural
+    golden-pocket level, closer to entry, wins instead). ATR kept small
+    enough relative to the golden-pocket range (1.0) that the 04/08
+    significance filter (range >= 2xATR, added the same session) doesn't
+    reject the candidate outright -- this test is about the invalidation
+    floor, not the significance filter (see its own dedicated tests below)."""
+    narrow_atr_candles = [
+        Candle(ts=i * 3600, open=1.5, high=1.65, low=1.35, close=1.5) for i in range(20)
+    ]
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=narrow_atr_candles)
+
+    swing_result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    scalping_result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    swing_watch = swing_result["limit_order_candidate"]
+    scalping_watch = scalping_result["limit_order_candidate"]
+    assert swing_watch["invalidation"] == pytest.approx(1.5 * (1 - 0.40))  # ATR floor clamped to swing's 40% max
+    assert scalping_watch["invalidation"] == pytest.approx(1.214 * 0.98)  # structural gp_low*0.98 wins under scalping's 10% max
+    assert scalping_watch["invalidation"] > swing_watch["invalidation"]  # never widened below the swing floor
+
+
+# ── filtre de signification range >= 2xATR (04/08, diligence #9/#7) ───────────
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_rejected_when_range_narrower_than_2x_atr_scalping(monkeypatch, test_settings):
+    """Golden-pocket range (1.0, from ``_in_gp_no_divergence_signal``'s
+    range_high-range_low) far narrower than 2x this token's ATR (2x1.333x1.5
+    = 4.0) -- price oscillating inside its own normal volatility, not a real
+    structure. Scalping mode only (v6/v7's real creation path) -- rejected
+    outright rather than watched."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_atr_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result.get("limit_order_candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_significance_filter_scoped_to_scalping_only(monkeypatch, test_settings):
+    """The SAME narrow-range/wide-ATR fixture that gets rejected in scalping
+    mode (test above) must NOT be filtered in swing/standard mode -- v1-v5
+    never call this function at all (separate engine, scalping_variants.py),
+    and this filter was scoped to scalping deliberately (Lot A plan) rather
+    than applied universally, to keep the diagnostic signature attributable
+    to a single change at a time."""
+    _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_atr_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")  # mode defaults to "standard"
+
+    assert result.get("limit_order_candidate") is not None
+
+
+@pytest.mark.asyncio
+async def test_rsi_divergence_watch_candidate_passes_significance_filter_when_range_wide_enough(monkeypatch, test_settings):
+    """A genuinely significant setup (range comfortably >= 2x ATR) must never
+    be rejected by this filter, in scalping mode or otherwise -- proves the
+    filter isn't accidentally rejecting everything."""
+    wide_range_signal = _in_gp_no_divergence_signal(gp_low=1.0, gp_high=1.4, range_low=0.0, range_high=100.0)
+    _patch_pipeline(monkeypatch, signal=wide_range_signal, candles=_rising_ts_atr_candles())
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+
+    assert result.get("limit_order_candidate") is not None
+
+
+@pytest.mark.asyncio
 async def test_rsi_divergence_watch_candidate_carries_recent_low(monkeypatch, test_settings):
     """Item #65 (08/03): same window (25) as the golden-pocket watch and the
     standard BUY path -- min(low) over the 25-candle varying-low fixture."""
