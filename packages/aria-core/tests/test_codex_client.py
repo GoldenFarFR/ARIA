@@ -1,8 +1,8 @@
-"""Tests for the Codex.io client (GraphQL getBars, Item #185, 29/07) -- new
-OHLCV cascade tier inserted between DexPaprika and the DexScreener degraded
-synthesis. No real network call, everything is mocked -- no
-``CODEX_IO_API_KEY`` exists in this environment (see the module's own
-docstring), so this client has never been exercised against the real API."""
+"""Tests for the Codex.io client (GraphQL getBars, Item #185, 29/07) -- OHLCV
+cascade tier inserted between DexPaprika and the DexScreener degraded
+synthesis; scalping ladder + monthly scalping sub-budget added 04/08. No real
+network call here, everything is mocked (the client itself was live-verified
+in prod on 04/08 -- see the module's own docstring)."""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ async def test_get_ohlcv_rejects_unmapped_chain(monkeypatch):
 async def test_get_ohlcv_skips_network_when_monthly_cap_reached(monkeypatch):
     monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
 
-    async def _cap_reached():
+    async def _cap_reached(*, mode="standard"):
         return True
 
     monkeypatch.setattr(codex, "_monthly_cap_reached", _cap_reached)
@@ -297,3 +297,90 @@ async def test_successful_call_records_a_request(monkeypatch):
     _patch_client(monkeypatch, FakeResponse(200, _bars_payload(30)))
     await codex.get_ohlcv(POOL, network="base")
     assert await codex._requests_this_month() == 1
+
+
+# ── scalping ladder + monthly scalping sub-budget (04/08) ───────────────────
+
+@pytest.mark.asyncio
+async def test_scalping_mode_walks_15m_then_30m_ladder(monkeypatch):
+    monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
+    fake = _patch_client(
+        monkeypatch,
+        [FakeResponse(200, {"data": {"getBars": None}}), FakeResponse(200, _bars_payload(30))],
+    )
+    result = await codex.get_ohlcv(POOL, network="base", mode="scalping")
+    assert result.available is True
+    assert len(result.candles) == 30
+    resolutions = [call["json"]["variables"]["resolution"] for call in fake.calls]
+    assert resolutions == ["15", "30"]
+
+
+@pytest.mark.asyncio
+async def test_scalping_mode_never_touches_standard_ladder(monkeypatch):
+    monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
+    fake = _patch_client(monkeypatch, FakeResponse(200, {"data": {"getBars": None}}))
+    result = await codex.get_ohlcv(POOL, network="base", mode="scalping")
+    assert result.available is False
+    resolutions = [call["json"]["variables"]["resolution"] for call in fake.calls]
+    assert resolutions == ["15", "30"]
+    assert not set(resolutions) & {"1D", "240", "60"}
+
+
+@pytest.mark.asyncio
+async def test_scalping_requests_counted_in_their_own_slice(monkeypatch):
+    monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
+    _patch_client(monkeypatch, FakeResponse(200, _bars_payload(30)))
+    await codex.get_ohlcv(POOL, network="base", mode="scalping")
+    assert await codex._requests_this_month(mode="scalping") == 1
+    assert await codex._requests_this_month(mode="standard") == 0
+    assert await codex._requests_this_month() == 1
+
+
+@pytest.mark.asyncio
+async def test_scalping_sub_budget_fails_closed_but_standard_continues(monkeypatch):
+    """The decisive invariant: a spent scalping slice blocks ONLY the
+    scalping ladder -- standard-mode calls keep going up to the global cap."""
+    monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
+    monkeypatch.setattr(codex, "_MONTHLY_SCALPING_CAP", 2)
+    await codex._record_request(mode="scalping")
+    await codex._record_request(mode="scalping")
+
+    fake = _patch_client(monkeypatch, FakeResponse(200, _bars_payload(30)))
+    blocked = await codex.get_ohlcv(POOL, network="base", mode="scalping")
+    assert blocked.available is False
+    assert "plafond mensuel" in (blocked.error or "")
+    assert fake.calls == []  # no network call once the slice is spent
+
+    still_ok = await codex.get_ohlcv(POOL, network="base", mode="standard")
+    assert still_ok.available is True
+
+
+@pytest.mark.asyncio
+async def test_global_cap_blocks_scalping_too(monkeypatch):
+    monkeypatch.setenv("CODEX_IO_API_KEY", "fake-key-value")
+    monkeypatch.setattr(codex, "_MONTHLY_REQUEST_CAP", 1)
+    await codex._record_request(mode="standard")
+    fake = _patch_client(monkeypatch, FakeResponse(200, _bars_payload(30)))
+    result = await codex.get_ohlcv(POOL, network="base", mode="scalping")
+    assert result.available is False
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mode_column_soft_migration_from_legacy_table():
+    """A table created by the pre-04/08 schema (single column) must migrate
+    in place, with legacy rows counted as 'standard'."""
+    import aiosqlite
+
+    async with aiosqlite.connect(codex.DB_PATH) as db:
+        await db.execute("CREATE TABLE codex_request_log (requested_at TEXT NOT NULL)")
+        await db.execute(
+            "INSERT INTO codex_request_log (requested_at) VALUES (?)",
+            (codex._month_start().isoformat(),),
+        )
+        await db.commit()
+
+    await codex._record_request(mode="scalping")
+    assert await codex._requests_this_month() == 2
+    assert await codex._requests_this_month(mode="standard") == 1
+    assert await codex._requests_this_month(mode="scalping") == 1

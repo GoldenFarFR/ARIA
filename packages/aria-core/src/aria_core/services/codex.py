@@ -39,15 +39,22 @@ before use (never assumed from marketing docs, same doctrine as dexpaprika.py):
   fails CLOSED on this provider only (skip Codex, the cascade degrades to
   the next tier) once the cap is reached, never blocking.
 
-NOT YET LIVE-TESTED against a real API key (per the project's "verify before
-affirming" doctrine, every new external client should be) -- no
-``CODEX_IO_API_KEY`` exists in this environment as of 29/07. Same pattern
-already accepted in this project for Webacy (committed dormant, gated by key
-absence, ``codex_configured()`` returns False and every caller already
-degrades gracefully in that case -- same pattern as ``mobula_configured()``).
-Whoever adds a real key must re-verify this client against one live call
-before trusting it in production (schema drift on an external GraphQL API is
-a real risk this diligence cannot rule out from docs alone).
+LIVE-TESTED on 04/08 (real key in prod since then -- the "NOT YET
+LIVE-TESTED" caveat that stood here from 29/07 is resolved): real calls from
+the prod container returned 241 candles on the reference Base pool AND, the
+decisive part, real candles on two low-volume pools invisible to DexPaprika
+(ROBO $21k/24h: 159 candles standard + 101 real 15m candles fresh to ~3min;
+Anon $4.7k/24h: 241 candles) -- this provider has the best small-cap
+coverage of the whole cascade, which is exactly why the scalping ladder
+below exists despite the scarce budget.
+
+Scalping ladder (04/08, operator "go"): ``mode="scalping"`` requests real
+15m -> 30m bars, wired as the LAST tier of the scalping cascade (after
+GeckoTerminal/Mobula/DexPaprika) in ``momentum_entry``. Guarded by its own
+monthly sub-budget (``_MONTHLY_SCALPING_CAP``, a slice INSIDE the global
+cap, never in addition to it): once the slice is spent, scalping calls fail
+closed (skip, cascade degrades) while standard-mode calls continue up to
+the global cap -- the standard tier keeps priority on this scarce budget.
 
 "Dome" doctrine (identical to dexpaprika.py/mobula.py):
 - 429: exponential backoff, 3 attempts max, then give up without blocking.
@@ -97,11 +104,24 @@ _throttle_lock = asyncio.Lock()
 # this provider's last-resort position (see module docstring).
 _MONTHLY_REQUEST_CAP = 9_500
 
+# 04/08 -- scalping sub-budget: a SLICE of the global cap above (never in
+# addition to it) reserved for the scalping ladder. Sized so a fully-spent
+# slice still leaves 5,500+ requests/month to the standard tier (which was
+# consuming <1,000/month when this was added). Scalping calls fail closed
+# (skip) once the slice is spent; standard calls only stop at the global cap.
+_MONTHLY_SCALPING_CAP = 4_000
+
 _STANDARD_LADDER: tuple[str, ...] = ("1D", "240", "60")  # day -> 4h -> 1h
+# 15m first (matches the scalping candle width used by every variant), 30m
+# as the explicit degradation -- mirrors the Mobula/DexPaprika scalping
+# ladders in this same cascade.
+_SCALPING_LADDER: tuple[str, ...] = ("15", "30")
 _MIN_USEFUL_CANDLES = 20
 _CANDLES_TO_REQUEST = 120
 _WINDOW_SAFETY_FACTOR = 2.0
-_RESOLUTION_SECONDS: dict[str, int] = {"1D": 86400, "240": 14400, "60": 3600}
+_RESOLUTION_SECONDS: dict[str, int] = {
+    "1D": 86400, "240": 14400, "60": 3600, "30": 1800, "15": 900,
+}
 
 
 def codex_configured() -> bool:
@@ -113,6 +133,15 @@ async def _ensure_table() -> None:
         await db.execute(
             "CREATE TABLE IF NOT EXISTS codex_request_log (requested_at TEXT NOT NULL)"
         )
+        # 04/08 -- soft migration for the scalping sub-budget: rows written
+        # before this column existed default to 'standard', which is exactly
+        # what they all were (the scalping ladder didn't exist yet).
+        try:
+            await db.execute(
+                "ALTER TABLE codex_request_log ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard'"
+            )
+        except aiosqlite.OperationalError:
+            pass  # column already exists
         await db.commit()
 
 
@@ -121,28 +150,45 @@ def _month_start(now: datetime | None = None) -> datetime:
     return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-async def _requests_this_month(now: datetime | None = None) -> int:
+async def _requests_this_month(now: datetime | None = None, *, mode: str | None = None) -> int:
+    """Total requests this month; ``mode`` restricts the count to one
+    ladder's slice (``"scalping"``), ``None`` counts everything (the global
+    cap's view)."""
     await _ensure_table()
     start = _month_start(now)
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM codex_request_log WHERE requested_at >= ?",
-            (start.isoformat(),),
-        )
+        if mode is None:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM codex_request_log WHERE requested_at >= ?",
+                (start.isoformat(),),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM codex_request_log WHERE requested_at >= ? AND mode = ?",
+                (start.isoformat(), mode),
+            )
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
 
-async def _record_request(now: datetime | None = None) -> None:
+async def _record_request(now: datetime | None = None, *, mode: str = "standard") -> None:
     await _ensure_table()
     ts = (now or datetime.now(timezone.utc)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO codex_request_log (requested_at) VALUES (?)", (ts,))
+        await db.execute(
+            "INSERT INTO codex_request_log (requested_at, mode) VALUES (?, ?)", (ts, mode)
+        )
         await db.commit()
 
 
-async def _monthly_cap_reached() -> bool:
-    return await _requests_this_month() >= _MONTHLY_REQUEST_CAP
+async def _monthly_cap_reached(*, mode: str = "standard") -> bool:
+    """Global cap applies to every call; scalping additionally fails closed
+    on its own sub-budget slice (see ``_MONTHLY_SCALPING_CAP``)."""
+    if await _requests_this_month() >= _MONTHLY_REQUEST_CAP:
+        return True
+    if mode == "scalping":
+        return await _requests_this_month(mode="scalping") >= _MONTHLY_SCALPING_CAP
+    return False
 
 
 async def _throttle() -> None:
@@ -154,7 +200,9 @@ async def _throttle() -> None:
         _last_call_at = time.monotonic()
 
 
-async def _graphql_query(query: str, variables: dict) -> tuple[dict | None, str | None]:
+async def _graphql_query(
+    query: str, variables: dict, *, mode: str = "standard"
+) -> tuple[dict | None, str | None]:
     """POST with the same dome retry policy as the rest of the OHLCV
     cascade. Returns (data, error) -- ``data`` is the ``data`` field of the
     GraphQL response, never the raw envelope."""
@@ -203,7 +251,7 @@ async def _graphql_query(query: str, variables: dict) -> tuple[dict | None, str 
             logger.warning("codex: %s", exc)
             return None, f"{UNAVAILABLE} ({exc})"
 
-        await _record_request()
+        await _record_request(mode=mode)
         payload = response.json()
         if not isinstance(payload, dict):
             return None, f"{UNAVAILABLE} (reponse illisible)"
@@ -275,11 +323,14 @@ query GetBars($symbol: String!, $from: Int!, $to: Int!, $resolution: String!) {
 """
 
 
-async def _fetch_one_resolution(pool_address: str, network_id: int, resolution: str) -> list[Candle]:
+async def _fetch_one_resolution(
+    pool_address: str, network_id: int, resolution: str, *, mode: str = "standard"
+) -> list[Candle]:
     start, end = _compute_window(resolution, _CANDLES_TO_REQUEST)
     data, error = await _graphql_query(
         _GET_BARS_QUERY,
         {"symbol": f"{pool_address}:{network_id}", "from": start, "to": end, "resolution": resolution},
+        mode=mode,
     )
     if error is not None:
         logger.info("codex: %s:%s (%s) failed -- %s", pool_address[:10], network_id, resolution, error)
@@ -287,12 +338,14 @@ async def _fetch_one_resolution(pool_address: str, network_id: int, resolution: 
     return _parse_bars(data)
 
 
-async def get_ohlcv(pool_address: str, *, network: str = "base") -> OHLCVResult:
+async def get_ohlcv(pool_address: str, *, network: str = "base", mode: str = "standard") -> OHLCVResult:
     """Real OHLCV candles for ``pool_address`` on ``network`` -- last real-
     candle tier of the cascade (never primary, see module docstring).
-    Standard mode only (day/4h/1h ladder) -- never wired into the scalping
-    ladder, this provider's monthly budget is too scarce to spend on the
-    much higher call volume a short-cycle scalping path would generate."""
+    ``mode="standard"`` walks the day/4h/1h ladder under the global monthly
+    cap; ``mode="scalping"`` (04/08) walks the real 15m/30m ladder and
+    additionally fails closed on its own sub-budget slice
+    (``_MONTHLY_SCALPING_CAP``) so the scalping call volume can never starve
+    the standard tier of this scarce budget."""
     if not codex_configured():
         return OHLCVResult(candles=[], available=False, error=f"{UNAVAILABLE} (non configure)")
 
@@ -300,13 +353,17 @@ async def get_ohlcv(pool_address: str, *, network: str = "base") -> OHLCVResult:
     if network_id is None:
         return OHLCVResult(candles=[], available=False, error=f"{UNAVAILABLE} (chaine {network} non mappee)")
 
-    if await _monthly_cap_reached():
-        logger.info("codex: monthly request cap reached (%s) -- skipping this call", _MONTHLY_REQUEST_CAP)
+    if await _monthly_cap_reached(mode=mode):
+        logger.info(
+            "codex: monthly request cap reached (global %s, scalping slice %s, mode=%s) -- skipping this call",
+            _MONTHLY_REQUEST_CAP, _MONTHLY_SCALPING_CAP, mode,
+        )
         return OHLCVResult(candles=[], available=False, error=f"{UNAVAILABLE} (plafond mensuel atteint)")
 
+    ladder = _SCALPING_LADDER if mode == "scalping" else _STANDARD_LADDER
     best: list[Candle] = []
-    for resolution in _STANDARD_LADDER:
-        candles = await _fetch_one_resolution(pool_address, network_id, resolution)
+    for resolution in ladder:
+        candles = await _fetch_one_resolution(pool_address, network_id, resolution, mode=mode)
         if not candles:
             continue
         if len(candles) >= _MIN_USEFUL_CANDLES:
