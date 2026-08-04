@@ -112,12 +112,21 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # OHLCV fallback cascade (_fetch_candles: DexPaprika/CoinMarketCap/Mobula/
 # Codex.io/DexScreener/Dune) was confirmed absorbing a GeckoTerminal 429
 # cleanly -- two live 429s minutes before this change both got real 15min
-# candles from Mobula within ~300ms, zero pipeline impact. Still NOT the
-# burst-controlled empirical measurement task #41 calls for -- an
-# operator-directed live test leaning on the now-confirmed cascade safety
-# net, to be walked back if a sustained 429 rate (not an isolated one)
-# shows up post-deploy.
-_AUTHENTICATED_MIN_INTERVAL = 0.8
+# candles from Mobula within ~300ms, zero pipeline impact.
+#
+# 04/08, minutes later -- REVERTED. The adaptive per-provider circuit
+# breaker (_PROVIDER_FAIL_THRESHOLD=3, see momentum_entry.py) tripped within
+# ~10s of deploy and stayed open (repeated "paused" log lines) for the
+# entire observation window -- a SUSTAINED, not isolated, 429 rate, exactly
+# the rollback trigger this comment named. Operator also flagged a real,
+# already-lived risk this change didn't weigh enough: GeckoTerminal sits
+# behind Cloudflare, and a sustained aggressive rate risks a Cloudflare-level
+# IP block (the 08/01 incident above), which is far worse and longer-lived
+# than an API 429 -- not a risk to re-test casually. Back to the
+# already-stable 15 req/min. The burst-controlled empirical measurement
+# (task #41) remains the right way to find the real ceiling -- a bounded,
+# monitored test script, not a permanent throttle change applied live.
+_AUTHENTICATED_MIN_INTERVAL = 4.0
 
 
 def geckoterminal_authenticated() -> bool:
@@ -181,9 +190,11 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # 08/02 (later same day) -- widened again alongside _AUTHENTICATED_MIN_INTERVAL,
 # same reason, same invariant.
 #
-# 04/08 -- widened alongside _AUTHENTICATED_MIN_INTERVAL (same operator
-# decision, see its comment), same invariant kept intact.
-_MIN_INTERVAL = 0.8
+# 04/08 -- widened, then REVERTED minutes later alongside
+# _AUTHENTICATED_MIN_INTERVAL (same operator decision/incident, see its
+# comment: circuit breaker tripped sustained, Cloudflare-block risk flagged
+# by the operator), same invariant kept intact.
+_MIN_INTERVAL = 4.0
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
