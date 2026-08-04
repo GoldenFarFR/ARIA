@@ -242,3 +242,16 @@ async def test_get_ohlcv_degrades_gracefully_on_invalid_interval_error(monkeypat
 
     assert result.available is False
     assert result.candles == []
+
+
+class TestAuthHeaders:
+    """04/08 -- optional free-tier key, read from the environment only.
+    Uses a throwaway value, never a real key."""
+
+    def test_no_key_env_var_returns_empty_headers(self, monkeypatch):
+        monkeypatch.delenv("DEXPAPRIKA_API_KEY", raising=False)
+        assert dp._auth_headers() == {}
+
+    def test_key_present_returns_raw_authorization_header(self, monkeypatch):
+        monkeypatch.setenv("DEXPAPRIKA_API_KEY", "test-key-123")
+        assert dp._auth_headers() == {"Authorization": "test-key-123"}

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -105,17 +106,28 @@ def _compute_start(interval: str, limit: int) -> str:
     return start_dt.strftime("%Y-%m-%d")
 
 
+def _auth_headers() -> dict[str, str]:
+    """04/08 -- optional free-tier key (DEXPAPRIKA_API_KEY), read from the
+    environment only, never logged/displayed. Keyless calls remain the
+    default (this tier works without one, see module docstring); when
+    present, the key is sent exactly as their dashboard shows it: a raw
+    Authorization header, no "Bearer " prefix."""
+    key = os.environ.get("DEXPAPRIKA_API_KEY", "").strip()
+    return {"Authorization": key} if key else {}
+
+
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
     """GET with retry on 429/5xx/timeout -- same policy as the rest of the dome."""
     url = f"{BASE_URL}{path}"
     attempt_429 = 0
     timeout_retried = False
+    headers = _auth_headers()
 
     while True:
         await _throttle()
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(url, params=params)
+                response = await client.get(url, params=params, headers=headers)
         except httpx.TransportError as exc:
             if not timeout_retried:
                 timeout_retried = True
