@@ -235,37 +235,57 @@ async def resolve_primary_pool(token_address: str, *, network_slug: str = "base"
     return PoolMetadata(pool_address=str(pool_address), created_at=created_at, available=True, error=None)
 
 
-async def get_ohlcv(pool_address: str, *, network_slug: str = "base") -> OHLCVResult:
-    """OHLCV candles for ``pool_address`` via ``/v1/k-line/candles``. Tolerant
-    parsing (schema not confirmed live, cf. module docstring): accepts several
-    plausible field names, any unexpected shape -> `available=False`, never a
-    fabricated candle."""
+async def get_ohlcv(contract_address: str, *, network_slug: str = "base") -> OHLCVResult:
+    """OHLCV candles for the TOKEN ``contract_address`` (never a pool/pair
+    address, see 04/08 note below) via ``/v1/k-line/candles``.
+
+    04/08 -- two real bugs found live, both confirmed against real requests
+    (operator OHLCV-cascade quality audit), not from docs alone:
+    1. Wrong parameter names caused a sustained HTTP 500 (reproduced
+       on-demand, not a transient outage): ``network_slug``/
+       ``contract_address``/``time_period="hourly"`` were never this
+       endpoint's real parameters. Official docs (coinmarketcap.com/api/
+       documentation/pro-api-reference/ohlcv) confirm the real ones:
+       ``platform`` ("Platform name or id"), ``address`` ("Token or pool
+       address"), ``interval`` (enum including "1h", not "hourly").
+    2. Even with correct parameter names, passing the POOL/pair address
+       (as every other provider in this cascade expects) silently returned
+       real-looking but YEAR-STALE data (confirmed live: last candle dated
+       2025-07-29 against a request made 2026-08-04) -- worse than the 500,
+       since a stale-but-well-formed response looks like a success. Passing
+       the TOKEN contract address instead resolves to live, current data
+       (confirmed live: last candle within the current hour, close price
+       matching the live pair quote within normal noise). This confirms the
+       module's own docstring warning ("schema not confirmed live") -- this
+       path had never actually been exercised against a real successful,
+       FRESH response before now.
+
+    Row shape is a positional array, not a dict, also never confirmed live
+    before now: ``[open, high, low, close, volume, ts_ms, trader_count]``."""
     data, error = await _get_json(
-        "/v1/k-line/candles", params={"network_slug": network_slug, "contract_address": pool_address, "time_period": "hourly"}
+        "/v1/k-line/candles", params={"platform": network_slug, "address": contract_address, "interval": "1h"}
     )
     if error is not None:
         return OHLCVResult(candles=[], available=False, error=error)
 
     raw_candles = data.get("data")
-    if isinstance(raw_candles, dict):
-        raw_candles = raw_candles.get("quotes") or raw_candles.get("candles")
     if not isinstance(raw_candles, list) or not raw_candles:
         return OHLCVResult(candles=[], available=False, error=f"{UNAVAILABLE} (aucune bougie)")
 
     candles: list[Candle] = []
     for row in raw_candles:
-        if not isinstance(row, dict):
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
             continue
         try:
-            ts_raw = row.get("timestamp") or row.get("time_open") or row.get("ts")
+            o = float(row[0])
+            h = float(row[1])
+            l = float(row[2])
+            c = float(row[3])
+            v = float(row[4] or 0.0)
+            ts_raw = row[5]
             ts = int(ts_raw) if ts_raw is not None else None
             if ts is not None and ts > 10_000_000_000:  # milliseconds -> seconds
                 ts //= 1000
-            o = float(row.get("open"))
-            h = float(row.get("high"))
-            l = float(row.get("low"))
-            c = float(row.get("close"))
-            v = float(row.get("volume") or 0.0)
         except (TypeError, ValueError):
             continue
         if ts is None:

@@ -2024,7 +2024,12 @@ async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
 
-    result = await me._fetch_candles("0xpool", "base")
+    # 04/08 -- CoinMarketCap now requires the TOKEN contract address (real
+    # bug found live: the pool address silently returned year-stale data,
+    # see coinmarketcap.get_ohlcv's own docstring) -- guarded on `contract`
+    # being non-empty, so it must be passed here for this tier to even be
+    # attempted.
+    result = await me._fetch_candles("0xpool", "base", contract="0xtoken")
     assert result == cmc_candles
 
 
@@ -2857,13 +2862,15 @@ async def test_fetch_candles_provider_cooldown_skips_after_threshold_failures(mo
         # otherwise short-circuit repeat calls after CoinMarketCap's own
         # (non-empty) fallback result -- cleared each iteration so this test
         # keeps exercising REAL repeated calls, its whole point, independent
-        # of that unrelated optimization.
+        # of that unrelated optimization. `contract=` also now required for
+        # CoinMarketCap to be attempted at all (real bug fix, see
+        # test_fetch_candles_falls_back_to_coinmarketcap's own comment).
         me._candles_cache.clear()
-        await me._fetch_candles("0xpool", "base")
+        await me._fetch_candles("0xpool", "base", contract="0xtoken")
     assert gt_calls == 3  # les 3 premiers échecs déclenchent bien la pause
 
     me._candles_cache.clear()
-    result = await me._fetch_candles("0xpool", "base")
+    result = await me._fetch_candles("0xpool", "base", contract="0xtoken")
     assert result == cmc_candles
     assert gt_calls == 3  # 4e appel : GeckoTerminal sauté, pas retenté
 

@@ -1880,9 +1880,15 @@ async def _fetch_candles_impl(
 
     from aria_core.services import coinmarketcap
 
-    if not _provider_in_cooldown("coinmarketcap"):
+    # 04/08 -- real bug found live: this endpoint needs the TOKEN contract
+    # address, never the pool/pair address every other provider in this
+    # cascade expects -- passing the pool address silently returned
+    # real-looking but YEAR-STALE data (see coinmarketcap.get_ohlcv's own
+    # docstring for the live-confirmed detail). Guarded on `contract` being
+    # non-empty, same doctrine as the Mobula guard right below.
+    if contract and not _provider_in_cooldown("coinmarketcap"):
         try:
-            cmc_result = await coinmarketcap.get_ohlcv(pool_address, network_slug=chain)
+            cmc_result = await coinmarketcap.get_ohlcv(contract, network_slug=chain)
         except Exception as exc:  # noqa: BLE001
             logger.info("_fetch_candles: CoinMarketCap (fallback) %s/%s failed (%s)", chain, pool_address[:10], exc)
             cmc_result = None

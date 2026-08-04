@@ -236,6 +236,18 @@ class TestResolvePrimaryPool:
 
 
 class TestGetOhlcv:
+    """04/08 -- real bug found live (operator OHLCV-cascade quality audit):
+    every fixture below used to encode a dict-shaped row
+    (``{"timestamp": ..., "open": ...}``) and the pool/pair address as the
+    request target. Neither matches reality, confirmed live: the real row
+    shape is a POSITIONAL ARRAY (``[open, high, low, close, volume, ts_ms,
+    trader_count]``), and the endpoint silently returns real-looking but
+    YEAR-STALE data when given a pool address instead of the TOKEN contract
+    address (see coinmarketcap.get_ohlcv's own docstring). Fixtures rewritten
+    to match the confirmed-live shape -- this file's own header comment
+    ("aucun appel réseau réel, tout est mocké") is exactly why this drifted
+    undetected: nothing here was ever cross-checked against a real response."""
+
     @pytest.mark.asyncio
     async def test_parses_candles_and_sorts_by_timestamp(self, monkeypatch):
         monkeypatch.delenv("COINMARKETCAP_API_KEY", raising=False)
@@ -246,15 +258,15 @@ class TestGetOhlcv:
                     200,
                     _envelope(
                         [
-                            {"timestamp": 200, "open": 2.0, "high": 2.5, "low": 1.9, "close": 2.2, "volume": 500.0},
-                            {"timestamp": 100, "open": 1.0, "high": 1.5, "low": 0.9, "close": 1.2, "volume": 1000.0},
+                            [2.0, 2.5, 1.9, 2.2, 500.0, 200, None],
+                            [1.0, 1.5, 0.9, 1.2, 1000.0, 100, None],
                         ]
                     ),
                 )
             ],
         )
 
-        result = await cmc.get_ohlcv("0xpool")
+        result = await cmc.get_ohlcv("0xtoken")
 
         assert result.available is True
         assert [c.ts for c in result.candles] == [100, 200]
@@ -267,14 +279,12 @@ class TestGetOhlcv:
             [
                 FakeResponse(
                     200,
-                    _envelope(
-                        [{"timestamp": 1_700_000_000_000, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}]
-                    ),
+                    _envelope([[1, 1, 1, 1, 1, 1_700_000_000_000, None]]),
                 )
             ],
         )
 
-        result = await cmc.get_ohlcv("0xpool")
+        result = await cmc.get_ohlcv("0xtoken")
 
         assert result.available is True
         assert result.candles[0].ts == 1_700_000_000
@@ -284,7 +294,7 @@ class TestGetOhlcv:
         monkeypatch.delenv("COINMARKETCAP_API_KEY", raising=False)
         _patch_client(monkeypatch, [FakeResponse(200, _envelope([]))])
 
-        result = await cmc.get_ohlcv("0xpool")
+        result = await cmc.get_ohlcv("0xtoken")
 
         assert result.available is False
         assert result.candles == []
@@ -299,15 +309,15 @@ class TestGetOhlcv:
                     200,
                     _envelope(
                         [
-                            {"timestamp": "not-a-number", "open": 1, "high": 1, "low": 1, "close": 1},
-                            {"timestamp": 100, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 10.0},
+                            ["not-a-number", 1, 1, 1, 1, 50, None],  # open unparseable
+                            [1.0, 1.1, 0.9, 1.05, 10.0, 100, None],
                         ]
                     ),
                 )
             ],
         )
 
-        result = await cmc.get_ohlcv("0xpool")
+        result = await cmc.get_ohlcv("0xtoken")
 
         assert result.available is True
         assert len(result.candles) == 1
@@ -318,7 +328,21 @@ class TestGetOhlcv:
         monkeypatch.delenv("COINMARKETCAP_API_KEY", raising=False)
         _patch_client(monkeypatch, [FakeResponse(200, _envelope({"unexpected": "shape"}))])
 
-        result = await cmc.get_ohlcv("0xpool")
+        result = await cmc.get_ohlcv("0xtoken")
 
         assert result.available is False
         assert result.candles == []
+
+    @pytest.mark.asyncio
+    async def test_uses_platform_address_interval_params_not_the_old_wrong_names(self, monkeypatch):
+        """04/08 -- locks in the real parameter names (platform/address/
+        interval), confirmed against official docs after the old ones
+        (network_slug/contract_address/time_period) produced a sustained
+        real HTTP 500, reproduced on-demand."""
+        monkeypatch.delenv("COINMARKETCAP_API_KEY", raising=False)
+        holder = _patch_client(monkeypatch, [FakeResponse(200, _envelope([]))])
+
+        await cmc.get_ohlcv("0xtoken", network_slug="base")
+
+        url, params, _ = holder["calls"][0]
+        assert params == {"platform": "base", "address": "0xtoken", "interval": "1h"}
