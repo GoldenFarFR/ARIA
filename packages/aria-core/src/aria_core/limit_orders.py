@@ -124,7 +124,9 @@ def _now() -> str:
 _MIN_HISTORICAL_TRIGGER_SAMPLE = 10
 
 
-async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int]:
+async def historical_trigger_rate(
+    reason: str | None, *, wallet: str | None = None,
+) -> tuple[float | None, int]:
     """Real historical rate (Item #227, 30/07) at which a pending limit order
     tagged ``limit_order_reason == reason`` (``None`` for the price-drift
     path, #175, which never tags one) went on to actually TRIGGER, among
@@ -136,9 +138,25 @@ async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int
     as exactly that, an honest base rate, never framed as a forecast for the
     order it's shown on.
 
+    ``wallet`` (08/04, real gap found live on scalping_v7's very first
+    order): the rate used to aggregate across EVERY pocket sharing the same
+    ``reason`` -- for ``rsi_divergence_pending``, that meant v6/swing/megacap
+    (the operator-validated 15-20 RSI-watch span) and the brand-new v7 (4-10
+    span, zero resolved orders of its own) were silently pooled together, so
+    v7's first order displayed a rate (~4%) that reflected the OLD window's
+    behavior, not its own -- misleading, since the whole point of v7 is that
+    its window is expected to behave differently. ``None`` (default) keeps
+    the historical cross-pocket aggregate for any caller that doesn't scope
+    it (unchanged behavior). When given, filters on the real SQL ``wallet``
+    column (a native field on ``pending_limit_order``, unlike ``reason``
+    which only lives inside ``signal_json``) -- cheaper AND correct, never
+    silently blended across pockets that use a different trigger window.
+
     Returns ``(None, sample_size)`` if the sample is below
     ``_MIN_HISTORICAL_TRIGGER_SAMPLE`` -- never a rate computed on too few
-    data points to mean anything.
+    data points to mean anything (a fresh pocket like v7 will correctly show
+    "pas assez d'historique" rather than a borrowed number from another
+    pocket's window).
 
     Item #250 (30/07): orders resolved before the last
     ``reset_historical_trigger_rate()`` call (if any) are excluded -- see
@@ -152,11 +170,14 @@ async def historical_trigger_rate(reason: str | None) -> tuple[float | None, int
                 cutoff = row[0]
 
         query = "SELECT state, signal_json FROM pending_limit_order WHERE state IN ('triggered', 'cancelled', 'expired')"
-        params: tuple = ()
+        params: list = []
         if cutoff:
             query += " AND resolved_at >= ?"
-            params = (cutoff,)
-        async with db.execute(query, params) as cur:
+            params.append(cutoff)
+        if wallet is not None:
+            query += " AND wallet = ?"
+            params.append(wallet)
+        async with db.execute(query, tuple(params)) as cur:
             rows = await cur.fetchall()
 
     triggered = 0

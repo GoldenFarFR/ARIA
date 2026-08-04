@@ -2210,6 +2210,60 @@ async def test_historical_trigger_rate_ignores_still_active_orders():
 
 
 @pytest.mark.asyncio
+async def test_historical_trigger_rate_scoped_by_wallet_never_pools_other_pockets():
+    """08/04, real gap found live on scalping_v7's very first order: the rate
+    used to aggregate across EVERY pocket sharing the same reason -- v6/swing
+    (15-20 RSI-watch window) and v7 (4-10 window, its own separate trigger
+    behavior) were silently pooled together, displaying v6's history on v7's
+    brand-new order. wallet=None (default) must still return the old
+    cross-pocket aggregate, unchanged for any caller that doesn't scope it."""
+    await lo._ensure_table()
+    for i in range(10):
+        order = await lo.create_pending_order(
+            f"0xV6-{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+            wallet="scalping_v6",
+        )
+        await lo.mark_triggered(order["id"])
+    for i in range(10):
+        order = await lo.create_pending_order(
+            f"0xV7-{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+            wallet="scalping_v7",
+        )
+        await lo.mark_cancelled(order["id"], "invalidation_crossed")
+
+    v6_rate, v6_total = await lo.historical_trigger_rate("rsi_divergence_pending", wallet="scalping_v6")
+    assert v6_total == 10
+    assert v6_rate == pytest.approx(1.0)
+
+    v7_rate, v7_total = await lo.historical_trigger_rate("rsi_divergence_pending", wallet="scalping_v7")
+    assert v7_total == 10
+    assert v7_rate == pytest.approx(0.0)
+
+    # Unscoped (wallet=None, default) -- unchanged historical aggregate behavior.
+    combined_rate, combined_total = await lo.historical_trigger_rate("rsi_divergence_pending")
+    assert combined_total == 20
+    assert combined_rate == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_historical_trigger_rate_wallet_scoped_below_min_sample_returns_none():
+    """A fresh pocket with zero (or too few) resolved orders of its own must
+    show 'not enough data' even when the UNSCOPED aggregate would have had
+    plenty -- never borrow another pocket's sample size to clear the floor."""
+    await lo._ensure_table()
+    for i in range(20):
+        order = await lo.create_pending_order(
+            f"0xV6-{i}", "base", "T", 1.0, {"limit_order_reason": "rsi_divergence_pending"},
+            wallet="scalping_v6",
+        )
+        await lo.mark_triggered(order["id"])
+
+    rate, total = await lo.historical_trigger_rate("rsi_divergence_pending", wallet="scalping_v7")
+    assert rate is None
+    assert total == 0
+
+
+@pytest.mark.asyncio
 async def test_reset_historical_trigger_rate_excludes_orders_resolved_before_reset():
     """Item #250 (30/07), operator request ("reset les taux de déclenchement
     historique") after several same-day pipeline changes made the displayed

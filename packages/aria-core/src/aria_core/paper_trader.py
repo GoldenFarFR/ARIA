@@ -4357,7 +4357,7 @@ async def _open_new_entries_for_wallet(
                         # orders, triggered vs cancelled/expired), never a
                         # per-candidate forecast.
                         hist_rate, hist_sample = await limit_orders.historical_trigger_rate(
-                            order_sig.get("limit_order_reason"),
+                            order_sig.get("limit_order_reason"), wallet=wallet,
                         )
                         order_sig["historical_trigger_rate"] = hist_rate
                         order_sig["historical_trigger_sample"] = hist_sample
@@ -4574,7 +4574,7 @@ async def _open_new_entries_for_wallet(
                         # orders, triggered vs cancelled/expired), never a
                         # per-candidate forecast.
                         hist_rate, hist_sample = await limit_orders.historical_trigger_rate(
-                            order_sig.get("limit_order_reason"),
+                            order_sig.get("limit_order_reason"), wallet=wallet,
                         )
                         order_sig["historical_trigger_rate"] = hist_rate
                         order_sig["historical_trigger_sample"] = hist_sample
