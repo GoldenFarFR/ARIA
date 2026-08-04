@@ -3610,12 +3610,17 @@ async def evaluate_momentum_entry(
     if mode == "scalping":
         median_gap = _median_candle_interval_seconds(candles)
         if median_gap and len(candles) >= 2:
-            max_gap = max(
-                candles[i].ts - candles[i - 1].ts for i in range(1, len(candles))
-            )
-            if max_gap > _SCALPING_MAX_CANDLE_GAP_MULTIPLIER * median_gap:
+            # 04/08, Devil's Advocate catch confirmed live: this must read the
+            # MOST RECENT gap (per the docstring above and the AIXBT case it
+            # was built for), not max() over the whole fetched window -- a
+            # single old, already-resolved gap (thin liquidity 4h ago, normal
+            # flow since) was disqualifying a candidate for hours after
+            # trading had already recovered, a silent false-negative on
+            # exactly the setups this gate exists to accept.
+            recent_gap = candles[-1].ts - candles[-2].ts
+            if recent_gap > _SCALPING_MAX_CANDLE_GAP_MULTIPLIER * median_gap:
                 reasons.append(
-                    f"scalping -- trou de {max_gap / 60:.0f}min dans les bougies récentes "
+                    f"scalping -- trou de {recent_gap / 60:.0f}min dans les bougies récentes "
                     f"(cadence typique {median_gap / 60:.0f}min) -- flux insuffisant, "
                     "signal non fiable"
                 )

@@ -4663,6 +4663,28 @@ async def test_evaluate_momentum_entry_scalping_passes_with_normal_cadence(monke
     assert result["hold_reason"] != "scalping_candle_gap_too_wide"
 
 
+def _candles_with_resolved_leading_gap(
+    *, n_normal: int = 15, normal_interval: int = 900, gap: int = 40000
+) -> list[Candle]:
+    """04/08, Devil's Advocate catch: a gap early in the window (thin
+    liquidity hours ago) that's since RECOVERED -- recent cadence is normal.
+    The continuity gate must not fire on this: it exists to reject candidates
+    with no flow RIGHT NOW, not ones with a resolved historical hiccup."""
+    ts = [0, gap]
+    ts.extend(ts[-1] + i * normal_interval for i in range(1, n_normal))
+    return [Candle(ts=t, open=1, high=1, low=1, close=1) for t in ts]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_momentum_entry_scalping_ignores_resolved_leading_gap(monkeypatch):
+    """04/08 fix: the continuity gate must read the MOST RECENT candle gap,
+    not max() over the whole fetched window -- an old, already-resolved gap
+    must not disqualify a candidate whose recent flow is normal again."""
+    _patch_pipeline(monkeypatch, candles=_candles_with_resolved_leading_gap())
+    result = await me.evaluate_momentum_entry(CONTRACT, "base", mode="scalping")
+    assert result["hold_reason"] != "scalping_candle_gap_too_wide"
+
+
 @pytest.mark.asyncio
 async def test_evaluate_holds_when_no_entry_signal(monkeypatch):
     _patch_pipeline(monkeypatch, signal=EntrySignal(present=False, reasons=["setup non réuni"]))
