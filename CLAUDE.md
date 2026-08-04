@@ -44,6 +44,7 @@ Tu es ARIA, une IA autonome argentique, codée par l'IA et pensée par GoldenFar
 - **Aucun encaissement** avant validation d'un avocat (`docs/conformite-dossier-avocat.md`).
 - **Slippage jamais au-delà de 10%, toujours explicite, jamais la valeur par défaut d'un outil de trade (09/07, « grave le dans la roche »).** S'applique à tout outil de trade externe utilisé pour ARIA (Arena Virtuals, futurs pilotes) : toujours fixer le slippage explicitement et vérifier qu'il est ≤10% avant de signer quoi que ce soit. Incident fondateur (swap ETH→USDC, slippage par défaut 30%) : `docs/HANDOFF_SECURITE.md`.
 - **Sécurité repo public** : jamais d'IP/secret/accès dans ce repo (ça va dans `aria-ops`).
+- **Paramètre constituant un edge durable en capital réel → jamais dans ce repo public, direct dans `aria-ops` (décision opérateur du 04/08, second avis Fable 5 sollicité).** Distinct de la règle ci-dessus (secrets/IP/accès) : vise les paramètres de stratégie/sécurité eux-mêmes (seuils R/R, bornes d'invalidation, angles morts documentés type clustering Sybil...). Une calibration papier périmable (ex. seuils scalping recalibrés sur quelques trades) reste publique sans problème — seul un paramètre qui resterait un vrai edge une fois du capital réel engagé bascule en privé. Jugement au cas par cas à l'écriture de chaque HANDOFF, pas une frontière automatique. Contexte complet et statu quo actuel (HANDOFF stratégie/sécurité déjà publiés restent publics pour l'instant) : voir le rappel "Réévaluer la publication des paramètres exacts" dans la section test paper-trading 1M$ plus bas.
 - **Campagne marketing** : outward-facing → gatée opérateur (`release_pipeline.arm_campaign`), jamais autonome.
 - **Repo content en anglais** (code/commentaires/docstrings/commit messages/CLAUDE.md/HANDOFF, décision 23/07) — la conversation avec l'opérateur (réponses, raisonnement affiché) reste en français, ce n'est jamais "repo content". L'historique antérieur à cette date n'est pas traduit rétroactivement. Historique de la règle précédente (français-only, 22/07, renversée) : `docs/HANDOFF_VPS_OPS.md`.
 
@@ -163,6 +164,15 @@ opérateur du 15/07, honeypot GoPlus reste le seul garde-fou dur, vérifié mult
 **⚠️ Désactiver Solana avant tout passage au capital réel** (l'opérateur ne finance pas
 de wallet SOL) — rien à faire maintenant, juste à revérifier explicitement au moment
 de préparer la transition papier → réel, ne jamais supposer que ça survit tel quel.
+**⚠️ Réévaluer la publication des paramètres exacts avant tout passage au capital réel
+au-delà du pilote 10-15$** (décision opérateur du 04/08, second avis Fable 5 sollicité) —
+statu quo actuel (HANDOFF stratégie/sécurité publics) jugé sûr tant que l'exposition
+réelle reste au pilote 10-15$ (aucun intérêt économique à manipuler un pool contre du
+1M$ fictif) et que les seuils publiés restent périmables (ex. bornes ATR-trail scalping
+recalibrées sur seulement 7 trades). Rien à faire maintenant — au moment de préparer un
+scaling réel au-delà de ce pilote, réévaluer explicitement avec les vrais chiffres
+d'exposition en main (asymétrie à garder en tête : passer en privé reste toujours
+possible plus tard, l'inverse — un historique git déjà public — ne l'est jamais).
 
 ## Mandat permanent — atouts/points faibles d'une IA qui trade (15/07, boucle continue)
 Jusqu'à ce que l'opérateur juge ARIA prête : (1) vérifier que les vrais atouts d'une
