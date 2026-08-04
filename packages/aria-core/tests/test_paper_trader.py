@@ -6657,6 +6657,110 @@ async def test_open_new_entries_for_wallet_enforces_per_wallet_cap(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_stops_immediately_when_paused_mid_batch(tmp_db):
+    """04/08, real bug found live (operator: "je vien de faire /off et sa sa
+    tourne encore"): every CALLER of this function only checks paper_pause.
+    is_paused() once, before starting a cycle -- a cycle already past that
+    check when /off flips kept creating positions for its entire candidate
+    batch (confirmed live: 3 scalping_v6 limit orders created 2m44s-4m20s
+    after /off was recorded, during a slow provider-circuit-breaker window).
+    Re-checked HERE, inside the per-candidate loop -- must stop the batch
+    immediately once paused, regardless of how many candidates remain."""
+    from aria_core import paper_pause, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    calls = {"n": 0}
+
+    async def _buy_analyzer(contract):
+        calls["n"] += 1
+        return {
+            "action": "BUY", "chain": "base", "symbol": "T", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    paused_state = {"paused": False}
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(paper_pause, "is_paused", lambda: paused_state["paused"])
+
+    async def _pause_after_first(contract):
+        # Flips /off DURING the batch -- simulates the operator pausing
+        # mid-cycle, exactly what the live incident showed.
+        paused_state["paused"] = True
+        return {
+            "action": "BUY", "chain": "base", "symbol": "T", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    try:
+        await pt.reset_portfolio(1_000_000.0)
+        candidates = ["0x" + f"9{i:039x}" for i in range(5)]
+
+        opened, count = await pt._open_new_entries_for_wallet(
+            "swing", candidates, _pause_after_first,
+            price_lookup=_price_lookup, notifier=None, max_new=99,
+            using_default_price_lookup=False, closed_this_cycle=set(),
+            weekly_context=None, risk_state=risk_state, discovery_channel=None,
+            trading_mode="standard", max_positions_cap=None, funnel={},
+        )
+    finally:
+        monkeypatch.undo()
+
+    # Only the FIRST candidate (which itself flipped the pause) was opened --
+    # the loop must never reach the remaining 4.
+    assert count == 1
+    assert len(opened) == 1
+
+
+@pytest.mark.asyncio
+async def test_open_new_entries_for_wallet_skips_entire_batch_when_already_paused(tmp_db):
+    """Simpler companion to the mid-batch test above: if /off is ALREADY
+    active before this function is even called (the common case -- most
+    callers already check paper_pause.is_paused() themselves), the loop must
+    open nothing at all, not just stop late."""
+    from aria_core import paper_pause, risk_guard
+
+    risk_state = risk_guard.PortfolioRiskState(
+        wallet="swing", equity=1_000_000.0, high_water_mark=1_000_000.0, drawdown_pct=0.0,
+        consecutive_losses=0, alloc_multiplier=1.0, blocked=False,
+    )
+
+    async def _buy_analyzer(contract):
+        return {
+            "action": "BUY", "chain": "base", "symbol": "T", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
+        }
+
+    async def _price_lookup(contract):
+        return 1.0
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(paper_pause, "is_paused", lambda: True)
+    try:
+        await pt.reset_portfolio(1_000_000.0)
+        candidates = ["0x" + f"9{i:039x}" for i in range(5)]
+
+        opened, count = await pt._open_new_entries_for_wallet(
+            "swing", candidates, _buy_analyzer,
+            price_lookup=_price_lookup, notifier=None, max_new=99,
+            using_default_price_lookup=False, closed_this_cycle=set(),
+            weekly_context=None, risk_state=risk_state, discovery_channel=None,
+            trading_mode="standard", max_positions_cap=None, funnel={},
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert count == 0
+    assert opened == []
+
+
+@pytest.mark.asyncio
 async def test_open_new_entries_for_wallet_unlimited_cap_never_breaks(tmp_db):
     """``max_positions_cap=None`` (the scalping doctrine) never stops the loop on
     a count check -- same unlimited philosophy as today's existing
