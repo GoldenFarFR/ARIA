@@ -103,7 +103,21 @@ UNAVAILABLE = "donnée GeckoTerminal indisponible"
 # real sustained cap under current load. 15 req/min = 4.0s. Still not the
 # burst-controlled empirical measurement called for above -- this remains an
 # incremental de-escalation, not a calibrated final value.
-_AUTHENTICATED_MIN_INTERVAL = 4.0
+#
+# 04/08 -- widened AGAIN (5x, 15 -> 75 req/min), explicit operator decision,
+# on a re-examined premise: DEFAULT_CHAINS has been Base-only since 27/07
+# (the "Base+Ethereum two-chain load" that drove every widening above no
+# longer applies to current traffic -- verified live, 100% of GeckoTerminal
+# calls in the prior 2h were networks/base/pools, zero Ethereum), AND the
+# OHLCV fallback cascade (_fetch_candles: DexPaprika/CoinMarketCap/Mobula/
+# Codex.io/DexScreener/Dune) was confirmed absorbing a GeckoTerminal 429
+# cleanly -- two live 429s minutes before this change both got real 15min
+# candles from Mobula within ~300ms, zero pipeline impact. Still NOT the
+# burst-controlled empirical measurement task #41 calls for -- an
+# operator-directed live test leaning on the now-confirmed cascade safety
+# net, to be walked back if a sustained 429 rate (not an isolated one)
+# shows up post-deploy.
+_AUTHENTICATED_MIN_INTERVAL = 0.8
 
 
 def geckoterminal_authenticated() -> bool:
@@ -166,7 +180,10 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 #
 # 08/02 (later same day) -- widened again alongside _AUTHENTICATED_MIN_INTERVAL,
 # same reason, same invariant.
-_MIN_INTERVAL = 4.0
+#
+# 04/08 -- widened alongside _AUTHENTICATED_MIN_INTERVAL (same operator
+# decision, see its comment), same invariant kept intact.
+_MIN_INTERVAL = 0.8
 
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,

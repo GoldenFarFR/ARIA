@@ -150,7 +150,16 @@ MAX_NEW_PER_DRAIN = 3             # same pacing as the heartbeat default (run_pa
 # rate/quota documented anywhere in this codebase -- it could become the real
 # bottleneck before GeckoTerminal ever does. Observe real latency/cost over
 # the following days before raising this further.
-MAX_EVALUATIONS_PER_HOUR = 200
+#
+# 04/08 -- raised 200 -> 500, same operator decision/session as
+# geckoterminal._AUTHENTICATED_MIN_INTERVAL's 5x widening (see its comment:
+# 15 -> 75 req/min = ~4500/h). Re-derived the SAME way as 31/07 above rather
+# than mechanically multiplied by 5: 500 candidates/hour x 2 GeckoTerminal
+# calls = ~1000 calls/hour, ~22% of the new ~4500/h capacity -- preserves the
+# same conservative margin (~25%) the 31/07 calibration was built on, instead
+# of drifting to a looser one. The LLM-call gap flagged above is still
+# unresolved.
+MAX_EVALUATIONS_PER_HOUR = 500
 
 _CONNECT_TIMEOUT_SECONDS = 8
 _RECV_TIMEOUT_SECONDS = 15
