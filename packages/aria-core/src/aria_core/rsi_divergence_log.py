@@ -44,7 +44,23 @@ questions (bought / performs best / often refused):
 
 Append-only (same doctrine as ``momentum_scan_log.py``/``momentum_
 blacklist.py``) -- one row per decision point, never updated/deleted.
-Best-effort: a write failure here must never break a real trading cycle."""
+Best-effort: a write failure here must never break a real trading cycle.
+
+``last_seen_span``/``last_seen_gap`` (04/08, operator request while
+diagnosing why the "megacap" pocket never triggers: ``expired_unconfirmed``/
+``cancelled_unconfirmed`` rows always carried ``span=None`` -- there was
+never a CONFIRMED divergence to measure, by definition of those outcomes.
+But ``limit_orders.check_rsi_divergence_watching_order`` re-runs the
+detection on every watch check regardless of whether it falls inside the
+trigger window (``momentum_entry.RSI_WATCH_MIN_SPAN``-``MAX_SPAN``) -- a
+watch that expired unconfirmed may still have observed a real (but
+too-short/too-long) divergence along the way. These two columns capture the
+LAST such observation before resolution (never a fabricated "best" -- just
+whatever was most recently seen), letting a later analysis ask "how close
+did this watch get?" instead of a flat "never". Deliberately SEPARATE from
+``gap``/``span`` (which keep meaning ONLY a confirmed, in-window divergence,
+unchanged) -- conflating the two would silently redefine what every
+existing caller/report already means by "span"."""
 from __future__ import annotations
 
 import logging
@@ -81,6 +97,12 @@ def compute_angle_deg(gap: float | None, span: int | None) -> float | None:
     return math.degrees(math.atan2(gap, span))
 
 
+_ADDED_COLUMNS = [
+    ("last_seen_span", "INTEGER"),
+    ("last_seen_gap", "REAL"),
+]
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -96,10 +118,19 @@ async def _ensure_table() -> None:
                 span INTEGER,
                 angle_deg REAL,
                 outcome TEXT NOT NULL,
-                recorded_at TEXT NOT NULL
+                recorded_at TEXT NOT NULL,
+                last_seen_span INTEGER,
+                last_seen_gap REAL
             )
             """
         )
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(rsi_divergence_log)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE rsi_divergence_log ADD COLUMN {name} {ddl}")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_rsi_divergence_log_recorded_at "
             "ON rsi_divergence_log (recorded_at)"
@@ -115,11 +146,17 @@ async def record_divergence(
     contract: str, chain: str, *, outcome: str, symbol: str | None = None,
     wallet: str | None = None, mode: str | None = None,
     gap: float | None = None, span: int | None = None,
+    last_seen_span: int | None = None, last_seen_gap: float | None = None,
 ) -> None:
     """Records one divergence decision point. ``outcome`` must be one of
     ``OUTCOMES`` (defensive assert -- a typo here would silently create an
     unanalyzable bucket). Best-effort: never raises into the caller's real
-    trading cycle."""
+    trading cycle.
+
+    ``last_seen_span``/``last_seen_gap`` (04/08) -- see module docstring:
+    the last NON-confirmed (or confirmed, callers may pass either) candidate
+    observed during the watch, independent of ``gap``/``span`` which stay
+    ``None`` unless a real trigger-window divergence confirmed."""
     if not contract or outcome not in OUTCOMES:
         return
     angle_deg = compute_angle_deg(gap, span)
@@ -128,11 +165,13 @@ async def record_divergence(
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO rsi_divergence_log "
-                "(contract, chain, symbol, wallet, mode, gap, span, angle_deg, outcome, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(contract, chain, symbol, wallet, mode, gap, span, angle_deg, outcome, recorded_at, "
+                "last_seen_span, last_seen_gap) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     contract.lower(), chain or "base", symbol, wallet, mode,
                     gap, span, angle_deg, outcome, _now(),
+                    last_seen_span, last_seen_gap,
                 ),
             )
             await db.commit()
@@ -146,7 +185,8 @@ async def recent_entries(limit: int = 20) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT contract, chain, symbol, wallet, mode, gap, span, angle_deg, outcome, recorded_at "
+            "SELECT contract, chain, symbol, wallet, mode, gap, span, angle_deg, outcome, recorded_at, "
+            "last_seen_span, last_seen_gap "
             "FROM rsi_divergence_log ORDER BY recorded_at DESC LIMIT ?",
             (max(1, min(limit, 200)),),
         )
@@ -169,7 +209,8 @@ async def summarize_by_outcome() -> dict[str, dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT outcome, COUNT(*), AVG(angle_deg), MIN(angle_deg), MAX(angle_deg), "
-            "AVG(span), MIN(span), MAX(span) "
+            "AVG(span), MIN(span), MAX(span), "
+            "AVG(last_seen_span), MIN(last_seen_span), MAX(last_seen_span) "
             "FROM rsi_divergence_log GROUP BY outcome"
         )
         rows = await cursor.fetchall()
@@ -177,10 +218,14 @@ async def summarize_by_outcome() -> dict[str, dict]:
         o: {
             "count": 0, "avg_angle_deg": None, "min_angle_deg": None, "max_angle_deg": None,
             "avg_span": None, "min_span": None, "max_span": None,
+            "avg_last_seen_span": None, "min_last_seen_span": None, "max_last_seen_span": None,
         }
         for o in OUTCOMES
     }
-    for outcome, count, avg_angle, min_angle, max_angle, avg_span, min_span, max_span in rows:
+    for (
+        outcome, count, avg_angle, min_angle, max_angle, avg_span, min_span, max_span,
+        avg_last_seen_span, min_last_seen_span, max_last_seen_span,
+    ) in rows:
         out[outcome] = {
             "count": count,
             "avg_angle_deg": avg_angle,
@@ -189,6 +234,9 @@ async def summarize_by_outcome() -> dict[str, dict]:
             "avg_span": avg_span,
             "min_span": min_span,
             "max_span": max_span,
+            "avg_last_seen_span": avg_last_seen_span,
+            "min_last_seen_span": min_last_seen_span,
+            "max_last_seen_span": max_last_seen_span,
         }
     return out
 
@@ -211,7 +259,21 @@ def format_summary_report(summary: dict[str, dict]) -> str:
         if count == 0:
             lines.append(f"- {labels[outcome]} : aucune entrée")
         elif avg is None:
-            lines.append(f"- {labels[outcome]} : {count} (angle non mesurable)")
+            line = f"- {labels[outcome]} : {count} (angle non mesurable)"
+            # 04/08 -- even without a CONFIRMED divergence, the last
+            # candidate observed before resolution is often available (see
+            # module docstring on last_seen_span/last_seen_gap) -- shown
+            # here so "refused" rows aren't a dead end for a later
+            # calibration pass.
+            avg_last_seen = bucket.get("avg_last_seen_span")
+            if avg_last_seen is not None:
+                lo_seen = bucket.get("min_last_seen_span")
+                hi_seen = bucket.get("max_last_seen_span")
+                line += (
+                    f" | dernier span observé (non confirmé) : moyenne {avg_last_seen:.1f} "
+                    f"(min {lo_seen:.0f}, max {hi_seen:.0f})"
+                )
+            lines.append(line)
         else:
             lo_angle = bucket.get("min_angle_deg")
             hi_angle = bucket.get("max_angle_deg")

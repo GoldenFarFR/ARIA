@@ -60,6 +60,25 @@ async def test_record_divergence_persists_computed_angle():
 
 
 @pytest.mark.asyncio
+async def test_record_divergence_persists_last_seen_span_for_unconfirmed_outcomes():
+    """04/08, operator request ("ajuste les log pour qu'il récupère plus
+    d'informations"): expired/cancelled watches never had a CONFIRMED
+    divergence (gap/span stay None, unchanged), but the last candidate
+    OBSERVED along the way (even outside the trigger window) is now
+    captured separately -- so these rows aren't a flat, unanalyzable
+    "never"."""
+    await rdl.record_divergence(
+        "0xAAA", "base", outcome="expired_unconfirmed",
+        last_seen_span=6, last_seen_gap=3.0,
+    )
+    rows = await rdl.recent_entries()
+    assert rows[0]["gap"] is None  # never fabricated -- no CONFIRMED divergence
+    assert rows[0]["span"] is None
+    assert rows[0]["last_seen_span"] == 6
+    assert rows[0]["last_seen_gap"] == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
 async def test_record_divergence_no_angle_for_unconfirmed_outcomes():
     """An expired/cancelled watch never had a confirmed divergence -- no
     gap/span exist to measure, so no angle is fabricated."""
@@ -122,6 +141,27 @@ async def test_summarize_by_outcome_counts_and_averages():
 
 
 @pytest.mark.asyncio
+async def test_summarize_by_outcome_averages_last_seen_span_separately():
+    """04/08: last_seen_span/gap are a SEPARATE aggregate from the confirmed
+    span/gap -- an expired bucket with zero confirmed divergences can still
+    report how close its watches got."""
+    await rdl.record_divergence(
+        "0xA", "base", outcome="expired_unconfirmed", last_seen_span=6, last_seen_gap=3.0,
+    )
+    await rdl.record_divergence(
+        "0xB", "base", outcome="expired_unconfirmed", last_seen_span=10, last_seen_gap=5.0,
+    )
+    await rdl.record_divergence("0xC", "base", outcome="expired_unconfirmed")  # never saw anything
+
+    summary = await rdl.summarize_by_outcome()
+
+    assert summary["expired_unconfirmed"]["avg_span"] is None  # still never fabricated
+    assert summary["expired_unconfirmed"]["avg_last_seen_span"] == pytest.approx(8.0)
+    assert summary["expired_unconfirmed"]["min_last_seen_span"] == 6
+    assert summary["expired_unconfirmed"]["max_last_seen_span"] == 10
+
+
+@pytest.mark.asyncio
 async def test_summarize_by_outcome_empty_log():
     summary = await rdl.summarize_by_outcome()
     for outcome in rdl.OUTCOMES:
@@ -135,18 +175,22 @@ def test_format_summary_report_degrades_honestly_on_empty_buckets():
         "bought_direct": {
             "count": 0, "avg_angle_deg": None, "min_angle_deg": None, "max_angle_deg": None,
             "avg_span": None, "min_span": None, "max_span": None,
+            "avg_last_seen_span": None, "min_last_seen_span": None, "max_last_seen_span": None,
         },
         "bought_via_limit_order": {
             "count": 2, "avg_angle_deg": 30.5, "min_angle_deg": 20.0, "max_angle_deg": 41.0,
             "avg_span": 17.0, "min_span": 15, "max_span": 19,
+            "avg_last_seen_span": None, "min_last_seen_span": None, "max_last_seen_span": None,
         },
         "expired_unconfirmed": {
             "count": 4, "avg_angle_deg": None, "min_angle_deg": None, "max_angle_deg": None,
             "avg_span": None, "min_span": None, "max_span": None,
+            "avg_last_seen_span": 8.0, "min_last_seen_span": 6, "max_last_seen_span": 10,
         },
         "cancelled_unconfirmed": {
             "count": 0, "avg_angle_deg": None, "min_angle_deg": None, "max_angle_deg": None,
             "avg_span": None, "min_span": None, "max_span": None,
+            "avg_last_seen_span": None, "min_last_seen_span": None, "max_last_seen_span": None,
         },
     }
     report = rdl.format_summary_report(summary)
@@ -154,3 +198,5 @@ def test_format_summary_report_degrades_honestly_on_empty_buckets():
     assert "angle moyen 30.5°" in report
     assert "longueur moyenne 17.0 bougies" in report
     assert "4 (angle non mesurable)" in report  # expired_unconfirmed
+    # 04/08 -- last-seen (non confirmed) span surfaces even without a confirmed angle
+    assert "dernier span observé (non confirmé) : moyenne 8.0" in report

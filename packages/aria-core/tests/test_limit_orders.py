@@ -1265,6 +1265,69 @@ async def test_check_rsi_divergence_watching_realigns_candle_ts_on_first_check(m
 
 
 @pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_tracks_last_seen_span_outside_window(monkeypatch):
+    """04/08, operator request ("ajuste les log pour qu'il récupère plus
+    d'informations"): a divergence that formed but landed OUTSIDE the
+    trigger window (RSI_WATCH_MIN_SPAN-MAX_SPAN) must still be recorded on
+    `sig` -- so an eventual expire/cancel log entry isn't a flat "never saw
+    anything", it's "saw span=6, just not in [15,20]"."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(True, "divergence", gap=3.0, span=6)
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order()
+    result = await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert result == "wait"  # span=6 present but outside RSI_WATCH_MIN_SPAN-MAX_SPAN
+    assert sig["last_seen_span"] == 6
+    assert sig["last_seen_gap"] == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
+async def test_check_rsi_divergence_watching_preserves_last_seen_span_when_not_present(monkeypatch):
+    """last_seen_span/gap must never be erased by a check where the pattern
+    isn't present at all -- only ever updated when a NEW divergence is
+    actually observed."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair()]
+
+    async def _fake_fetch_candles(pool_address, chain, *, contract="", pair=None, **kw):
+        from aria_core.skills.ta_levels import Candle
+
+        return [Candle(ts=i * 3600, open=1, high=1, low=1, close=1) for i in range(6)]
+
+    def _fake_detail(candles, **kw):
+        return entry_signals.RsiDivergenceDetail(False, "")
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_fetch_candles", _fake_fetch_candles)
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", _fake_detail)
+
+    order, sig = _rsi_watch_order(sig_overrides={"last_seen_span": 6, "last_seen_gap": 3.0})
+    await lo.check_rsi_divergence_watching_order(order, sig)
+
+    assert sig["last_seen_span"] == 6
+    assert sig["last_seen_gap"] == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
 async def test_check_rsi_divergence_watching_waits_on_pair_lookup_failure(monkeypatch):
     from aria_core import momentum_entry
 
@@ -1512,6 +1575,42 @@ async def test_process_active_orders_logs_expired_rsi_divergence(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_active_orders_logs_last_seen_span_on_expire(monkeypatch):
+    """04/08, operator request: an expired watch that DID observe a
+    divergence along the way (just never inside the trigger window) must
+    forward that last-seen candidate to the log, not a flat None."""
+    from aria_core import rsi_divergence_log
+
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        sig_arg["last_seen_span"] = 6
+        sig_arg["last_seen_gap"] = 3.0
+        return "expire"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert len(calls) == 1
+    assert calls[0]["last_seen_span"] == 6
+    assert calls[0]["last_seen_gap"] == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
 async def test_process_active_orders_logs_scalping_mode_for_scalping_variant_wallet(monkeypatch):
     """08/02 -- real bug found live (adversarial cross-review workflow): the
     logged mode= used to test wallet == "scalping" literally, which stopped
@@ -1576,6 +1675,41 @@ async def test_process_active_orders_logs_cancelled_rsi_divergence(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["outcome"] == "cancelled_unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_process_active_orders_logs_last_seen_span_on_cancel(monkeypatch):
+    """Same doctrine as the expire case above -- an invalidation-crossed
+    cancel that DID observe a divergence along the way must forward it too."""
+    from aria_core import rsi_divergence_log
+
+    await paper_trader.reset_portfolio(1_000_000.0)
+    order = await lo.create_pending_order(
+        "0xCHECK", "base", "CHECK", 1.5,
+        {"limit_order_reason": "rsi_divergence_pending", "invalidation": 1.19, "last_candle_ts": 0},
+    )
+    await lo.transition_to_watching(order["id"])
+
+    async def _fake_dedicated(order_arg, sig_arg):
+        sig_arg["last_seen_span"] = 9
+        sig_arg["last_seen_gap"] = 4.5
+        return "cancel"
+
+    async def _price(contract, *, chain="base"):
+        return 1.5
+
+    calls = []
+
+    async def _fake_record(contract, chain, **kw):
+        calls.append({"contract": contract, "chain": chain, **kw})
+
+    monkeypatch.setattr(lo, "check_rsi_divergence_watching_order", _fake_dedicated)
+    monkeypatch.setattr(rsi_divergence_log, "record_divergence", _fake_record)
+    await lo.process_active_orders(_price)
+
+    assert len(calls) == 1
+    assert calls[0]["last_seen_span"] == 9
+    assert calls[0]["last_seen_gap"] == pytest.approx(4.5)
 
 
 @pytest.mark.asyncio

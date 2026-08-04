@@ -471,6 +471,28 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
 
     detail = _bullish_rsi_divergence_detail(candles)
+    # 04/08 -- operator request while diagnosing megacap's zero-trigger
+    # history ("ajuste les log pour qu'il récupère plus d'informations"):
+    # a divergence that formed but landed outside the trigger window
+    # (RSI_WATCH_MIN_SPAN-MAX_SPAN) used to leave NO trace at all -- an
+    # expired/cancelled watch's rsi_divergence_log row always had span=None,
+    # indistinguishable from "never even got close". Persisted on `sig`
+    # (same mutate-in-place + explicit persist doctrine as the candle-ts
+    # realignment above) so the LAST non-trigger candidate observed survives
+    # to the eventual expire/cancel log call, even though this function
+    # itself only ever sees one check at a time.
+    if detail.present and (
+        sig.get("last_seen_span") != detail.span or sig.get("last_seen_gap") != detail.gap
+    ):
+        sig["last_seen_span"] = detail.span
+        sig["last_seen_gap"] = detail.gap
+        try:
+            await _persist_signal_json(order["id"], sig)
+        except Exception as exc:  # noqa: BLE001 -- best-effort telemetry, never blocking a real check
+            logger.info(
+                "limit_orders: rsi-divergence last-seen persist failed for %s (%s)",
+                order["contract"], exc,
+            )
     if (
         detail.present and detail.span is not None
         and momentum_entry.RSI_WATCH_MIN_SPAN <= detail.span <= momentum_entry.RSI_WATCH_MAX_SPAN
@@ -1139,6 +1161,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                 order["contract"], order["chain"], symbol=order.get("symbol"),
                 wallet=order.get("wallet"),
                 mode=log_mode,
+                last_seen_span=sig.get("last_seen_span"), last_seen_gap=sig.get("last_seen_gap"),
                 outcome="expired_unconfirmed",
             )
             continue
@@ -1150,6 +1173,7 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                     order["contract"], order["chain"], symbol=order.get("symbol"),
                     wallet=order.get("wallet"),
                     mode=log_mode,
+                    last_seen_span=sig.get("last_seen_span"), last_seen_gap=sig.get("last_seen_gap"),
                     outcome="cancelled_unconfirmed",
                 )
             if notifier:
