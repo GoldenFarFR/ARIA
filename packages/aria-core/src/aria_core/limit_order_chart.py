@@ -2,13 +2,17 @@
 operator request: "c'est possible davoir un screenshot du graphique pour
 chaque poche quand elle etablie un ordre limite avec les signaux detecter").
 
-Pilot scope (operator's own choice via AskUserQuestion, not "all pockets at
-once"): ``scalping_v6``/``scalping_v7`` only -- the two pockets sharing the
-same RSI-divergence/golden-pocket signal (``momentum_entry.evaluate_
-momentum_entry``, only the trigger span differs), the freshest and most
-actively observed pockets at the time of this request. Every other pocket
-(v1-v5, swing, vc, megacap) is untouched -- extend ``PILOT_WALLETS`` once
-this pilot is validated, never silently.
+Piloted on ``scalping_v6``/``scalping_v7`` only at first (the two pockets
+sharing the same RSI-divergence/golden-pocket signal, freshest and most
+actively observed at the time), then extended to every pocket the same day
+once the pilot was validated live (operator: "tu pourrais rajouter les
+screenshot sur toutes les poche comme v6 et v7 ?") -- no wallet gate left,
+any pocket's limit order gets a chart. ``mode``/``horizon_label`` still
+branch on ``paper_trader.is_scalping_pocket(wallet)`` since scalping's real
+candle timeframe (15/30min, plays out in hours) and swing/vc/megacap's
+(daily, plays out in weeks) are genuinely different setups, not a cosmetic
+choice -- reusing the wrong one would show hour-scale noise on a multi-week
+chart or a flat multi-day line on an hour-scale one.
 
 Reuses the pool resolved by THIS SAME scan (``sig["pool_address"]``, added
 04/08 for exactly this) to refetch candles via ``momentum_entry.
@@ -26,24 +30,20 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# 04/08 -- pilot pockets only, operator's explicit choice. Extend here once
-# validated -- never silently broaden the scope of a pilot.
-PILOT_WALLETS = ("scalping_v6", "scalping_v7")
-
 # A scalping setup plays out in hours, not weeks -- the label shown on the
 # chart's simulation panel is overridden accordingly (chart_render.py's
-# horizon_label), never the default "N sem." wording built for VC/marketing.
-_HORIZON_LABEL = "quelques heures"
+# horizon_label) for scalping pockets only. Every other pocket (swing/vc/
+# megacap) keeps chart_render's own default ("N sem."), already correct for
+# their real multi-week horizon.
+_SCALPING_HORIZON_LABEL = "quelques heures"
 
 
 async def maybe_send_order_chart(order: dict, sig: dict) -> None:
-    """Best-effort: sends a candles + signal-levels screenshot for a
-    newly-placed limit order, only for ``PILOT_WALLETS``. Silently does
-    nothing outside the pilot scope, on missing data, or on any failure --
-    this is a visual complement to the text alert, never a blocking step."""
+    """Best-effort: sends a candles + signal-levels screenshot for every
+    newly-placed limit order, any pocket. Silently does nothing on missing
+    data or on any failure -- this is a visual complement to the text
+    alert, never a blocking step."""
     wallet = order.get("wallet")
-    if wallet not in PILOT_WALLETS:
-        return
     pool_address = sig.get("pool_address")
     if not pool_address:
         return
@@ -51,12 +51,15 @@ async def maybe_send_order_chart(order: dict, sig: dict) -> None:
     path = None
     try:
         from aria_core import momentum_entry
+        from aria_core import paper_trader
         from aria_core.gateway import telegram_bot
         from aria_core.skills import chart_render
 
+        scalping = paper_trader.is_scalping_pocket(wallet or "")
         candles = await momentum_entry.fetch_candles(
             pool_address, order.get("chain") or "base",
-            contract=order.get("contract", ""), mode="scalping",
+            contract=order.get("contract", ""),
+            mode="scalping" if scalping else "standard",
         )
         if not candles:
             return
@@ -66,7 +69,7 @@ async def maybe_send_order_chart(order: dict, sig: dict) -> None:
             entry=sig.get("price_at_order_placed") or sig.get("price"),
             invalidation=sig.get("invalidation"),
             target=sig.get("target"),
-            horizon_label=_HORIZON_LABEL,
+            horizon_label=_SCALPING_HORIZON_LABEL if scalping else None,
         )
         path = f"/tmp/aria-limit-order-chart-{order.get('id', 'na')}-{int(time.monotonic() * 1000)}.png"
         chart_render.save_png_data_uri(data_uri, path)
