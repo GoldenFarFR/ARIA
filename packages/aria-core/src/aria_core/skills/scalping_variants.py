@@ -338,10 +338,18 @@ def _buy_result(
 
 
 # ── V1 -- Pure Bollinger (%B) ────────────────────────────────────────────────
-# Entrée : %B <= 0 puis confirmation de sortie (%B repasse > 0). Stop = 1.5xATR.
+# Entrée : %B <= 0.1 puis confirmation de sortie (%B repasse > 0.1). Stop = 1.5xATR.
 # TP = ratio fixe 1:2.
 
-_V1_OVERSOLD_THRESHOLD = 0.0
+# 04/08 -- relaxed from 0.0 to 0.1 (real data, operator pre-authorized:
+# "n'attends pas ma confirmation assoupli un peut et redeploi" -- V1 sat at
+# zero trades for the 3h20 since the first relaxation pass deployed, unlike
+# V3/V4 which both traded in that window). Live-measured on 15 currently-
+# scanned candidates (~262 fine-candle data points, fresh sample distinct
+# from the previous pass): 0.0 is crossed 5.7% of the time (15/262), vs. 9.2%
+# at 0.1 (24/262), a ~1.6x increase. Still stricter than V3's %K<=15 (16.8%
+# measured in the earlier pass).
+_V1_OVERSOLD_THRESHOLD = 0.1
 _V1_STOP_ATR_MULT = 1.5
 _V1_TP_RR_RATIO = 2.0
 
@@ -380,7 +388,7 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
 
 
 # ── V2 -- VWAP Z-score "institutionnel" ──────────────────────────────────────
-# Entrée : Z-score VWAP <= -2.0 puis confirmation de sortie. Stop = 1.5xATR.
+# Entrée : Z-score VWAP <= -1.75 puis confirmation de sortie. Stop = 1.5xATR.
 # TP = ratio fixe 1:1.5 (sortie plus rapide, conviction volume).
 
 # 03/08 -- relaxed from -2.5 to -2.0 (real data, operator request after V2/V5
@@ -391,7 +399,15 @@ async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
 # both of which DID trade in the same window) -- keeps V2/V5's "institutional
 # capitulation" character, just no longer rare enough to sit at zero. V4's
 # combo threshold deliberately left untouched (separate operator decision).
-_V2_OVERSOLD_ZSCORE = -2.0
+#
+# 04/08 -- relaxed again, -2.0 to -1.75 (operator pre-authorized: "n'attends
+# pas ma confirmation assoupli un peut et redeploi"): still zero trades on
+# either V2 or V5 in the 3h20 since the first pass deployed, unlike V3/V4
+# which both traded. Fresh live measurement (15 currently-scanned candidates,
+# ~224 data points, distinct sample from the prior pass, some rate-limited so
+# a smaller n): -2.0 crossed 3.6% of the time (8/224), vs. 7.6% at -1.75
+# (17/224), a ~2.1x increase -- still the strictest of the 5 variants.
+_V2_OVERSOLD_ZSCORE = -1.75
 _V2_STOP_ATR_MULT = 1.5
 _V2_TP_RR_RATIO = 1.5
 
