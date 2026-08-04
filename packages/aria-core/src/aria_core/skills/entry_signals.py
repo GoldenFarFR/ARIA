@@ -114,21 +114,15 @@ def rsi_series(closes: list[float], period: int = _RSI_PERIOD) -> list[float | N
     return out
 
 
-def fibonacci_zone(candles: list[Candle]) -> dict | None:
-    """Golden pocket (0.618-0.786) + levels, from the window's low to its high.
-
-    Measures the swing-low -> swing-high leg; retracements are SUPPORTS below
-    the high. Returns None if the window is flat/too short.
-    """
-    if len(candles) < 2:
-        return None
-    hi = max(c.high for c in candles)
-    lo = min(c.low for c in candles)
+def _fib_levels_from_range(lo: float, hi: float) -> dict | None:
+    """Pure ratio math shared by ``fibonacci_zone`` (naive window max/min) and
+    ``detect_swing_leg`` (ATR-confirmed pivot leg, 04/08) -- both ultimately
+    describe the same "golden pocket between hi and lo" geometry, only the
+    METHOD used to pick hi/lo differs. Returns None if the leg is flat."""
     if hi <= lo:
         return None
     diff = hi - lo
     levels = {r: hi - diff * r for r in _FIB_RATIOS}
-    # Golden pocket: between the 0.618 and 0.786 retracement (the deep "red" zone).
     return {
         "high": hi,
         "low": lo,
@@ -136,6 +130,125 @@ def fibonacci_zone(candles: list[Candle]) -> dict | None:
         "gp_high": levels[0.618],  # zone's upper bound (shallower retracement)
         "gp_low": levels[0.786],   # lower bound (deeper retracement)
     }
+
+
+def fibonacci_zone(candles: list[Candle]) -> dict | None:
+    """Golden pocket (0.618-0.786) + levels, from the window's low to its high.
+
+    Measures the swing-low -> swing-high leg; retracements are SUPPORTS below
+    the high. Returns None if the window is flat/too short.
+
+    04/08, operator-found gap (real ZRO order, gp_high computed 0.7645 while
+    the operator's own hand-drawn Fibonacci on the full visible chart gave a
+    completely different zone): this function is a NAIVE max/min over
+    whatever window it's given -- it does not detect a real swing, it just
+    measures the extremes of the candles handed to it. ``detect_entry`` no
+    longer calls this directly on a truncated window (see
+    ``detect_swing_leg`` below, which finds the actual swing leg first) --
+    kept as a pure, unchanged utility for existing callers/tests that
+    genuinely want "the extremes of this exact candle list" (e.g. a caller
+    that already trimmed the window itself)."""
+    if len(candles) < 2:
+        return None
+    hi = max(c.high for c in candles)
+    lo = min(c.low for c in candles)
+    return _fib_levels_from_range(lo, hi)
+
+
+# 04/08, operator + Fable 5 (relayed second opinion) -- root cause of the ZRO
+# gap above: fibonacci_zone()'s naive max/min, combined with detect_entry's
+# truncation to the last _DEFAULT_LOOKBACK (25) candles, measured a random
+# recent sub-move instead of the token's real swing. Standard practice for an
+# automated Fibonacci (verified via web research on ZigZag/Auto-Fib
+# indicators, 04/08) is a ZigZag-style pivot detector: a reversal must
+# exceed a threshold -- here ATR x multiplier, so it self-calibrates to each
+# token's real volatility instead of an arbitrary fixed candle count -- before
+# a new pivot is confirmed. Separate multiplier per mode (scalping's noisier
+# 15-30min candles need a wider multiplier to avoid parasitic pivots than
+# swing's calmer 1h-4h-1j candles): starting points from published ZigZag/ATR
+# guidance (day-trading ~2.0xATR, swing default ~2.0-2.5xATR), taking the
+# upper end of each range because Base micro-caps are noisier than the
+# markets these defaults were calibrated on -- explicitly a starting point to
+# recalibrate against paper_position_archive (gp_low/gp_high stored since
+# 26/07), never a settled truth.
+ZIGZAG_ATR_MULTIPLIER = 2.5
+ZIGZAG_ATR_MULTIPLIER_SCALPING = 1.5
+
+
+def _zigzag_pivots(
+    candles: list[Candle], *, atr_mult: float, atr_period: int = 14
+) -> list[tuple[int, float, str]]:
+    """ATR-threshold ZigZag: confirms a pivot (index, price, "low"/"high")
+    once price reverses by ``atr_mult`` x the ATR-at-that-point from the
+    running candidate extreme since the last confirmed pivot. Alternates
+    low/high by construction. Returns [] if there isn't enough data for ATR
+    to warm up -- never a fabricated pivot on too-short a series."""
+    from aria_core.skills.indicators import atr_series
+
+    n = len(candles)
+    atrs = atr_series(candles, period=atr_period)
+    start = next((i for i in range(n) if atrs[i] is not None), None)
+    if start is None or start >= n - 1:
+        return []
+
+    pivots: list[tuple[int, float, str]] = []
+    cand_high, cand_high_idx = candles[start].high, start
+    cand_low, cand_low_idx = candles[start].low, start
+    trend: str | None = None  # None (undecided) / "up" (tracking a high) / "down" (tracking a low)
+
+    for i in range(start + 1, n):
+        atr = atrs[i]
+        if atr is None:
+            continue
+        threshold = atr_mult * atr
+        c = candles[i]
+
+        if trend is None:
+            if c.high > cand_high:
+                cand_high, cand_high_idx = c.high, i
+            if c.low < cand_low:
+                cand_low, cand_low_idx = c.low, i
+            if cand_high - c.low >= threshold:
+                pivots.append((cand_high_idx, cand_high, "high"))
+                trend, cand_low, cand_low_idx = "down", c.low, i
+            elif c.high - cand_low >= threshold:
+                pivots.append((cand_low_idx, cand_low, "low"))
+                trend, cand_high, cand_high_idx = "up", c.high, i
+        elif trend == "up":
+            if c.high > cand_high:
+                cand_high, cand_high_idx = c.high, i
+            elif cand_high - c.low >= threshold:
+                pivots.append((cand_high_idx, cand_high, "high"))
+                trend, cand_low, cand_low_idx = "down", c.low, i
+        else:  # trend == "down"
+            if c.low < cand_low:
+                cand_low, cand_low_idx = c.low, i
+            elif c.high - cand_low >= threshold:
+                pivots.append((cand_low_idx, cand_low, "low"))
+                trend, cand_high, cand_high_idx = "up", c.high, i
+
+    return pivots
+
+
+def detect_swing_leg(candles: list[Candle], *, mode: str | None = None) -> dict | None:
+    """Finds the LAST COMPLETE low -> high leg via ATR-confirmed ZigZag
+    pivots, searched over the FULL candle series provided (never truncated
+    to a fixed count -- the old bug was exactly this truncation). Returns
+    None (fail-closed, per Fable 5's explicit spec, 04/08) when no valid
+    bullish leg is currently confirmed:
+    - not enough data for ATR to warm up,
+    - fewer than 2 confirmed pivots,
+    - the last two confirmed pivots are NOT a low followed by a high (e.g.
+      price is currently in a fresh downswing) -- never silently falls back
+      to a naive max/min, which is exactly the geometry bug this replaces."""
+    atr_mult = ZIGZAG_ATR_MULTIPLIER_SCALPING if mode == "scalping" else ZIGZAG_ATR_MULTIPLIER
+    pivots = _zigzag_pivots(candles, atr_mult=atr_mult)
+    if len(pivots) < 2:
+        return None
+    (low_idx, low_price, low_kind), (high_idx, high_price, high_kind) = pivots[-2], pivots[-1]
+    if low_kind != "low" or high_kind != "high":
+        return None
+    return {"low": low_price, "high": high_price, "low_idx": low_idx, "high_idx": high_idx}
 
 
 @dataclass(frozen=True)
@@ -350,16 +463,41 @@ def _invalidation_floor_pct(candles: list[Candle], *, mode: str | None = None) -
     return _invalidation_floor_pct_from_ratio(last_atr / close, mode=mode)
 
 
+# 04/08 -- the fixed 3% tolerance (below) was found disproportionate on a
+# narrow ZigZag-detected leg (operator/Fable 5): on ZRO's real ~4.2% leg, 3%
+# widened the entry band by nearly as much as the golden pocket itself is
+# wide. ``tolerance`` is now proportional to the zone's own width (a fraction
+# of gp_high-gp_low), capped at the previous 3% absolute -- a CAP, never a
+# floor, so a wide/healthy swing is never given MORE slack than before.
+# 0.275 = midpoint of Fable 5's recommended 25-30% range, itself a starting
+# point (not backtested) like the ZigZag multipliers above.
+ZONE_TOLERANCE_FRACTION = 0.275
+ZONE_TOLERANCE_MAX = 0.03
+
+
 def detect_entry(
     candles: list[Candle],
     *,
     lookback: int = _DEFAULT_LOOKBACK,
-    tolerance: float = 0.03,
+    tolerance: float | None = None,
     execution_price: float | None = None,
     period: int = _RSI_PERIOD,
     mode: str | None = None,
 ) -> EntrySignal:
-    """Detects the "golden pocket + RSI divergence" setup over <= ``lookback`` candles.
+    """Detects the "golden pocket + RSI divergence" setup.
+
+    ``lookback`` (04/08 -- narrowed scope): used ONLY to bound the RSI
+    divergence pivot search (``_bullish_rsi_divergence_detail``), same as
+    before. The golden pocket itself is no longer computed on a
+    ``candles[-lookback:]`` slice -- ``detect_swing_leg`` searches the FULL
+    candle series for the actual swing leg (see its docstring; this was the
+    root cause of a real geometry bug found 04/08 on a live ZRO order).
+
+    ``tolerance`` (04/08): ``None`` (default) computes a proportional
+    tolerance from the detected zone's own width, capped at
+    ``ZONE_TOLERANCE_MAX`` -- see the constant's comment above. An explicit
+    float still overrides it completely (e.g. a test that wants a fixed
+    value), unchanged behavior for that case.
 
     ``period`` (Item #101, 26/07): the RSI period passed through to
     ``bullish_rsi_divergence`` -- default ``_RSI_PERIOD`` (14, swing/standard
@@ -392,8 +530,8 @@ def detect_entry(
     if len(candles) < period + 2:
         return EntrySignal(present=False, reasons=["série trop courte pour un signal fiable"])
 
-    window = candles[-lookback:]
-    fib = fibonacci_zone(window)
+    leg = detect_swing_leg(candles, mode=mode)
+    fib = _fib_levels_from_range(leg["low"], leg["high"]) if leg is not None else None
     div_detail = _bullish_rsi_divergence_detail(candles, lookback=lookback, period=period)
     div, div_base = div_detail.present, div_detail.reason
     close = candles[-1].close
@@ -402,7 +540,11 @@ def detect_entry(
     in_gp = False
     if fib is not None:
         gp_low, gp_high = fib["gp_low"], fib["gp_high"]  # gp_low < gp_high
-        if gp_low * (1 - tolerance) <= close <= gp_high * (1 + tolerance):
+        effective_tolerance = tolerance
+        if effective_tolerance is None:
+            zone_width_pct = (gp_high - gp_low) / gp_high if gp_high else 0.0
+            effective_tolerance = min(ZONE_TOLERANCE_MAX, ZONE_TOLERANCE_FRACTION * zone_width_pct)
+        if gp_low * (1 - effective_tolerance) <= close <= gp_high * (1 + effective_tolerance):
             in_gp = True
             # Item #101 (26/07): the exact zone bounds are now cited in the
             # thesis text itself, not just the principle -- operator request
@@ -418,7 +560,8 @@ def detect_entry(
     if not (in_gp and div and fib is not None):
         return EntrySignal(
             present=False, reasons=reasons or ["setup non réuni"],
-            in_golden_pocket=in_gp, rsi_divergence=div, lookback_used=len(window),
+            in_golden_pocket=in_gp, rsi_divergence=div,
+            lookback_used=(leg["high_idx"] - leg["low_idx"] + 1) if leg is not None else 0,
             # Item #182 (28/07): the zone itself is a fact derived from the
             # real candles (fibonacci_zone), independent of whether RSI has
             # confirmed a divergence yet -- exposing it here invents nothing,
@@ -480,7 +623,7 @@ def detect_entry(
         invalidation=invalidation,
         target=target,
         rr=rr,
-        lookback_used=len(window),
+        lookback_used=leg["high_idx"] - leg["low_idx"] + 1,
         gp_low=gp_low,
         gp_high=gp_high,
         range_high=target,

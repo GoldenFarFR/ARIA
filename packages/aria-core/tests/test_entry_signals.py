@@ -53,6 +53,100 @@ def test_fibonacci_flat_is_none():
     assert fibonacci_zone(_candles([100, 100, 100])) is None
 
 
+# ── détecteur de jambe ZigZag/ATR (04/08, remplace le max/min sur fenêtre fixe) ──
+# Contexte réel : un ordre ZRO en prod (scalping_v7) a déclenché "dans la golden
+# pocket" à un prix qui ne respectait même pas le vrai Fibonacci du graphique --
+# `fibonacci_zone()` mesurait juste le max/min des 25 dernières bougies passées
+# par `detect_entry`, sans jamais détecter le vrai swing. Diagnostic vérifié
+# (recalcul inverse) + confirmé par second avis Fable 5, qui a aussi trouvé deux
+# aggravants (tolérance 3% disproportionnée sur une jambe étroite, aucun contrôle
+# que la jambe est bien haussière) -- les deux corrigés ci-dessous.
+
+from aria_core.skills.entry_signals import _zigzag_pivots, detect_swing_leg
+
+
+def test_detect_swing_leg_none_too_short_series():
+    """Pas assez de bougies pour que l'ATR chauffe -- jamais une jambe inventée."""
+    assert detect_swing_leg(_candles([100, 101, 102])) is None
+
+
+def test_detect_swing_leg_none_on_fresh_downswing():
+    """04/08, spec Fable 5 explicite : si les deux derniers pivots confirmés sont
+    haut PUIS bas (une jambe baissière déjà en cours), aucune jambe haussière
+    n'est retournée -- jamais un repli silencieux sur l'ancien max/min, qui
+    aurait mesuré cette baisse comme si c'était une "golden pocket" valide."""
+    lead_in = [100.0] * 20
+    capitulation = _ramp(100, 20, 8)
+    bounce = _ramp(20, 300, 12)
+    decline = _ramp(300, 20, 14)
+    rebound = [60, 90]  # confirme le nouveau pivot bas (54) comme le PLUS RÉCENT
+    closes = lead_in + capitulation + bounce + decline + rebound
+    c = _candles(closes)
+    assert detect_swing_leg(c, mode=None) is None
+    assert detect_swing_leg(c, mode="scalping") is None
+
+
+def test_detect_swing_leg_finds_real_swing_beyond_truncated_window():
+    """Reproduit directement le mécanisme du bug ZRO réel (04/08) : le vrai creux
+    (20) est loin en arrière dans la série (au-delà des 25 dernières bougies) --
+    l'ANCIEN mécanisme (``fibonacci_zone`` sur une fenêtre tronquée à 25) rate
+    complètement le vrai swing et mesure un bruit de plateau sans rapport ;
+    ``detect_swing_leg`` cherche sur TOUTE la série fournie et retrouve le vrai
+    creux quel que soit son ancienneté."""
+    lead_in = [100.0] * 20
+    capitulation = _ramp(100, 20, 8)
+    bounce = _ramp(20, 300, 12)
+    plateau = [280 + (i % 5) for i in range(30)]  # pousse le vrai creux hors des 25 dernières
+    closes = lead_in + capitulation + bounce + plateau
+    c = _candles(closes)
+
+    old_window_fib = fibonacci_zone(c[-25:])  # ancien mécanisme, gardé pour comparaison
+    assert old_window_fib["low"] == 280  # rate le vrai creux -- bruit de plateau
+    assert old_window_fib["high"] != 300
+
+    leg = detect_swing_leg(c)
+    assert leg is not None
+    assert leg["low"] == 20.0 and leg["high"] == 300.0  # le vrai swing, retrouvé
+
+
+def test_rsi_divergence_lookback_stays_decoupled_from_swing_detection():
+    """04/08, verrou de non-régression explicite (recommandation Fable 5,
+    second avis) : ``lookback`` (25 par défaut) ne doit influencer QUE la
+    recherche de pivots pour la divergence RSI -- jamais la détection de la
+    jambe Fibonacci. Garantie STRUCTURELLE (pas seulement comportementale) :
+    ``detect_swing_leg`` n'accepte même pas de paramètre ``lookback`` -- il ne
+    peut donc pas être borné par erreur. La preuve comportementale (la jambe
+    détectée voit bien au-delà d'une fenêtre de 25 bougies) est couverte par
+    ``test_detect_swing_leg_finds_real_swing_beyond_truncated_window``
+    ci-dessus."""
+    import inspect
+
+    from aria_core.skills.entry_signals import _DEFAULT_LOOKBACK
+
+    assert _DEFAULT_LOOKBACK == 25  # valeur validée opérateur pour la divergence RSI -- ne pas dériver en silence
+    assert "lookback" not in inspect.signature(detect_swing_leg).parameters
+
+
+def test_zone_tolerance_proportional_narrower_than_old_fixed_on_tight_zone():
+    """04/08, aggravant trouvé par Fable 5 : sur une jambe étroite (comme le
+    ZRO réel, ~4-5% d'amplitude), l'ancienne tolérance fixe de 3% élargit la
+    zone d'entrée quasi autant que la golden pocket elle-même -- la nouvelle
+    tolérance proportionnelle (fraction de la largeur de zone, plafonnée à 3%)
+    rejette un prix que l'ancienne tolérance fixe aurait accepté à tort."""
+    lead_in = [100.0] * 15
+    capitulation = [100, 90, 82, 77]
+    bounce = [85, 93, 98, 101, 103]
+    retest = [96, 88, 79, 75]
+    tail = [81]  # entre gp_low*0.97 (ancienne tolérance) et gp_low (zone stricte)
+    c = _candles(lead_in + capitulation + bounce + retest + tail)
+
+    sig_proportional = detect_entry(c, lookback=25)
+    assert sig_proportional.in_golden_pocket is False  # rejeté par la nouvelle tolérance
+
+    sig_old_fixed = detect_entry(c, lookback=25, tolerance=0.03)
+    assert sig_old_fixed.in_golden_pocket is True  # l'ancienne tolérance fixe l'aurait accepté
+
+
 # ── le setup complet ─────────────────────────────────────────────────────────
 
 def _setup_series() -> list[float]:
@@ -65,7 +159,13 @@ def _setup_series() -> list[float]:
     capitulation = [100, 90, 82, 77]   # creux 1 = 77 (chute franche -> RSI ~0)
     bounce = [85, 93, 98, 101, 103]    # fort rebond -> RSI remonte
     retest = [96, 88, 79, 75]          # creux 2 = 75 (plus bas) mais RSI plus haut
-    tail = [80]                        # petit rebond, prix courant dans le golden pocket
+    # 04/08 -- recalibré pour la vraie jambe ZigZag/ATR (77 -> 103, confirmée
+    # géométriquement, remplace l'ancienne fenêtre fixe de 25 bougies) : sa
+    # golden pocket réelle est [82.56, 86.93], pas le [77, 103]*0.618-0.786
+    # d'une fenêtre tronquée arbitraire -- 84 y retombe (petit rebond depuis
+    # le creux 2), 80 (ancienne valeur) n'y était plus une fois la vraie
+    # jambe mesurée correctement.
+    tail = [84]                        # petit rebond, prix courant dans le vrai golden pocket
     return lead_in + capitulation + bounce + retest + tail
 
 
@@ -301,19 +401,68 @@ def test_detect_entry_short_series_safe():
     assert sig.present is False
 
 
+def _ramp(a: float, b: float, n: int) -> list[float]:
+    """``n`` points strictly between ``a`` (exclusive) and ``b`` (inclusive) --
+    a smooth, many-candle move (unlike the few-giant-jump fixtures elsewhere
+    in this file) so ATR stays small relative to the swing's total amplitude,
+    the realistic shape real OHLCV data has (04/08, needed to build fixtures
+    where the ZigZag swing detector and a golden-pocket retracement don't
+    fight each other -- see ``_confirmed_leg_series`` below)."""
+    return [a + (b - a) * (i + 1) / n for i in range(n)]
+
+
+def _confirmed_leg_series() -> list[float]:
+    """A real ATR-confirmed low -> high leg (20 -> 300), with price only
+    PARTWAY back down through the retracement -- not yet in the golden
+    pocket, no divergence yet. 04/08, replaces the old monotonic-uptrend
+    fixture for the "zone computable but setup not there yet" test below:
+    a monotonic move has no confirmed reversal at all under the new
+    ZigZag/ATR swing detector (see the dedicated fail-closed test), so it no
+    longer represents a "not there yet" case -- this does."""
+    lead_in = [100.0] * 20
+    capitulation = _ramp(100, 20, 8)
+    bounce = _ramp(20, 300, 12)
+    decline = _ramp(300, 200, 6)  # repli partiel, encore loin de la zone [79.9, 127.0]
+    return lead_in + capitulation + bounce + decline
+
+
 def test_detect_entry_exposes_zone_bounds_even_absent_when_computable():
     """Item #182 (28/07), golden-pocket liberation: gp_low/gp_high/range_high/
-    range_low are geometric facts derived from fibonacci_zone(), independent
-    of whether RSI has confirmed a divergence -- a caller building a
-    watch-and-wait limit order for a "not there yet" setup needs them even
-    when present=False, as long as a real zone is computable (a monotonic
-    uptrend still has a well-defined high/low leg)."""
-    sig = detect_entry(_candles([100 + i for i in range(30)]), lookback=25)
+    range_low are geometric facts derived from the detected swing leg,
+    independent of whether RSI has confirmed a divergence -- a caller
+    building a watch-and-wait limit order for a "not there yet" setup needs
+    them even when present=False, as long as a real ATR-confirmed leg exists.
+
+    04/08 -- recalibrated for the ZigZag/ATR swing detector (see
+    ``detect_swing_leg``): the old fixture (a bare monotonic uptrend) no
+    longer represents this case, since a one-directional move never confirms
+    a reversal pivot at all (see
+    ``test_detect_entry_absent_no_zone_on_unconfirmed_monotonic_move``
+    below) -- ``_confirmed_leg_series`` provides a genuinely confirmed leg
+    instead."""
+    sig = detect_entry(_candles(_confirmed_leg_series()), lookback=25)
     assert sig.present is False
+    assert sig.rsi_divergence is False
     assert sig.gp_low is not None and sig.gp_high is not None
     assert sig.gp_low < sig.gp_high
     assert sig.range_high is not None and sig.range_low is not None
     assert sig.range_low < sig.gp_low < sig.gp_high < sig.range_high
+
+
+def test_detect_entry_absent_no_zone_on_unconfirmed_monotonic_move():
+    """04/08, ZigZag/ATR swing detector, fail-closed spec (operator + Fable 5
+    second opinion): a one-directional move NEVER confirms a reversal pivot
+    (the ZigZag needs a real retracement of ATR x multiplier magnitude to
+    confirm even the FIRST pivot) -- so ``detect_swing_leg`` returns None and
+    no golden pocket is fabricated. This intentionally REVERSES the old
+    (buggy) expectation, where a naive max/min over the window always
+    produced *some* zone even on a move with no real structure -- exactly the
+    geometry bug found live on ZRO (a leg measured on the wrong swing is
+    worse than admitting no signal)."""
+    sig = detect_entry(_candles([100 + i for i in range(30)]), lookback=25)
+    assert sig.present is False
+    assert sig.gp_low is None and sig.gp_high is None
+    assert sig.range_high is None and sig.range_low is None
 
 
 def test_detect_entry_zone_bounds_none_when_no_computable_zone():
@@ -484,16 +633,45 @@ def test_invalidation_floor_mode_none_matches_swing_default():
     assert entry_signals._invalidation_floor_pct(candles, mode="standard") == entry_signals._invalidation_floor_pct(candles, mode=None)
 
 
+def _dual_mode_setup_series() -> list[float]:
+    """04/08, ZigZag/ATR swing detector: a low->high leg large enough (20 ->
+    300, over many small candles via ``_ramp``) that BOTH the swing
+    (ATR x2.5) and scalping (ATR x1.5) multipliers confirm the exact same
+    pivots -- the golden-pocket entry bounce itself must never be big enough
+    to also register as a spurious new ZigZag pivot under EITHER threshold,
+    which only holds when the swing develops gradually (small ATR relative
+    to the total amplitude), unlike the few-giant-jump fixtures elsewhere in
+    this file. Needed specifically because ``mode`` (04/08) now affects BOTH
+    the swing-leg detection AND the invalidation floor -- this test isolates
+    the floor difference by keeping the detected leg identical across modes."""
+    lead_in = [100.0] * 20
+    capitulation = _ramp(100, 20, 8)
+    bounce = _ramp(20, 300, 12)
+    decline = _ramp(300, 110, 10)  # repli vers la zone [79.9, 127.0], creux1 = 110
+    rally = [122, 132]              # petit rebond -> RSI remonte
+    creux2 = [108]                  # nouveau plus bas mais RSI plus haut (divergence)
+    tail = [114]                    # prix courant, dans la zone
+    return lead_in + capitulation + bounce + decline + rally + creux2 + tail
+
+
 def test_detect_entry_scalping_mode_uses_narrower_invalidation_floor():
     """Bout-en-bout via ``detect_entry`` (pas juste la fonction interne) : le
     même setup golden-pocket+divergence produit une invalidation DIFFÉRENTE
     (donc un R/R différent) selon le mode -- preuve que le paramètre est bien
-    câblé jusqu'au bout, pas seulement testé en isolation."""
-    candles = _candles(_setup_series())
+    câblé jusqu'au bout, pas seulement testé en isolation.
+
+    04/08 -- fixture dédiée (``_dual_mode_setup_series``) : depuis que
+    ``mode`` influence aussi la détection de la jambe elle-même (multiplicateur
+    ATR du ZigZag), la fenêtre partagée doit garantir que les DEUX modes
+    détectent la même jambe -- sinon gp_low/gp_high pourraient légitimement
+    différer, ce qui ne testerait plus la même chose."""
+    candles = _candles(_dual_mode_setup_series())
     swing_signal = detect_entry(candles, lookback=25)
     scalping_signal = detect_entry(candles, lookback=25, mode="scalping")
 
     assert swing_signal.present and scalping_signal.present
+    assert swing_signal.gp_low == scalping_signal.gp_low  # même jambe détectée dans les deux modes
+    assert swing_signal.gp_high == scalping_signal.gp_high
     # Le scalping ne peut jamais élargir l'invalidation au-delà de la structurelle --
     # seul un plancher PLUS ÉTROIT peut la rapprocher de l'entrée (jamais l'inverse).
     assert scalping_signal.invalidation >= swing_signal.invalidation
