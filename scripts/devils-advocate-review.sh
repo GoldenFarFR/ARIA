@@ -5,29 +5,59 @@
 # le hook .git/hooks/pre-push (non versionne -- CE script est la logique
 # versionnee, le hook n'est qu'un declencheur d'une ligne).
 #
-# Role : un modele DIFFERENT de celui qui ecrit le code (jamais le meme qui
-# se juge lui-meme -- ici Gemini 3.1 Pro via OpenRouter, jamais Claude) relit le
-# diff qui vient de partir sur main et redige une critique structuree
-# (complexite inutile, limites a l'echelle, alternative radicale SI
-# pertinente + plan de transition obligatoire). Ecrit un rapport, rien
-# d'autre -- aucune execution, aucun acces au code, aucune commande git. La
-# session suivante le lit et DOIT verifier chaque affirmation avant d'agir
-# dessus (jamais gober -- meme discipline que toute revue croisee Gemini/
-# ChatGPT deja pratiquee dans ce projet).
+# Role : un modele qui relit le diff qui vient de partir sur main et redige
+# une critique structuree (complexite inutile, limites a l'echelle,
+# alternative radicale SI pertinente + plan de transition obligatoire).
+# Ecrit un rapport, rien d'autre -- aucune execution, aucun acces au code,
+# aucune commande git. La session suivante le lit et DOIT verifier chaque
+# affirmation avant d'agir dessus (jamais gober -- meme discipline que toute
+# revue croisee externe deja pratiquee dans ce projet).
+#
+# 04/08 -- ORIGINALEMENT un modele/lab DIFFERENT de celui qui ecrit le code
+# (jamais le meme qui se juge lui-meme -- Gemini 3.1 Pro, jamais Claude).
+# Doctrine explicitement RENVERSEE par decision operateur le meme jour, apres
+# une comparaison directe (meme diff, meme prompt, Gemini vs Claude Fable 5)
+# ou Fable 5 a trouve le meme angle mort SANS l'erreur factuelle de Gemini et
+# a propose une architecture meilleure (voir devils-advocate-lib.sh, section
+# "modele officialise"). Verdict operateur : la doctrine cross-lab s'annule
+# devant une efficacite prouvee superieure -- garde cette note comme trace de
+# la decision et de son inversion, jamais reecrite silencieusement.
 #
 # Ne bloque JAMAIS le push : tout le travail reel tourne en arriere-plan,
 # detache. Ne se declenche QUE sur un push touchant refs/heads/main (jamais
 # sur une branche temporaire claude/*-temp -- bruit et cout inutiles).
+#
+# 04/08 -- modele/prompt/appel API extraits dans devils-advocate-lib.sh
+# (partage avec devils-advocate-precommit.sh, la verification SYNCHRONE
+# demandee par l'operateur pour capter la critique AVANT un commit officiel,
+# pas seulement apres un push deja parti) -- jamais une deuxieme copie qui
+# pourrait diverger silencieusement.
+#
+# 04/08 (meme jour) -- gap reel trouve en direct (l'operateur : "je paye pour
+# rien", appels payes jamais lus) : le rapport unique ecrase a CHAQUE push
+# perdait silencieusement tout rapport intermediaire sur deux pushs
+# rapproches, et le rappel de lecture (session-checkpoint.sh) ne suivait que
+# le DERNIER etat. Confirme independamment par Gemini ET Claude Fable 5 sur
+# le meme diff de test (comparaison directe, meme session) -- les deux
+# convergent sur la meme proposition : une vraie file d'attente plutot qu'un
+# fichier ecrase. Remplace REPORT_FILE par un repertoire PENDING_DIR (un
+# fichier par push, jamais ecrase) ; "lu" devient un geste explicite
+# (deplacement vers archived/, voir session-checkpoint.sh) plutot qu'un
+# throttle qui perd silencieusement ce qui arrive entre deux lectures.
 set -uo pipefail
 
 REPO_DIR="/opt/aria"
-REPORT_FILE="/opt/aria-data/architect-report.md"
+PENDING_DIR="/opt/aria-data/architect-reports/pending"
 REVIEW_LOG="/opt/aria-data/architect-review.log"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
-MODEL="google/gemini-3.1-pro-preview"
 ZERO_SHA="0000000000000000000000000000000000000000"
 
+mkdir -p "$PENDING_DIR" 2>/dev/null || true
+
 cd "$REPO_DIR" || exit 1
+# shellcheck source=./devils-advocate-lib.sh
+source "$REPO_DIR/scripts/devils-advocate-lib.sh"
+MODEL="$DEVILS_ADVOCATE_MODEL"
 
 # Le hook pre-push recoit sur stdin une ligne par ref poussee :
 # <local ref> <local sha1> <remote ref> <remote sha1>
@@ -42,6 +72,10 @@ done
 
 [ -z "$MAIN_LOCAL_SHA" ] && exit 0          # main non concerne -- silencieux
 [ "$MAIN_LOCAL_SHA" = "$ZERO_SHA" ] && exit 0  # suppression de branche
+
+# Un fichier PAR push (nom = sha complet, jamais de collision) -- jamais
+# ecrase par le push suivant, voir le commentaire de tete sur PENDING_DIR.
+REPORT_FILE="$PENDING_DIR/${MAIN_LOCAL_SHA}.md"
 
 if [ "$MAIN_REMOTE_SHA" = "$ZERO_SHA" ]; then
   DIFF_CONTENT=$(git show --format="" "$MAIN_LOCAL_SHA" 2>/dev/null)
@@ -81,82 +115,17 @@ fi
   INBOX_INDEX=$(ls "$REPO_DIR"/docs/aria-learning-inbox/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null)
   [ -z "$INBOX_INDEX" ] && INBOX_INDEX="(aucune fiche deposee pour l'instant)"
 
-  SYSTEM_PROMPT=$(cat <<'PROMPT_EOF'
-Tu es un Architecte Logiciel Senior et "l'Avocat du Diable" du projet ARIA
-(agent IA autonome de trading/analyse crypto sur Base). Ton role n'est PAS de
-valider le code qui t'est soumis ni de chercher des erreurs de syntaxe. Ton
-unique objectif : trouver les limites, les angles morts architecturaux, et
-proposer des ameliorations radicales (changements de paradigme) au code
-fraichement pousse sur la branche main en production.
-
-Le code fourni vient d'etre pousse de maniere autonome. Il fonctionne dans
-l'etat actuel. Determine s'il va casser sous une charge/echelle 10x
-superieure, ou s'il aurait fallu une approche differente depuis le depart.
-
-REGLES D'ANALYSE :
-1. Friction et complexite : ou la solution est-elle surcompliquee ? Detours
-   logiques, redondances, duplication avec du code deja existant ailleurs
-   dans le projet ?
-2. Scalabilite et limites : projette ce code a une echelle superieure.
-   Qu'est-ce qui casse en premier (memoire, latence, dependances
-   circulaires, cout API) ?
-3. Changement de paradigme (REGLE D'OR) : si tu proposes une refonte
-   radicale, tu DOIS fournir un plan de migration progressif en etapes
-   isolees, sans regression, sans interrompre le fonctionnement existant.
-   Ne propose JAMAIS "efface tout et recommence" sans ce plan.
-
-MEMOIRE PARTAGEE -- des noms de fiches de recherche deja deposees par
-l'equipe te seront donnees (juste les noms, pas le contenu) : ne propose PAS
-comme "nouvelle piste" un sujet qui a deja son propre nom de fichier, borne-
-toi a le mentionner comme deja explore si pertinent.
-
-FORMAT DE SORTIE EXIGE, STRICT, RIEN D'AUTRE AUTOUR :
-[VULNERABILITE CACHEE] : (1-2 phrases, ce qui risque de casser a moyen terme)
-[LA FAUSSE BONNE IDEE] : (un choix de conception recent qui semble marcher mais sous-optimal)
-[L'ALTERNATIVE RADICALE] : (solution repensee depuis zero -- "aucune" si le code est deja solide, ne force jamais une critique artificielle)
-[PLAN DE TRANSITION SECURISE] : (comment migrer en 3 etapes isolees sans casser l'existant -- omis si alternative radicale vide)
-
-Si le diff est reellement solide sans angle mort serieux, dis-le honnetement
-plutot que d'inventer une critique pour remplir le format.
-PROMPT_EOF
-)
-
-  USER_CONTENT="[MEMOIRE PARTAGEE -- fiches deja deposees]
-${INBOX_INDEX}
-
-[DIFF POUSSE SUR MAIN]
-${DIFF_CONTENT}${DIFF_TRUNCATED}"
-
-  PAYLOAD=$(jq -n \
-    --arg model "$MODEL" \
-    --arg system "$SYSTEM_PROMPT" \
-    --arg user "$USER_CONTENT" \
-    --arg session_id "devils-advocate-${MAIN_LOCAL_SHA}" \
-    '{
-      model: $model,
-      max_tokens: 4000,
-      messages: [
-        {role: "system", content: $system},
-        {role: "user", content: $user}
-      ],
-      session_id: $session_id
-    }')
-
-  RESP_TMP=$(mktemp /tmp/architect-response.XXXXXX.json)
-  HTTP_STATUS=$(curl -s -o "$RESP_TMP" -w "%{http_code}" \
-    --max-time 120 \
-    -X POST https://openrouter.ai/api/v1/chat/completions \
-    -H "Authorization: Bearer $OR_KEY" \
-    -H "Content-Type: application/json" \
-    -H "HTTP-Referer: https://github.com/GoldenFarFR/aria-vanguard" \
-    -H "X-OpenRouter-Title: ARIA Devil's Advocate" \
-    -H "X-Title: ARIA Devil's Advocate" \
-    -d "$PAYLOAD")
+  USER_DIFF_CONTENT="${DIFF_CONTENT}${DIFF_TRUNCATED}"
+  RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$OR_KEY" 2>/tmp/devils-advocate-http-status.$$)
+  HTTP_STATUS=$(grep -oE 'HTTP_STATUS:[0-9]+' /tmp/devils-advocate-http-status.$$ | cut -d: -f2)
+  rm -f /tmp/devils-advocate-http-status.$$
   unset OR_KEY
 
   RESPONSE_CONTENT=""
+  FINISH_REASON="inconnu"
   if [ "$HTTP_STATUS" = "200" ]; then
-    RESPONSE_CONTENT=$(jq -r '.choices[0].message.content // empty' "$RESP_TMP" 2>/dev/null)
+    RESPONSE_CONTENT=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    FINISH_REASON=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].finish_reason // "inconnu"' 2>/dev/null)
   fi
 
   {
@@ -176,16 +145,19 @@ ${DIFF_CONTENT}${DIFF_TRUNCATED}"
     echo "---"
     echo ""
     if [ -n "$RESPONSE_CONTENT" ]; then
+      if [ "$FINISH_REASON" = "length" ]; then
+        echo "**ATTENTION -- reponse TRONQUEE (finish_reason=length, max_tokens atteint) -- incomplete.**"
+        echo ""
+      fi
       echo "$RESPONSE_CONTENT"
     else
-      echo "**[ECHEC DE GENERATION DU RAPPORT]** -- HTTP status: ${HTTP_STATUS}."
+      echo "**[ECHEC DE GENERATION DU RAPPORT]** -- HTTP status: ${HTTP_STATUS}, finish_reason: ${FINISH_REASON}."
       echo ""
       echo "Aucune critique n'a pu etre generee pour ce push. Voir ${REVIEW_LOG} pour le detail."
     fi
   } > "$REPORT_FILE"
 
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- HTTP ${HTTP_STATUS} ===" >> "$REVIEW_LOG"
-  rm -f "$RESP_TMP"
 ) &
 disown
 

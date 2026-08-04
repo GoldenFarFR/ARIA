@@ -111,4 +111,38 @@ EOF
   fi
 fi
 
+# ── Rappel RAPPORTS AVOCAT DU DIABLE non lus (04/08, gap trouvé en direct par l'opérateur :
+# appels payés jamais suivis d'une lecture réelle -- "je paye pour rien") ─────────────────
+# scripts/devils-advocate-review.sh écrit désormais UN FICHIER PAR PUSH dans
+# architect-reports/pending/<sha>.md (jamais écrasé -- l'ancien fichier unique perdait
+# silencieusement tout rapport intermédiaire sur deux pushs rapprochés, gap confirmé
+# indépendamment par Gemini ET Claude Fable 5 sur le même test). "Lu" = geste EXPLICITE :
+# déplacer le fichier vers architect-reports/archived/ une fois vérifié/agi. Le rappel
+# ci-dessous liste tout ce qui reste en attente. Se répète (1) quand la LISTE change
+# (nouvelle arrivée pendant que d'anciens sont encore en attente) OU (2) tous les
+# INTERVAL messages (même compteur/cadence que le checkpoint HANDOFF ci-dessus) même si
+# la liste est STABLE -- backstop trouvé en direct (Fable 5, meme session, sur ce diff
+# lui-meme) : un throttle purement "liste changee" ne se repete JAMAIS si la session
+# ignore le rappel et qu'aucun NOUVEAU rapport n'arrive -- exactement le bug "je paye
+# pour rien" d'origine, deplace du fichier ecrase vers l'etat de rappel.
+PENDING_DIR="/opt/aria-data/architect-reports/pending"
+PENDING_REMINDED="$ROOT/.claude/.architect-pending-reminded-state"
+
+if [ -d "$PENDING_DIR" ]; then
+  pending_list=$(ls "$PENDING_DIR"/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null | sort | tr '\n' ',')
+  if [ -n "$pending_list" ]; then
+    last_state=""
+    [ -f "$PENDING_REMINDED" ] && last_state=$(cat "$PENDING_REMINDED" 2>/dev/null || true)
+    if [ "$pending_list" != "$last_state" ] || { [ "$INTERVAL" -gt 0 ] && [ $((n % INTERVAL)) -eq 0 ]; }; then
+      printf '%s' "$pending_list" > "$PENDING_REMINDED" 2>/dev/null || true
+      count=$(printf '%s' "$pending_list" | tr ',' '\n' | grep -c '\.md$')
+      cat <<EOF
+🕵️ RAPPORTS AVOCAT DU DIABLE NON LUS ($count) -- $PENDING_DIR
+Fichiers : $pending_list
+Avant de continuer à écrire du code, lis-les et vérifie chaque affirmation contre le vrai code (agent externe, peut halluciner -- jamais gober). Une fois un rapport traité (agi ou explicitement jugé non-actionnable), déplace-le vers $PENDING_DIR/../archived/ pour le retirer de la file.
+EOF
+    fi
+  fi
+fi
+
 exit 0
