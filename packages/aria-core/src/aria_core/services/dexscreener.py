@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 import httpx
 
+from aria_core import circuit_breaker_log
 from aria_core.skills.ta_levels import Candle
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,12 @@ def _in_cooldown() -> bool:
 def _record_outcome(*, ok: bool) -> None:
     global _consecutive_failures, _circuit_open_until
     if ok:
+        was_open = _consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD
         _consecutive_failures = 0
+        if was_open:
+            circuit_breaker_log.record_transition_nowait(
+                "dexscreener", "closed", consecutive_failures=0, cooldown_seconds=0.0,
+            )
         return
     _consecutive_failures += 1
     if _consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD:
@@ -98,6 +104,11 @@ def _record_outcome(*, ok: bool) -> None:
             "dexscreener: circuit breaker opened after %s consecutive failures -- pausing %ss",
             _consecutive_failures, _CIRCUIT_COOLDOWN_SECONDS,
         )
+        if _consecutive_failures == _CIRCUIT_FAIL_THRESHOLD:
+            circuit_breaker_log.record_transition_nowait(
+                "dexscreener", "opened",
+                consecutive_failures=_consecutive_failures, cooldown_seconds=_CIRCUIT_COOLDOWN_SECONDS,
+            )
 
 _SOCIAL_LABELS = {
     "twitter": "X (Twitter)",

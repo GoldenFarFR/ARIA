@@ -612,6 +612,31 @@ async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
     }
 
 
+@router.get("/diagnostics/circuit-breakers")
+async def diagnostics_circuit_breakers(request: Request):
+    """État live des circuit breakers externes (04/08, demande opérateur suite à
+    la perte des logs Docker bruts à un redéploiement -- "si ça peut améliorer le
+    suivi, implémente les logs permanents"). Pensé pour la même raison que les
+    autres diagnostics ci-dessus : une session Claude Code sans accès VPS/base
+    direct doit pouvoir vérifier si une API externe est cassée sans dépendre d'un
+    relais manuel. Même gate dédié que `/diagnostics/pool-status`.
+
+    Couvre uniquement les 5 fichiers qui ont un VRAI état ouvert/fermé (12 états :
+    blockscout par chaîne, dexscreener, goplus + goplus_auth, wallet_transfers
+    alchemy/moralis, la cascade OHLCV par provider) -- vérifié service par service
+    dans le code réel, pas supposé. Les 12 autres fichiers de service (compteur
+    sans cooldown ou sans seuil) ne sont PAS dans ce périmètre -- ce diagnostic ne
+    les mentionne pas plutôt que de laisser croire qu'ils sont surveillés.
+    """
+    from aria_core import circuit_breaker_status
+    from aria_core.diagnostics_access import verify_diagnostic_access
+
+    if not verify_diagnostic_access(request.headers.get("X-Diagnostic-Access")):
+        raise HTTPException(status_code=403, detail="Diagnostic access required")
+
+    return {"circuits": await circuit_breaker_status.get_circuit_status()}
+
+
 @router.get("/repertoire", response_model=list[RepertoireItem])
 async def list_repertoire():
     return await repertoire_db.get_all()

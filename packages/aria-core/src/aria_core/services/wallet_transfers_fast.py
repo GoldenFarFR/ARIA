@@ -43,6 +43,8 @@ import time
 
 import httpx
 
+from aria_core import circuit_breaker_log
+
 from aria_core.services.blockscout import TokenTransfer, TokenTransfersResult
 
 logger = logging.getLogger(__name__)
@@ -68,7 +70,13 @@ def _in_cooldown(provider: str) -> bool:
 
 def _record_outcome(provider: str, *, ok: bool) -> None:
     if ok:
+        was_open = _consecutive_failures.get(provider, 0) >= _CIRCUIT_FAIL_THRESHOLD
         _consecutive_failures[provider] = 0
+        if was_open:
+            circuit_breaker_log.record_transition_nowait(
+                f"wallet_transfers_{provider}", "closed",
+                consecutive_failures=0, cooldown_seconds=0.0,
+            )
         return
     failures = _consecutive_failures.get(provider, 0) + 1
     _consecutive_failures[provider] = failures
@@ -78,6 +86,11 @@ def _record_outcome(provider: str, *, ok: bool) -> None:
             "wallet_transfers_fast: %s -- %s consecutive failures, circuit "
             "breaker opened, pausing %ss", provider, failures, _CIRCUIT_COOLDOWN_SECONDS,
         )
+        if failures == _CIRCUIT_FAIL_THRESHOLD:
+            circuit_breaker_log.record_transition_nowait(
+                f"wallet_transfers_{provider}", "opened",
+                consecutive_failures=failures, cooldown_seconds=_CIRCUIT_COOLDOWN_SECONDS,
+            )
 
 ALCHEMY_BASE_URL = "https://base-mainnet.g.alchemy.com/v2"
 MORALIS_BASE_URL = "https://deep-index.moralis.io/api/v2.2"

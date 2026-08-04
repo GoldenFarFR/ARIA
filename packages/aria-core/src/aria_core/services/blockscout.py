@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from aria_core import circuit_breaker_log
 from aria_core.services import blockscout_credit_budget
 
 logger = logging.getLogger(__name__)
@@ -322,8 +323,14 @@ class BlockscoutClient:
             self._last_request = asyncio.get_event_loop().time()
 
     def _record_success(self) -> None:
+        was_open = self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        if was_open:
+            circuit_breaker_log.record_transition_nowait(
+                f"blockscout:{self.chain}", "closed",
+                consecutive_failures=0, cooldown_seconds=0.0,
+            )
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
@@ -336,6 +343,12 @@ class BlockscoutClient:
                 detail,
                 _CIRCUIT_COOLDOWN_SECONDS,
             )
+            if self._consecutive_failures == _FAIL_STREAK_WARN_THRESHOLD:
+                circuit_breaker_log.record_transition_nowait(
+                    f"blockscout:{self.chain}", "opened",
+                    consecutive_failures=self._consecutive_failures,
+                    cooldown_seconds=_CIRCUIT_COOLDOWN_SECONDS, detail=detail,
+                )
         else:
             logger.info("blockscout: call failed (%s/%s) — %s", self._consecutive_failures, _FAIL_STREAK_WARN_THRESHOLD, detail)
 

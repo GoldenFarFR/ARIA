@@ -45,6 +45,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from aria_core import circuit_breaker_log
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.gopluslabs.io/api/v1"
@@ -307,7 +309,12 @@ class GoPlusClient:
             self._last_request = asyncio.get_event_loop().time()
 
     def _record_success(self) -> None:
+        was_open = self._consecutive_failures >= _CIRCUIT_FAIL_THRESHOLD
         self._consecutive_failures = 0
+        if was_open:
+            circuit_breaker_log.record_transition_nowait(
+                "goplus", "closed", consecutive_failures=0, cooldown_seconds=0.0,
+            )
 
     def _record_failure(self, detail: str) -> None:
         self._consecutive_failures += 1
@@ -320,6 +327,12 @@ class GoPlusClient:
                 detail,
                 _CIRCUIT_COOLDOWN_S,
             )
+            if self._consecutive_failures == _CIRCUIT_FAIL_THRESHOLD:
+                circuit_breaker_log.record_transition_nowait(
+                    "goplus", "opened",
+                    consecutive_failures=self._consecutive_failures,
+                    cooldown_seconds=_CIRCUIT_COOLDOWN_S, detail=detail,
+                )
         elif self._consecutive_failures >= _FAIL_STREAK_WARN_THRESHOLD:
             logger.warning(
                 "goplus: %s consecutive failures (last: %s) — circuit breaker not yet open",
@@ -435,6 +448,17 @@ class GoPlusClient:
                         "check GOPLUS_APP_KEY/GOPLUS_APP_SECRET",
                         _AUTH_BROKEN_COOLDOWN_S,
                     )
+                    if time.time() >= self._auth_broken_until:
+                        # 04/08 -- only log a transition if it wasn't already
+                        # in cooldown (the "headers = None" fallback below
+                        # means a fresh code 4012 can't normally recur while
+                        # this cooldown is active, but the guard stays cheap
+                        # insurance against a future refactor doubling it up).
+                        circuit_breaker_log.record_transition_nowait(
+                            "goplus_auth", "opened",
+                            cooldown_seconds=_AUTH_BROKEN_COOLDOWN_S,
+                            detail="code 4012 (signature verification failure)",
+                        )
                     self._auth_broken_until = time.time() + _AUTH_BROKEN_COOLDOWN_S
                     auth_fallback_done = True
                     headers = None

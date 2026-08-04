@@ -2,6 +2,7 @@
 
 import pytest
 
+from aria_core import circuit_breaker_log
 from aria_core.services.blockscout import BlockscoutClient, UNAVAILABLE
 
 
@@ -516,6 +517,32 @@ async def test_circuit_breaker_opens_after_threshold_consecutive_failures(monkey
     info = await client.get_address_info("0xabc")
     assert info.available is False
     assert "disjoncteur" in info.error
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_open_logs_exactly_one_transition(monkeypatch):
+    """04/08 -- the threshold crossing must log exactly ONE 'opened' event
+    (never one per failure, which would turn a sustained outage into
+    thousands of DB rows), scoped by this client's own chain."""
+    _patch_no_sleep(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        circuit_breaker_log, "record_transition_nowait",
+        lambda service, event, **kw: calls.append((service, event, kw)),
+    )
+    client = BlockscoutClient()
+    url = f"{client.base_url}/addresses/0xabc"
+    _patch_client(monkeypatch, {url: [FakeResponse(500), FakeResponse(500)] * 3})
+
+    for _ in range(3):
+        await client.get_address_info("0xabc")
+
+    assert len(calls) == 1
+    service, event, kw = calls[0]
+    assert service == "blockscout:base"
+    assert event == "opened"
+    assert kw["consecutive_failures"] == 3
+    assert kw["cooldown_seconds"] == 180.0
 
 
 @pytest.mark.asyncio

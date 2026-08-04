@@ -79,7 +79,7 @@ import asyncio
 import logging
 import time
 
-from aria_core import momentum_blacklist
+from aria_core import circuit_breaker_log, momentum_blacklist
 from aria_core.chasing_filter_shadow import (
     RECENT_LOW_WINDOW_GOLDEN_POCKET,
     recent_low_from_candles,
@@ -1612,8 +1612,13 @@ def _provider_in_cooldown(name: str) -> bool:
 
 def _record_provider_outcome(name: str, *, ok: bool) -> None:
     if ok:
+        was_open = _provider_fail_counts.get(name, 0) >= _PROVIDER_FAIL_THRESHOLD
         _provider_fail_counts[name] = 0
         _provider_cooldown_until.pop(name, None)
+        if was_open:
+            circuit_breaker_log.record_transition_nowait(
+                f"ohlcv_{name}", "closed", consecutive_failures=0, cooldown_seconds=0.0,
+            )
         return
     count = _provider_fail_counts.get(name, 0) + 1
     _provider_fail_counts[name] = count
@@ -1623,6 +1628,11 @@ def _record_provider_outcome(name: str, *, ok: bool) -> None:
             "_fetch_candles: %s paused for %.0fs after %d consecutive failures (adaptive circuit breaker)",
             name, _PROVIDER_COOLDOWN_SECONDS, count,
         )
+        if count == _PROVIDER_FAIL_THRESHOLD:
+            circuit_breaker_log.record_transition_nowait(
+                f"ohlcv_{name}", "opened",
+                consecutive_failures=count, cooldown_seconds=_PROVIDER_COOLDOWN_SECONDS,
+            )
 
 
 # 20/07 -- external cross-review: the volume/liquidity ratio guardrail

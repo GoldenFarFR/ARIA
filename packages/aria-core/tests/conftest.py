@@ -46,3 +46,26 @@ def test_settings() -> AriaRuntimeSettings:
     from aria_core.runtime import get_settings
 
     return get_settings()
+
+
+@pytest.fixture(autouse=True)
+async def _drain_circuit_breaker_background_tasks():
+    """04/08 -- ``circuit_breaker_log.record_transition_nowait`` schedules a
+    fire-and-forget ``asyncio.Task`` (best-effort DB write) onto the CURRENT
+    event loop. Any test that drives a service module past its failure
+    threshold (blockscout/dexscreener/goplus/wallet_transfers_fast/momentum_
+    entry's OHLCV cascade -- exercised by plenty of PRE-EXISTING error/retry
+    tests, not just the new circuit-breaker-log tests) now schedules one of
+    these. pytest-asyncio tears down the loop at the end of each async test;
+    without draining here first, an in-flight task's aiosqlite worker thread
+    tries to signal a closed loop (`RuntimeError: Event loop is closed`,
+    surfaced as a noisy `PytestUnhandledThreadExceptionWarning`). Draining
+    after every test (not just circuit-breaker tests) keeps the whole suite
+    quiet regardless of which test happens to cross a threshold."""
+    yield
+    from aria_core import circuit_breaker_log
+
+    if circuit_breaker_log._background_tasks:
+        import asyncio
+
+        await asyncio.gather(*list(circuit_breaker_log._background_tasks), return_exceptions=True)
