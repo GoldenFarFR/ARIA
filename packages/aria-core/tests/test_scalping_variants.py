@@ -719,3 +719,21 @@ async def test_v8_rejects_price_already_ran_away(monkeypatch):
     sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
     assert sig["action"] == "HOLD"
     assert sig["hold_reason"] == "price_ran_away"
+
+
+@pytest.mark.asyncio
+async def test_v8_exempt_from_volume_hard_gate_but_v1_still_blocked(monkeypatch):
+    """08/05 (first autonomous live-data decision) -- v8 opts out of the
+    RVOL>=3x hard gate (empirically non-predictive, dominant starvation cause
+    in its first live 40 min); v1-v5 keep it byte-for-byte. The cache key
+    includes the flag so the two reads never contaminate each other."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True),
+                             volume_status="not_confirmed")
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+
+    v1 = await scalping_variants.evaluate_v1_bollinger(CONTRACT, CHAIN)
+    assert v1["action"] == "HOLD"
+    assert v1["hold_reason"] == "no_volume_confirmation"
+
+    v8 = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert v8["action"] == "BUY"

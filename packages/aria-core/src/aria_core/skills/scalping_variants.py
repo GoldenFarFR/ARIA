@@ -100,7 +100,7 @@ def _hold(chain: str, symbol: str, price: float, reason: str, hold_code: str) ->
 
 
 async def _gates_and_candles(
-    contract: str, chain: str,
+    contract: str, chain: str, *, enforce_volume_gate: bool = True,
 ) -> tuple["momentum_entry.PairSnapshot | None", list[Candle], dict | None]:
     """Shared plumbing for all 5 variants: hard gates (same as the RSI
     scalping mode, mode="scalping") then real 15-30min candles. Returns
@@ -109,21 +109,34 @@ async def _gates_and_candles(
 
     08/01 -- cached (see _gates_cache's own comment): the 5 variants are
     evaluated on the SAME candidate independently, this used to mean 5x the
-    network calls for identical data."""
-    key = (contract.lower(), (chain or "").lower())
+    network calls for identical data.
+
+    ``enforce_volume_gate`` (08/05, scalping_v8 -- first live-data decision
+    under Claude's autonomous mandate): v8 opts OUT of the RVOL>=3x hard
+    gate. Empirical basis, PRE-established by the same-day backtest (58 real
+    trades, BEFORE v8 shipped -- not a reactive tweak): RVOL at entry showed
+    NO predictive power on outcome (RVOL<1x actually won 42.9% vs 35.3% for
+    >=3x), and the first 40 live minutes confirmed the gate as v8's dominant
+    starvation cause (29 of 50 scans rejected on it alone -- the exact V2/V5
+    zero-trade trap this pocket's bootstrap mode exists to avoid). RVOL stays
+    computed and persisted by _buy_result (observational, feeds sizing),
+    only its HARD-GATE use is skipped for callers that opt out. Cache key
+    includes the flag -- a gated and an ungated read of the same candidate
+    never contaminate each other (v1-v5 byte-for-byte unchanged)."""
+    key = (contract.lower(), (chain or "").lower(), enforce_volume_gate)
     now = time.monotonic()
     cached = _gates_cache.get(key)
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    result = await _gates_and_candles_uncached(contract, chain)
+    result = await _gates_and_candles_uncached(contract, chain, enforce_volume_gate=enforce_volume_gate)
     _prune_gates_cache(now)
     _gates_cache[key] = (now + _GATES_CACHE_TTL_SECONDS, result)
     return result
 
 
 async def _gates_and_candles_uncached(
-    contract: str, chain: str,
+    contract: str, chain: str, *, enforce_volume_gate: bool = True,
 ) -> tuple["momentum_entry.PairSnapshot | None", list[Candle], dict | None]:
     best_pair, _honeypot_reason, hold = await momentum_entry.evaluate_hard_gates(
         contract, chain, mode="scalping",
@@ -196,13 +209,14 @@ async def _gates_and_candles_uncached(
     # informational/sizing signal (still computed and propagated in
     # _buy_result below, still feeds risk_guard's conviction sizing) -- only
     # its use as a HARD GATE here is removed.
-    volume_status, volume_reason, _rvol = momentum_entry._check_volume_confirmation(candles, mode="scalping")
-    if volume_status == "not_confirmed":
-        return None, [], _hold(
-            chain, best_pair.base_symbol, best_pair.price_usd,
-            f"rebond non soutenu par le volume ({volume_reason})",
-            "no_volume_confirmation",
-        )
+    if enforce_volume_gate:
+        volume_status, volume_reason, _rvol = momentum_entry._check_volume_confirmation(candles, mode="scalping")
+        if volume_status == "not_confirmed":
+            return None, [], _hold(
+                chain, best_pair.base_symbol, best_pair.price_usd,
+                f"rebond non soutenu par le volume ({volume_reason})",
+                "no_volume_confirmation",
+            )
     return best_pair, candles, None
 
 
@@ -700,7 +714,10 @@ _V8_TROUGH_WINDOW = 10
 async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
     from aria_core.skills import entry_signals
 
-    pair, candles, hold = await _gates_and_candles(contract, chain)
+    # enforce_volume_gate=False: v8's own empirically-grounded opt-out (see
+    # _gates_and_candles's docstring -- RVOL non-predictive on our data, and
+    # this gate alone caused 29/50 rejections in v8's first live 40 minutes).
+    pair, candles, hold = await _gates_and_candles(contract, chain, enforce_volume_gate=False)
     if hold is not None:
         return hold
     if pair is None:
