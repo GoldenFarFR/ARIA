@@ -183,6 +183,71 @@ async def test_record_sale_failure_never_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_record_sale_notifies_operator_on_success(monkeypatch, tmp_path):
+    """05/08, operator request: a Telegram alert on every real x402 sale."""
+    import aria_core.gateway.telegram_bot as telegram_bot_module
+    from aria_core import x402_revenue_ledger as ledger
+
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    sent = []
+
+    async def fake_send_message(text, *args, **kwargs):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(telegram_bot_module, "send_message", fake_send_message)
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyerAddress"))
+    await x402_signals._record_sale_if_paid(request, "b20_safety")
+
+    assert len(sent) == 1
+    assert "b20_safety" in sent[0]
+    assert "0xBuyerAddress" in sent[0]
+    assert "0.10" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_record_sale_notify_failure_never_raises(monkeypatch, tmp_path):
+    import aria_core.gateway.telegram_bot as telegram_bot_module
+    from aria_core import x402_revenue_ledger as ledger
+
+    from app.api.routes import x402_signals
+
+    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
+
+    async def raising_send(*args, **kwargs):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(telegram_bot_module, "send_message", raising_send)
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
+    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_record_sale_skips_notify_when_ledger_write_fails(monkeypatch):
+    import aria_core.gateway.telegram_bot as telegram_bot_module
+    import aria_core.x402_revenue_ledger as ledger_module
+
+    from app.api.routes import x402_signals
+
+    async def raising(**kwargs):
+        raise RuntimeError("db is down")
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("notify should never fire when the ledger write failed")
+
+    monkeypatch.setattr(ledger_module, "record_sale", raising)
+    monkeypatch.setattr(telegram_bot_module, "send_message", fail_if_called)
+
+    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
+    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise/call notify
+
+
+@pytest.mark.asyncio
 async def test_wallet_score_route_records_a_sale_when_paid(monkeypatch, tmp_path):
     from aria_core import x402_revenue_ledger as ledger
     from app.api.routes import x402_signals

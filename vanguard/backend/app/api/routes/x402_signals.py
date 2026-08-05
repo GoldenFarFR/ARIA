@@ -100,6 +100,23 @@ async def _record_sale_if_paid(request: Request | None, product: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001 -- never breaks the paid response
         logger.warning("x402_signals: failed to record sale for %s (%s)", product, exc)
+        return
+    await _notify_sale(product=product, payer=payer, amount_usd=amount_usd)
+
+
+async def _notify_sale(*, product: str, payer: str, amount_usd: float) -> None:
+    """Telegram alert on every real x402 sale (05/08, operator request).
+    Best-effort, same dome doctrine as the ledger write above: a notify
+    failure never breaks the already-paid response, only logged."""
+    try:
+        from aria_core.gateway.telegram_bot import send_message
+
+        await send_message(
+            f"\U0001f4b0 Vente x402 réelle : {product} (${amount_usd:.2f})\n"
+            f"Payeur : {payer}"
+        )
+    except Exception as exc:  # noqa: BLE001 -- never breaks the paid response
+        logger.warning("x402_signals: sale notify failed for %s (%s)", product, exc)
 
 
 @router.get("/walletscore/exists")
