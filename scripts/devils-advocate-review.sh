@@ -85,6 +85,18 @@ fi
 
 [ -z "$DIFF_CONTENT" ] && exit 0  # diff vide (ex. simple move de ref)
 
+# 05/08 -- exception validee par l'operateur ("oui je valide", issue du
+# rapport 4d94019c) : un push ne touchant QUE .github/** (pure config CI/
+# workflows, zero effet runtime sur le VPS) ne merite pas un appel paye --
+# l'infrastructure de surveillance (CodeQL/Dependabot/uptime) doit pouvoir
+# etre poussee immediatement sans attendre le seuil de 2000 lignes NI couter
+# une revue. Des qu'UN fichier hors .github/ est dans le diff, la revue
+# complete a lieu normalement.
+if [ "$MAIN_REMOTE_SHA" != "$ZERO_SHA" ]; then
+  NON_GITHUB_FILES=$(git diff --name-only "$MAIN_REMOTE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null | grep -cv "^\.github/" || true)
+  [ "$NON_GITHUB_FILES" = "0" ] && exit 0
+fi
+
 DIFF_LEN=${#DIFF_CONTENT}
 DIFF_TRUNCATED=""
 if [ "$DIFF_LEN" -gt 60000 ]; then
