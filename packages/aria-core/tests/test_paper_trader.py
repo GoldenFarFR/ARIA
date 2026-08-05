@@ -8150,3 +8150,20 @@ async def test_paused_pockets_source_nothing_but_focus_pockets_do(tmp_db, monkey
     # v8 is the ONLY variant whose analyzer ran at all -- the paused variants
     # were skipped upstream of any evaluation/network work.
     assert analyzer_called_for == ["evaluate_v8_wick_reversal"]
+
+
+@pytest.mark.asyncio
+async def test_high_water_starts_at_spot_not_degraded_fill(tmp_db):
+    """08/05 -- real bug caught by v8's first 4 live positions (all
+    trail-stopped in minutes at ~-3.9%, "high +0.0% vs entry"): seeding
+    high_water with the degraded fill (spot + simulated fee/impact) consumed
+    the whole trail width at t=0. Market levels live on SPOT; the fill only
+    prices what we paid."""
+    pos = await pt.open_position(
+        A, "AAA", 1.0, invalidation_price=0.9, alloc_usd=10_000,
+        pool_liquidity_usd=100_000.0, wallet="scalping", mode="scalping",
+    )
+    # fill is degraded above spot (fee + impact on 10% of the pool)
+    assert pos["entry_price"] > 1.0
+    # ...but the trailing high-water mark starts at the SPOT entry
+    assert pos["high_water_price"] == pytest.approx(1.0)

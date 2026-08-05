@@ -2106,7 +2106,21 @@ async def open_position(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
-             _now(), fill_price, qty, category or "", entry_security_json or None,
+             # 08/05 -- high_water_price starts at the SPOT entry (the
+             # ``entry_price`` argument), NOT the degraded ``fill_price``:
+             # real bug caught live by v8's very first 4 positions, ALL
+             # trail-stopped within minutes at ~-3.9% with "high +0.0% vs
+             # entry". Seeding the water mark with the fill (spot +1-3%
+             # simulated fee/impact) meant the market was ALREADY "-3% off
+             # its high" at t=0 -- the 2% trail was consumed before the
+             # trade drew its first breath, mechanically killing every
+             # scalping position whose entry friction exceeded its trail
+             # width (v6's 13.6%-WR "stop suiveur" exits share this bias
+             # since #175, 20/07). Doctrine (operator-validated the same
+             # evening): market LEVELS (high water, trail, stop) live on
+             # SPOT prices; the degraded fill only prices what we PAID
+             # (cost/qty/PnL, unchanged).
+             _now(), entry_price, qty, category or "", entry_security_json or None,
              (chain or "base").lower(), thesis, entry_atr_pct,
              strategy or "momentum", pool_liquidity_usd, entry_regime, entry_dev_sold_pct,
              # 07/22 -- task #4: initialized to the same value as entry_liquidity_usd
