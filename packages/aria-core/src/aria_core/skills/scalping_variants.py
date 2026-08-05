@@ -628,10 +628,160 @@ async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
     )
 
 
+# ── V8 -- Wick-confirmed RSI-divergence reversal (08/05, operator carte
+# blanche: "je te donne carte blanche pour me crée une poche v8 avec tes
+# convictions selon les données récoltées") ─────────────────────────────────
+# Every design choice below is anchored to the 05/08 empirical session (58
+# real closed trades reconstructed candle-by-candle + the free in-DB analysis
+# of all 124 closed trades), never to theory alone:
+#   - ENTRY = bullish RSI divergence (scalping period 10, CLOSED candles --
+#     the two 05/08 fixes) CONFIRMED by a lower-wick (hammer) signal candle:
+#     wick ratio >= 0.3 won 60% vs 25.6% without (p=0.026), the ONLY entry
+#     discriminator that survived confound checks (pocket + period).
+#   - The divergence itself is CONTEXT, not the edge: its gap/span showed
+#     ~zero outcome correlation on real trades (05/08 analysis) -- so no
+#     invented calibration on them, standard detection as-is.
+#   - FRESHNESS gate: the divergence's recent pivot must be <= 5 closed
+#     candles old -- a stale divergence is a historical chart pattern, not an
+#     entry (34% of real trades never traded above entry again: buying late
+#     into a dead setup is the dominant historical failure mode).
+#   - ANTI-CHASE gate: live price must not already sit > 2% above the signal
+#     candle's close -- median max gain across ALL 58 trades was +0.47%, and
+#     the two real winners measured (DEGEN/LIQ) peaked at +4-6%: entering
+#     +2%+ late consumes the whole move before we're even in.
+#   - NO fixed take-profit (target=None, V5 pattern): tight fixed SL/TP grids
+#     were ALL negative-EV on our data (12/12 combos, SL hit first on up to
+#     53/58 trades) and v6's winning exits were the technical ones (bearish-
+#     divergence exit 60% WR) -- exits stay: ATR trail (scalping bounds) +
+#     bearish-RSI-divergence + the SHORTER v8 stagnation timeout
+#     (paper_trader._scalping_stagnation_params_for_wallet: 1.5h, vs 3h
+#     generic -- "timeout stagnation" was 0% WR over 45 real trades; a trade
+#     that doesn't move fast is already dead, free the capital sooner).
+#   - NO RVOL gate: empirically non-predictive on our memecoin trades
+#     (RVOL<1x actually won MORE than >=3x) -- logged by _buy_result for
+#     observation, never gated.
+# Future variants (operator: "anticiper des test pour de futur version 8.1
+# 8.2"): every knob is a named constant below -- a new variant = a new
+# constants set threaded the same way v7 overrides v6's watch span (see
+# build_scalping_pocket_entries), e.g. 8.1 = wick >= 0.6 alone (drop the
+# divergence requirement, test whether the hammer IS the whole signal),
+# 8.2 = tighter freshness/stagnation. Never retune v8 in place once it has
+# live history -- add a pocket, keep the comparison arm (v6/v7 doctrine).
+_V8_WICK_MIN_RATIO = 0.30
+_V8_MAX_BARS_SINCE_PIVOT = 5
+_V8_MAX_CHASE_PCT = 2.0
+_V8_STOP_ATR_MULT = 1.5
+# Sizing-only R/R (V5's exact pattern -- target stays None, this never
+# becomes a TP level). Two tiers: a wick entry BACKED by a confirmed fresh
+# RSI divergence earns the standard tier (2.0, the 60%-WR historical basis
+# was measured on divergence-triggered trades), a bootstrap wick-only entry
+# sizes more defensively (1.5, V5's tier) until its own forward data exists.
+_V8_SIZING_RR_WITH_DIVERGENCE = 2.0
+_V8_SIZING_RR_WICK_ONLY = 1.5
+# BOOTSTRAP MODE (08/05, operator: "fait en sorte qu'il trade beaucoup au
+# début en étant souple, ça permettra d'obtenir un minimum de données") --
+# the full divergence requirement stacked on wick+freshness+anti-chase would
+# likely reproduce the V2/V5 zero-trade trap (both sat at zero for DAYS until
+# relaxed twice, same file above). While True: the RSI divergence is OPTIONAL
+# and TRACED (each buy's reason says whether it was present) instead of
+# required -- the wick gate (the actual validated edge) plus a FRESH LOCAL
+# TROUGH requirement still hold unconditionally. This doubles as the 8.1
+# experiment for free: wick-only vs wick+divergence sub-populations accumulate
+# side by side in the same pocket, separable by reason/rr at analysis time.
+# Flip to False (a conscious, documented decision -- accelerated-observation
+# doctrine, CLAUDE.md 27/07) once enough forward trades exist to judge.
+_V8_BOOTSTRAP_MODE = True
+# Bootstrap trough freshness: the lowest low of the recent window must sit
+# within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
+# spirit as the divergence pivot check, computed directly on the candles.
+_V8_TROUGH_WINDOW = 10
+
+
+async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
+    from aria_core.skills import entry_signals
+
+    pair, candles, hold = await _gates_and_candles(contract, chain)
+    if hold is not None:
+        return hold
+    if pair is None:
+        return None
+    detail = entry_signals._bullish_rsi_divergence_detail(
+        candles, period=entry_signals.SCALPING_RSI_PERIOD
+    )
+    divergence_fresh = (
+        detail.present
+        and detail.bars_since_recent_pivot is not None
+        and detail.bars_since_recent_pivot <= _V8_MAX_BARS_SINCE_PIVOT
+    )
+    if not divergence_fresh:
+        if not _V8_BOOTSTRAP_MODE:
+            reason = (
+                "pas de divergence RSI haussière (période scalping)"
+                if not detail.present
+                else f"divergence trop ancienne (pivot il y a {detail.bars_since_recent_pivot} "
+                f"bougies > {_V8_MAX_BARS_SINCE_PIVOT})"
+            )
+            return _hold(chain, pair.base_symbol, pair.price_usd, reason,
+                         "no_signal" if not detail.present else "stale_divergence")
+        # bootstrap: no divergence needed, but the wick must reject a FRESH
+        # local trough -- a hammer printed mid-range confirms nothing.
+        window = candles[-_V8_TROUGH_WINDOW:]
+        min_low = min(c.low for c in window)
+        bars_since_trough = len(window) - 1 - max(
+            i for i, c in enumerate(window) if c.low == min_low
+        )
+        if bars_since_trough > _V8_MAX_BARS_SINCE_PIVOT:
+            return _hold(
+                chain, pair.base_symbol, pair.price_usd,
+                f"creux local trop ancien ({bars_since_trough} bougies > "
+                f"{_V8_MAX_BARS_SINCE_PIVOT}, fenêtre {_V8_TROUGH_WINDOW})", "stale_trough",
+            )
+    wick = indicators.hammer_wick_ratio(candles[-1])
+    if wick is None or wick < _V8_WICK_MIN_RATIO:
+        shown = "n/a" if wick is None else f"{wick:.2f}"
+        return _hold(
+            chain, pair.base_symbol, pair.price_usd,
+            f"bougie de signal sans rejet du bas (mèche {shown} < {_V8_WICK_MIN_RATIO})",
+            "no_wick_confirmation",
+        )
+    entry = pair.price_usd
+    signal_close = candles[-1].close
+    if signal_close > 0 and entry > signal_close * (1 + _V8_MAX_CHASE_PCT / 100.0):
+        return _hold(
+            chain, pair.base_symbol, entry,
+            f"prix déjà parti (+{(entry / signal_close - 1) * 100:.1f}% au-dessus de la "
+            f"bougie de signal, max {_V8_MAX_CHASE_PCT:.0f}%)", "price_ran_away",
+        )
+    atr = _atr_value(candles)
+    if not atr or atr <= 0:
+        return _hold(chain, pair.base_symbol, entry, "ATR non calculable", "indicator_unavailable")
+    stop = entry - _V8_STOP_ATR_MULT * atr
+    if stop <= 0:
+        return _hold(chain, pair.base_symbol, entry, "stop ATR invalide (<=0)", "invalid_stop")
+    if divergence_fresh:
+        basis = (
+            f"divergence RSI confirmée (pivot il y a {detail.bars_since_recent_pivot} bougies)"
+        )
+        sizing_rr = _V8_SIZING_RR_WITH_DIVERGENCE
+    else:
+        basis = "creux local frais sans divergence (bootstrap)"
+        sizing_rr = _V8_SIZING_RR_WICK_ONLY
+    return _buy_result(
+        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=None,
+        reason=(
+            f"mèche basse confirmée (ratio {wick:.2f} >= {_V8_WICK_MIN_RATIO}), "
+            f"{basis}, sans TP fixe"
+        ),
+        variant="V8 wick reversal",
+        candles=candles, sizing_rr=sizing_rr, recent_low_window=RECENT_LOW_WINDOW_STOCHASTIC,
+    )
+
+
 VARIANT_ANALYZERS = {
     "scalping_v1": evaluate_v1_bollinger,
     "scalping_v2": evaluate_v2_vwap_institutional,
     "scalping_v3": evaluate_v3_stochastic,
     "scalping_v4": evaluate_v4_combo,
     "scalping_v5": evaluate_v5_vwap_trailing,
+    "scalping_v8": evaluate_v8_wick_reversal,
 }

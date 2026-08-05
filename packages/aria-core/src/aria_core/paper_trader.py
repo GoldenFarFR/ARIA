@@ -81,6 +81,26 @@ MODE = "trading"
 SCALPING_STAGNATION_TIMEOUT_HOURS = 3.0
 SCALPING_STAGNATION_MIN_MOVE_PCT = 1.0
 
+# 08/05 -- per-wallet stagnation overrides (scalping_v8, operator carte
+# blanche). Empirical basis: "timeout stagnation" closed 45 real scalping
+# trades at a 0% win rate, and 34% of trades never traded above entry at all
+# (05/08 candle-reconstruction backtest) -- a scalping position that hasn't
+# moved fast is already dead, so v8 frees the capital at 1.5h instead of the
+# generic 3h. Seam for future variants (8.1/8.2...): one entry per wallet,
+# (timeout_hours, min_move_pct); every wallet absent here keeps the generic
+# constants above -- v1..v7 behavior is byte-for-byte unchanged.
+_SCALPING_STAGNATION_OVERRIDES_BY_WALLET: dict[str, tuple[float, float]] = {
+    "scalping_v8": (1.5, SCALPING_STAGNATION_MIN_MOVE_PCT),
+}
+
+
+def _scalping_stagnation_params_for_wallet(wallet: str | None) -> tuple[float, float]:
+    """(timeout_hours, min_move_pct) for this pocket's stagnation exit --
+    generic constants unless the wallet has an explicit override above."""
+    return _SCALPING_STAGNATION_OVERRIDES_BY_WALLET.get(
+        wallet or "", (SCALPING_STAGNATION_TIMEOUT_HOURS, SCALPING_STAGNATION_MIN_MOVE_PCT)
+    )
+
 # 07/18 -- explicit operator decision: replaces the 30d/7d/14d protocol. ARIA restarts at
 # $1M EVERY week, target +10% ($1.1M) VALIDATED every week -- a repeated TRAINING loop
 # (never a one-time exit gate to cross once). The reset happens whether the week was
@@ -3212,6 +3232,31 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
 # accumulates under this new shape.
 MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 10
 
+# 08/05 -- explicit operator decision ("je veut que tu désactive tous les
+# autres poches sauf v6 et swing et ton agent pour focus les appels sur
+# eux") : SOURCING pause list. Pockets listed here open NO new position (both
+# the heartbeat loop and the WebSocket drain consult sourcing_paused() at the
+# top of their pocket loops) but keep everything else: existing positions
+# stay MANAGED to natural close (stop/TP/stagnation/weekly reset), history/
+# reporting untouched, capital state intact -- flip back by removing the
+# wallet from this set, nothing to migrate. Rationale: every paused pocket
+# multiplies hard-gate + candle + honeypot network calls each cycle for
+# comparison arms that already told their story (v1-v5/v7 all deeply
+# negative or near-zero trades; vc dormant by design; megacap 0 trades) --
+# the freed API budget concentrates on the 3 arms that matter now:
+# scalping_v6 (ungated wick-shadow control), swing, scalping_v8 (Claude's
+# gated agent).
+SOURCING_PAUSED_WALLETS: frozenset[str] = frozenset({
+    "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
+    "scalping_v7", "vc", "megacap",
+})
+
+
+def sourcing_paused(wallet: str | None) -> bool:
+    """True when this pocket must not SOURCE new entries this cycle (see
+    SOURCING_PAUSED_WALLETS above) -- position management is never affected."""
+    return (wallet or "") in SOURCING_PAUSED_WALLETS
+
 
 def build_scalping_pocket_entries(
     momentum_candidates: list[str],
@@ -3236,7 +3281,7 @@ def build_scalping_pocket_entries(
     Gate OFF (``scalping_variants_enabled()`` False): byte-for-byte the
     historical single "scalping" pocket, full candidate list, unchanged.
 
-    Gate ON: 7 pockets, not 6 -- ``scalping_v6`` (08/01, operator's explicit
+    Gate ON: 8 pockets -- ``scalping_v6`` (08/01, operator's explicit
     call, "le scalping met le à part en v6") is the SAME legacy RSI-
     divergence engine (``_default_momentum_analyzer(mode="scalping")``) the
     single "scalping" pocket always used, kept as its own comparison arm
@@ -3245,6 +3290,13 @@ def build_scalping_pocket_entries(
     rows, risk_guard_state file) was migrated wallet "scalping" ->
     "scalping_v6" in the same rollout (one-off migration, see
     docs/HANDOFF_PIPELINE_MOMENTUM.md), never re-created from zero.
+
+    ``scalping_v8`` (08/05, operator carte blanche) comes in through
+    ``VARIANT_ANALYZERS`` like v1..v5 (a direct-buy engine, no limit-order
+    watch): wick-confirmed RSI-divergence reversal -- every design choice
+    anchored to the 05/08 candle-reconstruction backtest, see the V8 block
+    in skills/scalping_variants.py. Its shorter stagnation timeout rides
+    ``_SCALPING_STAGNATION_OVERRIDES_BY_WALLET`` above.
 
     ``scalping_v7`` (08/04): SAME legacy engine as v6, byte-for-byte, except
     it overrides the RSI-divergence watch's trigger span (``rsi_watch_span``
@@ -3429,6 +3481,13 @@ _SCALPING_VARIANT_WALLETS = (
     # watch span (4-10 vs v6's 15-20), see build_scalping_pocket_entries's
     # own docstring for the empirical rationale.
     "scalping_v7",
+    # scalping_v8 (08/05, operator carte blanche -- Claude's own pocket) --
+    # wick-confirmed reversal engine, VARIANT_ANALYZERS entry like v1..v5.
+    # Missing from this tuple = invisible to the macro circuit breaker,
+    # /portfolio, reporting AND is_scalping_pocket() (which would silently
+    # give v8 the STANDARD exit discipline) -- the locked pocket-list tests
+    # caught exactly that before it could ship.
+    "scalping_v8",
 )
 
 
@@ -5517,6 +5576,11 @@ async def _run_paper_cycle_locked(
             # here via that branch (price never dropped to active_stop either).
             if p.get("mode") == "scalping":
                 hours_open = _hours_since(p.get("opened_at"))
+                # 08/05 -- per-wallet override seam (scalping_v8's shorter
+                # timeout, see _SCALPING_STAGNATION_OVERRIDES_BY_WALLET).
+                stagnation_timeout_hours, stagnation_min_move_pct = (
+                    _scalping_stagnation_params_for_wallet(p.get("wallet"))
+                )
                 # Best price ever OBSERVED, not the confirmed (ratcheted) high
                 # water -- the trailing-stop ratchet requires ~75s of holding
                 # above the old high (HIGH_WATER_CONFIRMATION_SECONDS) before
@@ -5545,14 +5609,14 @@ async def _run_paper_cycle_locked(
                 exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
                 if (
                     hours_open is not None
-                    and hours_open >= SCALPING_STAGNATION_TIMEOUT_HOURS
-                    and peak_gain_pct < SCALPING_STAGNATION_MIN_MOVE_PCT
-                    and exit_gain_pct > -SCALPING_STAGNATION_MIN_MOVE_PCT
+                    and hours_open >= stagnation_timeout_hours
+                    and peak_gain_pct < stagnation_min_move_pct
+                    and exit_gain_pct > -stagnation_min_move_pct
                 ):
                     exit_notes = (
                         f"Timeout de stagnation (scalping) : aucun mouvement > "
-                        f"+{SCALPING_STAGNATION_MIN_MOVE_PCT:.1f}% depuis l'entrée en "
-                        f"{SCALPING_STAGNATION_TIMEOUT_HOURS:.0f}h (plus haut {peak_gain_pct:+.1f}%) -- "
+                        f"+{stagnation_min_move_pct:.1f}% depuis l'entrée en "
+                        f"{stagnation_timeout_hours:.1f}h (plus haut {peak_gain_pct:+.1f}%) -- "
                         f"clôture forcée pour libérer le capital ({exit_gain_pct:+.1f}% net vs entrée), "
                         f"{_duration_phrase(p.get('opened_at'))}."
                     )
@@ -6018,6 +6082,12 @@ async def _run_paper_cycle_locked(
             ("vc", vc_candidates, vc_analyzer, "standard", MAX_POSITIONS_VC),
             ("megacap", megacap_candidates, megacap_analyzer, "standard", MAX_POSITIONS_MEGACAP),
         ):
+            # 08/05 -- operator focus decision: paused pockets never source
+            # (see SOURCING_PAUSED_WALLETS) -- their open positions are still
+            # managed by the position loop above, this skip only stops NEW
+            # entries and the network calls their evaluation would cost.
+            if sourcing_paused(pocket_wallet):
+                continue
             # 27/07 -- Phase 3: independent per-pocket risk state -- SUPERSEDES
             # the single ``risk_state`` snapshot computed above (that one
             # stays "swing"-scoped, only used for weekly_context/its own

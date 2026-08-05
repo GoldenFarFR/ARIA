@@ -272,6 +272,12 @@ class RsiDivergenceDetail:
     reason: str
     gap: float | None = None
     span: int | None = None
+    # 08/05 (scalping_v8) -- freshness of the divergence: how many candles
+    # separate the RECENT pivot low (i2) from the end of the series. A
+    # divergence whose recent pivot is many candles old is a historical
+    # pattern, not an actionable entry -- v8 gates on this staying small.
+    # Additive field, ``None`` when no divergence (same doctrine as gap/span).
+    bars_since_recent_pivot: int | None = None
 
 
 def _bullish_rsi_divergence_detail(
@@ -310,6 +316,7 @@ def _bullish_rsi_divergence_detail(
                 f"plus-bas prix {l2:.6g} < {l1:.6g} mais RSI remonte ({r1:.0f} → {r2:.0f})",
                 gap=r2 - r1,
                 span=i2 - i1,
+                bars_since_recent_pivot=len(candles) - 1 - i2,
             )
     return RsiDivergenceDetail(False, "")
 

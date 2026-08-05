@@ -4078,20 +4078,22 @@ async def test_run_cycle_tracking_alert_never_double_counts_a_pocket_with_no_pap
     tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
     assert len(tracking_alerts) == 1
     msg = tracking_alerts[0]
-    # 9 real pockets (scalping_v1..v5 + scalping_v6 + scalping_v7 + swing +
-    # vc), never the stale "3" -- see all_pocket_wallets()'s own doctrine.
-    assert "9 poches combinées" in msg
+    # 10 real pockets (scalping_v1..v5 + scalping_v6 + scalping_v7 +
+    # scalping_v8 + swing + vc), never the stale "3" -- see
+    # all_pocket_wallets()'s own doctrine.
+    assert "10 poches combinées" in msg
     assert "3 poches combinées" not in msg
     # The old bug's signature: a ghost "scalping" wallet's untouched $1M
     # (never reduced by the real ~$10,000 position under scalping_v1) added
     # on top of that same position's own value -- equity would read
-    # ~$9,010,000 (double-counted) instead of ~$9,000,000 (9 pockets at $1M
-    # each; the small residual gap from an exact 9x starting capital is the
-    # simulated scalping swap fee on entry, not a bug -- see simulated_fill_
-    # price). A tolerance of $200 comfortably separates "correct, minor
-    # slippage" from "double-counted, off by the full position size".
+    # ~$10,010,000 (double-counted) instead of ~$10,000,000 (10 pockets at
+    # $1M each since v8, 08/05; the small residual gap from an exact 10x
+    # starting capital is the simulated scalping swap fee on entry, not a
+    # bug -- see simulated_fill_price). A tolerance of $200 comfortably
+    # separates "correct, minor slippage" from "double-counted, off by the
+    # full position size".
     equity_str = msg.split("équité ")[1].split(" $")[0].replace(",", "")
-    assert abs(float(equity_str) - 9_000_000.0) < 200.0
+    assert abs(float(equity_str) - 10_000_000.0) < 200.0
 
 
 @pytest.mark.asyncio
@@ -5861,6 +5863,9 @@ async def test_multi_pocket_gate_on_vc_pocket_sources_bonding_candidates(tmp_db,
     "momentum" (bonding_entry.py's own dict), never "vc_thesis" -- only the
     capital pool/reset eligibility changes with the wallet, never the exit
     discipline."""
+    # 08/05 -- sourcing pause neutralized: this test validates the pocket
+    # ARCHITECTURE, the pause behavior has its own dedicated tests.
+    monkeypatch.setattr(pt, "SOURCING_PAUSED_WALLETS", frozenset())
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     from aria_core import bonding_entry
@@ -5910,6 +5915,9 @@ async def test_multi_pocket_gate_on_megacap_pocket_sources_from_fixed_watchlist(
     list_watchlist_candidates(), never momentum_candidates -- confirmed here
     by mocking a single fixed-watchlist contract distinct from the shared
     momentum discovery (empty this cycle)."""
+    # 08/05 -- sourcing pause neutralized: this test validates the pocket
+    # ARCHITECTURE, the pause behavior has its own dedicated tests.
+    monkeypatch.setattr(pt, "SOURCING_PAUSED_WALLETS", frozenset())
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
     from aria_core import fixed_watchlist
@@ -7337,6 +7345,9 @@ async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, 
     scalping and swing at once -- proof #1 of this chantier's whole point."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
+    # 08/05 -- sourcing pause neutralized: this test validates the 3-pocket
+    # architecture itself, the pause has its own dedicated tests.
+    monkeypatch.setattr(pt, "SOURCING_PAUSED_WALLETS", frozenset())
     from aria_core import momentum_entry
     from aria_core.skills import candidate_ranking
 
@@ -7565,12 +7576,12 @@ def test_all_pocket_wallets_gate_off_returns_classic_three():
     assert pt.all_pocket_wallets() == ("scalping", "swing", "vc")
 
 
-def test_all_pocket_wallets_gate_on_returns_seven_variants_plus_two(monkeypatch):
+def test_all_pocket_wallets_gate_on_returns_eight_variants_plus_two(monkeypatch):
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     wallets = pt.all_pocket_wallets()
     assert wallets == (
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "swing", "vc",
+        "scalping_v7", "scalping_v8", "swing", "vc",
     )
 
 
@@ -7627,7 +7638,7 @@ def test_all_pocket_wallets_gate_on_with_megacap_enabled(monkeypatch):
     wallets = pt.all_pocket_wallets()
     assert wallets == (
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "swing", "vc", "megacap",
+        "scalping_v7", "scalping_v8", "swing", "vc", "megacap",
     )
 
 
@@ -7647,7 +7658,7 @@ def test_uses_fine_rsi_confirmation_false_for_vc():
 
 
 def test_uses_fine_rsi_confirmation_false_for_scalping_pockets():
-    for wallet in ("scalping", "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
+    for wallet in ("scalping", "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6", "scalping_v8"):
         assert pt.uses_fine_rsi_confirmation(wallet) is False
 
 
@@ -7700,7 +7711,7 @@ async def test_all_reporting_wallets_includes_retired_pocket_with_history(tmp_db
 
 
 @pytest.mark.asyncio
-async def test_scalping_variants_enabled_replaces_scalping_pocket_with_seven(tmp_db, monkeypatch):
+async def test_scalping_variants_enabled_replaces_scalping_pocket_with_eight(tmp_db, monkeypatch):
     """The classic "scalping" slot disappears from SOURCING entirely -- each
     of the 5 variant pockets PLUS scalping_v6 (08/01, the legacy RSI-
     divergence engine kept as its own comparison arm, "le scalping met le à
@@ -7709,6 +7720,10 @@ async def test_scalping_variants_enabled_replaces_scalping_pocket_with_seven(tmp
     sharing the SAME momentum discovery pass (never a duplicated network call)."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    # 08/05 -- sourcing pause (operator focus decision) is a SEPARATE concern,
+    # neutralized here so this test keeps validating the FULL 8-pocket
+    # architecture (dedicated tests below cover the pause behavior itself).
+    monkeypatch.setattr(pt, "SOURCING_PAUSED_WALLETS", frozenset())
     from aria_core import momentum_entry
     from aria_core.skills import candidate_ranking, scalping_variants
 
@@ -7753,9 +7768,9 @@ async def test_scalping_variants_enabled_replaces_scalping_pocket_with_seven(tmp
     wallets_opened = {p["wallet"] for p in act["opened"]}
     assert wallets_opened == {
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7",
+        "scalping_v7", "scalping_v8",
     }
-    assert len(act["opened"]) == 7
+    assert len(act["opened"]) == 8
     assert await pt.get_open_positions(wallet="scalping") == []  # classic slot never sourced
     for key in (*scalping_variants.VARIANT_ANALYZERS, "scalping_v6", "scalping_v7"):
         positions = await pt.get_open_positions(wallet=key)
@@ -7782,13 +7797,14 @@ def test_build_scalping_pocket_entries_gate_off_single_pocket_full_candidates():
     assert cap == pt.MAX_POSITIONS_SCALPING
 
 
-def test_build_scalping_pocket_entries_gate_on_returns_seven_pockets(monkeypatch):
+def test_build_scalping_pocket_entries_gate_on_returns_eight_pockets(monkeypatch):
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     entries = pt.build_scalping_pocket_entries([f"0xC{i}" for i in range(30)], {})
     wallets = [e[0] for e in entries]
+    # VARIANT_ANALYZERS order (v1..v5, v8) then the two legacy-engine arms
     assert wallets == [
-        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7",
+        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v8",
+        "scalping_v6", "scalping_v7",
     ]
     assert all(e[3] == "scalping" for e in entries)
     assert all(e[4] == pt.MAX_POSITIONS_SCALPING for e in entries)
@@ -8046,3 +8062,87 @@ async def test_open_new_entries_suppresses_repeat_failure_notification(tmp_db):
     active = await limit_orders.get_active_orders()
     assert len(active) == 1  # the new order IS created, never gated
     assert notified == []  # but the repeat-failure notification is suppressed
+
+
+def test_scalping_stagnation_override_v8_shorter_timeout():
+    """08/05 (scalping_v8) -- per-wallet stagnation seam: v8 gets 1.5h, every
+    other wallet (and a missing wallet) keeps the generic constants
+    byte-for-byte."""
+    from aria_core import paper_trader as pt
+
+    assert pt._scalping_stagnation_params_for_wallet("scalping_v8") == (
+        1.5, pt.SCALPING_STAGNATION_MIN_MOVE_PCT,
+    )
+    generic = (pt.SCALPING_STAGNATION_TIMEOUT_HOURS, pt.SCALPING_STAGNATION_MIN_MOVE_PCT)
+    assert pt._scalping_stagnation_params_for_wallet("scalping_v6") == generic
+    assert pt._scalping_stagnation_params_for_wallet(None) == generic
+
+
+# ── sourcing pause (08/05, operator focus decision: v6 + swing + v8 only) ───
+
+def test_sourcing_paused_default_state():
+    """v1-v5/v7/vc/megacap paused; the 3 focus arms (v6, swing, v8) and the
+    legacy gate-off "scalping" slot never paused."""
+    for w in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4",
+              "scalping_v5", "scalping_v7", "vc", "megacap"):
+        assert pt.sourcing_paused(w) is True
+    for w in ("scalping_v6", "swing", "scalping_v8", "scalping", None):
+        assert pt.sourcing_paused(w) is not True
+
+
+@pytest.mark.asyncio
+async def test_paused_pockets_source_nothing_but_focus_pockets_do(tmp_db, monkeypatch):
+    """End-to-end through run_paper_cycle with the DEFAULT pause state (no
+    neutralization): only the focus arms open -- paused pockets are skipped
+    before their analyzer even runs (that's the point: no network cost).
+    Same full setup as test_scalping_variants_enabled_replaces_scalping_
+    pocket_with_eight above, minus the pause neutralization."""
+    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    from aria_core import momentum_entry
+    from aria_core.skills import candidate_ranking, scalping_variants
+
+    async def _fake_sources(*, limit=20):
+        return [D], {D: "base"}
+
+    monkeypatch.setattr(pt, "_momentum_candidates_and_chain_map", _fake_sources)
+
+    async def _fake_top_candidates(limit):
+        return []
+
+    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
+    analyzer_called_for: list[str] = []
+
+    def _tracking_fake_variant_analyzer(evaluate_fn, chain_by_contract):
+        async def analyzer(contract):
+            analyzer_called_for.append(getattr(evaluate_fn, "__name__", "?"))
+            return {
+                "action": "BUY", "chain": "base", "symbol": "DDD", "price": 1.0,
+                "target": 2.0, "invalidation": 0.9, "mode": "scalping",
+            }
+        return analyzer
+
+    monkeypatch.setattr(pt, "_scalping_variant_analyzer", _tracking_fake_variant_analyzer)
+
+    async def _fake_eval(contract, chain, *, weekly_context=None, current_regime=None, relaxed=False, mode="standard", waive_holder_concentration=False, rsi_watch_span=None):
+        if mode != "scalping":
+            return {"action": "HOLD", "chain": chain, "symbol": "DDD", "price": 1.0, "hold_reason": "test_stub"}
+        return {
+            "action": "BUY", "chain": chain, "symbol": "DDD", "price": 1.0,
+            "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3, "mode": mode,
+        }
+
+    monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", _fake_eval)
+
+    await pt.reset_portfolio(1_000_000.0)
+    act = await pt.run_paper_cycle(price_lookup=_price_lookup_one, depeg_check=_no_depeg)
+
+    wallets_opened = {p["wallet"] for p in act["opened"]}
+    assert "scalping_v6" in wallets_opened
+    assert "scalping_v8" in wallets_opened
+    for paused in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4",
+                   "scalping_v5", "scalping_v7", "vc", "megacap"):
+        assert paused not in wallets_opened
+    # v8 is the ONLY variant whose analyzer ran at all -- the paused variants
+    # were skipped upstream of any evaluation/network work.
+    assert analyzer_called_for == ["evaluate_v8_wick_reversal"]

@@ -672,6 +672,13 @@ class MomentumWebsocketListener:
                 ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
                 ("megacap", megacap_candidates, megacap_analyzer, "standard", paper_trader.MAX_POSITIONS_MEGACAP),
             ):
+                # 08/05 -- operator focus decision: paused pockets never
+                # source here either (same filter as the heartbeat loop,
+                # paper_trader.SOURCING_PAUSED_WALLETS -- the two loops must
+                # never diverge on this, same doctrine as the shared
+                # build_scalping_pocket_entries itself).
+                if paper_trader.sourcing_paused(pocket_wallet):
+                    continue
                 try:
                     # 27/07 -- Phase 3: independent per-pocket risk state --
                     # a drawdown/losing streak on ONE pocket alone must never

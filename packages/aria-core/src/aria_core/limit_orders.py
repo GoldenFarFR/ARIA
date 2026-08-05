@@ -684,6 +684,27 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
             )
         except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real trigger
             logger.info("limit_orders: chasing_filter_shadow.record_check failed (%s)", exc)
+        # 08/05 -- wick-confirmation shadow filter (see wick_filter_shadow.py's
+        # module docstring for the empirical basis: signal-candle lower-wick
+        # ratio >= 0.3 won 60% vs 25.6% below, on 58 reconstructed real
+        # trades). Logged on this SAME dominant trigger path, NEVER blocking:
+        # the goal is to validate the threshold on forward v6/v7 trades before
+        # ever gating them -- the new scalping_v8 pocket is the gated arm of
+        # this exact A/B. ``div_candles[-1]`` is the last CLOSED candle (the
+        # signal candle the divergence was confirmed on), same series the
+        # trigger decision itself just used -- never the still-forming one.
+        try:
+            from aria_core import wick_filter_shadow
+            from aria_core.skills.indicators import hammer_wick_ratio
+
+            await wick_filter_shadow.record_trigger(
+                order["contract"], order.get("chain") or "base",
+                wallet=order.get("wallet") or "swing", source="limit_order_trigger",
+                wick_ratio=hammer_wick_ratio(div_candles[-1]) if div_candles else None,
+                symbol=sig.get("symbol"),
+            )
+        except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real trigger
+            logger.info("limit_orders: wick_filter_shadow.record_trigger failed (%s)", exc)
         return "trigger"
     return "wait"
 

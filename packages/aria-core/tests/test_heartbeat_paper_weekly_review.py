@@ -120,7 +120,7 @@ async def test_paper_weekly_review_cycle_covers_all_7_scalping_variants_when_gat
 
     assert set(due_calls) == {
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "swing",
+        "scalping_v7", "scalping_v8", "swing",
     }
     assert "scalping" not in due_calls
     assert "vc" not in due_calls

@@ -285,3 +285,29 @@ def test_stochastic_k_series_default_period_is_fourteen():
     default_result = stochastic_k_series(candles)
     explicit_result = stochastic_k_series(candles, period=14)
     assert default_result == explicit_result
+
+
+# ── hammer_wick_ratio (08/05, scalping_v8 + wick shadow filter) ─────────────
+
+def test_hammer_wick_ratio_pure_hammer_is_high():
+    from aria_core.skills.indicators import hammer_wick_ratio
+
+    # body pinned at the top, long lower wick: (min(o,c)-l)/(h-l) = 0.9/1.0
+    c = Candle(ts=1, open=10.0, high=10.1, low=9.1, close=10.05)
+    ratio = hammer_wick_ratio(c)
+    assert ratio is not None and ratio > 0.85
+
+
+def test_hammer_wick_ratio_no_lower_wick_is_zero():
+    from aria_core.skills.indicators import hammer_wick_ratio
+
+    # low == body bottom: no rejection of the low at all
+    c = Candle(ts=1, open=10.0, high=10.5, low=10.0, close=10.2)
+    assert hammer_wick_ratio(c) == 0.0
+
+
+def test_hammer_wick_ratio_zero_range_returns_none():
+    from aria_core.skills.indicators import hammer_wick_ratio
+
+    c = Candle(ts=1, open=10.0, high=10.0, low=10.0, close=10.0)
+    assert hammer_wick_ratio(c) is None

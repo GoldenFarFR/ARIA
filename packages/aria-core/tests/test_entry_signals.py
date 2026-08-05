@@ -675,3 +675,18 @@ def test_detect_entry_scalping_mode_uses_narrower_invalidation_floor():
     # Le scalping ne peut jamais élargir l'invalidation au-delà de la structurelle --
     # seul un plancher PLUS ÉTROIT peut la rapprocher de l'entrée (jamais l'inverse).
     assert scalping_signal.invalidation >= swing_signal.invalidation
+
+
+def test_divergence_detail_exposes_fresh_pivot_age():
+    """08/05 (scalping_v8) -- bars_since_recent_pivot: the recent pivot of
+    _setup_series() sits exactly one candle before the tail, and the field
+    stays None when no divergence exists (never fabricated)."""
+    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
+
+    detail = _bullish_rsi_divergence_detail(_candles(_setup_series()), lookback=25)
+    assert detail.present is True
+    assert detail.bars_since_recent_pivot == 1
+
+    absent = _bullish_rsi_divergence_detail(_candles([100 - i for i in range(30)]), lookback=25)
+    assert absent.present is False
+    assert absent.bars_since_recent_pivot is None

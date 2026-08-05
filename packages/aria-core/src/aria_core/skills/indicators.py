@@ -273,3 +273,27 @@ def stochastic_k_series(candles: list[Candle], *, period: int = _STOCHASTIC_PERI
             continue
         out[i] = (candles[i].close - lowest) / rng * 100.0
     return out
+
+
+def hammer_wick_ratio(candle: Candle) -> float | None:
+    """Lower-wick ratio of a single candle (08/05, scalping_v8 + wick shadow
+    filter): ``(min(open, close) - low) / (high - low)`` -- the share of the
+    candle's total range sitting BELOW the body, i.e. how hard the low was
+    rejected by real buyers. 0 = no lower wick at all (monolithic dump),
+    1 = the whole candle is lower wick (pure hammer).
+
+    Empirical basis (05/08 backtest, 58 real closed scalping/swing trades
+    reconstructed candle-by-candle): entries whose signal candle had a ratio
+    >= 0.3 won 60% (9W/6L) vs 25.6% (11W/32L) below it, Fisher exact
+    p=0.026, consistent across pockets AND periods -- the only entry-side
+    discriminator that survived confound checks that day (RVOL, volatility
+    squeeze, pre-entry momentum, regime and weekday all failed them). Same
+    formula as the LetItRide wick-detection study surfaced independently by
+    the community-research workflow the same day.
+
+    ``None`` on a zero-range candle (high == low) -- never a fabricated
+    ratio, same doctrine as every other indicator here."""
+    rng = candle.high - candle.low
+    if rng <= 0:
+        return None
+    return (min(candle.open, candle.close) - candle.low) / rng

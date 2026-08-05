@@ -769,6 +769,10 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
     gets its own real per-pocket position cap and the "websocket" discovery
     channel tag, exactly mirroring paper_trader._run_paper_cycle_locked's own
     multi-pocket branch."""
+    # 08/05 -- sourcing pause neutralized: this test validates the pocket
+    # ARCHITECTURE, the pause behavior has its own dedicated tests.
+    from aria_core import paper_trader as _pt_for_pause
+    monkeypatch.setattr(_pt_for_pause, "SOURCING_PAUSED_WALLETS", frozenset())
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
@@ -890,6 +894,10 @@ async def test_drain_multi_pocket_gate_on_dispatches_megacap_pocket_from_fixed_w
     gated continue) as paper_trader.py, confirmed independently here since
     the two files historically drifted (build_scalping_pocket_entries
     docstring)."""
+    # 08/05 -- sourcing pause neutralized: this test validates the pocket
+    # ARCHITECTURE, the pause behavior has its own dedicated tests.
+    from aria_core import paper_trader as _pt_for_pause
+    monkeypatch.setattr(_pt_for_pause, "SOURCING_PAUSED_WALLETS", frozenset())
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
@@ -1063,7 +1071,7 @@ async def test_drain_multi_pocket_respects_scalping_only_and_vc_pocket_gates(mon
 
 
 @pytest.mark.asyncio
-async def test_drain_multi_pocket_gate_on_dispatches_seven_scalping_variants_when_variants_enabled(
+async def test_drain_multi_pocket_gate_on_dispatches_eight_scalping_variants_when_variants_enabled(
     monkeypatch,
 ):
     """08/01 -- real bug found live: this drain used to hardcode its own
@@ -1075,6 +1083,10 @@ async def test_drain_multi_pocket_gate_on_dispatches_seven_scalping_variants_whe
     build_scalping_pocket_entries -- this proves the websocket drain picks
     up all 6 scalping pockets once ARIA_SCALPING_VARIANTS_ENABLED is on,
     never just the legacy "scalping" wallet."""
+    # 08/05 -- sourcing pause neutralized: this test validates the pocket
+    # ARCHITECTURE, the pause behavior has its own dedicated tests.
+    from aria_core import paper_trader as _pt_for_pause
+    monkeypatch.setattr(_pt_for_pause, "SOURCING_PAUSED_WALLETS", frozenset())
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_VC_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
@@ -1138,7 +1150,7 @@ async def test_drain_multi_pocket_gate_on_dispatches_seven_scalping_variants_whe
     by_wallet = {c["wallet"]: c for c in captured_calls}
     assert set(by_wallet) == {
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "swing", "vc",
+        "scalping_v7", "scalping_v8", "swing", "vc",
     }
     # every scalping-variant pocket (v1..v6) shares the SAME candidate list --
     # the legacy "scalping" wallet is never sourced through this drain again.

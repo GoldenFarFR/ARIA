@@ -168,6 +168,23 @@ when preparing real scaling beyond this pilot, explicitly re-evaluate with the
 real exposure figures in hand (asymmetry to keep in mind: going private is always
 still possible later, the reverse — an already-public git history — never is).
 
+## Active state — scalping_v8, Claude's own agent (05/08, operator carte blanche)
+**`scalping_v8` is Claude Code's OWN pocket — explicit operator mandate (05/08): build
+and modify it on my own initiative ("je veux que tu construise et modifie ton agent v8
+toi meme quand tu le souhaites et comme tu le souhaites"), code+commit+deploy without
+asking, including future 8.1/8.2 variant pockets. Reinforced same day: the operator
+NEVER wants to be pulled in on v8/8.x ("si tu bloqué tu te débrouilles") — a blocked
+v8 thread is resolved autonomously (backtests on our own data, new indicators, own
+WebSearch/internal workflows), never escalated. The paid Fable 5 consult stays under
+its own 03/08 rule (real cost, not explicitly lifted).** Bounds unchanged: paper only, never
+guardrail files, never real capital, never the OTHER pockets without operator
+validation, push still gated by the 2000-raw-line batch rule. Design + empirical basis
+(wick gate 60% vs 25.6% WR p=0.026, no fixed TP, 1.5h stagnation, bootstrap mode =
+free 8.1 experiment): `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.05 entry). Monitoring
+meant for SESSIONS (read it when resuming the v8 thread): `/opt/aria-data/v8-watch/
+v8-log.md` (cron 2h accelerated, nominal 6h to restore — backlog #1); bootstrap exit
+criteria — backlog #2. Wick shadow filter on v6/v7: `wick_filter_shadow_log` table.
+
 ## Permanent mandate — strengths/weaknesses of a trading AI (15/07, continuous loop)
 Until the operator judges ARIA ready: (1) verify that the real strengths of an
 AI trader (24/7 availability, criteria consistency, perfect traceability) are

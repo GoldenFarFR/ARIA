@@ -570,9 +570,12 @@ async def test_v5_buys_with_no_fixed_target(monkeypatch):
 
 # ── VARIANT_ANALYZERS registry ───────────────────────────────────────────────
 
-def test_variant_analyzers_registry_has_all_5_variants():
+def test_variant_analyzers_registry_has_all_variants():
+    # v8 added 08/05 (wick-confirmed reversal, operator carte blanche) --
+    # deliberate invariant change, updated in the same commit as the engine.
     assert set(scalping_variants.VARIANT_ANALYZERS) == {
         "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
+        "scalping_v8",
     }
     for fn in scalping_variants.VARIANT_ANALYZERS.values():
         assert callable(fn)
@@ -598,3 +601,121 @@ def test_prune_gates_cache_noop_under_threshold():
     # Below _GATES_CACHE_MAX_SIZE -- pruning is skipped entirely, even for an
     # expired entry (cheap by design, next insert over threshold catches it).
     assert "a" in scalping_variants._gates_cache
+
+
+# ── V8 -- wick-confirmed reversal (08/05) ───────────────────────────────────
+# The divergence engine has its own tests (test_entry_signals.py) -- mocked
+# here to exercise V8's OWN gate logic in isolation, same doctrine as the
+# V1-V5 tests above mocking their indicators.
+
+def _v8_candles(*, signal_wick: bool, trough_age: int = 0, n: int = 60):
+    """Flat series whose SIGNAL candle (the last one AFTER _gates_and_candles
+    trims the still-forming tail, i.e. index -2 here) is shaped as a hammer
+    or a monolithic no-wick candle. ``trough_age`` places the window's lowest
+    low that many candles BEFORE the signal candle (0 = the signal candle
+    itself is the trough)."""
+    from aria_core.skills.ta_levels import Candle
+
+    candles = [
+        Candle(ts=i, open=1.0, high=1.05, low=0.95, close=1.0, volume=1000.0) for i in range(n)
+    ]
+    if signal_wick:
+        # hammer: body pinned near the top, deep lower wick
+        sig = Candle(ts=n - 2, open=1.0, high=1.02, low=0.90, close=1.0, volume=1500.0)
+    else:
+        # monolithic drop: body bottom == low, no rejection
+        sig = Candle(ts=n - 2, open=1.0, high=1.02, low=0.94, close=0.94, volume=1500.0)
+    candles[n - 2] = sig
+    if trough_age > 0:
+        # a DEEPER low further back (visible in the 10-candle bootstrap window)
+        idx = n - 2 - trough_age
+        candles[idx] = Candle(ts=idx, open=1.0, high=1.05, low=0.85, close=1.0, volume=1000.0)
+    return candles
+
+
+def _mock_divergence(monkeypatch, *, present: bool, bars_since: int | None = 1):
+    from aria_core.skills import entry_signals
+
+    def fake_detail(candles, *, lookback=40, period=14):
+        if present:
+            return entry_signals.RsiDivergenceDetail(
+                True, "mock divergence", gap=10.0, span=8, bars_since_recent_pivot=bars_since,
+            )
+        return entry_signals.RsiDivergenceDetail(False, "")
+
+    monkeypatch.setattr(entry_signals, "_bullish_rsi_divergence_detail", fake_detail)
+
+
+@pytest.mark.asyncio
+async def test_v8_registered_in_variant_analyzers():
+    assert "scalping_v8" in scalping_variants.VARIANT_ANALYZERS
+    assert scalping_variants.VARIANT_ANALYZERS["scalping_v8"] is scalping_variants.evaluate_v8_wick_reversal
+
+
+@pytest.mark.asyncio
+async def test_v8_buys_on_wick_with_fresh_divergence_standard_sizing(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=True, bars_since=2)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "BUY"
+    assert sig["target"] is None  # no fixed TP by design (invalidated empirically)
+    assert sig["rr"] == scalping_variants._V8_SIZING_RR_WITH_DIVERGENCE
+    assert "divergence RSI confirmée" in sig["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_v8_bootstrap_buys_on_wick_alone_defensive_sizing(monkeypatch):
+    """Bootstrap mode: no divergence needed -- wick + fresh trough suffice,
+    sized one tier more defensively, and the reason TRACES the sub-population
+    (the free 8.1 experiment)."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=False)
+    monkeypatch.setattr(scalping_variants, "_V8_BOOTSTRAP_MODE", True)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "BUY"
+    assert sig["rr"] == scalping_variants._V8_SIZING_RR_WICK_ONLY
+    assert "bootstrap" in sig["reasons"][0]
+
+
+@pytest.mark.asyncio
+async def test_v8_strict_mode_requires_divergence(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=False)
+    monkeypatch.setattr(scalping_variants, "_V8_BOOTSTRAP_MODE", False)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "no_signal"
+
+
+@pytest.mark.asyncio
+async def test_v8_rejects_signal_candle_without_wick(monkeypatch):
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=False))
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "no_wick_confirmation"
+
+
+@pytest.mark.asyncio
+async def test_v8_bootstrap_rejects_stale_trough(monkeypatch):
+    """Bootstrap without divergence: a hammer printed 8 candles after the
+    window's real low confirms nothing -- rejected as stale."""
+    candles = _v8_candles(signal_wick=True, trough_age=8)
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=candles)
+    _mock_divergence(monkeypatch, present=False)
+    monkeypatch.setattr(scalping_variants, "_V8_BOOTSTRAP_MODE", True)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "stale_trough"
+
+
+@pytest.mark.asyncio
+async def test_v8_rejects_price_already_ran_away(monkeypatch):
+    """Anti-chase: live price 5% above the signal candle's close -- the move
+    this entry was meant to catch is already consumed (median max gain on the
+    58 reconstructed real trades was +0.47%)."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=1.05), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "price_ran_away"
