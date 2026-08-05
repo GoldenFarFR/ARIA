@@ -116,6 +116,23 @@ async def get_cached(signal_type: str, target_key: str, *, ttl_days: float) -> d
         return None
 
 
+async def get_cached_at(signal_type: str, target_key: str) -> str | None:
+    """Raw ISO timestamp of the last cache write for this key, or ``None`` if
+    never cached -- TTL-agnostic (informational display only, e.g. "scanned
+    Xh ago" on a paid x402 response), never re-validates freshness the way
+    ``get_cached`` does. Separate accessor rather than threading this through
+    ``get_cached`` itself, since most callers never need it."""
+    await _ensure_table()
+    key = _normalize_key(target_key)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT cached_at FROM external_signal_cache WHERE signal_type = ? AND target_key = ?",
+            (signal_type, key),
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
 async def store(signal_type: str, target_key: str, payload: dict) -> None:
     """Upserts the payload with the current timestamp. Never stores an
     unavailable/failed result (callers only call this on a real, usable

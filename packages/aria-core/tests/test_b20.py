@@ -508,3 +508,35 @@ def test_rpc_url_default(monkeypatch):
 def test_rpc_url_override(monkeypatch):
     monkeypatch.setenv("ARIA_BASE_RPC_URL", "https://custom.example/rpc")
     assert b20._rpc_url() == "https://custom.example/rpc"
+
+
+# ── cached_scan_timestamp (05/08, x402 richness request) ────────────────────
+
+@pytest.mark.asyncio
+async def test_cached_scan_timestamp_none_when_never_scanned():
+    addr = "0x" + "5" * 40
+    assert await b20.cached_scan_timestamp(addr) is None
+
+
+@pytest.mark.asyncio
+async def test_cached_scan_timestamp_returns_real_timestamp_after_scan():
+    addr = "0x" + "6" * 40
+    w3 = _FakeW3(is_b20=True, block_number=10, windows={})
+    verdict = await b20.evaluate_b20_safety(addr, w3=w3)
+    assert verdict.verdict == "safe"
+
+    from datetime import datetime
+
+    ts = await b20.cached_scan_timestamp(addr)
+    assert ts is not None
+    datetime.fromisoformat(ts)  # real ISO timestamp, not raise
+
+
+@pytest.mark.asyncio
+async def test_cached_scan_timestamp_none_for_never_cached_opaque():
+    """opaque verdicts are never cached (see the section above) -- their
+    timestamp accessor stays None, never a stale/fabricated value."""
+    addr = "0x" + "7" * 40
+    verdict = await b20.evaluate_b20_safety(addr, w3=_FakeW3(break_contract=True))
+    assert verdict.verdict == "opaque"
+    assert await b20.cached_scan_timestamp(addr) is None

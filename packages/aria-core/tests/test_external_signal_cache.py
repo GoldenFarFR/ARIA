@@ -22,6 +22,36 @@ async def test_get_cached_none_when_never_scanned():
 
 
 @pytest.mark.asyncio
+async def test_get_cached_at_none_when_never_scanned():
+    assert await cache.get_cached_at("github_substance", "https://github.com/acme/x") is None
+
+
+@pytest.mark.asyncio
+async def test_get_cached_at_returns_timestamp_after_store():
+    await cache.store("github_substance", "https://github.com/acme/x", {"available": True})
+    result = await cache.get_cached_at("github_substance", "https://github.com/acme/x")
+    assert result is not None
+    datetime.fromisoformat(result)  # must be a real ISO timestamp, not raise
+
+
+@pytest.mark.asyncio
+async def test_get_cached_at_ignores_ttl_expiry():
+    """Unlike get_cached, get_cached_at is TTL-agnostic -- an expired row
+    still has a real cached_at, informational display only."""
+    await cache.store("docs_substance", "https://docs.acme.xyz", {"available": True})
+    async with aiosqlite.connect(cache.DB_PATH) as db:
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=999)).isoformat()
+        await db.execute(
+            "UPDATE external_signal_cache SET cached_at = ? WHERE signal_type = ? AND target_key = ?",
+            (old_ts, "docs_substance", "https://docs.acme.xyz"),
+        )
+        await db.commit()
+
+    assert await cache.get_cached("docs_substance", "https://docs.acme.xyz", ttl_days=15.0) is None
+    assert await cache.get_cached_at("docs_substance", "https://docs.acme.xyz") is not None
+
+
+@pytest.mark.asyncio
 async def test_store_then_get_cached_roundtrip():
     await cache.store("github_substance", "https://github.com/acme/x", {"available": True, "commits_analyzed": 42})
     result = await cache.get_cached("github_substance", "https://github.com/acme/x", ttl_days=7.0)

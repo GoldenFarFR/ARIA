@@ -499,6 +499,23 @@ async def evaluate_b20_safety(token_address: str, *, w3=None) -> B20SafetyVerdic
     return verdict
 
 
+async def cached_scan_timestamp(token_address: str) -> str | None:
+    """ISO timestamp this token's B20 verdict was last cached, or ``None`` if
+    never cached (05/08, x402 richness request -- lets a paying caller see
+    how fresh the verdict is). TTL-agnostic raw read, separate from
+    ``evaluate_b20_safety``'s own freshness-checked read -- informational
+    only, never re-validates or blocks."""
+    from aria_core.services import external_signal_cache
+
+    try:
+        return await external_signal_cache.get_cached_at(
+            _CACHE_SIGNAL_TYPE, (token_address or "").strip().lower(),
+        )
+    except Exception as exc:  # noqa: BLE001 -- informational only, never blocks
+        logger.info("b20: cached_scan_timestamp read failed for %s (%s)", token_address, exc)
+        return None
+
+
 async def _evaluate_b20_safety_uncached(token_address: str, *, w3=None) -> B20SafetyVerdict:
     """The real scan, never cache-aware itself -- see ``evaluate_b20_safety``
     (the public entry point) for the cache-first wrapper.

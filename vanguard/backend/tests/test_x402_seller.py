@@ -289,6 +289,54 @@ async def test_wallet_score_404_never_records_a_sale(monkeypatch, tmp_path):
     assert await ledger.list_sales() == []
 
 
+# ── product health tracking (05/08, operator request: eviter de facturer ────
+# un x402 casse ou un resultat pas satisfaisant) ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_wallet_score_success_records_health_attempt(monkeypatch):
+    from app.api.routes import x402_signals
+    from aria_core import x402_product_health as health
+
+    async def fake_score(address: str):
+        return 42.0
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    await x402_signals.x402_wallet_score(address="0xScored")
+
+    assert recorded == [("wallet_score", "success")]
+
+
+@pytest.mark.asyncio
+async def test_wallet_score_404_records_health_attempt_as_no_result(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.routes import x402_signals
+    from aria_core import x402_product_health as health
+
+    async def fake_score(address: str):
+        return None
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    with pytest.raises(HTTPException):
+        await x402_signals.x402_wallet_score(address="0xneverscored")
+
+    assert recorded == [("wallet_score", "no_result")]
+
+
 # ── B20 route (31/07) -- anti-abuse guardrails baked in from the start ──────
 
 _VALID_ADDR = "0x" + "a" * 40
@@ -374,6 +422,116 @@ async def test_b20_score_returns_verdict_and_records_sale(monkeypatch, tmp_path)
     assert len(sales) == 1
     assert sales[0]["product"] == "b20_safety"
     assert sales[0]["payer_address"] == "0xPayer"
+
+
+@pytest.mark.asyncio
+async def test_b20_score_includes_scanned_at_freshness(monkeypatch):
+    """05/08, operator request: enrich the response with when this verdict
+    was last scanned, not just the verdict itself."""
+    from aria_core.services import b20
+    from app.api.routes import x402_signals
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(verdict="safe")
+
+    async def fake_timestamp(address):
+        return "2026-08-05T07:00:00+00:00"
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+    monkeypatch.setattr(b20, "cached_scan_timestamp", fake_timestamp)
+
+    result = await x402_signals.x402_b20_score(contract=_VALID_ADDR)
+
+    assert result["scanned_at"] == "2026-08-05T07:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_b20_score_records_health_attempt_success(monkeypatch):
+    from aria_core.services import b20
+    from aria_core import x402_product_health as health
+    from app.api.routes import x402_signals
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(verdict="safe")
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    await x402_signals.x402_b20_score(contract=_VALID_ADDR)
+
+    assert recorded == [("b20_safety", "success")]
+
+
+@pytest.mark.asyncio
+async def test_b20_score_records_health_attempt_no_result_on_opaque(monkeypatch):
+    from aria_core.services import b20
+    from aria_core import x402_product_health as health
+    from app.api.routes import x402_signals
+
+    async def fake_verdict(address):
+        return b20.B20SafetyVerdict(verdict="opaque", reason="node unreachable")
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", fake_verdict)
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    await x402_signals.x402_b20_score(contract=_VALID_ADDR)
+
+    assert recorded == [("b20_safety", "no_result")]
+
+
+@pytest.mark.asyncio
+async def test_b20_score_records_health_attempt_error_on_malformed_address(monkeypatch):
+    from fastapi import HTTPException
+
+    from aria_core import x402_product_health as health
+    from app.api.routes import x402_signals
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    with pytest.raises(HTTPException):
+        await x402_signals.x402_b20_score(contract="garbage")
+
+    assert recorded == [("b20_safety", "error")]
+
+
+@pytest.mark.asyncio
+async def test_b20_score_records_health_attempt_error_on_scan_failure(monkeypatch):
+    from fastapi import HTTPException
+
+    from aria_core.services import b20
+    from aria_core import x402_product_health as health
+    from app.api.routes import x402_signals
+
+    async def failing_verdict(address):
+        raise RuntimeError("RPC down")
+
+    recorded = []
+
+    async def fake_record_attempt(product, outcome):
+        recorded.append((product, outcome))
+
+    monkeypatch.setattr(b20, "evaluate_b20_safety", failing_verdict)
+    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
+
+    with pytest.raises(HTTPException):
+        await x402_signals.x402_b20_score(contract=_VALID_ADDR)
+
+    assert recorded == [("b20_safety", "error")]
 
 
 @pytest.mark.asyncio

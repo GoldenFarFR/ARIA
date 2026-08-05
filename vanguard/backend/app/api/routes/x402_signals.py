@@ -107,13 +107,27 @@ async def _record_sale_if_paid(request: Request | None, product: str) -> None:
 async def _notify_sale(*, product: str, payer: str, amount_usd: float) -> None:
     """Telegram alert on every real x402 sale (05/08, operator request).
     Best-effort, same dome doctrine as the ledger write above: a notify
-    failure never breaks the already-paid response, only logged."""
+    failure never breaks the already-paid response, only logged.
+
+    Includes the product's rolling success rate (05/08, operator request:
+    "éviter de faire payer un x402 cassé") -- a broken product is visible on
+    every sale notification, not just discoverable by someone digging into
+    a separate dashboard."""
     try:
         from aria_core.gateway.telegram_bot import send_message
+        from aria_core.x402_product_health import success_rate
 
+        health = await success_rate(product)
+        rate_line = (
+            f"Taux de réussite (50 derniers appels) : {health['rate_pct']}% "
+            f"({health['successes']}/{health['attempts']})"
+            if health["rate_pct"] is not None
+            else "Taux de réussite : pas encore de donnée"
+        )
         await send_message(
             f"\U0001f4b0 Vente x402 réelle : {product} (${amount_usd:.2f})\n"
-            f"Payeur : {payer}"
+            f"Payeur : {payer}\n"
+            f"{rate_line}"
         )
     except Exception as exc:  # noqa: BLE001 -- never breaks the paid response
         logger.warning("x402_signals: sale notify failed for %s (%s)", product, exc)
@@ -131,9 +145,13 @@ async def x402_wallet_score_exists(address: str = Query(..., min_length=10)):
 async def x402_wallet_score(address: str = Query(..., min_length=10), request: Request = None):
     """PAID (x402-gated when mounted). Returns ARIA's own cached composite wallet
     score -- never a live re-scan, never a raw third-party data pass-through."""
+    from aria_core.x402_product_health import record_attempt
+
     score = await latest_score_for_wallet(address)
     if score is None:
+        await record_attempt("wallet_score", "no_result")
         raise HTTPException(status_code=404, detail="wallet not yet scored by ARIA")
+    await record_attempt("wallet_score", "success")
     await _record_sale_if_paid(request, "wallet_score")
     return {"wallet": address.lower(), "composite_percentile": score}
 
@@ -169,7 +187,10 @@ async def x402_b20_score(contract: str = Query(..., min_length=10), request: Req
     next: same structural limitation as ``_record_sale_if_paid``'s own
     known-limitation note (the SDK already charged the buyer before this
     handler runs), documented honestly rather than pretended away."""
+    from aria_core.x402_product_health import record_attempt
+
     if not _ETH_ADDRESS_RE.match(contract or ""):
+        await record_attempt("b20_safety", "error")
         raise HTTPException(status_code=400, detail="invalid contract address format")
 
     payer = _extract_payer_address(request)
@@ -192,12 +213,16 @@ async def x402_b20_score(contract: str = Query(..., min_length=10), request: Req
         verdict = await b20.evaluate_b20_safety(contract)
     except Exception as exc:  # noqa: BLE001 -- never a raw error/stack trace to a paying client
         logger.warning("x402_signals: b20 scan failed for %s (%s)", contract, exc)
+        await record_attempt("b20_safety", "error")
         raise HTTPException(status_code=502, detail="scan temporarily unavailable") from None
 
+    await record_attempt("b20_safety", "no_result" if verdict.verdict == "opaque" else "success")
     await _record_sale_if_paid(request, "b20_safety")
+    scanned_at = await b20.cached_scan_timestamp(contract)
     return {
         "contract": contract.lower(),
         "b20_verdict": verdict.verdict,
         "reason": verdict.reason,
         "role_holders": {name: sorted(holders) for name, holders in verdict.role_holders.items()},
+        "scanned_at": scanned_at,
     }
