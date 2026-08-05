@@ -30,7 +30,20 @@ COPY packages/aria-core /packages/aria-core
 # du header de paiement) n'etait pas installe -- meme categorie de bug que
 # `[agent_wallet]` avant sa correction (#204) : extra jamais ajoute au build,
 # trouve en testant le tout premier vrai paiement x402 en conditions reelles.
-RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet,x402]"
+#
+# requirements-lock.txt en CONTRAINTES (-c) sur les deux pip install (05/08,
+# reaction directe a l'attaque supply-chain npm keyv/cacheable du 04/08, cf.
+# docs/HANDOFF_SECURITE.md) : sans lui, chaque build tirait silencieusement la
+# DERNIERE version publiee de chaque dependance (directe et transitive) -- le
+# vecteur exact qui a compromis les projets touches cote npm. Le lock fige les
+# 132 versions du conteneur prod verifie sain ; les planchers `>=` de
+# pyproject.toml/requirements.txt restent le contrat SCA (deliberement, voir le
+# commentaire en tete de requirements.txt) -- un `-c` ne les remplace pas, il
+# borne juste ce que le resolveur peut choisir. Mise a jour CONSCIENTE du lock :
+# regenerer via `docker exec aria-api pip freeze --exclude-editable | grep -v
+# '^aria-core'` apres un upgrade voulu et teste, jamais automatiquement.
+COPY vanguard/backend/requirements-lock.txt ./backend/
+RUN pip install --no-cache-dir -c backend/requirements-lock.txt "/packages/aria-core[agent_wallet,x402]"
 
 # Chromium headless (Playwright) : captures d'ecran reelles du site pour ux_watch
 # (tache #155, skills/ux_watch.py) -- +300-500 Mo mesures, accepte tel quel (decision
@@ -39,7 +52,7 @@ RUN pip install --no-cache-dir "/packages/aria-core[agent_wallet,x402]"
 RUN playwright install --with-deps chromium
 
 COPY vanguard/backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
+RUN pip install --no-cache-dir -c backend/requirements-lock.txt -r backend/requirements.txt
 
 COPY vanguard/backend/ ./backend/
 COPY --from=frontend-build /frontend/dist ./frontend/dist
