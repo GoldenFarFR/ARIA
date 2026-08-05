@@ -3516,7 +3516,11 @@ async def test_open_position_scalping_mode_uses_the_lower_price_impact_floor(tmp
     # comparison that matters is scalping's lower floor giving MORE room
     # than standard's default floor on the SAME nominal setup.
     assert pos_standard["cost_usd"] == pytest.approx(375.0, rel=1e-6)
-    assert pos_scalping["cost_usd"] == pytest.approx(495.049505, rel=1e-5)
+    # 08/05 -- fee 1% -> 0.3%: the impact cap now allows ~$673 on this setup,
+    # so the OTHER sizing bound ($500 on this fixture) becomes the binding
+    # one -- cost lands exactly on it (was 495.05 = the impact cap when the
+    # 1% fee made it the tighter of the two).
+    assert pos_scalping["cost_usd"] == pytest.approx(500.0, rel=1e-5)
     assert pos_scalping["cost_usd"] > pos_standard["cost_usd"]
 
 

@@ -606,7 +606,7 @@ class TestCapAllocToPriceImpact:
             1_000.0, 1.0, 1.06, 0.97, 50_000.0, apply_swap_fee=True,
         )
         assert alloc_no_fee == pytest.approx(375.0, rel=1e-6)
-        assert alloc_with_fee == pytest.approx(123.762376, rel=1e-5)
+        assert alloc_with_fee == pytest.approx(299.102692, rel=1e-5)  # fee 0.3% (08/05)
         assert alloc_with_fee < alloc_no_fee
 
     def test_apply_swap_fee_integration_matches_final_fill_rr_floor(self):
@@ -646,7 +646,7 @@ class TestCapAllocToPriceImpact:
         alloc_implicit_default = risk_guard.cap_alloc_to_price_impact(
             1_000.0, 1.0, 1.06, 0.97, 50_000.0, apply_swap_fee=True,
         )
-        assert alloc_implicit_default == alloc_explicit_default == pytest.approx(123.762376, rel=1e-5)
+        assert alloc_implicit_default == alloc_explicit_default == pytest.approx(299.102692, rel=1e-5)  # fee 0.3% (08/05)
 
     def test_scalping_min_rr_gives_more_room_than_default_on_a_tight_setup(self):
         """08/02 -- real problem found live (audit + adversarial verify
@@ -664,8 +664,8 @@ class TestCapAllocToPriceImpact:
             1_000.0, 1.0, 1.06, 0.97, 50_000.0, apply_swap_fee=True,
             min_rr=risk_guard.PRICE_IMPACT_MIN_RR_SCALPING,
         )
-        assert alloc_default == pytest.approx(123.762376, rel=1e-5)
-        assert alloc_scalping == pytest.approx(495.049505, rel=1e-5)
+        assert alloc_default == pytest.approx(299.102692, rel=1e-5)  # fee 0.3% (08/05)
+        assert alloc_scalping == pytest.approx(672.981057, rel=1e-5)
         assert alloc_scalping > alloc_default
 
 

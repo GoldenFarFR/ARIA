@@ -3239,18 +3239,18 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
 # empirical measurements may move them; this constant only widens how many
 # candidates the freed budget is spent on.
 #
-# 08/05 same evening -- walked back 13 -> 11 on LIVE evidence, ~2h after the
-# raise: the GoPlus circuit breaker opened TWICE in 8 minutes (20:00:57 and
-# 20:08:06, code 4029 bursts on every scan cycle -- the burst wall ~11
-# consecutive requests documented in docs/HANDOFF_GOPLUS.md), meeting the
-# pre-committed "sustained" criterion (2+ openings/hour) set in the v8 work
-# journal BEFORE acting. The bursts pre-dated the raise (measured 19:43,
-# before the 13-candidate container swapped in) but the wider slice feeds
-# them; 11 aligns the per-cycle honeypot burst with GoPlus's real burst
-# tolerance. If breaker reopenings persist at 11, the next lever is the
-# GoPlus client throttle calibration itself (shared client, separate
-# decision, real measurements now in hand).
-MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 11
+# 08/05 same evening -- briefly walked back to 11 on a WRONG diagnosis, then
+# restored to 13 within the hour (honest correction, both steps journaled):
+# the GoPlus 4029 breaker openings that motivated the walk-back were NOT a
+# burst-rate problem this constant could fix -- the GoPlus MONTHLY quota has
+# been exhausted since late July (known state, renewal ~mid-August, see
+# docs/HANDOFF_GOPLUS.md), so its client fails on every call regardless of
+# pacing (its own throttle already sits at a very tame ~9/min). The live
+# pipeline's real primary is Honeypot.is (permanent operator decision,
+# 29/07); GoPlus only backstops the ~10-12% of candidates Honeypot.is
+# doesn't know, which fail closed -- bounded, accepted, nothing this slice
+# can change.
+MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 13
 
 # 08/05 -- explicit operator decision ("je veut que tu désactive tous les
 # autres poches sauf v6 et swing et ton agent pour focus les appels sur

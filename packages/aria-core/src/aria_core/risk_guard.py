@@ -729,7 +729,18 @@ def cap_alloc_to_pool_share(alloc_usd: float, pool_liquidity_usd: float | None) 
 # swing path is left byte-for-byte unchanged so the already-running Milly
 # test's historical behavior/results are never altered retroactively; only
 # NEW scalping-mode callers opt in explicitly.
-DEX_SWAP_FEE_PCT = 0.01
+# 08/05 -- 0.01 -> 0.003 (operator-validated after the TIG fill investigation:
+# entry displayed +3.02% above spot, reproduced to the cent as spot x 1.01 fee
+# x 1.02 impact). The 1% flat fee assumed every scalping target sits in the
+# highest fee tier; the pools v8/v6 actually pick (TIG/FAI/SAPIEN -- Aerodrome
+# USDC pairs, ~$1M liquidity) are typically 0.05-0.3% tiers. 0.3% keeps the
+# simulation conservative (top of the realistic Base range) without the old
+# ~6% simulated round-trip friction that structurally crushed scalping
+# targets of +2-5%. Price impact itself (PRICE_IMPACT_RATIO) is untouched --
+# a large order on a thin pool IS expensive, that part protects us from
+# paper-trading over-optimism. Future lever (separate chantier): read the
+# pool's REAL fee tier at entry instead of any flat figure.
+DEX_SWAP_FEE_PCT = 0.003
 
 
 def simulated_fill_price(
