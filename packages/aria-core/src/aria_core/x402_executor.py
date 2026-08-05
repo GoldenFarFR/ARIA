@@ -115,6 +115,12 @@ _ALLOWED_PROVIDER_DOMAINS = frozenset({
     "x402.quickintel.io",                                     # services/quickintel.py
     "x402.ottoai.services",                                   # services/ottoai.py, services/otto_ai.py
     "blockrun.ai",                                             # services/blockrun_kalshi.py
+    # 05/08 -- ARIA's OWN x402 seller domain (vanguard/backend/app/x402_seller.py),
+    # added for the operator-requested self-payment test: ARIA pays her own
+    # real mainnet product from her own real x402 payer wallet, closing the
+    # loop end-to-end with money she already controls on both sides (never a
+    # third party). Zero external-domain risk -- this is ARIA's own prod API.
+    "api.ariavanguardzhc.com",
 })
 
 
