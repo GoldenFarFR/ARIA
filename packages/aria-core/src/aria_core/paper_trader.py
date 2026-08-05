@@ -4904,6 +4904,23 @@ async def _run_paper_cycle_locked(
     """Real body of ``run_paper_cycle`` -- called ONLY under
     ``_run_cycle_lock``, never directly (no concurrency guardrail otherwise)."""
     await _ensure_tables()
+
+    # 05/08 -- real gap found live (operator: "/off doit couper toute la
+    # chaine achat ET vente, donc les API ne sont plus sollicitees non
+    # plus"). A single early check here, before ANYTHING else, is the
+    # actual fix -- not just a mirror of the per-candidate/per-position
+    # checks below (which only cover a cycle already IN FLIGHT when /off
+    # fires, same doctrine as the 04/08 buy-side fix). Without this, step
+    # 1ter (portfolio risk snapshot, ``risk_guard.evaluate_portfolio_risk``,
+    # ALWAYS executed regardless of skip_position_management/skip_new_
+    # entries) still calls `price_lookup` on every open position to compute
+    # equity/drawdown -- found live via a dedicated test that caught this
+    # SECOND leak even after the position-management loop itself was fixed.
+    from aria_core import paper_pause
+
+    if paper_pause.is_paused():
+        return {"opened": [], "closed": [], "partial": [], "checked": 0, "tracked": [], "paused": True}
+
     price_lookup = price_lookup or _default_price_lookup
     # #194 -- the default knows how to follow a position's persisted chain
     # (multi-chain); any INJECTED price_lookup (tests, or the momentum
@@ -4971,10 +4988,25 @@ async def _run_paper_cycle_locked(
     #    service, triggered much more often than the normal heartbeat cycle):
     #    doesn't re-scan GoPlus/Blockscout on every open position on every
     #    candidate push.
-    from aria_core import paper_trader_risk as risk
+    #
+    # 05/08 -- real gap found live (operator: "/off doit couper toute la
+    # chaine achat ET vente, donc les API ne sont plus sollicitees non
+    # plus"): the 04/08 fix (see ``_open_new_entries_for_wallet``'s own
+    # comment) only re-checked ``paper_pause.is_paused()`` on every NEW-ENTRY
+    # candidate -- this loop, which re-scans GoPlus/Blockscout security AND
+    # fetches a fresh DexScreener price for every OPEN position every cycle,
+    # never checked the pause at all. A cycle already in flight when `/off`
+    # fires kept fully managing (and fully re-soliciting every provider for)
+    # every open position until the whole batch was done, same class of bug,
+    # just on the sell side instead of the buy side. Mirrors the same fix:
+    # re-checked on every iteration, `break`s immediately (not `continue` --
+    # the whole point is to stop soliciting providers, not just skip one).
+    from aria_core import paper_pause, paper_trader_risk as risk
 
     if not skip_position_management:
         for p in await get_open_positions():
+            if paper_pause.is_paused():
+                break
             actions["checked"] += 1
             # 07/17 -- with the DEFAULT price_lookup, the DexScreener pair is
             # fetched ONCE and reused for both the price and the

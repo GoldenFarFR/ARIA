@@ -2828,6 +2828,45 @@ async def test_run_cycle_ignores_positions_without_security_signal(tmp_db, monke
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_position_management_stops_when_paused(tmp_db, monkeypatch):
+    """05/08, real gap found live (operator: "/off doit couper toute la
+    chaine achat ET vente, donc les API ne sont plus sollicitees non plus"):
+    the position-management loop (security re-scan + price lookup on every
+    OPEN position) never checked paper_pause.is_paused() at all -- a cycle
+    already in flight when /off fires kept re-soliciting GoPlus/Blockscout/
+    DexScreener for every open position regardless. Must stop immediately,
+    same as the 04/08 buy-side fix -- no position touched, no rescan/price
+    call made, once paused."""
+    from aria_core import paper_pause, paper_trader_risk as risk
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000,
+        entry_security_json=risk.EntrySecuritySnapshot(is_honeypot=False).to_json(), wallet="swing",
+    )
+
+    monkeypatch.setattr(paper_pause, "is_paused", lambda: True)
+
+    calls = {"n": 0}
+
+    async def fake_rescan(position, *, pair=None):
+        calls["n"] += 1
+        return {"contract": position["contract"], "reasons": ["honeypot détecté (absent à l'entrée)"]}
+
+    monkeypatch.setattr(risk, "rescan_open_position", fake_rescan)
+
+    async def price_lookup(contract):
+        calls["n"] += 1
+        return 1.2
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert act["checked"] == 0
+    assert act["closed"] == []
+    assert calls["n"] == 0
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_blocks_new_entries_on_usdc_depeg(tmp_db):
     await pt.reset_portfolio(1_000_000.0)
 
