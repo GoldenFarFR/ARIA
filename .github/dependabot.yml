@@ -1,0 +1,31 @@
+# Dependabot -- SECURITY SIGNAL ONLY, never routine version-bump noise (05/08).
+# open-pull-requests-limit: 0 disables ordinary version-update PRs entirely;
+# Dependabot ALERTS (email on a CVE touching one of our pinned versions) stay
+# active by default on a public repo. This is the watch layer that makes the
+# lockfile-pinning strategy (04/08 npm keyv attack response) livable without
+# manual CVE monitoring: versions stay frozen, GitHub tells us when a freeze
+# needs a conscious, tested upgrade.
+# Note: automatic security-fix PRs are a repo Setting (Security > Dependabot),
+# operator-side toggle -- deliberately not required for the alerts themselves.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/vanguard/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "npm"
+    directory: "/vanguard/product-frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "npm"
+    directory: "/vanguard"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0

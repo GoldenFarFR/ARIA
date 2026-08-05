@@ -1,0 +1,42 @@
+# CodeQL static security analysis (05/08) -- GitHub's own analyzer, free on
+# public repos, runs entirely on GitHub's servers (zero VPS load, zero LLM,
+# zero cost). Complements the existing security CI: osv-scanner covers
+# DEPENDENCIES, detect-secrets covers SECRETS, the daily attack simulation
+# covers RUNTIME guardrails -- CodeQL covers OUR OWN CODE's mechanical flaw
+# classes (injection, unsafe deserialization, path traversal...). Purely
+# additive: alerts land in the repo's Security tab, nothing is ever blocked.
+name: "Security — CodeQL"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/aria-core/**/*.py"
+      - "vanguard/backend/**/*.py"
+      - "vanguard/src/**"
+      - "vanguard/product-frontend/src/**"
+  schedule:
+    - cron: "20 5 * * 1"  # weekly sweep (Monday 05:20 UTC) even without pushes
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
