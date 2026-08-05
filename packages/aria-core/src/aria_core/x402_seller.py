@@ -56,7 +56,11 @@ PRICING_CATALOG: dict[str, str] = {
     # at all for this token standard (precompile, no bytecode). Cache-first
     # (3h TTL) -- most requests are served from the cache, not a fresh scan,
     # so priced below the full LLM-backed token_analysis tiers.
-    "b20_safety": "$0.15",
+    # 05/08 -- lowered from $0.15 to $0.10 (operator decision): keeps every
+    # catalog entry at or under MAX_TRANSACTION_USD (x402_executor.py), so
+    # ARIA's own payer path can exercise this product without special-casing
+    # the per-transaction cap.
+    "b20_safety": "$0.10",
 }
 
 # CAIP-2 chain identifiers -- verified against the installed x402 2.16.0 SDK
