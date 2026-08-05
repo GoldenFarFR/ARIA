@@ -529,9 +529,29 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
             )
             return "expire"
 
-    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail
+    from aria_core.skills.entry_signals import _bullish_rsi_divergence_detail, SCALPING_RSI_PERIOD
 
-    detail = _bullish_rsi_divergence_detail(candles)
+    # 05/08 -- real bug found live (cbXRP scalping_v7 trigger, operator
+    # screenshot review against the actual chart): the divergence pivot
+    # search used to run on the UNTRIMMED candle list, including the last
+    # candle still mid-formation -- every real-time OHLCV provider in the
+    # cascade reports it as the latest point. Same root cause already fixed
+    # for the separate v1-v5 engine (scalping_variants.py::_gates_and_
+    # candles_uncached, commit b00db0d8, 03/08) but never ported here, even
+    # though THIS function is the actual trigger path for scalping_v6/v7 (and
+    # swing/megacap's own watch phase). Trimmed ONLY for the divergence
+    # computation below -- the anchor/horizon bookkeeping above intentionally
+    # keeps reading the untrimmed ``candles``, unrelated to this fix.
+    #
+    # RSI period: also mirrors momentum_entry's own mode-aware choice
+    # (SCALPING_RSI_PERIOD=10 in scalping watch_mode, vs. the default 14 used
+    # everywhere else, see evaluate_momentum_entry's own comment) -- this
+    # function used to always default to 14 even inside a scalping watch,
+    # silently disagreeing with the period the INITIAL signal (detect_entry)
+    # used to create this very order.
+    div_candles = candles[:-1]
+    div_kwargs = {"period": SCALPING_RSI_PERIOD} if watch_mode == "scalping" else {}
+    detail = _bullish_rsi_divergence_detail(div_candles, **div_kwargs)
     # 04/08 -- operator request while diagnosing megacap's zero-trigger
     # history ("ajuste les log pour qu'il récupère plus d'informations"):
     # a divergence that formed but landed outside the trigger window
