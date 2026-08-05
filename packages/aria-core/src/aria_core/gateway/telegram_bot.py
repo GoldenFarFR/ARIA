@@ -616,6 +616,12 @@ async def _feedback_reply() -> str:
         "scalping_v5": "Scalping V5 (VWAP trailing)",
         # 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established tokens).
         "megacap": "Megacap fixe",
+        # 08/05 -- v6/v7/v8 labels (real gap: these pockets displayed as raw
+        # wallet ids in this bilan since their creation). v8 = Claude's own
+        # agent (operator carte blanche, see CLAUDE.md "Active state" section).
+        "scalping_v6": "Scalping V6 (RSI legacy)",
+        "scalping_v7": "Scalping V7 (RSI span court)",
+        "scalping_v8": "Scalping V8 (wick reversal — agent Claude)",
     }
     wallets = await paper_trader.all_reporting_wallets()
     pocket_lines = []
@@ -628,10 +634,21 @@ async def _feedback_reply() -> str:
         # 29/07 -- operator request: the single dense line per pocket (all
         # stats packed with " · " separators) was hard to scan -- one dash
         # per fact, on its own line, reads more cleanly on mobile Telegram.
+        # 08/05 -- operator request ("pense a garder un ratio winrate et pnl
+        # visible sur v8"): win_rate was ALREADY computed by portfolio_summary
+        # since forever, just never displayed here -- shown for every pocket
+        # (not v8 alone, the comparison IS the point), only when at least one
+        # closed trade exists (never a fabricated 0%).
+        closed_count = summary["closed_trades"]
+        winrate_part = (
+            f" · winrate {summary['win_rate']:.0f} %"
+            if closed_count and summary.get("win_rate") is not None
+            else ""
+        )
         pocket_lines.append(
             f"{pocket_labels.get(wallet, wallet)}\n"
             f"- départ {summary['starting']:,.0f} $ → {summary['equity']:,.0f} $ ({sign}{pnl_total:,.0f} $)\n"
-            f"- {summary['open_positions']} ouverte(s) · {summary['closed_trades']} clôturée(s)"
+            f"- {summary['open_positions']} ouverte(s) · {closed_count} clôturée(s){winrate_part}"
         )
     # 08/01 -- pocket count in the header is now dynamic (was a hardcoded
     # "3 portefeuilles", stale since the 27/07 3-pocket split even before
