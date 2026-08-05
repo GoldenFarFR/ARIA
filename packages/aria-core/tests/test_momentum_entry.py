@@ -7143,7 +7143,7 @@ async def test_evaluate_momentum_entry_forwards_rsi_watch_span_override(monkeypa
     )
     watch = result["limit_order_candidate"]
     assert watch["rsi_watch_min_span"] == 4
-    assert watch["rsi_watch_max_span"] == 10
+    assert watch["rsi_watch_max_span"] == 13
 
 
 @pytest.mark.asyncio
@@ -7543,5 +7543,5 @@ def test_rsi_divergence_watch_candidate_honors_explicit_span_override():
         rsi_watch_span=(me.RSI_WATCH_MIN_SPAN_V7, me.RSI_WATCH_MAX_SPAN_V7),
     )
     assert watch["rsi_watch_min_span"] == 4
-    assert watch["rsi_watch_max_span"] == 10
-    assert "span 4-10 bougies" in watch["reason"]
+    assert watch["rsi_watch_max_span"] == 13
+    assert "span 4-13 bougies" in watch["reason"]

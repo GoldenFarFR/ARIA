@@ -179,7 +179,7 @@ async def historical_trigger_rate(
     ``wallet`` (08/04, real gap found live on scalping_v7's very first
     order): the rate used to aggregate across EVERY pocket sharing the same
     ``reason`` -- for ``rsi_divergence_pending``, that meant v6/swing/megacap
-    (the operator-validated 15-20 RSI-watch span) and the brand-new v7 (4-10
+    (the operator-validated 15-20 RSI-watch span) and the brand-new v7 (4-13
     span, zero resolved orders of its own) were silently pooled together, so
     v7's first order displayed a rate (~4%) that reflected the OLD window's
     behavior, not its own -- misleading, since the whole point of v7 is that

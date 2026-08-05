@@ -3248,7 +3248,7 @@ def build_scalping_pocket_entries(
 
     ``scalping_v7`` (08/04): SAME legacy engine as v6, byte-for-byte, except
     it overrides the RSI-divergence watch's trigger span (``rsi_watch_span``
-    -> ``momentum_entry.RSI_WATCH_MIN_SPAN_V7``/``MAX_SPAN_V7``, 4-10 instead
+    -> ``momentum_entry.RSI_WATCH_MIN_SPAN_V7``/``MAX_SPAN_V7``, 4-13 instead
     of v6's 15-20) -- a real code change (not just a config flip) was
     required because that window used to be a single pair of module-level
     constants shared by every pocket; see ``evaluate_momentum_entry``'s own

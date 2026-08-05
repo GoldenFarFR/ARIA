@@ -3064,8 +3064,11 @@ RSI_WATCH_MAX_HORIZON_CANDLES = 20
 # applied globally, specifically so this unproven-at-scale window can be
 # compared side by side against the operator-validated 15-20 window (v6) on
 # real forward trades, never silently replacing it everywhere at once.
+# 05/08 -- MAX widened 10->13 (explicit operator decision, not re-derived
+# from a new backtest sample -- the 85-90% figure above was measured
+# specifically on [4-10], never re-measured on [4-13]).
 RSI_WATCH_MIN_SPAN_V7 = 4
-RSI_WATCH_MAX_SPAN_V7 = 10
+RSI_WATCH_MAX_SPAN_V7 = 13
 
 # 08/04 -- absolute ceiling for the RSI-divergence watch expiry on scalping
 # pockets specifically (see _median_candle_interval_seconds/gap-continuity
