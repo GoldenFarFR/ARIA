@@ -4469,6 +4469,49 @@ async def test_evaluate_rejects_blacklisted_contract_before_any_network_call(mon
 
 
 @pytest.mark.asyncio
+async def test_evaluate_rejects_non_trusted_pegged_asset_before_any_network_call(monkeypatch):
+    """Cas réel du 08/05 : scalping_v8 a acheté msUSD (Metronome Synth USD) en
+    lisant son rebond post-dépeg comme un creux/mèche classique -- un pattern
+    structurellement différent (dépend du buyback/burn du protocole, pas du
+    sentiment de marché). Le gate doit rejeter avant même le premier appel
+    réseau, comme le blacklist ci-dessus."""
+
+    async def _never_called(*args, **kwargs):
+        raise AssertionError("aucun appel réseau ne doit être tenté sur un actif pegged non fiable")
+
+    monkeypatch.setattr(me, "_check_honeypot", _never_called)
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+
+    result = await me.evaluate_momentum_entry(
+        "0x526728dbc96689597f85ae4cd716d4f7fccbae9d", "base",
+    )
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "pegged_asset_excluded"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_rejects_other_pegged_assets_found_in_scan_log_sweep(monkeypatch):
+    """08/05, même jour que le cas msUSD -- audit de momentum_scan_log a trouvé
+    9 autres candidats au même risque (peg actuellement intact, jamais
+    incident-vérifiés individuellement comme msUSD). USDe (Ethena) comme
+    représentant du lot, pour couvrir le registre au-delà d'une seule entrée."""
+
+    async def _never_called(*args, **kwargs):
+        raise AssertionError("aucun appel réseau ne doit être tenté sur un actif pegged non fiable")
+
+    monkeypatch.setattr(me, "_check_honeypot", _never_called)
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+
+    result = await me.evaluate_momentum_entry(
+        "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34", "base",  # USDe
+    )
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "pegged_asset_excluded"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_rejects_extreme_volume_to_liquidity_ratio(monkeypatch):
     """Cas réel du 17/07 : BRIAN passait le honeypot GoPlus (technique "propre")
     mais affichait ~91x volume/liquidité (wash-trading) -- ce garde-fou l'aurait

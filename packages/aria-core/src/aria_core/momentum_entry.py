@@ -2761,6 +2761,24 @@ async def evaluate_hard_gates(
             "hold_reason": "blacklisted",
         }
 
+    # 08/05 -- real scalping_v8 trade found the gap: a depegged synthetic
+    # stablecoin's rebound reads as a fresh wick reversal to every technical
+    # gate below, but its price action depends on the issuing protocol's
+    # buyback/burn remediation, not market sentiment -- a fundamentally
+    # different dynamic than any momentum/scalping signal here was validated
+    # on. See `smart_money._NON_TRUSTED_PEGGED_ASSET_ADDRESSES_BY_CHAIN`'s own
+    # comment for why this is a SEPARATE registry from the trusted-stablecoin
+    # one (that one also exempts honeypot checks -- exactly the wrong
+    # direction for a protocol that just proved its own failure mode).
+    from aria_core.services.smart_money import is_non_trusted_pegged_asset
+
+    if is_non_trusted_pegged_asset(contract, chain):
+        return None, None, {
+            "action": "HOLD", "chain": chain,
+            "reasons": ["actif pegged/synthétique au peg déjà rompu -- pas un signal spéculatif"],
+            "hold_reason": "pegged_asset_excluded",
+        }
+
     from aria_core import momentum_rejection_cache
 
     # Item #228 (30/07): the liquidity tier only depends on current_regime/

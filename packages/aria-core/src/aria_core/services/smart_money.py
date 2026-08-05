@@ -92,6 +92,69 @@ _STABLECOIN_ADDRESSES_BY_CHAIN: dict[str, set[str]] = {
     },
 }
 
+# Non-trusted pegged/synthetic assets (08/05, scalping_v8 real trade): DISTINCT
+# from `_STABLECOIN_ADDRESSES_BY_CHAIN` above on purpose -- that registry also
+# feeds `is_recognized_reference_asset` (exempts regulated/institutional
+# issuers from the owner-lever honeypot checks). msUSD proved the opposite:
+# its synthetic-swap module went undercollateralized (stale-oracle MEV,
+# ~$4.57M msUSD + 6367 msETH unbacked, 30% depeg) -- an anonymous DeFi
+# protocol failure mode, not an institutional custodian safety feature.
+# Adding it to the trusted registry would have EXEMPTED it from GoPlus
+# owner-lever checks, the wrong direction entirely. This registry ONLY
+# excludes candidates from momentum/scalping discovery (a peg that just broke
+# is not a "fresh reversal" -- its price action depends on the issuing
+# protocol's buyback/burn remediation, not market sentiment, a fundamentally
+# different dynamic than the wick-reversal signal was validated on). Never
+# read by any security-exemption path. A token missing here = no protection
+# (documented degraded behavior, same policy as the registries above) --
+# extend as new pegged/synthetic failures are found, never as a general
+# "all synthetics" ban (a healthy peg is simply never a momentum candidate on
+# its own, this registry only matters for the ones that get scanned anyway
+# because their price has moved off 1.00).
+_NON_TRUSTED_PEGGED_ASSET_ADDRESSES_BY_CHAIN: dict[str, frozenset[str]] = {
+    "base": frozenset({
+        "0x526728dbc96689597f85ae4cd716d4f7fccbae9d",  # msUSD (Metronome Synth USD) -- 30% depeg, underbacked module, 08/05
+        # Sweep of momentum_scan_log (08/05, same-day follow-up to the msUSD
+        # trade): every distinct symbol/contract ever scanned matching
+        # %usd%/%eur%/%dai% (66798 scan rows), cross-checked against its most
+        # recent scanned price. Kept below ONLY the ones whose peg is
+        # CURRENTLY intact (price within a normal band of 1.00 USD or the
+        # real EUR/USD rate ~1.08-1.15) -- these are exactly the shape that
+        # fooled v8 on msUSD BEFORE it broke. Two matches (USDP, USDi) were
+        # excluded from this list: their last scanned price was ~1e-7/1e-15,
+        # already dead/scammed and already caught by the liquidity/honeypot
+        # gates -- adding them here would add nothing (a token that never
+        # trades near 1.00 was never going to be misread as a fresh peg
+        # reversal in the first place). KREDAI (bonding, 3 addresses) is a
+        # grep false positive (matches "dai" substring, not a stablecoin) --
+        # excluded. Not each individually incident-verified like msUSD --
+        # the objective criterion (currently trading near its nominal peg) is
+        # what matters here, regardless of whether the contract is the real
+        # issuer or an impersonator: neither is ever a legitimate wick/creux
+        # reversal candidate.
+        "0x409e79c96389c00fb5a46586ace2615c6d09c76e",  # AIUSD -- 0.9999 (05/08 scan)
+        "0x832bcced5bd431b31663576490344ea1c0bea295",  # EUR -- 1.093 (31/07 scan)
+        "0x4933a85b5b5466fbaf179f72d3de273c287ec2c2",  # EURAU -- 1.15 (01/08 scan)
+        "0x55380fe7a1910dff29a47b622057ab4139da42c5",  # FXUSD (f(x) Protocol) -- 0.9999 (03/08 scan)
+        "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34",  # USDe (Ethena) -- 0.9996 (30/07 scan)
+        "0x8210c0634ab8f273806e4b7866e9db353773c44b",  # USDf (Falcon Finance) -- 0.9965 (02/08 scan)
+        "0x04d5ddf5f3a8939889f11e97f8c4bb48317f1938",  # USDz (Anzen) -- 0.9724 (01/08 scan)
+        "0x14913815bcfde78baead2111f463d038ac9c2949",  # eUSD -- 1.0000049 (05/08 scan)
+        "0x4154550f4db74dc38d1fe98e1f3f28ed6dad627d",  # jEUR (Jarvis Synthetic Euro) -- 1.15 (05/08 scan)
+        "0x1217bfe6c773eec6cc4a38b5dc45b92292b6e189",  # oUSDT (omnichain USDT) -- 0.9991 (01/08 scan)
+    }),
+}
+
+
+def is_non_trusted_pegged_asset(token_address: str, chain: str) -> bool:
+    """True if this address is a known pegged/synthetic asset whose peg
+    mechanism has already failed or is otherwise unreliable -- excluded from
+    speculative discovery, never from security checks (see registry comment
+    above for why the two must stay separate)."""
+    chain = (chain or "").strip().lower()
+    return (token_address or "").lower() in _NON_TRUSTED_PEGGED_ASSET_ADDRESSES_BY_CHAIN.get(chain, frozenset())
+
+
 # "wrap/unwrap" exploit (15/07, Gemini review): a script that wraps/unwraps
 # ETH<->WETH hundreds of times for a few cents of gas would artificially
 # unlock WEIGHTS.min_total_swaps without ever taking on trading risk. Cheap
