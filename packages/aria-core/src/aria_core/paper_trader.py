@@ -3055,7 +3055,7 @@ async def _bonding_candidates(*, limit: int = 20) -> list[str]:
     return contracts[:limit]
 
 
-async def _momentum_candidates_and_chain_map(*, limit: int = 50) -> tuple[list[str], dict[str, str]]:
+async def _momentum_candidates_and_chain_map(*, limit: int = 63) -> tuple[list[str], dict[str, str]]:
     """#194, momentum pivot -- default candidate source for THIS TEST (replaces
     ``candidate_ranking.top_candidates()`` ONLY as ``run_paper_cycle``'s
     default when neither ``candidates`` nor ``analyzer`` are provided by the
@@ -3230,7 +3230,15 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
 # shared candidate list is already sorted oldest-scanned-first) rather than
 # starving anyone outright. Recalibrate once real multi-cycle timing data
 # accumulates under this new shape.
-MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 10
+# 08/05 -- operator throughput decision ("Augmente le debit de 25%"), minutes
+# after live-measuring real headroom (sourcing paused on 8 of 11 pockets, 1
+# lone GeckoTerminal 429 in 30 min, GoPlus at ~17 calls/30 min): 10 -> 13
+# candidates per cycle for the scalping arms (v6+v8 share this slice). The
+# NETWORK throttles themselves stay untouched -- they are calibrated to 90%
+# of each provider's VERIFIED real capacity (absolute rule) and only new
+# empirical measurements may move them; this constant only widens how many
+# candidates the freed budget is spent on.
+MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 13
 
 # 08/05 -- explicit operator decision ("je veut que tu désactive tous les
 # autres poches sauf v6 et swing et ton agent pour focus les appels sur
@@ -3752,7 +3760,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
     # mode.
     trading_mode = await get_trading_mode()
 
-    candidates, chain_map = await _momentum_candidates_and_chain_map(limit=50)
+    candidates, chain_map = await _momentum_candidates_and_chain_map(limit=63)
     analyzer = _default_momentum_analyzer(
         chain_map, weekly_context, current_regime=current_regime, relaxed=True,
         mode=trading_mode,
@@ -5952,7 +5960,7 @@ async def _run_paper_cycle_locked(
         # discovery (#194) is fetched ONCE and shared by scalping+swing (same
         # real-world scan, only the analyzer's ``mode`` differs) -- never a
         # duplicated network call for the same discovery pass.
-        momentum_candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=50)
+        momentum_candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=63)
         from aria_core.skills.candidate_ranking import top_candidates
 
         vc_candidates = [c.contract for c in await top_candidates(20)]
@@ -6156,7 +6164,7 @@ async def _run_paper_cycle_locked(
         # ``_open_new_entries_for_wallet`` (the only new wiring needed to
         # keep working under ``open_position``'s new mandatory ``wallet`` param).
         if candidates is None and analyzer is None:
-            candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=50)
+            candidates, _momentum_chain_by_contract = await _momentum_candidates_and_chain_map(limit=63)
             analyzer = _default_momentum_analyzer(
                 _momentum_chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
                 mode=trading_mode,
