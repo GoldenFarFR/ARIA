@@ -989,7 +989,19 @@ async def test_cycle_one_stuck_wallet_is_cancelled_without_losing_the_others(mon
     assert sorted(result["processed"]) == sorted([A, C])
 
     pending_b = [q for q in await wsq.list_pending() if q.wallet == B]
-    assert pending_b and pending_b[0].last_attempt_at is None  # never checkpointed -- retried next cycle
+    # 05/08 -- a timed-out wallet now IS checkpointed (mark_attempt), so it
+    # loses future FIFO tie-breaks fairly instead of monopolizing every
+    # cycle forever (real live-lock found live: 4 wallets queued 07/23 never
+    # advanced past `last_attempt_at IS NULL`, permanently winning every
+    # tie-break against every other milestone-0 wallet -- see this cycle's
+    # exception-handling branch for the full account). Still retried next
+    # cycle (`next_check_at == now`), just no longer indistinguishable from
+    # a never-attempted wallet.
+    assert pending_b and pending_b[0].last_attempt_at is not None
+    # The actual live-lock mechanism: next_check_at must move off its frozen
+    # added_at value, or B would keep winning every FIFO tie-break against
+    # every other milestone-0 wallet forever (exactly what happened in prod).
+    assert pending_b[0].next_check_at > pending_b[0].added_at
 
 
 @pytest.mark.asyncio

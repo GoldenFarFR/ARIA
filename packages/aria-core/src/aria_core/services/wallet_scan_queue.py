@@ -728,10 +728,32 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
         if isinstance(res, BaseException):
             # One wallet's own failure -- including a per-wallet timeout
             # (asyncio.TimeoutError) from `_bounded` above -- must never
-            # break the others running concurrently: this cycle simply
-            # retries it next time (its next_check_at was never advanced
-            # past `now`).
+            # break the others running concurrently.
+            #
+            # 05/08 -- real bug found live (operator spotted an abnormal
+            # daily Blockscout credit burn -- 90k/100k consumed in <6h):
+            # this branch used to just log and `continue`, NEVER calling
+            # `mark_attempt` -- unlike the sibling "report unavailable"
+            # path a few lines below (`not report.available`), which does.
+            # Confirmed in prod DB: 4 wallets queued 07/23, `last_attempt_at`
+            # still NULL 12+ days later despite ~100 Blockscout calls EACH
+            # in a single 6h window -- `list_pending()` sorts catch-up
+            # wallets by `last_notified_milestone DESC, next_check_at ASC`,
+            # so a wallet whose `next_check_at` is frozen at its original
+            # `added_at` (never advanced, since it was never marked
+            # attempted) permanently wins every tie-break against every
+            # other milestone-0 wallet -- a live-lock, not a retry: this
+            # cycle didn't just retry it next time, it monopolized ALL
+            # `MAX_WALLETS_PER_CYCLE` slots every single cycle since 07/23,
+            # starving every other queued wallet of a single pass. Mirrors
+            # the sibling path: `next_check_at=now` still leaves the wallet
+            # due immediately (retried next cycle, same intent as before),
+            # but now loses future tie-breaks fairly instead of always
+            # winning them, AND finally persists `last_attempt_at` so a
+            # systematically-failing wallet stops being indistinguishable
+            # from a never-attempted one.
             logger.warning("wallet_scan_queue: processing %s failed (%s)", queued.wallet, res)
+            await mark_attempt(queued.wallet, next_check_at=now)
             continue
         if res["processed"]:
             processed.append(res["processed"])
