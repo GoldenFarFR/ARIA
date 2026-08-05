@@ -1,0 +1,72 @@
+# External uptime watch (05/08) -- closes a structural blind spot: every
+# existing monitor (log-health, memory-watch, paper watchdog, autoheal) runs
+# ON the VPS itself, so a full-VPS outage (hardware, network, kernel) alerts
+# no one. This runs on GitHub's servers, fully outside our infra: checks the
+# showcase + API health endpoint every ~15 min, opens ONE labeled issue on
+# sustained failure (3 attempts, 30s apart, inside a single run -- a blip
+# never alerts), auto-closes it on recovery. GitHub emails the operator on
+# issue open (native notification, zero extra plumbing).
+# NOTE: GitHub cron schedules drift by design (minutes, sometimes skipped
+# under load) -- fine for uptime granularity, never used for anything else.
+name: "Uptime — external watch"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe endpoints (3 attempts, 30s apart)
+        id: probe
+        run: |
+          check_all() {
+            curl -fsS --max-time 15 -o /dev/null "https://ariavanguardzhc.com" && \
+            curl -fsS --max-time 15 -o /dev/null "https://api.ariavanguardzhc.com/api/health"
+          }
+          FAILED=1
+          for i in 1 2 3; do
+            if check_all; then FAILED=0; break; fi
+            [ "$i" -lt 3 ] && sleep 30
+          done
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+
+      - name: Open issue on sustained failure (dedup) / close on recovery
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const failed = "${{ steps.probe.outputs.failed }}" === "1";
+            const label = "uptime-alert";
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: "open", labels: label,
+            });
+            if (failed && open.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: "Site/API down (external probe)",
+                labels: [label],
+                body: "3 consecutive probe failures (30s apart) from GitHub's servers on " +
+                      "ariavanguardzhc.com and/or api.ariavanguardzhc.com/api/health.\n\n" +
+                      "If the VPS itself is unreachable over SSH too, see " +
+                      "docs/runbook-incident-agent.md (power cycle from the IONOS panel) " +
+                      "and docs/runbook-migration-vps.md if hardware is gone.\n\n" +
+                      "This issue auto-closes when the probe recovers.",
+              });
+            } else if (!failed) {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, body: "Probe recovered — auto-closing.",
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: "closed",
+                });
+              }
+            }
