@@ -393,3 +393,107 @@ async def test_b20_score_no_payer_skips_rate_limit_check(monkeypatch):
 
     result = await x402_signals.x402_b20_score(contract=_VALID_ADDR, request=None)
     assert result["b20_verdict"] == "not_b20"
+
+
+# ── CDP mainnet facilitator authentication (04/08) ──────────────────────────
+
+def test_facilitator_auth_provider_none_on_testnet(monkeypatch):
+    """Mainnet gate off (default) -- the free testnet facilitator needs no
+    auth at all, must never build a CDP auth provider."""
+    from app.x402_seller import _facilitator_auth_provider
+
+    monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
+    assert _facilitator_auth_provider() is None
+
+
+def test_facilitator_auth_provider_raises_when_mainnet_on_without_credentials(monkeypatch):
+    """Fail LOUD at mount time, never a silent 401 on the first real payment."""
+    from app.x402_seller import _facilitator_auth_provider
+
+    monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
+    monkeypatch.delenv("ARIA_X402_FACILITATOR_CDP_API_KEY_ID", raising=False)
+    monkeypatch.delenv("ARIA_X402_FACILITATOR_CDP_API_KEY_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="ARIA_X402_FACILITATOR_CDP_API_KEY"):
+        _facilitator_auth_provider()
+
+
+def test_facilitator_auth_provider_builds_with_dedicated_credentials(monkeypatch):
+    """Never the wallet's own CDP_API_KEY_ID/_SECRET -- a dedicated,
+    minimum-permission key pair (operator decision, 04/08)."""
+    from app import x402_seller as x402_seller_module
+    from app.x402_seller import CdpFacilitatorAuthProvider, _facilitator_auth_provider
+
+    monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
+    monkeypatch.setenv("ARIA_X402_FACILITATOR_CDP_API_KEY_ID", "test-key-id")
+    monkeypatch.setenv("ARIA_X402_FACILITATOR_CDP_API_KEY_SECRET", "test-key-secret")
+    # X402_SELLER_FACILITATOR_URL is read once at import time (module-level
+    # constant, unchanged pre-existing behavior) -- patch the constant
+    # itself, not the env var, same as the mount-time test below.
+    monkeypatch.setattr(
+        x402_seller_module, "X402_SELLER_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402",
+    )
+
+    provider = _facilitator_auth_provider()
+    assert isinstance(provider, CdpFacilitatorAuthProvider)
+    assert provider._host == "api.cdp.coinbase.com"
+    assert provider._base_path == "/platform/v2/x402"
+
+
+def test_cdp_facilitator_auth_provider_scopes_each_endpoint_correctly(monkeypatch):
+    """Real, observed SDK behavior (verified against the installed x402 +
+    cdp-sdk packages): get_auth_headers() is called fresh before EACH
+    request and must return a distinct, correctly-scoped (method+path)
+    Bearer token for verify/settle/supported all at once."""
+    from app.x402_seller import CdpFacilitatorAuthProvider
+
+    captured = []
+
+    class _FakeJwtOptions:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+            self.kwargs = kwargs
+
+    def fake_generate_jwt(options):
+        return f"jwt-for-{options.kwargs['request_method']}-{options.kwargs['request_path']}"
+
+    import cdp.auth
+    import cdp.auth.utils.jwt as jwt_module
+
+    monkeypatch.setattr(jwt_module, "JwtOptions", _FakeJwtOptions)
+    monkeypatch.setattr(cdp.auth, "generate_jwt", fake_generate_jwt)
+
+    provider = CdpFacilitatorAuthProvider(
+        "key-id", "key-secret", host="api.cdp.coinbase.com", base_path="/platform/v2/x402",
+    )
+    headers = provider.get_auth_headers()
+
+    assert headers.verify == {"Authorization": "Bearer jwt-for-POST-/platform/v2/x402/verify"}
+    assert headers.settle == {"Authorization": "Bearer jwt-for-POST-/platform/v2/x402/settle"}
+    assert headers.supported == {"Authorization": "Bearer jwt-for-GET-/platform/v2/x402/supported"}
+    assert all(kw["api_key_id"] == "key-id" and kw["api_key_secret"] == "key-secret" for kw in captured)
+
+
+def test_mount_x402_seller_wires_auth_provider_on_mainnet(monkeypatch):
+    """Smoke test: mounting with mainnet+credentials configured must not
+    raise, and must actually pass the CDP auth provider through to
+    FacilitatorConfig (never silently drop it)."""
+    from fastapi import FastAPI
+
+    import cdp.auth
+    import cdp.auth.utils.jwt as jwt_module
+    from app import x402_seller as x402_seller_module
+
+    monkeypatch.setattr(jwt_module, "JwtOptions", lambda **kwargs: kwargs)
+    monkeypatch.setattr(cdp.auth, "generate_jwt", lambda options: "fake-jwt")
+
+    monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
+    monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
+    monkeypatch.setenv("ARIA_X402_FACILITATOR_CDP_API_KEY_ID", "test-key-id")
+    monkeypatch.setenv("ARIA_X402_FACILITATOR_CDP_API_KEY_SECRET", "test-key-secret")
+    monkeypatch.setenv(
+        "ARIA_X402_SELLER_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402",
+    )
+    monkeypatch.setattr(x402_seller_module, "X402_SELLER_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
+
+    app = FastAPI()
+    x402_seller_module.mount_x402_seller(app)  # must not raise
