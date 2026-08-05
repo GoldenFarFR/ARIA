@@ -44,12 +44,20 @@ import time
 from dataclasses import dataclass, field
 
 import httpx
+from datetime import datetime, timezone
 
 from aria_core import circuit_breaker_log
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.gopluslabs.io/api/v1"
+
+# 08/05 -- self-expiring quota suspension (see _get_json's comment): every
+# call short-circuits to "unavailable" until this ISO date. Set to a few days
+# past the expected monthly-quota renewal (~13/08 per the operator's 29/07
+# "~15 jours" estimate, margin included). ISO-string comparison is correct
+# for dates in this format.
+GOPLUS_QUOTA_SUSPENDED_UNTIL = "2026-08-16"
 BASE_CHAIN_ID = "8453"  # Base mainnet
 
 # 22/07 -- cooldown after a rejected authentication (code 4012) despite a
@@ -352,6 +360,19 @@ class GoPlusClient:
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
         """GET with the dome's error policy. Returns (data, error)."""
+        # 08/05 -- temporary quota suspension (explicit operator request, after
+        # a circuit-breaker-watch Telegram alert on the KNOWN exhausted monthly
+        # quota: "sa serait bien de la desactiver le temp quel soit a nouveau
+        # operationel"). The monthly quota died late July (renewal expected
+        # ~mid-August, docs/HANDOFF_GOPLUS.md); until then every call is 3
+        # attempts of guaranteed 4029 -- pure latency, breaker churn and alert
+        # noise, while Honeypot.is (permanent primary since 29/07) carries the
+        # pipeline. Self-expiring by DATE: no manual re-enable to forget --
+        # past the date the client resumes on its own, and if the quota is
+        # still dead the normal breaker takes over again, no harm. Backlog
+        # task tracks verifying the renewal.
+        if datetime.now(timezone.utc).date().isoformat() < GOPLUS_QUOTA_SUSPENDED_UNTIL:
+            return None, f"{UNAVAILABLE} (quota mensuel épuisé, suspendu jusqu'au {GOPLUS_QUOTA_SUSPENDED_UNTIL})"
         if self.circuit_open():
             return None, f"{UNAVAILABLE} (coupe-circuit ouvert, échecs consécutifs récents)"
 

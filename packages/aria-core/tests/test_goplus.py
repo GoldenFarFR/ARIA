@@ -7,6 +7,7 @@ import time
 import httpx
 import pytest
 
+from aria_core.services import goplus
 from aria_core.services.goplus import UNAVAILABLE, GoPlusClient, TokenSecurity, _tax, _tri
 from aria_core.skills.acp_onchain_scan import (
     PairSnapshot,
@@ -14,6 +15,16 @@ from aria_core.skills.acp_onchain_scan import (
     _apply_honeypot_signals,
 )
 from aria_core.skills.safety_screen import safety_screen
+
+
+@pytest.fixture(autouse=True)
+def _lift_quota_suspension(monkeypatch):
+    """08/05 -- the date-based quota suspension (GOPLUS_QUOTA_SUSPENDED_UNTIL)
+    short-circuits every call while the REAL current date sits inside the
+    suspension window -- neutralized by default so the existing network-path
+    tests keep exercising what they were written for. The suspension's own
+    tests override this explicitly."""
+    monkeypatch.setattr(goplus, "GOPLUS_QUOTA_SUSPENDED_UNTIL", "2000-01-01")
 
 ADDR = "0x" + "b" * 40
 
@@ -1316,3 +1327,29 @@ async def test_get_address_security_defaults_to_base_chain_id():
     await c.get_address_security(ADDR)  # pas de chain_id explicite
 
     assert seen_params.get("chain_id") == "8453"
+
+
+class TestQuotaSuspension:
+    """08/05 -- self-expiring suspension while the monthly quota is dead
+    (operator request). Date-based: no manual re-enable to forget."""
+
+    @pytest.mark.asyncio
+    async def test_suspended_short_circuits_without_network(self, monkeypatch):
+        monkeypatch.setattr(goplus, "GOPLUS_QUOTA_SUSPENDED_UNTIL", "2099-01-01")
+        client = goplus.GoPlusClient()
+
+        async def _boom(*a, **k):
+            raise AssertionError("network must never be touched while suspended")
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _boom, raising=False)
+        data, error = await client._get_json("/token_security/8453", params={})
+        assert data is None
+        assert "suspendu" in error
+
+    @pytest.mark.asyncio
+    async def test_past_date_resumes_normal_path(self, monkeypatch):
+        monkeypatch.setattr(goplus, "GOPLUS_QUOTA_SUSPENDED_UNTIL", "2000-01-01")
+        client = goplus.GoPlusClient()
+        client._circuit_open_until = time.time() + 60  # breaker open -> NEXT guard fires
+        data, error = await client._get_json("/token_security/8453", params={})
+        assert "coupe-circuit" in error  # reached the breaker guard = suspension lifted
