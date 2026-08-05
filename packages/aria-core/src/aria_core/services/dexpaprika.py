@@ -106,21 +106,34 @@ def _compute_start(interval: str, limit: int) -> str:
     return start_dt.strftime("%Y-%m-%d")
 
 
+_key_marked_invalid = False
+
+
 def _auth_headers() -> dict[str, str]:
     """04/08 -- optional free-tier key (DEXPAPRIKA_API_KEY), read from the
     environment only, never logged/displayed. Keyless calls remain the
     default (this tier works without one, see module docstring); when
     present, the key is sent exactly as their dashboard shows it: a raw
-    Authorization header, no "Bearer " prefix."""
+    Authorization header, no "Bearer " prefix.
+
+    05/08 -- once a configured key has been rejected once (401, see
+    ``_get_json``), stop sending it for the rest of the process instead of
+    retrying a known-bad key on every call: same anti-pattern already fixed
+    for Blockscout on 07/20 (an invalid config must degrade gracefully, not
+    silently break a tier that works fine keyless)."""
+    if _key_marked_invalid:
+        return {}
     key = os.environ.get("DEXPAPRIKA_API_KEY", "").strip()
     return {"Authorization": key} if key else {}
 
 
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
     """GET with retry on 429/5xx/timeout -- same policy as the rest of the dome."""
+    global _key_marked_invalid
     url = f"{BASE_URL}{path}"
     attempt_429 = 0
     timeout_retried = False
+    key_fallback_tried = False
     headers = _auth_headers()
 
     while True:
@@ -135,6 +148,22 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 continue
             logger.warning("dexpaprika: timeout on %s -> %s", url, exc)
             return None, f"{UNAVAILABLE} (timeout, {exc})"
+
+        if response.status_code == 401 and headers and not key_fallback_tried:
+            # 05/08 -- a configured key rejected outright (verified against
+            # DexPaprika's own docs: this tier requires no auth at all, a 401
+            # only ever means "key present but invalid/revoked", never "auth
+            # required"). Fall back to keyless immediately rather than
+            # burning the whole cascade on a config mistake.
+            key_fallback_tried = True
+            _key_marked_invalid = True
+            logger.warning(
+                "dexpaprika: configured API key rejected (401) on %s -- "
+                "falling back to keyless access for the rest of this process",
+                url,
+            )
+            headers = {}
+            continue
 
         if response.status_code == 429:
             attempt_429 += 1

@@ -65,7 +65,9 @@ def _reset_circuit_breaker():
     """Same trap as every other dome client's tests -- module-level throttle
     timer shared across tests in this file (harmless here since ``_MIN_INTERVAL``
     is only a proactive delay, never a hard state to reset)."""
+    dp._key_marked_invalid = False
     yield
+    dp._key_marked_invalid = False
 
 
 # ── _compute_start -- the ONE thing that must never regress (26/07 diligence:
@@ -255,3 +257,38 @@ class TestAuthHeaders:
     def test_key_present_returns_raw_authorization_header(self, monkeypatch):
         monkeypatch.setenv("DEXPAPRIKA_API_KEY", "test-key-123")
         assert dp._auth_headers() == {"Authorization": "test-key-123"}
+
+    def test_key_marked_invalid_returns_empty_headers_even_if_env_var_present(self, monkeypatch):
+        monkeypatch.setenv("DEXPAPRIKA_API_KEY", "test-key-123")
+        dp._key_marked_invalid = True
+        assert dp._auth_headers() == {}
+
+
+class TestInvalidKeyFallback:
+    """05/08 -- a configured key rejected with 401 must fall back to keyless
+    access instead of degrading the whole tier (same anti-pattern as the
+    07/20 Blockscout fix)."""
+
+    @pytest.mark.asyncio
+    async def test_401_falls_back_to_keyless_and_succeeds(self, monkeypatch):
+        monkeypatch.setenv("DEXPAPRIKA_API_KEY", "invalid-key")
+        url = f"https://api.dexpaprika.com/networks/base/pools/{POOL}/ohlcv"
+        _patch_client(monkeypatch, {url: [FakeResponse(401), FakeResponse(200, _rows(30))]})
+        _patch_no_sleep(monkeypatch)
+
+        result = await dp.get_ohlcv(POOL, network="base")
+
+        assert result.available is True
+        assert len(result.candles) == 30
+
+    @pytest.mark.asyncio
+    async def test_401_marks_key_invalid_for_subsequent_calls(self, monkeypatch):
+        monkeypatch.setenv("DEXPAPRIKA_API_KEY", "invalid-key")
+        url = f"https://api.dexpaprika.com/networks/base/pools/{POOL}/ohlcv"
+        _patch_client(monkeypatch, {url: [FakeResponse(401), FakeResponse(200, _rows(30))]})
+        _patch_no_sleep(monkeypatch)
+
+        await dp.get_ohlcv(POOL, network="base")
+
+        assert dp._key_marked_invalid is True
+        assert dp._auth_headers() == {}
