@@ -312,6 +312,15 @@ class AriaBrain:
                 # (Spark down) -- only the operator should know this, never a public surface.
                 response.data["llm_fallback_used"] = True
                 response.data["llm_fallback_provider"] = fallback["provider"]
+            # 06/08 -- operator request: a short "XXX$ dépensé" line on every
+            # paid reply (Haiku/Sonnet cost tracking). Owner-only, same
+            # posture as the fallback notice above -- never a public surface.
+            from aria_core.llm_usage import get_chat_usage_totals
+
+            usage_totals = get_chat_usage_totals()
+            if usage_totals["cost_usd"] > 0 or usage_totals["cost_unknown"]:
+                response.data["llm_turn_cost_usd"] = usage_totals["cost_usd"]
+                response.data["llm_turn_cost_unknown"] = usage_totals["cost_unknown"]
             return response
         finally:
             clear_chat_usage_tracking()

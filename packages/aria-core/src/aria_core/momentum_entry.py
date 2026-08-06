@@ -704,14 +704,26 @@ async def _batch_liquidity_prefilter(
 # real signal).
 def reference_tokens_excluded(chain: str) -> frozenset[str]:
     from aria_core.services.smart_money import (
+        _BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN,
         _LST_ADDRESSES_BY_CHAIN,
         _STABLECOIN_ADDRESSES_BY_CHAIN,
         _WRAPPED_NATIVE_ADDRESSES,
     )
 
+    # 06/08 -- real scalping_v8 trade found the gap: cbBTC (Coinbase Wrapped
+    # BTC) was bought as a "wick reversal" candidate. Its address IS in
+    # _BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN, but that registry only fed
+    # is_recognized_reference_asset (the honeypot-check exemption for
+    # regulated issuers) -- never this function. A blue-chip wrapped asset is
+    # exactly the same "reference/quote currency, never a legitimate
+    # speculative candidate" case as the stablecoins/LSTs/wrapped-native
+    # already excluded here (same reasoning as the msUSD pegged-asset gate,
+    # 05/08): its price tracks the underlying (BTC/ETH), not micro-cap
+    # sentiment, so a wick+divergence signal was never validated on it.
     stables = _STABLECOIN_ADDRESSES_BY_CHAIN.get(chain, set())
     lsts = _LST_ADDRESSES_BY_CHAIN.get(chain, frozenset())
-    return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES | lsts
+    bluechips = _BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN.get(chain, frozenset())
+    return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES | lsts | bluechips
 
 
 def _add_candidate(

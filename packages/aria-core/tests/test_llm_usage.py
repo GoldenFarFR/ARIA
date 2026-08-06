@@ -1,15 +1,20 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from aria_core.cursor_usage import format_cursor_usage_dashboard, update_cursor_usage
 from aria_core.llm_usage import (
     begin_chat_usage_tracking,
     clear_chat_usage_tracking,
+    cost_usd_for,
     format_grok_build_dashboard,
     format_paid_usage_dashboard,
     get_chat_fallback_state,
+    get_chat_usage_totals,
     is_paid_provider,
     mark_fallback_used,
+    monthly_cost_usd,
     parse_usage_from_response,
     paid_usage_snapshot,
     record_llm_usage,
@@ -130,6 +135,94 @@ def test_chat_fallback_state_tracked_turn():
         clear_chat_usage_tracking()
     # Après clear, retour à l'état neutre.
     assert get_chat_fallback_state() == {"used": False, "provider": ""}
+
+
+# ── Cost tracking (06/08, operator request: "XXX$ dépensé" on every paid ──
+# Telegram reply, Haiku/Sonnet only). Prices sourced live 06/08 (anthropic.com):
+# Haiku 4.5 = $1/$5 per million; Sonnet 5 = $2/$10 through 2026-08-31, $3/$15
+# from 2026-09-01. These tests lock the exact numbers AND the step-up date --
+# a silent drift here means every operator-facing cost figure goes wrong.
+
+def test_haiku_cost_known_and_correct():
+    cost = cost_usd_for(
+        provider="anthropic", model="claude-haiku-4-5-20251001",
+        input_tokens=1_000_000, output_tokens=1_000_000,
+    )
+    assert cost == 6.0  # $1 in + $5 out
+
+
+def test_sonnet_cost_intro_price_before_step_up():
+    cost = cost_usd_for(
+        provider="anthropic", model="claude-sonnet-5",
+        input_tokens=1_000_000, output_tokens=1_000_000,
+        at=datetime(2026, 8, 31, 23, 59, tzinfo=timezone.utc),
+    )
+    assert cost == 12.0  # $2 in + $10 out, introductory price
+
+
+def test_sonnet_cost_standard_price_after_step_up():
+    cost = cost_usd_for(
+        provider="anthropic", model="claude-sonnet-5",
+        input_tokens=1_000_000, output_tokens=1_000_000,
+        at=datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc),
+    )
+    assert cost == 18.0  # $3 in + $15 out, standard price
+
+
+def test_unknown_model_cost_is_none_never_guessed():
+    assert cost_usd_for(
+        provider="grok", model="x-ai-grok-4-3", input_tokens=1000, output_tokens=1000,
+    ) is None
+    assert cost_usd_for(
+        provider="anthropic", model="claude-opus-4-8", input_tokens=1000, output_tokens=1000,
+    ) is None  # not in the price table -- honest degradation, not a guess
+
+
+def test_record_llm_usage_persists_cost_usd(tmp_path):
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        input_tokens=100_000,
+        output_tokens=10_000,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    month_cost = monthly_cost_usd(month="2026-07")
+    assert month_cost == pytest.approx((100_000 / 1_000_000) * 1.0 + (10_000 / 1_000_000) * 5.0)
+
+
+def test_monthly_cost_usd_ignores_unpriced_providers(tmp_path):
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="grok", model="x-ai-grok-4-3", input_tokens=1_000_000, output_tokens=1_000_000,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    assert monthly_cost_usd(month="2026-07") == 0.0
+
+
+def test_chat_usage_tracking_accumulates_real_cost():
+    begin_chat_usage_tracking()
+    try:
+        record_llm_usage(
+            provider="anthropic", model="claude-haiku-4-5-20251001",
+            input_tokens=1_000_000, output_tokens=1_000_000,
+        )
+        totals = get_chat_usage_totals()
+        assert totals["cost_usd"] == 6.0
+        assert totals["cost_unknown"] is False
+    finally:
+        clear_chat_usage_tracking()
+
+
+def test_chat_usage_tracking_flags_unknown_cost():
+    begin_chat_usage_tracking()
+    try:
+        record_llm_usage(provider="grok", model="x-ai-grok-4-3", input_tokens=1000, output_tokens=100)
+        totals = get_chat_usage_totals()
+        assert totals["cost_usd"] == 0.0
+        assert totals["cost_unknown"] is True
+    finally:
+        clear_chat_usage_tracking()
 
 
 def test_cursor_usage_dashboard(tmp_path, monkeypatch):

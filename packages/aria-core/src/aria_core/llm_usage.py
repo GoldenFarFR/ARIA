@@ -19,6 +19,50 @@ _GROK_BUILD_PROVIDERS = frozenset({"grok", "xai", "grok-build"})
 _chat_usage_ctx: ContextVar[dict[str, int] | None] = ContextVar("chat_usage_ctx", default=None)
 _chat_fallback_ctx: ContextVar[dict[str, Any] | None] = ContextVar("chat_fallback_ctx", default=None)
 
+# 06/08 -- operator request: a short cost line on every paid Telegram reply
+# ("XXX$ dépensé"), Haiku/Sonnet only (the only two providers meant to be
+# used long-term, see CLAUDE.md). USD per MILLION tokens (input, output).
+# SOURCED, never guessed (doctrine: a number cited without a source is a
+# liability, not a convenience) -- anthropic.com/claude/haiku +
+# anthropic.com/news/claude-sonnet-5, checked live 06/08. Sonnet 5's
+# introductory price ($2/$10) steps up to standard ($3/$15) on 2026-09-01 --
+# handled by date below so this table never silently drifts stale.
+_HAIKU_PRICE_PER_MILLION = (1.0, 5.0)
+_SONNET_INTRO_PRICE_PER_MILLION = (2.0, 10.0)
+_SONNET_STANDARD_PRICE_PER_MILLION = (3.0, 15.0)
+_SONNET_PRICE_STEP_UP_AT = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
+def _price_per_million_usd(provider: str, model: str, *, at: datetime | None = None) -> tuple[float, float] | None:
+    """(input, output) USD/million tokens for a KNOWN model, else None --
+    never a guessed price. Matched by substring since the exact model ID
+    varies by call site (e.g. "claude-haiku-4-5-20251001" vs a short alias)."""
+    if (provider or "").strip().lower() != "anthropic":
+        return None
+    m = (model or "").lower()
+    if "haiku" in m:
+        return _HAIKU_PRICE_PER_MILLION
+    if "sonnet" in m:
+        now = at or datetime.now(timezone.utc)
+        if now >= _SONNET_PRICE_STEP_UP_AT:
+            return _SONNET_STANDARD_PRICE_PER_MILLION
+        return _SONNET_INTRO_PRICE_PER_MILLION
+    return None
+
+
+def cost_usd_for(
+    *, provider: str, model: str, input_tokens: int, output_tokens: int, at: datetime | None = None,
+) -> float | None:
+    """None when the model's price isn't in the table above -- honest
+    degradation (no invented figure), same doctrine as every other unknown
+    in this codebase. ``at`` lets a test pin the Sonnet price-step-up date
+    deterministically -- real callers never pass it (real current time)."""
+    prices = _price_per_million_usd(provider, model, at=at)
+    if prices is None:
+        return None
+    price_in, price_out = prices
+    return (int(input_tokens) / 1_000_000) * price_in + (int(output_tokens) / 1_000_000) * price_out
+
 
 def begin_chat_usage_tracking() -> None:
     _chat_usage_ctx.set({
@@ -26,6 +70,8 @@ def begin_chat_usage_tracking() -> None:
         "output_tokens": 0,
         "total_tokens": 0,
         "calls": 0,
+        "cost_usd": 0.0,
+        "cost_unknown": False,
     })
     _chat_fallback_ctx.set({"used": False, "provider": ""})
 
@@ -35,7 +81,7 @@ def clear_chat_usage_tracking() -> None:
     _chat_fallback_ctx.set(None)
 
 
-def get_chat_usage_totals() -> dict[str, int]:
+def get_chat_usage_totals() -> dict[str, Any]:
     state = _chat_usage_ctx.get()
     if not state:
         return {
@@ -43,6 +89,8 @@ def get_chat_usage_totals() -> dict[str, int]:
             "output_tokens": 0,
             "total_tokens": 0,
             "calls": 0,
+            "cost_usd": 0.0,
+            "cost_unknown": False,
         }
     return dict(state)
 
@@ -65,7 +113,9 @@ def get_chat_fallback_state() -> dict[str, Any]:
     return dict(state)
 
 
-def _accumulate_chat_usage(*, input_tokens: int, output_tokens: int) -> None:
+def _accumulate_chat_usage(
+    *, input_tokens: int, output_tokens: int, provider: str = "", model: str = "",
+) -> None:
     state = _chat_usage_ctx.get()
     if state is None:
         return
@@ -75,6 +125,11 @@ def _accumulate_chat_usage(*, input_tokens: int, output_tokens: int) -> None:
     state["output_tokens"] += out
     state["total_tokens"] += inp + out
     state["calls"] += 1
+    cost = cost_usd_for(provider=provider, model=model, input_tokens=inp, output_tokens=out)
+    if cost is None:
+        state["cost_unknown"] = True
+    else:
+        state["cost_usd"] += cost
 
 
 def llm_usage_dir() -> Path:
@@ -150,6 +205,11 @@ def record_llm_usage(
             row["truncated"] = True
         if latency_ms is not None:
             row["latency_ms"] = round(float(latency_ms), 1)
+        cost = cost_usd_for(
+            provider=provider, model=model, input_tokens=input_tokens, output_tokens=output_tokens, at=now,
+        )
+        if cost is not None:
+            row["cost_usd"] = round(cost, 5)
         path = _month_path(day)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -157,6 +217,8 @@ def record_llm_usage(
             _accumulate_chat_usage(
                 input_tokens=int(input_tokens),
                 output_tokens=int(output_tokens),
+                provider=provider or "",
+                model=model or "",
             )
     except Exception as exc:
         logger.debug("llm usage log skip: %s", exc)
@@ -380,3 +442,28 @@ def summarize_usage(*, month: str | None = None) -> dict[str, Any]:
         "by_model": dict(sorted(by_model.items())),
         "rows": len(rows),
     }
+
+
+def monthly_cost_usd(*, month: str | None = None) -> float:
+    """Sum of known-price cost across this month's rows (Haiku/Sonnet today
+    -- any provider _price_per_million_usd() doesn't know stays excluded,
+    never guessed). Recomputes from tokens for rows logged before this cost
+    tracking existed (no "cost_usd" field persisted yet) so the month total
+    isn't silently short right after this feature ships."""
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    total = 0.0
+    for row in _iter_rows(month):
+        if not row.get("ok"):
+            continue
+        if "cost_usd" in row:
+            total += float(row["cost_usd"])
+            continue
+        cost = cost_usd_for(
+            provider=str(row.get("provider") or ""),
+            model=str(row.get("model") or ""),
+            input_tokens=int(row.get("input_tokens") or 0),
+            output_tokens=int(row.get("output_tokens") or 0),
+        )
+        if cost is not None:
+            total += cost
+    return total

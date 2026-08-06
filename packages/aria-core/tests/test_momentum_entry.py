@@ -328,6 +328,19 @@ def test_reference_tokens_excluded_covers_eurc():
     assert "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42" in excluded  # EURC
 
 
+def test_reference_tokens_excluded_covers_bluechip_wrapped():
+    """06/08 -- real scalping_v8 trade found the gap: cbBTC (Coinbase Wrapped
+    BTC) was bought as a "wick reversal" candidate. Its address was already in
+    _BLUECHIP_WRAPPED_ADDRESSES_BY_CHAIN, but that registry only fed
+    is_recognized_reference_asset (the honeypot-check exemption), never this
+    discovery-exclusion function -- same "reference/quote currency" case as
+    WETH/stablecoins/LSTs already excluded above."""
+    excluded = me.reference_tokens_excluded("base")
+    assert "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf" in excluded  # cbBTC
+    assert "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22" in excluded  # cbETH
+    assert "0x0555e30da8f98308edb960aa94c0db47230d2b9c" in excluded  # WBTC
+
+
 def test_reference_tokens_excluded_empty_for_unlisted_chain():
     # Chaîne sans registre stablecoin connu -- WETH mainnet Ethereum reste exclu
     # (registre wrapped-native indépendant de la chaîne), mais aucun stablecoin.

@@ -2340,6 +2340,18 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             provider = response.data.get("llm_fallback_provider", "")
             reply_text = f"{reply_text}\n\n{fallback_notice_line(provider, lang=lang)}"
+        if "llm_turn_cost_usd" in response.data and is_owner(user.id):
+            # 06/08 -- operator request ("un court message qui dit XXX$
+            # dépensé"): owner-only, same posture as the fallback notice
+            # above -- never a public/admin-only surface.
+            from aria_core.llm_usage import monthly_cost_usd
+
+            turn_cost = response.data["llm_turn_cost_usd"]
+            month_cost = monthly_cost_usd()
+            unknown_note = " (+ appels à prix inconnu)" if response.data.get("llm_turn_cost_unknown") else ""
+            reply_text = (
+                f"{reply_text}\n\n💵 {turn_cost:.5f}${unknown_note} — cumul mois : {month_cost:.5f}$"
+            )
         await _reply(message, reply_text)
     except Exception:
         # #144: full traceback server-side (never shown to the operator) --
@@ -2569,6 +2581,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("langue", "Langue des analyses (fr/en)"),
     ("learn", "Ajoute une leçon manuelle (topic | contenu)"),
     ("ledger", "Détail par position du paper-trading (thèse, entrée/sortie, R:R)"),
+    ("llmspend", "Dépense LLM du mois en $ (Haiku/Sonnet, par point d'appel) — owner-only"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
     ("off", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
     ("on", "▶️ Reprend le paper trading après /off"),
@@ -2898,6 +2911,48 @@ async def _handle_v9set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"trail -{entry['trail_pct'] * 100:g}%.\n"
         f"Effectif au prochain cycle 5 min.",
     )
+
+
+async def _handle_llmspend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/llmspend -- 06/08, operator request: on-demand cost breakdown
+    (Haiku/Sonnet, USD, by call site) so an anomaly ("dépense louche") can
+    be caught even for the skills that never notify Telegram on their own
+    (VC intelligence, smart-money scoring, source-code audit, the momentum
+    trading tie-breaker) -- the per-reply cost line only fires on an actual
+    conversational turn, this command covers everything else. Owner-only,
+    same posture as the per-reply cost line."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    user = update.effective_user
+    if not user or not is_owner(user.id):
+        await _reply(message, "Réservé à l'opérateur principal.")
+        return
+    from datetime import datetime, timezone
+
+    from aria_core.llm_usage import cost_usd_for, monthly_cost_usd, summarize_usage
+
+    month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+    summary = summarize_usage(month=month_key)
+    total = monthly_cost_usd(month=month_key)
+    lines = [f"💵 Dépense LLM — {month_key} : {total:.5f}$", ""]
+    any_unpriced = False
+    for model_key, stats in summary["by_model"].items():
+        provider, _, model = model_key.partition("/")
+        cost = cost_usd_for(
+            provider=provider, model=model,
+            input_tokens=stats["input_tokens"], output_tokens=stats["output_tokens"],
+        )
+        if cost is None:
+            any_unpriced = True
+            lines.append(f"- {model_key} : {stats['calls']} appel(s), prix inconnu")
+        else:
+            lines.append(f"- {model_key} : {stats['calls']} appel(s), {cost:.5f}$")
+    if any_unpriced:
+        lines.append("\n(prix inconnu = jamais deviné, exclu du total ci-dessus)")
+    await _reply(message, "\n".join(lines))
 
 
 async def _handle_v9remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4080,6 +4135,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("v9list", _handle_v9list))
     app.add_handler(CommandHandler("v9remove", _handle_v9remove))
     app.add_handler(CommandHandler("v9set", _handle_v9set))
+    app.add_handler(CommandHandler("llmspend", _handle_llmspend))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
