@@ -122,6 +122,61 @@ async def _ensure_watchlist_table() -> None:
         await db.commit()
 
 
+# 06/08 -- operator request ("je veut tout savoir si un jour on doit
+# comprendre ce qui a fonctionné ou non"): trace EVERY cycle evaluation for
+# EVERY watchlist token, not just the ones that end in a trade -- a HOLD
+# cycle running on a degraded (fallback) OHLCV read is exactly the kind of
+# thing that's invisible today and needs to be reconstructible after the
+# fact. Append-only, never pruned automatically (small volume: <=5 tokens *
+# 12 cycles/hour).
+async def _ensure_cycle_log_table() -> None:
+    import aiosqlite
+
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS v9_cycle_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                contract TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe_configured_min INTEGER,
+                provider TEXT,
+                timeframe_served TEXT,
+                degraded INTEGER,
+                rsi_last REAL,
+                mfi_last REAL,
+                action TEXT NOT NULL,
+                reason TEXT
+            )
+            """
+        )
+        await db.commit()
+
+
+async def _log_cycle_evaluation(
+    *, contract: str, symbol: str, timeframe_configured_min: int,
+    provenance: dict | None, rsi_last: float | None, mfi_last: float | None,
+    action: str, reason: str,
+) -> None:
+    import aiosqlite
+
+    provenance = provenance or {}
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO v9_cycle_log (ts, contract, symbol, timeframe_configured_min, "
+            "provider, timeframe_served, degraded, rsi_last, mfi_last, action, reason) "
+            "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                contract.lower(), symbol, timeframe_configured_min,
+                provenance.get("provider"), provenance.get("timeframe_served"),
+                1 if provenance.get("degraded") else 0,
+                rsi_last, mfi_last, action, reason,
+            ),
+        )
+        await db.commit()
+
+
 async def get_watchlist() -> list[dict]:
     """Active watchlist, the one the 5-min cycle iterates -- per-token
     settings resolved (DB value or module default, never None)."""
@@ -410,16 +465,33 @@ async def run_v9_cycle(*, notifier=None) -> dict:
     from aria_core.skills import indicators
     from aria_core.skills.entry_signals import rsi_series
 
+    await _ensure_cycle_log_table()
+
     for token in await get_watchlist():
         contract, chain, label = token["contract"], token["chain"], token["symbol"]
+        tf_min = token["timeframe_min"]
         actions["checked"] += 1
+
+        async def _log(action: str, reason: str, *, rsi_last=None, mfi_last=None, provenance=None) -> None:
+            # 06/08 -- operator request, full traceability: EVERY evaluation
+            # of EVERY token, not just the ones that end in a trade, so a
+            # cycle that ran on degraded (fallback) data is reconstructible
+            # after the fact even when nothing was bought.
+            await _log_cycle_evaluation(
+                contract=contract, symbol=label, timeframe_configured_min=tf_min,
+                provenance=provenance, rsi_last=rsi_last, mfi_last=mfi_last,
+                action=action, reason=reason,
+            )
+
         try:
             pair = await paper_trader._default_pair_lookup(contract, chain=chain)
         except Exception as exc:  # noqa: BLE001 -- one token's failure never blocks the rest
             logger.info("scalping_v9[%s]: pair lookup failed (%s)", label, exc)
+            await _log("hold", "pair_lookup_failed")
             continue
         if pair is None or not pair.price_usd or pair.price_usd <= 0:
             actions["holds"].append({"symbol": label, "reason": "no_liquid_pair"})
+            await _log("hold", "no_liquid_pair")
             continue
         spot = pair.price_usd
 
@@ -446,13 +518,16 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             # better than "no data at all", never day/hour-scale.
             candles = await momentum_entry._fetch_candles(
                 pair.pair_address, chain, contract=contract, pair=pair,
-                mode=f"scalping_{token['timeframe_min']}m",
+                mode=f"scalping_{tf_min}m",
             )
         except Exception as exc:  # noqa: BLE001
             logger.info("scalping_v9[%s]: OHLCV failed (%s)", label, exc)
+            await _log("hold", "ohlcv_exception")
             continue
+        provenance = momentum_entry.get_last_candle_provenance()
         if not candles:
             actions["holds"].append({"symbol": label, "reason": "ohlcv_unavailable"})
+            await _log("hold", "ohlcv_unavailable", provenance=provenance)
             continue
         # Last candle is the one still forming (standard real-time OHLCV
         # behavior) -- never compute the signal on an unclosed candle, same
@@ -460,23 +535,29 @@ async def run_v9_cycle(*, notifier=None) -> dict:
         candles = candles[:-1]
         if len(candles) < _MIN_CANDLES_FOR_SIGNAL:
             actions["holds"].append({"symbol": label, "reason": "insufficient_candles"})
+            await _log("hold", "insufficient_candles", provenance=provenance)
             continue
 
         rsi = rsi_series([c.close for c in candles], period=token["rsi_period"])
         mfi = indicators.mfi_series(candles, period=token["mfi_period"])
+        rsi_last = rsi[-1] if rsi else None
+        mfi_last = mfi[-1] if mfi else None
         transition_idx = _find_entry_transition(
             rsi, mfi, rsi_lower=token["rsi_lower"], mfi_lower=token["mfi_lower"],
         )
         if transition_idx is None:
             actions["holds"].append({"symbol": label, "reason": "no_signal"})
+            await _log("hold", "no_signal", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
         transition_ts = float(getattr(candles[transition_idx], "ts", 0) or 0)
         if _last_buy_episode_ts.get(contract.lower()) == transition_ts:
             actions["holds"].append({"symbol": label, "reason": "episode_already_bought"})
+            await _log("hold", "episode_already_bought", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
         if await _recent_position_guard(contract):
             actions["holds"].append({"symbol": label, "reason": "episode_guard_recent_position"})
+            await _log("hold", "episode_guard_recent_position", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
         # The one hard guardrail (CLAUDE.md absolute) -- fail-closed.
@@ -486,12 +567,14 @@ async def run_v9_cycle(*, notifier=None) -> dict:
         if not clear:
             actions["holds"].append({"symbol": label, "reason": f"honeypot:{hp_reason}"})
             logger.info("scalping_v9[%s]: honeypot gate refused (%s)", label, hp_reason)
+            await _log("hold", f"honeypot:{hp_reason}", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
         cash = await paper_trader.cash_available(wallet=paper_trader.V9_WALLET)
         alloc = cash * BUY_PCT_OF_REMAINING_CASH
         if alloc < _MIN_ALLOC_USD:
             actions["holds"].append({"symbol": label, "reason": "insufficient_cash"})
+            await _log("hold", "insufficient_cash", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
         rsi_shown = rsi[transition_idx]
@@ -515,16 +598,23 @@ async def run_v9_cycle(*, notifier=None) -> dict:
                 f"ET MFI({token['mfi_period']})={mfi_shown:.1f} < {token['mfi_lower']:g} "
                 f"en même temps. Achat immédiat 3% du cash restant, sortie unique : "
                 f"stop suiveur -{token['trail_pct'] * 100:g}% du plus haut spot."
+                + (
+                    f" [Données : {provenance['provider']}, {provenance['timeframe_served']}"
+                    f"{' -- DÉGRADÉ' if provenance.get('degraded') else ''}]"
+                    if provenance else ""
+                )
             ),
         )
         if pos is None:
             actions["holds"].append({"symbol": label, "reason": "open_refused"})
+            await _log("hold", "open_refused", rsi_last=rsi_shown, mfi_last=mfi_shown, provenance=provenance)
             continue
         # Trailing runs on SPOT ("prix net réel sur le graphique") -- reseed
         # the high-water at spot, not the degraded fill open_position stored.
         await paper_trader._update_high_water(pos["id"], spot)
         _last_buy_episode_ts[contract.lower()] = transition_ts
         actions["opened"].append(pos)
+        await _log("buy", "synchronized_transition", rsi_last=rsi_shown, mfi_last=mfi_shown, provenance=provenance)
         if notifier is not None:
             try:
                 await notifier(paper_trader.format_buy_alert(pos))

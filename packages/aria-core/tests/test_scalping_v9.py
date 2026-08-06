@@ -30,6 +30,24 @@ def _clear_episode_memory():
     v9._last_buy_episode_ts.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_candles_cache():
+    """06/08 -- same trap as ``test_momentum_entry.py``'s own
+    ``_reset_candles_cache`` fixture: ``momentum_entry._candles_cache`` is a
+    module-level dict keyed by (chain, pool, mode, skip_daily), shared across
+    every ``_fetch_candles`` caller -- and every test in this file reuses the
+    SAME pool address ("0xpool") and mode ("scalping_5m"), a guaranteed
+    collision. Found while writing the provenance-traceability tests below:
+    without this reset, a cache hit from an EARLIER test silently skips
+    ``_fetch_candles_impl`` (and the provenance tag it sets) entirely on a
+    LATER test, serving stale candles from a completely different scenario."""
+    from aria_core import momentum_entry
+
+    momentum_entry._candles_cache.clear()
+    yield
+    momentum_entry._candles_cache.clear()
+
+
 def _flat_candles(n=60, price=1.0, volume=1000.0):
     return [
         Candle(ts=float(i), open=price, high=price * 1.01, low=price * 0.99,
@@ -52,6 +70,39 @@ class _FakeOhlcv:
         self.candles = candles
         self.available = bool(candles)
         self.error = None
+
+
+class _FakeMobulaResult:
+    def __init__(self, candles):
+        self.candles = candles
+        self.available = bool(candles)
+
+
+def _patch_geckoterminal_dead_mobula_alive(monkeypatch, *, mobula_candles=None):
+    """Shared wiring for "GeckoTerminal down, Mobula answers" scalping-fallback
+    scenarios -- GeckoTerminal returns available=False, Mobula returns real
+    15m candles. 61 candles by default: run_v9_cycle trims the still-forming
+    last one, landing exactly on ``_signal_series()``'s default n=60 (same
+    padding convention as ``_patch_cycle_io`` above -- a bare 60 here caused a
+    real, order-dependent ``IndexError`` found while writing the traceability
+    tests below: candles[59] out of range once trimmed to 59)."""
+    from aria_core import momentum_entry
+    from aria_core.services import geckoterminal, mobula
+
+    async def dead_gecko(pool, *, network="base", mode="standard", **kw):
+        return _FakeOhlcv([])
+
+    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", dead_gecko)
+    monkeypatch.setattr(momentum_entry, "_provider_in_cooldown", lambda provider: False)
+    monkeypatch.setattr(momentum_entry, "_record_provider_outcome", lambda *a, **kw: None)
+    monkeypatch.setattr(mobula, "mobula_configured", lambda: True)
+
+    candles = mobula_candles if mobula_candles is not None else _flat_candles(61)
+
+    async def fake_mobula_get_ohlcv(contract, *, blockchain="base", period="15m"):
+        return _FakeMobulaResult(candles)
+
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_get_ohlcv)
 
 
 def _patch_cycle_io(
@@ -301,7 +352,6 @@ async def test_buy_via_mobula_fallback_when_geckoterminal_unavailable(tmp_db, mo
     (available=False) must no longer mean "blind for this cycle" as long as
     Mobula has real candles."""
     from aria_core import momentum_entry
-    from aria_core.services import geckoterminal, mobula
     from aria_core.skills import entry_signals
 
     monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
@@ -310,25 +360,7 @@ async def test_buy_via_mobula_fallback_when_geckoterminal_unavailable(tmp_db, mo
         return _FakePair(price=2.0)
 
     monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
-
-    async def dead_gecko(pool, *, network="base", mode="standard", **kw):
-        return _FakeOhlcv([])  # available=False -- GeckoTerminal down
-
-    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", dead_gecko)
-    monkeypatch.setattr(momentum_entry, "_provider_in_cooldown", lambda provider: False)
-    monkeypatch.setattr(momentum_entry, "_record_provider_outcome", lambda *a, **kw: None)
-    monkeypatch.setattr(mobula, "mobula_configured", lambda: True)
-
-    class _FakeMobulaResult:
-        def __init__(self, candles):
-            self.candles = candles
-            self.available = bool(candles)
-
-    async def fake_mobula_get_ohlcv(contract, *, blockchain="base", period="15m"):
-        assert period == "15m"  # scalping fallback tries 15m first
-        return _FakeMobulaResult(_flat_candles(60))
-
-    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_get_ohlcv)
+    _patch_geckoterminal_dead_mobula_alive(monkeypatch)
 
     rsi, mfi = _signal_series()
     monkeypatch.setattr(entry_signals, "rsi_series", lambda closes, period=14: rsi)
@@ -344,6 +376,167 @@ async def test_buy_via_mobula_fallback_when_geckoterminal_unavailable(tmp_db, mo
 
     assert len(actions["opened"]) == 1
     assert not any(h["reason"] == "ohlcv_unavailable" for h in actions["holds"])
+
+
+# ── full traceability (06/08 operator request) ───────────────────────────────
+
+async def _cycle_log_rows(tmp_path):
+    import aiosqlite
+
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM v9_cycle_log ORDER BY id") as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+@pytest.mark.asyncio
+async def test_buy_thesis_includes_data_provenance_annotation(tmp_db, monkeypatch):
+    """The BUY thesis must name the real provider/timeframe that served the
+    candles -- degraded (fallback, wrong granularity) flagged explicitly,
+    never silently presented as if it were the configured 5min GeckoTerminal
+    read."""
+    from aria_core import momentum_entry
+    from aria_core.skills import entry_signals
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair(price=2.0)
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    _patch_geckoterminal_dead_mobula_alive(monkeypatch)
+
+    rsi, mfi = _signal_series()
+    monkeypatch.setattr(entry_signals, "rsi_series", lambda closes, period=14: rsi)
+    monkeypatch.setattr(indicators, "mfi_series", lambda c, *, period=10: mfi)
+
+    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+        return True, "", ""
+
+    monkeypatch.setattr(momentum_entry, "_check_honeypot", fake_honeypot)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    pos = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]
+    # SPX configured at 5min, Mobula only serves 15m -- must read as degraded.
+    assert "[Données : mobula, 15m -- DÉGRADÉ]" in pos["thesis"]
+
+
+@pytest.mark.asyncio
+async def test_buy_thesis_provenance_not_flagged_degraded_on_exact_timeframe(tmp_db, monkeypatch):
+    """GeckoTerminal always serves the exact requested granularity -- no
+    DÉGRADÉ marker when it's the one that answered."""
+    rsi, mfi = _signal_series()
+    _patch_cycle_io(monkeypatch, spot=2.0, rsi=rsi, mfi=mfi)
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    await v9.run_v9_cycle()
+
+    pos = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]
+    assert "[Données : geckoterminal, scalping_5m]" in pos["thesis"]
+    assert "DÉGRADÉ" not in pos["thesis"]
+
+
+@pytest.mark.asyncio
+async def test_cycle_log_records_every_hold_including_no_signal(tmp_db, monkeypatch):
+    """A HOLD cycle where nothing is bought must still leave a row -- the
+    whole point of full traceability ('je veut tout savoir si un jour on
+    doit comprendre se qui a fonctionner ou non')."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    _patch_cycle_io(monkeypatch, rsi=[50.0] * 60, mfi=[50.0] * 60)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["opened"] == []
+    rows = await _cycle_log_rows(tmp_db)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["symbol"] == "SPX"
+    assert row["action"] == "hold"
+    assert row["reason"] == "no_signal"
+    assert row["provider"] == "geckoterminal"
+    assert row["timeframe_served"] == "scalping_5m"
+    assert row["degraded"] == 0
+    assert row["rsi_last"] == pytest.approx(50.0)
+    assert row["mfi_last"] == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_cycle_log_records_ohlcv_unavailable_hold_with_no_provider(tmp_db, monkeypatch):
+    """Everything down (no fallback answered): provenance is None -- the
+    row must record that honestly, never fabricate a provider. DexPaprika/
+    Codex explicitly mocked unavailable too -- otherwise this test would
+    make a REAL outbound network call (dexpaprika.get_ohlcv has no
+    "configured" gate, unlike codex/mobula) instead of exercising the
+    intended "nothing answered" path deterministically."""
+    from aria_core import momentum_entry
+    from aria_core.services import codex, dexpaprika, geckoterminal, mobula
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair(price=2.0)
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    async def dead_gecko(pool, *, network="base", mode="standard", **kw):
+        return _FakeOhlcv([])
+
+    async def dead_dexpaprika(pool, *, network="base", mode="standard", **kw):
+        return _FakeOhlcv([])
+
+    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", dead_gecko)
+    monkeypatch.setattr(dexpaprika, "get_ohlcv", dead_dexpaprika)
+    monkeypatch.setattr(codex, "codex_configured", lambda: False)
+    monkeypatch.setattr(momentum_entry, "_provider_in_cooldown", lambda provider: False)
+    monkeypatch.setattr(momentum_entry, "_record_provider_outcome", lambda *a, **kw: None)
+    monkeypatch.setattr(mobula, "mobula_configured", lambda: False)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["opened"] == []
+    rows = await _cycle_log_rows(tmp_db)
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "ohlcv_unavailable"
+    assert rows[0]["provider"] is None
+    assert rows[0]["degraded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cycle_log_records_the_buy_row(tmp_db, monkeypatch):
+    rsi, mfi = _signal_series()
+    _patch_cycle_io(monkeypatch, spot=2.0, rsi=rsi, mfi=mfi)
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    await v9.run_v9_cycle()
+
+    rows = await _cycle_log_rows(tmp_db)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["action"] == "buy"
+    assert row["reason"] == "synchronized_transition"
+    assert row["provider"] == "geckoterminal"
+    assert row["rsi_last"] == pytest.approx(15.0)
+    assert row["mfi_last"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_get_last_candle_provenance_none_before_any_fetch(tmp_db, monkeypatch):
+    """Sanity check on the ContextVar seam itself: a fresh task with no
+    ``_fetch_candles`` call yet must read None, never stale state leaked
+    from an unrelated earlier call."""
+    from aria_core import momentum_entry
+
+    async def _isolated_read():
+        return momentum_entry.get_last_candle_provenance()
+
+    assert await asyncio.create_task(_isolated_read()) is None
 
 
 # ── run_v9_cycle -- exit side (flat -5% trailing on SPOT) ────────────────────

@@ -79,6 +79,7 @@ import asyncio
 import logging
 import os
 import time
+from contextvars import ContextVar
 
 from aria_core import circuit_breaker_log, momentum_blacklist
 from aria_core.chasing_filter_shadow import (
@@ -101,6 +102,33 @@ from aria_core.skills.indicators import bollinger_bands, ema_series, macd_series
 from aria_core.skills.ta_levels import Candle
 
 logger = logging.getLogger(__name__)
+
+# 06/08 -- operator request ("je veut tout savoir si un jour on doit
+# comprendre ce qui a fonctionné ou non"): scalping_v9 needs to know WHICH
+# provider actually served the candles it just used, and at what real
+# granularity, so a degraded (fallback) read is traceable after the fact --
+# never just "it worked" with no record of how. Same ContextVar pattern as
+# llm_usage.py's chat-usage tracking: task-local (asyncio-safe, no cross-call
+# leakage), set by whichever cascade stage returns candles, read by the
+# caller right after the ``await`` that produced them. Only wired for the
+# SCALPING path (v9's only consumer) -- the standard/VC path never asked for
+# this and stays untouched.
+_candle_provenance_ctx: ContextVar[dict | None] = ContextVar("candle_provenance_ctx", default=None)
+
+
+def _set_candle_provenance(*, provider: str, timeframe_served: str, degraded: bool) -> None:
+    _candle_provenance_ctx.set({
+        "provider": provider, "timeframe_served": timeframe_served, "degraded": degraded,
+    })
+
+
+def get_last_candle_provenance() -> dict | None:
+    """Provider/timeframe that served the MOST RECENT ``_fetch_candles`` call
+    in this task -- ``None`` if that call never reached a scalping-cascade
+    stage that tags provenance (e.g. it failed everywhere, or went through
+    the untagged standard/VC path). Read immediately after the ``await`` --
+    never cached, never assumed still valid on a later call."""
+    return _candle_provenance_ctx.get()
 
 # 20/07 -- explicit operator decision (following Gemini cross-review): focus on
 # Base ONLY for now -- Solana (active since 15/07) and Robinhood (never really
@@ -1883,6 +1911,11 @@ async def _fetch_candles_impl(
     GeckoTerminal stage (excludes its daily rung, see
     ``ohlcv.OHLCVClient.get_ohlcv``'s own docstring), `False` by default, no
     other stage accepts or needs this parameter."""
+    # Reset before every call -- without this, a stage that ends up
+    # returning [] (nothing worked) would leave the PREVIOUS call's
+    # provenance in the ContextVar, misleading the caller into crediting a
+    # provider that produced nothing this time.
+    _candle_provenance_ctx.set(None)
     gecko_candles = await _try_gecko_stage(
         pool_address, chain, mode=mode, gecko_client=gecko_client,
         min_useful_candles=min_useful_candles, skip_daily=skip_daily,
@@ -1899,7 +1932,19 @@ async def _fetch_candles_impl(
     # confirmed day/hour-scale only, corrupting a scalping RSI/MFI read
     # without any visible error). Matched by prefix instead.
     if mode == "scalping" or mode.startswith("scalping_"):
-        return await _scalping_fallbacks(pool_address, chain, contract=contract)
+        # "scalping_{N}m" -> N, for the degraded-timeframe check inside the
+        # fallbacks below; plain "scalping" (v8's legacy mode, no per-token
+        # timeframe) has nothing to compare against -- None, no degradation
+        # claim made either way.
+        requested_min: int | None = None
+        if mode.startswith("scalping_") and mode.endswith("m"):
+            try:
+                requested_min = int(mode[len("scalping_"):-1])
+            except ValueError:
+                requested_min = None
+        return await _scalping_fallbacks(
+            pool_address, chain, contract=contract, requested_timeframe_min=requested_min,
+        )
     return await _standard_fallbacks(pool_address, chain, contract=contract, pair=pair)
 
 
@@ -1932,6 +1977,10 @@ async def _try_gecko_stage(
             result = None
         if result is not None and result.available and result.candles:
             _record_provider_outcome("geckoterminal", ok=True)
+            # GeckoTerminal always serves EXACTLY the requested granularity
+            # (services/ohlcv.py refuses to silently substitute a coarser
+            # one -- see its own comment) -- never degraded.
+            _set_candle_provenance(provider="geckoterminal", timeframe_served=mode, degraded=False)
             return result.candles
         if result is None or not result.available:
             _record_provider_outcome("geckoterminal", ok=False)
@@ -1940,7 +1989,9 @@ async def _try_gecko_stage(
     return None
 
 
-async def _scalping_fallbacks(pool_address: str, chain: str, *, contract: str = "") -> list[Candle]:
+async def _scalping_fallbacks(
+    pool_address: str, chain: str, *, contract: str = "", requested_timeframe_min: int | None = None,
+) -> list[Candle]:
     """Scalping cascade after GeckoTerminal (04/08 split): Mobula 15m/30m ->
     DexPaprika 15m/30m -> Codex.io 15m/30m -> honest ``[]``. CoinMarketCap/
     DexScreener synthesis/Dune are deliberately absent (confirmed no sub-hour
@@ -1965,6 +2016,9 @@ async def _scalping_fallbacks(pool_address: str, chain: str, *, contract: str = 
                     mobula_result = None
                 if mobula_result is not None and mobula_result.available and mobula_result.candles:
                     _record_provider_outcome("mobula", ok=True)
+                    served_min = int(period[:-1])
+                    degraded = requested_timeframe_min is not None and served_min != requested_timeframe_min
+                    _set_candle_provenance(provider="mobula", timeframe_served=period, degraded=degraded)
                     if period == "15m":
                         logger.info(
                             "_fetch_candles: Mobula scalping fallback (real 15min candles) %s/%s",
@@ -2005,6 +2059,11 @@ async def _scalping_fallbacks(pool_address: str, chain: str, *, contract: str = 
             dp_result = None
         if dp_result is not None and dp_result.available and dp_result.candles:
             _record_provider_outcome("dexpaprika", ok=True)
+            # DexPaprika's own internal 15m/30m ladder isn't exposed here --
+            # never claim a precise served timeframe we don't actually know.
+            _set_candle_provenance(
+                provider="dexpaprika", timeframe_served="15m_ou_30m_indetermine", degraded=True,
+            )
             logger.info("_fetch_candles: DexPaprika scalping fallback (real candles) %s/%s", chain, pool_address[:10])
             return dp_result.candles
         if dp_result is None or not dp_result.available:
@@ -2029,6 +2088,10 @@ async def _scalping_fallbacks(pool_address: str, chain: str, *, contract: str = 
                 codex_result = None
             if codex_result is not None and codex_result.available and codex_result.candles:
                 _record_provider_outcome("codex", ok=True)
+                # Same "unknown precise timeframe" honesty as DexPaprika above.
+                _set_candle_provenance(
+                    provider="codex", timeframe_served="15m_ou_30m_indetermine", degraded=True,
+                )
                 logger.info("_fetch_candles: Codex.io scalping fallback (real candles) %s/%s", chain, pool_address[:10])
                 return codex_result.candles
             if codex_result is None or not codex_result.available:
