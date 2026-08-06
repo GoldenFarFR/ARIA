@@ -16,21 +16,25 @@ from aria_core.skills.acp_schema import get_acp_strict_rules
 
 _SCAN_CACHE = memory_dir() / "acp_market_scan.json"
 
+# CodeQL py/polynomial-redos: unbounded ".*" between literals is O(n^2) on
+# a long, mostly-blank message (re-tried at every start position by
+# .search()) -- bounded to 100 chars everywhere below, generous for any
+# real sentence between the two anchor phrases.
 _LEADERBOARD_RE = re.compile(
     r"(?i)(?:"
     r"leaderboard|leader\s*board|classement\s+acp|top\s+agents?\s+acp|"
-    r"quand.*(?:voir|vois|voit|appara[iî]t).*(?:leader|classement|top)|"
+    r"quand.{0,100}(?:voir|vois|voit|appara[iî]t).{0,100}(?:leader|classement|top)|"
     r"learderboard|leaderbord"
     r")",
 )
 
 _MARKET_RE = re.compile(
     r"(?i)(?:"
-    r"étud(?:e|ier).*(?:offre|demande|marketplace)|"
-    r"analys(?:e|er).*(?:agents?|marketplace|acp)|"
-    r"offre\s+et\s+la\s+demande|supply.*demand|"
+    r"étud(?:e|ier).{0,100}(?:offre|demande|marketplace)|"
+    r"analys(?:e|er).{0,100}(?:agents?|marketplace|acp)|"
+    r"offre\s+et\s+la\s+demande|supply.{0,100}demand|"
     r"gap(?:s)?\s+(?:marketplace|acp|offre)|"
-    r"quelle?\s+offre\s+créer|workflow.*créer|"
+    r"quelle?\s+offre\s+créer|workflow.{0,100}créer|"
     r"intelligence\s+(?:marché|marche|market)|"
     r"scan\s+(?:marché|marche|marketplace)\s+acp|"
     r"virtuals\.io/acp/scan|/acp/scan"

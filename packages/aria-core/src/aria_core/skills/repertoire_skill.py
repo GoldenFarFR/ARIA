@@ -31,9 +31,17 @@ def _extract_target_name(message: str) -> str:
     for pat in patterns:
         m = re.search(pat, message, re.I)
         if m:
-            target = m.group(1).strip()
+            # CodeQL py/polynomial-redos: two "\s*" around a literal
+            # alternation is O(n^2) on a pathologically long, mostly-blank
+            # user message -- a repertoire entry name is never realistically
+            # over 300 chars, so bounding here loses nothing real.
+            target = m.group(1).strip()[:300]
+            # Defense in depth: the [:300] slice above already makes this
+            # fast in practice (verified empirically), but the "\s*" itself
+            # is also bounded so this regex stays safe even if that slice
+            # is ever removed by a future edit.
             target = re.sub(
-                r"\s*(du répertoire|from (?:the\s+)?repertoire|please|s'il te plaît)\s*$",
+                r"\s{0,20}(du répertoire|from (?:the\s+)?repertoire|please|s'il te plaît)\s{0,20}$",
                 "", target, flags=re.I,
             )
             return target.strip(" \"'")

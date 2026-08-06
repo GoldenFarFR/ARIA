@@ -35,7 +35,16 @@ _INJECTED_CLAIM_RE = re.compile(
     # -- "classé/classée/classés/classées" still always captured,
     # "classement/classer/classeur" never match anymore.
     r"merg[ée]|déploy[ée]|commit\s+[a-f0-9]{6,}|\bclass[ée]e?s?\b|"
-    r"\d+\s*%|\d+[\s,.]?\d*\s*(?:\$|€|usd|usdc)|"
+    # CodeQL py/polynomial-redos: TWO fixes needed here, verified empirically
+    # (a first pass that only fused the adjacent "\s*" quantifiers still hung
+    # on 100k zeros -- theory alone wasn't enough). (1) the same-char-class
+    # ambiguity between "\d+" and the optional "\d*" is fused (second \d+
+    # only exists alongside its separator). (2) EACH leading "\d+" is itself
+    # bounded ({1,15}) -- an unanchored .search() retries an unbounded
+    # greedy \d+ at every start position on a long homogeneous digit run,
+    # O(n^2) even with a single quantifier, regardless of what follows it.
+    # Same numbers still captured ("1000", "1,000", "1.5", up to 15 digits).
+    r"\d{1,15}\s*%|\d{1,15}(?:[\s,.]\d+)?\s*(?:\$|€|usd|usdc)|"
     r"le\s+\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|"
     r"septembre|octobre|novembre|décembre|decembre)\s+\d{4}"
     r")",
@@ -340,7 +349,11 @@ async def verify_external_claim(claim: str, lang: str = "fr") -> tuple[str, dict
             except Exception:
                 pass
             repo_guess = "ARIA"
-            m = re.search(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", text)
+            # CodeQL py/polynomial-redos: two adjacent unbounded "+" on the
+            # same char class around a literal "/" backtrack catastrophically
+            # on a long run with no "/" -- bounded to 100 chars each side,
+            # GitHub's own hard limit on owner/repo name length.
+            m = re.search(r"([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})", text)
             if m:
                 parts = m.group(1).split("/")
                 if len(parts) == 2:

@@ -31,8 +31,13 @@ _GO_AHEAD_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+# CodeQL py/polynomial-redos: "\s+" immediately followed by ".+?" overlaps
+# on whitespace (both can consume the same characters), O(n^2) on a long
+# run of spaces after "peux "/"puisse " with no terminator -- bounded to
+# 200 chars, matching the [:200] truncation parse_readiness_goal already
+# applies to the result below, so real behavior is unchanged.
 _GOAL_RE = re.compile(
-    r"pour que tu (?:puisses?|peux|puisse)\s+(.+?)(?:[.?!,]|$)",
+    r"pour que tu (?:puisses?|peux|puisse)\s+(.{1,200}?)(?:[.?!,]|$)",
     re.IGNORECASE,
 )
 _STATUS_PULSE_RE = re.compile(

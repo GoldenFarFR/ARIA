@@ -12,8 +12,12 @@ from aria_core.narrative import one_liner
 from aria_core.skills.repertoire_skill import get_repertoire_summary
 
 # Only treat as explicit tweet body after a comms command — not any ":" in French prose.
+# CodeQL py/polynomial-redos: trailing "\s*" immediately followed by ".+"
+# (DOTALL, so "." also matches whitespace) overlap on the same characters
+# -- O(n^2) on a long, mostly-blank message. Bounded to 5000 chars, far
+# beyond any realistic post/thread body.
 _EXPLICIT_X_POST = re.compile(
-    r"(?:^|\b)(?:publie sur x|poste sur x|post on x|tweet sur x|tweet)\s*:\s*(.+)$",
+    r"(?:^|\b)(?:publie sur x|poste sur x|post on x|tweet sur x|tweet)\s*:\s*(.{1,5000})$",
     re.IGNORECASE | re.DOTALL,
 )
 

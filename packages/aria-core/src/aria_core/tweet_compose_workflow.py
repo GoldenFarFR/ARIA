@@ -680,7 +680,16 @@ def extract_operator_supplied_tweet(text: str) -> str | None:
         if not match:
             continue
         body = match.group(1).strip()
-        body = re.split(r"\s*—\s*reponds|\s*@\w+\s*puis\b", body, maxsplit=1)[0].strip()
+        # CodeQL py/polynomial-redos: an unanchored split with a leading
+        # ``\s*`` on user-controlled text is O(n^2) on a pathologically long
+        # run of whitespace/no-match content -- a tweet body is capped at
+        # 280 chars below anyway, so 2000 chars is a generous bound that
+        # never truncates a real match.
+        # Defense in depth: the [:2000] slice above already makes this fast
+        # in practice (verified empirically), but the "\s*" itself is also
+        # bounded so this regex stays safe even if that slice is ever
+        # removed by a future edit.
+        body = re.split(r"\s{0,20}—\s{0,20}reponds|\s{0,20}@\w+\s{0,20}puis\b", body[:2000], maxsplit=1)[0].strip()
         body = _normalize_draft_text(body)
         if 20 <= len(body) <= 280:
             return body
@@ -785,7 +794,9 @@ def _is_handle_addition_request(text: str) -> bool:
     if re.match(r"^@[a-z0-9_]+$", clean, re.IGNORECASE):
         return True
     if re.search(
-        r"ajoute.*(?:alias|handles?|mentions?|tags?)|"
+        # CodeQL py/polynomial-redos: unbounded ".*" before an alternation
+        # is O(n^2) on user-controlled ``clean`` -- bounded to 80 chars.
+        r"ajoute.{0,80}(?:alias|handles?|mentions?|tags?)|"
         r"(?:mets?|tag(?:ue)?)\s+(?:les\s+)?(?:alias|handles?|mentions?)",
         clean,
         re.IGNORECASE,
@@ -1070,7 +1081,11 @@ async def start_compose_workflow(*, operator_context: str = "") -> str:
     wants_q = bool(
         operator_context
         and re.search(
-            r"question|apprendre|learn|propos.*tweet|mieux comprendre|communaut",
+            # CodeQL py/polynomial-redos: unbounded ".*" between two literals
+            # is O(n^2) on operator_context.lower() (user-controlled) --
+            # bounded to a generous 80 chars, well above any realistic gap
+            # between "propos" and "tweet" in a real sentence.
+            r"question|apprendre|learn|propos.{0,80}tweet|mieux comprendre|communaut",
             operator_context.lower(),
         )
     )

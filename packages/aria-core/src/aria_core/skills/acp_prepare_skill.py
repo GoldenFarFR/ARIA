@@ -21,13 +21,17 @@ _PREPARE_RE = re.compile(
     r"livrable\s+(?:job\s+)?acp"
     r")"
 )
-_JOB_ID_RE = re.compile(r"(?i)\b(?:job[- ]?id|job)\s*[:#]?\s*(0x[a-fA-F0-9]{8,})")
+# CodeQL py/polynomial-redos: "\s*[:#]?\s*" is two adjacent "\s*" that
+# overlap when the optional separator is absent -- fused.
+_JOB_ID_RE = re.compile(r"(?i)\b(?:job[- ]?id|job)\s*(?:[:#]\s*)?(0x[a-fA-F0-9]{8,})")
 _JOB_HEX_RE = re.compile(r"\b(0x[a-fA-F0-9]{8,})\b")
 _OFFERING_RE = re.compile(
     r"(?i)\b(?:offre|offering|workflow|template)\s+([a-z][a-z0-9_]*)"
 )
 _CONTRACT_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
-_BRIEF_RE = re.compile(r"(?i)\bbrief\s+(.+?)(?:\s+offre|\s+offering|$)")
+# CodeQL py/polynomial-redos: unbounded "(.+?)" before an alternation of
+# terminators -- bounded to 300 chars, a real brief is never longer.
+_BRIEF_RE = re.compile(r"(?i)\bbrief\s+(.{1,300}?)(?:\s+offre|\s+offering|$)")
 
 _PREPARED_DIR = memory_dir() / "acp_prepared"
 

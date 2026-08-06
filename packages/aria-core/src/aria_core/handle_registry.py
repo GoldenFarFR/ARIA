@@ -142,10 +142,16 @@ def resolve_handles_in_text(text: str) -> str:
 
     out = _ALIAS_TOKEN.sub(_expand, text)
 
-    pack_match = _PLUS_PACK.search(out)
+    # CodeQL py/polynomial-redos: "\s*" anchored to end-of-string on the
+    # FULL text is O(n^2) on a long, mostly-blank message -- the pattern
+    # only ever matches a trailing "+pack", so searching just the last 100
+    # chars (generous for "  +some_pack_name") is equivalent and bounded.
+    _PLUS_PACK_WINDOW = 100
+    tail = out[-_PLUS_PACK_WINDOW:]
+    pack_match = _PLUS_PACK.search(tail)
     if pack_match:
         pack = pack_match.group(1).lower()
-        body = out[: pack_match.start()].rstrip()
+        body = out[: len(out) - len(tail) + pack_match.start()].rstrip()
         extra = mentions_for_pack(pack)
         if extra and extra not in body:
             out = f"{body} {extra}".strip()

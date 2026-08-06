@@ -25,12 +25,17 @@ _CLIENT_RE = re.compile(
     r"négoci|negoce|trade|swap|vendre|buy|sell|souscri|abonnement"
     r")\b"
 )
-_JOB_ID_RE = re.compile(r"(?i)\b(?:job[- ]?id|job)\s*[:#]?\s*([0-9a-fx-]{6,})")
+# CodeQL py/polynomial-redos: "\s*[:#]?\s*" is two adjacent "\s*" that
+# overlap when the optional separator is absent -- fused.
+_JOB_ID_RE = re.compile(r"(?i)\b(?:job[- ]?id|job)\s*(?:[:#]\s*)?([0-9a-fx-]{6,})")
 _OFFERING_RE = re.compile(
     r"(?i)\b(?:offre|offering|workflow|service)\s+([a-z][a-z0-9_]*)"
     r"|(?:template|offre)\s+([a-z][a-z0-9_]*)"
 )
-_AMOUNT_RE = re.compile(r"(?i)(\d+(?:[.,]\d+)?)\s*(?:usdc|\$|dollars?)")
+# CodeQL py/polynomial-redos: an unbounded leading "\d+" re-tried at every
+# .search() start position is O(n^2) on a long run of digits with no
+# currency suffix -- bounded, a real amount never exceeds 15 digits.
+_AMOUNT_RE = re.compile(r"(?i)(\d{1,15}(?:[.,]\d+)?)\s*(?:usdc|\$|dollars?)")
 _CONTRACT_RE = re.compile(r"(0x[a-fA-F0-9]{40})")
 _TRADE_PAIR_RE = re.compile(
     r"(?i)(?:swap|trade|échange|echange)\s+(\w+)\s+(?:contre|for|→|->)\s+(\w+)"

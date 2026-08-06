@@ -33,7 +33,10 @@ _TEMPLATES_RE = re.compile(
 )
 _TEMPLATE_EXPLICIT_RE = re.compile(r"template\s+([a-z][a-z0-9_]+)", re.I)
 _RESERVED_KEYS = frozenset({"acp", "offre", "offering", "workflow", "template"})
-_PRICE_RE = re.compile(r"(?:prix|price)\s*[:=]?\s*(\d+(?:\.\d+)?)", re.I)
+# CodeQL py/polynomial-redos: "\s*[:=]?\s*" is two adjacent "\s*" that
+# overlap when the optional separator is absent -- fused so the second
+# "\s*" only exists alongside an actual separator.
+_PRICE_RE = re.compile(r"(?:prix|price)\s*(?:[:=]\s*)?(\d+(?:\.\d+)?)", re.I)
 
 _DELETE_ALL_RE = re.compile(
     r"(?i)\b(?:supprim\w*|retir\w*|effac\w*|delete|remove)\b"
@@ -45,32 +48,49 @@ _DELETE_HEAD_RE = re.compile(
     r"(?i)\b(?:supprim\w*|retir\w*|effac\w*|delete|remove)\b"
     r".{0,40}?\b(?:workflow|offre|offering)\b"
 )
+# CodeQL py/polynomial-redos: trailing "\s+" + unbounded ".+" overlap on
+# whitespace -- bounded, same 300-char ceiling as _normalize_offering_name
+# ever needs for a real offering name.
 _DELETE_NAME_RE = re.compile(
-    r"(?i)\b(?:workflow|offre|offering)\b(?:\s+acp)?\s+(.+)$"
+    r"(?i)\b(?:workflow|offre|offering)\b(?:\s+acp)?\s+(.{1,300})$"
 )
 _DELETE_STOP = frozenset(
     {"maintenant", "sur", "acp", "stp", "svp", "please", "now", "immediatement", "immédiatement"}
 )
 
+# CodeQL py/polynomial-redos: unbounded ".*" between the phrase and "acp"
+# is O(n^2) on a long, mostly-blank message -- bounded to 100 chars, same
+# convention as _DELETE_HEAD_RE's ".{0,40}?" just above.
 _ADHOC_RE = re.compile(
     r"(?i)(?:"
     r"cr[ée]e[r]?\s+(?:un\s+)?(?:workflow|offre|offering)"
     r"|nouveau\s+workflow"
     r"|lancer\s+(?:un\s+)?(?:workflow|produit|offre)"
     r"|ajoute[r]?\s+(?:un\s+)?workflow"
-    r").*\bacp\b"
-    r"|\bacp\b.*(?:cr[ée]er|nouveau|appeler|workflow|offre)"
+    r").{0,100}\bacp\b"
+    r"|\bacp\b.{0,100}(?:cr[ée]er|nouveau|appeler|workflow|offre)"
 )
 _NAME_RE = re.compile(r"(?i)(?:appeler|nomm(?:é|e)|named?)\s+([a-z][a-z0-9_]*)")
 _NAME_FALLBACK_RE = re.compile(r"(?i)workflow\s+([a-z][a-z0-9_]*)")
+# CodeQL py/polynomial-redos: two fixes, verified empirically (a first pass
+# that only fused the adjacent "\s*(?:\$|dollars?)?\s*" still hung on 100k
+# zeros). (1) that fusion stands. (2) the leading "(\d+)" is ALSO bounded
+# ({1,15}) -- an unanchored .search() retries an unbounded greedy \d+ at
+# every start position on a long homogeneous digit run, O(n^2) regardless
+# of what follows it.
 _PRICE_DOLLARS_CENTS_RE = re.compile(
-    r"(?i)(\d+)\s*(?:\$|dollars?)?\s*(?:et\s+)?(\d{1,2})\s*(?:centimes?|cents?)"
+    r"(?i)(\d{1,15})\s*(?:(?:\$|dollars?)\s*)?(?:et\s+)?(\d{1,2})\s*(?:centimes?|cents?)"
 )
-_PRICE_FLOAT_RE = re.compile(r"(?i)(?:à|a|@|pour)\s*(\d+(?:[.,]\d{1,2})?)\s*\$?|(\d+[.,]\d{2})\s*\$")
+# Bounded \d+ (a price never realistically exceeds 12 digits) -- removes
+# any residual ambiguity CodeQL flagged across this alternation's branches.
+_PRICE_FLOAT_RE = re.compile(r"(?i)(?:à|a|@|pour)\s*(\d{1,12}(?:[.,]\d{1,2})?)\s*\$?|(\d{1,12}[.,]\d{2})\s*\$")
+# CodeQL py/polynomial-redos: unbounded "(.+?)" before an alternation of
+# terminators overlaps with the "\s*$" branch -- bounded to 300 chars,
+# same ceiling as _DELETE_NAME_RE for a realistic offering description.
 _DESC_RE = re.compile(
-    r"(?i)qui propose\s+(.+?)(?:\.\s*$|\.\s+(?:sur|et)\s+|\s*$)"
-    r"|proposant\s+(.+?)(?:\.\s*$|\s*$)"
-    r"|services?\s+d[''']?(.+?)(?:\.\s*$|\s*$)"
+    r"(?i)qui propose\s+(.{1,300}?)(?:\.\s*$|\.\s+(?:sur|et)\s+|\s*$)"
+    r"|proposant\s+(.{1,300}?)(?:\.\s*$|\s*$)"
+    r"|services?\s+d[''']?(.{1,300}?)(?:\.\s*$|\s*$)"
 )
 
 
