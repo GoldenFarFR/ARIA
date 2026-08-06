@@ -702,9 +702,25 @@ _V8_SIZING_RR_WICK_ONLY = 1.5
 # TROUGH requirement still hold unconditionally. This doubles as the 8.1
 # experiment for free: wick-only vs wick+divergence sub-populations accumulate
 # side by side in the same pocket, separable by reason/rr at analysis time.
-# Flip to False (a conscious, documented decision -- accelerated-observation
-# doctrine, CLAUDE.md 27/07) once enough forward trades exist to judge.
-_V8_BOOTSTRAP_MODE = True
+# Flipped to False (06/08, operator decision): 20 forward trades closed in
+# <24h under bootstrap, 0 wins, 19/20 (95%) never traded above their entry
+# price even once (the 05/08 backtest's own worst case was 34% never-above --
+# this run is far outside it). Operator's read, not just a data point: we are
+# in the LAST year of the post-halving cycle, the phase with the least "free
+# beta" left in the market -- a wick-only filter that fires this fast (30
+# candidates queued in under a day) is exactly the kind of permissive
+# sourcing that stopped working once free capital inflow dried up. The fix
+# isn't waiting passively for the ~30-trade bootstrap-exit threshold with the
+# same permissive filter; it's tightening NOW. Divergence goes from optional
+# (traced) to a hard requirement -- only the 60%-WR-validated combination
+# (wick + fresh divergence) trades from here, the wick-only tier stops
+# opening new positions. Not proven better yet by forward data (only 1
+# divergence-confirmed trade exists so far, ZORA, itself a loss) -- this is a
+# principled tightening for the current market phase, not an empirical
+# conclusion. _V8_SIZING_RR_WICK_ONLY stays defined (existing/legacy
+# positions still reference it) but no new entry can reach it once this gate
+# is unconditional.
+_V8_BOOTSTRAP_MODE = False
 # Bootstrap trough freshness: the lowest low of the recent window must sit
 # within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
 # spirit as the divergence pivot check, computed directly on the candles.
