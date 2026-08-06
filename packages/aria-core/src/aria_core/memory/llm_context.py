@@ -164,6 +164,12 @@ async def build_llm_context(
         from aria_core.memory.capability_state import get_capability_state_text
 
         parts.append(f"\n{get_capability_state_text()}")
+        try:
+            from aria_core import paper_trader
+
+            parts.append(f"\n{await paper_trader.pocket_state_text()}")
+        except Exception:
+            pass
         from aria_core.memory.reflection import get_reflections_text
 
         reflection_block = get_reflections_text()

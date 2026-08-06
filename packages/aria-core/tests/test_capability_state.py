@@ -82,3 +82,23 @@ async def test_build_llm_context_includes_capability_state(monkeypatch):
     assert "État des capacités ARIA" in ctx
     lines = [ln for ln in ctx.splitlines() if "ARIA_WEB_FETCH_ENABLED" in ln]
     assert lines and "ACTIVE" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_build_llm_context_includes_live_pocket_state(monkeypatch, tmp_path):
+    """06/08 -- operator finding, live (screenshot): a free-text question
+    about the v9 pocket fell through to an unrelated skill match because
+    nothing in aria_brain's context knew v9 existed. Locks that the pocket
+    list is now part of every non-public conversational context, always
+    derived from the real pocket lineup, never a frozen doc."""
+    from aria_core import paper_trader as pt
+    from aria_core.memory.llm_context import build_llm_context
+    from aria_core.testing import configure_test_runtime
+
+    configure_test_runtime()
+    monkeypatch.setattr(pt, "DB_PATH", str(tmp_path / "paper.db"))
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v8")
+    ctx = await build_llm_context(public=False)
+    assert "Poches de trading actives" in ctx
+    assert "Scalping V8" in ctx

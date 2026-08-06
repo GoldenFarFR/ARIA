@@ -3673,6 +3673,68 @@ async def all_reporting_wallets() -> tuple[str, ...]:
     return tuple(ordered)
 
 
+# 06/08 -- single source of truth for pocket display labels (Devil's Advocate
+# report 786c7483 flagged this dict duplicated/desynced across callers -- the
+# recurring bug class it names: v6/v7/v8 had displayed as raw wallet ids
+# "since their creation" because a label dict lived inline in telegram_bot.py
+# instead of here. v9 added the same day this constant was extracted -- any
+# NEW pocket now needs exactly ONE edit, here, to be labeled everywhere
+# (Telegram bilan AND the LLM's live pocket-state context below).
+POCKET_LABELS: dict[str, str] = {
+    "scalping": "Scalping (RSI, legacy)", "swing": "Swing", "vc": "VC",
+    "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
+    "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
+    "scalping_v5": "Scalping V5 (VWAP trailing)",
+    "megacap": "Megacap fixe",
+    "scalping_v6": "Scalping V6 (RSI legacy)",
+    "scalping_v7": "Scalping V7 (RSI span court)",
+    "scalping_v8": "Scalping V8 (wick reversal — agent Claude)",
+    "scalping_v9": "Scalping V9 (RSI+MFI synchronisé — watchlist opérateur)",
+}
+
+
+async def pocket_state_text() -> str:
+    """Markdown block listing the trading pockets that ACTUALLY exist right
+    now, always recomputed live (never a hand-written claim) -- same doctrine
+    as memory/capability_state.py, extended here because that module knows
+    nothing about pockets. Built for aria_brain's conversational context
+    (memory/llm_context.py): the operator flagged live (06/08) that a free-
+    text question ("modifier le signal sur v9") missed entirely because
+    nothing in the LLM's context knew v9 existed, and fell through to an
+    unrelated keyword match instead.
+
+    Deliberately built on visible_reporting_wallets() (excludes retired
+    scalping pockets) -- same rule as every operator-facing Telegram surface
+    (06/08, "je ne veux jamais voir les wallets désactivés ici [...] aucune
+    trace d'eux sauf dans tes logs"): this text can flow straight into a
+    conversational reply, so it must respect the same visibility boundary as
+    /feedback's bilan, not the macro circuit breaker's full internal list."""
+    wallets = await visible_reporting_wallets()
+    lines = ["# Poches de trading actives (calculé en direct, jamais périmé)"]
+    for wallet in wallets:
+        label = POCKET_LABELS.get(wallet, wallet)
+        status = "sourcing en pause" if sourcing_paused(wallet) else "sourcing actif"
+        lines.append(f"- **{label}** (wallet `{wallet}`) : {status}")
+    if wallet_v9 := (V9_WALLET if scalping_v9_enabled() else None):
+        try:
+            from aria_core import scalping_v9
+
+            watch = await scalping_v9.get_watchlist()
+            if watch:
+                lines.append(f"\n## Watchlist v9 ({len(watch)} contrat(s), réglable par l'opérateur via /v9add /v9set /v9remove)")
+                for entry in watch:
+                    lines.append(
+                        f"- {entry.get('symbol', '?')} (`{entry.get('contract', '?')}`, "
+                        f"{entry.get('chain', '?')}) — RSI({entry.get('rsi_period')})<"
+                        f"{entry.get('rsi_lower')}, MFI({entry.get('mfi_period')})<"
+                        f"{entry.get('mfi_lower')}, trail {entry.get('trail_pct', 0) * 100:.1f}%, "
+                        f"{entry.get('timeframe_min')}min"
+                    )
+        except Exception:
+            pass
+    return "\n".join(lines)
+
+
 # ── Daily trade FLOOR (07/23, diagnostic) ────────────────────────────────────
 
 def daily_trade_floor_enabled() -> bool:

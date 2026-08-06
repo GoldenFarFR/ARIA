@@ -609,20 +609,11 @@ async def _feedback_reply() -> str:
     # -- the bug the operator caught live (screenshot, "je le voit pas": the
     # legacy scalping pocket, 7 open positions, had vanished from this exact
     # bilan the moment the 5 variants replaced it as the sourcing target).
-    pocket_labels = {
-        "scalping": "Scalping (RSI, legacy)", "swing": "Swing", "vc": "VC",
-        "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
-        "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
-        "scalping_v5": "Scalping V5 (VWAP trailing)",
-        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 10 established tokens).
-        "megacap": "Megacap fixe",
-        # 08/05 -- v6/v7/v8 labels (real gap: these pockets displayed as raw
-        # wallet ids in this bilan since their creation). v8 = Claude's own
-        # agent (operator carte blanche, see CLAUDE.md "Active state" section).
-        "scalping_v6": "Scalping V6 (RSI legacy)",
-        "scalping_v7": "Scalping V7 (RSI span court)",
-        "scalping_v8": "Scalping V8 (wick reversal — agent Claude)",
-    }
+    # 06/08 -- labels now centralized in paper_trader.POCKET_LABELS (Devil's
+    # Advocate report 786c7483: this dict, defined only here, had already
+    # gone stale once -- v6/v7/v8 displayed as raw wallet ids "since their
+    # creation"). Single source of truth, one edit needed for any new pocket.
+    pocket_labels = paper_trader.POCKET_LABELS
     # 06/08 -- operator order: retired pockets never shown here (see
     # paper_trader.visible_reporting_wallets's docstring).
     wallets = await paper_trader.visible_reporting_wallets()
@@ -2013,6 +2004,97 @@ async def _dispatch_nl_action(action_key: str) -> str:
     raise ValueError(f"clé d'action NL inconnue : {action_key!r}")
 
 
+# ── Natural-language routing -> v9 command TEMPLATES (06/08, operator request) ─
+#
+# Distinct from the read-only router above: /v9add, /v9set, /v9remove all
+# WRITE (the read-only router's own docstring explicitly excludes exactly
+# this case -- "never a command that writes... nor one that takes a
+# free-form address parameter... a misunderstood rephrasing must never
+# misinterpret a contract"). This router never executes anything: on a
+# detected v9 intent it replies with the REAL command, pre-filled with the
+# REAL current values read live from the DB -- the operator edits only the
+# numbers that changed and sends it back themselves. Same safety property as
+# before (the LLM never picks a contract from free text), while still
+# answering the operator's live-caught gap ("modifier le signal sur v9" fell
+# through to an unrelated skill match, screenshot 06/08): a "v9" mention now
+# gets a template, never silence or a random topic.
+_NL_V9_MENTION_RE = re.compile(r"\bv\s*9\b", re.IGNORECASE)
+_NL_V9_ADD_RE = re.compile(r"ajout|add|nouveau\s+(token|contrat)", re.IGNORECASE)
+_NL_V9_REMOVE_RE = re.compile(r"retir|supprim|enlev|remove|vire", re.IGNORECASE)
+_NL_V9_MODIFY_RE = re.compile(
+    r"modif|régl|regl|chang|ajust|affine|signal|seuil|rsi|mfi|trail|timeframe|\btf\b",
+    re.IGNORECASE,
+)
+_NL_V9_LIST_RE = re.compile(r"liste|watchlist|quels?\s+(token|contrat)", re.IGNORECASE)
+
+
+def _format_v9_watchlist(tokens: list[dict]) -> str:
+    """Shared by /v9list and the NL template router below -- single source
+    of formatting for what a v9 watchlist entry looks like."""
+    lines = [f"Watchlist scalping_v9 ({len(tokens)} token(s), cycle 5 min) :", ""]
+    for t in tokens:
+        lines.append(
+            f"• {t['symbol']} ({t['chain']}) — bougies {t['timeframe_min']} min, "
+            f"RSI({t['rsi_period']})<{t['rsi_lower']:g} "
+            f"+ MFI({t['mfi_period']})<{t['mfi_lower']:g}, trail -{t['trail_pct'] * 100:g}%\n"
+            f"  {t['contract']}"
+        )
+    return "\n".join(lines)
+
+
+def _v9_set_template(t: dict) -> str:
+    """Ready-to-edit /v9set line, pre-filled with THIS token's real current
+    values -- operator request (06/08): "juste le champ texte paramétrique
+    [...] juste les valeurs numériques sont à changer"."""
+    return (
+        f"{t['symbol']} :\n"
+        f"/v9set {t['contract']} rsi={t['rsi_period']}/{t['rsi_lower']:g} "
+        f"mfi={t['mfi_period']}/{t['mfi_lower']:g} "
+        f"trail={t['trail_pct'] * 100:g} tf={t['timeframe_min']}"
+    )
+
+
+async def _try_nl_v9_command(text: str) -> str | None:
+    if not _NL_V9_MENTION_RE.search(text):
+        return None
+    from aria_core import scalping_v9
+    from aria_core.dossier import ADDR_RE
+
+    lower = text.lower()
+
+    if _NL_V9_ADD_RE.search(lower):
+        return (
+            "Pour ajouter un token à v9, édite l'adresse puis envoie :\n"
+            "/v9add <adresse> [chaîne optionnelle — sinon détection auto]"
+        )
+
+    tokens = await scalping_v9.get_watchlist()
+    if not tokens:
+        return "Watchlist v9 vide — ajoute d'abord un token : /v9add <adresse>."
+
+    # Unlike dossier.extract_contract() (deliberately strict -- "message is
+    # essentially just an address"), a v9 command sentence has real words
+    # around the address ("modifie le rsi de 0x... sur v9") -- any address
+    # mentioned anywhere narrows the reply, no "almost nothing else" bar.
+    mentioned = {m.lower() for m in ADDR_RE.findall(text)}
+    matched = [t for t in tokens if t["contract"].lower() in mentioned] or tokens
+
+    if _NL_V9_REMOVE_RE.search(lower):
+        lines = ["Pour retirer, édite si besoin puis envoie :", ""]
+        lines.extend(f"/v9remove {t['contract']}   ({t['symbol']})" for t in matched)
+        return "\n".join(lines)
+
+    if _NL_V9_MODIFY_RE.search(lower):
+        lines = ["Pour modifier, édite seulement les chiffres puis renvoie :", ""]
+        lines.extend(_v9_set_template(t) for t in matched)
+        return "\n".join(lines)
+
+    if _NL_V9_LIST_RE.search(lower):
+        return _format_v9_watchlist(tokens)
+
+    return None
+
+
 async def _try_nl_readonly_command(text: str) -> str | None:
     """Detects a natural-language question (or a bare keyword) that matches
     one of the read-only commands above, and returns the REAL reply
@@ -2063,6 +2145,11 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     nl_reply = await _try_nl_readonly_command(text)
     if nl_reply is not None:
         await _reply(message, nl_reply)
+        return
+
+    v9_reply = await _try_nl_v9_command(text)
+    if v9_reply is not None:
+        await _reply(message, v9_reply)
         return
 
     if re.match(r"^@claude\b", text, re.IGNORECASE):
@@ -2738,17 +2825,8 @@ async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not tokens:
         await _reply(message, "Watchlist v9 vide — ajoute un contrat avec /v9add <adresse>.")
         return
-    lines = [f"Watchlist scalping_v9 ({len(tokens)} token(s), cycle 5 min) :", ""]
-    for t in tokens:
-        lines.append(
-            f"• {t['symbol']} ({t['chain']}) — bougies {t['timeframe_min']} min, "
-            f"RSI({t['rsi_period']})<{t['rsi_lower']:g} "
-            f"+ MFI({t['mfi_period']})<{t['mfi_lower']:g}, trail -{t['trail_pct'] * 100:g}%\n"
-            f"  {t['contract']}"
-        )
-    lines.append("")
-    lines.append("Affiner : /v9set <adresse> rsi=18/21 mfi=10/20 trail=5 tf=5")
-    await _reply(message, "\n".join(lines))
+    text_out = _format_v9_watchlist(tokens) + "\n\nAffiner : /v9set <adresse> rsi=18/21 mfi=10/20 trail=5 tf=5"
+    await _reply(message, text_out)
 
 
 _V9SET_USAGE = (

@@ -8176,3 +8176,71 @@ async def test_high_water_starts_at_spot_not_degraded_fill(tmp_db):
     assert pos["entry_price"] > 1.0
     # ...but the trailing high-water mark starts at the SPOT entry
     assert pos["high_water_price"] == pytest.approx(1.0)
+
+
+# ── pocket_state_text() -- 06/08, LLM context freshness ──────────────────────
+# Operator finding, live (screenshot): a free-text question about v9 fell
+# through to an unrelated skill match because nothing in aria_brain's context
+# knew v9 existed. pocket_state_text() closes that gap -- these tests lock
+# its two contracts: (1) always reflects the REAL gate state, never stale,
+# (2) never leaks a retired pocket (same boundary as the Telegram bilan).
+
+@pytest.mark.asyncio
+async def test_pocket_state_text_lists_active_trio_by_default(monkeypatch, tmp_db):
+    monkeypatch.delenv("ARIA_SCALPING_V9_ENABLED", raising=False)
+    monkeypatch.delenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", raising=False)
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v8")
+    await pt.reset_portfolio(1_000_000.0, wallet="swing")
+    await pt.reset_portfolio(1_000_000.0, wallet="vc")
+    text = await pt.pocket_state_text()
+    assert "Scalping V8" in text
+    assert "Swing" in text
+    assert "VC" in text
+    assert "scalping_v9" not in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_pocket_state_text_never_shows_retired_pockets(monkeypatch, tmp_db):
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
+    # a retired pocket with real history in the DB (migrated rows, e.g.)
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v6")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v8")
+    text = await pt.pocket_state_text()
+    assert "scalping_v6" not in text
+    assert "Scalping V6" not in text
+
+
+@pytest.mark.asyncio
+async def test_pocket_state_text_reflects_v9_when_gate_on(monkeypatch, tmp_db):
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v9")
+    text = await pt.pocket_state_text()
+    assert "Scalping V9" in text
+    assert "scalping_v9" in text
+
+
+@pytest.mark.asyncio
+async def test_pocket_state_text_includes_v9_watchlist_entries(monkeypatch, tmp_db):
+    """The watchlist table self-seeds SPX on first read (see scalping_v9.py's
+    module docstring) -- no network call needed to exercise this block."""
+    from aria_core import scalping_v9
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await pt.reset_portfolio(1_000_000.0, wallet="scalping_v9")
+    seeded = await scalping_v9.get_watchlist()
+    assert seeded  # sanity: the seed contract is really there
+    text = await pt.pocket_state_text()
+    assert seeded[0]["contract"].lower() in text.lower()
+    assert "RSI(" in text and "MFI(" in text
+
+
+def test_pocket_labels_has_entry_for_every_active_wallet_family():
+    """Locks the exact class of bug Devil's Advocate report 786c7483 named
+    ("v6/v7/v8 displayed as raw wallet ids since their creation") -- any
+    wallet name all_pocket_wallets()/visible_reporting_wallets() can ever
+    return needs a POCKET_LABELS entry, checked here independently of any
+    gate's current on/off state."""
+    for wallet in ("scalping_v8", "scalping_v9", "swing", "vc", "megacap"):
+        assert wallet in pt.POCKET_LABELS
