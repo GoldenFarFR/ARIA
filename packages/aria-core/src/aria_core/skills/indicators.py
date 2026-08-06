@@ -275,6 +275,42 @@ def stochastic_k_series(candles: list[Candle], *, period: int = _STOCHASTIC_PERI
     return out
 
 
+def mfi_series(candles: list[Candle], *, period: int = 10) -> list[float | None]:
+    """Money Flow Index (06/08, scalping_v9 -- operator spec, MFI length 10):
+    volume-weighted RSI analogue. Typical price = (H+L+C)/3; raw money flow =
+    typical price x volume; a candle whose typical price rose vs the previous
+    one contributes positive flow, fell -> negative flow, unchanged ->
+    neither (standard MFI convention). MFI = 100 - 100/(1 + pos/neg) over the
+    trailing ``period`` window. <= 20 = oversold, >= 80 = overbought
+    (operator's charted limits). ``None`` during warmup (needs ``period``
+    DELTAS, i.e. period+1 candles) or when the window has zero total flow on
+    both sides; a window with zero NEGATIVE flow reads 100.0 (pure inflow),
+    zero POSITIVE flow reads 0.0 -- never a division by zero."""
+    n = len(candles)
+    out: list[float | None] = [None] * n
+    if period <= 0 or n < period + 1:
+        return out
+    typical = [(c.high + c.low + c.close) / 3.0 for c in candles]
+    pos_flows: list[float] = [0.0] * n
+    neg_flows: list[float] = [0.0] * n
+    for i in range(1, n):
+        flow = typical[i] * (candles[i].volume or 0.0)
+        if typical[i] > typical[i - 1]:
+            pos_flows[i] = flow
+        elif typical[i] < typical[i - 1]:
+            neg_flows[i] = flow
+    for i in range(period, n):
+        pos = sum(pos_flows[i - period + 1 : i + 1])
+        neg = sum(neg_flows[i - period + 1 : i + 1])
+        if pos <= 0 and neg <= 0:
+            continue
+        if neg <= 0:
+            out[i] = 100.0
+        else:
+            out[i] = 100.0 - 100.0 / (1.0 + pos / neg)
+    return out
+
+
 def hammer_wick_ratio(candle: Candle) -> float | None:
     """Lower-wick ratio of a single candle (08/05, scalping_v8 + wick shadow
     filter): ``(min(open, close) - low) / (high - low)`` -- the share of the

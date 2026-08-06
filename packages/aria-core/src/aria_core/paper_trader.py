@@ -1903,6 +1903,7 @@ async def open_position(
     align_macd: bool | None = None,
     align_pattern: bool | None = None,
     entry_market_cap_usd: float | None = None,
+    allow_multiple: bool = False,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -2004,7 +2005,12 @@ async def open_position(
     # 27/07 -- scoped to THIS pocket only: an already-open position in a
     # DIFFERENT wallet on the same contract must never block this one (that's
     # the whole point of 3 concurrent pockets).
-    if await has_open(contract, wallet=wallet):
+    # ``allow_multiple`` (06/08, scalping_v9): a fixed-watchlist pocket
+    # legitimately stacks several concurrent positions on the SAME contract
+    # (one per oversold episode, operator spec) -- every close path already
+    # resolves by position_id, so the only thing this skips is the
+    # single-position-per-contract refusal, never any risk guardrail below.
+    if not allow_multiple and await has_open(contract, wallet=wallet):
         return None
     # 27/07 -- count scoped to THIS pocket (``get_open_positions(wallet=wallet)``)
     # rather than the whole portfolio, so pocket X's own count never blocks
@@ -3290,23 +3296,20 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
 # can change.
 MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 13
 
-# 08/05 -- explicit operator decision ("je veut que tu désactive tous les
-# autres poches sauf v6 et swing et ton agent pour focus les appels sur
-# eux") : SOURCING pause list. Pockets listed here open NO new position (both
-# the heartbeat loop and the WebSocket drain consult sourcing_paused() at the
-# top of their pocket loops) but keep everything else: existing positions
-# stay MANAGED to natural close (stop/TP/stagnation/weekly reset), history/
-# reporting untouched, capital state intact -- flip back by removing the
-# wallet from this set, nothing to migrate. Rationale: every paused pocket
-# multiplies hard-gate + candle + honeypot network calls each cycle for
-# comparison arms that already told their story (v1-v5/v7 all deeply
-# negative or near-zero trades; vc dormant by design; megacap 0 trades) --
-# the freed API budget concentrates on the 3 arms that matter now:
-# scalping_v6 (ungated wick-shadow control), swing, scalping_v8 (Claude's
-# gated agent).
+# 08/05 -- SOURCING pause list (operator decision). Pockets listed here open
+# NO new position (both the heartbeat loop and the WebSocket drain consult
+# sourcing_paused() at the top of their pocket loops) but keep everything
+# else: existing positions stay MANAGED to natural close (stop/TP/stagnation/
+# weekly reset), history/reporting untouched, capital state intact -- flip
+# back by removing the wallet from this set, nothing to migrate.
+# 06/08 -- retirement of scalping v1-v7 (operator: "supprimer toutes les
+# poches scalping sauf v8"): the scalping entries left this set because those
+# pockets no longer exist in the sourcing code at all (see
+# build_scalping_pocket_entries); vc left it too (operator kept v8/swing/vc
+# as the active trio). Only megacap stays paused (0 trades, API budget
+# concentrated on the active arms).
 SOURCING_PAUSED_WALLETS: frozenset[str] = frozenset({
-    "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
-    "scalping_v7", "vc", "megacap",
+    "megacap",
 })
 
 
@@ -3336,74 +3339,42 @@ def build_scalping_pocket_entries(
     this here so there is exactly ONE place that knows the pocket list, not
     two that can silently drift apart again.
 
-    Gate OFF (``scalping_variants_enabled()`` False): byte-for-byte the
-    historical single "scalping" pocket, full candidate list, unchanged.
+    06/08 -- scalping v1-v7 retired (explicit operator decision: "supprimer
+    toutes les poches scalping sauf v8"). The V1-V5 mean-reversion engines,
+    the v6 legacy RSI-divergence arm (itself the migrated historical
+    "scalping" pocket) and the v7 narrow-watch-span arm were all removed from
+    sourcing -- their DB history (paper_state/paper_position_archive/
+    momentum_scan_log/pending_limit_order rows) stays intact, and
+    all_reporting_wallets() keeps them visible in reports since it reads
+    paper_state directly. Full retirement context:
+    docs/HANDOFF_PIPELINE_MOMENTUM.md.
 
-    Gate ON: 8 pockets -- ``scalping_v6`` (08/01, operator's explicit
-    call, "le scalping met le à part en v6") is the SAME legacy RSI-
-    divergence engine (``_default_momentum_analyzer(mode="scalping")``) the
-    single "scalping" pocket always used, kept as its own comparison arm
-    rather than retired -- its pre-existing history (paper_state/
-    paper_position/pending_limit_order/momentum_scan_log/rsi_divergence_log
-    rows, risk_guard_state file) was migrated wallet "scalping" ->
-    "scalping_v6" in the same rollout (one-off migration, see
-    docs/HANDOFF_PIPELINE_MOMENTUM.md), never re-created from zero.
-
-    ``scalping_v8`` (08/05, operator carte blanche) comes in through
-    ``VARIANT_ANALYZERS`` like v1..v5 (a direct-buy engine, no limit-order
-    watch): wick-confirmed RSI-divergence reversal -- every design choice
-    anchored to the 05/08 candle-reconstruction backtest, see the V8 block
-    in skills/scalping_variants.py. Its shorter stagnation timeout rides
+    Gate ON (``scalping_variants_enabled()``): ``scalping_v8`` only (08/05,
+    operator carte blanche -- Claude's own pocket), through
+    ``VARIANT_ANALYZERS`` (a direct-buy engine, no limit-order watch):
+    wick-confirmed RSI-divergence reversal, see the V8 block in
+    skills/scalping_variants.py. Its shorter stagnation timeout rides
     ``_SCALPING_STAGNATION_OVERRIDES_BY_WALLET`` above.
 
-    ``scalping_v7`` (08/04): SAME legacy engine as v6, byte-for-byte, except
-    it overrides the RSI-divergence watch's trigger span (``rsi_watch_span``
-    -> ``momentum_entry.RSI_WATCH_MIN_SPAN_V7``/``MAX_SPAN_V7``, 4-13 instead
-    of v6's 15-20) -- a real code change (not just a config flip) was
-    required because that window used to be a single pair of module-level
-    constants shared by every pocket; see ``evaluate_momentum_entry``'s own
-    docstring for how the override threads through. A fresh pocket rather
-    than a retune of v6 itself, specifically so the two windows can be
-    compared side by side on real forward trades (see the constants'
-    comment in momentum_entry.py for the backtest that motivated this and
-    its honest small-sample caveat) -- v6 is NOT retired, NOT touched.
+    Gate OFF: NO scalping pocket sources at all -- since the v1-v7
+    retirement this gate is effectively v8's kill-switch (the historical
+    gate-OFF fallback re-created the legacy "scalping" RSI-divergence
+    pocket, whose engine arm was retired with v6)."""
+    if not scalping_variants_enabled():
+        return ()
+    from aria_core.skills import scalping_variants
 
-    All 7 scalping pockets (v1..v7) share the SAME truncated candidate slice
-    -- see MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE's own comment."""
-    if scalping_variants_enabled():
-        from aria_core import momentum_entry
-        from aria_core.skills import scalping_variants
-
-        shared_candidates = momentum_candidates[:MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE]
-        entries = tuple(
-            (
-                wallet_name,
-                shared_candidates,
-                _scalping_variant_analyzer(evaluate_fn, chain_by_contract),
-                "scalping",
-                MAX_POSITIONS_SCALPING,
-            )
-            for wallet_name, evaluate_fn in scalping_variants.VARIANT_ANALYZERS.items()
+    shared_candidates = momentum_candidates[:MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE]
+    return tuple(
+        (
+            wallet_name,
+            shared_candidates,
+            _scalping_variant_analyzer(evaluate_fn, chain_by_contract),
+            "scalping",
+            MAX_POSITIONS_SCALPING,
         )
-        legacy_analyzer = _default_momentum_analyzer(
-            chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-            mode="scalping",
-        )
-        v7_analyzer = _default_momentum_analyzer(
-            chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-            mode="scalping",
-            rsi_watch_span=(momentum_entry.RSI_WATCH_MIN_SPAN_V7, momentum_entry.RSI_WATCH_MAX_SPAN_V7),
-        )
-        return entries + (
-            ("scalping_v6", shared_candidates, legacy_analyzer, "scalping", MAX_POSITIONS_SCALPING),
-            ("scalping_v7", shared_candidates, v7_analyzer, "scalping", MAX_POSITIONS_SCALPING),
-        )
-
-    scalping_analyzer = _default_momentum_analyzer(
-        chain_by_contract, weekly_context=weekly_context, current_regime=current_regime,
-        mode="scalping",
+        for wallet_name, evaluate_fn in scalping_variants.VARIANT_ANALYZERS.items()
     )
-    return (("scalping", momentum_candidates, scalping_analyzer, "scalping", MAX_POSITIONS_SCALPING),)
 
 
 def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
@@ -3512,41 +3483,60 @@ def fixed_watchlist_pocket_enabled() -> bool:
 
 
 def scalping_variants_enabled() -> bool:
-    """08/01, operator's explicit call: swaps the single RSI-divergence
-    scalping pocket for 5 independent mean-reversion variants (V1-V5,
-    services/skills/scalping_variants.py -- %B Bollinger / VWAP Z-score /
-    fast Stochastic, compared side by side). OFF by default (fail-closed) --
-    while OFF, the "scalping" pocket keeps its historical RSI-divergence
-    behavior unchanged. While ON, the "scalping" wallet/pocket is REPLACED
-    (not added to) by 5 new pockets ("scalping_v1".."scalping_v5"), each its
-    own independent $1M paper wallet -- same doctrine as the existing
-    3-pocket architecture, just more pockets. Requires
-    multi_pocket_sourcing_enabled() to also be on (this gate only decides
-    WHAT the scalping slot sources with, not whether multi-pocket sourcing
-    itself runs at all)."""
+    """08/01: originally swapped the single RSI-divergence scalping pocket
+    for the V1-V5 comparison variants. 06/08, v1-v7 retired (operator
+    decision): this gate is now effectively scalping_v8's kill-switch --
+    ON sources v8 (the only remaining VARIANT_ANALYZERS entry), OFF sources
+    no scalping pocket at all (the historical gate-OFF fallback to the
+    legacy "scalping" pocket is gone, its engine arm was retired with v6).
+    OFF by default (fail-closed). Requires multi_pocket_sourcing_enabled()
+    to also be on (this gate only decides WHAT the scalping slot sources
+    with, not whether multi-pocket sourcing itself runs at all)."""
     return os.environ.get("ARIA_SCALPING_VARIANTS_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
 
 
+# 06/08 -- v1-v7 retired from sourcing (see build_scalping_pocket_entries).
+# Only pockets that can still SOURCE new positions belong here.
 _SCALPING_VARIANT_WALLETS = (
-    "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5",
-    # scalping_v6 (08/01) -- the legacy RSI-divergence "scalping" pocket,
-    # kept as its own comparison arm rather than retired, see
-    # build_scalping_pocket_entries's own docstring.
-    "scalping_v6",
-    # scalping_v7 (08/04) -- same legacy engine as v6, narrower RSI-divergence
-    # watch span (4-10 vs v6's 15-20), see build_scalping_pocket_entries's
-    # own docstring for the empirical rationale.
-    "scalping_v7",
     # scalping_v8 (08/05, operator carte blanche -- Claude's own pocket) --
-    # wick-confirmed reversal engine, VARIANT_ANALYZERS entry like v1..v5.
+    # wick-confirmed reversal engine, VARIANT_ANALYZERS entry.
     # Missing from this tuple = invisible to the macro circuit breaker,
     # /portfolio, reporting AND is_scalping_pocket() (which would silently
     # give v8 the STANDARD exit discipline) -- the locked pocket-list tests
     # caught exactly that before it could ship.
     "scalping_v8",
 )
+
+# Retired scalping wallets (06/08) -- no sourcing, but is_scalping_pocket()
+# must keep recognizing them: their archived rows, any residual limit order
+# and any replay/reporting path must still get the SCALPING exit discipline
+# and timeframes, never silently fall back to "standard" (the exact class of
+# bug documented in is_scalping_pocket's docstring).
+_RETIRED_SCALPING_WALLETS = frozenset({
+    "scalping", "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4",
+    "scalping_v5", "scalping_v6", "scalping_v7",
+})
+
+# 06/08 -- scalping_v9 (full operator spec, see scalping_v9.py's module
+# docstring): fixed-watchlist RSI+MFI synchronized-oversold engine, its OWN
+# heartbeat cycle (5min) and its OWN position management (flat -5% trailing
+# stop as the only exit) -- deliberately NOT in _SCALPING_VARIANT_WALLETS
+# (never sourced by the momentum candidate stream) and EXCLUDED from the
+# generic position-management loop below (see the skip in
+# _run_paper_cycle_locked -- the generic ATR-trail/TP-ladder/stagnation
+# machinery must never second-guess its single-exit design).
+V9_WALLET = "scalping_v9"
+
+
+def scalping_v9_enabled() -> bool:
+    """Dedicated gate, OFF by default (fail-closed, same idiom as every
+    other gate in this file) -- required IN ADDITION to
+    ARIA_PAPER_TRADING_ENABLED (the heartbeat wires both)."""
+    return os.environ.get("ARIA_SCALPING_V9_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def is_scalping_pocket(wallet: str) -> bool:
@@ -3569,7 +3559,11 @@ def is_scalping_pocket(wallet: str) -> bool:
     BOTH the legacy single "scalping" wallet (gate off) AND any of the 6
     variant wallets (gate on), so no caller needs to know which regime is
     currently active."""
-    return wallet == "scalping" or wallet in _SCALPING_VARIANT_WALLETS
+    return (
+        wallet in _RETIRED_SCALPING_WALLETS
+        or wallet in _SCALPING_VARIANT_WALLETS
+        or wallet == V9_WALLET
+    )
 
 
 def uses_fine_rsi_confirmation(wallet: str) -> bool:
@@ -3599,10 +3593,18 @@ def all_pocket_wallets() -> tuple[str, ...]:
     02/08 -- "megacap" appended when fixed_watchlist_pocket_enabled() is on,
     independent of scalping_variants_enabled()'s own state (additive to both
     branches below)."""
+    # 06/08 -- v1-v7 retired: the gate-OFF branch no longer resurrects the
+    # legacy "scalping" pocket (its engine arm was removed with v6), it just
+    # drops every scalping pocket from sourcing.
     if scalping_variants_enabled():
         base = (*_SCALPING_VARIANT_WALLETS, "swing", "vc")
     else:
-        base = ("scalping", "swing", "vc")
+        base = ("swing", "vc")
+    # 06/08 -- scalping_v9 rides its own gate (not the variants gate): being
+    # listed here is what plugs it into the macro circuit breaker, reporting,
+    # /riskresume AND the weekly reset loop (heartbeat iterates this list).
+    if scalping_v9_enabled():
+        base = (V9_WALLET, *base)
     if fixed_watchlist_pocket_enabled():
         base = (*base, "megacap")
     return base
@@ -5124,6 +5126,13 @@ async def _run_paper_cycle_locked(
         for p in await get_open_positions():
             if paper_pause.is_paused():
                 break
+            # 06/08 -- scalping_v9 positions are managed EXCLUSIVELY by their
+            # own 5-min cycle (scalping_v9.run_v9_cycle: flat -5% trailing
+            # stop is the pocket's ONLY exit, operator spec) -- the generic
+            # ATR-trail/TP-ladder/stagnation machinery below must never
+            # touch them.
+            if p.get("wallet") == V9_WALLET:
+                continue
             actions["checked"] += 1
             # 07/17 -- with the DEFAULT price_lookup, the DexScreener pair is
             # fetched ONCE and reused for both the price and the

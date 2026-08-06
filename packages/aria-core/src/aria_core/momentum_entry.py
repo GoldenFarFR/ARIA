@@ -3072,22 +3072,6 @@ RSI_WATCH_MIN_SPAN = 15
 RSI_WATCH_MAX_SPAN = 20
 RSI_WATCH_MAX_HORIZON_CANDLES = 20
 
-# 08/04, scalping_v7: forward-return backtest run on real closed-order candles
-# this session (25 occurrences, 4 tokens, ~2.5 days) found the CURRENT window
-# above (15-20) has the WORST win rate of every window tested (40% at short
-# horizons), while a narrower [4-10] window scored 85-90%. Honest caveat, not
-# hidden: this sample is small and the occurrences are autocorrelated (same
-# few tokens revisited) -- directionally suggestive, not statistically
-# proven. Isolated to its OWN dedicated pocket (scalping_v7) rather than
-# applied globally, specifically so this unproven-at-scale window can be
-# compared side by side against the operator-validated 15-20 window (v6) on
-# real forward trades, never silently replacing it everywhere at once.
-# 05/08 -- MAX widened 10->13 (explicit operator decision, not re-derived
-# from a new backtest sample -- the 85-90% figure above was measured
-# specifically on [4-10], never re-measured on [4-13]).
-RSI_WATCH_MIN_SPAN_V7 = 4
-RSI_WATCH_MAX_SPAN_V7 = 13
-
 # 08/04 -- absolute ceiling for the RSI-divergence watch expiry on scalping
 # pockets specifically (see _median_candle_interval_seconds/gap-continuity
 # fix below). The generic 1h-720h clamp in _rsi_divergence_watch_candidate

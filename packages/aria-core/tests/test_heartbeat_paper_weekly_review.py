@@ -35,8 +35,8 @@ def _fake_report(wallet: str) -> dict:
 @pytest.mark.asyncio
 async def test_paper_weekly_review_cycle_resets_swing_and_scalping_never_vc(monkeypatch):
     """Gate OFF (default in tests): all_pocket_wallets() returns exactly
-    ("scalping", "swing", "vc") -- real (unmocked) call, "vc" must never be
-    among the wallets due/reset is called on."""
+    ("swing", "vc") since the 06/08 v1-v7 retirement -- real (unmocked)
+    call, "vc" must never be among the wallets due/reset is called on."""
     due_calls: list[str] = []
     reset_calls: list[str] = []
 
@@ -59,11 +59,11 @@ async def test_paper_weekly_review_cycle_resets_swing_and_scalping_never_vc(monk
 
     await heartbeat.aria_heartbeat._run_task("paper_weekly_review_cycle")
 
-    assert set(due_calls) == {"scalping", "swing"}
-    assert set(reset_calls) == {"scalping", "swing"}
+    assert set(due_calls) == {"swing"}
+    assert set(reset_calls) == {"swing"}
     assert "vc" not in due_calls
     assert "vc" not in reset_calls
-    assert len(notified) == 2
+    assert len(notified) == 1
 
 
 @pytest.mark.asyncio
@@ -88,16 +88,16 @@ async def test_paper_weekly_review_cycle_skips_wallet_not_due(monkeypatch):
 
     await heartbeat.aria_heartbeat._run_task("paper_weekly_review_cycle")
 
-    assert set(due_calls) == {"scalping", "swing"}
-    assert reset_calls == ["swing"]  # scalping wasn't due -- never reset
+    assert set(due_calls) == {"swing"}
+    assert reset_calls == ["swing"]
 
 
 @pytest.mark.asyncio
-async def test_paper_weekly_review_cycle_covers_all_7_scalping_variants_when_gate_on(monkeypatch):
-    """The exact regression this fix targets: with scalping_variants_enabled()
-    on, all_pocket_wallets() replaces "scalping" with scalping_v1..v7 -- the
-    weekly loop must follow, never keep looking for a "scalping" row that no
-    longer exists."""
+async def test_paper_weekly_review_cycle_covers_v8_when_gate_on(monkeypatch):
+    """The exact regression this fix targets: the weekly loop must follow
+    all_pocket_wallets() (scalping_v8 + swing since the 06/08 v1-v7
+    retirement), never keep looking for a "scalping" row that no longer
+    exists."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     due_calls: list[str] = []
@@ -118,9 +118,6 @@ async def test_paper_weekly_review_cycle_covers_all_7_scalping_variants_when_gat
 
     await heartbeat.aria_heartbeat._run_task("paper_weekly_review_cycle")
 
-    assert set(due_calls) == {
-        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "scalping_v8", "swing",
-    }
+    assert set(due_calls) == {"scalping_v8", "swing"}
     assert "scalping" not in due_calls
     assert "vc" not in due_calls

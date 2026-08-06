@@ -72,13 +72,26 @@ _SCALPING_FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
     ("minute", 30, 120, "30M"),
 )
 
+# 06/08 -- scalping_v9 (operator spec: 5-minute timeframe ONLY). Single rung,
+# no fallback: v9's RSI(18)/MFI(10) limits were charted by the operator on
+# 5-min candles specifically -- serving a coarser timeframe would silently
+# change what the thresholds mean (same "never mislead" doctrine as the
+# scalping ladder's own no-fallthrough comment above). A pool too thin for
+# 5-min candles gets an honest ``available=False``.
+_SCALPING_5M_FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
+    ("minute", 5, 120, "5M"),
+)
+
 
 def _ladder_for_mode(mode: str) -> tuple[tuple[str, int, int, str], ...]:
-    """``mode="scalping"`` -> the dedicated sub-hour ladder above; anything
-    else (default ``"standard"``) -> the original 1D/4H/1H ladder, unchanged
-    behavior for every existing caller."""
+    """``mode="scalping"`` -> the dedicated sub-hour ladder above;
+    ``mode="scalping_5m"`` (06/08, scalping_v9) -> the single-rung 5-min
+    ladder; anything else (default ``"standard"``) -> the original 1D/4H/1H
+    ladder, unchanged behavior for every existing caller."""
     if mode == "scalping":
         return _SCALPING_FETCH_LADDER
+    if mode == "scalping_5m":
+        return _SCALPING_5M_FETCH_LADDER
     return _FETCH_LADDER
 
 
