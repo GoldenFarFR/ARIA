@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -42,8 +43,17 @@ def _gaps_dir() -> Path:
     return path
 
 
+def _gap_record_path(capability_id: str) -> Path:
+    # CodeQL py/path-injection: every current caller passes a hardcoded
+    # literal (verified) -- this sink-side allowlist is defense in depth in
+    # case a future caller ever forwards a dynamic id, same doctrine as the
+    # bounded-regex hardening applied elsewhere this session.
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", capability_id)[:80]
+    return _gaps_dir() / f"{safe_id}.json"
+
+
 def _load_record(capability_id: str) -> dict[str, Any] | None:
-    path = _gaps_dir() / f"{capability_id}.json"
+    path = _gap_record_path(capability_id)
     if not path.is_file():
         return None
     try:
@@ -53,7 +63,7 @@ def _load_record(capability_id: str) -> dict[str, Any] | None:
 
 
 def _save_record(capability_id: str, record: dict[str, Any]) -> None:
-    path = _gaps_dir() / f"{capability_id}.json"
+    path = _gap_record_path(capability_id)
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

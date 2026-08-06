@@ -166,7 +166,12 @@ def _resolve_ddg_url(href: str) -> str:
     if href.startswith("//"):
         href = "https:" + href
     parsed = urlparse(href)
-    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+    # CodeQL py/incomplete-url-substring-sanitization: ``href`` comes from
+    # untrusted external HTML (a DDG results page) -- a substring check
+    # ("duckduckgo.com" in netloc) would also match an attacker-crafted
+    # "duckduckgo.com.evil.tld", exact-host/subdomain match only.
+    netloc = parsed.netloc.lower()
+    if (netloc == "duckduckgo.com" or netloc.endswith(".duckduckgo.com")) and parsed.path.startswith("/l/"):
         q = parse_qs(parsed.query)
         uddg = (q.get("uddg") or [""])[0]
         if uddg:

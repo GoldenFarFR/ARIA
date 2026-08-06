@@ -130,6 +130,10 @@ async def _flush_pending_x_promo() -> dict[str, Any] | None:
     if not is_x_post_configured():
         return {"posted": False, "reason": "x_not_configured"}
     _, note = await post_tweet(tweet, approval_id="pending_acp_promo")
+    # CodeQL py/incomplete-url-substring-sanitization: ``note`` is OUR OWN
+    # post_tweet() confirmation string, never an untrusted/external URL --
+    # this is a success-detection heuristic, not a security boundary, so a
+    # substring check is intentional here (no attacker-controlled bypass).
     posted = "x.com/" in note.lower() and "/status/" in note.lower()
     if posted:
         _advance_distribution_queue(posted_offering=offering)

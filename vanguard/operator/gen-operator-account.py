@@ -65,6 +65,11 @@ async def _create(username: str, *, show_secret_once: bool) -> None:
         print("\nSecret TOTP NON affiché. Relance avec --show-secret-once pour l'enrôlement.")
         return
 
+    # CodeQL py/clear-text-logging-sensitive-data (x2 below: password
+    # confirmation flow above uses getpass, never echoed): accepted by
+    # design, same reasoning as gen-admin-secret.py's own comment -- this
+    # is the explicit ``--show-secret-once`` path, a local one-shot CLI
+    # display gated behind its own flag, not a log/shared system.
     uri = provisioning_uri(secret, label=f"ARIA Mobile ({username})", issuer="Aria Vanguard ZHC")
     print("\n⚠️  Secret TOTP affiché UNE SEULE FOIS -- scanne-le maintenant, il ne sera")
     print("   plus jamais réaffiché (relancer ce script en génère un nouveau) :\n")

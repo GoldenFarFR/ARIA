@@ -47,6 +47,10 @@ def _save_meta(meta: dict[str, Any]) -> None:
 
 
 def _gallery_path(name: str) -> Path:
+    # CodeQL py/path-injection: sanitized via character allowlist (no path
+    # separators/".." survive) -- CodeQL's taint tracker doesn't credit a
+    # custom re/str filter as a barrier for this rule, hence the finding on
+    # this and downstream callers despite this being safe.
     safe = "".join(c for c in name.lower() if c.isalnum() or c in "-_")
     return aria_avatar_gallery_dir() / f"{safe}.jpg"
 
@@ -110,6 +114,9 @@ def _normalize_jpeg(data: bytes) -> bytes:
 
 
 def _commit_avatar(source_path: Path, *, source: str, note: str = "") -> dict[str, Any]:
+    # CodeQL py/path-injection: every caller passes either a _gallery_path()
+    # result (character-sanitized, see below) or a tmp file this module
+    # itself created from bytes -- source_path is never free user input.
     dest = current_avatar_path()
     shutil.copy2(source_path, dest)
     entry = {

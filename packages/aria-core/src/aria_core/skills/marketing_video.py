@@ -58,6 +58,9 @@ except Exception:  # noqa: BLE001 -- reportlab absent in a minimal test environm
 # such utility existed elsewhere in the repo (confirmed by exploration).
 _EM_DASH_RE = re.compile(r"[—–]")
 _EMOJI_RE = re.compile(
+    # CodeQL py/overly-large-range: intentional -- these ARE the standard
+    # Unicode emoji block ranges, deliberately wide to strip the whole
+    # family, not an accidental typo'd range.
     "["
     "\U0001F300-\U0001FAFF"
     "\U00002600-\U000027BF"

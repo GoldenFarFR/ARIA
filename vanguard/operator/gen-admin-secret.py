@@ -28,6 +28,13 @@ def _write_secret_to_env(secret: str) -> None:
 
 
 def main() -> None:
+    # CodeQL py/clear-text-storage-sensitive-data + py/clear-text-logging-
+    # sensitive-data: both accepted by design for this LOCAL, one-shot admin
+    # bootstrap script -- .env (chmod 600) IS the established secret store
+    # for this project (see CLAUDE.md), and the print below is the single,
+    # intentional one-time display so the operator can copy it into their
+    # own password manager (docstring above). Not a log file, not a shared
+    # system, not repeatable -- neither finding applies to this threat model.
     secret = secrets.token_urlsafe(32)
     _write_secret_to_env(secret)
     print("== Secret opérateur (1er facteur cockpit) — régénéré ==\n")

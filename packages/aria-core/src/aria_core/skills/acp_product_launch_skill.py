@@ -128,6 +128,8 @@ async def _promote_product(
 
     if is_x_post_configured():
         _, note = await post_tweet(tweet, approval_id="acp_product_launch")
+        # CodeQL py/incomplete-url-substring-sanitization: ``note`` is OUR OWN
+        # post_tweet() confirmation string, never an untrusted/external URL.
         result["x_posted"] = "x.com/" in note.lower() and "/status/" in note.lower()
         result["x_note"] = note
         if not result["x_posted"]:

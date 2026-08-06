@@ -960,6 +960,9 @@ async def _flush_x_queue_bucket(key: str, bucket: dict[str, Any]) -> dict[str, A
         skip_rate_gap=True,
         force=operator_publish,
     )
+    # CodeQL py/incomplete-url-substring-sanitization: ``note`` is OUR OWN
+    # post_tweet() confirmation string, never an untrusted/external URL --
+    # success-detection heuristic, not a security boundary.
     posted = "Publié sur X" in note or "x.com/" in note
     reply_note = ""
     thread_posted = False

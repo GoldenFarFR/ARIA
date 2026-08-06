@@ -269,6 +269,12 @@ class GoPlusClient:
                 return self._access_token
 
             t = int(now)
+            # CodeQL py/weak-sensitive-data-hashing: SHA1 here is NOT a
+            # security choice of ours -- GoPlus's own token-auth API spec
+            # mandates this exact sign = sha1(app_key + time + app_secret)
+            # scheme (their server recomputes and compares it). Switching
+            # algorithms would just break authentication, not improve
+            # security -- accepted, third-party-constrained finding.
             sign = hashlib.sha1(f"{app_key}{t}{app_secret}".encode()).hexdigest()
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:

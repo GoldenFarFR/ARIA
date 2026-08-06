@@ -92,6 +92,10 @@ def _save_prepared(
     source: str,
 ) -> Path:
     _PREPARED_DIR.mkdir(parents=True, exist_ok=True)
+    # CodeQL py/path-injection: already sanitized (character allowlist
+    # strips path separators/"..") -- CodeQL's taint tracker doesn't credit
+    # a custom re.sub as a barrier for this rule, hence the finding despite
+    # this being safe.
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job_id)[:80]
     path = _PREPARED_DIR / f"{safe_id}.json"
     doc = {

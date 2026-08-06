@@ -64,10 +64,23 @@ def _default_repo_root() -> Path:
 
 
 def _resolve_repo_path(message: str) -> Path:
+    # CodeQL py/path-injection: ``message`` is operator-controlled free text
+    # (Telegram) -- a path lifted straight out of it and walked/read (see
+    # ``_collect_candidates`` below) would let anything landing in that
+    # channel point the ingest at an arbitrary directory on this machine.
+    # Bounded to the operator's own home tree (where every legitimate repo
+    # this tool is meant to ingest already lives, cf. ``_default_repo_root``'s
+    # own default) -- never an unrestricted absolute path.
+    home = Path.home().resolve()
     for match in _WIN_PATH_RE.findall(message):
         p = Path(match)
         if p.is_dir():
-            return p.resolve()
+            resolved = p.resolve()
+            try:
+                resolved.relative_to(home)
+            except ValueError:
+                continue
+            return resolved
     lower = message.lower()
     if "collegue" in lower:
         root = _default_repo_root()

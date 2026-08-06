@@ -291,6 +291,9 @@ const server = createServer((req, res) => {
       jsonResponse(res, 404, { error: "not found" });
     })
     .catch((err) => {
+      // CodeQL js/stack-trace-exposure: only ``.message`` (or the error's
+      // own toString(), which is "Name: message", never ``.stack``) reaches
+      // the response -- .stack is never referenced anywhere in this file.
       jsonResponse(res, 500, { error: String(err?.message || err) });
     });
 });

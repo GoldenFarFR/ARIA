@@ -32,6 +32,11 @@ def _write_secret_to_env(secret: str) -> None:
 
 
 def main() -> None:
+    # CodeQL py/clear-text-storage-sensitive-data + py/clear-text-logging-
+    # sensitive-data: accepted by design, same reasoning as gen-admin-
+    # secret.py's own comment -- local one-shot admin CLI, .env (chmod 600)
+    # is the established store, the print below is the one-time enrollment
+    # display the docstring above describes.
     secret = generate_secret()
     uri = provisioning_uri(secret, label="ARIA Admin", issuer="Aria Vanguard ZHC")
     _write_secret_to_env(secret)

@@ -203,6 +203,9 @@ async def execute_comms_draft(user_message: str, lang: str = "en") -> tuple[str,
 
         if wants_publish and is_x_post_configured():
             _, post_note = await post_tweet(tweet_text[:280], approval_id="comms_skill")
+            # CodeQL py/incomplete-url-substring-sanitization: ``post_note``
+            # is OUR OWN post_tweet() confirmation string, never an
+            # untrusted/external URL.
             posted = "x.com/" in post_note.lower() and "/status/" in post_note.lower()
             append_memory("comms", f"[x_post] posted={posted} {tweet_text[:80]}")
             title = "Publication X" if posted else ("Publication X — brouillon" if lang == "fr" else "X — draft")

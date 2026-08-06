@@ -188,6 +188,8 @@ async def flush_workflow_used_tweet() -> dict[str, Any] | None:
             "workflow_url": head.get("workflow_url"),
         }
     _, note = await post_tweet(tweet, approval_id="acp_workflow_used")
+    # CodeQL py/incomplete-url-substring-sanitization: ``note`` is OUR OWN
+    # post_tweet() confirmation string, never an untrusted/external URL.
     posted = "x.com/" in note.lower() and "/status/" in note.lower()
     if posted:
         _pop_queue_head()

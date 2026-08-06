@@ -67,6 +67,9 @@ def fix_handle_in_text(text: str) -> str:
     handle = official_x_handle()
     result = text
     for pattern in _WRONG_X_HANDLE_PATTERNS:
+        # CodeQL py/incomplete-url-substring-sanitization: ``pattern`` comes
+        # from the module's own hardcoded ``_WRONG_X_HANDLE_PATTERNS``
+        # tuple above, never external/user input.
         if "x.com" in pattern or "twitter.com" in pattern:
             result = re.sub(pattern, official_x_url(), result, flags=re.IGNORECASE)
         elif "@" in pattern:
