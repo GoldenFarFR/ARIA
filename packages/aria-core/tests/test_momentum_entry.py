@@ -2799,6 +2799,41 @@ async def test_fetch_candles_cache_hit_skips_network_call(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_candles_cache_hit_restores_its_own_provenance(monkeypatch):
+    """Devil's Advocate review of 94655696 (v9 traceability): a cache HIT
+    used to skip ``_fetch_candles_impl`` entirely, so the provenance
+    ContextVar it sets was never touched -- a caller looping over several
+    pools in the SAME task (scalping_v9.run_v9_cycle does exactly this)
+    would read pool A's leftover provenance for pool B's cache-served
+    candles. The cache entry must carry its OWN provenance and restore it
+    on every hit, never leak a sibling call's."""
+    from aria_core.services import geckoterminal as gt
+
+    pool_b_candles = _plain_candles(2)
+    me._candles_cache[("base", "0xpoolb", "scalping_5m", False)] = (
+        time.monotonic(), pool_b_candles,
+        {"provider": "mobula", "timeframe_served": "15m", "degraded": True},
+    )
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    await me._fetch_candles("0xpoola", "base", mode="scalping_5m")
+    assert me.get_last_candle_provenance() == {
+        "provider": "geckoterminal", "timeframe_served": "scalping_5m", "degraded": False,
+    }
+
+    result_b = await me._fetch_candles("0xpoolb", "base", mode="scalping_5m")
+
+    assert result_b == pool_b_candles
+    assert me.get_last_candle_provenance() == {
+        "provider": "mobula", "timeframe_served": "15m", "degraded": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_candles_cache_scoped_by_mode(monkeypatch):
     """The SAME pool under a DIFFERENT mode (standard vs scalping) must never
     hit -- the candle shape genuinely differs (day/4h/1h vs 15/30min), a
@@ -2828,7 +2863,7 @@ async def test_fetch_candles_cache_expires_after_ttl():
     key = ("base", "0xpool", "scalping", False)
     candles = _plain_candles(2)
     ts = time.monotonic() - me._CANDLES_CACHE_TTL_SECONDS - 1
-    me._candles_cache[key] = (ts, candles)
+    me._candles_cache[key] = (ts, candles, None)
 
     assert me._get_cached_candles("base", "0xpool", "scalping", False) is None
 

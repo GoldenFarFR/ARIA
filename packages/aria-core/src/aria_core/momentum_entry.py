@@ -2269,16 +2269,24 @@ def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) 
 # or test-doubled request never shared across pockets) -- never a wrong
 # cache hit for a caller asking for something different.
 _CANDLES_CACHE_TTL_SECONDS = 60.0
-_candles_cache: dict[tuple[str, str, str, bool], tuple[float, list[Candle]]] = {}
+_candles_cache: dict[tuple[str, str, str, bool], tuple[float, list[Candle], dict | None]] = {}
 
 
 def _cache_candles(
     chain: str, pool_address: str, mode: str, skip_daily: bool, candles: list[Candle],
 ) -> None:
+    # 06/08 -- Devil's Advocate review of 94655696 (v9 traceability): a cache
+    # HIT below returns without ever calling ``_fetch_candles_impl``, so the
+    # provenance ContextVar it sets is skipped entirely -- silently leaving
+    # whatever provenance the LAST call in this same task happened to set
+    # (a different token's, if the caller loops over several in one task,
+    # as scalping_v9.run_v9_cycle does). Snapshotting the provenance INTO
+    # the cache entry and re-arming the ContextVar on a hit (below) closes
+    # this structurally instead of documenting it as a known gap.
     now = time.monotonic()
     key = (chain, pool_address.lower(), mode, skip_daily)
-    _candles_cache[key] = (now, candles)
-    expired = [k for k, (ts, _c) in _candles_cache.items() if (now - ts) >= _CANDLES_CACHE_TTL_SECONDS]
+    _candles_cache[key] = (now, candles, get_last_candle_provenance())
+    expired = [k for k, (ts, _c, _p) in _candles_cache.items() if (now - ts) >= _CANDLES_CACHE_TTL_SECONDS]
     for k in expired:
         del _candles_cache[k]
 
@@ -2289,9 +2297,10 @@ def _get_cached_candles(
     cached = _candles_cache.get((chain, pool_address.lower(), mode, skip_daily))
     if cached is None:
         return None
-    ts, candles = cached
+    ts, candles, provenance = cached
     if (time.monotonic() - ts) >= _CANDLES_CACHE_TTL_SECONDS:
         return None
+    _candle_provenance_ctx.set(provenance)
     return candles
 
 
