@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from aria_core import repertoire_db
+from aria_core.safe_re import clamp_intent_text
 from aria_core.narrative import (
     help_commands,
     help_commands_public,
@@ -333,6 +334,13 @@ class AriaBrain:
         visitor_id: str = "",
         public_mode: bool | None = None,
     ) -> ChatResponse:
+        # Backlog #13 (06/08): single choke point for the ReDoS bug class --
+        # every downstream regex (``_routing_message`` below included, which
+        # runs its own re.search on the raw text) now sees a bounded input
+        # regardless of how any individual pattern is written. Structural
+        # fix, not a replacement for the 21 patch-by-patch bounds already
+        # applied (commit 7aff8afe) -- those stay as belt-and-suspenders.
+        user_message = clamp_intent_text(user_message)
         public = is_public_mode() if public_mode is None else public_mode
         vid = visitor_id if public else ""
         shell_mode = not public and str(visitor_id).startswith("shell")
