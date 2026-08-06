@@ -422,14 +422,26 @@ _V8_SIZING_RR_WICK_ONLY = 1.5
 # the existing anti-chase guard only bounds entry from ABOVE (max +2% over
 # signal_close) -- nothing stops a buy once the bounce that produced the
 # wick has already faded and price has resumed falling BELOW where the
-# "confirmed" reversal candle closed. ``_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT``
-# closes that gap: refuse the entry if live price has already given back
-# more than this fraction below the signal candle's own close, i.e. if the
-# rebound is already dead by the time we'd act on it. Principled, not yet
-# forward-validated (0 trades under this gate so far) -- same class of
-# change as the 06/08 bootstrap-mode flip below, revisit once trade data
-# accumulates under it.
-_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT = 0.5
+# "confirmed" reversal candle closed.
+#
+# Devil's Advocate report 2db20159 (verified, real point): a first version of
+# this gate used a flat 0.5% threshold, the only entry-band constant in the
+# whole file NOT expressed in ATR while everything else here (stop, trail)
+# scales with the pair's own volatility -- flat % either rejects almost
+# every valid entry on a low-volatility pair or lets a real breakdown
+# through on a high-volatility one. ATR-scaled here, same clamp pattern as
+# paper_trader._effective_trail_pct: MULT * entry_atr_pct bounded to
+# [MIN, MAX]. Principled, not yet forward-validated (0 trades under any
+# version of this gate so far) -- same class of change as the 06/08
+# bootstrap-mode flip below, revisit once trade data accumulates under it.
+# (The report's more radical proposal -- anchor entry to a simulated limit
+# order at signal_close +/- k*ATR instead of a live-price gate, run in
+# shadow mode first -- is a real architecture improvement banked as
+# backlog #10-adjacent, not done here: bigger surface, needs its own
+# validation pass before touching how v8 actually enters.)
+_V8_GIVEBACK_ATR_MULT = 0.35
+_V8_MIN_GIVEBACK_PCT = 0.2
+_V8_MAX_GIVEBACK_PCT = 1.5
 
 _V8_BOOTSTRAP_MODE = False
 # Bootstrap trough freshness: the lowest low of the recent window must sit
@@ -489,6 +501,9 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
             "no_wick_confirmation",
         )
     entry = pair.price_usd
+    atr = _atr_value(candles)
+    if not atr or atr <= 0:
+        return _hold(chain, pair.base_symbol, entry, "ATR non calculable", "indicator_unavailable")
     signal_close = candles[-1].close
     if signal_close > 0 and entry > signal_close * (1 + _V8_MAX_CHASE_PCT / 100.0):
         return _hold(
@@ -496,15 +511,17 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
             f"prix déjà parti (+{(entry / signal_close - 1) * 100:.1f}% au-dessus de la "
             f"bougie de signal, max {_V8_MAX_CHASE_PCT:.0f}%)", "price_ran_away",
         )
-    if signal_close > 0 and entry < signal_close * (1 - _V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT / 100.0):
-        return _hold(
-            chain, pair.base_symbol, entry,
-            f"rebond de la bougie de signal déjà effacé (-{(1 - entry / signal_close) * 100:.1f}% "
-            f"sous sa clôture, max {_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT:.1f}%)", "bounce_already_faded",
+    if signal_close > 0:
+        atr_pct = atr / entry if entry > 0 else 0.0
+        giveback_limit_pct = max(
+            _V8_MIN_GIVEBACK_PCT, min(_V8_MAX_GIVEBACK_PCT, _V8_GIVEBACK_ATR_MULT * atr_pct * 100.0)
         )
-    atr = _atr_value(candles)
-    if not atr or atr <= 0:
-        return _hold(chain, pair.base_symbol, entry, "ATR non calculable", "indicator_unavailable")
+        if entry < signal_close * (1 - giveback_limit_pct / 100.0):
+            return _hold(
+                chain, pair.base_symbol, entry,
+                f"rebond de la bougie de signal déjà effacé (-{(1 - entry / signal_close) * 100:.1f}% "
+                f"sous sa clôture, max {giveback_limit_pct:.2f}% pour cet ATR)", "bounce_already_faded",
+            )
     stop = entry - _V8_STOP_ATR_MULT * atr
     if stop <= 0:
         return _hold(chain, pair.base_symbol, entry, "stop ATR invalide (<=0)", "invalid_stop")

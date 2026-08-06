@@ -392,9 +392,10 @@ async def test_v8_rejects_bounce_already_faded_below_signal_close(monkeypatch):
     """06/08 live diagnostic fix: 32/34 real v8 trades never traded a single
     tick above entry -- entry (live price) can lag the signal candle's close
     by up to a candle period, buying into a bounce that already gave up.
-    Live price 1% below the signal candle's close (> the 0.5% tolerance)
-    must reject, symmetric with the anti-chase guard above."""
-    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.99), candles=_v8_candles(signal_wick=True))
+    Live price 2% below the signal candle's close clears even the ATR-scaled
+    cap (1.5% on this fixture's synthetic, wide-range candles) -- must
+    reject, symmetric with the anti-chase guard above."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.98), candles=_v8_candles(signal_wick=True))
     _mock_divergence(monkeypatch, present=True, bars_since=1)
     sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
     assert sig["action"] == "HOLD"
@@ -403,12 +404,38 @@ async def test_v8_rejects_bounce_already_faded_below_signal_close(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_v8_allows_small_giveback_within_tolerance(monkeypatch):
-    """Live price 0.2% below the signal candle's close stays within the 0.5%
-    tolerance -- normal execution noise, not a faded bounce."""
-    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.998), candles=_v8_candles(signal_wick=True))
+    """Live price 1% below the signal candle's close stays within this
+    fixture's ATR-scaled cap (1.5%, clamped to _V8_MAX_GIVEBACK_PCT on the
+    synthetic wide-range candles) -- normal execution noise, not a faded
+    bounce."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.99), candles=_v8_candles(signal_wick=True))
     _mock_divergence(monkeypatch, present=True, bars_since=1)
     sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
     assert sig["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_v8_giveback_gate_scales_with_atr_not_flat_pct(monkeypatch):
+    """Devil's Advocate report 2db20159: a flat % threshold ignores the
+    pair's own volatility regime -- everything else in v8's entry band
+    (stop distance) scales with ATR, this gate now does too. A LOW-ATR
+    series (tight candles, clamped to the _V8_MIN_GIVEBACK_PCT floor) must
+    reject a 0.3% giveback that the default HIGH-ATR fixture (clamped to
+    the ceiling, see test_v8_allows_small_giveback_within_tolerance above)
+    would tolerate several times over -- proves the gate is ATR-adaptive,
+    not a fixed number."""
+    from aria_core.skills.ta_levels import Candle
+
+    n = 60
+    tight_candles = [
+        Candle(ts=i, open=1.0, high=1.001, low=0.999, close=1.0, volume=1000.0) for i in range(n)
+    ]
+    tight_candles[n - 2] = Candle(ts=n - 2, open=1.0, high=1.003, low=0.995, close=1.0, volume=1500.0)
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.997), candles=tight_candles)
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "bounce_already_faded"
 
 
 @pytest.mark.asyncio
