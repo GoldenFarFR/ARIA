@@ -4240,15 +4240,17 @@ class TestHolderConcentrationLongTermCache:
 class TestHolderConcentrationOutageBypass:
     """06/08 -- explicit operator override during a real live Blockscout
     outage ("coupe blockscout et laisse passer les tokens"), OFF by
-    default. Never touches the real over-concentration REJECTION path
-    (only the 'couldn't verify' exits)."""
+    default and SELF-EXPIRING (Devil's Advocate report 786c7483: a bypass
+    whose disarming depends on human memory WILL be forgotten). Never
+    touches the real over-concentration REJECTION path (only the
+    'couldn't verify' exits)."""
 
     @pytest.mark.asyncio
     async def test_off_by_default_stays_fail_closed(self, monkeypatch):
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult
 
-        monkeypatch.delenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", raising=False)
+        monkeypatch.delenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", raising=False)
         monkeypatch.setattr(
             blockscout_module, "get_blockscout_client",
             lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
@@ -4259,10 +4261,13 @@ class TestHolderConcentrationOutageBypass:
 
     @pytest.mark.asyncio
     async def test_on_lets_unverified_candidate_through(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult
 
-        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", future)
         monkeypatch.setattr(
             blockscout_module, "get_blockscout_client",
             lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
@@ -4281,13 +4286,50 @@ class TestHolderConcentrationOutageBypass:
         from aria_core import holder_concentration_cache as hcc
         from aria_core.services.blockscout import TokenHoldersResult
 
-        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        from datetime import datetime, timedelta, timezone
+
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", future)
         monkeypatch.setattr(
             blockscout_module, "get_blockscout_client",
             lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
         )
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert await hcc.cached_verdict(CONTRACT, "base") is None
+
+    @pytest.mark.asyncio
+    async def test_expired_bypass_disarms_itself(self, monkeypatch):
+        """The whole point of the self-expiry: a date in the past means the
+        bypass is OFF, no human action needed."""
+        from datetime import datetime, timedelta, timezone
+
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", past)
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+    @pytest.mark.asyncio
+    async def test_unparseable_expiry_fails_closed(self, monkeypatch):
+        """A broken date must never mean "bypass forever"."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", "demain")
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
 
     @pytest.mark.asyncio
     async def test_bypass_never_overrides_a_real_rejection(self, monkeypatch):
@@ -4297,7 +4339,10 @@ class TestHolderConcentrationOutageBypass:
         import aria_core.services.blockscout as blockscout_module
         from aria_core.services.blockscout import TokenHoldersResult
 
-        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        from datetime import datetime, timedelta, timezone
+
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", future)
         holders = [_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 8.5) for i in range(10)]
         result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))

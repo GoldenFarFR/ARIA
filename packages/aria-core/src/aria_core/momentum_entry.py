@@ -1501,8 +1501,8 @@ _HOLDER_DATA_UNAVAILABLE_REASON = (
 
 
 def _holder_concentration_outage_bypass_enabled() -> bool:
-    """06/08 -- TEMPORARY manual override (explicit operator decision during
-    a real, live Blockscout outage: "coupe blockscout et laisse passer les
+    """06/08 -- TEMPORARY override (explicit operator decision during a
+    real, live Blockscout outage: "coupe blockscout et laisse passer les
     tokens", after the 24h verdict cache above proved insufficient on its
     own -- a token NEVER previously verified still needs to trade). OFF by
     default (fail-closed, the 03/08 doctrine is NOT reverted permanently).
@@ -1510,11 +1510,32 @@ def _holder_concentration_outage_bypass_enabled() -> bool:
     CLEAR verdict instead of a rejection -- never persisted to
     ``holder_concentration_cache`` (not a real check, must re-verify for
     real the moment Blockscout recovers) and always logged loudly so the
-    bypass window stays visible. Manually flip back OFF once Blockscout
-    recovers -- this is a session workaround, not a new steady state."""
-    return os.environ.get("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    bypass window stays visible.
+
+    SELF-EXPIRING (same-day hardening, Devil's Advocate report 786c7483 --
+    a security-guardrail bypass whose disarming depends on human memory
+    WILL eventually be forgotten; same self-expiry pattern as the GoPlus
+    quota suspension, commit 0392725a): the env var carries an explicit
+    UTC expiry timestamp, never a boolean. Past that instant the bypass
+    disarms ITSELF, no checklist needed -- re-arming requires consciously
+    setting a NEW future date. An unparseable value fails CLOSED (a broken
+    date must never mean "bypass forever")."""
+    raw = os.environ.get("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL", "").strip()
+    if not raw:
+        return False
+    from datetime import datetime, timezone
+
+    try:
+        expiry = datetime.fromisoformat(raw)
+    except ValueError:
+        logger.warning(
+            "holder_concentration: unparseable ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL "
+            "(%r) -- bypass stays OFF (fail-closed)", raw,
+        )
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) < expiry
 
 
 def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, str]:
@@ -1524,7 +1545,7 @@ def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, s
     if _holder_concentration_outage_bypass_enabled():
         logger.warning(
             "holder_concentration: OUTAGE BYPASS active -- %s/%s let through UNVERIFIED "
-            "(ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED=on, revert once Blockscout recovers)",
+            "(ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_UNTIL still in the future -- self-expires)",
             chain, contract[:14],
         )
         return False, ""
