@@ -51,6 +51,7 @@ from app.api.routes import (
     forex,
     games,
     holding_member,
+    operator_dashboard,
     operator_mobile,
     pairs,
     pot,
@@ -201,6 +202,7 @@ app.include_router(watchlist.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(aria.router, prefix="/api")
 app.include_router(operator_mobile.router, prefix="/api")
+app.include_router(operator_dashboard.router, prefix="/api")
 app.include_router(holding_member.router, prefix="/api")
 app.include_router(websocket.router)
 
