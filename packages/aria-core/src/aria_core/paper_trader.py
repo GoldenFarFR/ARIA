@@ -3294,7 +3294,21 @@ def _scalping_variant_analyzer(evaluate_fn, chain_by_contract: dict[str, str]):
 # 29/07); GoPlus only backstops the ~10-12% of candidates Honeypot.is
 # doesn't know, which fail closed -- bounded, accepted, nothing this slice
 # can change.
-MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 13
+#
+# 06/08 evening -- 13 -> 18 (Claude autonomous mandate, operator directive:
+# "accelere le rythme" toward the 24h winrate/PnL check-in). The 13 value was
+# explicitly calibrated to be SHARED by v6+v8 (comment above); v6 retired the
+# same day, so v8 alone has effectively been sitting on a budget sized for two
+# pockets since then -- widening its OWN slice, not a fresh guess at network
+# headroom. Kept short of doubling and deliberately NOT touching the divergence
+# gate itself (that tightening is the operator's own market-phase judgment,
+# not an engineering knob -- see the 06/08 comment further down this file).
+# The real limit this could still hit is GeckoTerminal OHLCV, still calibrated
+# at ~15/min (docs/api-rate-limit-calibration.md) -- verified 9 real 429s over
+# the prior 30min window before this change (normal noise at ~90% calibrated
+# capacity, no uncoordinated second client found via `ps aux`). Revert to 13
+# if the 429 rate rises materially on the next check-ins.
+MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 18
 
 # 08/05 -- SOURCING pause list (operator decision). Pockets listed here open
 # NO new position (both the heartbeat loop and the WebSocket drain consult
