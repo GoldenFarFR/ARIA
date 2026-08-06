@@ -397,7 +397,95 @@ async def test_open_position_allow_multiple_seam(tmp_db):
 
 
 def test_watchlist_extensible_shape():
-    """The operator will add ~4 more contracts -- every entry must carry the
-    3 keys the engine reads, nothing engine-side to change."""
+    """The operator will add ~4 more contracts -- every seed entry must carry
+    the 3 keys the engine reads, nothing engine-side to change."""
     for token in v9.V9_WATCHLIST:
         assert set(token) == {"contract", "chain", "symbol"}
+
+
+# ── dynamic watchlist (DB, /v9add -- operator self-service, 06/08) ───────────
+
+@pytest.mark.asyncio
+async def test_watchlist_seeds_spx_once(tmp_db):
+    tokens = await v9.get_watchlist()
+    assert [t["symbol"] for t in tokens] == ["SPX"]
+    assert tokens[0]["contract"] == SPX.lower()
+    # a second read never duplicates the seed
+    assert len(await v9.get_watchlist()) == 1
+
+
+@pytest.mark.asyncio
+async def test_add_resolves_most_liquid_chain(tmp_db, monkeypatch):
+    calls: list[str] = []
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        calls.append(chain)
+        pair = _FakePair(price=1.0, liquidity=100_000.0 if chain == "base" else 900_000.0)
+        pair.base_symbol = "TOK"
+        return pair
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    entry, error = await v9.add_watchlist_token("0x" + "b" * 40)
+
+    assert error == ""
+    assert calls == ["base", "ethereum"]  # both probed, most liquid wins
+    assert entry["chain"] == "ethereum"
+    symbols = [t["symbol"] for t in await v9.get_watchlist()]
+    assert "TOK" in symbols and "SPX" in symbols
+
+
+@pytest.mark.asyncio
+async def test_add_no_pool_refuses_with_reason(tmp_db, monkeypatch):
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return None
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    entry, error = await v9.add_watchlist_token("0x" + "c" * 40)
+
+    assert entry is None
+    assert "aucun pool liquide" in error
+    assert len(await v9.get_watchlist()) == 1  # SPX only, nothing half-added
+
+
+@pytest.mark.asyncio
+async def test_remove_deactivates_and_readd_reactivates(tmp_db, monkeypatch):
+    assert await v9.remove_watchlist_token(SPX) is True
+    assert await v9.get_watchlist() == []
+    # removing again: nothing active anymore
+    assert await v9.remove_watchlist_token(SPX) is False
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        pair = _FakePair()
+        return pair if chain == "base" else None
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    entry, error = await v9.add_watchlist_token(SPX)
+    assert error == ""
+    assert [t["contract"] for t in await v9.get_watchlist()] == [SPX.lower()]
+
+
+@pytest.mark.asyncio
+async def test_removed_seed_never_resurrected_by_ensure(tmp_db):
+    """INSERT OR IGNORE seed: a /v9remove of SPX must survive the next
+    table-ensure pass (the exact trap the seed doctrine comment guards)."""
+    await v9.remove_watchlist_token(SPX)
+    await v9._ensure_watchlist_table()
+    assert await v9.get_watchlist() == []
+
+
+@pytest.mark.asyncio
+async def test_cycle_reads_db_watchlist_not_the_seed_tuple(tmp_db, monkeypatch):
+    """The 5-min cycle iterates the DB list -- a /v9remove takes effect on
+    the very next cycle without any code change."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9.remove_watchlist_token(SPX)
+    rsi, mfi = _signal_series()
+    _patch_cycle_io(monkeypatch, rsi=rsi, mfi=mfi)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["checked"] == 0
+    assert actions["opened"] == []

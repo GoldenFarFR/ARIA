@@ -2501,6 +2501,9 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
+    ("v9add", "Ajoute un contrat à la watchlist scalping_v9 (RSI+MFI 5min)"),
+    ("v9list", "Watchlist scalping_v9 active"),
+    ("v9remove", "Retire un contrat de la watchlist scalping_v9"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
@@ -2680,6 +2683,88 @@ async def _reply_manual_candidates_queued(message, addresses: list[str], chain: 
         "Passeront par les mêmes garde-fous (honeypot/liquidité/volume/wash-trading/R-R) "
         "qu'un candidat trouvé automatiquement — jamais un achat forcé.",
     )
+
+
+async def _handle_v9add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/v9add <contract> [chain] -- 06/08, explicit operator request ("je
+    pourrai ajouter les contrats moi-même directement dans v9") : adds a
+    token to the scalping_v9 fixed watchlist, effective on the next 5-min
+    cycle, zero redeploy. Chain auto-detected (most liquid DexScreener pool
+    across base/ethereum; non-0x address tried as Solana) unless given."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    args = context.args or []
+    if not args:
+        await _reply(
+            message,
+            "Usage : /v9add <adresse> [chaîne]\n"
+            "Chaîne optionnelle (base/ethereum/solana) — sinon détection "
+            "automatique sur le pool le plus liquide.",
+        )
+        return
+    from aria_core import scalping_v9
+
+    contract = args[0].strip()
+    chain = args[1].strip().lower() if len(args) > 1 else None
+    entry, error = await scalping_v9.add_watchlist_token(contract, chain)
+    if entry is None:
+        await _reply(message, f"❌ Ajout refusé : {error}")
+        return
+    await _reply(
+        message,
+        f"✅ {entry['symbol']} ajouté à la watchlist v9 ({entry['chain']}, "
+        f"liquidité {entry['liquidity_usd']:,.0f} $, prix {entry['price_usd']:.6g} $).\n"
+        f"Effectif au prochain cycle 5 min — entrée : RSI(18)<21 ET MFI(10)<20 "
+        f"sur la même bougie.",
+    )
+
+
+async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/v9list -- active scalping_v9 watchlist (see /v9add)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    from aria_core import scalping_v9
+
+    tokens = await scalping_v9.get_watchlist()
+    if not tokens:
+        await _reply(message, "Watchlist v9 vide — ajoute un contrat avec /v9add <adresse>.")
+        return
+    lines = [f"Watchlist scalping_v9 ({len(tokens)} token(s), cycle 5 min) :", ""]
+    for t in tokens:
+        lines.append(f"• {t['symbol']} ({t['chain']}) — {t['contract']}")
+    await _reply(message, "\n".join(lines))
+
+
+async def _handle_v9remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/v9remove <contract> -- deactivates a v9 watchlist token. Open
+    positions on it keep being managed to natural close (the management
+    pass iterates positions, not the watchlist)."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    args = context.args or []
+    if not args:
+        await _reply(message, "Usage : /v9remove <adresse>")
+        return
+    from aria_core import scalping_v9
+
+    removed = await scalping_v9.remove_watchlist_token(args[0].strip())
+    if removed:
+        await _reply(
+            message,
+            "✅ Retiré de la watchlist v9. Les positions ouvertes dessus restent "
+            "gérées jusqu'à clôture naturelle (stop suiveur -5%).",
+        )
+    else:
+        await _reply(message, "Rien à retirer — ce contrat n'est pas dans la watchlist active (/v9list).")
 
 
 async def _handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3827,6 +3912,9 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))
     app.add_handler(CommandHandler("order", _handle_order))
+    app.add_handler(CommandHandler("v9add", _handle_v9add))
+    app.add_handler(CommandHandler("v9list", _handle_v9list))
+    app.add_handler(CommandHandler("v9remove", _handle_v9remove))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))

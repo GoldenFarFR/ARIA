@@ -41,8 +41,11 @@ from aria_core import paper_trader
 
 logger = logging.getLogger(__name__)
 
-# Watchlist -- operator-provided. Append new entries here (contract, chain,
-# label); no other code change needed to feed more tokens to the engine.
+# Watchlist SEED -- the DB (v9_watchlist table below) is the live list the
+# cycle reads; this tuple only seeds it once on first access. The operator
+# manages the list themselves via Telegram (/v9add, /v9list, /v9remove --
+# explicit request, 06/08: "je pourrai ajouter les contrats moi-même") --
+# additions take effect on the next 5-min cycle, zero redeploy.
 V9_WATCHLIST: tuple[dict, ...] = (
     {
         "contract": "0x50dA645f148798F68EF2d7dB7C1CB22A6819bb2C",
@@ -50,6 +53,117 @@ V9_WATCHLIST: tuple[dict, ...] = (
         "symbol": "SPX",
     },
 )
+
+# Chains probed (in order) when /v9add gets a bare EVM address with no chain
+# hint -- the most liquid pool across them wins. A non-0x address is tried as
+# Solana directly.
+_DETECTION_CHAINS = ("base", "ethereum")
+
+
+async def _ensure_watchlist_table() -> None:
+    """Creates the table and seeds V9_WATCHLIST once -- INSERT OR IGNORE, so
+    an operator /v9remove of a seeded token is never resurrected."""
+    import aiosqlite
+
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS v9_watchlist (
+                contract TEXT PRIMARY KEY,
+                chain TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                added_at TEXT NOT NULL,
+                removed_at TEXT
+            )
+            """
+        )
+        for token in V9_WATCHLIST:
+            await db.execute(
+                "INSERT OR IGNORE INTO v9_watchlist (contract, chain, symbol, active, added_at) "
+                "VALUES (?, ?, ?, 1, datetime('now'))",
+                (token["contract"].lower(), token["chain"], token["symbol"]),
+            )
+        await db.commit()
+
+
+async def get_watchlist() -> list[dict]:
+    """Active watchlist, the one the 5-min cycle iterates."""
+    import aiosqlite
+
+    await _ensure_watchlist_table()
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT contract, chain, symbol FROM v9_watchlist WHERE active = 1 ORDER BY added_at"
+        )
+        rows = await cur.fetchall()
+    return [{"contract": c, "chain": ch, "symbol": s} for c, ch, s in rows]
+
+
+async def add_watchlist_token(contract: str, chain: str | None = None) -> tuple[dict | None, str]:
+    """Resolves the token's most liquid pool (DexScreener) then activates it
+    in the watchlist. Returns ``(entry, "")`` or ``(None, reason)`` -- the
+    Telegram handler relays the reason verbatim, never a silent failure.
+    Chain auto-detected when not provided: EVM (0x...) probes
+    ``_DETECTION_CHAINS``, anything else is tried as Solana."""
+    import aiosqlite
+
+    contract = (contract or "").strip()
+    if not contract:
+        return None, "adresse vide"
+    chains = [chain] if chain else (
+        list(_DETECTION_CHAINS) if contract.lower().startswith("0x") else ["solana"]
+    )
+    best_pair, best_chain = None, None
+    for candidate_chain in chains:
+        try:
+            pair = await paper_trader._default_pair_lookup(contract, chain=candidate_chain)
+        except Exception as exc:  # noqa: BLE001 -- one chain's failure never hides another's pool
+            logger.info("scalping_v9: /v9add lookup %s on %s failed (%s)", contract[:10], candidate_chain, exc)
+            continue
+        if pair is not None and pair.price_usd and pair.price_usd > 0:
+            if best_pair is None or pair.liquidity_usd > best_pair.liquidity_usd:
+                best_pair, best_chain = pair, candidate_chain
+    if best_pair is None:
+        return None, (
+            f"aucun pool liquide trouvé pour {contract[:14]}… sur "
+            f"{'/'.join(chains)} (DexScreener)"
+        )
+    entry = {
+        "contract": contract.lower(),
+        "chain": best_chain,
+        "symbol": best_pair.base_symbol or contract[:8],
+    }
+    await _ensure_watchlist_table()
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO v9_watchlist (contract, chain, symbol, active, added_at) "
+            "VALUES (?, ?, ?, 1, datetime('now')) "
+            "ON CONFLICT(contract) DO UPDATE SET active = 1, chain = excluded.chain, "
+            "symbol = excluded.symbol, removed_at = NULL",
+            (entry["contract"], entry["chain"], entry["symbol"]),
+        )
+        await db.commit()
+    entry["liquidity_usd"] = best_pair.liquidity_usd
+    entry["price_usd"] = best_pair.price_usd
+    return entry, ""
+
+
+async def remove_watchlist_token(contract: str) -> bool:
+    """Deactivates (never deletes -- history stays queryable). Open positions
+    on the token keep being managed to natural close by the cycle's
+    management pass, which iterates POSITIONS, not the watchlist."""
+    import aiosqlite
+
+    await _ensure_watchlist_table()
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE v9_watchlist SET active = 0, removed_at = datetime('now') "
+            "WHERE contract = ? AND active = 1",
+            ((contract or "").strip().lower(),),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 # Operator-charted indicator settings (TradingView screenshots, 06/08):
 # RSI Length 18 (raw value -- the SMA smoothing line is unchecked on the
@@ -196,7 +310,7 @@ async def run_v9_cycle(*, notifier=None) -> dict:
     from aria_core.skills import indicators
     from aria_core.skills.entry_signals import rsi_series
 
-    for token in V9_WATCHLIST:
+    for token in await get_watchlist():
         contract, chain, label = token["contract"], token["chain"], token["symbol"]
         actions["checked"] += 1
         try:
