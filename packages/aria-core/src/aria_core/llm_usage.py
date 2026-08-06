@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +47,19 @@ def _price_per_million_usd(provider: str, model: str, *, at: datetime | None = N
         now = at or datetime.now(timezone.utc)
         if now >= _SONNET_PRICE_STEP_UP_AT:
             return _SONNET_STANDARD_PRICE_PER_MILLION
+        days_left = (_SONNET_PRICE_STEP_UP_AT - now).days
+        if days_left <= 3:
+            # Devil's Advocate report dfb1ce3d: a hardcoded step-up date is
+            # fine short-term, but must never drift silently -- a loud
+            # signal in the days right before it fires beats discovering
+            # weeks later that every cost figure has been quietly wrong.
+            logger.warning(
+                "Sonnet 5 pricing steps up to $%.0f/$%.0f per million tokens "
+                "in %d day(s) (%s) -- verify _SONNET_STANDARD_PRICE_PER_MILLION "
+                "is still correct before/at that date.",
+                _SONNET_STANDARD_PRICE_PER_MILLION[0], _SONNET_STANDARD_PRICE_PER_MILLION[1],
+                days_left, _SONNET_PRICE_STEP_UP_AT.date().isoformat(),
+            )
         return _SONNET_INTRO_PRICE_PER_MILLION
     return None
 
@@ -444,13 +458,16 @@ def summarize_usage(*, month: str | None = None) -> dict[str, Any]:
     }
 
 
-def monthly_cost_usd(*, month: str | None = None) -> float:
-    """Sum of known-price cost across this month's rows (Haiku/Sonnet today
-    -- any provider _price_per_million_usd() doesn't know stays excluded,
-    never guessed). Recomputes from tokens for rows logged before this cost
-    tracking existed (no "cost_usd" field persisted yet) so the month total
-    isn't silently short right after this feature ships."""
-    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+# Devil's Advocate report dfb1ce3d: a full JSONL re-scan on every paid
+# Telegram reply is synchronous I/O inside an async handler, growing daily
+# as the month's file grows -- a short TTL cache turns "one scan per
+# message" into "at most one scan per _MONTHLY_COST_CACHE_TTL_SECONDS",
+# which is all a cost DISPLAY (never a financial decision) needs.
+_MONTHLY_COST_CACHE_TTL_SECONDS = 60.0
+_monthly_cost_cache: dict[str, tuple[float, float]] = {}  # month -> (value, computed_at_monotonic)
+
+
+def _compute_monthly_cost_usd(month: str) -> float:
     total = 0.0
     for row in _iter_rows(month):
         if not row.get("ok"):
@@ -467,3 +484,31 @@ def monthly_cost_usd(*, month: str | None = None) -> float:
         if cost is not None:
             total += cost
     return total
+
+
+def clear_monthly_cost_cache() -> None:
+    """Test-only escape hatch -- the cache is a module-level dict, shared
+    across every test in the same process; without a way to clear it, two
+    tests using the same month literal (e.g. "2026-07") would leak a stale
+    value from one into the other whenever they run within the TTL window."""
+    _monthly_cost_cache.clear()
+
+
+def monthly_cost_usd(*, month: str | None = None) -> float:
+    """Sum of known-price cost across this month's rows (Haiku/Sonnet today
+    -- any provider _price_per_million_usd() doesn't know stays excluded,
+    never guessed). Recomputes from tokens for rows logged before this cost
+    tracking existed (no "cost_usd" field persisted yet) so the month total
+    isn't silently short right after this feature ships.
+
+    Cached for _MONTHLY_COST_CACHE_TTL_SECONDS -- see the module comment
+    above. A caller that genuinely needs the exact live value (tests,
+    reconciliation) should call _compute_monthly_cost_usd directly."""
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    now = time.monotonic()
+    cached = _monthly_cost_cache.get(month)
+    if cached is not None and (now - cached[1]) < _MONTHLY_COST_CACHE_TTL_SECONDS:
+        return cached[0]
+    value = _compute_monthly_cost_usd(month)
+    _monthly_cost_cache[month] = (value, now)
+    return value

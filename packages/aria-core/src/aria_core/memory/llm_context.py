@@ -1,6 +1,7 @@
 """Unified LLM context — Phase D (journal + cognitive + vector opt-in)."""
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -10,6 +11,8 @@ from aria_core.memory._legacy_journal import (
     get_launchpad_doctrine_text,
     get_persona_text,
 )
+
+logger = logging.getLogger(__name__)
 
 _VECTOR_RECALL_LIMIT = 5
 _VECTOR_RECALL_BUDGET = 1200
@@ -169,7 +172,11 @@ async def build_llm_context(
 
             parts.append(f"\n{await paper_trader.pocket_state_text()}")
         except Exception:
-            pass
+            # Devil's Advocate report dfb1ce3d: a silent except here is the
+            # exact same failure mode this block was built to fix (the
+            # brain going blind to the pocket lineup with zero signal) --
+            # never swallow it quietly again.
+            logger.exception("pocket_state_text() failed -- LLM context is missing the live pocket lineup this turn")
         from aria_core.memory.reflection import get_reflections_text
 
         reflection_block = get_reflections_text()

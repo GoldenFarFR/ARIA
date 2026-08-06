@@ -14,6 +14,13 @@ from aria_core.gateway import telegram_bot
 from aria_core.testing import configure_test_runtime
 
 
+@pytest.fixture(autouse=True)
+def _clear_monthly_cost_cache():
+    llm_usage.clear_monthly_cost_cache()
+    yield
+    llm_usage.clear_monthly_cost_cache()
+
+
 class FakeMessage:
     def __init__(self):
         self.replies: list[str] = []

@@ -7,6 +7,7 @@ from aria_core.cursor_usage import format_cursor_usage_dashboard, update_cursor_
 from aria_core.llm_usage import (
     begin_chat_usage_tracking,
     clear_chat_usage_tracking,
+    clear_monthly_cost_cache,
     cost_usd_for,
     format_grok_build_dashboard,
     format_paid_usage_dashboard,
@@ -23,6 +24,16 @@ from aria_core.llm_usage import (
     summarize_usage,
 )
 from aria_core.testing import configure_test_runtime
+
+
+@pytest.fixture(autouse=True)
+def _clear_monthly_cost_cache():
+    """The cache is a module-level dict shared across the whole test
+    process -- without this, two tests reusing the same month literal
+    (several do, "2026-07") would leak a stale value between them."""
+    clear_monthly_cost_cache()
+    yield
+    clear_monthly_cost_cache()
 
 
 def test_parse_usage_from_response_openai_shape():
