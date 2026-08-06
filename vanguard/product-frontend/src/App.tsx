@@ -15,24 +15,27 @@ const spinner = (
 )
 
 function App() {
-  // 06/08 -- operator-only trading dashboard: deliberately OUTSIDE MemberGate
-  // (Privy member auth grants zero operator rights). Its own screen gates on
-  // the operator TOTP login (see OperatorDashboard/operator-auth.ts) before
-  // showing anything.
-  if (window.location.pathname.startsWith('/ops')) {
+  // 06/08 -- this whole product-frontend build is currently deployed ONLY as
+  // the private operator dashboard (ops.ariavanguardzhc.com) -- deliberately
+  // OUTSIDE MemberGate (Privy member auth grants zero operator rights). Its
+  // own screen gates on the operator TOTP login (see OperatorDashboard/
+  // operator-auth.ts) before showing anything. MarketApp (the generic
+  // DexScreener-style public browser) stays in the codebase, reachable via
+  // /market, for whenever it gets its own separate public deployment.
+  if (window.location.pathname.startsWith('/market')) {
     return (
-      <Suspense fallback={spinner}>
-        <OperatorDashboard />
-      </Suspense>
+      <MemberGate>
+        <Suspense fallback={spinner}>
+          <MarketApp />
+        </Suspense>
+      </MemberGate>
     )
   }
 
   return (
-    <MemberGate>
-      <Suspense fallback={spinner}>
-        <MarketApp />
-      </Suspense>
-    </MemberGate>
+    <Suspense fallback={spinner}>
+      <OperatorDashboard />
+    </Suspense>
   )
 }
 
