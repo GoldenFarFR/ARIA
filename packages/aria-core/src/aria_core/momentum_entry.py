@@ -1890,7 +1890,15 @@ async def _fetch_candles_impl(
     if gecko_candles is not None:
         return gecko_candles
 
-    if mode == "scalping":
+    # 06/08 -- scalping_v9 (operator's fixed-watchlist pocket, per-token
+    # timeframe 5/15/30/60min) now shares this cascade too, passing
+    # "scalping_{N}m" (the same mode string geckoterminal_client.get_ohlcv
+    # already accepted directly) instead of the plain "scalping" v8 always
+    # used -- the strict "==" below would have silently misrouted it into
+    # _standard_fallbacks (CoinMarketCap/DexScreener-synthesis/Dune, all
+    # confirmed day/hour-scale only, corrupting a scalping RSI/MFI read
+    # without any visible error). Matched by prefix instead.
+    if mode == "scalping" or mode.startswith("scalping_"):
         return await _scalping_fallbacks(pool_address, chain, contract=contract)
     return await _standard_fallbacks(pool_address, chain, contract=contract, pair=pair)
 

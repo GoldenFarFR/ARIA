@@ -407,7 +407,6 @@ async def run_v9_cycle(*, notifier=None) -> dict:
         return actions
 
     from aria_core import momentum_entry
-    from aria_core.services.geckoterminal import geckoterminal_client
     from aria_core.skills import indicators
     from aria_core.skills.entry_signals import rsi_series
 
@@ -431,20 +430,34 @@ async def run_v9_cycle(*, notifier=None) -> dict:
         )
 
         try:
-            ohlcv = await geckoterminal_client.get_ohlcv(
-                pair.pair_address, network=chain,
+            # 06/08 -- operator-confirmed fix: this used to call GeckoTerminal
+            # DIRECTLY, unlike v8 which goes through _fetch_candles's 6-stage
+            # cascade (GeckoTerminal -> Mobula -> DexPaprika -> ...). A real
+            # missed entry (VELVET, 06/08 17:15 UTC transition confirmed after
+            # the fact from raw candles) traced back to exactly this: a
+            # GeckoTerminal rate-limit (documented as recurring in this
+            # codebase, especially right after a redeploy) left v9 blind with
+            # no fallback for that cycle. Same mode string as before
+            # ("scalping_{N}m") -- momentum_entry now recognizes it by prefix
+            # (see its own comment) and routes to the scalping-only fallback
+            # tier (never the day/hour-scale standard one). Known limit:
+            # Mobula/DexPaprika only return fixed 15m/30m candles, not this
+            # token's exact configured timeframe -- accepted as strictly
+            # better than "no data at all", never day/hour-scale.
+            candles = await momentum_entry._fetch_candles(
+                pair.pair_address, chain, contract=contract, pair=pair,
                 mode=f"scalping_{token['timeframe_min']}m",
             )
         except Exception as exc:  # noqa: BLE001
             logger.info("scalping_v9[%s]: OHLCV failed (%s)", label, exc)
             continue
-        if not ohlcv.available or not ohlcv.candles:
+        if not candles:
             actions["holds"].append({"symbol": label, "reason": "ohlcv_unavailable"})
             continue
         # Last candle is the one still forming (standard real-time OHLCV
         # behavior) -- never compute the signal on an unclosed candle, same
         # centralized-trim doctrine as scalping_variants.
-        candles = ohlcv.candles[:-1]
+        candles = candles[:-1]
         if len(candles) < _MIN_CANDLES_FOR_SIGNAL:
             actions["holds"].append({"symbol": label, "reason": "insufficient_candles"})
             continue

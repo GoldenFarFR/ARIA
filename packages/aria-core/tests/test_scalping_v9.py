@@ -293,6 +293,59 @@ async def test_no_signal_no_buy(tmp_db, monkeypatch):
     assert any(h["reason"] == "no_signal" for h in actions["holds"])
 
 
+@pytest.mark.asyncio
+async def test_buy_via_mobula_fallback_when_geckoterminal_unavailable(tmp_db, monkeypatch):
+    """06/08 operator-confirmed fix: v9 used to call GeckoTerminal directly
+    with no fallback (real missed entry, VELVET) -- now goes through
+    momentum_entry._fetch_candles's cascade like v8. GeckoTerminal down
+    (available=False) must no longer mean "blind for this cycle" as long as
+    Mobula has real candles."""
+    from aria_core import momentum_entry
+    from aria_core.services import geckoterminal, mobula
+    from aria_core.skills import entry_signals
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair(price=2.0)
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+
+    async def dead_gecko(pool, *, network="base", mode="standard", **kw):
+        return _FakeOhlcv([])  # available=False -- GeckoTerminal down
+
+    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", dead_gecko)
+    monkeypatch.setattr(momentum_entry, "_provider_in_cooldown", lambda provider: False)
+    monkeypatch.setattr(momentum_entry, "_record_provider_outcome", lambda *a, **kw: None)
+    monkeypatch.setattr(mobula, "mobula_configured", lambda: True)
+
+    class _FakeMobulaResult:
+        def __init__(self, candles):
+            self.candles = candles
+            self.available = bool(candles)
+
+    async def fake_mobula_get_ohlcv(contract, *, blockchain="base", period="15m"):
+        assert period == "15m"  # scalping fallback tries 15m first
+        return _FakeMobulaResult(_flat_candles(60))
+
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_get_ohlcv)
+
+    rsi, mfi = _signal_series()
+    monkeypatch.setattr(entry_signals, "rsi_series", lambda closes, period=14: rsi)
+    monkeypatch.setattr(indicators, "mfi_series", lambda c, *, period=10: mfi)
+
+    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+        return True, "", ""
+
+    monkeypatch.setattr(momentum_entry, "_check_honeypot", fake_honeypot)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    assert not any(h["reason"] == "ohlcv_unavailable" for h in actions["holds"])
+
+
 # ── run_v9_cycle -- exit side (flat -5% trailing on SPOT) ────────────────────
 
 @pytest.mark.asyncio
