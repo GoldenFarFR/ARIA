@@ -1903,6 +1903,7 @@ async def open_position(
     align_macd: bool | None = None,
     align_pattern: bool | None = None,
     entry_market_cap_usd: float | None = None,
+    allow_multiple: bool = False,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
     open, position cap reached, risk circuit breaker armed, invalid price,
@@ -2004,7 +2005,12 @@ async def open_position(
     # 27/07 -- scoped to THIS pocket only: an already-open position in a
     # DIFFERENT wallet on the same contract must never block this one (that's
     # the whole point of 3 concurrent pockets).
-    if await has_open(contract, wallet=wallet):
+    # ``allow_multiple`` (06/08, scalping_v9): a fixed-watchlist pocket
+    # legitimately stacks several concurrent positions on the SAME contract
+    # (one per oversold episode, operator spec) -- every close path already
+    # resolves by position_id, so the only thing this skips is the
+    # single-position-per-contract refusal, never any risk guardrail below.
+    if not allow_multiple and await has_open(contract, wallet=wallet):
         return None
     # 27/07 -- count scoped to THIS pocket (``get_open_positions(wallet=wallet)``)
     # rather than the whole portfolio, so pocket X's own count never blocks
@@ -3513,6 +3519,25 @@ _RETIRED_SCALPING_WALLETS = frozenset({
     "scalping_v5", "scalping_v6", "scalping_v7",
 })
 
+# 06/08 -- scalping_v9 (full operator spec, see scalping_v9.py's module
+# docstring): fixed-watchlist RSI+MFI synchronized-oversold engine, its OWN
+# heartbeat cycle (5min) and its OWN position management (flat -5% trailing
+# stop as the only exit) -- deliberately NOT in _SCALPING_VARIANT_WALLETS
+# (never sourced by the momentum candidate stream) and EXCLUDED from the
+# generic position-management loop below (see the skip in
+# _run_paper_cycle_locked -- the generic ATR-trail/TP-ladder/stagnation
+# machinery must never second-guess its single-exit design).
+V9_WALLET = "scalping_v9"
+
+
+def scalping_v9_enabled() -> bool:
+    """Dedicated gate, OFF by default (fail-closed, same idiom as every
+    other gate in this file) -- required IN ADDITION to
+    ARIA_PAPER_TRADING_ENABLED (the heartbeat wires both)."""
+    return os.environ.get("ARIA_SCALPING_V9_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
 
 def is_scalping_pocket(wallet: str) -> bool:
     """08/02 -- real bug found live (adversarial cross-review workflow,
@@ -3534,7 +3559,11 @@ def is_scalping_pocket(wallet: str) -> bool:
     BOTH the legacy single "scalping" wallet (gate off) AND any of the 6
     variant wallets (gate on), so no caller needs to know which regime is
     currently active."""
-    return wallet in _RETIRED_SCALPING_WALLETS or wallet in _SCALPING_VARIANT_WALLETS
+    return (
+        wallet in _RETIRED_SCALPING_WALLETS
+        or wallet in _SCALPING_VARIANT_WALLETS
+        or wallet == V9_WALLET
+    )
 
 
 def uses_fine_rsi_confirmation(wallet: str) -> bool:
@@ -3571,6 +3600,11 @@ def all_pocket_wallets() -> tuple[str, ...]:
         base = (*_SCALPING_VARIANT_WALLETS, "swing", "vc")
     else:
         base = ("swing", "vc")
+    # 06/08 -- scalping_v9 rides its own gate (not the variants gate): being
+    # listed here is what plugs it into the macro circuit breaker, reporting,
+    # /riskresume AND the weekly reset loop (heartbeat iterates this list).
+    if scalping_v9_enabled():
+        base = (V9_WALLET, *base)
     if fixed_watchlist_pocket_enabled():
         base = (*base, "megacap")
     return base
@@ -5092,6 +5126,13 @@ async def _run_paper_cycle_locked(
         for p in await get_open_positions():
             if paper_pause.is_paused():
                 break
+            # 06/08 -- scalping_v9 positions are managed EXCLUSIVELY by their
+            # own 5-min cycle (scalping_v9.run_v9_cycle: flat -5% trailing
+            # stop is the pocket's ONLY exit, operator spec) -- the generic
+            # ATR-trail/TP-ladder/stagnation machinery below must never
+            # touch them.
+            if p.get("wallet") == V9_WALLET:
+                continue
             actions["checked"] += 1
             # 07/17 -- with the DEFAULT price_lookup, the DexScreener pair is
             # fetched ONCE and reused for both the price and the

@@ -297,6 +297,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="scalping_v9_cycle",
+        name="Paper trading $1M — scalping_v9 (RSI+MFI watchlist, 5min)",
+        description="06/08 operator spec: fixed watchlist (SPX first), buys when RSI(18)<21 AND MFI(10)<20 on the same closed 5-min candle, 3% of remaining cash per buy, flat -5% trailing stop as the only exit, simulated fees +-1.3%. Own cycle at the candle cadence (5min) -- the signal is rare and fast, the generic 15min cycle would miss it. Double gate: ARIA_PAPER_TRADING_ENABLED + ARIA_SCALPING_V9_ENABLED. No real money.",
+        interval_minutes=5,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="paper_weekly_review_cycle",
         name="Weekly paper-trading $1M review (reset)",
         description="Replaces the 30d/7d/14d protocol (operator decision, 07/18): every week (7d), force-closes any open position at the real price, +10% ($1.1M) verdict validated/not reached, archives the history (never destroyed), restarts fresh at $1M. Same gate as paper_trade_cycle -- no real money.",
@@ -675,6 +682,21 @@ def _sync_x_curiosity_enabled() -> None:
                     )
                     and not paper_pause.is_paused()
                 )
+            if task.id == "scalping_v9_cycle":
+                # 06/08 -- same double-gate pattern as daily_trade_floor_cycle:
+                # the master paper-trading gate AND the pocket's own
+                # ARIA_SCALPING_V9_ENABLED (re-checked inside run_v9_cycle,
+                # defence in depth).
+                from aria_core import paper_pause
+                from aria_core.paper_trader import scalping_v9_enabled
+
+                paper_on = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
+                )
+                task.enabled = paper_on and scalping_v9_enabled()
             if task.id == "daily_trade_floor_cycle":
                 # 07/23 -- diagnostic floor: needs BOTH the master paper-trading
                 # gate (it only makes sense while the $1M test runs) AND its own
@@ -1383,6 +1405,17 @@ class AriaHeartbeat:
                 append_memory(
                     "paper",
                     f"[paper_trade] fictif 1M$ (découverte horaire) : +{len(actions.get('opened', []))} achats",
+                )
+
+        elif task_id == "scalping_v9_cycle":
+            from aria_core import scalping_v9
+
+            actions = await scalping_v9.run_v9_cycle(notifier=self._notify_telegram_trading)
+            if actions.get("opened") or actions.get("closed"):
+                append_memory(
+                    "paper",
+                    f"[scalping_v9] fictif 1M$ : +{len(actions.get('opened', []))} achats / "
+                    f"-{len(actions.get('closed', []))} ventes (watchlist RSI+MFI 5min)",
                 )
 
         elif task_id == "paper_weekly_review_cycle":
