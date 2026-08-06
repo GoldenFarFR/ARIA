@@ -15,10 +15,10 @@ from aria_core.testing import configure_test_runtime
 
 
 @pytest.fixture(autouse=True)
-def _clear_monthly_cost_cache():
-    llm_usage.clear_monthly_cost_cache()
+def _clear_monthly_cost_state():
+    llm_usage.clear_monthly_cost_state()
     yield
-    llm_usage.clear_monthly_cost_cache()
+    llm_usage.clear_monthly_cost_state()
 
 
 class FakeMessage:

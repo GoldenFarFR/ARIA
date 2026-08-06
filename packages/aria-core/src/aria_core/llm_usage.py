@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -238,6 +237,8 @@ def record_llm_usage(
         path = _month_path(day)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if ok:
+            _record_month_cost(day[:7], cost)
         if ok and kind == "chat":
             _accumulate_chat_usage(
                 input_tokens=int(input_tokens),
@@ -469,13 +470,19 @@ def summarize_usage(*, month: str | None = None) -> dict[str, Any]:
     }
 
 
-# Devil's Advocate report dfb1ce3d: a full JSONL re-scan on every paid
-# Telegram reply is synchronous I/O inside an async handler, growing daily
-# as the month's file grows -- a short TTL cache turns "one scan per
-# message" into "at most one scan per _MONTHLY_COST_CACHE_TTL_SECONDS",
-# which is all a cost DISPLAY (never a financial decision) needs.
-_MONTHLY_COST_CACHE_TTL_SECONDS = 60.0
-_monthly_cost_cache: dict[str, tuple[float, float]] = {}  # month -> (value, computed_at_monotonic)
+# Devil's Advocate reports dfb1ce3d then bae40fb9: a full JSONL re-scan on
+# every paid Telegram reply is synchronous I/O inside an async handler,
+# growing daily as the month's file grows -- a first fix (a 60s TTL cache)
+# only moved the wall, still rescanning the whole file every minute
+# regardless of how many rows actually changed, and never evicted past
+# months (a slow but real leak on a long-lived process). Replaced with an
+# incremental running total: seeded ONCE per month by a full scan (lazy, on
+# first touch -- covers a cold process start, when nothing has been
+# accumulated in memory yet), then updated in O(1) per row from
+# ``record_llm_usage`` itself. ``_compute_monthly_cost_usd`` stays as the
+# reconciliation tool a test (or a future periodic sanity check) can call
+# directly for the exact scanned value.
+_running_month_total: dict[str, float] = {}  # month -> running total, once seeded
 
 
 def _compute_monthly_cost_usd(month: str) -> float:
@@ -497,12 +504,25 @@ def _compute_monthly_cost_usd(month: str) -> float:
     return total
 
 
-def clear_monthly_cost_cache() -> None:
-    """Test-only escape hatch -- the cache is a module-level dict, shared
-    across every test in the same process; without a way to clear it, two
-    tests using the same month literal (e.g. "2026-07") would leak a stale
-    value from one into the other whenever they run within the TTL window."""
-    _monthly_cost_cache.clear()
+def _record_month_cost(month: str, cost: float | None) -> None:
+    """Called once per logged ``ok=True`` row (from ``record_llm_usage``,
+    right after the JSONL append). First touch of a month seeds the
+    accumulator with a full scan -- which already includes the row just
+    written to disk, so this never double-counts it; every touch after
+    that is a plain O(1) increment."""
+    if month not in _running_month_total:
+        _running_month_total[month] = _compute_monthly_cost_usd(month)
+        return
+    if cost is not None:
+        _running_month_total[month] += cost
+
+
+def clear_monthly_cost_state() -> None:
+    """Test-only escape hatch -- the accumulator is a module-level dict,
+    shared across every test in the same process; without a way to clear
+    it, two tests using the same month literal (e.g. "2026-07") would leak
+    a stale running total from one into the other."""
+    _running_month_total.clear()
 
 
 def monthly_cost_usd(*, month: str | None = None) -> float:
@@ -512,14 +532,10 @@ def monthly_cost_usd(*, month: str | None = None) -> float:
     tracking existed (no "cost_usd" field persisted yet) so the month total
     isn't silently short right after this feature ships.
 
-    Cached for _MONTHLY_COST_CACHE_TTL_SECONDS -- see the module comment
-    above. A caller that genuinely needs the exact live value (tests,
-    reconciliation) should call _compute_monthly_cost_usd directly."""
+    O(1) once the month's running total is seeded -- see the module comment
+    above. A caller that genuinely needs the exact freshly-scanned value
+    (reconciliation) should call _compute_monthly_cost_usd directly."""
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")
-    now = time.monotonic()
-    cached = _monthly_cost_cache.get(month)
-    if cached is not None and (now - cached[1]) < _MONTHLY_COST_CACHE_TTL_SECONDS:
-        return cached[0]
-    value = _compute_monthly_cost_usd(month)
-    _monthly_cost_cache[month] = (value, now)
-    return value
+    if month not in _running_month_total:
+        _running_month_total[month] = _compute_monthly_cost_usd(month)
+    return _running_month_total[month]
