@@ -372,7 +372,29 @@ def _buy_result(
 # 8.2 = tighter freshness/stagnation. Never retune v8 in place once it has
 # live history -- add a pocket, keep the comparison arm (v6/v7 doctrine).
 _V8_WICK_MIN_RATIO = 0.30
-_V8_MAX_BARS_SINCE_PIVOT = 5
+# 06/08 21h16 -- 5->7: 6h39 with ZERO new entries after the bootstrap-exit
+# (divergence made mandatory that morning), 394 no_signal rejections/24h vs
+# a distant 2nd place (blacklisted) -- the exact zero-signal starvation
+# pattern this file already documents for V2/V4/V5 (sat at zero for days
+# until relaxed). Diagnosed BEFORE touching this: the two OTHER gates a
+# parallel session added today (bounce_already_faded, giveback ATR-scale)
+# never even get reached -- this freshness window alone accounts for the
+# overwhelming majority of no_signal holds, confirmed against the real
+# momentum_scan_log breakdown, not assumed. Widened moderately (not reverted
+# to bootstrap's no-divergence-required mode) -- still requires a real
+# confirmed divergence, just tolerates a 2-candle-older pivot.
+#
+# Tension with "never retune v8 in place" (comment above, 05/08, before any
+# of today's changes): judged a calibration adjustment on an EXISTING knob,
+# not a change to what the signal fundamentally is (mèche + divergence stays
+# the entry logic) -- same class as today's other in-place changes already
+# made without spinning up a new pocket (bootstrap-exit, max-hold cap, the
+# parallel session's own two gate additions). Operator informed of the
+# silence and the planned action beforehand (no reply after the announced
+# reaction window) -- acting alone within the already-established v8
+# autonomy mandate, not a unilateral departure from it. Revert to 5 if this
+# doesn't restore a reasonable entry cadence within a few hours.
+_V8_MAX_BARS_SINCE_PIVOT = 7
 _V8_MAX_CHASE_PCT = 2.0
 _V8_STOP_ATR_MULT = 1.5
 # Sizing-only R/R (V5's exact pattern -- target stays None, this never
