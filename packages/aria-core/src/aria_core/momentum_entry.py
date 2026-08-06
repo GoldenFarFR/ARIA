@@ -2283,9 +2283,16 @@ def _cache_candles(
     # as scalping_v9.run_v9_cycle does). Snapshotting the provenance INTO
     # the cache entry and re-arming the ContextVar on a hit (below) closes
     # this structurally instead of documenting it as a known gap.
+    # Devil's Advocate review of de5f91ec: Candle is a frozen dataclass (no
+    # per-field mutation possible), but the LIST itself is a shared mutable
+    # container -- a defensive copy here (and on every read below) means no
+    # caller can ever corrupt this cache entry for its TTL window by
+    # sorting/appending/popping its own reference in place, even though no
+    # current caller does (verified: no in-place list mutation on a
+    # _fetch_candles result anywhere in this codebase today).
     now = time.monotonic()
     key = (chain, pool_address.lower(), mode, skip_daily)
-    _candles_cache[key] = (now, candles, get_last_candle_provenance())
+    _candles_cache[key] = (now, list(candles), get_last_candle_provenance())
     expired = [k for k, (ts, _c, _p) in _candles_cache.items() if (now - ts) >= _CANDLES_CACHE_TTL_SECONDS]
     for k in expired:
         del _candles_cache[k]
@@ -2301,7 +2308,7 @@ def _get_cached_candles(
     if (time.monotonic() - ts) >= _CANDLES_CACHE_TTL_SECONDS:
         return None
     _candle_provenance_ctx.set(provenance)
-    return candles
+    return list(candles)
 
 
 async def _fetch_candles(
