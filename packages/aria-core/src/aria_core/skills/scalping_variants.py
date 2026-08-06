@@ -483,6 +483,20 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         return hold
     if pair is None:
         return None
+    # 06/08 -- combo-signal shadow log (operator guidance: RSI alone already
+    # tried and doesn't work, draft indicator COMBINATIONS and observe them
+    # on real forward candles before forcing any single one). Logged on every
+    # real v8 evaluation that reaches valid candles, regardless of whether
+    # v8's OWN gates below end up holding -- maximizes forward data, zero
+    # extra network calls (same candles v8 itself just fetched).
+    try:
+        from aria_core import combo_signal_shadow
+
+        await combo_signal_shadow.record_evaluation(
+            contract, chain, wallet="scalping_v8", candles=candles, symbol=pair.base_symbol,
+        )
+    except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real evaluation
+        logger.info("scalping_variants: combo_signal_shadow.record_evaluation failed (%s)", exc)
     detail = entry_signals._bullish_rsi_divergence_detail(
         candles, period=entry_signals.SCALPING_RSI_PERIOD
     )
