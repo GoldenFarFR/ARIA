@@ -167,3 +167,35 @@ ici pour mémoire, pas une raison d'avancer la date.
   session future doit resituer où en est ARIA dans la démarche Base/Coinbase —
   vérifier son état réel (Phase 1 toujours en cours ou dépassée ?) plutôt que
   de le supposer figé à la date de cet extrait.
+
+## 06/08 — Pivot Pollak confirmé et creusé + Flashblocks + 1inch MCP (promotion veille Research, tout vérifié)
+
+**Pivot stratégique Base approfondi** : Jesse Pollak reconnaît désormais publiquement que le
+pari "social on-chain" (creator coins) a échoué et a fait prendre du retard à Base sur
+trading/paiements/tokenisation. Le nouvel appel à builders cite nommément tokenisation,
+stablecoins, crédit, **marchés de prédiction**, marchés institutionnels et **commerce
+agentique** comme piliers du recentrage 2026. Deux capacités déjà construites par ARIA
+(Polymarket paper trading #108, x402 seller dormant) tombent exactement dans deux des piliers
+nommés — signal à garder pour un futur dossier de financement Base
+(`docs/base-funding-dossier.md`) : ARIA est positionnée avant l'afflux de builders plutôt
+qu'en rattrapage, si le jalon de déverrouillage (test 1M$ concluant) est atteint un jour.
+
+**Base Flashblocks — désormais ACTIF en production mainnet, vérifié** : pré-confirmations à
+200ms (bloc de ~2s découpé en ~10 sous-blocs). Effet double sur le risque d'exécution : (a)
+l'ordonnancement à l'intérieur d'un flashblock est verrouillé (protection front-running
+structurelle sur cette fenêtre), (b) des bots peuvent désormais sniper un token "dans le même
+bloc" en observant le flux de flashblocks dès la transaction de déploiement (Banana Gun
+revendique le premier copy-trade "block 0" confirmé sur une chaîne EVM). Complète la question
+RPC MEV-protégé déjà notée le 18/07 (pas encore tranchée) : une future entrée réelle
+bénéficierait probablement d'un RPC/listener Flashblocks-aware, et 200ms est désormais un
+chiffre concret à opposer à la latence détection→achat du pipeline si la vitesse d'exécution
+est un jour creusée.
+
+**1inch MCP (lancé 30/03/2026), vérifié** : accès agent-natif à la suite d'API 1inch
+(swap/balance/portfolio/gas/transaction) avec limites de slippage et d'exécution définies
+CÔTÉ DÉVELOPPEUR, pas seulement à l'appel — répond directement à la question laissée ouverte
+le 18/07 ("le swap CDP actuel route-t-il vers un agrégateur best-execution comme 1inch, ou
+une seule pool ?") avec une option déjà en production. Exactement la structure de garde-fou
+déjà actée pour ARIA (slippage jamais >10%, toujours explicite). À évaluer comme couche
+d'exécution pour le pilote agent-wallet réel seulement si une meilleure exécution/agrégation
+s'avère nécessaire au-delà du pilote 10-15$ — rien à construire maintenant.

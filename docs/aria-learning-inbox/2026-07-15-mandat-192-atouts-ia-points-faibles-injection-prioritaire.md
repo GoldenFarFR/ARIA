@@ -336,3 +336,68 @@ pour le Volet B** (overfitting/fragilité de régime, pas encore traité dans ce
 situer objectivement le protocole hebdomadaire d'ARIA face à d'autres agents — piste de
 benchmark externe à consulter, pas un chantier à construire (ARIA n'a pas besoin de s'inscrire
 à ces arènes, juste de s'en servir comme repère de lecture).
+
+## Addendum 06/08 (promotion veille Research — session commandement)
+
+**Précision chiffrée sur la saison 5 TradeRank Arena déjà citée le 19/07 (vérifié WebSearch)** :
+le détail réel montre DeepSeek V4 Pro (+11,85%) et Mistral Medium 3.5 (+9,55%) devant Claude
+Opus (6e), GPT-5.5 (8e) et Grok (7e) — Claude n'est PAS le meilleur performer trading de cette
+saison, contrairement à une lecture rapide du "2/10 modèles positifs" déjà noté. Saison 6
+(lancée 20/06, 11 modèles) inclut Claude Fable 5 depuis le 02/07 (remplace Opus en cours de
+saison). Nuance à garder en tête avant de renforcer davantage la dépendance à Claude pour la
+confirmation LLM de trades ([[project_llm_provider_target_claude]], mémoire de session) — un
+classement où Claude n'est pas le meilleur performer mérite un suivi multi-saisons, pas une
+conclusion sur un seul point de données.
+
+**Deux nouvelles recherches Volet B, vérifiées réelles (WebSearch)** :
+1. **ClawSafety (arxiv 2604.01438, avril 2026)** — 120 scénarios adverses, 5 domaines à
+   privilèges élevés, 2520 essais sur 5 LLM frontière : taux de succès d'attaque 40-75%, et
+   les **instructions de Skill se révèlent le vecteur le plus dangereux des trois testés**
+   (devant email et contenu web) — un modèle jugé "sûr" en isolation devient dangereux une
+   fois branché à un scaffolding agentique réel. Angle jamais couvert par ce mandat jusqu'ici
+   (qui a porté sur les métadonnées de token, le web scrapé, la mémoire vectorielle) : le
+   **contenu des Skills packagées elles-mêmes** (utilisées par ARIA/Claude Code) comme surface
+   d'injection prioritaire, distincte des entrées de données déjà auditées.
+2. **Parallax — "Cognitive-Executive Separation" (arxiv 2604.12986, Joel Fokou, avril 2026)** —
+   au lieu d'une validation de sortie structurée en aval (déjà notée 18/07, cf. playbook
+   OpenAI), Parallax rend le composant qui RAISONNE structurellement incapable d'EXÉCUTER une
+   action, et inversement : 98,9% des attaques bloquées sur 280 cas adverses, 100% en
+   configuration maximale (implémentation open-source `OpenParallax`, Go). Question ouverte,
+   non vérifiée cette passe : les surfaces LLM à fort enjeu d'ARIA (`_llm_confirm`/
+   `_llm_security_gate`, pilote agent-wallet) sont-elles aujourd'hui séparées
+   structurellement du composant qui signe/exécute, ou seulement séparées par une validation
+   en aval (schéma JSON) ? À creuser dans une prochaine passe de ce mandat — pas vérifié ici.
+
+**CSA "Comment and Control" — vulnérabilité réelle et sévère (CVSS 9.4 Critical, HackerOne),
+mais structurellement inapplicable à ARIA aujourd'hui (vérifié)** : la faille touche des
+GitHub Actions qui déclenchent un agent IA automatiquement sur `pull_request`/`issues`/
+`issue_comment` (Claude Code Security Review, Gemini CLI Action, GitHub Copilot Agent) — un
+titre de PR ou un commentaire piégé peut faire exécuter des commandes arbitraires et exfiltrer
+des credentials via les logs Actions. **Vérifié dans `.github/workflows/` d'ARIA** : aucun
+workflow n'utilise `claude-code-action` ni n'exécute d'agent IA sur du contenu PR/issue —
+zéro surface d'attaque actuelle. Reste pertinent en risque FUTUR, déjà noté par le journal de
+veille lui-même : si le canal directive ARIA→Claude Code (`/canal`, #82, gate OFF) est un
+jour activé, ou si une future automatisation lit du contenu GitHub pour le relayer à un agent,
+vérifier la version patchée (`claude-code-action` v1.0.94+, `@anthropic-ai/claude-code`
+v1.0.93+) AVANT de construire ce type d'automatisation — pas une action à faire maintenant,
+rien à corriger dans l'existant.
+
+**Référence d'architecture pour durcir la confirmation LLM (Volet A), vérifiée réelle** :
+recherche BlackRock+Columbia (avril 2026, publiée) propose un cadre "trois couches" Bull
+agent + Bear agent + superviseur de risque qui débattent avant décision, surclassant
+systématiquement un LLM seul sur des décisions de trading — distinct du "devil's advocate"
+d'ARIA (porte sur le code après un push, jamais sur une décision de trade individuelle).
+**TradingAgents** (`github.com/TauricResearch/TradingAgents`, open-source, LangGraph,
+multi-provider dont Claude, v0.2.0 sortie février 2026) concrétise ce même patron en
+implémentation réelle et mature, déjà en production chez des tiers. Piste d'architecture à
+évaluer — jamais implémentée ici, hors de portée d'un correctif ponctuel — pour durcir
+`_llm_confirm`/`_llm_security_gate` sur les entrées ambiguës (R/R limite), en priorité sur
+les pockets scalping v8/8.x (mandat autonome de Claude Code déjà en place, 05/08) puisqu'un
+futur module de backtest y trouverait aussi un patron réutilisable (comble le même gap déjà
+documenté le 18/07 : Freqtrade/NautilusTrader).
+
+**Synthèse de cet addendum** : deux vrais nouveaux angles Volet B à creuser en priorité dans
+la prochaine passe (Skills comme vecteur d'injection, séparation structurelle
+raisonnement/exécution) ; un risque sévère mais aujourd'hui hors surface d'attaque (CSA) ; une
+piste d'architecture Volet A banquée pour v8/8.x, non urgente. Rien codé dans cet addendum
+(pure veille), conforme aux frontières du mandat.
