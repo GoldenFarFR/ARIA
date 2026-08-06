@@ -101,6 +101,30 @@ def _scalping_stagnation_params_for_wallet(wallet: str | None) -> tuple[float, f
         wallet or "", (SCALPING_STAGNATION_TIMEOUT_HOURS, SCALPING_STAGNATION_MIN_MOVE_PCT)
     )
 
+# 06/08 -- absolute hold-duration cap (scalping_v8, operator observation: a
+# scalping position is a swing badly configured if it drifts for hours).
+# DISTINCT from the stagnation timeout above: that one only fires if the
+# position never moved (peak_gain_pct < min_move_pct) -- a position with a
+# small early peak that then drifts back down without ever tripping the
+# trail OR the stagnation check can otherwise stay open indefinitely (real
+# cases observed 06/08: LMTS 3h+, SOL 5h+). This cap fires on hours_open
+# alone, regardless of movement -- a hard deadline, not a "did nothing"
+# check. 2h chosen deliberately ABOVE v8's own 1.5h stagnation timeout (so
+# stagnant positions still exit via that more specific, better-explained
+# reason first) while staying well under the 3-5h+ drift observed -- not yet
+# validated by forward data, a principled bound for the "scalping means
+# short" doctrine, to revisit with real duration-vs-outcome data once enough
+# trades exist under it. v8-only seam, v1..v7 unchanged (absent = no cap).
+_SCALPING_MAX_HOLD_HOURS_BY_WALLET: dict[str, float] = {
+    "scalping_v8": 2.0,
+}
+
+
+def _scalping_max_hold_hours_for_wallet(wallet: str | None) -> float | None:
+    """Absolute hold-duration cap in hours for this pocket, or None if
+    uncapped (v1..v7 default -- unchanged behavior)."""
+    return _SCALPING_MAX_HOLD_HOURS_BY_WALLET.get(wallet or "")
+
 # 07/18 -- explicit operator decision: replaces the 30d/7d/14d protocol. ARIA restarts at
 # $1M EVERY week, target +10% ($1.1M) VALIDATED every week -- a repeated TRAINING loop
 # (never a one-time exit gate to cross once). The reset happens whether the week was
@@ -5656,6 +5680,37 @@ async def _run_paper_cycle_locked(
                     )
                     closed = await close_position(
                         p["contract"], price, reason="timeout stagnation (scalping)",
+                        notes=exit_notes, position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                # 06/08 -- absolute hold-duration cap (see
+                # _SCALPING_MAX_HOLD_HOURS_BY_WALLET's own comment for the
+                # full reasoning). Reached only if the stagnation check above
+                # did NOT already close the position this round -- a position
+                # with a small early peak (exempt from stagnation) that then
+                # drifted for hours without tripping the trail either is
+                # exactly the case this closes.
+                max_hold_hours = _scalping_max_hold_hours_for_wallet(p.get("wallet"))
+                if (
+                    max_hold_hours is not None
+                    and hours_open is not None
+                    and hours_open >= max_hold_hours
+                ):
+                    exit_notes = (
+                        f"Duree maximale scalping atteinte ({max_hold_hours:.1f}h) -- "
+                        f"cloture forcee peu importe le mouvement ({exit_gain_pct:+.1f}% net vs "
+                        f"entree, plus haut {peak_gain_pct:+.1f}%), {_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="duree max scalping",
                         notes=exit_notes, position_id=p["id"],
                     )
                     if closed:

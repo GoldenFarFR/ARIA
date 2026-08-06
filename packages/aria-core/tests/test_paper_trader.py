@@ -8082,6 +8082,51 @@ def test_scalping_stagnation_override_v8_shorter_timeout():
     assert pt._scalping_stagnation_params_for_wallet(None) == generic
 
 
+def test_scalping_max_hold_hours_v8_only():
+    """06/08 -- v8 has an absolute 2h hold cap, every other wallet (and a
+    missing wallet) stays uncapped -- byte-for-byte unchanged."""
+    from aria_core import paper_trader as pt
+
+    assert pt._scalping_max_hold_hours_for_wallet("scalping_v8") == 2.0
+    assert pt._scalping_max_hold_hours_for_wallet("scalping_v6") is None
+    assert pt._scalping_max_hold_hours_for_wallet(None) is None
+
+
+@pytest.mark.asyncio
+async def test_scalping_v8_max_hold_duration_closes_a_drifting_position(tmp_db):
+    """06/08 -- real gap observed live (LMTS 3h+, SOL 5h+, operator: "un
+    scalping doit etre court sinon c'est du swing mal regle"): a v8 position
+    with a small CONFIRMED peak above the stagnation threshold (exempt from
+    that timeout) that then drifts back to entry without ever tripping the
+    trail must still close past the absolute hold cap (2h), regardless of
+    movement."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=90_000,
+        wallet="scalping_v8", mode="scalping",
+    )
+
+    prices = {"v": 1.10}
+
+    async def price_lookup(contract):
+        return prices["v"]
+
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    await _backdate_pending_since(D, pt.HIGH_WATER_CONFIRMATION_SECONDS + 5)
+    await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)  # confirme le ratchet
+    pos = await pt._get_open(D)
+    assert pos["high_water_price"] > pos["entry_price"] * 1.05
+
+    # Retombe a l'entree -- exempte du stagnation timeout (pic confirme
+    # au-dessus du seuil) ET pas de drawdown suffisant pour le trail suiveur.
+    prices["v"] = 1.0
+    await _backdate_opened_at(D, 2.5)  # au-dela du plafond absolu v8 (2h)
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "duree max scalping"
+    assert not await pt.has_open(D)
+
+
 # ── sourcing pause (08/05, operator focus decision: v6 + swing + v8 only) ───
 
 def test_sourcing_paused_default_state():
