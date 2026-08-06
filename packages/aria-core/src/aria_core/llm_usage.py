@@ -33,6 +33,15 @@ _SONNET_INTRO_PRICE_PER_MILLION = (2.0, 10.0)
 _SONNET_STANDARD_PRICE_PER_MILLION = (3.0, 15.0)
 _SONNET_PRICE_STEP_UP_AT = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
+# Devil's Advocate report bae40fb9: _price_per_million_usd runs on EVERY
+# cost_usd_for call (i.e. every paid LLM call, Telegram cost line included)
+# -- an unconditional logger.warning() in the 3-day step-up window would
+# have produced one near-identical line per call, drowning the exact signal
+# it exists to surface. Logged once per calendar day instead (a real
+# process-lifetime flag would miss a restart mid-window; a set keyed by ISO
+# date self-resets daily and needs no cleanup -- 3 entries max, ever).
+_step_up_warning_logged_dates: set[str] = set()
+
 
 def _price_per_million_usd(provider: str, model: str, *, at: datetime | None = None) -> tuple[float, float] | None:
     """(input, output) USD/million tokens for a KNOWN model, else None --
@@ -48,11 +57,13 @@ def _price_per_million_usd(provider: str, model: str, *, at: datetime | None = N
         if now >= _SONNET_PRICE_STEP_UP_AT:
             return _SONNET_STANDARD_PRICE_PER_MILLION
         days_left = (_SONNET_PRICE_STEP_UP_AT - now).days
-        if days_left <= 3:
+        today_key = now.date().isoformat()
+        if days_left <= 3 and today_key not in _step_up_warning_logged_dates:
             # Devil's Advocate report dfb1ce3d: a hardcoded step-up date is
             # fine short-term, but must never drift silently -- a loud
             # signal in the days right before it fires beats discovering
             # weeks later that every cost figure has been quietly wrong.
+            _step_up_warning_logged_dates.add(today_key)
             logger.warning(
                 "Sonnet 5 pricing steps up to $%.0f/$%.0f per million tokens "
                 "in %d day(s) (%s) -- verify _SONNET_STANDARD_PRICE_PER_MILLION "

@@ -410,6 +410,27 @@ _V8_SIZING_RR_WICK_ONLY = 1.5
 # conclusion. _V8_SIZING_RR_WICK_ONLY stays defined (existing/legacy
 # positions still reference it) but no new entry can reach it once this gate
 # is unconditional.
+# 06/08 -- live diagnostic (Claude autonomous mandate, operator directive:
+# iterate until winrate >=50%/PnL >=0): first 34 real closed trades showed
+# 0% winrate AND 32/34 NEVER traded a single tick above their own entry
+# price before closing (avg loss -2.57%, every exit either time-based,
+# trailing-stop, or invalidation -- never a target, since v8 has none by
+# design). This is not an exit-tuning problem (the 05/08 backtest's wick
+# discriminator was measured candle-by-candle, not against live execution
+# latency) -- it's an ENTRY problem: ``entry`` is a LIVE price fetched at
+# evaluation time, up to one candle period after ``candles[-1]`` closed, and
+# the existing anti-chase guard only bounds entry from ABOVE (max +2% over
+# signal_close) -- nothing stops a buy once the bounce that produced the
+# wick has already faded and price has resumed falling BELOW where the
+# "confirmed" reversal candle closed. ``_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT``
+# closes that gap: refuse the entry if live price has already given back
+# more than this fraction below the signal candle's own close, i.e. if the
+# rebound is already dead by the time we'd act on it. Principled, not yet
+# forward-validated (0 trades under this gate so far) -- same class of
+# change as the 06/08 bootstrap-mode flip below, revisit once trade data
+# accumulates under it.
+_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT = 0.5
+
 _V8_BOOTSTRAP_MODE = False
 # Bootstrap trough freshness: the lowest low of the recent window must sit
 # within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
@@ -474,6 +495,12 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
             chain, pair.base_symbol, entry,
             f"prix déjà parti (+{(entry / signal_close - 1) * 100:.1f}% au-dessus de la "
             f"bougie de signal, max {_V8_MAX_CHASE_PCT:.0f}%)", "price_ran_away",
+        )
+    if signal_close > 0 and entry < signal_close * (1 - _V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT / 100.0):
+        return _hold(
+            chain, pair.base_symbol, entry,
+            f"rebond de la bougie de signal déjà effacé (-{(1 - entry / signal_close) * 100:.1f}% "
+            f"sous sa clôture, max {_V8_MAX_GIVEBACK_BELOW_SIGNAL_CLOSE_PCT:.1f}%)", "bounce_already_faded",
         )
     atr = _atr_value(candles)
     if not atr or atr <= 0:

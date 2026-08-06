@@ -388,6 +388,30 @@ async def test_v8_rejects_price_already_ran_away(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v8_rejects_bounce_already_faded_below_signal_close(monkeypatch):
+    """06/08 live diagnostic fix: 32/34 real v8 trades never traded a single
+    tick above entry -- entry (live price) can lag the signal candle's close
+    by up to a candle period, buying into a bounce that already gave up.
+    Live price 1% below the signal candle's close (> the 0.5% tolerance)
+    must reject, symmetric with the anti-chase guard above."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.99), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "bounce_already_faded"
+
+
+@pytest.mark.asyncio
+async def test_v8_allows_small_giveback_within_tolerance(monkeypatch):
+    """Live price 0.2% below the signal candle's close stays within the 0.5%
+    tolerance -- normal execution noise, not a faded bounce."""
+    _patch_gates_and_candles(monkeypatch, pair=_pair(price=0.998), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=True, bars_since=1)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "BUY"
+
+
+@pytest.mark.asyncio
 async def test_v8_exempt_from_volume_hard_gate(monkeypatch):
     """08/05 (first autonomous live-data decision) -- v8 opts out of the
     RVOL>=3x hard gate (empirically non-predictive, dominant starvation cause

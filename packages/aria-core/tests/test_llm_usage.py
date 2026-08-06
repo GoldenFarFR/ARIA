@@ -180,6 +180,26 @@ def test_sonnet_cost_standard_price_after_step_up():
     assert cost == 18.0  # $3 in + $15 out, standard price
 
 
+def test_sonnet_step_up_warning_logged_once_per_day_not_per_call(caplog):
+    """Devil's Advocate report bae40fb9: cost_usd_for runs on EVERY paid LLM
+    call -- an unconditional warning in the 3-day step-up window would spam
+    one near-identical line per call. Same ``at`` (same day) across many
+    calls must log exactly once."""
+    from aria_core import llm_usage as llm_usage_module
+
+    llm_usage_module._step_up_warning_logged_dates.clear()
+    at = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)  # 2 days before step-up
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            cost_usd_for(
+                provider="anthropic", model="claude-sonnet-5",
+                input_tokens=1000, output_tokens=1000, at=at,
+            )
+    step_up_warnings = [r for r in caplog.records if "steps up" in r.message]
+    assert len(step_up_warnings) == 1
+    llm_usage_module._step_up_warning_logged_dates.clear()
+
+
 def test_unknown_model_cost_is_none_never_guessed():
     assert cost_usd_for(
         provider="grok", model="x-ai-grok-4-3", input_tokens=1000, output_tokens=1000,
