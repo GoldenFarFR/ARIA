@@ -1,39 +1,18 @@
-"""Scalping variant engines (V1-V5, 08/01) -- 5 independent mean-reversion
-strategies compared side by side on the SAME micro-cap sourcing/hard-gate
-pipeline already used by the RSI-divergence scalping mode. Operator-provided
-spec (%B Bollinger / VWAP Z-score / fast Stochastic %K, ATR-based risk
-management) -- cross-checked against ``indicators.py``'s own conventions
-before wiring, never taken at face value without verifying the formulas
-against the real code first.
+"""Scalping variant engine -- V8 only since 06/08 (explicit operator
+decision: "supprimer toutes les poches scalping sauf v8"). The V1-V5
+mean-reversion engines (08/01) and the v6/v7 legacy RSI-divergence arms
+(wired in paper_trader.build_scalping_pocket_entries) were retired that day
+-- their full trade history stays intact in the DB (paper_position_archive,
+momentum_scan_log...), only the sourcing code was removed. Design notes and
+the comparative-test history live in docs/HANDOFF_PIPELINE_MOMENTUM.md.
 
-Each variant shares:
-  - the SAME hard gates as every other momentum entry (blacklist/honeypot/
-    liquidity/wash-trading/B20 -- ``momentum_entry.evaluate_hard_gates``,
-    ``mode="scalping"``) -- never a weaker guardrail for a new variant.
-  - the SAME anti-dump doctrine (operator spec): never buy WHILE the
-    indicator is still IN its oversold zone (a falling knife) -- only on the
-    CONFIRMED EXIT from oversold (oversold on the second-to-last candle,
-    back above the threshold on the last one).
-  - the SAME micro-cap sourcing as today's scalping mode -- deliberately NOT
-    the mid/large-cap (50M-1B$) filter also proposed in the same spec
-    (operator's explicit scoping decision, 08/01): these 5 variants test
-    SIGNALS, not a different market-cap universe.
+The shared plumbing below (_gates_and_candles: hard gates + closed-candle
+truncation + volume-gate opt-out, _buy_result: uniform signal dict with
+entry_atr_pct/align_score/entry security snapshot) predates the retirement
+and is kept as the common base for v8 and any future 8.x variant pocket.
 
-Each variant differs on: entry signal, initial stop-loss, initial take-
-profit target. Deliberate simplification, stated honestly rather than
-silently: position MANAGEMENT after entry (trailing stop, TP-tier ladder,
-stagnation timeout) reuses paper_trader.py's existing generic engine as-is
-for all 5 variants -- V3's "exit on %K >= 85" and V5's "no fixed TP, exit on
-reversal" are therefore approximated via the initial target/invalidation
-feeding that generic ATR-adaptive trailing-stop/TP-ladder machinery, not a
-bespoke per-variant exit loop (a 5x reimplementation of exit management would
-be a disproportionate chantier for a first comparative test -- revisit if
-the comparison shows this approximation actually matters).
-
-Deterministic, no LLM call -- consistent with the spec's own intent (a fast,
-mechanical scalping engine, "ARIA must be first") and with how today's
-RSI-divergence scalping direct-buy path already works (mode == "scalping"
-skips the LLM confirmation entirely when R/R and alignment are strong)."""
+Deterministic, no LLM call -- a fast, mechanical scalping engine (the
+direct-buy path skips LLM confirmation entirely)."""
 from __future__ import annotations
 
 import logging
@@ -41,7 +20,6 @@ import time
 
 from aria_core import momentum_entry
 from aria_core.chasing_filter_shadow import (
-    RECENT_LOW_WINDOW_BOLLINGER_VWAP,
     RECENT_LOW_WINDOW_STOCHASTIC,
     recent_low_from_candles,
 )
@@ -102,14 +80,14 @@ def _hold(chain: str, symbol: str, price: float, reason: str, hold_code: str) ->
 async def _gates_and_candles(
     contract: str, chain: str, *, enforce_volume_gate: bool = True,
 ) -> tuple["momentum_entry.PairSnapshot | None", list[Candle], dict | None]:
-    """Shared plumbing for all 5 variants: hard gates (same as the RSI
+    """Shared plumbing for every variant pocket: hard gates (same as the RSI
     scalping mode, mode="scalping") then real 15-30min candles. Returns
     ``(None, [], hold_dict)`` on any hard rejection or missing data --
     caller returns that dict as-is, never guesses a signal without data.
 
-    08/01 -- cached (see _gates_cache's own comment): the 5 variants are
-    evaluated on the SAME candidate independently, this used to mean 5x the
-    network calls for identical data.
+    08/01 -- cached (see _gates_cache's own comment): concurrent variant
+    pockets used to evaluate the SAME candidate independently, multiplying
+    the network calls for identical data.
 
     ``enforce_volume_gate`` (08/05, scalping_v8 -- first live-data decision
     under Claude's autonomous mandate): v8 opts OUT of the RVOL>=3x hard
@@ -354,294 +332,6 @@ def _buy_result(
     }
 
 
-# ── V1 -- Pure Bollinger (%B) ────────────────────────────────────────────────
-# Entrée : %B <= 0.1 puis confirmation de sortie (%B repasse > 0.1). Stop = 1.5xATR.
-# TP = ratio fixe 1:2.
-
-# 04/08 -- relaxed from 0.0 to 0.1 (real data, operator pre-authorized:
-# "n'attends pas ma confirmation assoupli un peut et redeploi" -- V1 sat at
-# zero trades for the 3h20 since the first relaxation pass deployed, unlike
-# V3/V4 which both traded in that window). Live-measured on 15 currently-
-# scanned candidates (~262 fine-candle data points, fresh sample distinct
-# from the previous pass): 0.0 is crossed 5.7% of the time (15/262), vs. 9.2%
-# at 0.1 (24/262), a ~1.6x increase. Still stricter than V3's %K<=15 (16.8%
-# measured in the earlier pass).
-_V1_OVERSOLD_THRESHOLD = 0.1
-_V1_STOP_ATR_MULT = 1.5
-_V1_TP_RR_RATIO = 2.0
-
-
-async def evaluate_v1_bollinger(contract: str, chain: str) -> dict | None:
-    pair, candles, hold = await _gates_and_candles(contract, chain)
-    if hold is not None:
-        return hold
-    if pair is None:
-        return None
-    closes = [c.close for c in candles]
-    percent_b = indicators.bollinger_percent_b(closes)
-    if percent_b[-1] is None or percent_b[-2] is None:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "%B non calculable (warmup)", "indicator_unavailable")
-    was_oversold = percent_b[-2] <= _V1_OVERSOLD_THRESHOLD
-    confirmed_exit = percent_b[-1] > _V1_OVERSOLD_THRESHOLD
-    if not (was_oversold and confirmed_exit):
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd,
-            f"pas de sortie de survente confirmée (%B={percent_b[-1]:.2f})", "no_signal",
-        )
-    entry = pair.price_usd
-    atr = _atr_value(candles)
-    if not atr or atr <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "ATR non calculable", "indicator_unavailable")
-    stop = entry - _V1_STOP_ATR_MULT * atr
-    if stop <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
-    target = entry + _V1_TP_RR_RATIO * (entry - stop)
-    return _buy_result(
-        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
-        reason=f"sortie de survente %B confirmée ({percent_b[-2]:.2f} -> {percent_b[-1]:.2f})",
-        variant="V1 Bollinger",
-    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
-    )
-
-
-# ── V2 -- VWAP Z-score "institutionnel" ──────────────────────────────────────
-# Entrée : Z-score VWAP <= -1.75 puis confirmation de sortie. Stop = 1.5xATR.
-# TP = ratio fixe 1:1.5 (sortie plus rapide, conviction volume).
-
-# 03/08 -- relaxed from -2.5 to -2.0 (real data, operator request after V2/V5
-# sat at zero trades for 3 days straight): live-measured on 13 currently-
-# scanned candidates (~780 fine-candle data points) -- -2.5 is crossed only
-# 1.4% of the time (11/780), vs. 5.3% at -2.0 (41/780), a ~3.8x increase.
-# Still meaningfully stricter than V1's %B<=0 (6.5%) or V3's %K<=15 (16.8%,
-# both of which DID trade in the same window) -- keeps V2/V5's "institutional
-# capitulation" character, just no longer rare enough to sit at zero. V4's
-# combo threshold deliberately left untouched (separate operator decision).
-#
-# 04/08 -- relaxed again, -2.0 to -1.75 (operator pre-authorized: "n'attends
-# pas ma confirmation assoupli un peut et redeploi"): still zero trades on
-# either V2 or V5 in the 3h20 since the first pass deployed, unlike V3/V4
-# which both traded. Fresh live measurement (15 currently-scanned candidates,
-# ~224 data points, distinct sample from the prior pass, some rate-limited so
-# a smaller n): -2.0 crossed 3.6% of the time (8/224), vs. 7.6% at -1.75
-# (17/224), a ~2.1x increase -- still the strictest of the 5 variants.
-_V2_OVERSOLD_ZSCORE = -1.75
-_V2_STOP_ATR_MULT = 1.5
-_V2_TP_RR_RATIO = 1.5
-
-
-async def evaluate_v2_vwap_institutional(contract: str, chain: str) -> dict | None:
-    pair, candles, hold = await _gates_and_candles(contract, chain)
-    if hold is not None:
-        return hold
-    if pair is None:
-        return None
-    zscore = indicators.vwap_zscore_series(candles)
-    if zscore[-1] is None or zscore[-2] is None:
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd, "Z-score VWAP non calculable (warmup)", "indicator_unavailable",
-        )
-    was_oversold = zscore[-2] <= _V2_OVERSOLD_ZSCORE
-    confirmed_exit = zscore[-1] > _V2_OVERSOLD_ZSCORE
-    if not (was_oversold and confirmed_exit):
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd,
-            f"pas de sortie de survente VWAP confirmée (Z={zscore[-1]:.2f})", "no_signal",
-        )
-    entry = pair.price_usd
-    atr = _atr_value(candles)
-    if not atr or atr <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "ATR non calculable", "indicator_unavailable")
-    stop = entry - _V2_STOP_ATR_MULT * atr
-    if stop <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
-    target = entry + _V2_TP_RR_RATIO * (entry - stop)
-    return _buy_result(
-        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
-        reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f})",
-        variant="V2 VWAP institutionnel",
-    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
-    )
-
-
-# ── V3 -- Stochastique rapide, ultra-réactif ─────────────────────────────────
-# Entrée : %K <= 15 puis confirmation de sortie. Stop = plus bas de la bougie
-# précédente - 0.5% (structurel, pas ATR). TP dynamique visé (%K >= 85) --
-# approximé ici par un target initial au ratio 1:2 (voir docstring du module :
-# la gestion de sortie post-entrée reste le moteur générique existant).
-
-_V3_OVERSOLD_K = 15.0
-_V3_STOP_SLIPPAGE_PCT = 0.005
-_V3_TP_RR_RATIO = 2.0  # approximation du "sort sur %K>=85", voir docstring module
-
-
-async def evaluate_v3_stochastic(contract: str, chain: str) -> dict | None:
-    pair, candles, hold = await _gates_and_candles(contract, chain)
-    if hold is not None:
-        return hold
-    if pair is None:
-        return None
-    k = indicators.stochastic_k_series(candles)
-    if k[-1] is None or k[-2] is None:
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd, "%K non calculable (warmup)", "indicator_unavailable",
-        )
-    was_oversold = k[-2] <= _V3_OVERSOLD_K
-    confirmed_exit = k[-1] > _V3_OVERSOLD_K
-    if not (was_oversold and confirmed_exit):
-        return _hold(chain, pair.base_symbol, pair.price_usd, f"pas de sortie confirmée (%K={k[-1]:.1f})", "no_signal")
-    entry = pair.price_usd
-    previous_low = candles[-2].low
-    stop = previous_low * (1.0 - _V3_STOP_SLIPPAGE_PCT)
-    if stop <= 0 or stop >= entry:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "stop structurel invalide", "invalid_stop")
-    target = entry + _V3_TP_RR_RATIO * (entry - stop)
-    return _buy_result(
-        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
-        reason=f"sortie de survente %K confirmée ({k[-2]:.1f} -> {k[-1]:.1f})",
-        variant="V3 Stochastique ultra-réactif",
-    candles=candles, recent_low_window=RECENT_LOW_WINDOW_STOCHASTIC,
-    )
-
-
-# ── V4 -- Combo sec (%B ET %K) ───────────────────────────────────────────────
-# Entrée : LES DEUX conditions réunies (double confirmation) -- moins de
-# trades, taux de réussite visé maximal. Stop = 2xATR (large). TP = ratio 1:1.3
-# (relevé le 08/02, voir le commentaire ci-dessous -- 1:1 était mathématiquement
-# invendable).
-
-# 03/08 -- dedicated (not shared with V1/_V1_OVERSOLD_THRESHOLD or
-# V3/_V3_OVERSOLD_K) thresholds, operator request after V4 sat at zero trades
-# for 3 days: live-measured on 13 currently-scanned candidates (~780 fine-
-# candle data points), %B<=0.0 alone hits 6.5% of the time and %K<=15.0 alone
-# hits 16.8% -- if independent, their intersection (what V4 actually needs,
-# BOTH on the SAME candle) is ~1.1%, consistent with 0 trades observed. Widened
-# to %B<=0.1 (11.4% alone) and %K<=20.0 (20.6% alone), intersection ~2.3% --
-# roughly doubles V4's odds while it stays the strictest of the 5 variants by
-# a clear margin (V1 alone 6.5%, V3 alone 16.8%). Deliberately separate
-# constants from V1/V3's own -- widening V4's combo must never silently
-# loosen V1 or V3, which already trade fine at their original thresholds.
-_V4_BOLLINGER_THRESHOLD = 0.1
-_V4_STOCHASTIC_K_THRESHOLD = 20.0
-
-_V4_STOP_ATR_MULT = 2.0
-# 08/02 -- vrai bug critique trouvé en direct (workflow d'audit + contre-
-# vérification adversariale, feu vert opérateur) : à 1.0 exactement, ce ratio
-# était EXACTEMENT égal à risk_guard.PRICE_IMPACT_MIN_RR (1.0) -- une preuve
-# algébrique montre que cap_alloc_to_price_impact retourne alors TOUJOURS 0.0,
-# quelle que soit la liquidité ou la volatilité, dès que le frais de swap
-# scalping (1%, apply_swap_fee=True) est appliqué : `target_degraded_entry`
-# se simplifie exactement à `entry_price`, tandis que `fee_adjusted_entry` est
-# strictement supérieur (`entry_price*1.01`) -- la condition de rejet immédiat
-# `target_degraded_entry <= fee_adjusted_entry` est donc TOUJOURS vraie.
-# Confirmé en données réelles de prod : 7/7 signaux BUY de V4 rejetés
-# (`buy_refused`) depuis sa création, ZÉRO position jamais ouverte en 17h30+.
-# Relevé à 1.3 (au-dessus du plancher, y compris du nouveau plancher scalping
-# PRICE_IMPACT_MIN_RR_SCALPING=0.5 introduit le même jour) -- reste le ratio
-# le plus conservateur des 5 variantes (V1=2.0, V2=1.5, V3 structurel), cohérent
-# avec la conception "double confirmation, taux de réussite visé maximal".
-_V4_TP_RR_RATIO = 1.3
-
-
-async def evaluate_v4_combo(contract: str, chain: str) -> dict | None:
-    pair, candles, hold = await _gates_and_candles(contract, chain)
-    if hold is not None:
-        return hold
-    if pair is None:
-        return None
-    closes = [c.close for c in candles]
-    percent_b = indicators.bollinger_percent_b(closes)
-    k = indicators.stochastic_k_series(candles)
-    if any(v is None for v in (percent_b[-1], percent_b[-2], k[-1], k[-2])):
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd, "indicateurs non calculables (warmup)", "indicator_unavailable",
-        )
-    bollinger_signal = percent_b[-2] <= _V4_BOLLINGER_THRESHOLD and percent_b[-1] > _V4_BOLLINGER_THRESHOLD
-    stochastic_signal = k[-2] <= _V4_STOCHASTIC_K_THRESHOLD and k[-1] > _V4_STOCHASTIC_K_THRESHOLD
-    if not (bollinger_signal and stochastic_signal):
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd,
-            f"double confirmation absente (%B={percent_b[-1]:.2f}, %K={k[-1]:.1f})", "no_signal",
-        )
-    entry = pair.price_usd
-    atr = _atr_value(candles)
-    if not atr or atr <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "ATR non calculable", "indicator_unavailable")
-    stop = entry - _V4_STOP_ATR_MULT * atr
-    if stop <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
-    target = entry + _V4_TP_RR_RATIO * (entry - stop)
-    return _buy_result(
-        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=target,
-        reason=f"double confirmation Bollinger+Stochastique (%B {percent_b[-2]:.2f}->{percent_b[-1]:.2f}, "
-               f"%K {k[-2]:.1f}->{k[-1]:.1f})",
-        variant="V4 Combo sec",
-    candles=candles, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
-    )
-
-
-# ── V5 -- VWAP + stop suiveur, pas de TP fixe ────────────────────────────────
-# Entrée : même signal que V2 (Z-score VWAP). Sortie : stop suiveur pur
-# (réutilise le moteur ATR-adaptatif générique déjà en place), jamais de TP
-# fixe -- vise à maximiser le potentiel sur une grosse bougie. ``target=None``
-# ici (le champ existe pour rester compatible avec le format sig, mais aucun
-# palier de TP fixe n'est calculé -- la gestion générique retombe alors sur
-# le stop suiveur ATR seul, voir paper_trader.py's ``_effective_tp_stages``
-# fallback quand ``target_price`` est absent).
-
-_V5_STOP_ATR_MULT = 1.5
-
-# 08/02 -- real bug found (adversarial cross-review workflow): V5's rr was
-# always None (no fixed TP by design), which made risk_guard's conviction
-# sizing treat it as "no signal supplied at all" and always grant the
-# MAXIMUM allocation (5%/$50k), on every single buy, with zero risk
-# discrimination -- see _buy_result's own comment on sizing_rr for the full
-# explanation. Set to V2's OWN TP_RR_RATIO (1.5), not an arbitrary number:
-# V5 shares the exact same entry signal and stop width as V2 (same Z-score
-# VWAP oversold-bounce trigger, same _STOP_ATR_MULT=1.5), it only differs on
-# the EXIT (V2 takes profit at a fixed level, V5 lets the ATR trailing stop
-# run) -- 1.5 is the R/R V5's setup would have measured at entry if it had a
-# TP, same as its sister variant. Below MODERATE_RR_THRESHOLD (2.0,
-# risk_guard.py), so V5 can never reach the STRONG/MODERATE conviction
-# tiers this way -- deliberate: a design with no measurable upside target
-# has no real basis to claim a higher conviction tier, this only stops it
-# from defaulting to the WORST case (unconditional MAX) while still letting
-# the ATR-based sizing discriminate by this token's real volatility.
-_V5_SIZING_RR = _V2_TP_RR_RATIO
-
-
-async def evaluate_v5_vwap_trailing(contract: str, chain: str) -> dict | None:
-    pair, candles, hold = await _gates_and_candles(contract, chain)
-    if hold is not None:
-        return hold
-    if pair is None:
-        return None
-    zscore = indicators.vwap_zscore_series(candles)
-    if zscore[-1] is None or zscore[-2] is None:
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd, "Z-score VWAP non calculable (warmup)", "indicator_unavailable",
-        )
-    was_oversold = zscore[-2] <= _V2_OVERSOLD_ZSCORE
-    confirmed_exit = zscore[-1] > _V2_OVERSOLD_ZSCORE
-    if not (was_oversold and confirmed_exit):
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd,
-            f"pas de sortie de survente VWAP confirmée (Z={zscore[-1]:.2f})", "no_signal",
-        )
-    entry = pair.price_usd
-    atr = _atr_value(candles)
-    if not atr or atr <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "ATR non calculable", "indicator_unavailable")
-    stop = entry - _V5_STOP_ATR_MULT * atr
-    if stop <= 0:
-        return _hold(chain, pair.base_symbol, pair.price_usd, "stop ATR invalide (<=0)", "invalid_stop")
-    return _buy_result(
-        pair=pair, chain=chain, contract=contract, entry=entry, stop=stop, target=None,
-        reason=f"sortie de survente VWAP confirmée (Z={zscore[-2]:.2f} -> {zscore[-1]:.2f}), sans TP fixe",
-        variant="V5 VWAP trailing",
-    candles=candles, sizing_rr=_V5_SIZING_RR, recent_low_window=RECENT_LOW_WINDOW_BOLLINGER_VWAP,
-    )
-
-
 # ── V8 -- Wick-confirmed RSI-divergence reversal (08/05, operator carte
 # blanche: "je te donne carte blanche pour me crée une poche v8 avec tes
 # convictions selon les données récoltées") ─────────────────────────────────
@@ -811,10 +501,5 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
 
 
 VARIANT_ANALYZERS = {
-    "scalping_v1": evaluate_v1_bollinger,
-    "scalping_v2": evaluate_v2_vwap_institutional,
-    "scalping_v3": evaluate_v3_stochastic,
-    "scalping_v4": evaluate_v4_combo,
-    "scalping_v5": evaluate_v5_vwap_trailing,
     "scalping_v8": evaluate_v8_wick_reversal,
 }

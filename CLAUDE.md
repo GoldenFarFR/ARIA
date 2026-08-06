@@ -168,6 +168,9 @@ when preparing real scaling beyond this pilot, explicitly re-evaluate with the
 real exposure figures in hand (asymmetry to keep in mind: going private is always
 still possible later, the reverse — an already-public git history — never is).
 
+## Active state — pocket lineup (06/08, explicit operator decision)
+**Scalping v1-v7 RETIRED on 06/08** ("supprimer toutes les poches scalping sauf v8") — sourcing code removed, DB history intact, `ARIA_SCALPING_VARIANTS_ENABLED` is now v8's kill-switch (OFF = no scalping sourcing). Active trio: **scalping_v8 + swing + vc** (vc unpaused the same day); megacap stays sourcing-paused. **v9 pocket (operator-spec'd, 06/08)**: fixed-watchlist SPX-style engine — RSI(18)<21 AND MFI(10)<20 on the same closed 5-min candle → immediate buy, 1 buy per synchronized episode, 3% of remaining capital per buy, -5% trailing stop as the only exit, ±1.3% simulated fees both ways, dedicated $1M weekly-reset wallet, watchlist extensible (operator will add ~4 more contracts). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.06 entry).
+
 ## Active state — scalping_v8, Claude's own agent (05/08, operator carte blanche)
 **`scalping_v8` is Claude Code's OWN pocket — explicit operator mandate (05/08): build
 and modify it on my own initiative ("je veux que tu construise et modifie ton agent v8

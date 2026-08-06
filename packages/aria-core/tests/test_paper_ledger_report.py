@@ -35,7 +35,7 @@ async def test_build_report_empty_portfolio_shows_zero_trades(tmp_db):
     assert machine["pockets"]["swing"]["open_positions"] == []
     assert machine["pockets"]["swing"]["closed_positions"] == []
     # Les 3 poches ont chacune leur propre section -- jamais une seule fusionnée.
-    assert set(machine["pockets"].keys()) == {"scalping", "swing", "vc"}
+    assert set(machine["pockets"].keys()) == {"swing", "vc"}
 
 
 @pytest.mark.asyncio

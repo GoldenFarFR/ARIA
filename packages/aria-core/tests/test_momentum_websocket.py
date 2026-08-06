@@ -760,15 +760,16 @@ async def test_drain_multi_pocket_gate_off_never_dispatches_three_pockets(monkey
 
 
 @pytest.mark.asyncio
-async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_analyzers_and_caps(
+async def test_drain_multi_pocket_gate_on_dispatches_swing_and_vc_with_correct_analyzers_and_caps(
     monkeypatch,
 ):
-    """Gate ON: scalping+swing share THIS module's WebSocket-detected
-    candidate (A) with mode-differentiated analyzers, vc sources
-    INDEPENDENTLY from candidate_ranking.top_candidates (B) -- each pocket
-    gets its own real per-pocket position cap and the "websocket" discovery
-    channel tag, exactly mirroring paper_trader._run_paper_cycle_locked's own
-    multi-pocket branch."""
+    """Gate ON (variants gate OFF): swing gets THIS module's WebSocket-
+    detected candidate (A), vc sources INDEPENDENTLY from candidate_ranking.
+    top_candidates (B) -- each pocket gets its own real per-pocket position
+    cap and the "websocket" discovery channel tag, exactly mirroring
+    paper_trader._run_paper_cycle_locked's own multi-pocket branch. No
+    scalping arm at all since the 06/08 v1-v7 retirement (the variants gate,
+    OFF here, is v8's kill-switch)."""
     # 08/05 -- sourcing pause neutralized: this test validates the pocket
     # ARCHITECTURE, the pause behavior has its own dedicated tests.
     from aria_core import paper_trader as _pt_for_pause
@@ -860,23 +861,20 @@ async def test_drain_multi_pocket_gate_on_dispatches_three_pockets_with_correct_
 
     await listener._drain_once()
 
-    # 02/08 -- megacap_analyzer is now ALSO built unconditionally (same
-    # doctrine as vc_analyzer/swing_analyzer -- construction never gated,
-    # only the OPEN attempt is), so a 3rd "standard" call appears here even
-    # with ARIA_FIXED_WATCHLIST_POCKET_ENABLED off in this test.
-    assert [c["mode"] for c in analyzer_calls] == ["scalping", "standard", "standard"]
+    # 02/08 -- megacap_analyzer is built unconditionally (construction never
+    # gated, only the OPEN attempt is), so two "standard" calls appear here
+    # (swing + megacap) even with ARIA_FIXED_WATCHLIST_POCKET_ENABLED off.
+    # No "scalping" call since the 06/08 retirement (variants gate OFF here).
+    assert [c["mode"] for c in analyzer_calls] == ["standard", "standard"]
 
     by_wallet = {c["wallet"]: c for c in captured_calls}
     # megacap gate is OFF (not set in this test) -- its entry stays in the
     # static tuple but never reaches _open_new_entries_for_wallet.
-    assert set(by_wallet) == {"scalping", "swing", "vc"}
-    assert by_wallet["scalping"]["candidates"] == [A]
+    assert set(by_wallet) == {"swing", "vc"}
     assert by_wallet["swing"]["candidates"] == [A]
     assert by_wallet["vc"]["candidates"] == [B]
-    assert by_wallet["scalping"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_SCALPING
     assert by_wallet["swing"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_SWING
     assert by_wallet["vc"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_VC
-    assert by_wallet["scalping"]["trading_mode"] == "scalping"
     assert by_wallet["swing"]["trading_mode"] == "standard"
     assert by_wallet["vc"]["trading_mode"] == "standard"
     assert all(c["discovery_channel"] == "websocket" for c in captured_calls)
@@ -998,6 +996,7 @@ async def test_drain_multi_pocket_respects_scalping_only_and_vc_pocket_gates(mon
     all). Both must now skip "swing"/"vc" here exactly as they already do
     in the periodic loop."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     monkeypatch.setenv("ARIA_SCALPING_ONLY_SOURCING_ENABLED", "true")
     monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
     listener = mw.MomentumWebsocketListener()
@@ -1065,24 +1064,21 @@ async def test_drain_multi_pocket_respects_scalping_only_and_vc_pocket_gates(mon
     await listener._drain_once()
 
     wallets_dispatched = {c["wallet"] for c in captured_calls}
-    assert wallets_dispatched == {"scalping"}
+    assert wallets_dispatched == {"scalping_v8"}
     assert "swing" not in wallets_dispatched
     assert "vc" not in wallets_dispatched
 
 
 @pytest.mark.asyncio
-async def test_drain_multi_pocket_gate_on_dispatches_eight_scalping_variants_when_variants_enabled(
+async def test_drain_multi_pocket_gate_on_dispatches_v8_when_variants_enabled(
     monkeypatch,
 ):
     """08/01 -- real bug found live: this drain used to hardcode its own
-    single "scalping" wallet entry, never updated when scalping_v1..v7 were
-    introduced -- it kept feeding the legacy pocket through this 30s drain,
-    invisible to and duplicate of the periodic heartbeat's own multi-pocket
-    construction (642 limit orders / 3 open positions on "scalping" found
-    live while v2..v5 had zero). Now both use paper_trader.
-    build_scalping_pocket_entries -- this proves the websocket drain picks
-    up all 6 scalping pockets once ARIA_SCALPING_VARIANTS_ENABLED is on,
-    never just the legacy "scalping" wallet."""
+    single "scalping" wallet entry, never updated when new variant pockets
+    were introduced (642 orphaned limit orders found live). Now both the
+    drain and the heartbeat use paper_trader.build_scalping_pocket_entries
+    -- this proves the drain picks up the current variant list (scalping_v8
+    alone since the 06/08 v1-v7 retirement), never a stale hardcoded one."""
     # 08/05 -- sourcing pause neutralized: this test validates the pocket
     # ARCHITECTURE, the pause behavior has its own dedicated tests.
     from aria_core import paper_trader as _pt_for_pause
@@ -1148,14 +1144,9 @@ async def test_drain_multi_pocket_gate_on_dispatches_eight_scalping_variants_whe
     await listener._drain_once()
 
     by_wallet = {c["wallet"]: c for c in captured_calls}
-    assert set(by_wallet) == {
-        "scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6",
-        "scalping_v7", "scalping_v8", "swing", "vc",
-    }
-    # every scalping-variant pocket (v1..v6) shares the SAME candidate list --
-    # the legacy "scalping" wallet is never sourced through this drain again.
-    for key in ("scalping_v1", "scalping_v2", "scalping_v3", "scalping_v4", "scalping_v5", "scalping_v6"):
-        assert by_wallet[key]["candidates"] == [A]
+    assert set(by_wallet) == {"scalping_v8", "swing", "vc"}
+    # the legacy "scalping" wallet is never sourced through this drain.
+    assert by_wallet["scalping_v8"]["candidates"] == [A]
 
 
 @pytest.mark.asyncio

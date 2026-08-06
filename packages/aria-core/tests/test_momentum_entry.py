@@ -7174,15 +7174,15 @@ async def test_evaluate_momentum_entry_hold_carries_pool_address_for_limit_order
 
 @pytest.mark.asyncio
 async def test_evaluate_momentum_entry_forwards_rsi_watch_span_override(monkeypatch, test_settings):
-    """08/04, scalping_v7: evaluate_momentum_entry's own rsi_watch_span kwarg
-    must reach the watch candidate it builds -- this is the ONE hop
-    _default_momentum_analyzer relies on to give v7's pocket a different
-    trigger window than every other pocket without touching the module-level
-    constants."""
+    """08/04 (born with scalping_v7, kept as a generic seam after the 06/08
+    v1-v7 retirement): evaluate_momentum_entry's own rsi_watch_span kwarg
+    must reach the watch candidate it builds -- the ONE hop a pocket-specific
+    override relies on to get a different trigger window without touching
+    the module-level constants."""
     _patch_pipeline(monkeypatch, signal=_in_gp_no_divergence_signal(), candles=_rising_ts_candles())
 
     result = await me.evaluate_momentum_entry(
-        CONTRACT, "base", rsi_watch_span=(me.RSI_WATCH_MIN_SPAN_V7, me.RSI_WATCH_MAX_SPAN_V7),
+        CONTRACT, "base", rsi_watch_span=(4, 13),
     )
     watch = result["limit_order_candidate"]
     assert watch["rsi_watch_min_span"] == 4
@@ -7575,15 +7575,15 @@ def test_rsi_divergence_watch_candidate_default_span_matches_module_constants():
 
 
 def test_rsi_divergence_watch_candidate_honors_explicit_span_override():
-    """08/04, scalping_v7: the ONE caller that overrides rsi_watch_span
-    (build_scalping_pocket_entries's v7 arm) must see it reflected both in
-    the persisted fields (what the eventual limit order carries) and in the
-    human-readable reason text (what the operator sees in the Telegram
-    alert) -- never a mismatch between the two."""
+    """08/04 (born with scalping_v7, kept as a generic seam): a caller that
+    overrides rsi_watch_span must see it reflected both in the persisted
+    fields (what the eventual limit order carries) and in the human-readable
+    reason text (what the operator sees in the Telegram alert) -- never a
+    mismatch between the two."""
     signal = _in_gp_no_divergence_signal()
     watch = me._rsi_divergence_watch_candidate(
         CONTRACT, signal, "TOK", 1.5, _rising_ts_candles(),
-        rsi_watch_span=(me.RSI_WATCH_MIN_SPAN_V7, me.RSI_WATCH_MAX_SPAN_V7),
+        rsi_watch_span=(4, 13),
     )
     assert watch["rsi_watch_min_span"] == 4
     assert watch["rsi_watch_max_span"] == 13
