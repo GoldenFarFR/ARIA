@@ -208,15 +208,29 @@ async def test_feedback_includes_open_position_detail_with_url(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_feedback_shows_all_3_pockets_distinctly(monkeypatch):
+async def test_feedback_shows_all_3_pockets_distinctly(monkeypatch, tmp_path):
     """27/07 -- 3-pocket architecture plan, Phase 5: /feedback must show
-    scalping/swing/vc side by side, each with ITS OWN numbers -- not a single
-    aggregate that silently hides two of the three pockets."""
+    every ACTIVE pocket side by side, each with ITS OWN numbers -- not a
+    single aggregate that silently hides the others. 06/08 -- migrated the
+    historical "scalping" wallet to "scalping_v8" (v1-v7 retired, hidden
+    from every operator-facing pocket surface, see paper_trader.
+    visible_reporting_wallets's docstring)."""
+    from aria_core import paper_trader as pt
+
+    monkeypatch.setattr(pt, "DB_PATH", str(tmp_path / "paper.db"))
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(pt, "_run_cycle_lock", _asyncio.Lock())
+    # real paper_state rows so all_reporting_wallets() enumerates all 3,
+    # independent of scalping_variants_enabled()'s gate state.
+    for wallet in ("scalping_v8", "swing", "vc"):
+        await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+
     monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
     monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
 
     per_wallet = {
-        "scalping": {
+        "scalping_v8": {
             "starting": 1_000_000.0, "cash": 990_000.0, "equity": 995_000.0,
             "return_pct": -0.5, "realized_pnl": -3_000.0, "unrealized_pnl": -2_000.0,
             "open_positions": 1, "closed_trades": 4, "win_rate": 50.0,
@@ -245,11 +259,11 @@ async def test_feedback_shows_all_3_pockets_distinctly(monkeypatch):
     await telegram_bot._handle_feedback(update, FakeContext())
 
     reply = update.message.replies[0]
-    assert "Scalping" in reply
+    assert "Scalping V8" in reply
     assert "Swing" in reply
     assert "VC" in reply
     # Each pocket's own numbers appear, distinctly -- never a single merged figure.
-    assert "995,000" in reply  # scalping equity
+    assert "995,000" in reply  # scalping_v8 equity
     assert "1,050,000" in reply  # swing equity
     assert "1,000,000" in reply  # vc equity (starting == equity, flat)
 

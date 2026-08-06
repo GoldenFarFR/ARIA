@@ -1300,6 +1300,11 @@ async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
     # pocket retired from sourcing (e.g. legacy "scalping" after the 5-variant
     # switch) whose already-open positions still move real equity. See
     # all_reporting_wallets()'s docstring for the live bug this fixes.
+    # 06/08 -- deliberately NOT switched to visible_reporting_wallets() (the
+    # operator-facing filter): dropping the retired pockets' flat ~$1M each
+    # from this sum against the persisted high-water mark would fake a
+    # massive drawdown and trip this breaker on nothing. Hidden from every
+    # operator surface, still counted here.
     for wallet in await paper_trader.all_reporting_wallets():
         summary = await paper_trader.portfolio_summary(wallet=wallet, price_lookup=price_lookup)
         total_equity += float(summary["equity"])

@@ -4082,21 +4082,17 @@ async def test_run_cycle_tracking_alert_never_double_counts_a_pocket_with_no_pap
     tracking_alerts = [a for a in alerts if "suivi positions ouvertes" in a]
     assert len(tracking_alerts) == 1
     msg = tracking_alerts[0]
-    # 4 real pockets since the 06/08 v1-v7 retirement: the active trio
-    # (scalping_v8 + swing + vc) PLUS the retired scalping_v1 whose
-    # paper_state row (real capital/history) must STAY counted via
-    # all_reporting_wallets() -- the exact double-count blind spot this
-    # test exists for, now exercised through a retired wallet.
-    assert "4 poches combinées" in msg
-    assert "3 poches combinées" not in msg
-    # The old bug's signature: a ghost wallet's untouched $1M (never reduced
-    # by the real ~$10,000 position under scalping_v1) added on top of that
-    # same position's own value -- equity would read ~$4,010,000
-    # (double-counted) instead of ~$4,000,000 (4 pockets at $1M each; the
-    # small residual gap from an exact 4x starting capital is the simulated
-    # scalping swap fee on entry, not a bug -- see simulated_fill_price).
+    # 06/08, operator order: retired pockets (scalping_v1 here) never
+    # surface in this tracking -- only the active trio (scalping_v8 + swing
+    # + vc) is counted/displayed (visible_reporting_wallets). The retired
+    # pocket's OPEN position still shows in the tracked list (real money in
+    # play) but its flat $1M cash stays out of the displayed equity.
+    assert "3 poches combinées" in msg
+    assert "4 poches combinées" not in msg
+    # No double-count: 3 active pockets at $1M cash + the ~$10,000 open
+    # position's value -- never the retired wallet's $1M on top.
     equity_str = msg.split("équité ")[1].split(" $")[0].replace(",", "")
-    assert abs(float(equity_str) - 4_000_000.0) < 200.0
+    assert 3_000_000.0 < float(equity_str) < 3_020_000.0
 
 
 @pytest.mark.asyncio
@@ -6037,9 +6033,11 @@ async def test_multi_pocket_tracking_alert_sums_cash_across_all_3_pockets(tmp_db
 
     monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
 
-    for wallet in ("scalping", "swing", "vc"):
+    # 06/08 -- migrated the historical "scalping" wallet to "scalping_v8"
+    # (v1-v7 retired, hidden from every operator-facing pocket count).
+    for wallet in ("scalping_v8", "swing", "vc"):
         await pt.reset_portfolio(1_000_000.0, wallet=wallet)
-    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000.0, wallet="scalping")
+    await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000.0, wallet="scalping_v8")
     await pt.open_position(B, "BBB", 1.0, alloc_usd=50_000.0, wallet="swing")
     # vc pocket left empty -- its full $1M cash must still count toward the total.
 

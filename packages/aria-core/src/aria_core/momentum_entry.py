@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 
 from aria_core import circuit_breaker_log, momentum_blacklist
@@ -1499,6 +1500,37 @@ _HOLDER_DATA_UNAVAILABLE_REASON = (
 )
 
 
+def _holder_concentration_outage_bypass_enabled() -> bool:
+    """06/08 -- TEMPORARY manual override (explicit operator decision during
+    a real, live Blockscout outage: "coupe blockscout et laisse passer les
+    tokens", after the 24h verdict cache above proved insufficient on its
+    own -- a token NEVER previously verified still needs to trade). OFF by
+    default (fail-closed, the 03/08 doctrine is NOT reverted permanently).
+    While ON, an ``_HOLDER_DATA_UNAVAILABLE_REASON`` read degrades to a
+    CLEAR verdict instead of a rejection -- never persisted to
+    ``holder_concentration_cache`` (not a real check, must re-verify for
+    real the moment Blockscout recovers) and always logged loudly so the
+    bypass window stays visible. Manually flip back OFF once Blockscout
+    recovers -- this is a session workaround, not a new steady state."""
+    return os.environ.get("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, str]:
+    """Single choke point for every "couldn't verify" exit of
+    ``_check_holder_concentration`` -- see
+    ``_holder_concentration_outage_bypass_enabled``'s own docstring."""
+    if _holder_concentration_outage_bypass_enabled():
+        logger.warning(
+            "holder_concentration: OUTAGE BYPASS active -- %s/%s let through UNVERIFIED "
+            "(ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED=on, revert once Blockscout recovers)",
+            chain, contract[:14],
+        )
+        return False, ""
+    return True, _HOLDER_DATA_UNAVAILABLE_REASON
+
+
 async def _check_holder_concentration(contract: str, chain: str, pool_address: str) -> tuple[bool, str]:
     """``(too_concentrated, reason)`` -- rejects if the top
     ``_TOP_N_HOLDERS_FOR_CONCENTRATION`` EOA holders (excluding the liquidity pool,
@@ -1556,7 +1588,22 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     full-pipeline audit found the periodic scan cycle and the WebSocket drain
     loop independently re-evaluating the same fresh candidate a few seconds
     apart, each paying its own x402 call for the same contract (333 real
-    payments/$0.666 since 21/07, 31% pure duplicates)."""
+    payments/$0.666 since 21/07, 31% pure duplicates).
+
+    06/08 -- long-TTL persisted verdict cache (operator request during a
+    real Blockscout outage, see holder_concentration_cache.py's own
+    docstring): checked FIRST, before any network call. A contract already
+    VERIFIED (cleared or rejected) on real data within the last 24h returns
+    that verdict immediately, never re-hitting a struggling/down Blockscout.
+    A contract never successfully verified stays exactly as fail-closed as
+    before -- this cache is only ever written from a REAL verdict below,
+    never from the ``_HOLDER_DATA_UNAVAILABLE_REASON`` sentinel."""
+    from aria_core import holder_concentration_cache
+
+    cached = await holder_concentration_cache.cached_verdict(contract, chain)
+    if cached is not None:
+        return cached
+
     from aria_core.services.blockscout import get_blockscout_client
 
     client = get_blockscout_client(chain)
@@ -1571,11 +1618,11 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     else:
         metadata = await client.get_token_metadata(contract)
         if not metadata.available or not metadata.total_supply or metadata.decimals is None:
-            return True, _HOLDER_DATA_UNAVAILABLE_REASON
+            return _holder_data_unavailable_verdict(contract, chain)
 
         raw_holders = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
-            return True, _HOLDER_DATA_UNAVAILABLE_REASON
+            return _holder_data_unavailable_verdict(contract, chain)
 
         decimals = metadata.decimals
         total_supply = metadata.total_supply
@@ -1593,7 +1640,7 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
             ))
 
     if not entries:
-        return True, _HOLDER_DATA_UNAVAILABLE_REASON
+        return _holder_data_unavailable_verdict(contract, chain)
 
     excluded = {a.lower() for a in _BURN_ADDRESSES} | {(pool_address or "").lower()}
     ranked = sorted(
@@ -1606,11 +1653,14 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     )
     top_pct = sum(e[1] for e in ranked[:_TOP_N_HOLDERS_FOR_CONCENTRATION])
     if top_pct >= _MAX_TOP_HOLDERS_CONCENTRATION_PCT:
-        return True, (
+        reason = (
             f"concentration des {_TOP_N_HOLDERS_FOR_CONCENTRATION} plus gros détenteurs "
             f"(hors pool/burn/contrats vérifiés) : {top_pct:.0f}% >= "
             f"{_MAX_TOP_HOLDERS_CONCENTRATION_PCT:.0f}% -- risque de dump d'initié"
         )
+        await holder_concentration_cache.record_verdict(contract, chain, True, reason)
+        return True, reason
+    await holder_concentration_cache.record_verdict(contract, chain, False, "")
     return False, ""
 
 

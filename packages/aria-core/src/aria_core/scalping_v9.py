@@ -60,9 +60,39 @@ V9_WATCHLIST: tuple[dict, ...] = (
 _DETECTION_CHAINS = ("base", "ethereum")
 
 
+# Per-token tunable settings (06/08 "go réglages", operator: adjust in real
+# time to refine -- a /v9set takes effect on the NEXT 5-min cycle, no
+# redeploy). NULL in DB = use the module default (the operator's original
+# SPX-validated spec). Bounds are sanity rails, not strategy opinions.
+_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "rsi_period": (2, 100),
+    "rsi_lower": (1, 99),
+    "mfi_period": (2, 100),
+    "mfi_lower": (1, 99),
+    "trail_pct": (0.01, 0.50),
+    # discrete, validated against ALLOWED_TIMEFRAMES (not just the range)
+    "timeframe_min": (5, 60),
+}
+_SETTING_COLUMNS = tuple(_SETTING_BOUNDS)
+
+
+def _setting_defaults() -> dict:
+    return {
+        "rsi_period": RSI_PERIOD,
+        "rsi_lower": RSI_LOWER_LIMIT,
+        "mfi_period": MFI_PERIOD,
+        "mfi_lower": MFI_LOWER_LIMIT,
+        "trail_pct": TRAIL_STOP_PCT,
+        "timeframe_min": TIMEFRAME_MIN,
+    }
+
+
 async def _ensure_watchlist_table() -> None:
     """Creates the table and seeds V9_WATCHLIST once -- INSERT OR IGNORE, so
-    an operator /v9remove of a seeded token is never resurrected."""
+    an operator /v9remove of a seeded token is never resurrected. Settings
+    columns soft-migrated (ALTER ... ADD COLUMN, same pattern as
+    codex_request_log's mode column) -- a pre-settings row keeps NULLs and
+    falls back to the module defaults."""
     import aiosqlite
 
     async with aiosqlite.connect(paper_trader.DB_PATH) as db:
@@ -78,6 +108,11 @@ async def _ensure_watchlist_table() -> None:
             )
             """
         )
+        for column in _SETTING_COLUMNS:
+            try:
+                await db.execute(f"ALTER TABLE v9_watchlist ADD COLUMN {column} REAL")
+            except aiosqlite.OperationalError:
+                pass  # column already exists -- soft migration, idempotent
         for token in V9_WATCHLIST:
             await db.execute(
                 "INSERT OR IGNORE INTO v9_watchlist (contract, chain, symbol, active, added_at) "
@@ -88,16 +123,67 @@ async def _ensure_watchlist_table() -> None:
 
 
 async def get_watchlist() -> list[dict]:
-    """Active watchlist, the one the 5-min cycle iterates."""
+    """Active watchlist, the one the 5-min cycle iterates -- per-token
+    settings resolved (DB value or module default, never None)."""
     import aiosqlite
 
     await _ensure_watchlist_table()
+    settings_cols = ", ".join(_SETTING_COLUMNS)
     async with aiosqlite.connect(paper_trader.DB_PATH) as db:
         cur = await db.execute(
-            "SELECT contract, chain, symbol FROM v9_watchlist WHERE active = 1 ORDER BY added_at"
+            f"SELECT contract, chain, symbol, {settings_cols} "
+            "FROM v9_watchlist WHERE active = 1 ORDER BY added_at"
         )
         rows = await cur.fetchall()
-    return [{"contract": c, "chain": ch, "symbol": s} for c, ch, s in rows]
+    defaults = _setting_defaults()
+    out: list[dict] = []
+    for row in rows:
+        entry = {"contract": row[0], "chain": row[1], "symbol": row[2]}
+        for i, column in enumerate(_SETTING_COLUMNS):
+            value = row[3 + i]
+            entry[column] = defaults[column] if value is None else float(value)
+        entry["rsi_period"] = int(entry["rsi_period"])
+        entry["mfi_period"] = int(entry["mfi_period"])
+        entry["timeframe_min"] = int(entry["timeframe_min"])
+        out.append(entry)
+    return out
+
+
+async def set_watchlist_settings(contract: str, **settings: float) -> tuple[dict | None, str]:
+    """Real-time per-token tuning (/v9set): validates against
+    ``_SETTING_BOUNDS`` then persists -- effective on the next 5-min cycle.
+    Returns ``(resolved entry, "")`` or ``(None, reason)``. Only the keys
+    passed change; the others keep their current value (or default)."""
+    import aiosqlite
+
+    contract_lower = (contract or "").strip().lower()
+    if not settings:
+        return None, "aucun réglage fourni"
+    for key, value in settings.items():
+        if key not in _SETTING_BOUNDS:
+            return None, f"réglage inconnu : {key}"
+        if key == "timeframe_min":
+            if int(value) not in ALLOWED_TIMEFRAMES:
+                allowed = "/".join(str(t) for t in ALLOWED_TIMEFRAMES)
+                return None, f"timeframe {value} non supportée (choix : {allowed} min)"
+            continue
+        low, high = _SETTING_BOUNDS[key]
+        if not (low <= float(value) <= high):
+            return None, f"{key}={value} hors bornes [{low}-{high}]"
+    await _ensure_watchlist_table()
+    assignments = ", ".join(f"{key} = ?" for key in settings)
+    async with aiosqlite.connect(paper_trader.DB_PATH) as db:
+        cur = await db.execute(
+            f"UPDATE v9_watchlist SET {assignments} WHERE contract = ? AND active = 1",
+            (*[float(v) for v in settings.values()], contract_lower),
+        )
+        await db.commit()
+        if cur.rowcount == 0:
+            return None, "contrat absent de la watchlist active (/v9list)"
+    for token in await get_watchlist():
+        if token["contract"] == contract_lower:
+            return token, ""
+    return None, "contrat absent de la watchlist active (/v9list)"
 
 
 async def add_watchlist_token(contract: str, chain: str | None = None) -> tuple[dict | None, str]:
@@ -176,6 +262,11 @@ MFI_LOWER_LIMIT = 20.0
 
 BUY_PCT_OF_REMAINING_CASH = 0.03
 TRAIL_STOP_PCT = 0.05
+# Per-token candle timeframe (minutes) -- 5 by default (the operator's
+# original SPX chart), /v9set tf=15/30/60 switches it. Discrete values only:
+# each maps to a dedicated single-rung OHLCV ladder (services/ohlcv.py).
+TIMEFRAME_MIN = 5
+ALLOWED_TIMEFRAMES = (5, 15, 30, 60)
 # "le prix d'achat c'est le prix net + 0.3% + 1% pour simuler le price
 # impact" -- 0.3% pool fee + 1% impact, applied symmetrically on the sell.
 SWAP_FEE_PCT = 0.003
@@ -200,14 +291,20 @@ _last_buy_episode_ts: dict[str, float] = {}
 _EPISODE_GUARD_SECONDS = 15 * 60.0
 
 
-def _both_below(rsi_v: float | None, mfi_v: float | None) -> bool | None:
+def _both_below(
+    rsi_v: float | None, mfi_v: float | None,
+    *, rsi_lower: float = RSI_LOWER_LIMIT, mfi_lower: float = MFI_LOWER_LIMIT,
+) -> bool | None:
     """None while either indicator is still warming up -- never a guess."""
     if rsi_v is None or mfi_v is None:
         return None
-    return rsi_v < RSI_LOWER_LIMIT and mfi_v < MFI_LOWER_LIMIT
+    return rsi_v < rsi_lower and mfi_v < mfi_lower
 
 
-def _find_entry_transition(rsi: list, mfi: list) -> int | None:
+def _find_entry_transition(
+    rsi: list, mfi: list,
+    *, rsi_lower: float = RSI_LOWER_LIMIT, mfi_lower: float = MFI_LOWER_LIMIT,
+) -> int | None:
     """Index (into the candle list) of a fresh synchronized-oversold
     TRANSITION on one of the last 2 closed candles: both below now, NOT both
     below on the candle before. Returns None when there is no fresh episode
@@ -217,13 +314,15 @@ def _find_entry_transition(rsi: list, mfi: list) -> int | None:
     for idx in (n - 1, n - 2):
         if idx < 1:
             continue
-        now = _both_below(rsi[idx], mfi[idx])
-        prev = _both_below(rsi[idx - 1], mfi[idx - 1])
+        now = _both_below(rsi[idx], mfi[idx], rsi_lower=rsi_lower, mfi_lower=mfi_lower)
+        prev = _both_below(rsi[idx - 1], mfi[idx - 1], rsi_lower=rsi_lower, mfi_lower=mfi_lower)
         if now is True and prev is False:
             # a transition at n-2 only counts if the episode is still live
             # on the last candle (still both below) -- "be fast" never means
             # buying an episode that already ended.
-            if idx == n - 2 and _both_below(rsi[-1], mfi[-1]) is not True:
+            if idx == n - 2 and _both_below(
+                rsi[-1], mfi[-1], rsi_lower=rsi_lower, mfi_lower=mfi_lower,
+            ) is not True:
                 return None
             return idx
     return None
@@ -237,11 +336,13 @@ def _degraded_sell_price(spot: float) -> float:
     return spot * (1.0 - _TOTAL_FEE_PCT)
 
 
-async def _manage_positions(contract: str, spot: float, notifier=None) -> list[dict]:
-    """Flat -5% trailing stop from the SPOT high-water mark -- the pocket's
-    ONLY exit. High water lives on SPOT (chart) prices, never the degraded
-    fill (same doctrine as the 08/05 high-water-vs-fill fix in
-    paper_trader)."""
+async def _manage_positions(
+    contract: str, spot: float, notifier=None, *, trail_pct: float = TRAIL_STOP_PCT,
+) -> list[dict]:
+    """Flat trailing stop (per-token %, default -5%) from the SPOT
+    high-water mark -- the pocket's ONLY exit. High water lives on SPOT
+    (chart) prices, never the degraded fill (same doctrine as the 08/05
+    high-water-vs-fill fix in paper_trader)."""
     closed: list[dict] = []
     contract_lower = contract.lower()
     for p in await paper_trader.get_open_positions(wallet=paper_trader.V9_WALLET):
@@ -250,14 +351,14 @@ async def _manage_positions(contract: str, spot: float, notifier=None) -> list[d
         high_water = max(p.get("high_water_price") or 0.0, spot)
         if high_water > (p.get("high_water_price") or 0.0):
             await paper_trader._update_high_water(p["id"], high_water)
-        if spot <= high_water * (1.0 - TRAIL_STOP_PCT):
+        if spot <= high_water * (1.0 - trail_pct):
             result = await paper_trader.close_position(
                 contract,
                 _degraded_sell_price(spot),
                 position_id=p["id"],
-                reason="trailing -5% (v9)",
+                reason=f"trailing -{trail_pct * 100:g}% (v9)",
                 notes=(
-                    f"spot {spot:.6g} <= plus haut {high_water:.6g} -5% ; "
+                    f"spot {spot:.6g} <= plus haut {high_water:.6g} -{trail_pct * 100:g}% ; "
                     f"sortie simulée -{_TOTAL_FEE_PCT * 100:.1f}% (frais+impact)"
                 ),
             )
@@ -323,11 +424,16 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             continue
         spot = pair.price_usd
 
-        actions["closed"].extend(await _manage_positions(contract, spot, notifier=notifier))
+        actions["closed"].extend(
+            await _manage_positions(
+                contract, spot, notifier=notifier, trail_pct=token["trail_pct"],
+            )
+        )
 
         try:
             ohlcv = await geckoterminal_client.get_ohlcv(
-                pair.pair_address, network=chain, mode="scalping_5m",
+                pair.pair_address, network=chain,
+                mode=f"scalping_{token['timeframe_min']}m",
             )
         except Exception as exc:  # noqa: BLE001
             logger.info("scalping_v9[%s]: OHLCV failed (%s)", label, exc)
@@ -343,9 +449,11 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             actions["holds"].append({"symbol": label, "reason": "insufficient_candles"})
             continue
 
-        rsi = rsi_series([c.close for c in candles], period=RSI_PERIOD)
-        mfi = indicators.mfi_series(candles, period=MFI_PERIOD)
-        transition_idx = _find_entry_transition(rsi, mfi)
+        rsi = rsi_series([c.close for c in candles], period=token["rsi_period"])
+        mfi = indicators.mfi_series(candles, period=token["mfi_period"])
+        transition_idx = _find_entry_transition(
+            rsi, mfi, rsi_lower=token["rsi_lower"], mfi_lower=token["mfi_lower"],
+        )
         if transition_idx is None:
             actions["holds"].append({"symbol": label, "reason": "no_signal"})
             continue
@@ -381,7 +489,7 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             _degraded_buy_price(spot),
             wallet=paper_trader.V9_WALLET,
             alloc_usd=alloc,
-            invalidation_price=spot * (1.0 - TRAIL_STOP_PCT),
+            invalidation_price=spot * (1.0 - token["trail_pct"]),
             chain=chain,
             mode="standard",
             strategy="momentum",
@@ -389,10 +497,11 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             entry_market_cap_usd=pair.market_cap_usd,
             allow_multiple=True,
             thesis=(
-                f"[V9] Survente synchronisée sur bougie 5min : RSI(18)="
-                f"{rsi_shown:.1f} < {RSI_LOWER_LIMIT:.0f} ET MFI(10)={mfi_shown:.1f} "
-                f"< {MFI_LOWER_LIMIT:.0f} en même temps. Achat immédiat 3% du cash "
-                f"restant, sortie unique : stop suiveur -5% du plus haut spot."
+                f"[V9] Survente synchronisée sur bougie {token['timeframe_min']}min : "
+                f"RSI({token['rsi_period']})={rsi_shown:.1f} < {token['rsi_lower']:g} "
+                f"ET MFI({token['mfi_period']})={mfi_shown:.1f} < {token['mfi_lower']:g} "
+                f"en même temps. Achat immédiat 3% du cash restant, sortie unique : "
+                f"stop suiveur -{token['trail_pct'] * 100:g}% du plus haut spot."
             ),
         )
         if pos is None:

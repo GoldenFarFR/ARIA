@@ -72,26 +72,31 @@ _SCALPING_FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
     ("minute", 30, 120, "30M"),
 )
 
-# 06/08 -- scalping_v9 (operator spec: 5-minute timeframe ONLY). Single rung,
-# no fallback: v9's RSI(18)/MFI(10) limits were charted by the operator on
-# 5-min candles specifically -- serving a coarser timeframe would silently
-# change what the thresholds mean (same "never mislead" doctrine as the
-# scalping ladder's own no-fallthrough comment above). A pool too thin for
-# 5-min candles gets an honest ``available=False``.
-_SCALPING_5M_FETCH_LADDER: tuple[tuple[str, int, int, str], ...] = (
-    ("minute", 5, 120, "5M"),
-)
+# 06/08 -- scalping_v9 (operator spec: a SINGLE, operator-chosen timeframe
+# per token -- 5 min by default, /v9set can switch to 15/30/60). Single rung
+# each, no fallback: v9's RSI/MFI limits are charted by the operator on ONE
+# specific timeframe -- serving a coarser one would silently change what the
+# thresholds mean (same "never mislead" doctrine as the scalping ladder's
+# own no-fallthrough comment above). A pool too thin for the requested
+# timeframe gets an honest ``available=False``.
+_V9_SINGLE_TF_LADDERS: dict[str, tuple[tuple[str, int, int, str], ...]] = {
+    "scalping_5m": (("minute", 5, 120, "5M"),),
+    "scalping_15m": (("minute", 15, 120, "15M"),),
+    "scalping_30m": (("minute", 30, 120, "30M"),),
+    "scalping_60m": (("hour", 1, 120, "1H"),),
+}
 
 
 def _ladder_for_mode(mode: str) -> tuple[tuple[str, int, int, str], ...]:
     """``mode="scalping"`` -> the dedicated sub-hour ladder above;
-    ``mode="scalping_5m"`` (06/08, scalping_v9) -> the single-rung 5-min
-    ladder; anything else (default ``"standard"``) -> the original 1D/4H/1H
-    ladder, unchanged behavior for every existing caller."""
+    ``mode="scalping_<N>m"`` (06/08, scalping_v9) -> the matching
+    single-rung ladder; anything else (default ``"standard"``) -> the
+    original 1D/4H/1H ladder, unchanged behavior for every existing
+    caller."""
     if mode == "scalping":
         return _SCALPING_FETCH_LADDER
-    if mode == "scalping_5m":
-        return _SCALPING_5M_FETCH_LADDER
+    if mode in _V9_SINGLE_TF_LADDERS:
+        return _V9_SINGLE_TF_LADDERS[mode]
     return _FETCH_LADDER
 
 

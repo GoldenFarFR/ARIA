@@ -623,7 +623,9 @@ async def _feedback_reply() -> str:
         "scalping_v7": "Scalping V7 (RSI span court)",
         "scalping_v8": "Scalping V8 (wick reversal — agent Claude)",
     }
-    wallets = await paper_trader.all_reporting_wallets()
+    # 06/08 -- operator order: retired pockets never shown here (see
+    # paper_trader.visible_reporting_wallets's docstring).
+    wallets = await paper_trader.visible_reporting_wallets()
     pocket_lines = []
     for wallet in wallets:
         summary = await paper_trader.portfolio_summary(
@@ -2502,8 +2504,9 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
     ("v9add", "Ajoute un contrat à la watchlist scalping_v9 (RSI+MFI 5min)"),
-    ("v9list", "Watchlist scalping_v9 active"),
+    ("v9list", "Watchlist scalping_v9 active (avec réglages par token)"),
     ("v9remove", "Retire un contrat de la watchlist scalping_v9"),
+    ("v9set", "Règle RSI/MFI/trail/timeframe d'un token v9 en temps réel"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
@@ -2737,8 +2740,86 @@ async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     lines = [f"Watchlist scalping_v9 ({len(tokens)} token(s), cycle 5 min) :", ""]
     for t in tokens:
-        lines.append(f"• {t['symbol']} ({t['chain']}) — {t['contract']}")
+        lines.append(
+            f"• {t['symbol']} ({t['chain']}) — bougies {t['timeframe_min']} min, "
+            f"RSI({t['rsi_period']})<{t['rsi_lower']:g} "
+            f"+ MFI({t['mfi_period']})<{t['mfi_lower']:g}, trail -{t['trail_pct'] * 100:g}%\n"
+            f"  {t['contract']}"
+        )
+    lines.append("")
+    lines.append("Affiner : /v9set <adresse> rsi=18/21 mfi=10/20 trail=5 tf=5")
     await _reply(message, "\n".join(lines))
+
+
+_V9SET_USAGE = (
+    "Usage : /v9set <adresse> [rsi=période/seuil] [mfi=période/seuil] [trail=%] [tf=minutes]\n"
+    "Exemples :\n"
+    "  /v9set 0x50dA… rsi=16/25 — RSI période 16, seuil 25\n"
+    "  /v9set 0x50dA… mfi=10/18 trail=4 — seuil MFI 18 + stop suiveur -4%\n"
+    "  /v9set 0x50dA… tf=15 — bougies 15 min (choix : 5/15/30/60)\n"
+    "Seuls les réglages passés changent, effet au prochain cycle 5 min."
+)
+
+
+def _parse_v9set_args(args: list[str]) -> tuple[dict, str]:
+    """``rsi=18/21 mfi=10/20 trail=5`` -> settings dict for
+    scalping_v9.set_watchlist_settings. Returns ``(settings, error)``."""
+    settings: dict = {}
+    for raw in args:
+        key, _, value = raw.lower().partition("=")
+        if not value:
+            return {}, f"réglage illisible : {raw}"
+        try:
+            if key in ("rsi", "mfi"):
+                period_s, _, lower_s = value.partition("/")
+                if lower_s:
+                    settings[f"{key}_period"] = int(period_s)
+                    settings[f"{key}_lower"] = float(lower_s)
+                else:
+                    settings[f"{key}_lower"] = float(period_s)
+            elif key == "trail":
+                settings["trail_pct"] = float(value.rstrip("%")) / 100.0
+            elif key in ("tf", "timeframe"):
+                settings["timeframe_min"] = int(value.rstrip("m"))
+            else:
+                return {}, f"réglage inconnu : {key} (attendu rsi/mfi/trail)"
+        except ValueError:
+            return {}, f"valeur illisible : {raw}"
+    return settings, ""
+
+
+async def _handle_v9set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/v9set <contract> rsi=18/21 mfi=10/20 trail=5 -- 06/08 operator
+    request ("go réglages... modifier le réglage en temps réel pour
+    l'affiner"): per-token indicator/trailing tuning, persisted in the
+    v9_watchlist row, effective on the next 5-min cycle, zero redeploy."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await _reply(message, _V9SET_USAGE)
+        return
+    from aria_core import scalping_v9
+
+    settings, parse_error = _parse_v9set_args(args[1:])
+    if parse_error:
+        await _reply(message, f"❌ {parse_error}\n\n{_V9SET_USAGE}")
+        return
+    entry, error = await scalping_v9.set_watchlist_settings(args[0].strip(), **settings)
+    if entry is None:
+        await _reply(message, f"❌ Réglage refusé : {error}")
+        return
+    await _reply(
+        message,
+        f"✅ {entry['symbol']} réglé : bougies {entry['timeframe_min']} min, "
+        f"RSI({entry['rsi_period']})<{entry['rsi_lower']:g} "
+        f"+ MFI({entry['mfi_period']})<{entry['mfi_lower']:g}, "
+        f"trail -{entry['trail_pct'] * 100:g}%.\n"
+        f"Effectif au prochain cycle 5 min.",
+    )
 
 
 async def _handle_v9remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3849,6 +3930,11 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     args = list(getattr(context, "args", None) or [])
     requested = args[0].strip().lower() if args else None
+    # 06/08 -- deliberately the FULL list (not visible_reporting_wallets()):
+    # this is a risk-management action, not a bilan/tracking DISPLAY -- a
+    # retired pocket's already-open positions still get managed and can
+    # still trip its own circuit breaker, so the operator must still be
+    # able to target it explicitly by name if ever needed.
     known_pockets = await paper_trader.all_reporting_wallets()
     if requested and requested not in known_pockets:
         await _reply(
@@ -3915,6 +4001,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("v9add", _handle_v9add))
     app.add_handler(CommandHandler("v9list", _handle_v9list))
     app.add_handler(CommandHandler("v9remove", _handle_v9remove))
+    app.add_handler(CommandHandler("v9set", _handle_v9set))
     app.add_handler(CommandHandler("vc", _handle_vc))
     app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))

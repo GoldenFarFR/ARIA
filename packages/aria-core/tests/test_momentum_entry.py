@@ -41,6 +41,16 @@ def _isolated_rejection_cache_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_holder_concentration_cache_db(tmp_path, monkeypatch):
+    """06/08 -- ``_check_holder_concentration`` now consults
+    ``holder_concentration_cache`` before any network call -- same
+    DB_PATH-computed-once-at-import isolation need as the fixtures above."""
+    from aria_core import holder_concentration_cache as hcc
+
+    monkeypatch.setattr(hcc, "DB_PATH", str(tmp_path / "holder_concentration_cache_test.db"))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_manual_candidates_db(tmp_path, monkeypatch):
     """Item #236, 30/07: ``discover_momentum_candidates`` now also drains
     ``manual_candidates`` (the /add queue) as its 7th source -- same
@@ -4115,6 +4125,187 @@ class TestCheckHolderConcentration:
         assert too_concentrated is False
 
 
+# ── cache long-TTL persisté (06/08, panne Blockscout réelle, demande opérateur:
+# "coupe blockscout et laisse passer les tokens ils sont déjà vérifié") ────────
+
+class TestHolderConcentrationLongTermCache:
+    @pytest.mark.asyncio
+    async def test_real_clear_verdict_persisted_and_reused_without_network(self, monkeypatch):
+        """A REAL clear verdict is cached -- a second call, even with
+        Blockscout now completely down, returns the SAME verdict without
+        touching the network at all."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 60.0)] + [_holder(f"0xreal{i}", 3.0) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+
+        first = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert first == (False, "")
+
+        def _blockscout_now_down(chain):
+            raise AssertionError("Blockscout must never be hit on a cached verdict")
+
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", _blockscout_now_down)
+        second = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert second == (False, "")
+
+    @pytest.mark.asyncio
+    async def test_real_reject_verdict_persisted_and_reused_without_network(self, monkeypatch):
+        """Symmetric to the clear case -- a real REJECTED verdict is cached
+        too (operator: "clair ou rejeté"), also skipping the network."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        holders = [_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 8.5) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+
+        first = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert first[0] is True and "85%" in first[1]
+
+        def _blockscout_now_down(chain):
+            raise AssertionError("Blockscout must never be hit on a cached verdict")
+
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", _blockscout_now_down)
+        second = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert second == first
+
+    @pytest.mark.asyncio
+    async def test_unavailable_verdict_never_cached_keeps_retrying(self, monkeypatch):
+        """An 'unverifiable' read (the real outage case, e.g. HTTP 500) must
+        NEVER be cached -- retried every call, so a real recovery is picked
+        up immediately (never suppressed for hours on a non-answer)."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        first = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert first == (True, me._HOLDER_DATA_UNAVAILABLE_REASON)
+
+        calls = {"n": 0}
+
+        def _counting_client(chain):
+            calls["n"] += 1
+            return _FakeHoldersClient(TokenHoldersResult(available=False))
+
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", _counting_client)
+        second = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert second == (True, me._HOLDER_DATA_UNAVAILABLE_REASON)
+        assert calls["n"] == 1  # the network WAS hit again -- never cached
+
+    @pytest.mark.asyncio
+    async def test_a_never_verified_token_stays_unavailable_during_an_outage(self, monkeypatch):
+        """The precise operator-accepted boundary: a token NEVER successfully
+        verified stays exactly as fail-closed as before -- the cache only
+        unblocks tokens that WERE genuinely verified at some point."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(
+            "0x" + "9" * 40, "base", "0xpool",
+        )
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+    @pytest.mark.asyncio
+    async def test_verdict_cache_scoped_per_contract(self, monkeypatch):
+        """Contract B's cache must never leak into contract A's read."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        clear_holders = [_holder("0xPOOL", 60.0)] + [_holder(f"0xreal{i}", 3.0) for i in range(10)]
+        clear = TokenHoldersResult(holders=clear_holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(clear))
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+
+        other_contract = "0x" + "7" * 40
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(other_contract, "base", "0xpool")
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+
+class TestHolderConcentrationOutageBypass:
+    """06/08 -- explicit operator override during a real live Blockscout
+    outage ("coupe blockscout et laisse passer les tokens"), OFF by
+    default. Never touches the real over-concentration REJECTION path
+    (only the 'couldn't verify' exits)."""
+
+    @pytest.mark.asyncio
+    async def test_off_by_default_stays_fail_closed(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.delenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", raising=False)
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+    @pytest.mark.asyncio
+    async def test_on_lets_unverified_candidate_through(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is False
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_bypass_never_persisted_to_long_term_cache(self, monkeypatch):
+        """A bypassed pass-through is NOT a real verification -- must not
+        contaminate holder_concentration_cache, or a token would stay
+        silently unverified for 24h even after Blockscout recovers and the
+        bypass is switched back off."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core import holder_concentration_cache as hcc
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert await hcc.cached_verdict(CONTRACT, "base") is None
+
+    @pytest.mark.asyncio
+    async def test_bypass_never_overrides_a_real_rejection(self, monkeypatch):
+        """The bypass only degrades the 'couldn't verify' path -- a REAL,
+        successfully-fetched over-concentration verdict still rejects even
+        with the bypass flag on."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setenv("ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED", "true")
+        holders = [_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 8.5) for i in range(10)]
+        result = TokenHoldersResult(holders=holders, total_supply=1_000_000.0, available=True)
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert too_concentrated is True
+        assert "85%" in reason
+
+
 # ── cache TTL partagé holders (26/07, full-pipeline audit -- gaspillage x402 réel) ──
 
 class TestHoldersSharedCache:
@@ -4141,11 +4332,21 @@ class TestHoldersSharedCache:
     @pytest.mark.asyncio
     async def test_cache_expires_after_ttl(self, monkeypatch):
         import aria_core.services.blockscout as blockscout_module
+        from aria_core import holder_concentration_cache as hcc
         from aria_core.services.blockscout import TokenHoldersResult
 
         result = TokenHoldersResult(holders=[_holder("0xreal1", 3.0)], total_supply=1_000_000.0, available=True)
         client = _FakeHoldersClient(result)
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+        # 06/08 -- isolates THIS test to the raw-holders TTL it targets: the
+        # new 24h persisted verdict cache (holder_concentration_cache.py)
+        # would otherwise short-circuit the second call before it ever
+        # reaches the client, which is a DIFFERENT mechanism with its own
+        # dedicated coverage (see TestHolderConcentrationLongTermCache).
+        async def _never_cached(contract, chain):
+            return None
+
+        monkeypatch.setattr(hcc, "cached_verdict", _never_cached)
 
         fake_now = {"t": 1000.0}
         monkeypatch.setattr(me.time, "monotonic", lambda: fake_now["t"])

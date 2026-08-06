@@ -3610,6 +3610,22 @@ def all_pocket_wallets() -> tuple[str, ...]:
     return base
 
 
+async def visible_reporting_wallets() -> tuple[str, ...]:
+    """Operator-facing surfaces ONLY (06/08, explicit operator order: "je ne
+    veux jamais voir les wallets désactivés ici et ni leur historique, aucune
+    trace d'eux sauf dans tes logs") -- ``all_reporting_wallets()`` minus the
+    retired scalping wallets. Their rows STAY in the DB (session
+    diagnostics, archives) but every Telegram bilan/tracking/riskresume
+    surface uses THIS list. The macro circuit breaker deliberately keeps the
+    FULL list (see risk_guard.evaluate_macro_risk's comment): dropping ~$1M
+    of flat retired capital per pocket from its equity sum against the
+    persisted high-water mark would fake a massive drawdown and trip the
+    breaker on nothing."""
+    return tuple(
+        w for w in await all_reporting_wallets() if w not in _RETIRED_SCALPING_WALLETS
+    )
+
+
 async def all_reporting_wallets() -> tuple[str, ...]:
     """08/01 -- superset of all_pocket_wallets() for REPORTING/RISK views only,
     never for sourcing (new positions must still only open on the pockets
@@ -5880,7 +5896,11 @@ async def _run_paper_cycle_locked(
                 # hardcoded snapshot that silently rots every time the pocket
                 # architecture changes.
                 if multi_pocket_sourcing_enabled():
-                    pockets = await all_reporting_wallets()
+                    # 06/08 -- operator order: retired pockets never surface
+                    # in this Telegram tracking (visible_reporting_wallets's
+                    # docstring) -- their flat cash stays out of the DISPLAYED
+                    # equity; the macro breaker keeps its own full sum.
+                    pockets = await visible_reporting_wallets()
                     tracking_cash = sum([await cash_available(w) for w in pockets])
                     tracked_pocket_count = len(pockets)
                 else:

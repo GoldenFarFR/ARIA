@@ -211,7 +211,9 @@ async def build_report(closed_limit: int = 500) -> tuple[str, dict]:
     # ledger dump must include a pocket retired from sourcing but still
     # managing already-open positions (e.g. legacy "scalping"). See
     # paper_trader.all_reporting_wallets()'s docstring for the live bug fixed.
-    for wallet in await paper_trader.all_reporting_wallets():
+    # 06/08 -- operator order: retired pockets never shown (paper_trader.
+    # visible_reporting_wallets's docstring).
+    for wallet in await paper_trader.visible_reporting_wallets():
         lines, pocket_machine = await _build_pocket_section(wallet, closed_limit)
         text_blocks.append("\n".join(lines))
         machine_pockets[wallet] = pocket_machine

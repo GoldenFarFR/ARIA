@@ -79,8 +79,11 @@ async def test_riskresume_rejects_non_owner(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_riskresume_when_not_blocked_says_nothing_to_resume(monkeypatch):
-    """27/07, Phase 3: without an explicit pocket name, all 3 pockets are
-    checked in one confirmation -- none blocked here, nothing to resume."""
+    """27/07, Phase 3: without an explicit pocket name, every active pocket
+    is checked in one confirmation -- none blocked here, nothing to resume.
+    06/08 -- gate-off default is now (swing, vc) since the v1-v7 retirement
+    (the legacy "scalping" wallet no longer resurrects without real DB
+    history, see paper_trader.all_pocket_wallets's docstring)."""
     monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
     monkeypatch.setattr(
         telegram_bot.risk_guard, "new_entry_block_status",
@@ -97,7 +100,7 @@ async def test_riskresume_when_not_blocked_says_nothing_to_resume(monkeypatch):
 
     reply = update.message.replies[0]
     assert "rien à reprendre" in reply.lower()
-    assert "SCALPING" in reply and "SWING" in reply and "VC" in reply
+    assert "SWING" in reply and "VC" in reply
     assert calls["resume"] == 0
 
 
@@ -141,8 +144,10 @@ async def test_riskresume_when_blocked_lifts_only_the_blocked_pocket(monkeypatch
 
 @pytest.mark.asyncio
 async def test_riskresume_explicit_pocket_targets_only_that_one(monkeypatch):
-    """27/07, Phase 3: /riskresume scalping resumes ONLY the scalping pocket,
-    even though this fake reports every pocket as blocked."""
+    """27/07, Phase 3: /riskresume vc resumes ONLY the vc pocket, even
+    though this fake reports every pocket as blocked. 06/08 -- migrated
+    the example wallet off the retired "scalping" name (see the previous
+    test's own comment)."""
     monkeypatch.setattr(telegram_bot, "is_owner", lambda uid: uid == 7)
     monkeypatch.setattr(
         telegram_bot.risk_guard, "new_entry_block_status",
@@ -155,10 +160,10 @@ async def test_riskresume_explicit_pocket_targets_only_that_one(monkeypatch):
 
     monkeypatch.setattr(telegram_bot.risk_guard, "resume_new_entries", fake_resume)
 
-    update = FakeUpdate("/riskresume scalping", user_id=7)
-    await telegram_bot._handle_risk_resume(update, FakeContext(args=["scalping"]))
+    update = FakeUpdate("/riskresume vc", user_id=7)
+    await telegram_bot._handle_risk_resume(update, FakeContext(args=["vc"]))
 
-    assert captured == ["scalping"]
+    assert captured == ["vc"]
 
 
 @pytest.mark.asyncio

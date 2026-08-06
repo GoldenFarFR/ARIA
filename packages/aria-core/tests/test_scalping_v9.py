@@ -371,6 +371,62 @@ def test_all_pocket_wallets_includes_v9_when_gate_on(monkeypatch):
     assert pt.V9_WALLET not in pt.all_pocket_wallets()
 
 
+@pytest.mark.asyncio
+async def test_visible_reporting_hides_retired_pockets(tmp_db):
+    """06/08 operator order: retired wallets never surface on operator-facing
+    lists -- all_reporting_wallets (risk math) keeps them, the visible list
+    drops them."""
+    import aiosqlite
+
+    await pt._ensure_tables()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO paper_state (wallet, starting_capital, created_at) "
+            "VALUES ('scalping_v1', 1000000.0, '2026-07-30T00:00:00+00:00')",
+        )
+        await db.commit()
+
+    assert "scalping_v1" in await pt.all_reporting_wallets()
+    visible = await pt.visible_reporting_wallets()
+    assert "scalping_v1" not in visible
+    for retired in pt._RETIRED_SCALPING_WALLETS:
+        assert retired not in visible
+
+
+# tf setting tests
+@pytest.mark.asyncio
+async def test_set_timeframe_discrete_values_only(tmp_db):
+    entry, error = await v9.set_watchlist_settings(SPX, timeframe_min=15)
+    assert error == "" and entry["timeframe_min"] == 15
+    entry, error = await v9.set_watchlist_settings(SPX, timeframe_min=10)
+    assert entry is None and "non supportée" in error
+    # unchanged after the refusal
+    assert (await v9.get_watchlist())[0]["timeframe_min"] == 15
+
+
+@pytest.mark.asyncio
+async def test_cycle_requests_the_token_timeframe(tmp_db, monkeypatch):
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9.set_watchlist_settings(SPX, timeframe_min=30)
+    modes: list[str] = []
+    from aria_core.services import geckoterminal
+
+    async def fake_get_ohlcv(pool, *, network="base", mode="standard", **kw):
+        modes.append(mode)
+        return _FakeOhlcv([])
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair()
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", fake_get_ohlcv)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    await v9.run_v9_cycle()
+
+    assert modes == ["scalping_30m"]
+
+
 def test_v9_is_a_scalping_pocket():
     assert pt.is_scalping_pocket(pt.V9_WALLET) is True
     assert pt.uses_fine_rsi_confirmation(pt.V9_WALLET) is False
@@ -473,6 +529,99 @@ async def test_removed_seed_never_resurrected_by_ensure(tmp_db):
     await v9.remove_watchlist_token(SPX)
     await v9._ensure_watchlist_table()
     assert await v9.get_watchlist() == []
+
+
+# ── per-token settings (/v9set -- real-time tuning, 06/08) ───────────────────
+
+@pytest.mark.asyncio
+async def test_settings_defaults_resolved_on_seed(tmp_db):
+    token = (await v9.get_watchlist())[0]
+    assert token["rsi_period"] == 18 and token["rsi_lower"] == 21.0
+    assert token["mfi_period"] == 10 and token["mfi_lower"] == 20.0
+    assert token["trail_pct"] == pytest.approx(0.05)
+
+
+@pytest.mark.asyncio
+async def test_set_settings_partial_update(tmp_db):
+    entry, error = await v9.set_watchlist_settings(SPX, rsi_lower=25.0, trail_pct=0.04)
+    assert error == ""
+    assert entry["rsi_lower"] == 25.0
+    assert entry["trail_pct"] == pytest.approx(0.04)
+    # untouched keys keep their defaults
+    assert entry["rsi_period"] == 18 and entry["mfi_lower"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_set_settings_bounds_and_unknown_key_refused(tmp_db):
+    entry, error = await v9.set_watchlist_settings(SPX, rsi_lower=150.0)
+    assert entry is None and "hors bornes" in error
+    entry, error = await v9.set_watchlist_settings(SPX, buy_pct=0.5)
+    assert entry is None and "inconnu" in error
+    entry, error = await v9.set_watchlist_settings("0x" + "d" * 40, rsi_lower=25.0)
+    assert entry is None and "absent" in error
+    # nothing half-persisted
+    token = (await v9.get_watchlist())[0]
+    assert token["rsi_lower"] == 21.0
+
+
+@pytest.mark.asyncio
+async def test_cycle_honors_per_token_thresholds(tmp_db, monkeypatch):
+    """RSI at 24 with a per-token rsi_lower of 25: buys -- the same series
+    under the default 21 threshold would never signal."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9.set_watchlist_settings(SPX, rsi_lower=25.0)
+    rsi = [50.0] * 60
+    mfi = [50.0] * 60
+    rsi[-1] = 24.0  # below 25, above the default 21
+    mfi[-1] = 10.0
+    _patch_cycle_io(monkeypatch, rsi=rsi, mfi=mfi)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    assert "< 25" in (actions["opened"][0].get("thesis") or "")
+
+
+@pytest.mark.asyncio
+async def test_cycle_honors_per_token_trail(tmp_db, monkeypatch):
+    """trail=3%: a -4% dip from the peak closes (would survive at the
+    default -5%)."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9.set_watchlist_settings(SPX, trail_pct=0.03)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+    pos = await pt.open_position(
+        SPX, "SPX", 1.013, wallet=pt.V9_WALLET, alloc_usd=30_000,
+        mode="standard", allow_multiple=True,
+    )
+    await pt._update_high_water(pos["id"], 1.0)
+
+    _patch_cycle_io(monkeypatch, spot=0.96, rsi=[50.0] * 60, mfi=[50.0] * 60)
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["closed"]) == 1
+    assert actions["closed"][0]["close_reason"] == "trailing -3% (v9)"
+
+
+def test_v9set_arg_parsing():
+    from aria_core.gateway.telegram_bot import _parse_v9set_args
+
+    settings, error = _parse_v9set_args(["rsi=16/25", "mfi=10/18", "trail=4"])
+    assert error == ""
+    assert settings == {
+        "rsi_period": 16, "rsi_lower": 25.0,
+        "mfi_period": 10, "mfi_lower": 18.0,
+        "trail_pct": pytest.approx(0.04),
+    }
+    # threshold-only form
+    settings, error = _parse_v9set_args(["rsi=25"])
+    assert error == "" and settings == {"rsi_lower": 25.0}
+    # trail accepts a % suffix
+    settings, error = _parse_v9set_args(["trail=5%"])
+    assert error == "" and settings == {"trail_pct": pytest.approx(0.05)}
+    for bad in (["foo=1"], ["rsi"], ["rsi=abc"]):
+        settings, error = _parse_v9set_args(bad)
+        assert settings == {} and error
 
 
 @pytest.mark.asyncio

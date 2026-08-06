@@ -110,39 +110,38 @@ async def test_build_report_never_mixes_scopes_across_pockets(tmp_db):
     """27/07, 3-pocket architecture plan, Phase 3 -- LE bug corrigé : avant, l'équité/
     return % affichés venaient de la SEULE poche 'swing' (défaut implicite) alors que
     le winrate/PnL lisait get_open_positions()/get_closed_positions() SANS filtre --
-    toutes poches confondues. Une perte sur 'scalping' ne doit plus jamais apparaître
-    dans le winrate affiché pour 'swing', ni inversement."""
-    for wallet in ("scalping", "swing", "vc"):
+    toutes poches confondues. Une perte sur une poche ne doit plus jamais
+    apparaître dans le winrate affiché pour une autre. (06/08 : la poche
+    'scalping' historique est retirée ET masquée du rapport -- le test migre
+    sur vc/swing, deux poches toujours visibles.)"""
+    for wallet in ("swing", "vc"):
         await pt.reset_portfolio(1_000_000.0, wallet=wallet)
 
-    # Une perte sur "scalping" SEULE.
-    await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="scalping")
-    await pt.close_position(A, 0.5, reason="invalidation")  # -5000, scalping only
+    # Une perte sur "vc" SEULE.
+    await pt.open_position(A, "AAA", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="vc")
+    await pt.close_position(A, 0.5, reason="invalidation")  # -5000, vc only
 
     # Un gain sur "swing" SEULE.
     await pt.open_position(B, "BBB", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet="swing")
     await pt.close_position(B, 1.5, reason="palier 3/3 (clôture)")  # +5000, swing only
 
     _text, machine = await report.build_report()
-    scalping = machine["pockets"]["scalping"]
     swing = machine["pockets"]["swing"]
     vc = machine["pockets"]["vc"]
 
     # Chaque poche ne voit QUE ses propres trades -- jamais celui d'une autre poche.
-    assert scalping["winrate_stats"]["closed_trades"] == 1
-    assert scalping["winrate_stats"]["losses"] == 1
-    assert scalping["winrate_stats"]["wins"] == 0
+    assert vc["winrate_stats"]["closed_trades"] == 1
+    assert vc["winrate_stats"]["losses"] == 1
+    assert vc["winrate_stats"]["wins"] == 0
     assert swing["winrate_stats"]["closed_trades"] == 1
     assert swing["winrate_stats"]["wins"] == 1
     assert swing["winrate_stats"]["losses"] == 0
-    assert vc["winrate_stats"]["closed_trades"] == 0
 
-    # L'équité de chaque poche reflète UNIQUEMENT son propre P&L, jamais celui
-    # d'une autre poche (avant ce correctif, seule "swing" avait une équité
-    # cohérente avec son propre winrate -- ici les 3 le sont).
-    assert scalping["summary"]["equity"] == pytest.approx(995_000.0, abs=1.0)
+    # L'équité de chaque poche reflète UNIQUEMENT son propre P&L.
+    assert vc["summary"]["equity"] == pytest.approx(995_000.0, abs=1.0)
     assert swing["summary"]["equity"] == pytest.approx(1_005_000.0, abs=1.0)
-    assert vc["summary"]["equity"] == pytest.approx(1_000_000.0, abs=1.0)
+    # 06/08 : une poche retirée n'apparaît JAMAIS dans le rapport.
+    assert "scalping" not in machine["pockets"]
 
 
 @pytest.mark.asyncio

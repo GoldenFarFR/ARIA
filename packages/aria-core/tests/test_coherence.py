@@ -776,6 +776,12 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_FIXED_WATCHLIST_POCKET_ENABLED",
     "ARIA_GOPLUS_WATCHLIST_ENABLED",
     "ARIA_HIGH_CONVICTION_ALERTS_ENABLED",
+    # 06/08 -- TEMPORARY manual override during a real live Blockscout outage
+    # (operator: "coupe blockscout et laisse passer les tokens"). OFF by
+    # default; must be manually reverted once Blockscout recovers, see
+    # momentum_entry._holder_concentration_outage_bypass_enabled's own
+    # docstring.
+    "ARIA_HOLDER_CONCENTRATION_OUTAGE_BYPASS_ENABLED",
     "ARIA_KNOWLEDGE_INBOX_ENABLED",
     "ARIA_LLM_ANTHROPIC_ROUTING_ENABLED",
     "ARIA_LLM_ENABLED",
