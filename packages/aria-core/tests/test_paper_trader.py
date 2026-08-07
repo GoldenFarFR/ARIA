@@ -3914,6 +3914,18 @@ def test_strategy_label_swing_still_swing_trading_not_confused_with_megacap():
     assert pt._strategy_label({"mode": "standard", "strategy": "momentum", "wallet": "swing"}) == "swing trading"
 
 
+def test_strategy_label_scalping_v9_shows_v9_not_swing_trading():
+    """07/08 -- real bug found live (operator: "tout passe dans swing au
+    lieu de v9"): scalping_v9.py persists mode="standard"/strategy="momentum"
+    on its own positions (unlike scalping_variants.py's v8/v1..v6, which use
+    mode="scalping") -- the wallet-prefix check used to only run under
+    mode=="scalping", so every v9 alert silently fell through to "swing
+    trading"."""
+    assert pt._strategy_label(
+        {"mode": "standard", "strategy": "momentum", "wallet": "scalping_v9"}
+    ) == "scalping_v9"
+
+
 def test_format_buy_alert_shows_scalping_label():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000, "mode": "scalping"}

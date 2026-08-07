@@ -2524,17 +2524,27 @@ def _strategy_label(pos: dict) -> str:
     all (e.g. an older cached dict), never a crash on a missing field."""
     if pos.get("strategy") == "vc_thesis":
         return "venture capital"
+    # 07/08 -- real bug found live (operator: "tout passe dans swing au lieu
+    # de v9"): this check used to sit UNDER ``mode == "scalping"``, but
+    # scalping_v9 persists mode="standard"/strategy="momentum" on its own
+    # positions (scalping_v9.py never sets mode="scalping" -- it's a
+    # completely separate fixed-watchlist engine, not one of the
+    # scalping_variants.py arms this label was originally built for). Every
+    # v9 alert silently fell through to the generic "swing trading" fallback
+    # below. Wallet-prefix check now runs UNCONDITIONALLY, before the mode
+    # check -- v8/v1..v6 (mode="scalping") keep their exact same label,
+    # v9 (mode="standard") now gets its own instead of being misattributed.
+    wallet = pos.get("wallet")
+    if wallet and wallet.startswith("scalping_v"):
+        return wallet
     if pos.get("mode") == "scalping":
-        wallet = pos.get("wallet")
-        if wallet and wallet.startswith("scalping_v"):
-            return wallet
         return "scalping"
     # 02/08 -- same UX gap as the scalping_v1..v6 fix above, found the same
     # day for the new "megacap" pocket: it shares mode="standard"/
     # strategy="momentum" with swing, so without this it would silently show
     # "swing trading" in every alert -- exactly what this A/B comparison
     # pocket exists to be distinguishable from.
-    if pos.get("wallet") == "megacap":
+    if wallet == "megacap":
         return "megacap"
     return "swing trading"
 
