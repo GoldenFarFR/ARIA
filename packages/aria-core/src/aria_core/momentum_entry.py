@@ -81,7 +81,7 @@ import os
 import time
 from contextvars import ContextVar
 
-from aria_core import circuit_breaker_log, momentum_blacklist
+from aria_core import circuit_breaker_log, momentum_blacklist, pocket_spec
 from aria_core.chasing_filter_shadow import (
     RECENT_LOW_WINDOW_GOLDEN_POCKET,
     recent_low_from_candles,
@@ -1958,6 +1958,27 @@ async def _try_gecko_stage(
     its mode-specific fallback chain -- same shared adaptive circuit breaker
     as every other stage (a provider in cooldown is in cooldown for both
     cascades, never per-mode)."""
+    # 07/08 -- skip GeckoTerminal outright when it structurally cannot serve
+    # the requested granularity. Its minute aggregates are 1/5/15 only
+    # (official CoinGecko docs, re-read directly), so a "scalping_30m" request
+    # returned HTTP 200 with ZERO candles: quota spent, nothing gained, and
+    # the cascade fell through to Mobula anyway. Measured over 12h before this
+    # fix: 0 GeckoTerminal reads out of 140 on the 30-min tokens, while the
+    # SAME client served 342 reads at 15 min -- a rate limit would have hit
+    # both alike. Calling a provider that cannot answer is pure waste against
+    # a quota our own pipeline already saturates.
+    if mode.startswith("scalping_") and mode.endswith("m"):
+        try:
+            wanted_min = int(mode[len("scalping_"):-1])
+        except ValueError:
+            wanted_min = None
+        if wanted_min is not None and "geckoterminal" not in pocket_spec.timeframe_support_names(wanted_min):
+            logger.info(
+                "_fetch_candles: GeckoTerminal ne sert pas le %s min -- étage sauté "
+                "(aucun appel, quota préservé)", wanted_min,
+            )
+            return None
+
     if gecko_client is None:
         from aria_core.services.geckoterminal import geckoterminal_client
 
@@ -2005,7 +2026,30 @@ async def _scalping_fallbacks(
         from aria_core.services import mobula
 
         if mobula.mobula_configured() and not _provider_in_cooldown("mobula"):
-            for period in ("15m", "30m"):
+            # 07/08 -- REAL BUG, found from live v9 data: this loop used to be
+            # a hardcoded ("15m", "30m") ladder, tried in that order whatever
+            # the pocket had actually configured. A token set to 30 min got
+            # 15m on the FIRST iteration, which succeeds, so the loop never
+            # reached 30m -- it returned 15-minute candles flagged `degraded`
+            # and moved on. cbXRP and WETH ran that way for days: three real
+            # v9 buys (04h00, 05h18, 17h03 UTC on 07/08) were triggered by an
+            # RSI(10)/MFI(10) computed over a window HALF the configured one,
+            # which is why the same token kept re-triggering.
+            #
+            # Mobula's real capabilities were measured the same day (one call
+            # per granularity, checking the actual spacing between candles):
+            # it serves 1m/5m/15m/30m/1h/4h/6h/12h/1d correctly. So simply ask
+            # for the granularity the pocket configured, and fall back to the
+            # old ladder only when none was passed (v8's legacy plain
+            # "scalping" mode has no per-token timeframe).
+            periods = ("15m", "30m")
+            if requested_timeframe_min is not None:
+                exact = pocket_spec.mobula_period(requested_timeframe_min)
+                if exact is not None:
+                    # Exact match first, then the legacy ladder as a genuine
+                    # fallback -- still flagged `degraded` if it has to be used.
+                    periods = (exact, *(p for p in ("15m", "30m") if p != exact))
+            for period in periods:
                 try:
                     mobula_result = await mobula.get_ohlcv(contract, blockchain=chain, period=period)
                 except Exception as exc:  # noqa: BLE001

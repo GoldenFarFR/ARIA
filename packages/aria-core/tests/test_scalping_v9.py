@@ -73,9 +73,14 @@ class _FakeOhlcv:
 
 
 class _FakeMobulaResult:
-    def __init__(self, candles):
+    def __init__(self, candles, *, network_error=False):
         self.candles = candles
         self.available = bool(candles)
+        # Read by momentum_entry's scalping fallback (07/08) to stop
+        # escalating on a real error instead of retrying at the next
+        # granularity -- default False = "clean empty response", matching
+        # the real OHLCVResult's default.
+        self.network_error = network_error
 
 
 def _patch_geckoterminal_dead_mobula_alive(monkeypatch, *, mobula_candles=None):
@@ -394,7 +399,65 @@ async def test_buy_thesis_includes_data_provenance_annotation(tmp_db, monkeypatc
     """The BUY thesis must name the real provider/timeframe that served the
     candles -- degraded (fallback, wrong granularity) flagged explicitly,
     never silently presented as if it were the configured 5min GeckoTerminal
-    read."""
+    read.
+
+    Regression coverage for the 07/08 cbXRP/WETH bug: Mobula's fallback used
+    to always try "15m" before the token's actually-configured granularity,
+    so a 5min-configured token silently read as 15m-degraded forever, even
+    though Mobula genuinely supports 5m. The fix makes the exact configured
+    period the FIRST one tried (pocket_spec.mobula_period) -- degraded now
+    only fires when that exact period itself comes back empty and a real
+    fallback to a different granularity is needed, simulated here by making
+    Mobula's "5m" answer empty and its "15m" answer real."""
+    from aria_core import momentum_entry
+    from aria_core.services import mobula
+    from aria_core.skills import entry_signals
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair(price=2.0)
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    _patch_geckoterminal_dead_mobula_alive(monkeypatch)
+
+    # Override the shared helper's Mobula fake: exact "5m" comes back empty
+    # (forces a real fallback), "15m" (and anything else) answers for real.
+    candles = _flat_candles(61)
+
+    async def fake_mobula_get_ohlcv(contract, *, blockchain="base", period="15m"):
+        if period == "5m":
+            return _FakeMobulaResult([])
+        return _FakeMobulaResult(candles)
+
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_get_ohlcv)
+
+    rsi, mfi = _signal_series()
+    monkeypatch.setattr(entry_signals, "rsi_series", lambda closes, period=14: rsi)
+    monkeypatch.setattr(indicators, "mfi_series", lambda c, *, period=10: mfi)
+
+    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+        return True, "", ""
+
+    monkeypatch.setattr(momentum_entry, "_check_honeypot", fake_honeypot)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    pos = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]
+    # SPX configured at 5min, exact "5m" unavailable -- real fallback to 15m,
+    # correctly flagged degraded (never silently presented as the real read).
+    assert "[Données : mobula, 15m -- DÉGRADÉ]" in pos["thesis"]
+
+
+@pytest.mark.asyncio
+async def test_buy_thesis_not_flagged_degraded_when_mobula_serves_exact_configured_period(
+    tmp_db, monkeypatch,
+):
+    """The cbXRP/WETH bug itself, as a regression test: a 5min-configured
+    token whose exact granularity Mobula CAN serve must read as non-degraded
+    -- never forced through the old hardcoded 15m-first loop."""
     from aria_core import momentum_entry
     from aria_core.skills import entry_signals
 
@@ -420,8 +483,8 @@ async def test_buy_thesis_includes_data_provenance_annotation(tmp_db, monkeypatc
 
     assert len(actions["opened"]) == 1
     pos = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]
-    # SPX configured at 5min, Mobula only serves 15m -- must read as degraded.
-    assert "[Données : mobula, 15m -- DÉGRADÉ]" in pos["thesis"]
+    assert "[Données : mobula, 5m]" in pos["thesis"]
+    assert "DÉGRADÉ" not in pos["thesis"]
 
 
 @pytest.mark.asyncio
@@ -663,8 +726,12 @@ async def test_set_timeframe_discrete_values_only(tmp_db):
 
 @pytest.mark.asyncio
 async def test_cycle_requests_the_token_timeframe(tmp_db, monkeypatch):
+    """A token configured at 15min (a granularity GeckoTerminal DOES serve)
+    must still be requested with the exact matching mode -- the general
+    "request the token's own configured timeframe" contract, on the one
+    granularity where GeckoTerminal is actually in the running."""
     monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
-    await v9.set_watchlist_settings(SPX, timeframe_min=30)
+    await v9.set_watchlist_settings(SPX, timeframe_min=15)
     modes: list[str] = []
     from aria_core.services import geckoterminal
 
@@ -681,7 +748,44 @@ async def test_cycle_requests_the_token_timeframe(tmp_db, monkeypatch):
 
     await v9.run_v9_cycle()
 
-    assert modes == ["scalping_30m"]
+    assert modes == ["scalping_15m"]
+
+
+@pytest.mark.asyncio
+async def test_cycle_skips_geckoterminal_for_a_timeframe_it_cannot_serve(tmp_db, monkeypatch):
+    """GeckoTerminal has no 30min aggregate (confirmed against its own docs
+    and live prod data, 07/08) -- calling it for a 30min-configured token
+    only burns a wasted request before falling through to Mobula anyway.
+    The cascade must skip it outright and go straight to the provider that
+    can actually serve 30min, requesting the EXACT matching period there."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9.set_watchlist_settings(SPX, timeframe_min=30)
+    from aria_core.services import geckoterminal, mobula
+
+    gecko_calls: list[str] = []
+    mobula_periods: list[str] = []
+
+    async def fake_gecko_get_ohlcv(pool, *, network="base", mode="standard", **kw):
+        gecko_calls.append(mode)
+        return _FakeOhlcv([])
+
+    async def fake_mobula_get_ohlcv(contract, *, blockchain="base", period="15m"):
+        mobula_periods.append(period)
+        return _FakeMobulaResult(_flat_candles(61))
+
+    async def fake_pair_lookup(contract, *, chain="base"):
+        return _FakePair()
+
+    monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
+    monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", fake_gecko_get_ohlcv)
+    monkeypatch.setattr(mobula, "mobula_configured", lambda: True)
+    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_get_ohlcv)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    await v9.run_v9_cycle()
+
+    assert gecko_calls == []  # never called -- quota preserved
+    assert mobula_periods == ["30m"]  # exact configured granularity, not "15m" first
 
 
 def test_v9_is_a_scalping_pocket():
