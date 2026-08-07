@@ -12,6 +12,7 @@ contrat de cohérence.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -189,6 +190,40 @@ def test_sepolia_autonomous_registered_in_heartbeat_and_never_uses_wallet_guard(
         "sepolia_autonomous.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
         "— l'autonomie doit rester structurellement bornée au testnet, jamais un chemin "
         "partagé avec ce qui touchera un jour du capital réel."
+    )
+
+
+def test_acp_trade_never_falls_back_to_the_tools_default_slippage():
+    """Règle absolue 09/07 ("grave le dans la roche", incident fondateur ETH->USDC
+    à 30% de slippage par défaut, docs/HANDOFF_SECURITE.md) : le slippage est
+    toujours explicite, jamais la valeur par défaut d'un outil de trade.
+
+    Trou réel trouvé le 07/08 (audit proactif #259) : `_exec_trade_tokens` lisait
+    `payload.get("slippage", "")` alors qu'aucun appelant ne fournit cette clé,
+    donc `acp_cli.trade_tokens` sautait `--slippage` (`if slippage.strip():`) et
+    acp-cli appliquait SON défaut. Verrouillé ici pour qu'une session future ne
+    puisse pas réintroduire le repli silencieux -- si ce chemin est un jour
+    rouvert (unité `--slippage` d'acp-cli enfin vérifiée), le slippage doit être
+    passé explicitement, jamais via un `.get(..., "")` qui redégrade au défaut."""
+    path = CORE / "wallet_guard.py"
+    assert path.is_file(), "wallet_guard.py manquant"
+    # AST plutôt que recherche textuelle : la docstring du correctif CITE le motif
+    # fautif pour l'expliquer, un `in module` la prendrait pour le bug lui-même.
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "slippage"
+    ]
+    assert not offenders, (
+        f"wallet_guard.py lit le slippage via `.get(\"slippage\", ...)` (ligne(s) {offenders}) : "
+        "un payload sans cette clé retomberait silencieusement sur la valeur par défaut "
+        "d'acp-cli (règle absolue 09/07). Passer une valeur explicite validée."
     )
 
 

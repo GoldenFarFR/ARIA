@@ -16,7 +16,7 @@ from typing import Any, Callable
 from aria_core import custody_pause, outgoing_pause
 from aria_core.approvals import create_approval
 from aria_core.memory import append_memory
-from aria_core.skills.acp_cli import client_fund_job, trade_tokens
+from aria_core.skills.acp_cli import client_fund_job
 from aria_core.wallet_ledger import claim_for_decision, create_ledger_entry, set_result
 
 logger = logging.getLogger(__name__)
@@ -31,13 +31,41 @@ def _exec_client_fund_job(payload: dict[str, Any]) -> tuple[dict | None, str | N
 
 
 def _exec_trade_tokens(payload: dict[str, Any]) -> tuple[dict | None, str | None]:
-    return trade_tokens(
-        token_in=payload["token_in"],
-        token_out=payload["token_out"],
-        amount_in=payload["amount_in"],
-        chain_in=payload.get("chain_in", "8453"),
-        chain_out=payload.get("chain_out", "8453"),
-        slippage=payload.get("slippage", ""),
+    """Executes an ACP trade -- FAIL-CLOSED on slippage (absolute rule 09/07).
+
+    07/08 -- real gap found by the #259 proactive audit, verified end to end
+    before fixing: no caller has ever put a ``slippage`` key in this payload
+    (`acp_client_actions.py` builds token_in/token_out/amount_in only), so
+    ``payload.get("slippage", "")`` was always empty, so `acp_cli.trade_tokens`
+    skipped ``--slippage`` entirely (`if slippage.strip():`), so acp-cli applied
+    ITS OWN DEFAULT. That is exactly the founding 09/07 incident (ETH->USDC
+    swap defaulting to 30%, docs/HANDOFF_SECURITE.md) which produced the
+    absolute rule: "slippage never above 10%, always explicit, never a trade
+    tool's default value".
+
+    Why this BLOCKS instead of forcing a value: the unit acp-cli expects for
+    ``--slippage`` is unverified -- the flag has never been passed, no test or
+    doc in this repo records it, and acp-cli is a Windows-side npm package
+    (absent from the VPS container: `which acp` fails, APPDATA empty, so
+    `run_acp` already exits 127 here). Guessing "10" when the tool wants a
+    fraction would mean 1000% slippage -- strictly worse than the bug being
+    fixed. Project doctrine on an unverifiable value is fail-closed and say
+    why, never invent precision (cf. CLAUDE.md "Robustness / degradation").
+
+    To re-open this path: verify acp-cli's real ``--slippage`` unit (percent
+    vs fraction vs bps) against the installed package, then call
+    ``acp_cli.trade_tokens(..., slippage=<explicit validated value>)`` here --
+    passing it unconditionally, never via a ``.get(..., "")`` that silently
+    degrades to the tool's default again. Deliberately does NOT import
+    `agent_wallet_pilot`'s MAX_SLIPPAGE_BPS -- that pilot is structurally
+    separate from this shared guardrail (locked by test_coherence); both
+    modules answer to the same CLAUDE.md rule, never to each other."""
+    return None, (
+        "Trade ACP bloqué (fail-closed) : le slippage ne peut pas être garanti <=10%. "
+        "Aucun appelant ne fournit de slippage explicite, et l'unité attendue par "
+        "acp-cli (--slippage) n'est pas vérifiée -- exécuter reviendrait à accepter "
+        "la valeur par défaut de l'outil, ce qu'interdit la règle absolue du 09/07. "
+        "Vérifier l'unité réelle d'acp-cli avant de réactiver ce chemin."
     )
 
 
