@@ -118,11 +118,21 @@ export function registerNotificationTapListener(onTap: () => void): () => void {
 }
 
 /** App was closed/backgrounded and the tap is what launched/resumed it --
- * there's no live event for that, only this one-shot check at startup. */
+ * there's no live event for that, only this one-shot check at startup.
+ *
+ * 08/07 -- real bug found by the post-push Devil's Advocate review, verified
+ * against Expo's own docs: getLastNotificationResponseAsync returns the SAME
+ * response on every call until explicitly cleared -- it does NOT self-
+ * consume. Without clearLastNotificationResponseAsync, a tap from hours ago
+ * would re-open the chat on every single re-entry into "home" (every
+ * biometric re-lock, every totp_reverify completion), not just the launch
+ * that actually followed the tap. */
 export async function consumeInitialNotificationTap(): Promise<boolean> {
   try {
     const response = await Notifications.getLastNotificationResponseAsync();
-    return response !== null;
+    if (response === null) return false;
+    await Notifications.clearLastNotificationResponseAsync();
+    return true;
   } catch {
     return false;
   }

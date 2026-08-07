@@ -16,7 +16,7 @@ import {
   registerNotificationTapListener,
   setupPushNotifications,
 } from "./push";
-import { isReverifyOverdueLocally } from "./totpReverifyStore";
+import { localReverifyStatus } from "./totpReverifyStore";
 import { clearUnread, hydrateUnreadStore } from "./unreadStore";
 import { PrivyLoginScreen } from "./screens/PrivyLoginScreen";
 import { ChatScreen } from "./screens/ChatScreen";
@@ -81,10 +81,15 @@ function AppShell() {
         // 30-day TOTP policy must still hold: real bug found by the 08/07
         // post-push review, this branch used to go straight to "home"
         // regardless, silently bypassing the re-check whenever the server
-        // couldn't be reached. Falls back to the LOCAL mirror instead.
-        const overdue = await isReverifyOverdueLocally();
+        // couldn't be reached. Falls back to the LOCAL mirror -- "overdue"
+        // (a real recorded timestamp IS stale) is the only case that still
+        // fails closed; "unknown" (nothing ever recorded, e.g. an existing
+        // session from before this store existed) degrades to trusting the
+        // session rather than a lockout totp_reverify itself couldn't
+        // resolve offline (second Devil's Advocate finding on this same fix).
+        const status = await localReverifyStatus();
         if (cancelled) return;
-        setPhase(overdue ? "totp_reverify" : "home");
+        setPhase(status === "overdue" ? "totp_reverify" : "home");
       }
     })();
     return () => {
