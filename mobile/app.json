@@ -44,6 +44,12 @@
         "projectId": "d8db2c0f-4410-4835-912c-4ee7db3a1936"
       }
     },
-    "owner": "goldenfarfrs-team"
+    "owner": "goldenfarfrs-team",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d8db2c0f-4410-4835-912c-4ee7db3a1936"
+    }
   }
 }

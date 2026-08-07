@@ -11,6 +11,7 @@
     "expo-notifications": "~57.0.9",
     "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",
+    "expo-updates": "~57.0.12",
     "react": "19.2.3",
     "react-native": "0.86.2",
     "react-native-safe-area-context": "~5.7.0",
