@@ -322,6 +322,12 @@ class AriaBrain:
             if usage_totals["cost_usd"] > 0 or usage_totals["cost_unknown"]:
                 response.data["llm_turn_cost_usd"] = usage_totals["cost_usd"]
                 response.data["llm_turn_cost_unknown"] = usage_totals["cost_unknown"]
+            if usage_totals["cost_usd"] > 0:
+                public = is_public_mode() if public_mode is None else public_mode
+                if not public:
+                    from aria_core.operator_chat_budget import record_spend
+
+                    record_spend(usage_totals["cost_usd"])
             return response
         finally:
             clear_chat_usage_tracking()
@@ -1120,6 +1126,23 @@ class AriaBrain:
         if is_short_ack(route):
             return "OK.", None, ["Ack (template)"], {}, None
         if not public:
+            from aria_core.operator_chat_budget import budget_exceeded, budget_exceeded_reply
+
+            # 07/08, explicit operator decision ("bloque toute depense
+            # inutile"): once the operator-chat daily spend cap is reached,
+            # the free-form/casual LLM path below (personality chat, the
+            # actual costly fallback) is short-circuited -- everything else
+            # in this function (short acks, skills, data lookups) stays
+            # unaffected, this only caps the "just chatting" cost sink.
+            if budget_exceeded():
+                return (
+                    budget_exceeded_reply(lang_key),
+                    None,
+                    ["Budget LLM opérateur atteint (template — zéro appel LLM)"],
+                    {"operator_budget_exceeded": True, "skip_web": True},
+                    None,
+                )
+
             from aria_core.grounding import is_pure_casual_smalltalk
 
             # Pure casual / humor / small talk with operator → skip all meta-routing
