@@ -55,6 +55,12 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
       } else if (err instanceof NetworkError) {
         setError("Hors ligne — impossible de joindre le serveur.");
       } else {
+        // Logged (never the token itself, only the caught error) -- this
+        // branch's message alone gave no way to tell "our backend rejected
+        // it" from "Privy's own SDK never even reached the backend" (real
+        // case found 07/08: this branch is unreachable when the SDK throws
+        // upstream in handleOAuth/handleVerifyEmailCode instead).
+        console.error("[PrivyLogin] finishWithBackend failed:", err);
         setError("Connexion impossible pour le moment.");
       }
     } finally {
@@ -77,7 +83,8 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     try {
       await loginOAuth({ provider });
       await afterPrivySuccess();
-    } catch {
+    } catch (err) {
+      console.error("[PrivyLogin] OAuth failed:", err);
       setError("Connexion impossible pour le moment.");
       setSubmitting(false);
     }
@@ -90,7 +97,8 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     try {
       await sendCode({ email: email.trim() });
       setStep("email_code");
-    } catch {
+    } catch (err) {
+      console.error("[PrivyLogin] sendCode failed:", err);
       setError("Envoi du code impossible — vérifie l'adresse.");
     } finally {
       setSubmitting(false);
@@ -104,10 +112,21 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     try {
       await loginWithCode({ code: emailCode.trim(), email: email.trim() });
       await afterPrivySuccess();
-    } catch {
+    } catch (err) {
+      console.error("[PrivyLogin] loginWithCode failed:", err);
       setError("Code invalide ou expiré.");
       setSubmitting(false);
     }
+  }
+
+  function backToChoose() {
+    setError(null);
+    setStep("choose");
+  }
+
+  function backToEmailAddress() {
+    setError(null);
+    setStep("email_address");
   }
 
   async function handleSubmitInvite() {
@@ -154,6 +173,9 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 
         {step === "email_address" && (
           <View style={styles.field}>
+            <TouchableOpacity onPress={backToChoose} disabled={submitting}>
+              <Text style={styles.back}>‹ Retour</Text>
+            </TouchableOpacity>
             <Text style={styles.label}>Adresse email</Text>
             <TextInput
               style={styles.input}
@@ -178,6 +200,9 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 
         {step === "email_code" && (
           <View style={styles.field}>
+            <TouchableOpacity onPress={backToEmailAddress} disabled={submitting}>
+              <Text style={styles.back}>‹ Retour</Text>
+            </TouchableOpacity>
             <Text style={styles.label}>Code reçu par email</Text>
             <TextInput
               style={styles.input}
@@ -200,6 +225,9 @@ export function PrivyLoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 
         {step === "invite_code" && (
           <View style={styles.field}>
+            <TouchableOpacity onPress={backToChoose} disabled={submitting}>
+              <Text style={styles.back}>‹ Retour</Text>
+            </TouchableOpacity>
             <Text style={styles.label}>Première connexion — code d'invitation</Text>
             <Text style={styles.hint}>Génère-le sur Telegram avec /mobileinvite.</Text>
             <TextInput
@@ -251,6 +279,7 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 21, fontWeight: "600", marginBottom: 6 },
   subtitle: { color: theme.textFaint, fontSize: 13 },
   field: { gap: 12 },
+  back: { color: theme.textFaint, fontSize: 14, marginBottom: 4 },
   label: { color: theme.textDim, fontSize: 12, marginBottom: -4 },
   hint: { color: theme.textFaint, fontSize: 11.5, marginBottom: 4 },
   input: {
