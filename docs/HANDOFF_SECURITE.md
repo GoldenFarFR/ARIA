@@ -11,6 +11,12 @@ Solution : `_exec_trade_tokens` now FAIL-CLOSED -- returns a blocking reason ins
 
 ------------------------------------------------------------
 
+[ETAT ACTUEL] Subject : Backlog #259 closed -- outgoing_pause.py audited, no finding this time
+Date : 2026.08.07 / Problem : #259's third and last targeted file (`wallet_guard.py` already fixed above, `agent_wallet_pilot.py` already covered by #254). The kill-switch itself had never been re-audited since it was written.
+Solution : read `outgoing_pause.py` in full plus every real-capital caller of `is_paused()`/`money_block_reason()` (`x402_executor.py`, `agent_wallet_pilot.py` swap+transfer, `agent_wallet_smart_swing.py`, `polymarket_execution.py`, `wallet_guard.py`). Confirmed correct rather than assumed: atomic disk write (tmp + `os.replace`); every one of those 5 real-money paths uses `is_paused(strict=True)` or `money_block_reason()` (fail-closed on unreadable state) -- never the bare `is_paused()` default (fail-open, correctly reserved for tweets/jobs/paper-trading, all confirmed non-financial); kill-switch checked BEFORE any network call in every case, address allowlist (`agent_wallet_pilot.attempt_transfer`) checked independently. Honest result: no bug found this pass -- reported as such rather than manufacturing one to justify the audit. #259 closed in CLAUDE.md's backlog.
+
+------------------------------------------------------------
+
 [DEPLOYE] Subject : Generic mechanical guard for every ARIA_*_ENABLED gate (Item #176)
 Date : 2026.07.31 / Probleme : 64 distinct ARIA_*_ENABLED gates exist across aria-core, each protected ad hoc (if at all) in test_coherence.py -- this file's own history recorded ARIA_BONDING_DISCOVERY_ENABLED and ARIA_CABALSPY_SOURCING_ENABLED as OFF in CLAUDE.md while both were actually ON in prod, caught only by a manual 5-agent audit (24/07), never mechanically.
 Solution : same pattern as `_EXTERNAL_WRITE_ALLOWLIST` (Item, 10/07) -- new `_KNOWN_ENABLED_GATES` registry (all 64 current gates) + `test_all_enabled_gates_registered_in_known_gates` scans every `.py` file for `ARIA_[A-Z_]*_ENABLED` and fails if a new one appears undeclared. Honest scope: proves a gate is KNOWN and DECLARED, cannot prove its live prod value (CI has no access to the deployed `.env`, still requires a real "verifier avant d'affirmer" check) -- test_coherence.py.
