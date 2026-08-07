@@ -59,12 +59,20 @@ ALLOWLISTED_EMAILS = {
     "contact@ariavanguardzhc.com",   # adresse de contact publique ARIA (SECURITY.md),
                                       # redirige vers agentaria.zhc@gmail.com -- pas une
                                       # adresse personnelle.
+    "sylvain.rio.fr@gmail.com",      # email operateur (GoldenFarFR), utilise intentionnellement
+                                      # dans scripts/commit-msg-coauthor-check.sh pour la ligne
+                                      # Co-Authored-By -- decision operateur 29/07 (email reel,
+                                      # pas le noreply GitHub, pour que le commit compte dans son
+                                      # activite GitHub reelle).
 }
 
 # Domaines placeholder de documentation/exemple connus -- jamais une vraie adresse
 # personnelle, safe à allowlister au niveau du domaine entier.
 ALLOWLISTED_DOMAINS = {
     "example.com",
+    "exemple.com",  # variante francaise du placeholder RFC 2606 (mobile/screens/
+                     # PrivyLoginScreen.tsx: placeholder="toi@exemple.com"), jamais
+                     # un vrai domaine de messagerie.
     "yourdomain.com",
     "users.noreply.github.com",
 }
