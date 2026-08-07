@@ -10,10 +10,13 @@ import { requestUnlock } from "./biometricLock";
 import { AppWindow } from "./components/AppWindow";
 import { PRIVY_APP_ID, PRIVY_CLIENT_ID } from "./config";
 import {
+  consumeInitialNotificationTap,
   reconcileUnreadFromPresented,
   registerForegroundUnreadListener,
+  registerNotificationTapListener,
   setupPushNotifications,
 } from "./push";
+import { isReverifyOverdueLocally } from "./totpReverifyStore";
 import { clearUnread, hydrateUnreadStore } from "./unreadStore";
 import { PrivyLoginScreen } from "./screens/PrivyLoginScreen";
 import { ChatScreen } from "./screens/ChatScreen";
@@ -37,6 +40,7 @@ function AppShell() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [unlockFailed, setUnlockFailed] = useState(false);
   const [openApp, setOpenApp] = useState<AppId | null>(null);
+  const [pendingChatOpen, setPendingChatOpen] = useState(false);
 
   useEffect(() => {
     hydrateAuthStore();
@@ -70,11 +74,17 @@ function AppShell() {
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           await logout();
           setPhase("privy_login");
-        } else {
-          // Offline at launch -- the session is presumed still valid locally
-          // rather than locking the operator out for a transient network hiccup.
-          setPhase("home");
+          return;
         }
+        // Offline at launch -- the session is presumed still valid (never
+        // locking the operator out for a transient network hiccup), but the
+        // 30-day TOTP policy must still hold: real bug found by the 08/07
+        // post-push review, this branch used to go straight to "home"
+        // regardless, silently bypassing the re-check whenever the server
+        // couldn't be reached. Falls back to the LOCAL mirror instead.
+        const overdue = await isReverifyOverdueLocally();
+        if (cancelled) return;
+        setPhase(overdue ? "totp_reverify" : "home");
       }
     })();
     return () => {
@@ -99,13 +109,30 @@ function AppShell() {
       await reconcileUnreadFromPresented();
       if (cancelled) return;
       await setupPushNotifications();
+      // 08/07 -- deep-link gap found by the post-push review: a tap that
+      // launched/resumed the app (no live event for that, only this
+      // one-shot check) requests the chat -- consumed below only once
+      // `phase === "home"` is already true, i.e. AFTER the biometric/TOTP
+      // gate, never a way around it.
+      const launchedByTap = await consumeInitialNotificationTap();
+      if (cancelled) return;
+      if (launchedByTap) setPendingChatOpen(true);
     })();
-    const unsubscribe = registerForegroundUnreadListener();
+    const unsubscribeUnread = registerForegroundUnreadListener();
+    const unsubscribeTap = registerNotificationTapListener(() => setPendingChatOpen(true));
     return () => {
       cancelled = true;
-      unsubscribe();
+      unsubscribeUnread();
+      unsubscribeTap();
     };
   }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "home" || !pendingChatOpen) return;
+    setOpenApp("chat");
+    clearUnread();
+    setPendingChatOpen(false);
+  }, [phase, pendingChatOpen]);
 
   function handleOpenApp(id: AppId) {
     setOpenApp(id);

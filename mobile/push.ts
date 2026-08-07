@@ -101,3 +101,29 @@ export async function reconcileUnreadFromPresented(): Promise<void> {
     // best-effort
   }
 }
+
+/** Deep-link half of push notifications (08/07, gap found by the post-push
+ * Devil's Advocate review): a TAP on a notification is meaningless if it
+ * only opens the icon grid -- the operator wants the chat, not a scavenger
+ * hunt. Two paths, both funneled through the caller (App.tsx), which only
+ * ever acts on this once `phase === "home"` -- i.e. AFTER the biometric/TOTP
+ * gate, never as a way around it. */
+
+/** App already foregrounded: fires immediately on tap. */
+export function registerNotificationTapListener(onTap: () => void): () => void {
+  const subscription = Notifications.addNotificationResponseReceivedListener(() => {
+    onTap();
+  });
+  return () => subscription.remove();
+}
+
+/** App was closed/backgrounded and the tap is what launched/resumed it --
+ * there's no live event for that, only this one-shot check at startup. */
+export async function consumeInitialNotificationTap(): Promise<boolean> {
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    return response !== null;
+  } catch {
+    return false;
+  }
+}
