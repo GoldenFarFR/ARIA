@@ -1086,3 +1086,57 @@ def test_trading_thresholds_match_calibration_doc():
         f"Constante(s) vérifiée(s) ici mais absente(s) du registre markdown : {undocumented}. "
         "Ajoute une ligne dans docs/trading-thresholds-calibration.md."
     )
+
+
+# ── Index HANDOFF (07/08, délégué opérateur "choi toi") ──────────────────────────────────
+# Un HANDOFF non indexé dans CLAUDE.md est aussi invisible qu'un HANDOFF qui n'existe pas
+# (règle déjà écrite dans CLAUDE.md lui-même) -- ce test la rend mécanique plutôt que de
+# compter sur une relecture manuelle à chaque nouveau fichier.
+
+_HANDOFF_FILES = sorted((REPO / "docs").glob("HANDOFF_*.md"))
+
+
+@pytest.mark.parametrize("path", _HANDOFF_FILES, ids=lambda p: p.name)
+def test_handoff_file_indexed_in_claude_md(path):
+    """Chaque docs/HANDOFF_<composant>.md doit être cité par son nom dans l'index de
+    CLAUDE.md -- sinon une session future ne saura jamais qu'il existe."""
+    claude = _read("CLAUDE.md")
+    assert path.name in claude, (
+        f"{path.name} existe sur disque mais n'est cité nulle part dans CLAUDE.md. "
+        "Ajoute une ligne dans la section 'Index des HANDOFF par composant' (même commit "
+        "que la création du fichier, règle déjà écrite dans CLAUDE.md)."
+    )
+
+
+# ── Format des entrées HANDOFF (07/08, délégué opérateur "choi toi") ─────────────────────
+# Format imposé par CLAUDE.md : "[STATUT] Sujet : <titre>" / "Date : ... / Probleme : ..."
+# / "Solution : ...", entrées séparées par une ligne de tirets. Vérifié empiriquement sur
+# les 492 entrées réelles avant d'écrire ce test (492/492 conformes) -- "Sujet" et "Subject"
+# cohabitent légitimement (bascule repo-en-anglais du 23/07, cf. CLAUDE.md), donc les deux
+# sont acceptés ici, jamais un seul.
+_HANDOFF_STATUSES = ("DEPLOYE", "CODE", "CONFIG", "ETAT ACTUEL")
+_HANDOFF_STATUS_LINE = re.compile(
+    r"^\[(" + "|".join(_HANDOFF_STATUSES) + r")\][^\n]*(?:Sujet|Subject)", re.MULTILINE
+)
+_HANDOFF_BLOCK_SPLIT = re.compile(r"\n-{10,}\n")
+
+
+@pytest.mark.parametrize("path", _HANDOFF_FILES, ids=lambda p: p.name)
+def test_handoff_entries_use_valid_status_and_required_fields(path):
+    """Chaque entrée HANDOFF (bloc entre deux séparateurs) doit : (1) ouvrir sur un statut
+    dans {DEPLOYE, CODE, CONFIG, ETAT ACTUEL} + Sujet/Subject sur la même ligne, (2) contenir
+    Date, Probleme/Problème/Problem et Solution quelque part dans le bloc. Attrape un statut
+    inventé/mal orthographié ou une entrée bâclée sans qu'une relecture manuelle soit requise."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for block in _HANDOFF_BLOCK_SPLIT.split(text):
+        if not _HANDOFF_STATUS_LINE.search(block):
+            continue  # préambule/section libre, pas une entrée -- jamais forcé au format
+        assert re.search(r"\bDate\b", block), (
+            f"{path.name} : entrée sans 'Date' -- {block[:80]!r}"
+        )
+        assert re.search(r"\bProbleme\b|\bProblème\b|\bProblem\b", block), (
+            f"{path.name} : entrée sans 'Probleme'/'Problem' -- {block[:80]!r}"
+        )
+        assert re.search(r"\bSolution\b", block), (
+            f"{path.name} : entrée sans 'Solution' -- {block[:80]!r}"
+        )
