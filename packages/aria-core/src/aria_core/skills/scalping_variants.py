@@ -465,21 +465,28 @@ _V8_GIVEBACK_ATR_MULT = 0.35
 _V8_MIN_GIVEBACK_PCT = 0.2
 _V8_MAX_GIVEBACK_PCT = 1.5
 
-# 07/08 -- re-enabled (Claude autonomous mandate, operator carte blanche
-# reaffirmed explicitly this session: "tu fait se que tu veut ... ta jamais
-# besoin de met permission"). This is NOT a blind revert to the version that
-# lost 0%/-$8728 on 30 trades (05/08-06/08): those trades ran BEFORE the
-# anti-chase (_V8_MAX_CHASE_PCT) and ATR-scaled giveback (_V8_GIVEBACK_ATR_MULT)
-# gates above existed -- both apply unconditionally to every v8 entry
-# regardless of divergence_fresh, so bootstrap-tier entries now get the same
-# entry-quality protection the divergence tier already has. Never tested in
-# this combined shape before. Direct motivation: the divergence-required tier
-# alone produced only 4 trades in ~20h (06/08 20:55 -> 06/08 16:46) after the
-# tightening -- for the operator's 24h "signes nets d'amélioration" mandate
-# (06/08 22:27), that rate cannot produce enough data to judge anything.
-# Reversible in one line; the 20min autonomous check-ins already running
-# will catch it fast if this tier reproduces the old 0% pattern.
-_V8_BOOTSTRAP_MODE = True
+# 07/08 ~12h30 -- DISABLED AGAIN, the re-enable above (06h25 same day) has now
+# reproduced the exact pattern its own comment said to watch for. Full v8
+# closed history at the moment of this decision: bootstrap tier 34 trades /
+# 0 wins / -9304$ (avg -2.72%), divergence tier 6 trades / 0 wins / -1284$
+# (avg -1.63%) -- bootstrap carries 91% of v8's total realized loss on 87%
+# of its trade count. Since THIS re-enable specifically (anti-chase +
+# ATR-giveback gates added): 4 trades, all 4 entered via bootstrap (zero via
+# divergence), all 4 losers -- the very re-enable meant to test whether the
+# new gates fixed bootstrap instead ran zero divergence-tier trades to
+# compare against. Across both the pre-gate and post-gate samples combined,
+# bootstrap has now produced 0 winners in 38 trades under two different gate
+# configurations and two different market windows -- past the point where
+# "not enough data" is a credible explanation. The divergence tier is the
+# only one with any empirical basis at all (60% WR vs 25.6%, Fisher
+# p=0.026, the actual backtest v8 was built on) -- bootstrap was always an
+# experiment layered on top of it, never itself validated. Disabling it
+# does not resolve the divergence tier's own 0/6 (still too small a sample
+# to judge), it just stops paying bootstrap's now-proven-negative tax while
+# that tier accumulates real data. Reversible in one line if a future
+# session finds a real fix for bootstrap's entry quality, but re-enabling
+# it AGAIN without one would just be repeating this experiment a third time.
+_V8_BOOTSTRAP_MODE = False
 # Bootstrap trough freshness: the lowest low of the recent window must sit
 # within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
 # spirit as the divergence pivot check, computed directly on the candles.
