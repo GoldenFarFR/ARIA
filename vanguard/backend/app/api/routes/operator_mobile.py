@@ -492,3 +492,20 @@ async def history(request: Request, limit: int = HISTORY_DEFAULT_LIMIT):
     await require_operator_or_session(request)
     capped = max(1, min(limit, HISTORY_MAX_LIMIT))
     return {"limit": capped, "incidents": await kill_incident_log.list_incidents(limit=capped)}
+
+
+class PushTokenBody(BaseModel):
+    token: str = Field(..., min_length=1, max_length=512)
+    installation_id: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/push-token")
+async def register_push_token(body: PushTokenBody, request: Request):
+    """08/07 -- native push notifications follow-up to Item #201. Called at
+    every app launch (idempotent upsert, see push_tokens.py), not just first
+    install -- a reinstalled app gets a fresh Expo token that must replace
+    the stale one."""
+    await require_operator_or_session(request)
+    from aria_core.push_tokens import register_push_token as _register_token
+    await _register_token(body.token, body.installation_id)
+    return {"ok": True}

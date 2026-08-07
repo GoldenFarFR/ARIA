@@ -775,3 +775,24 @@ async def test_history_default_limit_when_unspecified(client, totp_secret):
     assert res.status_code == 200
     assert res.json()["limit"] == operator_mobile.HISTORY_DEFAULT_LIMIT
     assert res.json()["incidents"] == []
+
+
+@pytest.mark.asyncio
+async def test_register_push_token_requires_session(client):
+    res = await client.post("/api/aria/ops/push-token", json={"token": "ExponentPushToken[x]"})
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_register_push_token_persists(client, totp_secret):
+    from aria_core.push_tokens import list_push_tokens
+
+    headers = await _authed(client, totp_secret)
+    res = await client.post(
+        "/api/aria/ops/push-token",
+        json={"token": "ExponentPushToken[persist-1]", "installation_id": "dev-1"},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+    assert "ExponentPushToken[persist-1]" in await list_push_tokens()

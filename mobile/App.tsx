@@ -5,6 +5,12 @@ import { StatusBar } from "expo-status-bar";
 import { hydrateAuthStore, useAuthSession } from "./authStore";
 import { requestUnlock } from "./biometricLock";
 import { AppWindow } from "./components/AppWindow";
+import {
+  reconcileUnreadFromPresented,
+  registerForegroundUnreadListener,
+  setupPushNotifications,
+} from "./push";
+import { clearUnread, hydrateUnreadStore } from "./unreadStore";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ChatScreen } from "./screens/ChatScreen";
 import { ConsoleScreen } from "./screens/ConsoleScreen";
@@ -55,6 +61,29 @@ export default function App() {
     });
   }
 
+  // Native push setup (07/08): only once the operator is actually past the
+  // lock screen -- never solicits notification permission before that.
+  useEffect(() => {
+    if (phase !== "home") return;
+    let cancelled = false;
+    (async () => {
+      await hydrateUnreadStore();
+      await reconcileUnreadFromPresented();
+      if (cancelled) return;
+      await setupPushNotifications();
+    })();
+    const unsubscribe = registerForegroundUnreadListener();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [phase]);
+
+  function handleOpenApp(id: AppId) {
+    setOpenApp(id);
+    if (id === "chat") clearUnread();
+  }
+
   return (
     <SafeAreaProvider>
       <View style={styles.root}>
@@ -68,7 +97,7 @@ export default function App() {
         {phase === "locked" && <LockScreen onRetry={retryUnlock} failed={unlockFailed} />}
         {phase === "home" && (
           <>
-            <HomeScreen onOpenApp={setOpenApp} onLoggedOut={() => setPhase("login")} />
+            <HomeScreen onOpenApp={handleOpenApp} onLoggedOut={() => setPhase("login")} />
             <AppWindow
               visible={openApp !== null}
               title={openApp ? APP_TITLES[openApp] : ""}

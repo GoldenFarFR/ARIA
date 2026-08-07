@@ -1081,6 +1081,14 @@ class AriaHeartbeat:
             await send_message(text, disable_preview=disable_preview)
         except Exception as exc:
             logger.warning("Telegram notify failed: %s", exc)
+        # 08/07 -- mirrors the same message to the mobile app's "support" push
+        # channel, independent try/except (a push failure must never affect
+        # the Telegram send above, nor bubble up into the calling cycle).
+        try:
+            from aria_core.gateway.expo_push import notify_support
+            await notify_support(text)
+        except Exception as exc:
+            logger.warning("Expo support push failed: %s", exc)
 
     async def _notify_telegram_html(self, text: str) -> None:
         """07/23 -- dedicated HTML variant (``parse_mode="HTML"``), used ONLY
@@ -1112,6 +1120,15 @@ class AriaHeartbeat:
         ``Heartbeat`` instance, so it never sent anything)."""
         from aria_core.gateway.telegram_bot import send_trading_notification
         await send_trading_notification(text)
+        # 08/07 -- mirrors buy/sell/partial-exit/periodic-tracking alerts (never
+        # pending/watching limit orders, see notify_trading's own filter) to the
+        # mobile app's "trading" push channel. Independent try/except -- a push
+        # failure must never affect the Telegram send above.
+        try:
+            from aria_core.gateway.expo_push import notify_trading
+            await notify_trading(text)
+        except Exception as exc:
+            logger.warning("Expo trading push failed: %s", exc)
 
     async def _run_task(self, task_id: str) -> None:
         if task_id == "portfolio_scan":

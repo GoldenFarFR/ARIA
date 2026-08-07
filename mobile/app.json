@@ -31,6 +31,12 @@
             "usesCleartextTraffic": false
           }
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#c9a45c"
+        }
       ]
     ],
     "extra": {

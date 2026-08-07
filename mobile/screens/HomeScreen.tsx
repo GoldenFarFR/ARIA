@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { logout } from "../api/auth";
+import { useUnreadCount } from "../unreadStore";
 import { theme } from "../theme";
 
 export type AppId = "chat" | "console";
@@ -30,6 +31,8 @@ export function HomeScreen({
   onOpenApp: (id: AppId) => void;
   onLoggedOut: () => void;
 }) {
+  const unread = useUnreadCount();
+
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <View style={styles.header}>
@@ -54,6 +57,11 @@ export function HomeScreen({
           >
             <View style={styles.icon}>
               <Text style={styles.iconGlyph}>{app.glyph}</Text>
+              {app.id === "chat" && unread > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unread > 99 ? "99+" : unread}</Text>
+                </View>
+              )}
             </View>
             <Text style={styles.iconLabel}>{app.label}</Text>
           </TouchableOpacity>
@@ -93,7 +101,23 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
   },
   iconGlyph: { fontSize: 26, color: theme.accent },
   iconLabel: { color: theme.textDim, fontSize: 11.5, textAlign: "center" },
+  badge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: theme.danger,
+    borderWidth: 2,
+    borderColor: theme.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  badgeText: { color: "#fff", fontSize: 10.5, fontWeight: "700" },
 });
