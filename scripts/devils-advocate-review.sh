@@ -44,6 +44,18 @@
 # fichier par push, jamais ecrase) ; "lu" devient un geste explicite
 # (deplacement vers archived/, voir session-checkpoint.sh) plutot qu'un
 # throttle qui perd silencieusement ce qui arrive entre deux lectures.
+# 07/08 -- real gap found live (operator: "tu pousse trop souvent sous les
+# 2000" -- a small isolated push, e.g. a one-file CI fix, still triggered a
+# full paid call): the 2000-raw-line batching rule (CLAUDE.md) was PURE
+# session discipline, never mechanized here -- nothing stopped a push from
+# under the threshold from still costing a real API call. LAST_REVIEWED_MARKER
+# fixes this the same way .last-deployed-ref already tracks the deploy
+# threshold: the diff analyzed is no longer just "this push" but
+# marker..HEAD (everything accumulated since the last push that ACTUALLY
+# triggered a real call). Under threshold -> skip, marker untouched, so the
+# next push naturally absorbs the missed diff instead of a second push
+# silently starting a fresh, smaller-than-2000 window. Reaching the
+# threshold -> normal call, marker advances to HEAD.
 set -uo pipefail
 
 REPO_DIR="/opt/aria"
@@ -51,6 +63,8 @@ PENDING_DIR="/opt/aria-data/architect-reports/pending"
 REVIEW_LOG="/opt/aria-data/architect-review.log"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
 ZERO_SHA="0000000000000000000000000000000000000000"
+LAST_REVIEWED_MARKER="/opt/aria-data/architect-reports/last-reviewed-sha"
+BATCH_THRESHOLD_LINES=2000
 
 mkdir -p "$PENDING_DIR" 2>/dev/null || true
 
@@ -78,12 +92,12 @@ done
 REPORT_FILE="$PENDING_DIR/${MAIN_LOCAL_SHA}.md"
 
 if [ "$MAIN_REMOTE_SHA" = "$ZERO_SHA" ]; then
-  DIFF_CONTENT=$(git show --format="" "$MAIN_LOCAL_SHA" 2>/dev/null)
+  LAST_PUSH_DIFF=$(git show --format="" "$MAIN_LOCAL_SHA" 2>/dev/null)
 else
-  DIFF_CONTENT=$(git diff "$MAIN_REMOTE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null)
+  LAST_PUSH_DIFF=$(git diff "$MAIN_REMOTE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null)
 fi
 
-[ -z "$DIFF_CONTENT" ] && exit 0  # diff vide (ex. simple move de ref)
+[ -z "$LAST_PUSH_DIFF" ] && exit 0  # diff vide (ex. simple move de ref)
 
 # 05/08 -- exception validee par l'operateur ("oui je valide", issue du
 # rapport 4d94019c) : un push ne touchant QUE .github/** (pure config CI/
@@ -91,10 +105,41 @@ fi
 # l'infrastructure de surveillance (CodeQL/Dependabot/uptime) doit pouvoir
 # etre poussee immediatement sans attendre le seuil de 2000 lignes NI couter
 # une revue. Des qu'UN fichier hors .github/ est dans le diff, la revue
-# complete a lieu normalement.
+# complete a lieu normalement. Base sur CE push seul (jamais le cumul) --
+# une infra de surveillance doit toujours pouvoir sortir immediatement.
 if [ "$MAIN_REMOTE_SHA" != "$ZERO_SHA" ]; then
   NON_GITHUB_FILES=$(git diff --name-only "$MAIN_REMOTE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null | grep -cv "^\.github/" || true)
   [ "$NON_GITHUB_FILES" = "0" ] && exit 0
+fi
+
+# 07/08 -- mecanise le seuil de batching (voir commentaire de tete sur
+# LAST_REVIEWED_MARKER) : le diff REELLEMENT analyse est marker..HEAD, pas
+# juste ce dernier push, pour ne jamais perdre la couverture d'un push
+# precedent qui n'avait pas atteint le seuil.
+BASE_SHA="$MAIN_REMOTE_SHA"
+if [ -f "$LAST_REVIEWED_MARKER" ]; then
+  MARKER_SHA=$(cat "$LAST_REVIEWED_MARKER" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$MARKER_SHA" ] && git cat-file -e "${MARKER_SHA}^{commit}" 2>/dev/null; then
+    BASE_SHA="$MARKER_SHA"
+  fi
+fi
+
+if [ "$BASE_SHA" = "$ZERO_SHA" ] || [ -z "$BASE_SHA" ]; then
+  DIFF_CONTENT=$(git show --format="" "$MAIN_LOCAL_SHA" 2>/dev/null)
+else
+  DIFF_CONTENT=$(git diff "$BASE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null)
+fi
+[ -z "$DIFF_CONTENT" ] && DIFF_CONTENT="$LAST_PUSH_DIFF"
+
+CUMULATIVE_LINES=0
+if [ "$BASE_SHA" != "$ZERO_SHA" ] && [ -n "$BASE_SHA" ]; then
+  CUMULATIVE_LINES=$(git diff --shortstat "$BASE_SHA".."$MAIN_LOCAL_SHA" 2>/dev/null \
+    | grep -oE '[0-9]+ (insertion|deletion)' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+fi
+
+if [ "$CUMULATIVE_LINES" -lt "$BATCH_THRESHOLD_LINES" ]; then
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- SKIP sous le seuil (${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12}) ===" >> "$REVIEW_LOG"
+  exit 0
 fi
 
 DIFF_LEN=${#DIFF_CONTENT}
@@ -152,6 +197,9 @@ fi
     echo "> agir sur une affirmation non verifiee."
     echo ">"
     echo "> Commit pousse sur main : ${MAIN_LOCAL_SHA} (precedent : ${MAIN_REMOTE_SHA})"
+    if [ "$BASE_SHA" != "$MAIN_REMOTE_SHA" ]; then
+      echo "> Diff REELLEMENT analyse (cumul, ${CUMULATIVE_LINES} lignes) : depuis ${BASE_SHA:0:12} -- au moins un push precedent etait sous le seuil de ${BATCH_THRESHOLD_LINES} lignes et a ete reporte ici."
+    fi
     echo "> Genere le $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo ""
     echo "---"
@@ -169,7 +217,12 @@ fi
     fi
   } > "$REPORT_FILE"
 
-  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- HTTP ${HTTP_STATUS} ===" >> "$REVIEW_LOG"
+  # Avance le marker seulement une fois le cumul REELLEMENT couvert (seuil
+  # atteint, appel effectue) -- jamais sur un skip (voir le check plus haut),
+  # sinon la couverture du diff manque silencieusement.
+  echo "$MAIN_LOCAL_SHA" > "$LAST_REVIEWED_MARKER"
+
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- HTTP ${HTTP_STATUS} (cumul ${CUMULATIVE_LINES} lignes depuis ${BASE_SHA:0:12}) ===" >> "$REVIEW_LOG"
 ) &
 disown
 
