@@ -1,10 +1,11 @@
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { theme } from "../theme";
 
 export function LockScreen({ onRetry, failed }: { onRetry: () => void; failed: boolean }) {
   return (
-    <View style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
       <View style={styles.mark}>
         <Text style={styles.markText}>A</Text>
       </View>
@@ -17,7 +18,7 @@ export function LockScreen({ onRetry, failed }: { onRetry: () => void; failed: b
       <TouchableOpacity style={styles.button} onPress={onRetry}>
         <Text style={styles.buttonText}>Déverrouiller</Text>
       </TouchableOpacity>
-    </View>
+    </SafeAreaView>
   );
 }
 

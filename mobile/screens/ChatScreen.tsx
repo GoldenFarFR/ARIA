@@ -92,27 +92,9 @@ export function ChatScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
       style={styles.screen}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <View style={styles.header}>
-        <View style={styles.headerId}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>A</Text>
-          </View>
-          <View>
-            <Text style={styles.name}>ARIA</Text>
-            <View style={styles.sub}>
-              <View style={[styles.pulse, connection === "offline" && styles.pulseOffline]} />
-              <Text style={styles.subText}>{connection === "online" ? "en ligne" : "hors ligne"}</Text>
-            </View>
-          </View>
-        </View>
-        <TouchableOpacity
-          onPress={async () => {
-            await logout();
-            onLoggedOut();
-          }}
-        >
-          <Text style={styles.logout}>Déconnexion</Text>
-        </TouchableOpacity>
+      <View style={styles.connectionRow}>
+        <View style={[styles.pulse, connection === "offline" && styles.pulseOffline]} />
+        <Text style={styles.subText}>{connection === "online" ? "en ligne" : "hors ligne"}</Text>
       </View>
 
       <FlatList
@@ -163,31 +145,13 @@ export function ChatScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg },
-  header: {
+  connectionRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: 58,
+    paddingTop: 10,
     paddingHorizontal: 20,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.borderSoft,
+    paddingBottom: 6,
   },
-  headerId: { flexDirection: "row", alignItems: "center", gap: 10 },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    backgroundColor: theme.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-  avatarText: { color: theme.accent, fontSize: 16, fontWeight: "600" },
-  name: { color: theme.text, fontSize: 14.5, fontWeight: "600" },
-  sub: { flexDirection: "row", alignItems: "center", marginTop: 2 },
   pulse: {
     width: 6,
     height: 6,
@@ -197,7 +161,6 @@ const styles = StyleSheet.create({
   },
   pulseOffline: { backgroundColor: theme.textFaint },
   subText: { color: theme.textFaint, fontSize: 11 },
-  logout: { color: theme.textDim, fontSize: 12.5 },
   body: { flex: 1 },
   bodyContent: { padding: 16, gap: 10 },
   bubbleRow: { flexDirection: "row" },

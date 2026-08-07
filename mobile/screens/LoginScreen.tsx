@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { login } from "../api/auth";
 import { ApiError, NetworkError } from "../api/client";
 import { getOrCreateInstallationId } from "../installationId";
@@ -17,11 +18,10 @@ import { theme } from "../theme";
 export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("operator");
   const [password, setPassword] = useState("");
-  const [totpCode, setTotpCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = username.trim().length > 0 && password.length > 0 && totpCode.trim().length === 6;
+  const canSubmit = username.trim().length > 0 && password.length > 0;
 
   async function handleSubmit() {
     if (!canSubmit || submitting) return;
@@ -29,9 +29,8 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     setError(null);
     try {
       const installationId = await getOrCreateInstallationId();
-      await login({ username: username.trim(), password, totpCode: totpCode.trim(), installationId });
+      await login({ username: username.trim(), password, installationId });
       setPassword("");
-      setTotpCode("");
       onLoggedIn();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -49,10 +48,11 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
+    <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
+      <KeyboardAvoidingView
+        style={styles.inner}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
       <View style={styles.brand}>
         <View style={styles.mark}>
           <Text style={styles.markText}>A</Text>
@@ -88,19 +88,6 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
         />
       </View>
 
-      <View style={styles.field}>
-        <Text style={styles.label}>Code à 6 chiffres (TOTP)</Text>
-        <TextInput
-          style={[styles.input, styles.totpInput]}
-          value={totpCode}
-          onChangeText={(t) => setTotpCode(t.replace(/[^0-9]/g, "").slice(0, 6))}
-          keyboardType="number-pad"
-          placeholder="000000"
-          placeholderTextColor={theme.textFaint}
-          maxLength={6}
-        />
-      </View>
-
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <TouchableOpacity
@@ -118,17 +105,18 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
       <Text style={styles.footnote}>
         Connecté directement à ton VPS — aucune dépendance à Telegram
       </Text>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  screen: { flex: 1, backgroundColor: theme.bg },
+  inner: {
     flex: 1,
-    backgroundColor: theme.bg,
     paddingHorizontal: 26,
-    paddingTop: 72,
-    paddingBottom: 32,
+    paddingTop: 24,
+    paddingBottom: 20,
   },
   brand: { alignItems: "center", marginBottom: 40 },
   mark: {
@@ -157,7 +145,6 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 15,
   },
-  totpInput: { fontVariant: ["tabular-nums"], letterSpacing: 4 },
   error: { color: theme.danger, fontSize: 13, marginBottom: 14, textAlign: "center" },
   button: {
     backgroundColor: theme.accent,

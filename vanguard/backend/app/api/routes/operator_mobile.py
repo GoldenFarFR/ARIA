@@ -63,9 +63,16 @@ HISTORY_MAX_LIMIT = 100
 
 
 class LoginRequest(BaseModel):
+    # 07/08 -- TOTP dropped from THIS login form (operator request, "je veut
+    # aussi que tu désactive le totp"): the app's own biometric lock
+    # (biometricLock.ts) already gates every re-entry after the first login,
+    # and the session is now effectively permanent (SESSION_TTL, see
+    # operator_session.py), so this form is only ever seen once. Deliberately
+    # UNRELATED to the kill-switch TOTP (_require_fresh_totp below, guarding
+    # /stop and /resume specifically) -- that one stays required on every
+    # single call, never weakened by this change.
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1, max_length=256)
-    totp_code: str = Field(..., min_length=6, max_length=6)
     installation_id: str | None = Field(default=None, max_length=128)
     device_label: str | None = Field(default=None, max_length=64)
 
@@ -306,9 +313,8 @@ async def login(body: LoginRequest, request: Request):
         await asyncio.sleep(delay)
 
     password_ok = accounts.verify_password(account, body.password)
-    totp_ok = verify_totp(account["totp_secret"], body.totp_code)
 
-    if not password_ok or not totp_ok:
+    if not password_ok:
         await accounts.record_login_failure(account["id"])
         await auth_log.record_event(event_type=auth_log.EVENT_LOGIN_FAILURE, username=body.username, ip=ip)
         raise HTTPException(status_code=401, detail="Invalid credentials")

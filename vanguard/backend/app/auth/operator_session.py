@@ -26,7 +26,13 @@ from app.paths import auth_db_path
 
 DB_PATH = str(auth_db_path())
 
-SESSION_TTL = timedelta(days=7)
+# 07/08 -- operator request: never see the login screen again once signed in
+# once, only the local biometric lock (biometricLock.ts) gates re-entry from
+# then on. 10 years, not a literal "no expiry" sentinel (would need a NULL/
+# special-case path threaded through every comparison below for no real
+# gain) -- same practical effect, sliding window still renews it further out
+# on every use via _RENEWAL_THRESHOLD below.
+SESSION_TTL = timedelta(days=3650)
 _RENEWAL_THRESHOLD = timedelta(hours=48)
 
 

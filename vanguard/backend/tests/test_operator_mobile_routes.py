@@ -96,11 +96,13 @@ async def client(tmp_path, monkeypatch):
         yield c
 
 
-def _login_body(totp_secret, *, password=PASSWORD, code=None):
+def _login_body(totp_secret, *, password=PASSWORD):
+    # totp_secret kept as a parameter (not read here) so every existing call
+    # site stays unchanged -- see the 07/08 login-no-longer-needs-TOTP tests
+    # below for why the login form itself never sends totp_code anymore.
     return {
         "username": USERNAME,
         "password": password,
-        "totp_code": code if code is not None else totp_code(totp_secret),
         "installation_id": "test-device",
     }
 
@@ -116,11 +118,18 @@ async def test_login_succeeds_with_correct_password_and_totp(client, totp_secret
 
 
 @pytest.mark.asyncio
-async def test_login_rejected_without_valid_totp(client, totp_secret):
-    res = await client.post("/api/aria/ops/login", json=_login_body(totp_secret, code="000000"))
-    assert res.status_code == 401
-    events = await auth_log.list_events()
-    assert events[0]["event_type"] == "login_failure"
+async def test_login_no_longer_requires_totp(client, totp_secret):
+    """07/08 -- operator request ("désactive le totp"): the login FORM no
+    longer sends/checks a TOTP code at all -- the app's own biometric lock
+    gates re-entry after this one-time login, and the session is now
+    effectively permanent (SESSION_TTL). Deliberately UNRELATED to the
+    kill-switch TOTP (test_kill_switch_requires_fresh_totp below), which
+    stays required on every /stop and /resume call regardless of this
+    change."""
+    body = _login_body(totp_secret)
+    assert "totp_code" not in body
+    res = await client.post("/api/aria/ops/login", json=body)
+    assert res.status_code == 200
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,6 @@ import { setAuthToken } from "../authStore";
 export interface LoginPayload {
   username: string;
   password: string;
-  totpCode: string;
   installationId: string;
 }
 
@@ -25,7 +24,6 @@ export async function login(payload: LoginPayload): Promise<void> {
     {
       username: payload.username,
       password: payload.password,
-      totp_code: payload.totpCode,
       installation_id: payload.installationId,
     },
     false,
