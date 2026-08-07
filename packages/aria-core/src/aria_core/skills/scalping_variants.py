@@ -530,6 +530,17 @@ _V8_ENTRY_PAUSED = True
 _V8_TROUGH_WINDOW = 10
 
 
+async def _shadow_price_atr(contract: str, chain: str) -> tuple[float | None, float | None]:
+    """Injected into v8_limit_shadow.process_shadows -- reuses THIS module's
+    own _gates_and_candles (same short-TTL cache a real v8 scan of the same
+    candidate this cycle already populated), never a second client/fetch
+    path for the same data."""
+    pair, candles, hold = await _gates_and_candles(contract, chain, enforce_volume_gate=False)
+    if hold is not None or pair is None:
+        return None, None
+    return pair.price_usd, _atr_value(candles)
+
+
 async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
     from aria_core.skills import entry_signals
 
@@ -555,16 +566,6 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         )
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real evaluation
         logger.info("scalping_variants: combo_signal_shadow.record_evaluation failed (%s)", exc)
-    if _V8_ENTRY_PAUSED:
-        # 07/08 ~23h20, see _V8_ENTRY_PAUSED's own comment: both tiers proven
-        # 0 winners in 43 real trades, same never-touches-positive signature
-        # on each -- shadow logging above still runs (feeds the future
-        # limit-order redesign), only the buy path is cut.
-        return _hold(
-            chain, pair.base_symbol, pair.price_usd,
-            "poche v8 en pause (0 gain sur 43 trades reels, deux paliers -- "
-            "voir commentaire _V8_ENTRY_PAUSED)", "v8_entry_paused",
-        )
     detail = entry_signals._bullish_rsi_divergence_detail(
         candles, period=entry_signals.SCALPING_RSI_PERIOD
     )
@@ -609,6 +610,35 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
     if not atr or atr <= 0:
         return _hold(chain, pair.base_symbol, entry, "ATR non calculable", "indicator_unavailable")
     signal_close = candles[-1].close
+    if signal_close > 0:
+        # 07/08 23h40 -- limit-order shadow (see _V8_ENTRY_PAUSED's own
+        # comment for the full diagnosis): records what a simulated LIMIT
+        # order anchored to THIS signal candle's close would have done,
+        # regardless of where the live price (checked right below) actually
+        # is -- that's the whole point, an anchored order doesn't need an
+        # anti-chase gate the way a live-price buy does. Best-effort, never
+        # blocks a real evaluation.
+        try:
+            from aria_core import v8_limit_shadow
+
+            await v8_limit_shadow.record_signal(
+                contract, chain, symbol=pair.base_symbol, signal_close=signal_close,
+                atr_at_signal=atr, stop_price=signal_close - _V8_STOP_ATR_MULT * atr,
+            )
+            await v8_limit_shadow.process_shadows(_shadow_price_atr)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("scalping_variants: v8_limit_shadow failed (%s)", exc)
+    if _V8_ENTRY_PAUSED:
+        # 07/08 ~23h20, see _V8_ENTRY_PAUSED's own comment: both tiers proven
+        # 0 winners in 43 real trades, same never-touches-positive signature
+        # on each. Placed AFTER the shadow record above (not before, like the
+        # first version of this pause) so a real signal still feeds the
+        # limit-order shadow even while the real buy path stays cut.
+        return _hold(
+            chain, pair.base_symbol, pair.price_usd,
+            "poche v8 en pause (0 gain sur 43 trades reels, deux paliers -- "
+            "voir commentaire _V8_ENTRY_PAUSED)", "v8_entry_paused",
+        )
     if signal_close > 0 and entry > signal_close * (1 + _V8_MAX_CHASE_PCT / 100.0):
         return _hold(
             chain, pair.base_symbol, entry,
