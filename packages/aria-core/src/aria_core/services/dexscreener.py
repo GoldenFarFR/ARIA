@@ -351,6 +351,24 @@ def token_url(contract: str, *, chain: str = "base") -> str:
     return f"{WEB_BASE_URL}/{(chain or 'base').strip().lower()}/{(contract or '').strip().lower()}"
 
 
+# 07/08 -- operator request: every alert with a DexScreener link should also
+# link to ARIA's own console (MarketApp, deployed at ops.ariavanguardzhc.com/
+# market -- see vanguard/product-frontend). Deep link resolves the token
+# contract to its best pair server-side (GET /pairs/resolve/<chain>/<token>,
+# same doctrine as token_url's "token form, not a specific pair" above) --
+# never a network call here either, pure URL construction.
+CONSOLE_BASE_URL = "https://ops.ariavanguardzhc.com/market"
+
+
+def console_url(contract: str, *, chain: str = "base") -> str:
+    """ARIA's own chart console (companion to token_url above) -- same
+    contract/chain inputs, same "no network call" doctrine."""
+    return (
+        f"{CONSOLE_BASE_URL}?contract={(contract or '').strip().lower()}"
+        f"&chain={(chain or 'base').strip().lower()}"
+    )
+
+
 async def has_any_pair(contract: str, *, chain: str = "base") -> bool | None:
     """Triangulation (#157, 14/07): ``True``/``False`` if DexScreener responded
     normally (at least one pair found or not), ``None`` if the call

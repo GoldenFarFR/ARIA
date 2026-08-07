@@ -67,6 +67,15 @@ export async function getPair(chainId: string, pairAddress: string): Promise<Pai
   return res.json()
 }
 
+// Token contract -> its best pair. Used for deep links into a specific
+// token's chart (e.g. from a Telegram trade alert) where only the token
+// address is known, never the pair/pool address.
+export async function resolveToken(chainId: string, tokenAddress: string): Promise<PairSummary> {
+  const res = await apiFetch(`/pairs/resolve/${chainId}/${tokenAddress}`)
+  if (!res.ok) throw new Error('Token not found')
+  return res.json()
+}
+
 export async function searchPairs(query: string): Promise<PairSummary[]> {
   const res = await apiFetch(`/pairs/search?q=${encodeURIComponent(query)}`)
   if (!res.ok) throw new Error('Search failed')

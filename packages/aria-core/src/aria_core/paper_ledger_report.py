@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aria_core import paper_trader
-from aria_core.services.dexscreener import token_url
+from aria_core.services.dexscreener import console_url, token_url
 
 
 def _fmt_price(v) -> str:
@@ -68,6 +68,7 @@ def _render_open(p: dict) -> str:
         lines.append(f"    Dernière prise de profit partielle : {close_notes}")
     if p.get("contract"):
         lines.append(f"    DexScreener : {token_url(p['contract'], chain=p.get('chain') or 'base')}")
+        lines.append(f"    Console ARIA : {console_url(p['contract'], chain=p.get('chain') or 'base')}")
     return "\n".join(lines)
 
 
@@ -96,7 +97,10 @@ def _render_closed_compact(p: dict) -> str:
         f"détenue {_duration(p.get('opened_at'), p.get('closed_at'))}"
     )
     if p.get("contract"):
-        line += f" · {token_url(p['contract'], chain=p.get('chain') or 'base')}"
+        line += (
+            f" · {token_url(p['contract'], chain=p.get('chain') or 'base')}"
+            f" · {console_url(p['contract'], chain=p.get('chain') or 'base')}"
+        )
     return line
 
 
@@ -121,6 +125,7 @@ def _render_closed(p: dict) -> str:
     )
     if p.get("contract"):
         lines.append(f"    DexScreener : {token_url(p['contract'], chain=p.get('chain') or 'base')}")
+        lines.append(f"    Console ARIA : {console_url(p['contract'], chain=p.get('chain') or 'base')}")
     return "\n".join(lines)
 
 

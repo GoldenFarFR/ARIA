@@ -26,7 +26,7 @@ import aiosqlite
 
 from aria_core import chasing_filter_shadow, momentum_funnel_log
 from aria_core.paths import aria_db_path
-from aria_core.services.dexscreener import token_url
+from aria_core.services.dexscreener import console_url, token_url
 
 logger = logging.getLogger(__name__)
 
@@ -2584,6 +2584,7 @@ def format_buy_alert(pos: dict) -> str:
         lines.append(f"Thèse : {thesis}")
     if pos.get("contract"):
         lines.append(f"DexScreener : {token_url(pos['contract'], chain=pos.get('chain') or 'base')}")
+        lines.append(f"Console ARIA : {console_url(pos['contract'], chain=pos.get('chain') or 'base')}")
     lines.append("Aucun argent réel — preuve de performance en cours.")
     return "\n".join(lines)
 
@@ -2624,7 +2625,10 @@ def _format_tracked_position_line(t: dict) -> str:
             f"capital {cost:,.0f} $ ({pct_of_capital:.1f}% du capital de départ)"
         )
         if t.get("contract"):
-            line += f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+            line += (
+                f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+                f" · {console_url(t['contract'], chain=t.get('chain') or 'base')}"
+            )
         return line
     # 26/07 -- per-position label, not a single header one: this alert can
     # list positions opened under DIFFERENT strategies/modes at once (a
@@ -2642,7 +2646,10 @@ def _format_tracked_position_line(t: dict) -> str:
         hold = _format_hold_duration(t.get("opened_at"))
         line += f" · entrée {entry:.6g}" + (f" · détenue {hold}" if hold else "")
     if t.get("contract"):
-        line += f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+        line += (
+            f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+            f" · {console_url(t['contract'], chain=t.get('chain') or 'base')}"
+        )
     return line
 
 
@@ -2783,6 +2790,7 @@ def format_sell_alert(closed: dict) -> str:
         lines.append(f"Pourquoi : {notes}")
     if closed.get("contract"):
         lines.append(f"DexScreener : {token_url(closed['contract'], chain=closed.get('chain') or 'base')}")
+        lines.append(f"Console ARIA : {console_url(closed['contract'], chain=closed.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -2804,6 +2812,7 @@ def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str
     ]
     if contract:
         lines.append(f"DexScreener : {token_url(contract, chain=chain or 'base')}")
+        lines.append(f"Console ARIA : {console_url(contract, chain=chain or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -2832,6 +2841,7 @@ def format_partial_exit_alert(partial: dict) -> str:
         lines.append(f"Pourquoi : {notes}")
     if partial.get("contract"):
         lines.append(f"DexScreener : {token_url(partial['contract'], chain=partial.get('chain') or 'base')}")
+        lines.append(f"Console ARIA : {console_url(partial['contract'], chain=partial.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 

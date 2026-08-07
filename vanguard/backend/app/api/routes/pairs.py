@@ -83,6 +83,19 @@ async def token_pairs(chain_id: str, token_address: str):
     return {"chain_id": chain_id, "token_address": token_address, "pairs": pairs}
 
 
+@router.get("/resolve/{chain_id}/{token_address}")
+async def resolve_token(chain_id: str, token_address: str):
+    """Token contract -> its best (highest-liquidity) pair -- same shape as
+    ``get_pair`` below, so a caller with only a token address (every ARIA
+    paper-trading position, which stores ``contract`` never ``pair_address``)
+    can deep-link straight into the MarketApp chart without a client-side
+    pair-selection step."""
+    pair = await dexscreener_client.resolve_token_to_best_pair(chain_id, token_address)
+    if not pair:
+        raise HTTPException(status_code=404, detail="No pair found for token")
+    return pair
+
+
 @router.get("/discover", response_model=DiscoverResponse)
 async def discover_pairs():
     """Paires populaires groupées par blockchain (analysables)."""

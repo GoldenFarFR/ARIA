@@ -61,7 +61,7 @@ import aiosqlite
 from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 from aria_core.paths import aria_db_path
 from aria_core.services.blockscout import get_blockscout_client
-from aria_core.services.dexscreener import token_url
+from aria_core.services.dexscreener import console_url, token_url
 
 logger = logging.getLogger(__name__)
 
@@ -1205,6 +1205,7 @@ def format_movement_alert(m: WalletMovement) -> str:
         )
         lines.append(token_line)
         lines.append(f"DexScreener : {_html_link(m.contract, token_url(m.contract, chain='base'))}")
+        lines.append(f"Console ARIA : {_html_link(m.contract, console_url(m.contract, chain='base'))}")
         # 07/22 (cross-review) -- explicit guard: x402_budget.record_spend() requires
         # `resource` as a mandatory parameter (never empty in practice), but without
         # this guard corrupted data would produce a half-empty "Raison : " line,

@@ -51,7 +51,7 @@ import aiosqlite
 
 from aria_core import rsi_divergence_log
 from aria_core.paths import aria_db_path
-from aria_core.services.dexscreener import token_url
+from aria_core.services.dexscreener import console_url, token_url
 
 logger = logging.getLogger(__name__)
 
@@ -1945,6 +1945,7 @@ def format_limit_order_placed_alert(order: dict) -> str:
     lines.extend(_order_health_grid_lines(order, sig))
     if order.get("contract"):
         lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
+        lines.append(f"Console ARIA : {console_url(order['contract'], chain=order.get('chain') or 'base')}")
     return "\n".join(lines)
 
 
@@ -1970,6 +1971,7 @@ def format_limit_order_watching_alert(order: dict, current_price: float) -> str:
     ]
     if order.get("contract"):
         lines.append(f"DexScreener : {token_url(order['contract'], chain=order.get('chain') or 'base')}")
+        lines.append(f"Console ARIA : {console_url(order['contract'], chain=order.get('chain') or 'base')}")
     return "\n".join(lines)
 
 

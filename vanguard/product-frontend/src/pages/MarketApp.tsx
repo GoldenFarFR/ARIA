@@ -8,6 +8,7 @@ import {
   getPair,
   getWatchlist,
   removeFromWatchlist,
+  resolveToken,
   searchPairs,
 } from '../api'
 import { AgentPanel } from '../components/AgentPanel'
@@ -130,6 +131,18 @@ export function MarketApp() {
     getWatchlist().then(setWatchlist).catch(console.error)
     getAlerts().then(setAlerts).catch(console.error)
   }, [])
+
+  // Deep link (e.g. from a Telegram trade alert): /market?contract=0x..&chain=base
+  // resolves the token to its best pair and opens it directly, same path as
+  // clicking a watchlist item -- only the token address is ever known at the
+  // alert-generation site (paper_position.contract), never a pair address.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const contract = params.get('contract')
+    const chain = params.get('chain')
+    if (!contract || !chain) return
+    resolveToken(chain, contract).then(selectPair).catch(console.error)
+  }, [selectPair])
 
   useEffect(() => {
     if (activeTab !== 'signals' || selectedPair || !discoverOpen) return
