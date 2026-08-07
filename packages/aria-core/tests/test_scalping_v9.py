@@ -57,7 +57,11 @@ def _flat_candles(n=60, price=1.0, volume=1000.0):
 
 
 class _FakePair:
-    def __init__(self, price=1.0, liquidity=500_000.0):
+    # 07/08 -- large enough that risk_guard.cap_alloc_to_pool_share (1% of
+    # pool) never accidentally clips a 3%-of-$1M buy in tests that aren't
+    # specifically exercising that cap: v9's real watchlist is large-cap
+    # tokens (SPX, cbXRP...), a $50M pool is the realistic default here.
+    def __init__(self, price=1.0, liquidity=50_000_000.0):
         self.pair_address = "0xpool"
         self.price_usd = price
         self.base_symbol = "SPX"
@@ -112,10 +116,13 @@ def _patch_geckoterminal_dead_mobula_alive(monkeypatch, *, mobula_candles=None):
 
 def _patch_cycle_io(
     monkeypatch, *, spot=1.0, candles=None, rsi=None, mfi=None, honeypot_clear=True,
+    liquidity=None,
 ):
     """Wires every external dependency of run_v9_cycle to offline fakes.
     ``rsi``/``mfi`` are the series AFTER the still-forming-candle trim --
-    the fake series are padded by one so the trim lands exactly on them."""
+    the fake series are padded by one so the trim lands exactly on them.
+    ``liquidity`` (07/08): None keeps _FakePair's own large-cap default --
+    pass a small value to exercise the pool-share sizing cap specifically."""
     from aria_core import momentum_entry
     from aria_core.services import geckoterminal
     from aria_core.skills import entry_signals
@@ -123,7 +130,7 @@ def _patch_cycle_io(
     candles = candles if candles is not None else _flat_candles()
 
     async def fake_pair_lookup(contract, *, chain="base"):
-        return _FakePair(price=spot)
+        return _FakePair(price=spot, **({"liquidity": liquidity} if liquidity is not None else {}))
 
     monkeypatch.setattr(pt, "_default_pair_lookup", fake_pair_lookup)
 
@@ -280,6 +287,33 @@ async def test_buy_on_synchronized_signal_full_spec(tmp_db, monkeypatch):
     assert pos["high_water_price"] == pytest.approx(2.0)  # SPOT, never the fill
     assert pos["mode"] == "standard"  # fees modeled by v9 itself, never doubled
     assert "RSI(18)" in (pos["thesis"] or "") and "MFI(10)" in (pos["thesis"] or "")
+
+
+@pytest.mark.asyncio
+async def test_buy_size_capped_to_one_percent_of_pool_liquidity(tmp_db, monkeypatch):
+    """07/08, operator request (v8 parity): a thin pool must cap the buy at
+    risk_guard.MAX_ALLOC_PCT_OF_POOL_LIQUIDITY (1%) of its real liquidity,
+    even though the uncapped 3%-of-cash alloc would be far larger. The fill
+    PRICE must stay exactly spot * 1.013 regardless -- the cap only touches
+    size, never re-derives a second price-impact degradation (that would be
+    a double count on top of this module's own fixed-fee fill model)."""
+    from aria_core import risk_guard
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    rsi, mfi = _signal_series()
+    # $500k pool: uncapped alloc would be 3% of $1M = $30,000, but
+    # MAX_ALLOC_PCT_OF_POOL_LIQUIDITY (1%) of $500k caps it to $5,000.
+    _patch_cycle_io(monkeypatch, spot=2.0, rsi=rsi, mfi=mfi, liquidity=500_000.0)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    pos = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]
+    expected_cap = risk_guard.MAX_ALLOC_PCT_OF_POOL_LIQUIDITY * 500_000.0
+    assert expected_cap < 30_000.0  # sanity: the cap is actually the binding constraint here
+    assert pos["cost_usd"] == pytest.approx(expected_cap)
+    assert pos["entry_price"] == pytest.approx(2.0 * 1.013)  # price untouched by the size cap
 
 
 @pytest.mark.asyncio

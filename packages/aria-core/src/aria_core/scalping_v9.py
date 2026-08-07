@@ -15,14 +15,27 @@ here without an explicit operator decision):
     per synchronized episode (re-arms once at least one indicator closes
     back above its limit); buy immediately on detection, no confirmation
     wait ("achat sans analyse... il faut être rapide, le signal est rare").
-  - SIZING: every buy = 3% of the wallet's REMAINING cash. Positions stack
-    (several concurrent SPX positions are legitimate, one per episode) --
-    the allow_multiple seam in paper_trader.open_position exists for this.
+  - SIZING: every buy = 3% of the wallet's REMAINING cash, capped to never
+    exceed risk_guard.MAX_ALLOC_PCT_OF_POOL_LIQUIDITY (1%) of the pool's
+    real liquidity (07/08, operator request -- v8 already had this, v9
+    didn't). Applied by calling risk_guard.cap_alloc_to_pool_share directly
+    on our own ``alloc``, BEFORE open_position -- never by passing
+    pool_liquidity_usd to open_position itself (see FILL SIMULATION below
+    for why). Positions stack (several concurrent SPX positions are
+    legitimate, one per episode) -- the allow_multiple seam in
+    paper_trader.open_position exists for this.
   - FILL SIMULATION: buy at spot * (1 + 0.3% fee + 1% impact); sell at
     spot * (1 - 0.3% - 1%), symmetric (operator-confirmed). Modeled HERE
     explicitly -- positions are opened mode="standard" with
-    pool_liquidity_usd=None so paper_trader's own scalping fee/impact
-    machinery never double-counts.
+    pool_liquidity_usd=None (open_position's own parameter, distinct from
+    the sizing cap above) so paper_trader's own
+    risk_guard.simulated_fill_price never re-derives a SECOND, different
+    price-impact degradation on top of this module's own fixed 1%: that
+    function reads the exact same pool_liquidity_usd argument as the
+    sizing cap, so there is no way to opt into one without the other from
+    open_position's own parameter -- confirmed by trying it (0.11% price
+    drift, real double count, reverted in favor of the direct
+    cap_alloc_to_pool_share call above).
   - EXIT: flat -5% trailing stop from the SPOT high-water mark, the ONLY
     exit (no TP, no overbought exit, no stagnation timeout -- operator
     choice) + the standard weekly reset (V9_WALLET rides
@@ -37,7 +50,7 @@ from __future__ import annotations
 
 import logging
 
-from aria_core import paper_trader
+from aria_core import paper_trader, risk_guard
 
 logger = logging.getLogger(__name__)
 
@@ -572,6 +585,19 @@ async def run_v9_cycle(*, notifier=None) -> dict:
 
         cash = await paper_trader.cash_available(wallet=paper_trader.V9_WALLET)
         alloc = cash * BUY_PCT_OF_REMAINING_CASH
+        # 07/08 -- operator request, v8 parity: never let a buy represent
+        # more than risk_guard.MAX_ALLOC_PCT_OF_POOL_LIQUIDITY (1%) of the
+        # pool's real liquidity. Applied HERE, on our own alloc, rather than
+        # by passing pool_liquidity_usd to open_position below: that would
+        # ALSO feed risk_guard.simulated_fill_price, which recomputes the
+        # fill price from its OWN price-impact model on top of the fee/impact
+        # this module already bakes into _degraded_buy_price -- a real double
+        # count of the impact, found while wiring this (open_position's own
+        # comment: "fail-open to entry_price without a known
+        # pool_liquidity_usd" -- true, but the sizing cap and the fill-price
+        # recompute share that one argument, so there is no way to opt into
+        # one without the other from the caller side).
+        alloc = risk_guard.cap_alloc_to_pool_share(alloc, pair.liquidity_usd)
         if alloc < _MIN_ALLOC_USD:
             actions["holds"].append({"symbol": label, "reason": "insufficient_cash"})
             await _log("hold", "insufficient_cash", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
