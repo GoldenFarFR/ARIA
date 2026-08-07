@@ -590,24 +590,35 @@ async def test_small_dip_never_closes(tmp_db, monkeypatch):
 async def test_generic_cycle_never_manages_v9_positions(tmp_db, monkeypatch):
     """The generic loop's ATR-trail/TP/stagnation machinery must never touch
     a v9 position -- v9's own cycle is the single manager (operator spec:
-    -5% trailing is the ONLY exit)."""
+    -5% trailing is the ONLY exit).
+
+    07/08 -- assertion updated to follow a DELIBERATE behavior change made the
+    same day in `ba133e52` (operator report: "les position v9 apparaisse pas
+    ici" -- v9's open positions were missing from the periodic Telegram
+    tracking alert). The generic loop now fetches a DISPLAY-ONLY price for a
+    v9 position before skipping the rest, so the old proxy assertion
+    (`price_calls == []`) no longer holds. That commit changed the behavior
+    without updating this test, leaving CI red on main. The invariant this
+    test exists to protect is unchanged and is now asserted DIRECTLY: even at
+    a price that would trigger every generic exit, a v9 position is never
+    closed, never re-scanned, never managed by anything but its own cycle."""
     await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
     await pt.open_position(
         SPX, "SPX", 1.0, wallet=pt.V9_WALLET, alloc_usd=30_000,
         mode="standard", allow_multiple=True,
     )
 
-    price_calls: list[str] = []
-
     async def price_lookup(contract):
-        price_calls.append(contract)
         return 0.01  # -99% -- would trigger EVERY generic exit if managed
 
     actions = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup)
 
+    # -99% and still untouched: proves the generic exit machinery is not
+    # running on this position, which a display-only price lookup cannot fake.
     assert actions["closed"] == []
-    assert price_calls == []  # never even priced by the generic loop
-    assert len(await pt.get_open_positions(wallet=pt.V9_WALLET)) == 1
+    open_positions = await pt.get_open_positions(wallet=pt.V9_WALLET)
+    assert len(open_positions) == 1
+    assert open_positions[0]["contract"].lower() == SPX.lower()  # stored lowercased
 
 
 def test_all_pocket_wallets_includes_v9_when_gate_on(monkeypatch):
