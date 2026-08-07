@@ -105,3 +105,9 @@ Solution : (1) /opt/aria-data/db-backup/run.sh, daily cron 04:10 UTC (quiet slot
 [CODE] Subject : external uptime watch via GitHub Actions (4th delegation item, operator "ok pour les 4")
 Date : 2026.08.05 / Problem : structural blind spot -- every monitor (log-health, memory-watch, watchdog, autoheal) runs ON the VPS: a full-VPS outage alerts no one at all.
 Solution : .github/workflows/uptime-watch.yml -- GitHub-side probe every ~15 min (schedule drift acceptable at this granularity) on the showcase + /api/health, 3 attempts 30s apart inside one run (blips never alert), ONE deduped labeled issue on sustained failure (GitHub emails the operator natively), auto-close with comment on recovery. Zero external account, zero VPS load. Effective only once pushed (batched under the 2000-line rule, same as CodeQL/Dependabot).
+
+------------------------------------------------------------
+
+[CONFIG] Subject : log-health-watch false positive on Devil's Advocate skip lines (batch-push threshold interaction)
+Date : 2026.08.07 / Problem : Telegram alert fired at 21:15:01Z claiming "the last 3 attempts of the Devil's Advocate hook all failed (no HTTP 200)". The check only looked for "HTTP 200" among the last ARCHITECT_TAIL_N=3 raw lines of architect-review.log, with no distinction between a real failed API call and a "SKIP sous le seuil" line (no call attempted at all, normal behavior under the 2000-line batch-push threshold). Three consecutive small pushes under threshold produced 3 SKIP lines in a row, tripping the false alarm -- the last REAL attempt (2026-08-07T19:18:25Z) was in fact HTTP 200.
+Solution : /opt/aria-data/log-health-watch/run.sh (outside the public repo, no commit) -- filter out "SKIP sous le seuil" lines with grep -v before taking the last N lines, so only real call attempts count toward the failure check. Verified against the real log file before deploying: TOTAL=3, OK=3, ARCHITECT_ALL_FAILING=false.
