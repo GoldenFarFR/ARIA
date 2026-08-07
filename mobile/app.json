@@ -3,6 +3,7 @@
     "name": "ARIA App",
     "slug": "goldenfarfr",
     "version": "1.0.0",
+    "scheme": "ariaapp",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -37,7 +38,8 @@
         {
           "color": "#c9a45c"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

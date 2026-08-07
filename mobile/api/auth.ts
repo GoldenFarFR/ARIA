@@ -1,12 +1,6 @@
 import { apiClient } from "./client";
 import { setAuthToken } from "../authStore";
 
-export interface LoginPayload {
-  username: string;
-  password: string;
-  installationId: string;
-}
-
 export interface SessionInfo {
   username: string;
   role: string;
@@ -14,21 +8,8 @@ export interface SessionInfo {
   backend_version: string;
   mobile_api: number;
   minimum_mobile_api: number;
-}
-
-/** Throws ApiError(401) on wrong credentials, ApiError(429) if rate-limited --
- * the login screen distinguishes these two cases in its error message. */
-export async function login(payload: LoginPayload): Promise<void> {
-  const { token } = await apiClient.post<{ token: string }>(
-    "/api/aria/ops/login",
-    {
-      username: payload.username,
-      password: payload.password,
-      installation_id: payload.installationId,
-    },
-    false,
-  );
-  await setAuthToken(token);
+  // 08/07 -- Privy auth redesign, the 30-day periodic re-check.
+  totp_reverify_required: boolean;
 }
 
 export async function logout(): Promise<void> {
