@@ -1106,3 +1106,86 @@ async def test_cycle_reads_db_watchlist_not_the_seed_tuple(tmp_db, monkeypatch):
 
     assert actions["checked"] == 0
     assert actions["opened"] == []
+
+
+# ── réglages legacy vs spec configurable ─────────────────────────────────────
+
+async def _seed_token(contract="0x" + "ab" * 20):
+    import aiosqlite
+
+    await v9._ensure_watchlist_table()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO v9_watchlist (contract, chain, symbol, active, added_at) "
+            "VALUES (?, 'base', 'TEST', 1, datetime('now'))",
+            (contract,),
+        )
+        await db.commit()
+    return contract
+
+
+async def _spec_of(contract):
+    for token in await v9.get_watchlist():
+        if token["contract"] == contract:
+            return token["signals"]
+    raise AssertionError("token absent")
+
+
+@pytest.mark.asyncio
+async def test_legacy_rsi_setting_rewrites_a_stored_spec(tmp_db):
+    """07/08, real latent bug found by the post-push architectural review and
+    reproduced before fixing: once a token had a stored `signals` spec, the
+    legacy `/v9set rsi=16/25` wrote columns that `_resolve_signals` no longer
+    reads -- the command answered "réglé" and changed nothing. Exactly the
+    silently-accepted-but-inert class this session removed elsewhere."""
+    contract = await _seed_token()
+    await v9.set_watchlist_settings(contract, signals="rsi(18)<21,mfi(10)<20")
+
+    entry, error = await v9.set_watchlist_settings(contract, rsi_period=16, rsi_lower=25)
+
+    assert error == ""
+    assert entry is not None
+    assert await _spec_of(contract) == "rsi(16)<25,mfi(10)<20"
+
+
+@pytest.mark.asyncio
+async def test_legacy_setting_still_works_without_a_stored_spec(tmp_db):
+    """A token that never got a spec keeps the pre-07/08 path exactly: the
+    columns ARE the source, resolved through the migration fallback."""
+    contract = await _seed_token()
+
+    entry, error = await v9.set_watchlist_settings(contract, mfi_period=8, mfi_lower=15)
+
+    assert error == ""
+    assert entry["_stored_signals"] is None  # no spec written behind the scenes
+    assert await _spec_of(contract) == "rsi(18)<21,mfi(8)<15"
+
+
+@pytest.mark.asyncio
+async def test_legacy_setting_refused_when_the_indicator_left_the_signal(tmp_db):
+    """Someone who moved a token to stoch+adx and then types rsi=25 is far
+    likelier to be mistaken than to want a third condition appended -- refuse
+    with a reason naming what IS in the signal, never silently add."""
+    contract = await _seed_token()
+    await v9.set_watchlist_settings(contract, signals="stoch(14)<15,adx(14)>25")
+
+    entry, error = await v9.set_watchlist_settings(contract, rsi_lower=25)
+
+    assert entry is None
+    assert "rsi" in error and "stoch" in error and "signals=" in error
+    assert await _spec_of(contract) == "stoch(14)<15,adx(14)>25"  # untouched
+
+
+@pytest.mark.asyncio
+async def test_signals_and_legacy_in_the_same_command_lets_signals_win(tmp_db):
+    """No ambiguity to resolve: an explicit signals= in the SAME command is
+    the operator stating the whole signal, so it wins outright."""
+    contract = await _seed_token()
+    await v9.set_watchlist_settings(contract, signals="rsi(18)<21,mfi(10)<20")
+
+    entry, error = await v9.set_watchlist_settings(
+        contract, signals="rsi(9)<30,mfi(10)<20", rsi_lower=99,
+    )
+
+    assert error == ""
+    assert await _spec_of(contract) == "rsi(9)<30,mfi(10)<20"

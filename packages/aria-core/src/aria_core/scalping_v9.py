@@ -49,6 +49,7 @@ GeckoTerminal OHLCV call per watchlist token per 5 min."""
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from aria_core import paper_trader, risk_guard, signal_conditions
 
@@ -221,7 +222,14 @@ async def get_watchlist() -> list[dict]:
         entry["rsi_period"] = int(entry["rsi_period"])
         entry["mfi_period"] = int(entry["mfi_period"])
         entry["timeframe_min"] = int(entry["timeframe_min"])
-        entry["signals"] = _resolve_signals(row[3 + len(_SETTING_COLUMNS)], entry)
+        stored_spec = row[3 + len(_SETTING_COLUMNS)]
+        entry["signals"] = _resolve_signals(stored_spec, entry)
+        # The RAW stored value, distinct from the resolved one above: only
+        # this tells a caller whether the token has its OWN spec or is still
+        # riding the rsi/mfi migration fallback -- the two need different
+        # handling when a legacy rsi=/mfi= tweak arrives (see
+        # _translate_legacy_into_spec).
+        entry["_stored_signals"] = (stored_spec or "").strip() or None
         out.append(entry)
     return out
 
@@ -242,6 +250,74 @@ def _resolve_signals(stored: str | None, entry: dict) -> str:
     )
 
 
+_LEGACY_SPEC_KEYS = {
+    "rsi_period": ("rsi", "period"), "rsi_lower": ("rsi", "threshold"),
+    "mfi_period": ("mfi", "period"), "mfi_lower": ("mfi", "threshold"),
+}
+
+
+async def _translate_legacy_into_spec(
+    contract_lower: str, settings: dict,
+) -> tuple[dict, str]:
+    """Folds legacy ``rsi_*``/``mfi_*`` settings into the token's stored spec.
+
+    No stored spec (or the caller is setting ``signals`` in the SAME command,
+    which then wins outright) -> settings pass through untouched, so a token
+    that has never been given a spec keeps the exact historical behaviour.
+
+    An rsi/mfi tweak on a token whose spec no longer CONTAINS that indicator
+    is refused rather than silently added: someone who moved a token to
+    ``stoch<15,adx>25`` and then types ``rsi=16/25`` is far more likely to be
+    mistaken than to want a third condition appended without asking."""
+    legacy = {k: v for k, v in settings.items() if k in _LEGACY_SPEC_KEYS}
+    if not legacy or "signals" in settings:
+        return settings, ""
+
+    stored = None
+    for token in await get_watchlist():
+        if token["contract"] == contract_lower:
+            stored = token.get("_stored_signals")
+            break
+    if not stored:
+        return settings, ""  # migration fallback still applies, columns are read
+
+    conditions, error = signal_conditions.parse(stored)
+    if error:
+        # An unparseable stored spec is already handled fail-closed by the
+        # cycle itself; never repair it silently from here.
+        return settings, f"spec enregistré illisible ({error}) -- corrige-le avec signals="
+    by_indicator = {c.indicator: c for c in conditions}
+    for key, (indicator, field) in _LEGACY_SPEC_KEYS.items():
+        if key not in legacy:
+            continue
+        if indicator not in by_indicator:
+            present = ", ".join(c.indicator for c in conditions)
+            return settings, (
+                f"{indicator} n'est pas dans le signal de ce token ({present}) -- "
+                f"utilise signals= pour changer les indicateurs eux-mêmes"
+            )
+        current = by_indicator[indicator]
+        value = legacy[key]
+        by_indicator[indicator] = replace(
+            current,
+            period=int(value) if field == "period" else current.period,
+            threshold=float(value) if field == "threshold" else current.threshold,
+        )
+    rewritten = [by_indicator.get(c.indicator, c) for c in conditions]
+    spec = signal_conditions.format_spec(rewritten)
+    # Re-validated through parse: bounds are enforced by the same code path
+    # as a directly-typed signals=, never a second looser check here.
+    _reparsed, spec_error = signal_conditions.parse(spec)
+    if spec_error:
+        return settings, spec_error
+    merged = {k: v for k, v in settings.items() if k not in _LEGACY_SPEC_KEYS}
+    # The legacy columns stay in sync too -- they remain the source for any
+    # token that later has its spec cleared, and /v9list still shows them.
+    merged.update(legacy)
+    merged["signals"] = spec
+    return merged, ""
+
+
 async def set_watchlist_settings(contract: str, **settings) -> tuple[dict | None, str]:
     """Real-time per-token tuning (/v9set): validates against
     ``_SETTING_BOUNDS`` then persists -- effective on the next 5-min cycle.
@@ -250,12 +326,25 @@ async def set_watchlist_settings(contract: str, **settings) -> tuple[dict | None
 
     ``signals`` (07/08) is the one TEXT setting -- a condition spec parsed
     and bounds-checked by ``signal_conditions.parse`` rather than by
-    ``_SETTING_BOUNDS`` (which only models numeric ranges)."""
+    ``_SETTING_BOUNDS`` (which only models numeric ranges).
+
+    Legacy ``rsi_*``/``mfi_*`` on a token that ALREADY has a stored spec are
+    translated INTO that spec rather than written to columns
+    ``_resolve_signals`` would then ignore (07/08, real latent bug caught by
+    the post-push architectural review and reproduced before fixing): those
+    columns are only consulted as the migration fallback, so once a spec
+    exists, `/v9set rsi=16/25` used to answer "réglé" while changing
+    nothing -- precisely the silently-accepted-but-inert class of bug this
+    same session spent the day removing elsewhere. Rewriting the spec keeps
+    the two commands interchangeable, whichever order they are used in."""
     import aiosqlite
 
     contract_lower = (contract or "").strip().lower()
     if not settings:
         return None, "aucun réglage fourni"
+    settings, translate_error = await _translate_legacy_into_spec(contract_lower, settings)
+    if translate_error:
+        return None, translate_error
     for key, value in settings.items():
         if key == "signals":
             _conditions, spec_error = signal_conditions.parse(str(value))
@@ -677,6 +766,16 @@ async def run_v9_cycle(*, notifier=None) -> dict:
 
         # Values ON THE TRANSITION CANDLE (not the last one) -- what actually
         # triggered, for the thesis and the cycle log.
+        #
+        # Yes, this recomputes series `evaluate` and `current_values` already
+        # built -- three passes per indicator per token per cycle. Flagged by
+        # the 07/08 architectural review as a cost risk, so it was MEASURED
+        # rather than assumed: worst realistic case (3 conditions including
+        # the sliding-window `divergence`) is 2.1 ms per token, 19 ms for the
+        # whole 9-token watchlist -- 0.006% of a 5-minute cycle. Caching would
+        # save 13 ms and add shared mutable state to the buy-decision path.
+        # Deliberately not done; revisit only if the watchlist grows by an
+        # order of magnitude AND a profile shows this actually mattering.
         triggered_values = {
             c.indicator: signal_conditions.INDICATORS[c.indicator].series(
                 candles, c.period,
