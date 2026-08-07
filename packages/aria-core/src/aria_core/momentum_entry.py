@@ -2063,15 +2063,26 @@ async def _scalping_fallbacks(
                     served_min = int(period[:-1])
                     degraded = requested_timeframe_min is not None and served_min != requested_timeframe_min
                     _set_candle_provenance(provider="mobula", timeframe_served=period, degraded=degraded)
-                    if period == "15m":
+                    # 07/08 -- this used to key off `period == "15m"`, which
+                    # was accurate back when the ladder ALWAYS tried 15m
+                    # first. Since the fix above tries the exact configured
+                    # period first, a 30min-configured token now legitimately
+                    # gets served=30m on the FIRST attempt (15m never even
+                    # tried) -- the old message still said "DEGRADED to 30m
+                    # (15m unavailable)", which is false and would mislead
+                    # any future log-based diagnosis the same way the cbXRP
+                    # bug itself was found. Key off the real `degraded` flag
+                    # instead of the period string.
+                    if not degraded:
                         logger.info(
-                            "_fetch_candles: Mobula scalping fallback (real 15min candles) %s/%s",
-                            chain, pool_address[:10],
+                            "_fetch_candles: Mobula scalping fallback (exact %s candles) %s/%s",
+                            period, chain, pool_address[:10],
                         )
                     else:
                         logger.info(
                             "_fetch_candles: Mobula scalping fallback DEGRADED to %s "
-                            "(15m unavailable) %s/%s", period, chain, pool_address[:10],
+                            "(exact configured granularity unavailable) %s/%s",
+                            period, chain, pool_address[:10],
                         )
                     return mobula_result.candles
                 # 27/07 -- Item #126: same "stop, don't compound" principle
