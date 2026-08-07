@@ -1,0 +1,18 @@
+# Audited exclusions for OSV-Scanner (.github/workflows/sca-scan.yml) -- same audit
+# doctrine as .secrets.baseline: each entry below was verified against the real
+# dependency chain (07/08) before being ignored, never a blanket suppression.
+#
+# image-size (GHSA-5p2g-fcmc-qvqq ICNS infinite loop, GHSA-w3rx-r6r6-pgpr JXL/HEIF
+# infinite loop): transitive dep of metro (via expo, see `npm ls image-size`), used
+# only by the build-time bundler -- never parses images uploaded by a third party,
+# only this repo's own assets. No fixed version exists yet (2.0.2, the latest
+# published, is still in the vulnerable range) -- re-check periodically whether a
+# patched release has shipped and remove this exclusion once it has.
+
+[[IgnoredVulns]]
+id = "GHSA-5p2g-fcmc-qvqq"
+reason = "image-size: build-time transitive dep of metro (via expo), never parses untrusted third-party images. No fixed version exists yet."
+
+[[IgnoredVulns]]
+id = "GHSA-w3rx-r6r6-pgpr"
+reason = "image-size: build-time transitive dep of metro (via expo), never parses untrusted third-party images. No fixed version exists yet."
