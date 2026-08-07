@@ -2609,9 +2609,10 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
     ("v9add", "Ajoute un contrat à la watchlist scalping_v9 (RSI+MFI 5min)"),
+    ("v9indics", "Liste les 52 indicateurs utilisables dans /v9set signals="),
     ("v9list", "Watchlist scalping_v9 active (avec réglages par token)"),
     ("v9remove", "Retire un contrat de la watchlist scalping_v9"),
-    ("v9set", "Règle RSI/MFI/trail/timeframe d'un token v9 en temps réel"),
+    ("v9set", "Règle indicateurs/seuils/trail/timeframe d'un token v9 en temps réel"),
     ("vc", "Analyse VC complète d'un contrat"),
     ("vcresult", "Attribue un résultat réel à une prédiction VC"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
@@ -2830,6 +2831,50 @@ async def _handle_v9add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def _handle_v9indics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/v9indics -- every indicator ``signals=`` accepts, with its bounds.
+
+    Generated from ``signal_conditions.INDICATORS`` itself (07/08), never a
+    hand-written list: the catalogue and this help can therefore not drift
+    apart the way a duplicated list always eventually does."""
+    if not await _admin_check_reply(update):
+        return
+    message = update.message
+    if not message:
+        return
+    from aria_core import signal_conditions
+
+    rows = signal_conditions.as_template_indicators()
+    lines = [f"{len(rows)} indicateurs utilisables dans /v9set signals=…", ""]
+    for row in rows:
+        period = f"({row['default_period']})" if row["has_period"] else ""
+        threshold = f"{row['default_threshold']:g}"
+        lines.append(
+            f"{row['key']}{period}{row['default_operator']}{threshold} — {row['label']}"
+        )
+        # An indicator whose scale differs from a charting platform must say
+        # so HERE: a threshold copied off a TradingView chart would otherwise
+        # behave differently with no visible reason.
+        if row.get("scale_note"):
+            lines.append(f"   ⚠ {row['scale_note']}")
+    lines.append("")
+    lines.append("Toutes les conditions doivent être vraies sur la MÊME bougie close.")
+    lines.append(
+        "⚠ = échelle différente de TradingView : ne pas recopier un seuil lu sur un graphique."
+    )
+    lines.append("Exemple : /v9set 0x… signals=rsi(18)<21,adx(14)>25,rvol(20)>2")
+    # Telegram caps a message at 4096 chars -- 52 lines fit, but split
+    # defensively rather than have the API silently truncate the tail.
+    chunk: list[str] = []
+    for line in lines:
+        chunk.append(line)
+        if sum(len(x) + 1 for x in chunk) > 3500:
+            await _reply(message, "\n".join(chunk))
+            chunk = []
+    if chunk:
+        await _reply(message, "\n".join(chunk))
+
+
 async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/v9list -- active scalping_v9 watchlist (see /v9add)."""
     if not await _admin_check_reply(update):
@@ -2848,11 +2893,14 @@ async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 _V9SET_USAGE = (
-    "Usage : /v9set <adresse> [rsi=période/seuil] [mfi=période/seuil] [trail=%] [tf=minutes]\n"
+    "Usage : /v9set <adresse> [rsi=période/seuil] [mfi=période/seuil] [trail=%] [tf=minutes] [signals=…]\n"
     "Exemples :\n"
     "  /v9set 0x50dA… rsi=16/25 — RSI période 16, seuil 25\n"
     "  /v9set 0x50dA… mfi=10/18 trail=4 — seuil MFI 18 + stop suiveur -4%\n"
     "  /v9set 0x50dA… tf=15 — bougies 15 min (choix : 5/15/30/60)\n"
+    "  /v9set 0x50dA… signals=stoch(14)<15,wick>0.3 — change les indicateurs eux-mêmes\n"
+    "52 indicateurs disponibles — /v9indics pour la liste complète.\n"
+    "Toutes les conditions doivent être vraies sur la MÊME bougie close.\n"
     "Seuls les réglages passés changent, effet au prochain cycle 5 min."
 )
 
@@ -2866,7 +2914,17 @@ def _parse_v9set_args(args: list[str]) -> tuple[dict, str]:
         if not value:
             return {}, f"réglage illisible : {raw}"
         try:
-            if key in ("rsi", "mfi"):
+            if key == "signals":
+                # 07/08 -- configurable indicator combination. Validated HERE
+                # (parse returns a readable reason) so a typo is refused on
+                # the spot rather than silently holding forever at cycle time.
+                from aria_core import signal_conditions
+
+                conditions, spec_error = signal_conditions.parse(value)
+                if spec_error:
+                    return {}, spec_error
+                settings["signals"] = signal_conditions.format_spec(conditions)
+            elif key in ("rsi", "mfi"):
                 period_s, _, lower_s = value.partition("/")
                 if lower_s:
                     settings[f"{key}_period"] = int(period_s)
@@ -2878,7 +2936,7 @@ def _parse_v9set_args(args: list[str]) -> tuple[dict, str]:
             elif key in ("tf", "timeframe"):
                 settings["timeframe_min"] = int(value.rstrip("m"))
             else:
-                return {}, f"réglage inconnu : {key} (attendu rsi/mfi/trail)"
+                return {}, f"réglage inconnu : {key} (attendu rsi/mfi/trail/tf/signals)"
         except ValueError:
             return {}, f"valeur illisible : {raw}"
     return settings, ""
@@ -4159,6 +4217,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("v9add", _handle_v9add))
     app.add_handler(CommandHandler("v9list", _handle_v9list))
     app.add_handler(CommandHandler("v9remove", _handle_v9remove))
+    app.add_handler(CommandHandler("v9indics", _handle_v9indics))
     app.add_handler(CommandHandler("v9set", _handle_v9set))
     app.add_handler(CommandHandler("llmspend", _handle_llmspend))
     app.add_handler(CommandHandler("vc", _handle_vc))

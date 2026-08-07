@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import logging
 
-from aria_core import paper_trader, risk_guard
+from aria_core import paper_trader, risk_guard, signal_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,14 @@ async def _ensure_watchlist_table() -> None:
                 await db.execute(f"ALTER TABLE v9_watchlist ADD COLUMN {column} REAL")
             except aiosqlite.OperationalError:
                 pass  # column already exists -- soft migration, idempotent
+        # 07/08 -- configurable condition spec (signal_conditions). TEXT, not
+        # REAL, hence its own migration line. NULL on every pre-existing row:
+        # resolved to the rsi/mfi columns below so an untouched token keeps
+        # behaving exactly as before, never silently re-armed on defaults.
+        try:
+            await db.execute("ALTER TABLE v9_watchlist ADD COLUMN signals TEXT")
+        except aiosqlite.OperationalError:
+            pass
         for token in V9_WATCHLIST:
             await db.execute(
                 "INSERT OR IGNORE INTO v9_watchlist (contract, chain, symbol, active, added_at) "
@@ -199,7 +207,7 @@ async def get_watchlist() -> list[dict]:
     settings_cols = ", ".join(_SETTING_COLUMNS)
     async with aiosqlite.connect(paper_trader.DB_PATH) as db:
         cur = await db.execute(
-            f"SELECT contract, chain, symbol, {settings_cols} "
+            f"SELECT contract, chain, symbol, {settings_cols}, signals "
             "FROM v9_watchlist WHERE active = 1 ORDER BY added_at"
         )
         rows = await cur.fetchall()
@@ -213,21 +221,47 @@ async def get_watchlist() -> list[dict]:
         entry["rsi_period"] = int(entry["rsi_period"])
         entry["mfi_period"] = int(entry["mfi_period"])
         entry["timeframe_min"] = int(entry["timeframe_min"])
+        entry["signals"] = _resolve_signals(row[3 + len(_SETTING_COLUMNS)], entry)
         out.append(entry)
     return out
 
 
-async def set_watchlist_settings(contract: str, **settings: float) -> tuple[dict | None, str]:
+def _resolve_signals(stored: str | None, entry: dict) -> str:
+    """The token's condition spec: the stored one, or -- for a row that
+    predates the ``signals`` column -- the exact equivalent of its own
+    rsi/mfi settings.
+
+    Deliberately NOT ``signal_conditions.DEFAULT_SPEC`` as the fallback: a
+    token the operator had tuned to, say, rsi=16/25 must keep ITS thresholds,
+    never be silently reset to the module defaults by a migration."""
+    if stored and stored.strip():
+        return stored.strip()
+    return (
+        f"rsi({int(entry['rsi_period'])})<{entry['rsi_lower']:g},"
+        f"mfi({int(entry['mfi_period'])})<{entry['mfi_lower']:g}"
+    )
+
+
+async def set_watchlist_settings(contract: str, **settings) -> tuple[dict | None, str]:
     """Real-time per-token tuning (/v9set): validates against
     ``_SETTING_BOUNDS`` then persists -- effective on the next 5-min cycle.
     Returns ``(resolved entry, "")`` or ``(None, reason)``. Only the keys
-    passed change; the others keep their current value (or default)."""
+    passed change; the others keep their current value (or default).
+
+    ``signals`` (07/08) is the one TEXT setting -- a condition spec parsed
+    and bounds-checked by ``signal_conditions.parse`` rather than by
+    ``_SETTING_BOUNDS`` (which only models numeric ranges)."""
     import aiosqlite
 
     contract_lower = (contract or "").strip().lower()
     if not settings:
         return None, "aucun réglage fourni"
     for key, value in settings.items():
+        if key == "signals":
+            _conditions, spec_error = signal_conditions.parse(str(value))
+            if spec_error:
+                return None, spec_error
+            continue
         if key not in _SETTING_BOUNDS:
             return None, f"réglage inconnu : {key}"
         if key == "timeframe_min":
@@ -243,7 +277,13 @@ async def set_watchlist_settings(contract: str, **settings: float) -> tuple[dict
     async with aiosqlite.connect(paper_trader.DB_PATH) as db:
         cur = await db.execute(
             f"UPDATE v9_watchlist SET {assignments} WHERE contract = ? AND active = 1",
-            (*[float(v) for v in settings.values()], contract_lower),
+            (
+                *[
+                    str(v) if key == "signals" else float(v)
+                    for key, v in settings.items()
+                ],
+                contract_lower,
+            ),
         )
         await db.commit()
         if cur.rowcount == 0:
@@ -377,20 +417,37 @@ def _find_entry_transition(
     TRANSITION on one of the last 2 closed candles: both below now, NOT both
     below on the candle before. Returns None when there is no fresh episode
     -- including the both-below-for-a-while case (episode already bought or
-    already stale, per the one-buy-per-episode spec)."""
-    n = len(rsi)
+    already stale, per the one-buy-per-episode spec).
+
+    Kept as the RSI+MFI-specific entry point (07/08): the cycle now goes
+    through ``_find_transition_in_verdicts`` with a configurable condition
+    spec, but this signature is the one the operator's own spec was written
+    against and stays covered by its own tests."""
+    return _find_transition_in_verdicts([
+        _both_below(rsi[i], mfi[i], rsi_lower=rsi_lower, mfi_lower=mfi_lower)
+        for i in range(len(rsi))
+    ])
+
+
+def _find_transition_in_verdicts(verdicts: list) -> int | None:
+    """Same freshness rule as above, on an already-computed per-candle
+    verdict series (True = every configured condition holds, False = at
+    least one does not, None = still warming up).
+
+    07/08 -- generalized so a token can be configured with ANY combination
+    of indicators (signal_conditions.evaluate produces the series) instead
+    of the hard-wired RSI+MFI pair. The transition semantics are unchanged
+    and deliberately so: a fresh episode is True now / False on the candle
+    before -- a None (warm-up) before never counts as a transition."""
+    n = len(verdicts)
     for idx in (n - 1, n - 2):
         if idx < 1:
             continue
-        now = _both_below(rsi[idx], mfi[idx], rsi_lower=rsi_lower, mfi_lower=mfi_lower)
-        prev = _both_below(rsi[idx - 1], mfi[idx - 1], rsi_lower=rsi_lower, mfi_lower=mfi_lower)
-        if now is True and prev is False:
+        if verdicts[idx] is True and verdicts[idx - 1] is False:
             # a transition at n-2 only counts if the episode is still live
-            # on the last candle (still both below) -- "be fast" never means
-            # buying an episode that already ended.
-            if idx == n - 2 and _both_below(
-                rsi[-1], mfi[-1], rsi_lower=rsi_lower, mfi_lower=mfi_lower,
-            ) is not True:
+            # on the last candle -- "be fast" never means buying an episode
+            # that already ended.
+            if idx == n - 2 and verdicts[-1] is not True:
                 return None
             return idx
     return None
@@ -551,13 +608,28 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             await _log("hold", "insufficient_candles", provenance=provenance)
             continue
 
-        rsi = rsi_series([c.close for c in candles], period=token["rsi_period"])
-        mfi = indicators.mfi_series(candles, period=token["mfi_period"])
-        rsi_last = rsi[-1] if rsi else None
-        mfi_last = mfi[-1] if mfi else None
-        transition_idx = _find_entry_transition(
-            rsi, mfi, rsi_lower=token["rsi_lower"], mfi_lower=token["mfi_lower"],
-        )
+        # 07/08 -- configurable per-token condition spec. A stored spec that
+        # fails to parse is a HOLD, never a fallback to defaults: silently
+        # trading on criteria the operator did not configure is the worse
+        # failure mode (fail-closed, same doctrine as every guardrail here).
+        conditions, spec_error = signal_conditions.parse(token["signals"])
+        if spec_error:
+            actions["holds"].append({"symbol": label, "reason": "invalid_signal_spec"})
+            logger.warning(
+                "scalping_v9[%s]: spec de signal invalide (%s) -- aucun achat",
+                label, spec_error,
+            )
+            await _log("hold", f"invalid_signal_spec:{spec_error}", provenance=provenance)
+            continue
+        verdicts = signal_conditions.evaluate(conditions, candles)
+        last_values = signal_conditions.current_values(conditions, candles)
+        # The cycle-evaluation log keeps its two dedicated rsi/mfi columns --
+        # they stay populated when the spec uses those indicators, and read
+        # None for a spec built on others (never a value from a different
+        # indicator squeezed into a column named after RSI).
+        rsi_last = last_values.get("rsi")
+        mfi_last = last_values.get("mfi")
+        transition_idx = _find_transition_in_verdicts(verdicts)
         if transition_idx is None:
             actions["holds"].append({"symbol": label, "reason": "no_signal"})
             await _log("hold", "no_signal", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
@@ -603,8 +675,23 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             await _log("hold", "insufficient_cash", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
-        rsi_shown = rsi[transition_idx]
-        mfi_shown = mfi[transition_idx]
+        # Values ON THE TRANSITION CANDLE (not the last one) -- what actually
+        # triggered, for the thesis and the cycle log.
+        triggered_values = {
+            c.indicator: signal_conditions.INDICATORS[c.indicator].series(
+                candles, c.period,
+            )[transition_idx]
+            for c in conditions
+        }
+        rsi_shown = triggered_values.get("rsi")
+        mfi_shown = triggered_values.get("mfi")
+        triggered_text = " ET ".join(
+            f"{c.indicator.upper()}({c.period})="
+            f"{triggered_values[c.indicator]:.1f} {c.operator} {c.threshold:g}"
+            if triggered_values.get(c.indicator) is not None
+            else f"{c.indicator.upper()}({c.period}) {c.operator} {c.threshold:g}"
+            for c in conditions
+        )
         pos = await paper_trader.open_position(
             contract,
             pair.base_symbol or label,
@@ -619,10 +706,9 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             entry_market_cap_usd=pair.market_cap_usd,
             allow_multiple=True,
             thesis=(
-                f"[V9] Survente synchronisée sur bougie {token['timeframe_min']}min : "
-                f"RSI({token['rsi_period']})={rsi_shown:.1f} < {token['rsi_lower']:g} "
-                f"ET MFI({token['mfi_period']})={mfi_shown:.1f} < {token['mfi_lower']:g} "
-                f"en même temps. Achat immédiat 3% du cash restant, sortie unique : "
+                f"[V9] Signal synchronisé sur bougie {token['timeframe_min']}min : "
+                f"{triggered_text} en même temps. "
+                f"Achat immédiat 3% du cash restant, sortie unique : "
                 f"stop suiveur -{token['trail_pct'] * 100:g}% du plus haut spot."
                 + (
                     f" [Données : {provenance['provider']}, {provenance['timeframe_served']}"

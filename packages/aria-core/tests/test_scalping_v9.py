@@ -979,6 +979,79 @@ async def test_cycle_honors_per_token_thresholds(tmp_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_untouched_token_keeps_its_own_thresholds_after_the_signals_migration(tmp_db):
+    """07/08 -- the `signals` column is NULL on every pre-existing row. It
+    must resolve to that token's OWN rsi/mfi settings, never to the module
+    defaults: a token tuned to rsi_lower=25 must not be silently reset to 21
+    by the migration."""
+    await v9.set_watchlist_settings(SPX, rsi_lower=25.0, mfi_lower=18.0)
+    token = next(t for t in await v9.get_watchlist() if t["contract"] == SPX.lower())
+    assert token["signals"] == "rsi(18)<25,mfi(10)<18"
+
+
+@pytest.mark.asyncio
+async def test_cycle_buys_on_a_reconfigured_indicator_set(tmp_db, monkeypatch):
+    """A token switched to stoch+wick must trigger on THOSE, not on RSI/MFI
+    -- the operator-requested point of the whole configurable-signal work."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    entry, error = await v9.set_watchlist_settings(SPX, signals="stoch(14)<20,wick>0.2")
+    assert error == "" and entry["signals"] == "stoch(14)<20,wick>0.2"
+
+    from aria_core.skills import indicators as ind
+
+    # Fresh transition on the last closed candle: stoch above its limit
+    # everywhere, below only at [-1]; every candle carries a long lower wick.
+    stoch = [50.0] * 60
+    stoch[-1] = 10.0
+    monkeypatch.setattr(ind, "stochastic_k_series", lambda c, *, period=14: stoch)
+    monkeypatch.setattr(ind, "hammer_wick_ratio", lambda c: 0.5)
+    _patch_cycle_io(monkeypatch, spot=2.0)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert len(actions["opened"]) == 1
+    thesis = (await pt.get_open_positions(wallet=pt.V9_WALLET))[0]["thesis"] or ""
+    assert "STOCH(14)" in thesis and "WICK" in thesis
+    assert "RSI" not in thesis  # the reconfigured spec, not the old hardcoded pair
+
+
+@pytest.mark.asyncio
+async def test_cycle_holds_fail_closed_on_an_unparseable_stored_spec(tmp_db, monkeypatch):
+    """A corrupted/hand-edited spec in the DB must HOLD, never silently fall
+    back to defaults -- trading on criteria the operator never configured is
+    the worse failure mode."""
+    import aiosqlite
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    await v9._ensure_watchlist_table()
+    async with aiosqlite.connect(pt.DB_PATH) as db:
+        await db.execute(
+            "UPDATE v9_watchlist SET signals = ? WHERE contract = ?",
+            ("garbage(999)<1", SPX.lower()),
+        )
+        await db.commit()
+
+    rsi, mfi = _signal_series()  # a series that WOULD trigger the default spec
+    _patch_cycle_io(monkeypatch, spot=2.0, rsi=rsi, mfi=mfi)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["opened"] == []
+    assert any(h["reason"] == "invalid_signal_spec" for h in actions["holds"])
+
+
+@pytest.mark.asyncio
+async def test_set_watchlist_settings_refuses_an_invalid_spec(tmp_db):
+    entry, error = await v9.set_watchlist_settings(SPX, signals="foo(3)<5")
+    assert entry is None and "indicateur inconnu" in error
+    # unchanged after the refusal
+    token = next(t for t in await v9.get_watchlist() if t["contract"] == SPX.lower())
+    assert "foo" not in token["signals"]
+
+
+@pytest.mark.asyncio
 async def test_cycle_honors_per_token_trail(tmp_db, monkeypatch):
     """trail=3%: a -4% dip from the peak closes (would survive at the
     default -5%)."""
