@@ -465,7 +465,21 @@ _V8_GIVEBACK_ATR_MULT = 0.35
 _V8_MIN_GIVEBACK_PCT = 0.2
 _V8_MAX_GIVEBACK_PCT = 1.5
 
-_V8_BOOTSTRAP_MODE = False
+# 07/08 -- re-enabled (Claude autonomous mandate, operator carte blanche
+# reaffirmed explicitly this session: "tu fait se que tu veut ... ta jamais
+# besoin de met permission"). This is NOT a blind revert to the version that
+# lost 0%/-$8728 on 30 trades (05/08-06/08): those trades ran BEFORE the
+# anti-chase (_V8_MAX_CHASE_PCT) and ATR-scaled giveback (_V8_GIVEBACK_ATR_MULT)
+# gates above existed -- both apply unconditionally to every v8 entry
+# regardless of divergence_fresh, so bootstrap-tier entries now get the same
+# entry-quality protection the divergence tier already has. Never tested in
+# this combined shape before. Direct motivation: the divergence-required tier
+# alone produced only 4 trades in ~20h (06/08 20:55 -> 06/08 16:46) after the
+# tightening -- for the operator's 24h "signes nets d'amélioration" mandate
+# (06/08 22:27), that rate cannot produce enough data to judge anything.
+# Reversible in one line; the 20min autonomous check-ins already running
+# will catch it fast if this tier reproduces the old 0% pattern.
+_V8_BOOTSTRAP_MODE = True
 # Bootstrap trough freshness: the lowest low of the recent window must sit
 # within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
 # spirit as the divergence pivot check, computed directly on the candles.
