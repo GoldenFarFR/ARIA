@@ -25,7 +25,7 @@ Crypto-to-crypto only (USDC on Base) -- no fiat rail for this product. Per
 docs/conformite-dossier-avocat.md §7, this scope is what the operator decided can
 proceed without waiting on a lawyer review (fiat would re-trigger that gate).
 
-Package: x402[evm,fastapi] (pyproject.toml, pinned >=2.16.0 -- Alpha-status
+Package: x402[evm,fastapi,extensions] (pyproject.toml, pinned >=2.16.0 -- Alpha-status
 package, one breaking v1->v2 rewrite already behind it as of this integration,
 per the 23/07 feasibility research). Facilitator defaults to the free
 x402.org testnet facilitator unless ARIA_X402_SELLER_FACILITATOR_URL points to a
