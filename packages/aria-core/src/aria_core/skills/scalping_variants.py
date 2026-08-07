@@ -487,6 +487,43 @@ _V8_MAX_GIVEBACK_PCT = 1.5
 # session finds a real fix for bootstrap's entry quality, but re-enabling
 # it AGAIN without one would just be repeating this experiment a third time.
 _V8_BOOTSTRAP_MODE = False
+
+# 07/08 ~23h20 -- ENTIRE POCKET PAUSED, divergence tier included. The 12h30
+# decision above only killed bootstrap and left divergence running on the
+# assumption its 0/6 was "too small a sample to judge" -- it has since grown
+# to 9 closed trades (paper_position, wallet='scalping_v8'), STILL 0 wins,
+# and every single one shares the exact failure signature already diagnosed
+# for bootstrap (comment above, 06/08): avg peak gain vs entry -1.6%, and
+# n_touched_positive = 0/9 -- not one divergence-tier trade EVER traded a
+# single tick above its own entry price before closing (6 via "duree max
+# scalping", 2 via stagnation timeout, 1 via trailing stop that itself never
+# saw a positive high-water mark). Combined with bootstrap's 0/34, that's
+# 0 winners in 43 real closed trades across BOTH tiers -- the one tier with
+# an actual backtest basis (60% WR, p=0.026) is failing forward exactly like
+# the one that never had one. This is not a sample-size question anymore.
+#
+# Diagnosis: not an exit-tuning problem (same conclusion the 06/08 comment
+# already reached for bootstrap) -- it's the SAME entry-timing bug the
+# anti-chase/giveback gates (both ATR-scaled, both already active on this
+# tier) were meant to close and evidently don't: ``entry`` is still a LIVE
+# price sampled at evaluation time, un-anchored to ``signal_close``, so a
+# "confirmed" wick can finish fading between candle close and this pocket's
+# next scan pass before either gate ever sees it. The real fix is the one
+# already banked and never built (Devil's Advocate report 2db20159, cited in
+# the giveback-gate comment above): simulate a LIMIT order anchored to
+# signal_close +/- k*ATR instead of buying at whatever price is live when
+# evaluated, in SHADOW mode first (same doctrine as combo_signal_shadow.py/
+# wick_filter_shadow.py -- log what a limit-order entry would have done on
+# the same real candidates, without acting on it, until there's forward data
+# to judge it by) before ever routing a real paper trade through it. Not
+# implemented in this commit -- pausing entries first (cheap, immediate,
+# stops the bleed) is separable from designing and validating that
+# replacement (non-trivial, deserves its own session). Backlog: build the
+# limit-order shadow log, accumulate a real forward sample, only then decide
+# whether to re-open v8 on the new entry mechanics -- never just flip this
+# flag back on the current one, that would be the bootstrap mistake a third
+# time under a different name.
+_V8_ENTRY_PAUSED = True
 # Bootstrap trough freshness: the lowest low of the recent window must sit
 # within the last _V8_MAX_BARS_SINCE_PIVOT closed candles -- same freshness
 # spirit as the divergence pivot check, computed directly on the candles.
@@ -518,6 +555,16 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         )
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real evaluation
         logger.info("scalping_variants: combo_signal_shadow.record_evaluation failed (%s)", exc)
+    if _V8_ENTRY_PAUSED:
+        # 07/08 ~23h20, see _V8_ENTRY_PAUSED's own comment: both tiers proven
+        # 0 winners in 43 real trades, same never-touches-positive signature
+        # on each -- shadow logging above still runs (feeds the future
+        # limit-order redesign), only the buy path is cut.
+        return _hold(
+            chain, pair.base_symbol, pair.price_usd,
+            "poche v8 en pause (0 gain sur 43 trades reels, deux paliers -- "
+            "voir commentaire _V8_ENTRY_PAUSED)", "v8_entry_paused",
+        )
     detail = entry_signals._bullish_rsi_divergence_detail(
         candles, period=entry_signals.SCALPING_RSI_PERIOD
     )

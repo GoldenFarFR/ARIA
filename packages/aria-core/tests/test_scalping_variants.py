@@ -25,6 +25,17 @@ def _clear_gates_cache():
     scalping_variants._gates_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _v8_entries_unpaused(monkeypatch):
+    """07/08 ~23h20 -- v8's real default flipped to _V8_ENTRY_PAUSED=True
+    (both tiers proven 0 winners in 43 real trades, see its own comment).
+    Every test below exercises the underlying gate logic that stays fully
+    correct and worth locking in even while paused -- only
+    test_v8_entry_paused_blocks_every_signal below tests the flag itself,
+    so it opts back into the real default explicitly."""
+    monkeypatch.setattr(scalping_variants, "_V8_ENTRY_PAUSED", False)
+
+
 def _pair(price=1.0, symbol="TOK", liquidity=100_000.0):
     return momentum_entry.PairSnapshot(
         pair_address="0xpool", price_usd=price, base_symbol=symbol, liquidity_usd=liquidity,
@@ -316,6 +327,22 @@ def _mock_divergence(monkeypatch, *, present: bool, bars_since: int | None = 1):
 async def test_v8_registered_in_variant_analyzers():
     assert "scalping_v8" in scalping_variants.VARIANT_ANALYZERS
     assert scalping_variants.VARIANT_ANALYZERS["scalping_v8"] is scalping_variants.evaluate_v8_wick_reversal
+
+
+@pytest.mark.asyncio
+async def test_v8_entry_paused_blocks_every_signal(monkeypatch):
+    """07/08 ~23h20: real default is _V8_ENTRY_PAUSED=True (see its own
+    comment -- 0 winners in 43 real closed trades across both tiers, same
+    never-touches-positive signature on each). A perfect textbook signal
+    (fresh divergence + strong wick, the exact setup that used to BUY) must
+    still HOLD -- the pause is a hard stop on the whole pocket, not a gate
+    tucked away in one code path that a future refactor could bypass."""
+    monkeypatch.setattr(scalping_variants, "_V8_ENTRY_PAUSED", True)
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=True, bars_since=2)
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "v8_entry_paused"
 
 
 @pytest.mark.asyncio
