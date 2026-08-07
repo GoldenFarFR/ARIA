@@ -16,6 +16,7 @@ import { ChatScreen } from "./screens/ChatScreen";
 import { ConsoleScreen } from "./screens/ConsoleScreen";
 import { HomeScreen, type AppId } from "./screens/HomeScreen";
 import { LockScreen } from "./screens/LockScreen";
+import { StopScreen } from "./screens/StopScreen";
 import { theme } from "./theme";
 
 type Phase = "loading" | "login" | "locked" | "home";
@@ -23,6 +24,7 @@ type Phase = "loading" | "login" | "locked" | "home";
 const APP_TITLES: Record<AppId, string> = {
   chat: "Chat ARIA",
   console: "Console",
+  stop: "Kill-switch",
 };
 
 export default function App() {
@@ -105,6 +107,7 @@ export default function App() {
             >
               {openApp === "chat" && <ChatScreen onLoggedOut={() => { setOpenApp(null); setPhase("login"); }} />}
               {openApp === "console" && <ConsoleScreen />}
+              {openApp === "stop" && <StopScreen />}
             </AppWindow>
           </>
         )}

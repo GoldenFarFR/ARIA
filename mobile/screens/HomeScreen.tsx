@@ -5,7 +5,7 @@ import { logout } from "../api/auth";
 import { useUnreadCount } from "../unreadStore";
 import { theme } from "../theme";
 
-export type AppId = "chat" | "console";
+export type AppId = "chat" | "console" | "stop";
 
 interface AppIcon {
   id: AppId;
@@ -16,6 +16,7 @@ interface AppIcon {
 const APPS: AppIcon[] = [
   { id: "chat", label: "Chat ARIA", glyph: "A" },
   { id: "console", label: "Console", glyph: "📈" },
+  { id: "stop", label: "Kill-switch", glyph: "⏻" },
 ];
 
 // Smartphone-style home screen (operator request, 07/08): a grid of app
@@ -55,8 +56,10 @@ export function HomeScreen({
             onPress={() => onOpenApp(app.id)}
             activeOpacity={0.7}
           >
-            <View style={styles.icon}>
-              <Text style={styles.iconGlyph}>{app.glyph}</Text>
+            <View style={[styles.icon, app.id === "stop" && styles.iconDanger]}>
+              <Text style={[styles.iconGlyph, app.id === "stop" && styles.iconGlyphDanger]}>
+                {app.glyph}
+              </Text>
               {app.id === "chat" && unread > 0 && (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>{unread > 99 ? "99+" : unread}</Text>
@@ -104,6 +107,8 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   iconGlyph: { fontSize: 26, color: theme.accent },
+  iconDanger: { borderColor: "rgba(229,72,77,0.4)" },
+  iconGlyphDanger: { color: theme.danger },
   iconLabel: { color: theme.textDim, fontSize: 11.5, textAlign: "center" },
   badge: {
     position: "absolute",
