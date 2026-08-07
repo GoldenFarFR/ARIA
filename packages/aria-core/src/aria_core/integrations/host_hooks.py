@@ -11,6 +11,7 @@ _auth_db_path: Path | None = None
 _check_rate_limit: Callable[..., bool] | None = None
 _run_portfolio_analysis: Callable[[str], Awaitable[tuple[str, dict]]] | None = None
 _reset_operator_failed_attempts: Callable[[str], Awaitable[bool]] | None = None
+_generate_operator_invite_code: Callable[[], Awaitable[str]] | None = None
 
 run_portfolio_analysis = None  # set by register()
 
@@ -24,9 +25,11 @@ def register(
     check_rate_limit: Callable[..., bool] | None = None,
     run_portfolio_analysis_fn: Callable[[str], Awaitable[tuple[str, dict]]] | None = None,
     reset_operator_failed_attempts_fn: Callable[[str], Awaitable[bool]] | None = None,
+    generate_operator_invite_code_fn: Callable[[], Awaitable[str]] | None = None,
 ) -> None:
     global _get_watchlist, _get_game_score, _init_auth_db, _auth_db_path, _check_rate_limit
     global _run_portfolio_analysis, run_portfolio_analysis, _reset_operator_failed_attempts
+    global _generate_operator_invite_code
     _get_watchlist = get_watchlist
     _get_game_score = get_game_score
     _init_auth_db = init_auth_db
@@ -35,6 +38,7 @@ def register(
     _run_portfolio_analysis = run_portfolio_analysis_fn
     run_portfolio_analysis = run_portfolio_analysis_fn
     _reset_operator_failed_attempts = reset_operator_failed_attempts_fn
+    _generate_operator_invite_code = generate_operator_invite_code_fn
 
 
 async def get_watchlist() -> list[Any]:
@@ -72,3 +76,13 @@ async def reset_operator_failed_attempts(username: str) -> bool:
     if _reset_operator_failed_attempts is None:
         return False
     return await _reset_operator_failed_attempts(username)
+
+
+async def generate_operator_invite_code() -> str | None:
+    """08/07 -- Privy auth redesign: the /mobileinvite Telegram command's real
+    implementation, same host-hook bridge pattern as reset_operator_failed_
+    attempts above. None (never raises) if the host never registered this
+    hook -- e.g. a non-vanguard host, or the feature not wired up yet."""
+    if _generate_operator_invite_code is None:
+        return None
+    return await _generate_operator_invite_code()

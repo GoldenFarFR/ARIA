@@ -67,6 +67,18 @@ async def _ensure_table() -> None:
             )
             """
         )
+        # 08/07 -- Privy auth redesign: a "permanent" session (SESSION_TTL
+        # above) is only safe long-term if SOMETHING re-proves identity
+        # periodically -- last_totp_reverify_at tracks the last time this
+        # specific session did (see needs_totp_reverify below). Migration
+        # (not part of CREATE TABLE) because the table already has rows in
+        # prod -- same pattern as privy_sessions.py's _ensure_session_columns.
+        cursor = await db.execute("PRAGMA table_info(operator_sessions)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "last_totp_reverify_at" not in cols:
+            await db.execute(
+                "ALTER TABLE operator_sessions ADD COLUMN last_totp_reverify_at TEXT"
+            )
         await db.commit()
 
 
@@ -104,17 +116,57 @@ async def create_operator_session(
             """
             INSERT INTO operator_sessions
                 (session_id, account_id, secret_hash, created_at, expires_at,
-                 last_seen_at, created_ip, last_seen_ip, device_label, user_agent, installation_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_seen_at, created_ip, last_seen_ip, device_label, user_agent, installation_id,
+                 last_totp_reverify_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, account_id, _hash_secret(secret), now.isoformat(), expires.isoformat(),
                 now.isoformat(), ip, ip, device_label, user_agent, installation_id,
+                # 08/07 -- a fresh login (password or Privy, both require their
+                # own real-time proof of identity) counts as an implicit
+                # reverify -- the 30-day clock starts at creation, not at
+                # None/never (which would demand a redundant TOTP prompt on
+                # the very next launch).
+                now.isoformat(),
             ),
         )
         await db.commit()
 
     return f"{session_id}.{secret}"
+
+
+# 08/07 -- Privy auth redesign: on top of the "permanent" sliding session
+# above, the operator asked for a periodic TOTP re-check every 30 days --
+# bounds how long a compromised device/session stays usable even though it
+# never expires on its own otherwise.
+TOTP_REVERIFY_INTERVAL = timedelta(days=30)
+
+
+def needs_totp_reverify(session: dict) -> bool:
+    """Pure function over an already-fetched session row (verify_operator_
+    session's return value) -- never a second DB round trip just to check
+    this. Missing/unparsable last_totp_reverify_at fails CLOSED (reverify
+    required) -- the same "when in doubt" doctrine as everywhere else in this
+    module, never silently trusted."""
+    raw = session.get("last_totp_reverify_at")
+    if not raw:
+        return True
+    try:
+        last = _parse_iso(raw)
+    except ValueError:
+        return True
+    return _now() - last >= TOTP_REVERIFY_INTERVAL
+
+
+async def mark_totp_reverified(session_id: str) -> None:
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE operator_sessions SET last_totp_reverify_at = ? WHERE session_id = ?",
+            (_now().isoformat(), session_id),
+        )
+        await db.commit()
 
 
 async def verify_operator_session(token: str | None, *, ip: str | None = None) -> dict | None:

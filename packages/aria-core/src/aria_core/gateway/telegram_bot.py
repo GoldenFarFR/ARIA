@@ -28,7 +28,11 @@ from aria_core.identity import (
     official_x_url,
 )
 from aria_core import custody_pause, outgoing_pause, risk_guard
-from aria_core.integrations.host_hooks import check_rate_limit, reset_operator_failed_attempts
+from aria_core.integrations.host_hooks import (
+    check_rate_limit,
+    generate_operator_invite_code,
+    reset_operator_failed_attempts,
+)
 from aria_core.runtime import settings
 # Wallet card/report formatting (#157 follow-up, 15/07) -- factored into
 # smart_money.py so the background cycle `wallet_scan_queue.py` reuses
@@ -2602,6 +2606,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("theses", "Liste des thèses encore ouvertes"),
     ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
+    ("mobileinvite", "Génère un code d'invitation à usage unique pour lier l'app mobile à Privy"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
     ("v9add", "Ajoute un contrat à la watchlist scalping_v9 (RSI+MFI 5min)"),
     ("v9list", "Watchlist scalping_v9 active (avec réglages par token)"),
@@ -4009,6 +4014,25 @@ async def _handle_paper_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 _DEFAULT_OPERATOR_MOBILE_USERNAME = "operator"
 
 
+async def _handle_mobile_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/mobileinvite -- 08/07, Privy auth redesign. Owner-only, same gate as
+    /unlockmobile: generates a one-time code the operator enters ONCE in the
+    app on first Privy sign-in to bind that identity permanently. Proves
+    "this is really the operator" via a channel (Telegram) already trusted,
+    same doctrine as /unlockmobile's own SSH-independent recovery path."""
+    if not await _owner_only(update):
+        return
+    code = await generate_operator_invite_code()
+    if code is None:
+        await _reply(update.message, "Fonctionnalité non câblée sur cet hôte.")
+        return
+    await _reply(
+        update.message,
+        f"🔑 Code d'invitation (usage unique) : {code}\n"
+        "Entre-le dans l'app mobile lors de la première connexion Privy.",
+    )
+
+
 async def _handle_unlock_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/unlockmobile [username] -- Item #201, second SSH-independent unlock path for
     the operator mobile account's progressive login slowdown. Owner-only, same gate
@@ -4122,6 +4146,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", _handle_resume))
     app.add_handler(CommandHandler("off", _handle_paper_off))
     app.add_handler(CommandHandler("on", _handle_paper_on))
+    app.add_handler(CommandHandler("mobileinvite", _handle_mobile_invite))
     app.add_handler(CommandHandler("unlockmobile", _handle_unlock_mobile))
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))

@@ -162,11 +162,20 @@ async def require_operator_or_session(request: Request) -> dict:
     server-to-server X-Admin-Secret/X-Admin-Totp path (is_operator_request,
     untouched) OR a mobile Bearer session -- either is enough for /chat, /status,
     and (Phase 3) /stop, /resume, /history. Returns a tagged dict so callers can
-    tell which path authorized the request."""
+    tell which path authorized the request.
+
+    08/07 -- Privy auth redesign: a mobile session that hasn't done its
+    30-day TOTP reverify (sessions.needs_totp_reverify) is rejected HERE, the
+    single gate every protected route already goes through -- never a
+    per-route check to keep in sync. /totp-reverify itself and /session
+    bypass this function (they call _require_mobile_session directly) so the
+    operator isn't locked out of the one action that clears this state."""
     if is_operator_request(request):
         return {"mode": "legacy"}
     ip = client_ip(request)
     session = await _require_mobile_session(request.headers.get("Authorization"), ip=ip)
+    if sessions.needs_totp_reverify(session):
+        raise HTTPException(status_code=403, detail="totp_reverify_required")
     return {"mode": "mobile", **session}
 
 
@@ -351,7 +360,13 @@ async def logout(request: Request, authorization: str | None = Header(default=No
 @router.get("/session")
 async def session_status(request: Request, authorization: str | None = Header(default=None)):
     """Verifies (and slides forward, see operator_session.py) the session, and
-    returns identity + version info in a single round trip at app launch."""
+    returns identity + version info in a single round trip at app launch.
+
+    08/07 -- also reports totp_reverify_required so the app can route to that
+    screen PROACTIVELY (rather than waiting for a 403 on the first protected
+    call it happens to make) -- this route itself is deliberately exempt from
+    the same gate (require_operator_or_session), or the app would have no way
+    to even learn it needs to reverify."""
     ip = client_ip(request)
     session = await _require_mobile_session(authorization, ip=ip)
     account = await accounts.get_account_by_id(session["account_id"])
@@ -364,7 +379,96 @@ async def session_status(request: Request, authorization: str | None = Header(de
         "backend_version": _backend_version(),
         "mobile_api": MOBILE_API_VERSION,
         "minimum_mobile_api": MINIMUM_MOBILE_API_VERSION,
+        "totp_reverify_required": sessions.needs_totp_reverify(session),
     }
+
+
+class PrivyLoginRequest(BaseModel):
+    privy_access_token: str = Field(..., min_length=1)
+    invite_code: str | None = Field(default=None, max_length=64)
+    installation_id: str | None = Field(default=None, max_length=128)
+    device_label: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/login-privy", response_model=LoginResponse)
+async def login_privy(body: PrivyLoginRequest, request: Request):
+    """MetaMask-style flow (08/07, operator spec): first-ever call for a given
+    Privy identity MUST carry a valid, unused invite_code (proves "this is
+    really the operator" once, via a channel -- Telegram -- the operator
+    already controls); every call after that just needs the Privy token,
+    exactly like a password login needs just the password. Reuses
+    privy_verify.py's access-token verification as-is (already generic, no
+    web-specific assumption) -- never a second JWT-checking implementation."""
+    from app.auth import operator_privy_link as privy_link
+    from app.auth.privy_verify import PrivyAuthError, privy_did_from_access
+
+    ip = client_ip(request)
+    try:
+        privy_did = privy_did_from_access(body.privy_access_token)
+    except PrivyAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    account_id = await privy_link.get_linked_account_id(privy_did)
+    if account_id is None:
+        code = (body.invite_code or "").strip()
+        if not code:
+            raise HTTPException(status_code=403, detail="invite_code_required")
+        account = await accounts.get_the_account()
+        if account is None:
+            raise HTTPException(status_code=503, detail="No operator account configured")
+        linked = await privy_link.link_with_invite_code(
+            privy_did=privy_did, account_id=account["id"], code=code,
+        )
+        if not linked:
+            raise HTTPException(status_code=403, detail="Invalid or already-used invite code")
+        account_id = account["id"]
+
+    await auth_log.record_event(
+        event_type=auth_log.EVENT_LOGIN_SUCCESS, username="privy", ip=ip,
+        installation_id=body.installation_id,
+    )
+    token = await sessions.create_operator_session(
+        account_id=account_id, installation_id=body.installation_id,
+        user_agent=request.headers.get("User-Agent"), ip=ip, device_label=body.device_label,
+    )
+    return LoginResponse(token=token)
+
+
+class TotpReverifyBody(BaseModel):
+    totp_code: str = Field(..., max_length=16)
+
+
+@router.post("/totp-reverify")
+async def totp_reverify(body: TotpReverifyBody, request: Request):
+    """08/07 -- the 30-day re-check (operator spec: "le totp 1 seul fois tous
+    les 30 jours"). Deliberately calls _require_mobile_session directly, NOT
+    require_operator_or_session -- the whole point is to be reachable even
+    when needs_totp_reverify is already true, or the operator would be locked
+    out of the one action that clears it. Same fresh-code + anti-replay
+    doctrine as the kill-switch (_require_fresh_totp), not reused directly
+    since that helper also special-cases the legacy server-to-server caller,
+    which never reaches this mobile-only route."""
+    ip = client_ip(request)
+    session = await _require_mobile_session(request.headers.get("Authorization"), ip=ip)
+    account = await accounts.get_account_by_id(session["account_id"])
+    if account is None:
+        raise HTTPException(status_code=403, detail="Invalid or expired session")
+
+    if not check_rate_limit(
+        f"operator_totp_reverify:{session['account_id']}",
+        max_attempts=KILL_SWITCH_MAX_ATTEMPTS,
+        window_seconds=KILL_SWITCH_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many attempts — retry shortly.")
+
+    code = (body.totp_code or "").strip()
+    if not verify_totp(account["totp_secret"], code):
+        raise HTTPException(status_code=403, detail=_TOTP_REQUIRED_DETAIL)
+    if not await totp_replay.claim_code(account_id=session["account_id"], totp_code=code):
+        raise HTTPException(status_code=403, detail=_TOTP_REQUIRED_DETAIL)
+
+    await sessions.mark_totp_reverified(session["session_id"])
+    return {"ok": True}
 
 
 @router.get("/version")

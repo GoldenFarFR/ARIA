@@ -130,6 +130,7 @@ def register_aria_host_integrations() -> None:
     from aria_core.spark_config import apply_spark_to_environ, resolve_spark_runtime
     from app.auth.access_code import DB_PATH, init_auth_db
     from app.auth.operator_account import reset_failed_attempts as reset_operator_failed_attempts
+    from app.auth.operator_privy_link import generate_invite_code as generate_operator_invite_code
     from app.auth.rate_limit import check_rate_limit
     from app.config import settings
     from app.games.scores import get_score
@@ -156,4 +157,5 @@ def register_aria_host_integrations() -> None:
         check_rate_limit=check_rate_limit,
         run_portfolio_analysis_fn=run_portfolio_analysis,
         reset_operator_failed_attempts_fn=reset_operator_failed_attempts,
+        generate_operator_invite_code_fn=generate_operator_invite_code,
     )

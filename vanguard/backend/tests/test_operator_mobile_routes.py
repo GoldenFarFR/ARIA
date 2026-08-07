@@ -16,8 +16,10 @@ from aria_core.admin_totp import generate_secret, totp_code
 from app.api.routes import operator_mobile
 from app.auth import operator_account as accounts
 from app.auth import operator_auth_log as auth_log
+from app.auth import operator_privy_link as privy_link
 from app.auth import operator_session as sessions
 from app.auth import operator_totp_replay as totp_replay
+from app.auth import privy_verify
 from app.auth import rate_limit
 from app.config import settings
 from app.database import init_db
@@ -34,6 +36,7 @@ def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_log, "DB_PATH", str(tmp_path / "auth_log.db"))
     monkeypatch.setattr(totp_replay, "DB_PATH", str(tmp_path / "totp_replay.db"))
     monkeypatch.setattr(kill_incident_log, "DB_PATH", str(tmp_path / "aria.db"))
+    monkeypatch.setattr(privy_link, "DB_PATH", str(tmp_path / "privy_link.db"))
     yield
 
 
@@ -796,3 +799,138 @@ async def test_register_push_token_persists(client, totp_secret):
     assert res.status_code == 200
     assert res.json() == {"ok": True}
     assert "ExponentPushToken[persist-1]" in await list_push_tokens()
+
+
+# ── /login-privy + /totp-reverify (08/07, Privy auth redesign) ─────────────
+
+def _mock_privy_did(monkeypatch, token_to_did: dict[str, str]) -> None:
+    """privy_did_from_access is a thin JWT-verify wrapper -- no real Privy
+    token can be minted offline, so every test here substitutes it with a
+    plain lookup. Raises the same PrivyAuthError the real function would on
+    an unknown token, so error-path tests exercise the real route logic."""
+    def _fake(token: str) -> str:
+        did = token_to_did.get(token)
+        if did is None:
+            raise privy_verify.PrivyAuthError("Invalid Privy token")
+        return did
+
+    monkeypatch.setattr(privy_verify, "privy_did_from_access", _fake)
+
+
+@pytest.mark.asyncio
+async def test_login_privy_rejects_invalid_token(client, monkeypatch):
+    _mock_privy_did(monkeypatch, {})
+    res = await client.post("/api/aria/ops/login-privy", json={"privy_access_token": "garbage"})
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_privy_requires_invite_code_on_first_use(client, monkeypatch):
+    _mock_privy_did(monkeypatch, {"tok-1": "did:privy:new-user"})
+    res = await client.post("/api/aria/ops/login-privy", json={"privy_access_token": "tok-1"})
+    assert res.status_code == 403
+    assert res.json()["detail"] == "invite_code_required"
+
+
+@pytest.mark.asyncio
+async def test_login_privy_links_with_valid_invite_code(client, monkeypatch):
+    _mock_privy_did(monkeypatch, {"tok-1": "did:privy:new-user"})
+    code = await privy_link.generate_invite_code()
+    res = await client.post(
+        "/api/aria/ops/login-privy",
+        json={"privy_access_token": "tok-1", "invite_code": code},
+    )
+    assert res.status_code == 200
+    assert res.json()["token"]
+
+
+@pytest.mark.asyncio
+async def test_login_privy_rejects_already_used_invite_code(client, monkeypatch):
+    _mock_privy_did(monkeypatch, {"tok-1": "did:privy:user-a", "tok-2": "did:privy:user-b"})
+    code = await privy_link.generate_invite_code()
+    first = await client.post(
+        "/api/aria/ops/login-privy",
+        json={"privy_access_token": "tok-1", "invite_code": code},
+    )
+    assert first.status_code == 200
+
+    second = await client.post(
+        "/api/aria/ops/login-privy",
+        json={"privy_access_token": "tok-2", "invite_code": code},
+    )
+    assert second.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_login_privy_returning_identity_needs_no_code(client, monkeypatch):
+    """Once linked, the invite code is never asked again -- exactly the
+    'password' role a Privy identity plays from then on."""
+    _mock_privy_did(monkeypatch, {"tok-1": "did:privy:returning-user"})
+    code = await privy_link.generate_invite_code()
+    first = await client.post(
+        "/api/aria/ops/login-privy",
+        json={"privy_access_token": "tok-1", "invite_code": code},
+    )
+    assert first.status_code == 200
+
+    second = await client.post("/api/aria/ops/login-privy", json={"privy_access_token": "tok-1"})
+    assert second.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_session_reports_totp_reverify_not_required_right_after_login(client, totp_secret):
+    headers = await _authed(client, totp_secret)
+    res = await client.get("/api/aria/ops/session", headers=headers)
+    assert res.status_code == 200
+    assert res.json()["totp_reverify_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_stale_session_blocks_protected_routes_until_reverified(client, totp_secret):
+    headers = await _authed(client, totp_secret)
+
+    # Simulate 30+ days of inactivity by backdating the session's own
+    # last_totp_reverify_at -- the sliding-window renewal (last_seen_at/
+    # expires_at) is orthogonal and must not itself clear this.
+    token = headers["Authorization"].split(" ", 1)[1]
+    session_id = token.split(".", 1)[0]
+    import aiosqlite
+
+    async with aiosqlite.connect(sessions.DB_PATH) as db:
+        await db.execute(
+            "UPDATE operator_sessions SET last_totp_reverify_at = '2020-01-01T00:00:00+00:00' "
+            "WHERE session_id = ?",
+            (session_id,),
+        )
+        await db.commit()
+
+    status_res = await client.get("/api/aria/ops/status", headers=headers)
+    assert status_res.status_code == 403
+    assert status_res.json()["detail"] == "totp_reverify_required"
+
+    session_res = await client.get("/api/aria/ops/session", headers=headers)
+    assert session_res.status_code == 200
+    assert session_res.json()["totp_reverify_required"] is True
+
+    reverify_res = await client.post(
+        "/api/aria/ops/totp-reverify", json={"totp_code": _kill_code(totp_secret)}, headers=headers,
+    )
+    assert reverify_res.status_code == 200
+
+    status_after = await client.get("/api/aria/ops/status", headers=headers)
+    assert status_after.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_totp_reverify_rejects_wrong_code(client, totp_secret):
+    headers = await _authed(client, totp_secret)
+    res = await client.post(
+        "/api/aria/ops/totp-reverify", json={"totp_code": "000000"}, headers=headers,
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_totp_reverify_requires_session(client):
+    res = await client.post("/api/aria/ops/totp-reverify", json={"totp_code": "123456"})
+    assert res.status_code == 403

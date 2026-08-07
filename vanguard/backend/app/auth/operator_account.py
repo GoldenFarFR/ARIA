@@ -114,6 +114,20 @@ async def get_account(username: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def get_the_account() -> dict | None:
+    """08/07 -- Privy auth redesign: this channel has exactly ONE operator
+    account by design (no username/multi-user concept), so the Privy login
+    path needs to bind an invite code to THE account without asking for a
+    username. Returns the single row, or None if the account was never
+    provisioned (gen-operator-account.py not yet run)."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM operator_accounts LIMIT 1")
+        row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
 async def get_account_by_id(account_id: int) -> dict | None:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:

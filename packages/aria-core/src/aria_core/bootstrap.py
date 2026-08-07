@@ -23,6 +23,7 @@ def register_host_integrations(
     check_rate_limit: Callable[..., bool] | None = None,
     run_portfolio_analysis_fn: Callable[[str], Awaitable[tuple[str, dict]]] | None = None,
     reset_operator_failed_attempts_fn: Callable[[str], Awaitable[bool]] | None = None,
+    generate_operator_invite_code_fn: Callable[[], Awaitable[str]] | None = None,
 ) -> None:
     host_hooks.register(
         get_watchlist=get_watchlist,
@@ -32,4 +33,5 @@ def register_host_integrations(
         check_rate_limit=check_rate_limit,
         run_portfolio_analysis_fn=run_portfolio_analysis_fn,
         reset_operator_failed_attempts_fn=reset_operator_failed_attempts_fn,
+        generate_operator_invite_code_fn=generate_operator_invite_code_fn,
     )
