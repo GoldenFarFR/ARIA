@@ -249,6 +249,21 @@ async def _record_incident_best_effort(*, event_type: str, by: str, reason: str)
         logger.warning("operator_mobile: kill incident logging failed", exc_info=True)
 
 
+async def _notify_admin_best_effort(text: str) -> None:
+    """Real bug found 08/07: arming/lifting the kill-switch from the mobile
+    channel wrote to the incident log but never told Telegram -- the operator
+    had no way to learn the switch changed state unless they happened to be
+    looking at the app right then. Same best-effort guard as the incident
+    log: a Telegram outage must never turn an already-applied pause/resume
+    into a 500."""
+    try:
+        from aria_core.gateway.telegram_bot import notify_admin
+
+        await notify_admin(text)
+    except Exception:  # noqa: BLE001 -- notification must never block the kill-switch
+        logger.warning("operator_mobile: kill-switch admin notification failed", exc_info=True)
+
+
 def _actor(auth: dict) -> str:
     """Who armed/lifted, for pause_state + kill_incident_log. Uses the account's
     internal id, never its username (the plan keeps the username renameable), and
@@ -556,6 +571,9 @@ async def stop(request: Request, body: KillSwitchBody | None = None):
     await _record_incident_best_effort(
         event_type=kill_incident_log.EVENT_ARMED, by=actor, reason=reason,
     )
+    await _notify_admin_best_effort(
+        f"🛑 Kill-switch ARME depuis le mobile (by={actor}) — {reason}"
+    )
     return {"changed": True, **_pause_payload(after)}
 
 
@@ -579,12 +597,16 @@ async def resume_route(request: Request, body: KillSwitchBody | None = None):
 
     actor = _actor(auth)
     after = resume(by=actor)
+    reason = (body.reason or "").strip() or "Manual resume (operator mobile channel)"
     await _record_incident_best_effort(
         event_type=kill_incident_log.EVENT_LIFTED,
         by=actor,
         # outgoing_pause.resume() takes no reason, so an optional one only ever
         # reaches the incident log -- deliberate, not an oversight.
-        reason=(body.reason or "").strip() or "Manual resume (operator mobile channel)",
+        reason=reason,
+    )
+    await _notify_admin_best_effort(
+        f"✅ Kill-switch LEVE depuis le mobile (by={actor}) — {reason}"
     )
     return {"changed": True, **_pause_payload(after)}
 

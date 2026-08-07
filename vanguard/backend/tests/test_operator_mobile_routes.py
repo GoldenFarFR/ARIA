@@ -569,6 +569,81 @@ async def test_stop_arms_state_and_records_incident(client, totp_secret):
 
 
 @pytest.mark.asyncio
+async def test_stop_notifies_admin_via_telegram(client, totp_secret, monkeypatch):
+    """Real gap found 08/07: arming the kill-switch from the mobile channel updated
+    the pause state and the incident log but never told Telegram -- the operator had
+    no way to learn about it unless already looking at the app right then."""
+    from aria_core.gateway import telegram_bot
+
+    calls: list[str] = []
+
+    async def _fake_notify(text: str) -> bool:
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(telegram_bot, "notify_admin", _fake_notify)
+
+    headers = await _authed(client, totp_secret)
+    res = await client.post(
+        "/api/aria/ops/stop", json={"totp_code": _kill_code(totp_secret)}, headers=headers,
+    )
+    assert res.status_code == 200
+    assert len(calls) == 1
+    assert "mobile" in calls[0].lower()
+
+    # A retry on an already-armed switch must not spam a second notification.
+    second = await client.post(
+        "/api/aria/ops/stop", json={"totp_code": _kill_code(totp_secret, step=1)}, headers=headers,
+    )
+    assert second.json()["changed"] is False
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_notifies_admin_via_telegram(client, totp_secret, monkeypatch):
+    from aria_core.gateway import telegram_bot
+
+    calls: list[str] = []
+
+    async def _fake_notify(text: str) -> bool:
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(telegram_bot, "notify_admin", _fake_notify)
+
+    outgoing_pause.pause(by="test", reason="armed out of band")
+    headers = await _authed(client, totp_secret)
+    res = await client.post(
+        "/api/aria/ops/resume", json={"totp_code": _kill_code(totp_secret)}, headers=headers,
+    )
+    assert res.status_code == 200
+    assert len(calls) == 1
+    assert "mobile" in calls[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_notification_failure_never_blocks_the_action(
+    client, totp_secret, monkeypatch,
+):
+    """Same doctrine as the best-effort incident log: a Telegram outage must never
+    turn an already-applied pause into a 500 the app would read as 'it failed'."""
+    from aria_core.gateway import telegram_bot
+
+    async def _boom(text: str) -> bool:
+        raise RuntimeError("telegram is down")
+
+    monkeypatch.setattr(telegram_bot, "notify_admin", _boom)
+
+    headers = await _authed(client, totp_secret)
+    res = await client.post(
+        "/api/aria/ops/stop", json={"totp_code": _kill_code(totp_secret)}, headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["changed"] is True
+    assert outgoing_pause.is_paused() is True
+
+
+@pytest.mark.asyncio
 async def test_replayed_totp_cannot_lift_a_legitimate_stop(client, totp_secret):
     """The dangerous direction of a replay: a captured code must never be reusable
     to undo a STOP the operator genuinely armed."""
