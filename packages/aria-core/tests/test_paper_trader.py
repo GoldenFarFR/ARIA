@@ -4009,6 +4009,37 @@ async def test_run_cycle_notifies_position_tracking_for_still_open_positions(tmp
 
 
 @pytest.mark.asyncio
+async def test_run_cycle_tracking_alert_includes_open_v9_positions(tmp_db):
+    """08/07 -- real bug found live (operator: "les position v9 apparaisse
+    pas ici" on the periodic Telegram tracking alert): the early `continue`
+    that keeps v9 positions out of the generic ATR-trail/security-rescan
+    machinery (legitimate -- v9 manages its own exits) ALSO skipped the
+    `tracked.append` further down the same loop, so v9's open positions
+    silently never showed up here even though their cash was correctly
+    counted elsewhere (visible_reporting_wallets)."""
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+    await pt.open_position(
+        D, "DDD", 1.0, invalidation_price=0.5, alloc_usd=10_000, wallet=pt.V9_WALLET,
+    )
+
+    async def price_lookup(contract):
+        return 1.05
+
+    alerts: list[str] = []
+
+    async def notifier(msg):
+        alerts.append(msg)
+
+    act = await pt.run_paper_cycle(candidates=[], price_lookup=price_lookup, notifier=notifier)
+
+    assert act["closed"] == []
+    assert len(act["tracked"]) == 1
+    assert act["tracked"][0]["wallet"] == pt.V9_WALLET
+    assert any("suivi positions ouvertes" in a for a in alerts)
+    assert any("DDD" in a for a in alerts)
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_tracking_alert_shows_the_real_scalping_variant_end_to_end(tmp_db):
     """08/02 -- real UX gap found live (operator screenshot: 8 open scalping
     positions all shown as generic "(scalping)", no way to tell v1 from v3

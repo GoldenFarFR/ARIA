@@ -5241,9 +5241,36 @@ async def _run_paper_cycle_locked(
             # 06/08 -- scalping_v9 positions are managed EXCLUSIVELY by their
             # own 5-min cycle (scalping_v9.run_v9_cycle: flat -5% trailing
             # stop is the pocket's ONLY exit, operator spec) -- the generic
-            # ATR-trail/TP-ladder/stagnation machinery below must never
+            # ATR-trail/TP-ladder/security-rescan machinery below must never
             # touch them.
+            #
+            # 08/07 -- real bug found live (operator: "les position v9
+            # apparaisse pas ici" on the periodic tracking alert): this early
+            # `continue` also skipped the `tracked.append` further down in
+            # this same loop body, which only runs after the generic
+            # machinery -- so v9's open positions silently never showed up
+            # in the Telegram tracking alert, even though their cash was
+            # still correctly counted (visible_reporting_wallets already
+            # includes V9_WALLET). Fetch a display-only price here (same
+            # price_lookup as every other position, never a security
+            # re-scan or exit check) and append to `tracked` before skipping
+            # the rest.
             if p.get("wallet") == V9_WALLET:
+                try:
+                    if using_default_price_lookup:
+                        v9_pair = await _default_pair_lookup(p["contract"], chain=p.get("chain") or "base")
+                        v9_price = v9_pair.price_usd if v9_pair and v9_pair.price_usd and v9_pair.price_usd > 0 else None
+                    else:
+                        v9_price = await price_lookup(p["contract"])
+                except Exception:  # noqa: BLE001
+                    v9_price = None
+                tracked.append({
+                    "contract": p["contract"], "symbol": p["symbol"], "entry_price": p["entry_price"],
+                    "qty": p["qty"], "cost_usd": p["cost_usd"], "price": v9_price or p["entry_price"],
+                    "chain": p.get("chain") or "base", "mode": p.get("mode"), "strategy": p.get("strategy"),
+                    "opened_at": p.get("opened_at"), "wallet": p.get("wallet"),
+                    "price_unavailable": v9_price is None,
+                })
                 continue
             actions["checked"] += 1
             # 07/17 -- with the DEFAULT price_lookup, the DexScreener pair is
