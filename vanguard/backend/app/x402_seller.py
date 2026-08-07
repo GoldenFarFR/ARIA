@@ -171,6 +171,11 @@ def mount_x402_seller(app) -> None:
     from GoPlus/Blockscout/CabalSpy (docs/conformite-dossier-avocat.md,
     HANDOFF pending) -- adding a route here without that clearance is a
     compliance mistake, not just a technical one."""
+    from x402.extensions.bazaar import (
+        OutputConfig,
+        bazaar_resource_server_extension,
+        declare_discovery_extension,
+    )
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
     from x402.http.middleware.fastapi import PaymentMiddlewareASGI
     from x402.http.types import RouteConfig
@@ -181,10 +186,21 @@ def mount_x402_seller(app) -> None:
         FacilitatorConfig(url=X402_SELLER_FACILITATOR_URL, auth_provider=_facilitator_auth_provider())
     )
     server = x402ResourceServer(facilitator)
+    # 07/08 -- Bazaar discovery (operator go-ahead): the CDP facilitator only
+    # catalogs a route once its PaymentRequired response carries a valid
+    # "bazaar" extension block, built by declare_discovery_extension() below.
+    # Without register_extension() here, the discovery info would never be
+    # enriched with the HTTP method/route template the SDK's own indexer
+    # requires -- verified against the really-installed x402 2.18.0 SDK
+    # (x402.extensions.bazaar), not assumed from the docs alone (same
+    # discipline as every other x402 integration in this file).
+    server.register_extension(bazaar_resource_server_extension)
     network = aria_x402_seller.resolve_network()
     server.register(network, ExactEvmServerScheme())
 
-    def _route_config(product: str, description: str) -> RouteConfig:
+    def _route_config(
+        product: str, description: str, discovery: dict | None = None,
+    ) -> RouteConfig:
         resource_config = aria_x402_seller.build_resource_config(product)
         if resource_config is None:
             # x402_seller_ready() already confirmed the gate is on right before this
@@ -205,16 +221,72 @@ def mount_x402_seller(app) -> None:
             ],
             mime_type="application/json",
             description=description,
+            extensions=discovery,
         )
 
     routes = {
         "GET /api/x402/walletscore": _route_config(
-            "wallet_score", "ARIA's own composite wallet reputation score (Base wallets, cached)",
+            "wallet_score",
+            "ARIA's own composite wallet reputation score (Base wallets, cached)",
+            discovery=declare_discovery_extension(
+                input={"address": "0x1111111111166b7fe7bd91427724b487980afc69"},
+                input_schema={
+                    "properties": {
+                        "address": {
+                            "type": "string",
+                            "description": "Base wallet address, 0x-prefixed, 40 hex chars",
+                        },
+                    },
+                    "required": ["address"],
+                },
+                output=OutputConfig(
+                    example={
+                        "wallet": "0x1111111111166b7fe7bd91427724b487980afc69",
+                        "composite_percentile": 74,
+                    },
+                    schema={
+                        "properties": {
+                            "wallet": {"type": "string"},
+                            "composite_percentile": {"type": "number"},
+                        },
+                    },
+                ),
+            ),
         ),
         # 31/07 -- B20 native Base token safety verdict (services/b20.py).
         "GET /api/x402/b20score": _route_config(
             "b20_safety",
             "ARIA's own B20 role-holder safety verdict (MINT/PAUSE/BURN_BLOCKED, cache-first)",
+            discovery=declare_discovery_extension(
+                input={"contract": "0x1111111111166b7fe7bd91427724b487980afc69"},
+                input_schema={
+                    "properties": {
+                        "contract": {
+                            "type": "string",
+                            "description": "Base token contract address, 0x-prefixed, 40 hex chars",
+                        },
+                    },
+                    "required": ["contract"],
+                },
+                output=OutputConfig(
+                    example={
+                        "contract": "0x1111111111166b7fe7bd91427724b487980afc69",
+                        "b20_verdict": "MINT",
+                        "reason": "mint role held by a non-renounced EOA",
+                        "role_holders": {"MINT": ["0xabc0000000000000000000000000000000dead"]},
+                        "scanned_at": "2026-08-07T09:00:00+00:00",
+                    },
+                    schema={
+                        "properties": {
+                            "contract": {"type": "string"},
+                            "b20_verdict": {"type": "string"},
+                            "reason": {"type": ["string", "null"]},
+                            "role_holders": {"type": "object"},
+                            "scanned_at": {"type": ["string", "null"]},
+                        },
+                    },
+                ),
+            ),
         ),
     }
     app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)

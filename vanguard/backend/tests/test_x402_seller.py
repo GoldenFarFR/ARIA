@@ -41,6 +41,27 @@ def test_mount_x402_seller_wires_correctly_when_gate_on(monkeypatch):
     mount_x402_seller(app)  # must not raise
 
 
+def test_mount_x402_seller_declares_bazaar_discovery_on_both_routes(monkeypatch):
+    """07/08, operator go-ahead: both live paid routes must carry a real
+    Bazaar discovery extension, or the CDP facilitator never catalogs/indexes
+    them -- the whole point of listing (see docs/HANDOFF_X402.md, "no
+    discoverability" gap). Locks the invariant rather than trusting the wiring
+    stays correct after a future refactor."""
+    from fastapi import FastAPI
+
+    from app.x402_seller import mount_x402_seller
+
+    monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
+    app = FastAPI()
+    mount_x402_seller(app)
+    routes = app.user_middleware[0].kwargs["routes"]
+    for path in ("GET /api/x402/walletscore", "GET /api/x402/b20score"):
+        extensions = routes[path].extensions
+        assert extensions is not None and "bazaar" in extensions, (
+            f"{path} is missing its Bazaar discovery extension -- undiscoverable by real payers"
+        )
+
+
 def test_x402_prefix_exempted_from_privy_session_gate():
     """Machine-to-machine paid endpoints must never require a Privy operator/
     member session -- x402's own payment challenge is the access control."""
