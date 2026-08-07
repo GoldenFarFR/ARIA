@@ -281,8 +281,7 @@ export function MarketApp() {
                 <Zap className="w-5 h-5 text-accent" />
               </div>
               <div className="hidden sm:block min-w-0">
-                <p className="pixel-label leading-none mb-1">Aria Vanguard ZHC</p>
-                <h1 className="font-display text-[11px] text-terminal leading-tight">DEXPULSE</h1>
+                <p className="pixel-label leading-none">Aria Vanguard ZHC</p>
               </div>
             </div>
 
