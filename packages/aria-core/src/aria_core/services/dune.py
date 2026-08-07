@@ -828,6 +828,104 @@ async def get_token_sell_distribution(
 
 
 # ---------------------------------------------------------------------------
+# 07/08 -- "bundle & sniper at launch" (backlog #258, promoted from the research
+# watch). A single actor splitting one buy across many wallets INSIDE the launch
+# block makes the holder map look organic while the supply stays under one
+# person's control -- a coordinated-dump risk no existing guardrail covers
+# (honeypot/mint check the contract's powers, sybil_cluster counts holders,
+# insider_wallets tracks deployer distributions; none of them looks at WHEN the
+# first buys landed relative to each other). Detected without any per-wallet
+# network call: `dex.trades` already carries `block_number`, so ONE query
+# returns the distinct-buyer count of the token's earliest blocks. The
+# funding-graph layer (are those wallets funded by the same source?) is a
+# deliberate future extension, not required for a first usable signal.
+BUNDLE_LAUNCH_QUERY_TEMPLATE = """
+SELECT block_number, COUNT(DISTINCT taker) AS distinct_buyers, SUM(amount_usd) AS block_bought_usd
+FROM dex.trades
+WHERE blockchain = '{blockchain}'
+  AND token_bought_address = {token_address}
+  AND block_time >= NOW() - INTERVAL '{lookback_days}' day
+GROUP BY block_number
+ORDER BY block_number ASC
+LIMIT {limit}
+"""
+
+
+def build_bundle_launch_query(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 20,
+) -> str:
+    """Builds the per-block buyer-count query for a token's EARLIEST blocks.
+    Same validation/bare-hex-literal doctrine as
+    ``build_token_early_buyers_query`` (external contract input, real
+    anti-injection check required -- never a formatted string trusted blind).
+
+    ``limit`` bounds the number of earliest blocks returned, not wallets: the
+    bundle signature lives in the first blocks by construction, so scanning
+    deeper adds cost without adding signal."""
+    if not contract or not re.fullmatch(_EVM_ADDRESS_RE_SOURCE, contract):
+        raise ValueError(f"invalid EVM contract address: {contract!r}")
+    if not blockchain or not re.fullmatch(r"[a-z0-9_-]+", blockchain):
+        raise ValueError("invalid blockchain")
+    if not isinstance(lookback_days, int) or lookback_days <= 0:
+        raise ValueError("lookback_days must be a positive integer")
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+
+    return BUNDLE_LAUNCH_QUERY_TEMPLATE.format(
+        blockchain=blockchain, token_address=contract.lower(), lookback_days=lookback_days, limit=limit,
+    )
+
+
+@dataclass
+class LaunchBlockRecord:
+    block_number: int
+    distinct_buyers: int
+    bought_usd: float
+
+
+@dataclass
+class BundleLaunchResult:
+    blocks: list[LaunchBlockRecord] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_token_bundle_launch(
+    contract: str, *, blockchain: str = "base", lookback_days: int = 90, limit: int = 20,
+    performance: str = "small",
+) -> BundleLaunchResult:
+    """Per-block distinct-buyer counts for a token's earliest observed blocks,
+    oldest first -- same dome doctrine as the rest of this module: without a
+    key, invalid address, or failure at any step -> ``available=False``, never
+    an exception, never a fabricated block."""
+    try:
+        sql = build_bundle_launch_query(
+            contract, blockchain=blockchain, lookback_days=lookback_days, limit=limit,
+        )
+    except ValueError as exc:
+        return BundleLaunchResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return BundleLaunchResult(available=False, error=exec_result.error)
+
+    blocks: list[LaunchBlockRecord] = []
+    for row in exec_result.rows:
+        block_number, distinct_buyers = row.get("block_number"), row.get("distinct_buyers")
+        if block_number is None or distinct_buyers is None:
+            continue
+        try:
+            blocks.append(LaunchBlockRecord(
+                block_number=int(block_number),
+                distinct_buyers=int(distinct_buyers),
+                bought_usd=float(row.get("block_bought_usd") or 0.0),
+            ))
+        except (TypeError, ValueError):
+            continue  # a malformed row is skipped, never guessed at
+    return BundleLaunchResult(blocks=blocks, available=True, error=None)
+
+
+# ---------------------------------------------------------------------------
 # 22/07 -- "disguised liquidity exit" (picked up from stress-test Part 11 --
 # a proposal evaluated hypothetically, never coded before this day).
 # Objective: spot wallets that received a DIRECT distribution from the

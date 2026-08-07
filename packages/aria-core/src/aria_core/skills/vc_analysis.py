@@ -231,6 +231,7 @@ def _build_untrusted_context(
     x_substance: "XSubstanceVerdict | None" = None,
     sell_distribution: "SellDistributionVerdict | None" = None,
     token_cashtag_engagement: "TokenCashtagEngagementVerdict | None" = None,
+    bundle_launch: "BundleLaunchVerdict | None" = None,
 ) -> str:
     """Assembles the factual block (untrusted data) from facts already collected.
 
@@ -476,6 +477,10 @@ def _build_untrusted_context(
             f"Engagement récent sur LE TOKEN (pas le produit) : {_sanitize(token_cashtag_engagement.signal, 20)}"
         )
         for pt in token_cashtag_engagement.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if bundle_launch and bundle_launch.signal:
+        lines.append(f"Achat groupé au lancement (bundle/sniper) : {_sanitize(bundle_launch.signal, 20)}")
+        for pt in bundle_launch.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
     # Legitimacy context (JUDGED flags, not raw): mint authority, launchpad,
     # liquidity depth, dev wallet behavior.
@@ -1122,6 +1127,11 @@ _DOCS_SUBSTANCE_TTL_DAYS = 15.0
 # honeypot check -- short enough to catch a real change of state within a
 # day, long enough to avoid re-paying for a Dune query on every scan.
 _SELL_DISTRIBUTION_TTL_DAYS = 1.0
+# 07/08 (#258) -- launch blocks are IMMUTABLE once mined, so unlike the
+# fast-moving signals above this one can be cached far longer: re-running the
+# Dune query would re-read the exact same blocks. 30 days, bounded only so a
+# cache entry never outlives a schema change.
+_BUNDLE_LAUNCH_TTL_DAYS = 30.0
 _TOKEN_CASHTAG_ENGAGEMENT_TTL_DAYS = 1.0
 
 
@@ -1305,6 +1315,34 @@ async def _fetch_sell_distribution(ctx: TokenScanContext) -> "SellDistributionVe
         return None
 
 
+async def _fetch_bundle_launch(ctx: TokenScanContext) -> "BundleLaunchVerdict | None":
+    """07/08 (#258) -- bundled launch: one actor splitting a single buy across
+    many wallets INSIDE the launch block, so the holder map looks organic while
+    the supply stays under one person's control. No existing guardrail covered
+    the timing dimension (contract powers, holder counts and deployer
+    distributions all miss it). Reuses `ctx.contract`, no project link needed."""
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.bundle_launch import (
+        BundleLaunchFacts, gather_bundle_launch_facts, judge_bundle_launch,
+    )
+
+    try:
+        cached = await external_signal_cache.get_cached(
+            "bundle_launch", ctx.contract, ttl_days=_BUNDLE_LAUNCH_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_bundle_launch(BundleLaunchFacts(**cached))
+        facts = await gather_bundle_launch_facts(ctx.contract)
+        if facts.available:
+            await external_signal_cache.store("bundle_launch", ctx.contract, dataclasses.asdict(facts))
+        return judge_bundle_launch(facts)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: bundle launch failed (%s)", exc)
+        return None
+
+
 async def _fetch_token_cashtag_engagement(ctx: TokenScanContext) -> "TokenCashtagEngagementVerdict | None":
     """03/08 -- "token cashtag engagement" (C-MEM case: a credible dev plus a
     credible product said NOTHING about whether the account was still
@@ -1402,12 +1440,13 @@ async def analyze_vc_with_context(
     docs_substance = await _fetch_docs_substance(ctx)
     x_substance = await _fetch_x_substance(ctx)
     sell_distribution = await _fetch_sell_distribution(ctx)
+    bundle_launch = await _fetch_bundle_launch(ctx)
     token_cashtag_engagement = await _fetch_token_cashtag_engagement(ctx)
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
         market_alerts_digest, conviction_research, github_substance,
         website_substance, docs_substance, x_substance,
-        sell_distribution, token_cashtag_engagement,
+        sell_distribution, token_cashtag_engagement, bundle_launch,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
