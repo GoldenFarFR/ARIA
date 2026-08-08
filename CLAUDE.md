@@ -188,6 +188,9 @@ meant for SESSIONS (read it when resuming the v8 thread): `/opt/aria-data/v8-wat
 v8-log.md` (cron 30min accelerated — verified against the real crontab 07/08, the
 "2h" this line claimed was already stale; nominal 6h to restore — backlog #1); bootstrap exit
 criteria — backlog #2. Wick shadow filter on v6/v7: `wick_filter_shadow_log` table.
+RSI-reversal shadow (08/08, backtest-driven, 60min RSI14/RSI21 oversold/overbought
+round trip): `v8_rsi_reversal_shadow` table, same v8-watch log. Design + backtest basis:
+`docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.08 entry).
 
 ## Permanent mandate — strengths/weaknesses of a trading AI (15/07, continuous loop)
 Until the operator judges ARIA ready: (1) verify that the real strengths of an
