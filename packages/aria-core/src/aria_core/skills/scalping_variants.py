@@ -584,6 +584,18 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         await v8_limit_shadow.process_shadows(_shadow_price_atr)
     except Exception as exc:  # noqa: BLE001
         logger.info("scalping_variants: v8_limit_shadow.process_shadows failed (%s)", exc)
+    # 08/08 -- RSI-reversal shadow (backtest basis: docstring of
+    # v8_rsi_reversal_shadow.py). Same "runs on every real evaluation
+    # reaching valid candles" doctrine as combo_signal_shadow above -- zero
+    # extra network calls, resamples these SAME candles to 60min internally.
+    try:
+        from aria_core import v8_rsi_reversal_shadow
+
+        await v8_rsi_reversal_shadow.record_evaluation(
+            contract, chain, symbol=pair.base_symbol, candles=candles,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("scalping_variants: v8_rsi_reversal_shadow.record_evaluation failed (%s)", exc)
     detail = entry_signals._bullish_rsi_divergence_detail(
         candles, period=entry_signals.SCALPING_RSI_PERIOD
     )
