@@ -56,6 +56,16 @@ DB_PATH = str(aria_db_path())
 # of the source wallet's own real position sizing.
 POSITION_SIZE_USD = 1_000.0
 
+# 08/08 -- operator concern, verified real: some tracked wallets rotate
+# (the leaderboard's "all-time" history can outlive the specific on-chain
+# address currently associated with a handle -- confirmed live for songz,
+# see TRACKED_WALLETS below). No reliable automatic way to discover a
+# trader's NEW address exists here (would require re-scraping fomoscan/GMGN
+# on a schedule, too fragile for a heartbeat cycle) -- what IS reliably
+# buildable: flag a tracked wallet as dormant once it goes quiet, so a
+# session can notice and manually look up whether the trader moved.
+INACTIVITY_THRESHOLD_DAYS = 14
+
 # Transfers of these tokens are the PAYMENT leg of a swap (WETH/USDC/etc in,
 # token-of-interest out, or vice versa) -- never themselves the "buy"/"sell"
 # to copy. Base addresses, lowercase.
@@ -74,31 +84,48 @@ _QUOTE_TOKENS = {
 TRACKED_WALLETS: dict[str, dict] = {
     "0xd3a61ba3bd055f6aa962cc7554e117b4baf8d0a5": {
         "label": "songz", "tier": "verified_all_time",
-        "evidence": "fomoscan: +$177,213 realized all-time, 52.1% win rate",
+        "evidence": (
+            "fomoscan: +$177,213 realized all-time, 52.1% win rate -- CAVEAT "
+            "(verified 08/08, wallet_age_check): this Base address's first "
+            "on-chain tx is 2026-07-12, ~1 month old, ~150 ERC-20 transfers "
+            "total -- cannot possibly account for the 2,432-trade all-time "
+            "history fomoscan attributes to the 'songz' handle. Likely wallet "
+            "rotation on the app's side (a new address behind the same handle) "
+            "or cross-chain activity (fomo is multi-chain) not visible here. "
+            "Treat the 'all-time' evidence as attached to the HANDLE, not "
+            "necessarily to this specific address's own history."
+        ),
+        "wallet_first_tx_at": "2026-07-12",
     },
     "0xe6a5f7f6de90d5693fac766fca4d0d3214f95083": {
         "label": "thokani", "tier": "verified_all_time",
         "evidence": "fomoscan: +$119,241 realized all-time, 45.2% win rate",
+        "wallet_first_tx_at": "2025-11-07",
     },
     "0xeea1a89465e31fbd95ab99b2f81ab3b974cb674e": {
         "label": "wrld_sol", "tier": "verified_all_time",
         "evidence": "fomoscan: +$74,277 realized all-time, 27.7% win rate",
+        "wallet_first_tx_at": "2026-02-14",
     },
     "0x8d73a36d78e2ae4a437053c9ce3be70d483ab74d": {
         "label": "gmgn_0x8d_b74d", "tier": "gmgn_smart_money_30d",
         "evidence": "GMGN Base Smart Money: +$4,210/30d (1.86x)",
+        "wallet_first_tx_at": "2024-01-01",
     },
     "0xfd7e55a555555c2f25053a38ec744de1afea4fa4": {
         "label": "gmgn_0xfd_4fa4", "tier": "gmgn_smart_money_30d",
         "evidence": "GMGN Base Smart Money: +$4,150/30d (2.49x)",
+        "wallet_first_tx_at": "2024-07-16",
     },
     "0xa83b73f5644cde337b61da79589f10ea15548811": {
         "label": "gmgn_antpositions", "tier": "gmgn_smart_money_30d",
         "evidence": "GMGN Base Smart Money: +$2,640/30d",
+        "wallet_first_tx_at": "2025-10-21",
     },
     "0xb226f97bc5b01978848dc440b40c70faea7c006e": {
         "label": "gmgn_alexwong", "tier": "gmgn_smart_money_30d",
         "evidence": "GMGN Base Smart Money: +$139/30d (low volume)",
+        "wallet_first_tx_at": "2025-10-19",
     },
     "0xbd3183a293b3bea81479be052491207f1a328adf": {
         "label": "serial_frontrunner", "tier": "frontrunner",
@@ -108,6 +135,7 @@ TRACKED_WALLETS: dict[str, dict] = {
             "found buying AEON 2 days before the 04/08/2026 Programmable "
             "partnership announcement"
         ),
+        "wallet_first_tx_at": "2024-06-01",
     },
 }
 
@@ -134,7 +162,8 @@ _CURSOR_DDL = """
 CREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (
     wallet_address TEXT PRIMARY KEY,
     last_tx_hash TEXT,
-    last_scanned_at TEXT NOT NULL
+    last_scanned_at TEXT NOT NULL,
+    last_transfer_at TEXT
 )
 """
 
@@ -148,6 +177,15 @@ async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_POSITION_DDL)
         await db.execute(_CURSOR_DDL)
+        # Hot migration (08/08): last_transfer_at added after this table was
+        # first deployed -- a prod DB that already ran a cycle needs it added
+        # in place, same pattern as paper_trader.py's _ADDED_COLUMNS.
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(wallet_copy_shadow_cursor)")).fetchall()
+        }
+        if "last_transfer_at" not in existing:
+            await db.execute("ALTER TABLE wallet_copy_shadow_cursor ADD COLUMN last_transfer_at TEXT")
         await db.commit()
     _table_ready = True
 
@@ -170,15 +208,39 @@ async def _get_cursor(wallet: str) -> str | None:
     return row[0] if row else None
 
 
-async def _set_cursor(wallet: str, last_tx_hash: str | None) -> None:
+async def _get_last_transfer_at(wallet: str) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO wallet_copy_shadow_cursor (wallet_address, last_tx_hash, last_scanned_at) "
-            "VALUES (?, ?, ?) "
-            "ON CONFLICT(wallet_address) DO UPDATE SET last_tx_hash = excluded.last_tx_hash, "
-            "last_scanned_at = excluded.last_scanned_at",
-            (wallet, last_tx_hash, datetime.now(timezone.utc).isoformat()),
+        cursor = await db.execute(
+            "SELECT last_transfer_at FROM wallet_copy_shadow_cursor WHERE wallet_address = ?",
+            (wallet,),
         )
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def _set_cursor(wallet: str, last_tx_hash: str | None, *, last_transfer_at: str | None = None) -> None:
+    """``last_transfer_at`` (08/08): the ON-CHAIN timestamp of the newest
+    transfer actually observed this scan (never the scan's own wall-clock
+    time) -- only advanced when a newer transfer was seen, so a scan that
+    finds nothing new never resets the activity clock."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if last_transfer_at is not None:
+            await db.execute(
+                "INSERT INTO wallet_copy_shadow_cursor "
+                "(wallet_address, last_tx_hash, last_scanned_at, last_transfer_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(wallet_address) DO UPDATE SET last_tx_hash = excluded.last_tx_hash, "
+                "last_scanned_at = excluded.last_scanned_at, last_transfer_at = excluded.last_transfer_at",
+                (wallet, last_tx_hash, datetime.now(timezone.utc).isoformat(), last_transfer_at),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO wallet_copy_shadow_cursor (wallet_address, last_tx_hash, last_scanned_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(wallet_address) DO UPDATE SET last_tx_hash = excluded.last_tx_hash, "
+                "last_scanned_at = excluded.last_scanned_at",
+                (wallet, last_tx_hash, datetime.now(timezone.utc).isoformat()),
+            )
         await db.commit()
 
 
@@ -291,8 +353,11 @@ async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
 
         opened = closed = 0
         newest_hash = last_seen
+        newest_transfer_at = None
         for t in transfers:
             newest_hash = t.tx_hash
+            if t.timestamp:
+                newest_transfer_at = t.timestamp
             contract = (t.token_address or "").lower()
             if not contract or contract in _QUOTE_TOKENS:
                 continue
@@ -309,7 +374,7 @@ async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
                 closed += 1
 
         if newest_hash != last_seen:
-            await _set_cursor(wallet, newest_hash)
+            await _set_cursor(wallet, newest_hash, last_transfer_at=newest_transfer_at)
         return ShadowScanResult(wallet, opened, closed)
     except Exception as exc:  # noqa: BLE001 -- shadow, never blocking
         logger.info("wallet_copy_shadow: scan failed for %s/%s (%s)", label, wallet[:10], exc)
@@ -358,9 +423,23 @@ async def summary() -> dict[str, dict]:
     open positions are reported separately via their last mark, clearly
     labeled as latent/unrealized."""
     await _ensure_tables()
+    now = datetime.now(timezone.utc)
     out: dict[str, dict] = {}
     async with aiosqlite.connect(DB_PATH) as db:
         for wallet, meta in TRACKED_WALLETS.items():
+            activity_row = await db.execute(
+                "SELECT last_transfer_at FROM wallet_copy_shadow_cursor WHERE wallet_address = ?",
+                (wallet,),
+            )
+            last_transfer_at = (await activity_row.fetchone() or (None,))[0]
+            activity_status = "unknown"
+            if last_transfer_at:
+                try:
+                    dt = datetime.fromisoformat(last_transfer_at.replace("Z", "+00:00"))
+                    activity_status = "dormant" if (now - dt).days >= INACTIVITY_THRESHOLD_DAYS else "active"
+                except (ValueError, TypeError):
+                    activity_status = "unknown"
+
             cursor = await db.execute(
                 "SELECT status, entry_price_usd, exit_price_usd, last_mark_price_usd "
                 "FROM wallet_copy_shadow_position WHERE wallet_address = ?",
@@ -385,6 +464,9 @@ async def summary() -> dict[str, dict]:
                 "label": meta["label"],
                 "tier": meta["tier"],
                 "evidence": meta["evidence"],
+                "wallet_first_tx_at": meta.get("wallet_first_tx_at"),
+                "status": activity_status,
+                "last_transfer_at": last_transfer_at,
                 "closed_positions": closed_count,
                 "realized_pnl_usd": round(closed_pnl_usd, 2),
                 "open_positions": open_count,

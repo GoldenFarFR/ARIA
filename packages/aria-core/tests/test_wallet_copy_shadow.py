@@ -137,6 +137,51 @@ async def test_summary_reports_all_tracked_wallets_even_with_no_activity():
         assert stats["closed_positions"] == 0
         assert stats["open_positions"] == 0
         assert stats["label"] == wcs.TRACKED_WALLETS[wallet]["label"]
+        assert stats["status"] == "unknown"  # never scanned yet -- no activity clock started
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_active_after_a_recent_transfer(monkeypatch):
+    from datetime import datetime, timezone
+
+    recent = datetime.now(timezone.utc).isoformat()
+    _mock_price(monkeypatch, 1.0)
+    # Uses a genuinely fresh timestamp -- _transfer()'s default is fixed
+    # (2026-08-08), which would already be "dormant" by the time this test
+    # runs on a later date.
+    import aria_core.services.blockscout as bc
+
+    def _fresh_transfer(*, tx_hash, to_address="", from_address="", token_address=TOKEN, symbol="TP"):
+        return bc.TokenTransfer(
+            tx_hash=tx_hash, from_address=from_address, to_address=to_address,
+            token_address=token_address, token_symbol=symbol, token_name="TestProto",
+            amount=1_000.0, timestamp=recent,
+        )
+
+    _mock_transfers(monkeypatch, [_fresh_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    await wcs.scan_wallet(WALLET, META)
+    stats = (await wcs.summary())[WALLET]
+    assert stats["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_dormant_after_inactivity_window():
+    from datetime import datetime, timedelta, timezone
+
+    old = (datetime.now(timezone.utc) - timedelta(days=wcs.INACTIVITY_THRESHOLD_DAYS + 1)).isoformat()
+    await wcs._ensure_tables()
+    await wcs._set_cursor(WALLET, "0xold", last_transfer_at=old)
+    stats = (await wcs.summary())[WALLET]
+    assert stats["status"] == "dormant"
+
+
+def test_songz_wallet_age_caveat_documented():
+    """08/08 -- vérifié réel (blockscout, première tx 2026-07-12, ~1 mois),
+    incohérent avec le "all-time" 2432-trade que fomoscan attribue au handle
+    -- verrouille contre une régression silencieuse de la mise en garde."""
+    songz = wcs.TRACKED_WALLETS["0xd3a61ba3bd055f6aa962cc7554e117b4baf8d0a5"]
+    assert songz["wallet_first_tx_at"] == "2026-07-12"
+    assert "CAVEAT" in songz["evidence"]
 
 
 @pytest.mark.asyncio
