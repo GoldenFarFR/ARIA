@@ -380,6 +380,41 @@ async def test_v8_still_feeds_the_limit_shadow_while_paused(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v8_advances_the_shadow_even_without_a_fresh_signal(monkeypatch):
+    """Real bug found live (08/08, first forward observation session): a
+    shadow order already open (e.g. TOSHI) can only advance toward filled/
+    expired when process_shadows() actually runs -- it must NOT be gated
+    behind this candidate's OWN wick+divergence signal (that candidate might
+    never have one), or an already-open shadow for a DIFFERENT contract sits
+    frozen forever waiting for an unrelated coincidence. No divergence here
+    (real HOLD path, never reaches the wick/signal_close code at all) --
+    process_shadows must still run."""
+    from aria_core import v8_limit_shadow
+
+    processed = {"n": 0}
+
+    async def fake_process_shadows(price_atr_fn):
+        processed["n"] += 1
+
+    recorded = {"n": 0}
+
+    async def fake_record_signal(*a, **k):
+        recorded["n"] += 1
+
+    monkeypatch.setattr(v8_limit_shadow, "process_shadows", fake_process_shadows)
+    monkeypatch.setattr(v8_limit_shadow, "record_signal", fake_record_signal)
+    _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
+    _mock_divergence(monkeypatch, present=False)
+
+    sig = await scalping_variants.evaluate_v8_wick_reversal(CONTRACT, CHAIN)
+
+    assert sig["action"] == "HOLD"
+    assert sig["hold_reason"] == "no_signal"
+    assert processed["n"] == 1  # advances existing shadows regardless
+    assert recorded["n"] == 0  # but never opens a new one without a real signal
+
+
+@pytest.mark.asyncio
 async def test_v8_buys_on_wick_with_fresh_divergence_standard_sizing(monkeypatch):
     _patch_gates_and_candles(monkeypatch, pair=_pair(), candles=_v8_candles(signal_wick=True))
     _mock_divergence(monkeypatch, present=True, bars_since=2)

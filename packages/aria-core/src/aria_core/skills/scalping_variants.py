@@ -566,6 +566,24 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         )
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never block a real evaluation
         logger.info("scalping_variants: combo_signal_shadow.record_evaluation failed (%s)", exc)
+    # 08/08 -- real bug found live (first forward observation session): a
+    # PENDING/FILLED limit-shadow order can only ever advance (fill/expire/
+    # exit) when process_shadows() actually runs -- but it was only called
+    # from the block below, itself gated behind the SAME rare wick+divergence
+    # signal that opens a NEW shadow. A shadow already open (e.g. TOSHI,
+    # opened 00:46 UTC) sat frozen in 'pending' for hours because no OTHER
+    # candidate happened to re-trigger the full signal in the meantime --
+    # the advance step needs to run on every valid evaluation (any candidate
+    # with a live price), not just on a fresh signal. Moved here, right after
+    # combo_signal_shadow (same "runs on every real evaluation reaching valid
+    # candles" doctrine) -- record_signal (further below) stays gated to a
+    # real signal, only the advance step needed to move earlier.
+    try:
+        from aria_core import v8_limit_shadow
+
+        await v8_limit_shadow.process_shadows(_shadow_price_atr)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("scalping_variants: v8_limit_shadow.process_shadows failed (%s)", exc)
     detail = entry_signals._bullish_rsi_divergence_detail(
         candles, period=entry_signals.SCALPING_RSI_PERIOD
     )
@@ -617,7 +635,9 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
         # regardless of where the live price (checked right below) actually
         # is -- that's the whole point, an anchored order doesn't need an
         # anti-chase gate the way a live-price buy does. Best-effort, never
-        # blocks a real evaluation.
+        # blocks a real evaluation. (process_shadows itself now runs earlier,
+        # on every evaluation -- see the comment right after combo_signal_
+        # shadow above; only the OPEN of a new shadow stays gated here.)
         try:
             from aria_core import v8_limit_shadow
 
@@ -625,9 +645,8 @@ async def evaluate_v8_wick_reversal(contract: str, chain: str) -> dict | None:
                 contract, chain, symbol=pair.base_symbol, signal_close=signal_close,
                 atr_at_signal=atr, stop_price=signal_close - _V8_STOP_ATR_MULT * atr,
             )
-            await v8_limit_shadow.process_shadows(_shadow_price_atr)
         except Exception as exc:  # noqa: BLE001
-            logger.info("scalping_variants: v8_limit_shadow failed (%s)", exc)
+            logger.info("scalping_variants: v8_limit_shadow.record_signal failed (%s)", exc)
     if _V8_ENTRY_PAUSED:
         # 07/08 ~23h20, see _V8_ENTRY_PAUSED's own comment: both tiers proven
         # 0 winners in 43 real trades, same never-touches-positive signature
