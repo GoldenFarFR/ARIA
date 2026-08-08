@@ -11,6 +11,7 @@ from aria_core.grounding import (
     format_greeting_reply,
     grounded_for_audience,
     grounded_llm_identity,
+    is_ambiguous_short_message,
     is_analysis_methodology_question,
     is_aria_brain_question,
     is_greeting,
@@ -33,6 +34,32 @@ from aria_core.grounding import (
 def test_grounded_for_audience_operator_bypass():
     assert grounded_for_audience(public=False) is False
     assert grounded_for_audience(public=True) is True
+
+
+def test_is_ambiguous_short_message_catches_a_stray_typo():
+    # incident réel 08/08 : "feddback" (faute de frappe) a payé un LLM complet
+    # juste pour recevoir "Feedback sur quoi ? Sois précis."
+    assert is_ambiguous_short_message("feddback") is True
+    assert is_ambiguous_short_message("feedback") is True  # bien orthographié, même vague
+
+
+def test_is_ambiguous_short_message_ignores_real_questions():
+    assert is_ambiguous_short_message("prix?") is False
+    assert is_ambiguous_short_message("ça donne quoi ?") is False
+
+
+def test_is_ambiguous_short_message_ignores_longer_messages():
+    assert is_ambiguous_short_message("peux-tu regarder le portfolio v8") is False
+    assert is_ambiguous_short_message("") is False
+    assert is_ambiguous_short_message("   ") is False
+
+
+def test_is_ambiguous_short_message_requires_a_single_word():
+    # 2 mots peuvent déjà avoir un sens clair (incident réel : "Tu baise"
+    # dans test_operator_chat_budget.py mérite une vraie réponse, pas un
+    # rejet) -- le garde-fou reste volontairement limité à UN mot isolé.
+    assert is_ambiguous_short_message("pas clair") is False
+    assert is_ambiguous_short_message("trois mots ici") is False
 
 
 def test_llm_identity_question_detects_real_incident_phrasing():

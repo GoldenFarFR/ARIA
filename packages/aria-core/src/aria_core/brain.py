@@ -1093,6 +1093,21 @@ class AriaBrain:
             depth=depth.value,
         )
 
+    async def _last_agent_turn_asked_a_question(self) -> bool:
+        """True if ARIA's own last message ended with '?' -- used to skip the
+        ambiguous-short-message guard so a legitimate short reply to a
+        question ARIA just asked never gets swallowed. Best-effort: any
+        lookup failure defaults to False (guard stays active, never blocks
+        a real conversational turn on a DB hiccup)."""
+        try:
+            recent = await repertoire_db.get_messages(limit=5, visitor_id=None)
+        except Exception:
+            return False
+        for msg in recent:
+            if msg.get("role") == "agent":
+                return (msg.get("content") or "").rstrip().endswith("?")
+        return False
+
     async def _general_response(
         self,
         message: str,
@@ -1404,6 +1419,20 @@ class AriaBrain:
                     SkillName.EPISTEMIC_CHECK,
                     [calibrated_action_label(cal_data, lang=lang_key)],
                     cal_data,
+                    None,
+                )
+
+        if not public:
+            from aria_core.grounding import is_ambiguous_short_message
+
+            if is_ambiguous_short_message(route) and not await self._last_agent_turn_asked_a_question():
+                clarify = (
+                    "Précise ta demande." if lang == LANG_FR else "Please be more specific."
+                )
+                return (
+                    clarify, None,
+                    ["Message ambigu (template — sans appel LLM)"],
+                    {"ambiguous_short_message": True, "skip_web": True},
                     None,
                 )
 

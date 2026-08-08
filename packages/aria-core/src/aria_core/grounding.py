@@ -319,6 +319,33 @@ def is_short_ack(message: str) -> bool:
     return bool(_SHORT_ACK_RE.match((message or "").strip()))
 
 
+# 08/08 -- operator-reported waste: a single mistyped word ("feddback" for
+# "feedback") reached the full paid LLM call just to get "Feedback sur
+# quoi ? Sois précis." back -- the fixed system prompt (~1500-2500 tokens:
+# identity/persona/verified-facts/channel-rule blocks) dwarfs a message this
+# short, so the "clarify" answer costs almost as much as a real one. This is
+# NOT about spelling-correcting the word -- even a correctly-spelled but
+# vague one-word message ("feedback", "bug", "probleme") gets the exact same
+# unhelpful paid round-trip, so the fix targets "too short/vague to act on",
+# not "misspelled". Deliberately conservative -- ONE word only (a real
+# incident, test_operator_chat_budget.py's own "Tu baise" fixture, showed a
+# 2-word threshold swallows short provocations/smalltalk that already have a
+# clear intent and deserve a real reply), <=20 chars, no '?' -- to minimize
+# false positives on a real short command. The caller (brain.py)
+# additionally skips this when ARIA's own last turn ended in a question, so
+# a legitimate short answer to something ARIA just asked never gets
+# swallowed.
+def is_ambiguous_short_message(message: str) -> bool:
+    text = (message or "").strip()
+    if not text or "?" in text:
+        return False
+    if len(text) > 20:
+        return False
+    if len(text.split()) > 1:
+        return False
+    return True
+
+
 def is_general_qa(message: str) -> bool:
     """Question or info request — routes to calibrated Groq (not world YAML)."""
     text = message.strip()
