@@ -10,7 +10,9 @@ attached as the `x-cg-demo-api-key` header on every call, same pattern as
 `services/geckoterminal.py` (which already did this correctly since 18/07 --
 this module never had). Error policy identical to
 `services/coingecko.py` (see AGENTS.md):
-- 429: exponential backoff, 3 attempts max, then give up without blocking the pipeline.
+- 429: no retry (08/08, was 3 attempts -- amplified a sustained saturation
+  instead of absorbing an isolated burst), gives up immediately without
+  blocking the pipeline.
 - Timeout / endpoint unavailable: 1 retry after 5s, then explicit fallback.
 - 400 / 404 (unknown pool, uncovered network): `available=False` + clear message.
 - Missing data is never replaced by a guess — the absence is carried by
@@ -246,12 +248,18 @@ class OHLCVClient:
                 return None, f"{UNAVAILABLE} (GeckoTerminal timeout)"
 
             if response.status_code == 429:
+                # 08/08 -- no retry on 429 anymore (was 3 attempts): prod
+                # logs showed near-continuous 429s across every GeckoTerminal
+                # call site, a SUSTAINED saturation (aggregate demand from
+                # every pocket running simultaneously exceeding the account's
+                # real ceiling), not the isolated burst a retry is meant to
+                # absorb -- under sustained saturation a retry almost never
+                # succeeds while still spending a real request against an
+                # already-exhausted quota. Same fix applied in
+                # services/geckoterminal.py's own _get_json.
                 attempt_429 += 1
-                if attempt_429 >= 3:
-                    self._record_failure(f"{url} -> HTTP 429 after {attempt_429} attempts")
-                    return None, f"{UNAVAILABLE} (GeckoTerminal rate limit)"
-                await asyncio.sleep(0.5 * (2**attempt_429))
-                continue
+                self._record_failure(f"{url} -> HTTP 429 after {attempt_429} attempt(s)")
+                return None, f"{UNAVAILABLE} (GeckoTerminal rate limit)"
 
             if response.status_code >= 500:
                 if not timeout_retried:

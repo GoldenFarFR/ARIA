@@ -8,6 +8,16 @@ import pytest
 from aria_core import base_crawler as bc
 
 
+@pytest.fixture(autouse=True)
+def _reset_top_pools_cache():
+    """``_top_pools_cache`` is a module-level singleton -- never let one
+    test's cached payload leak into the next (mirrors momentum_entry.py's
+    own ``_reset_candles_cache`` pattern)."""
+    bc._top_pools_cache = None
+    yield
+    bc._top_pools_cache = None
+
+
 def _payload(addrs):
     return {"data": [{"relationships": {"base_token": {"data": {"id": "base_" + a}}}} for a in addrs]}
 
@@ -310,6 +320,72 @@ async def test_top_pools_skips_birdeye_when_geckoterminal_already_has_results():
     got = await bc.discover_top_pools(fetch=fetch, birdeye_discover=birdeye, min_liquidity_usd=30_000)
     assert got == [liquid]
     assert birdeye_called is False
+
+
+@pytest.mark.asyncio
+async def test_top_pools_real_fetch_path_is_cached_across_calls(monkeypatch):
+    """08/08 -- réduit la pression sur le quota GeckoTerminal partagé : deux
+    appels rapprochés de discover_top_pools() ne doivent taper le réseau
+    qu'une fois. Le cache n'existe que sur le vrai chemin ``_fetch_gt``
+    (fetch=None), jamais quand un test injecte son propre ``fetch=``."""
+    liquid = "0x" + "7" * 40
+    calls = 0
+
+    async def fake_fetch_gt(path):
+        nonlocal calls
+        calls += 1
+        return _pool_payload([(liquid, 80_000)])
+
+    monkeypatch.setattr(bc, "_fetch_gt", fake_fetch_gt)
+
+    first = await bc.discover_top_pools(min_liquidity_usd=30_000)
+    second = await bc.discover_top_pools(min_liquidity_usd=30_000)
+    assert first == [liquid]
+    assert second == [liquid]
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_top_pools_cache_expires_after_ttl(monkeypatch):
+    liquid = "0x" + "7" * 40
+    calls = 0
+
+    async def fake_fetch_gt(path):
+        nonlocal calls
+        calls += 1
+        return _pool_payload([(liquid, 80_000)])
+
+    monkeypatch.setattr(bc, "_fetch_gt", fake_fetch_gt)
+
+    await bc.discover_top_pools(min_liquidity_usd=30_000)
+    assert calls == 1
+    # Force le cache à paraître périmé sans vrai sleep.
+    cached_at, cached_payload = bc._top_pools_cache
+    bc._top_pools_cache = (cached_at - bc._TOP_POOLS_CACHE_TTL_SECONDS - 1.0, cached_payload)
+
+    await bc.discover_top_pools(min_liquidity_usd=30_000)
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_top_pools_failure_is_never_cached(monkeypatch):
+    """Un 429/panne réseau ne doit jamais geler l'échec pour toute la durée
+    du TTL -- l'appel suivant doit pouvoir retenter GeckoTerminal."""
+    calls = 0
+
+    async def fake_fetch_gt(path):
+        nonlocal calls
+        calls += 1
+        return None  # panne réseau/429
+
+    async def no_birdeye(*, min_liquidity_usd):
+        return []
+
+    monkeypatch.setattr(bc, "_fetch_gt", fake_fetch_gt)
+
+    await bc.discover_top_pools(birdeye_discover=no_birdeye)
+    await bc.discover_top_pools(birdeye_discover=no_birdeye)
+    assert calls == 2
 
 
 @pytest.mark.asyncio

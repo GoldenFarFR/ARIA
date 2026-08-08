@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -35,6 +36,18 @@ _DISCOVERY_PATHS = (
 # sort that the code never actually enforced — fixed here with an explicit
 # query parameter).
 _TOP_POOLS_PATH = "/networks/base/pools?sort=h24_volume_usd_desc"
+
+# 08/08 -- real bug found live: every `discover_top_pools` call re-fetched
+# this endpoint from scratch, even though the ranking barely moves minute to
+# minute -- one more source of demand on an already-saturated shared
+# GeckoTerminal quota (confirmed live: near-continuous 429s across every call
+# site, aggregate demand from all pockets running simultaneously exceeding
+# the account's real ceiling). Short-TTL cache, same pattern as
+# momentum_entry.py's `_candles_cache` (04/08). Only applied to the real
+# `_fetch_gt` path (never when a test injects its own `fetch=`), so the test
+# suite stays fully deterministic and isolated between tests.
+_TOP_POOLS_CACHE_TTL_SECONDS = 300.0
+_top_pools_cache: tuple[float, object] | None = None
 
 
 def _extract_token_contracts(payload: object) -> list[str]:
@@ -189,8 +202,24 @@ async def discover_top_pools(
     rest of the pipeline (see ``safety_screen``), without ever touching its
     safety gates.
     """
+    global _top_pools_cache
+    using_real_fetch = fetch is None
     fetch = fetch or _fetch_gt
-    payload = await fetch(_TOP_POOLS_PATH)
+
+    payload = None
+    if using_real_fetch and _top_pools_cache is not None:
+        cached_at, cached_payload = _top_pools_cache
+        if (time.monotonic() - cached_at) < _TOP_POOLS_CACHE_TTL_SECONDS:
+            payload = cached_payload
+    if payload is None:
+        payload = await fetch(_TOP_POOLS_PATH)
+        # Never cache a failure (429/outage) -- a frozen `None` for the full
+        # TTL would block the next call from re-trying GeckoTerminal AND from
+        # ever reaching a healthy response sooner than the TTL allows. Only a
+        # real payload is worth not re-fetching.
+        if using_real_fetch and payload is not None:
+            _top_pools_cache = (time.monotonic(), payload)
+
     seen: dict[str, None] = {}
     for addr, reserve, age_days in _extract_tokens_with_liquidity(payload):
         if reserve < min_liquidity_usd:

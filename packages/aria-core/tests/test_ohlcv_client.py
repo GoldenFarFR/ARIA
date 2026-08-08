@@ -151,14 +151,15 @@ async def test_all_unavailable_is_graceful(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rate_limit_on_first_rung_stops_the_ladder(monkeypatch):
-    """Un vrai 429 (3 tentatives internes épuisées) sur "day" ne doit JAMAIS
-    déclencher un essai sur "hour" -- le rate limit s'applique à tout le
-    pool/endpoint, pas à une granularité précise (confirmé en prod : le même
-    pool a pris day->429 PUIS hour->429 dans la même rafale)."""
+    """Un vrai 429 (08/08 : plus aucun retry interne, abandon dès le 1er coup
+    -- was 3 attempts, see services/ohlcv.py's own comment) sur "day" ne doit
+    JAMAIS déclencher un essai sur "hour" -- le rate limit s'applique à tout
+    le pool/endpoint, pas à une granularité précise (confirmé en prod : le
+    même pool a pris day->429 PUIS hour->429 dans la même rafale)."""
     client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
     _patch(
         monkeypatch,
-        {_url("day"): [FakeResponse(429), FakeResponse(429), FakeResponse(429)]},
+        {_url("day"): [FakeResponse(429)]},
     )
     res = await client.get_ohlcv(POOL)
     assert res.available is False
@@ -178,7 +179,7 @@ async def test_rate_limit_on_second_rung_preserves_partial_result_from_first(mon
         monkeypatch,
         {
             _url("day"): FakeResponse(200, _payload(_rows(5))),  # < _MIN_USEFUL_CANDLES
-            _url("hour"): [FakeResponse(429), FakeResponse(429), FakeResponse(429)],
+            _url("hour"): [FakeResponse(429)],
         },
     )
     res = await client.get_ohlcv(POOL)

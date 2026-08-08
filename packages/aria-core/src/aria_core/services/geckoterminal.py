@@ -271,12 +271,15 @@ class GeckoTerminalClient:
             self._last_request = asyncio.get_event_loop().time()
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
-        """GET with retry on 429/5xx/timeout -- same policy as blockscout.py
-        (#157, 14/07 fix: this function used to never retry a rate limit,
-        silently marking "unavailable" on the first 429 encountered, with no
-        log -- impossible to diagnose. An active wallet (~20 tokens x 2 calls)
-        can easily trigger an isolated 429 on the free tier; retrying once is
-        enough in the vast majority of cases rather than giving up outright."""
+        """GET with retry on 5xx/timeout, but NO retry on 429 (08/08, real
+        incident: prod logs showed near-continuous 429s across every
+        GeckoTerminal call site, aggregate demand from every pocket running
+        simultaneously exceeding the account's real ceiling -- a SUSTAINED
+        saturation, not the isolated burst the #157/14/07 retry-once policy
+        was designed for. Under sustained saturation a 429 retry almost never
+        succeeds (the service is still busy) while still spending a real
+        request against an already-exhausted quota -- pure amplification.
+        Gives up on the FIRST 429 instead of the previous 3 attempts."""
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -301,11 +304,8 @@ class GeckoTerminalClient:
 
             if response.status_code == 429:
                 attempt_429 += 1
-                if attempt_429 >= 3:
-                    logger.warning("geckoterminal: HTTP 429 on %s after %s attempts", url, attempt_429)
-                    return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
-                await asyncio.sleep(0.5 * (2**attempt_429))
-                continue
+                logger.warning("geckoterminal: HTTP 429 on %s after %s attempt(s)", url, attempt_429)
+                return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
 
             if response.status_code >= 500:
                 if not timeout_retried:
