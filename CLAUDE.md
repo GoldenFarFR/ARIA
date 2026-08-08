@@ -329,6 +329,7 @@ from scratch.
 - `docs/HANDOFF_DOPPLER.md` — on-chain Uniswap v4 price reading for Bankr/Doppler tokens.
 - `docs/HANDOFF_POLYMARKET.md` — paper bets on prediction markets, edge/quality judgment engine.
 - `docs/HANDOFF_AUTOMATISATION.md` — VPS crons (Research watch, Devil's Advocate, backlog promotion, watchdogs).
+- `docs/HANDOFF_WALLET_COPY_SHADOW.md` — forward-test de copie sur 8 wallets réels, ledgers fictifs indépendants, jamais un trigger réel.
 - **This list must stay up to date**: any new `docs/HANDOFF_*.md` file created (a new
   component never touched before) gets added here in the SAME commit — a HANDOFF not
   indexed here is as invisible as a HANDOFF that doesn't exist.

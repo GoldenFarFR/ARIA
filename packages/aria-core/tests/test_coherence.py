@@ -856,6 +856,10 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_VC_POCKET_SOURCING_ENABLED",
     "ARIA_VISION_ENABLED",
     "ARIA_WALLET_CANDIDATE_SOURCING_ENABLED",
+    # 08/08 -- wallet_copy_shadow.py : forward-test de copie sur 8 wallets réels,
+    # ledgers fictifs indépendants, jamais un trigger réel (jamais de capital
+    # réel, jamais fusionné avec le test 1M$). OFF par défaut.
+    "ARIA_WALLET_COPY_SHADOW_ENABLED",
     "ARIA_WALLET_SCAN_QUEUE_ENABLED",
     "ARIA_WALLET_SCORING_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",

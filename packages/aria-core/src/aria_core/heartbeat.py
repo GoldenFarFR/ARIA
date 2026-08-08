@@ -325,6 +325,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="wallet_copy_shadow_cycle",
+        name="Wallet-copy shadow -- 8 tracked wallets, fictional per-wallet ledger",
+        description="08/08 operator spec: forward-tests copying 8 real Base wallets (3 fomoscan-verified all-time track records, 4 GMGN Smart Money 30d, 1 confirmed serial front-runner), one INDEPENDENT fictional paper ledger per wallet -- never merged, never real capital, never a live trigger (CLAUDE.md smart-money doctrine: confirmation only). Polls each wallet's recent Base ERC-20 transfers via Blockscout, opens a $1,000 fictional position on a detected buy, closes it on the matching sell. summary() reports each wallet's realized/latent P&L separately so copying each one can be judged on its own. Dedicated gate ARIA_WALLET_COPY_SHADOW_ENABLED, OFF by default -- standalone research shadow, independent of the $1M momentum test.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -712,6 +719,14 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "wallet_copy_shadow_cycle":
+                # 08/08 -- standalone research shadow, independent of the
+                # $1M momentum test (no paper_trading double-gate needed --
+                # it never touches paper_trader positions). Single dedicated
+                # flag only.
+                task.enabled = os.environ.get(
+                    "ARIA_WALLET_COPY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "goplus_watchlist_cycle":
                 # 29/07 (Item #212) -- same double-gate pattern as
                 # daily_trade_floor_cycle above: this cycle only serves the
@@ -1487,6 +1502,18 @@ class AriaHeartbeat:
                     "paper",
                     f"[paper_trade] fictif 1M$ (plancher {actions.get('already_today', 0)}"
                     f"/{actions.get('target', 0)} du jour) : +{len(actions['opened'])} achats forcés",
+                )
+
+        elif task_id == "wallet_copy_shadow_cycle":
+            from aria_core import wallet_copy_shadow
+
+            results = await wallet_copy_shadow.run_scan_cycle()
+            opened = sum(r.opened for r in results)
+            closed = sum(r.closed for r in results)
+            if opened or closed:
+                logger.info(
+                    "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
+                    opened, closed, len(results),
                 )
 
         elif task_id == "goplus_watchlist_cycle":
