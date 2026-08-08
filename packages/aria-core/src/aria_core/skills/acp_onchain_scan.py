@@ -269,6 +269,16 @@ class TokenScanContext:
     # see skills/sybil_cluster.py. Never an outright rejection (LLM advisory only).
     sybil_cluster_signal: str | None = None
     sybil_cluster_points: list[str] = field(default_factory=list)
+    # 08/08 -- "burn mechanism" signal: a real, on-chain, currently-active
+    # token burn, distinguished from a project's own marketing claim (real
+    # incident: gitlawb advertised a "revenue flywheel... LIVE" burn that its
+    # own public leaderboard showed to be ~0.33% of supply, negligible).
+    # Populated if include_burn_mechanism AND data is available. See
+    # skills/burn_mechanism.py. Never an outright rejection (advisory only,
+    # same doctrine as every other signal in this block).
+    burn_mechanism_signal: str | None = None
+    burn_mechanism_verdict: str | None = None
+    burn_mechanism_supply_pct: float | None = None
     # Dynamic GoPlus security (populated if include_honeypot AND data is
     # available). What Blockscout's static ABI can't see: is reselling
     # REALLY possible, real buy/sell taxes, hidden powers. None = not scanned
@@ -931,6 +941,7 @@ async def scan_base_token(
     include_insider_check: bool = False,
     include_deployer_reputation: bool = False,
     include_sybil_check: bool = False,
+    include_burn_mechanism: bool = False,
 ) -> TokenScanContext:
     """Fetch DexScreener + compute heuristic security score.
 
@@ -969,6 +980,12 @@ async def scan_base_token(
     NOTABLY more network-expensive than the other signals (up to 15 bounded
     Blockscout calls, one per verified holder). Advisory signal only, never a
     veto.
+
+    `include_burn_mechanism` is disabled by default: reads the token's real
+    transfer history (Blockscout) for transfers to a known burn address,
+    separating a real, currently-active burn from a project's own marketing
+    claim (skills/burn_mechanism.py). One extra Blockscout call (paginated,
+    up to 10 pages). Advisory signal only, never a veto.
     """
     ca = (contract or "").strip()
     valid = bool(_ADDR_RE.match(ca))
@@ -1129,6 +1146,12 @@ async def scan_base_token(
     if include_sybil_check:
         await _resolve_sybil_cluster(ctx, holders)
 
+    # "Burn mechanism" signal (08/08): real, on-chain, currently-active burn
+    # activity, distinguished from a project's own marketing claim. Best-
+    # effort, never blocking.
+    if include_burn_mechanism:
+        await _resolve_burn_mechanism(ctx, ca)
+
     # Dynamic security (honeypot / real taxes / hidden powers) via GoPlus.
     # Disabled by default (one more network call); enabled on the VC analysis
     # path where a real decision is made. Additive: with no data, ctx unchanged.
@@ -1276,6 +1299,22 @@ async def _resolve_sybil_cluster(ctx: "TokenScanContext", holders: "TokenHolders
         logger.info("sybil_cluster: analysis of %s failed (%s)", ctx.contract, exc)
         ctx.sybil_cluster_signal = "unknown"
         ctx.sybil_cluster_points = []
+
+
+async def _resolve_burn_mechanism(ctx: "TokenScanContext", contract: str) -> None:
+    """Real on-chain burn activity vs. marketing claim. Defensive, never blocking."""
+    from aria_core.skills.burn_mechanism import assess_burn_mechanism
+
+    try:
+        assessment = await assess_burn_mechanism(contract)
+    except Exception as exc:  # noqa: BLE001 — bonus signal, never blocking
+        logger.info("burn_mechanism: analysis of %s failed (%s)", contract, exc)
+        ctx.burn_mechanism_signal = "unknown"
+        return
+
+    ctx.burn_mechanism_verdict = assessment.verdict
+    ctx.burn_mechanism_supply_pct = assessment.supply_burned_pct_in_window
+    ctx.burn_mechanism_signal = assessment.note if assessment.available else "unknown"
 
 
 def scan_base_token_sync(contract: str) -> TokenScanContext:

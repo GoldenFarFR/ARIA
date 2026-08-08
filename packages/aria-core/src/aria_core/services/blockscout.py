@@ -634,6 +634,59 @@ class BlockscoutClient:
 
         return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None, truncated=truncated)
 
+    async def get_token_transfers_for_token(
+        self, token_address: str, limit: int = 500, *, max_pages: int = 10,
+    ) -> TokenTransfersResult:
+        """All transfers of ONE specific token (any counterparty) -- the
+        inverse of ``get_token_transfers`` (one wallet, many tokens). Used by
+        ``skills/burn_mechanism.py`` to find transfers TO a burn address:
+        Blockscout's ``/tokens/{address}/transfers`` accepts no destination
+        filter (confirmed live -- both ``filter=`` and ``to_address_hash=``
+        return "Unexpected field"), so this returns the most RECENT window
+        of transfers (``max_pages`` x ``limit``, newest first) for the
+        caller to filter client-side. Never a full history -- a high-volume
+        token's recent window may only span hours; the caller must read
+        ``transfers[-1].timestamp`` to know how far back the window reaches,
+        never assume it's exhaustive. 08/08 -- new endpoint for this module,
+        this specific endpoint does NOT accept ``type=`` (confirmed live,
+        unlike ``/addresses/{address}/token-transfers``)."""
+        transfers: list[TokenTransfer] = []
+        pages_fetched = 0
+        truncated = False
+        params: dict = {}
+
+        while True:
+            data, error = await self._get_json(f"/tokens/{token_address}/transfers", params=params)
+            if error is not None:
+                if pages_fetched == 0:
+                    return TokenTransfersResult(available=False, error=error)
+                truncated = True
+                break
+            if not isinstance(data, dict):
+                if pages_fetched == 0:
+                    return TokenTransfersResult(available=False, error=UNAVAILABLE)
+                truncated = True
+                break
+
+            items = data.get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                transfers.append(self._parse_token_transfer(item))
+                if len(transfers) >= limit:
+                    break
+
+            pages_fetched += 1
+            next_page = data.get("next_page_params")
+            if not next_page:
+                break
+            if pages_fetched >= max_pages or len(transfers) >= limit:
+                truncated = True
+                break
+            params = next_page
+
+        return TokenTransfersResult(transfers=transfers[:limit], available=True, error=None, truncated=truncated)
+
     async def get_transaction_token_transfers(self, tx_hash: str) -> TokenTransfersResult:
         """All ERC-20 transfers of ONE specific transaction (14/07,
         wallet-scoring #157 -- exact price by tx_hash, complementing
