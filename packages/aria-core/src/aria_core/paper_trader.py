@@ -234,17 +234,20 @@ BONDING_TP_STAGE_FRACTIONS = (0.45, 0.25, 0.20)  # of INITIAL qty -- ~10% left a
 # BONDING_LIQUIDITY_FLOOR_USD is deliberately independent of
 # bonding_entry._MIN_LIQUIDITY_USD (the entry gate) rather than importing
 # that private constant directly -- keeps bonding_entry.py's own constants
-# private to its own gating logic, AND lets the exit-side floor stay more
-# conservative than the entry gate on purpose (an already-open position
-# degrading below 10,000$ is a real signal to leave, independent of how
-# permissive the entry gate is at any given time). #167, 28/07: the entry
-# gate was lowered to 5,000$ (a real empirical finding, see its own comment)
-# -- this exit floor was deliberately NOT lowered in lockstep, so it's no
-# longer an exact mirror, just never allowed to sit BELOW the entry gate
-# (self-contradictory), which it still comfortably isn't.
+# private to its own gating logic. 08/08, real bug found (operator screenshot:
+# ASTRAEUS/HYDREX/STONKCAT, 3 bonding positions closed within the same 12-min
+# cycle at an identical -0.7%): this floor sat ABOVE the entry gate (10,000$
+# vs bonding_entry._MIN_LIQUIDITY_USD=5,000$, lowered 28/07 -- see Item #167 --
+# specifically because 92.7% of fresh launches cluster at ~9,591$, a fixed
+# launch-config deposit, not a market signal). Any position opened in that
+# 5,000-10,000$ band was therefore ALREADY below this exit floor at entry --
+# volet 3 fired on the very next management cycle regardless of any real
+# liquidity movement, not a genuine "retrait" signal. Now matched to the
+# entry gate so a position accepted at entry can't be mechanically doomed by
+# the exit check before anything has actually happened to it.
 BONDING_VELOCITY_DROP_PCT = 0.40
 BONDING_VELOCITY_WINDOW_MINUTES = 30
-BONDING_LIQUIDITY_FLOOR_USD = 10_000.0
+BONDING_LIQUIDITY_FLOOR_USD = 5_000.0
 BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT = 0.5
 BONDING_LIQUIDITY_SUDDEN_DROP_PCT = 0.3
 

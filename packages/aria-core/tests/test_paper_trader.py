@@ -6650,7 +6650,7 @@ async def test_bonding_position_closes_on_absolute_liquidity_floor(tmp_db, monke
     )
     monkeypatch.setattr(
         pt, "_default_pair_lookup",
-        _vc_position_pair_lookup(price=1.05, liquidity_usd=8_000.0),  # < BONDING_LIQUIDITY_FLOOR_USD
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=3_000.0),  # < BONDING_LIQUIDITY_FLOOR_USD
     )
     act = await pt.run_paper_cycle(candidates=[])
     assert len(act["closed"]) == 1
@@ -6732,7 +6732,7 @@ async def test_non_bonding_position_never_touched_by_bonding_volet23(tmp_db, mon
     )
     monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=100_000.0))
     await pt.run_paper_cycle(candidates=[])
-    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=5_000.0))
+    monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=3_000.0))
     act = await pt.run_paper_cycle(candidates=[])
     assert act["closed"] == []
     assert await pt.has_open(A)

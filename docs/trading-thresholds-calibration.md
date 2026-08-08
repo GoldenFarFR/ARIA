@@ -97,7 +97,7 @@
 | `BONDING_TP_STAGE_FRACTIONS` | (0.45, 0.25, 0.20), ~10% moonbag jamais vendu | 28/07 | — |
 | `BONDING_VELOCITY_DROP_PCT` | 40% | 28/07, Item #155 volet 2 | **Pas encore vérifié empiriquement** — le workflow empirique en cours (28/07) doit confronter ce chiffre à des cas réels |
 | `BONDING_VELOCITY_WINDOW_MINUTES` | 30 min | 28/07, Item #155 volet 2 | Idem |
-| `BONDING_LIQUIDITY_FLOOR_USD` | 10 000 $ | 28/07 ; **n'est plus un miroir exact depuis l'Item #167** (`_MIN_LIQUIDITY_USD` d'entrée est descendu à 5 000 $, ce plancher de sortie a été délibérément laissé inchangé, toujours strictement AU-DESSUS de l'entrée — jamais l'inverse) | Si ce plancher de sortie doit lui aussi bouger |
+| `BONDING_LIQUIDITY_FLOOR_USD` | 5 000 $ | **Corrigé 08/08** (était 10 000 $ depuis le 28/07) : rester au-dessus de l'entrée (5 000 $) garantissait justement le bug — une position ouverte dans la bande 5-10k$ (92,7% des lancements ~9 591 $) était déjà sous ce plancher dès l'achat, sortie mécanique au cycle suivant sans vrai retrait de liquidité (cas réel : ASTRAEUS/HYDREX/STONKCAT, 3 sorties identiques -0,7% en 12min). Réaligné sur `bonding_entry._MIN_LIQUIDITY_USD` | Si le plancher d'entrée rebouge, réaligner celui-ci en même temps |
 | `BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT` | 50% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_DROP_INVALIDATION_PCT`) | — |
 | `BONDING_LIQUIDITY_SUDDEN_DROP_PCT` | 30% | 28/07, miroir du plancher VC (`VC_LIQUIDITY_SUDDEN_DROP_PCT`) | — |
 
