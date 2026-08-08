@@ -4037,7 +4037,7 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _handle_paper_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/off -- Item #64 (08/03): runtime pause of ALL paper-trading scanning/
-    sourcing (every pocket: scalping/swing/vc/megacap), instant, no redeploy.
+    sourcing (every pocket), instant, no redeploy.
     Owner-only, same gate as /stop. Structurally distinct from /stop
     (outgoing_pause/custody_pause, real-money-only, per Item #62's own split
     -- this NEVER touches those, it exists purely to silence data-provider
@@ -4050,7 +4050,7 @@ async def _handle_paper_off(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     paper_pause.pause(by=user.id if user else None, reason="Pause manuelle /off (owner)")
     await _reply(
         update.message,
-        "⏸ Paper trading en pause -- scan/sourcing des 4 poches (scalping/swing/vc/megacap) suspendu.\n"
+        "⏸ Paper trading en pause -- scan/sourcing des poches actives suspendu.\n"
         "N'affecte ni /stop ni le capital réel (aucun lien). Envoie /on pour reprendre.",
     )
 
@@ -4151,14 +4151,20 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
     # still trip its own circuit breaker, so the operator must still be
     # able to target it explicitly by name if ever needed.
     known_pockets = await paper_trader.all_reporting_wallets()
+    # 08/08 -- the SUGGESTION list and the no-argument sweep use the VISIBLE
+    # list (operator order: a hidden pocket must never surface in Telegram),
+    # while `known_pockets` above stays the FULL list so an explicit
+    # `/riskresume megacap` still works if ever needed -- the risk action is
+    # never lost, only its spontaneous display.
+    visible_pockets = await paper_trader.visible_reporting_wallets()
     if requested and requested not in known_pockets:
         await _reply(
             update.message,
-            f"Poche inconnue « {requested} » — utilise l'une de : {', '.join(known_pockets)} "
+            f"Poche inconnue « {requested} » — utilise l'une de : {', '.join(visible_pockets)} "
             "(ou omets l'argument pour toutes les lever à la fois).",
         )
         return
-    wallets = [requested] if requested else list(known_pockets)
+    wallets = [requested] if requested else list(visible_pockets)
 
     user = update.effective_user
     lines: list[str] = []

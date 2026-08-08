@@ -7710,6 +7710,33 @@ def test_uses_fine_rsi_confirmation_true_for_swing_and_megacap():
     assert pt.uses_fine_rsi_confirmation("megacap") is True
 
 
+@pytest.mark.asyncio
+async def test_visible_reporting_wallets_hides_megacap(tmp_db, monkeypatch):
+    """08/08, ordre opérateur ("cache la, je veux plus qu'elle apparaisse sur
+    telegram") : megacap sort de TOUTE surface opérateur, tout en restant dans
+    all_reporting_wallets() (coupe-circuit macro + ciblage explicite
+    /riskresume megacap)."""
+    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
+    await pt._ensure_tables()
+    assert "megacap" in await pt.all_reporting_wallets()
+    assert "megacap" not in await pt.visible_reporting_wallets()
+
+
+def test_megacap_hidden_but_never_treated_as_a_scalping_pocket():
+    """Verrouille la raison d'être du frozenset SÉPARÉ : ajouter megacap à
+    _RETIRED_SCALPING_WALLETS l'aurait fait passer par is_scalping_pocket(),
+    lui donnant la discipline de sortie SCALPING au lieu de son mode
+    "standard" -- exactement la classe de bug documentée dans
+    is_scalping_pocket."""
+    assert "megacap" in pt._HIDDEN_FROM_OPERATOR_SURFACES
+    assert "megacap" not in pt._RETIRED_SCALPING_WALLETS
+    assert pt.is_scalping_pocket("megacap") is False
+    # Les poches retirées restent cachées ET reconnues comme scalping.
+    for wallet in pt._RETIRED_SCALPING_WALLETS:
+        assert wallet in pt._HIDDEN_FROM_OPERATOR_SURFACES
+        assert pt.is_scalping_pocket(wallet) is True
+
+
 def test_uses_fine_rsi_confirmation_false_for_vc():
     assert pt.uses_fine_rsi_confirmation("vc") is False
 

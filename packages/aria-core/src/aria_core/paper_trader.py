@@ -3553,6 +3553,17 @@ _RETIRED_SCALPING_WALLETS = frozenset({
     "scalping_v5", "scalping_v6", "scalping_v7",
 })
 
+# 08/08 -- operator order ("laisse-la en pause et cache la, je veux plus
+# qu'elle apparaisse sur telegram"): pockets hidden from every operator-facing
+# surface, WIDER than _RETIRED_SCALPING_WALLETS above. Deliberately a SEPARATE
+# frozenset rather than adding "megacap" to the retired-scalping one: that set
+# also feeds is_scalping_pocket(), which would silently give megacap the
+# SCALPING exit discipline/timeframes instead of its mode="standard" design --
+# exactly the class of bug is_scalping_pocket's own docstring documents. Rows
+# STAY in the DB and the MACRO circuit breaker keeps the full list (see
+# visible_reporting_wallets/all_reporting_wallets).
+_HIDDEN_FROM_OPERATOR_SURFACES = _RETIRED_SCALPING_WALLETS | frozenset({"megacap"})
+
 # 06/08 -- scalping_v9 (full operator spec, see scalping_v9.py's module
 # docstring): fixed-watchlist RSI+MFI synchronized-oversold engine, its OWN
 # heartbeat cycle (5min) and its OWN position management (flat -5% trailing
@@ -3647,16 +3658,20 @@ def all_pocket_wallets() -> tuple[str, ...]:
 async def visible_reporting_wallets() -> tuple[str, ...]:
     """Operator-facing surfaces ONLY (06/08, explicit operator order: "je ne
     veux jamais voir les wallets désactivés ici et ni leur historique, aucune
-    trace d'eux sauf dans tes logs") -- ``all_reporting_wallets()`` minus the
-    retired scalping wallets. Their rows STAY in the DB (session
+    trace d'eux sauf dans tes logs") -- ``all_reporting_wallets()`` minus
+    ``_HIDDEN_FROM_OPERATOR_SURFACES``. Their rows STAY in the DB (session
     diagnostics, archives) but every Telegram bilan/tracking/riskresume
     surface uses THIS list. The macro circuit breaker deliberately keeps the
     FULL list (see risk_guard.evaluate_macro_risk's comment): dropping ~$1M
     of flat retired capital per pocket from its equity sum against the
     persisted high-water mark would fake a massive drawdown and trip the
-    breaker on nothing."""
+    breaker on nothing.
+
+    08/08 -- "megacap" joined the hidden set (operator order, same reasoning
+    as 06/08): sourcing-paused since 05/08, zero trades ever, no paper_state
+    row -- it only ever added a dead line to every Telegram report."""
     return tuple(
-        w for w in await all_reporting_wallets() if w not in _RETIRED_SCALPING_WALLETS
+        w for w in await all_reporting_wallets() if w not in _HIDDEN_FROM_OPERATOR_SURFACES
     )
 
 
