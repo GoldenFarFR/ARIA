@@ -3895,6 +3895,20 @@ async def evaluate_momentum_entry(
     if best is None:
         return None
 
+    # 08/08 -- narrative-signal shadow (operator direction "trader le bruit,
+    # pas le graphique"): purely observational forward test of event-driven
+    # signals (DefiLlama real revenue, Coinbase listing phase). Zero network
+    # calls per candidate (global catalogs, module-level cache), best-effort,
+    # never influences this evaluation -- see narrative_signal_shadow.py.
+    try:
+        from aria_core import narrative_signal_shadow
+
+        await narrative_signal_shadow.record_evaluation(
+            contract, chain, symbol=best.base_symbol, price_usd=best.price_usd,
+        )
+    except Exception:  # noqa: BLE001 -- shadow only, the real path never pays for it
+        pass
+
     reasons: list[str] = [honeypot_reason]
     candles = await _fetch_candles(best.pair_address, chain, contract=contract, pair=best, mode=mode)
     if not candles:
@@ -4353,6 +4367,21 @@ async def evaluate_momentum_entry(
             if research.potential_score is not None:
                 potential_score = research.potential_score
                 potential_rationale = research.rationale
+                # 08/08 -- narrative shadow, third (generic) detector: a
+                # high conviction score becomes a dated signal so its
+                # forward performance is measurable like the catalog ones.
+                if potential_score >= 7.0:
+                    try:
+                        from aria_core import narrative_signal_shadow
+
+                        await narrative_signal_shadow.record_external_signal(
+                            contract, chain, symbol=best.base_symbol,
+                            signal_type=narrative_signal_shadow.SIGNAL_CONVICTION_RESEARCH,
+                            detail=f"score {potential_score:.1f}/10: {potential_rationale[:120]}",
+                            price_usd=best.price_usd,
+                        )
+                    except Exception:  # noqa: BLE001 -- shadow only
+                        pass
                 reasons.append(
                     f"potentiel fondamental {potential_score:.1f}/10 "
                     f"(site {'trouvé' if research.website_url else 'introuvable'}, "
