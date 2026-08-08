@@ -172,6 +172,10 @@ async def test_top_pools_filters_by_liquidity_floor():
     assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=30_000) == [liquid]
 
 
+async def _no_birdeye_fallback(*, min_liquidity_usd):
+    return []
+
+
 @pytest.mark.asyncio
 async def test_top_pools_missing_reserve_is_filtered():
     a = "0x" + "c" * 40
@@ -179,7 +183,10 @@ async def test_top_pools_missing_reserve_is_filtered():
     async def fetch(path):
         return {"data": [{"relationships": {"base_token": {"data": {"id": "base_" + a}}}}]}
 
-    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1) == []
+    got = await bc.discover_top_pools(
+        fetch=fetch, birdeye_discover=_no_birdeye_fallback, min_liquidity_usd=1,
+    )
+    assert got == []
 
 
 @pytest.mark.asyncio
@@ -192,7 +199,7 @@ async def test_top_pools_requests_sort_by_volume():
         seen_paths.append(path)
         return _pool_payload([])
 
-    await bc.discover_top_pools(fetch=fetch)
+    await bc.discover_top_pools(fetch=fetch, birdeye_discover=_no_birdeye_fallback)
     assert len(seen_paths) == 1
     assert "sort=h24_volume_usd_desc" in seen_paths[0]
     assert seen_paths[0].startswith("/networks/base/pools")
@@ -263,7 +270,46 @@ async def test_top_pools_min_age_days_excludes_unknown_age():
     async def fetch(path):
         return _pool_payload_with_age([(unknown, 80_000, None)])
 
-    assert await bc.discover_top_pools(fetch=fetch, min_liquidity_usd=1, min_age_days=7) == []
+    got = await bc.discover_top_pools(
+        fetch=fetch, birdeye_discover=_no_birdeye_fallback, min_liquidity_usd=1, min_age_days=7,
+    )
+    assert got == []
+
+
+@pytest.mark.asyncio
+async def test_top_pools_falls_back_to_birdeye_when_geckoterminal_empty():
+    """08/08 -- GeckoTerminal down/429 (payload None) ne doit plus vider le
+    scan VC en silence : repli Birdeye (même floor de liquidité)."""
+    rescued = "0x" + "9" * 40
+
+    async def fetch(path):
+        return None  # panne réseau/429, comme _fetch_gt le retourne réellement
+
+    async def birdeye(*, min_liquidity_usd):
+        assert min_liquidity_usd == 45_000.0  # même floor que GeckoTerminal, transmis tel quel
+        return [rescued]
+
+    got = await bc.discover_top_pools(fetch=fetch, birdeye_discover=birdeye)
+    assert got == [rescued]
+
+
+@pytest.mark.asyncio
+async def test_top_pools_skips_birdeye_when_geckoterminal_already_has_results():
+    """Le repli ne double jamais la charge quand GeckoTerminal est en bonne santé."""
+    liquid = "0x" + "8" * 40
+    birdeye_called = False
+
+    async def fetch(path):
+        return _pool_payload([(liquid, 80_000)])
+
+    async def birdeye(*, min_liquidity_usd):
+        nonlocal birdeye_called
+        birdeye_called = True
+        return []
+
+    got = await bc.discover_top_pools(fetch=fetch, birdeye_discover=birdeye, min_liquidity_usd=30_000)
+    assert got == [liquid]
+    assert birdeye_called is False
 
 
 @pytest.mark.asyncio

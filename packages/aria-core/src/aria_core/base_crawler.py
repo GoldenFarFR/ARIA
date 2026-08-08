@@ -162,6 +162,7 @@ def _extract_tokens_with_liquidity(payload: object) -> list[tuple[str, float, fl
 async def discover_top_pools(
     *,
     fetch=None,
+    birdeye_discover=None,
     limit: int = 100,
     min_liquidity_usd: float = 45_000.0,
     min_age_days: float | None = None,
@@ -200,6 +201,29 @@ async def discover_top_pools(
             seen[addr] = None
         if len(seen) >= limit:
             break
+
+    if not seen:
+        # 08/08 -- real bug found live: this was GeckoTerminal-only with zero
+        # fallback, unlike momentum_entry's discovery (base_crawler + Birdeye
+        # + token_profiles + token_boosts combined) -- a GeckoTerminal 429
+        # silently zeroed out the entire VC pocket's sourcing (confirmed live:
+        # 0 candidates for hours). Birdeye fallback (own throttle, independent
+        # quota, same liquidity floor) -- only tried when GeckoTerminal
+        # produced nothing, never doubles the load when it's healthy. No age
+        # filter possible here (Birdeye doesn't expose pool_created_at) -- an
+        # honest gap, not a silently ignored parameter. ``birdeye_discover``
+        # injectable (same pattern as ``fetch`` above) -- testable offline,
+        # never a live network call from the test suite.
+        from aria_core.services.birdeye import discover_base_tokens_bulk
+
+        birdeye = birdeye_discover or discover_base_tokens_bulk
+        for addr in await birdeye(min_liquidity_usd=min_liquidity_usd):
+            addr = addr.lower()
+            if addr not in seen:
+                seen[addr] = None
+            if len(seen) >= limit:
+                break
+
     return list(seen.keys())
 
 

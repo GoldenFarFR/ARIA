@@ -21,7 +21,6 @@ from aria_core.services.blockscout import (
 from aria_core.services.coingecko import TokenFundamentals, coingecko_client
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.services.dexscreener import fetch_token_pairs as _dexscreener_fetch_token_pairs
-from aria_core.services.ohlcv import ohlcv_client
 from aria_core.services.smart_money import _is_recognized_stablecoin, analyze_smart_money
 from aria_core.skills.candlestick_patterns import CandlePattern, detect_patterns
 from aria_core.skills.entry_signals import EntrySignal, detect_entry
@@ -1072,22 +1071,37 @@ async def scan_base_token(
                     ctx.risk_flags.append(f"Liquidité : {depth.note}.")
 
     if include_ta and ctx.best_pair and ctx.best_pair.pair_address:
-        ohlcv = await ohlcv_client.get_ohlcv(ctx.best_pair.pair_address)
-        if ohlcv.available and ohlcv.candles:
-            ctx.ta_candles = ohlcv.candles
-            ctx.ta_timeframe = ohlcv.timeframe
-            ctx.ta = compute_levels(ohlcv.candles)
+        # 08/08 -- real bug found live: this used to call ohlcv_client
+        # (GeckoTerminal only, zero fallback) directly, exactly the pattern
+        # already fixed on smart_money.py's wallet-scoring path on 29/07
+        # (Item #186, see fetch_candles's own docstring) after it caused a
+        # production live-lock. A GeckoTerminal 429 silently zeroed out the
+        # whole TA block here with no fallback attempted -- same incident
+        # class, never ported to the VC pocket until now. Routes through the
+        # same 6-stage cascade (GeckoTerminal -> CoinMarketCap -> Mobula ->
+        # DexPaprika -> Codex.io -> DexScreener synthesis -> Dune) and shared
+        # adaptive circuit breaker momentum_entry/v8/v9 already benefit from.
+        from aria_core.momentum_entry import fetch_candles, get_last_candle_provenance
+
+        candles = await fetch_candles(
+            ctx.best_pair.pair_address, "base", contract=ca, pair=ctx.best_pair,
+        )
+        if candles:
+            provenance = get_last_candle_provenance()
+            ctx.ta_candles = candles
+            ctx.ta_timeframe = (provenance or {}).get("timeframe_served", "") or ""
+            ctx.ta = compute_levels(candles)
             ctx.ta_entry = suggest_entry_zone(ctx.ta)
 
-            closes = [c.close for c in ohlcv.candles]
+            closes = [c.close for c in candles]
             ctx.ta_ema_fast = _last_value(ema_series(closes, _EMA_FAST_PERIOD))
             ctx.ta_ema_slow = _last_value(ema_series(closes, _EMA_SLOW_PERIOD))
             macd_line, macd_signal, macd_hist = macd_series(closes)
             ctx.ta_macd_line = _last_value(macd_line)
             ctx.ta_macd_signal = _last_value(macd_signal)
             ctx.ta_macd_histogram = _last_value(macd_hist)
-            ctx.ta_golden_pocket_signal = detect_entry(ohlcv.candles)
-            ctx.ta_candle_patterns = detect_patterns(ohlcv.candles)[-3:]
+            ctx.ta_golden_pocket_signal = detect_entry(candles)
+            ctx.ta_candle_patterns = detect_patterns(candles)[-3:]
 
     # Dev wallet behavior: committed builder vs. farmer (contextual judgment,
     # never an outright rejection). Best-effort; any unavailability -> 'unknown'.
