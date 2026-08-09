@@ -6,23 +6,26 @@ cascade" entry), same structural pattern as the two free columns -- read
 
 Reuses ``skills/website_substance.py`` AS-IS (already-calibrated judgment,
 "positive" >= 70/100, same doctrine as ``github_substance.py``) -- built
-23/07, used today only post-BUY via ``vc_analysis.py``. Its own crawl
-(``services/tavily.TavilyClient.crawl``) already enforces the SHARED
-monthly Tavily budget internally (``tavily_budget.can_spend``/
-``record_spend``, fail-closed -- an exhausted budget degrades to
-``available=False`` -> 'unknown' verdict, never a crash, never a second
-budget check needed here).
+23/07. Its own crawl (``services/tavily.TavilyClient.crawl``) already
+enforces the SHARED monthly Tavily budget internally
+(``tavily_budget.can_spend``/``record_spend``, fail-closed -- an exhausted
+budget degrades to ``available=False`` -> 'unknown' verdict, never a crash,
+never a second budget check needed here).
 
 Unlike the two free columns, this one IS a real recurring cost against a
 budget shared with every other Tavily caller in the codebase (general web
 research, the learning loop) -- two deliberate throttles on top of the
-budget's own fail-closed behavior: (1) ``REEVALUATION_TTL_DAYS = 15``
-(matches ``vc_analysis._WEBSITE_SUBSTANCE_TTL_DAYS`` -- a project site's
-content rarely changes meaningfully faster than that); (2) the heartbeat
-cycle itself runs hourly, not every 15min like the free columns (see
-``heartbeat.py``'s ``web_signal_cascade_cycle``) -- a deliberately slower
-drip so this column never monopolizes the shared budget at the other
-callers' expense.
+budget's own fail-closed behavior: (1) ``REEVALUATION_TTL_DAYS = 7`` (09/08,
+lowered from an incorrectly-justified 15 -- the original claim of matching
+``vc_analysis._WEBSITE_SUBSTANCE_TTL_DAYS`` was FALSE, that constant/caller
+no longer exists in ``vc_analysis.py``, this module is today the ONLY
+caller of ``website_substance.py`` in the codebase; 7 days is a reasonable
+default, never rigorously calibrated -- "a project site's content rarely
+changes meaningfully faster than that" -- open to recalibration if real
+data ever justifies a different value); (2) the heartbeat cycle itself runs
+hourly, not every 15min like the free columns (see ``heartbeat.py``'s
+``web_signal_cascade_cycle``) -- a deliberately slower drip so this column
+never monopolizes the shared budget at the other callers' expense.
 """
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-REEVALUATION_TTL_DAYS = 15.0
+REEVALUATION_TTL_DAYS = 7.0
 
 _WATCHLIST_DDL = """
 CREATE TABLE IF NOT EXISTS web_signal_cascade_watchlist (

@@ -100,7 +100,7 @@ async def test_refresh_cycle_skips_recently_evaluated_website(monkeypatch):
     first = await scw.run_refresh_cycle()
     assert first["evaluated"] == WEBSITE_URL
     second = await scw.run_refresh_cycle()
-    assert second == {"evaluated": None}  # within the 15-day TTL
+    assert second == {"evaluated": None}  # within the 7-day TTL
 
 
 @pytest.mark.asyncio
