@@ -2,6 +2,9 @@
 triage queue). Never a trigger, never blocks a source column's own cycle."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import aiosqlite
 import pytest
 
 from aria_core import signal_cascade_convergence as scc
@@ -14,7 +17,36 @@ def _isolated_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "signal_cascade_convergence.db")
     monkeypatch.setattr(scc, "DB_PATH", db_path)
     monkeypatch.setattr(scc, "_table_ready", False)
+
+    async def _no_price(contract, chain):
+        return None
+
+    monkeypatch.setattr(scc, "_current_price_usd", _no_price)
     yield
+
+
+def _mock_price(monkeypatch, price: float | None) -> None:
+    async def _fake(contract, chain):
+        return price
+
+    monkeypatch.setattr(scc, "_current_price_usd", _fake)
+
+
+async def _decide_at_price(monkeypatch, contract, chain, decision, reasoning, price):
+    _mock_price(monkeypatch, price)
+    return await scc.record_triage_decision(contract, chain, decision, reasoning)
+
+
+async def _age_decision(db_path, contract, chain, days_ago: float) -> None:
+    import aiosqlite
+
+    old = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE signal_cascade_triage_queue SET decided_at = ? WHERE contract = ? AND chain = ?",
+            (old, contract, chain),
+        )
+        await db.commit()
 
 
 @pytest.mark.asyncio
@@ -108,3 +140,98 @@ async def test_signal_never_raises_even_on_broken_db(monkeypatch):
     monkeypatch.setattr(scc, "DB_PATH", "/nonexistent/dir/shadow.db")
     monkeypatch.setattr(scc, "_table_ready", False)
     await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")  # does not raise
+
+
+# ---- falsifiability test (validated vs rejected forward returns) ------
+
+@pytest.mark.asyncio
+async def test_decision_captures_price_at_decision(monkeypatch):
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    await _decide_at_price(monkeypatch, CONTRACT, "base", "validated", "raisonnement", 2.0)
+    async with aiosqlite.connect(scc.DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT price_at_decision FROM signal_cascade_triage_queue WHERE contract = ?", (CONTRACT,)
+        )
+        (price,) = await cursor.fetchone()
+    assert price == 2.0
+
+
+@pytest.mark.asyncio
+async def test_price_lookup_failure_never_blocks_recording_the_decision(monkeypatch):
+    _mock_price(monkeypatch, None)
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    ok = await scc.record_triage_decision(CONTRACT, "base", "validated", "raisonnement")
+    assert ok is True  # decision recorded even though price_at_decision stays NULL
+
+
+@pytest.mark.asyncio
+async def test_refresh_forward_prices_fills_24h_only_once_elapsed(monkeypatch):
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    await _decide_at_price(monkeypatch, CONTRACT, "base", "validated", "raisonnement", 1.0)
+
+    _mock_price(monkeypatch, 1.5)
+    updated = await scc.refresh_forward_prices()
+    assert updated == 0  # too recent, 24h not elapsed yet
+
+    await _age_decision(scc.DB_PATH, CONTRACT, "base", days_ago=1.1)
+    updated = await scc.refresh_forward_prices()
+    assert updated == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_forward_prices_never_touches_an_already_filled_row(monkeypatch):
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    await _decide_at_price(monkeypatch, CONTRACT, "base", "validated", "raisonnement", 1.0)
+    await _age_decision(scc.DB_PATH, CONTRACT, "base", days_ago=1.1)
+
+    _mock_price(monkeypatch, 1.5)
+    await scc.refresh_forward_prices()
+
+    _mock_price(monkeypatch, 999.0)  # would corrupt the already-captured value if re-applied
+    await scc.refresh_forward_prices()
+
+    async with aiosqlite.connect(scc.DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT price_after_24h FROM signal_cascade_triage_queue WHERE contract = ?", (CONTRACT,)
+        )
+        (price,) = await cursor.fetchone()
+    assert price == 1.5
+
+
+@pytest.mark.asyncio
+async def test_falsifiability_report_honest_below_minimum_samples(monkeypatch):
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    await _decide_at_price(monkeypatch, CONTRACT, "base", "validated", "raisonnement", 1.0)
+    await _age_decision(scc.DB_PATH, CONTRACT, "base", days_ago=1.1)
+    _mock_price(monkeypatch, 1.5)
+
+    report = await scc.falsifiability_report()
+    assert report["window_24h"]["enough_data"] is False
+    assert "pas assez de données" in report["window_24h"]["verdict"]
+
+
+@pytest.mark.asyncio
+async def test_falsifiability_report_detects_validated_outperforming(monkeypatch):
+    validated_contracts = [f"0x{i:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+    rejected_contracts = [f"0x{i + 100:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+
+    for contract in validated_contracts:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "validated", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+
+    for contract in rejected_contracts:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "rejected", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+
+    # Validated tokens doubled, rejected tokens went to zero.
+    async def _fake_price(contract, chain):
+        return 2.0 if contract in validated_contracts else 0.1
+
+    monkeypatch.setattr(scc, "_current_price_usd", _fake_price)
+    report = await scc.falsifiability_report()
+    bucket = report["window_24h"]
+    assert bucket["enough_data"] is True
+    assert bucket["avg_return_validated_pct"] > bucket["avg_return_rejected_pct"]
+    assert "critère utile" in bucket["verdict"]
