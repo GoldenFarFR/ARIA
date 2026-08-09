@@ -3041,14 +3041,18 @@ async def evaluate_hard_gates(
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None, None, None
 
-    # 08/08 -- signal cascade stage 1 (COLLECT), GitHub column: enqueues this
-    # candidate's GitHub repo (if any) for substance evaluation, DECOUPLED
-    # from every filter below -- a repo enters the watchlist whether or not
-    # this token ever clears liquidity/technical/security. Zero network
-    # cost, best-effort, never raises (see signal_cascade_github.py).
-    from aria_core import signal_cascade_github
+    # 08/08-08/09 -- signal cascade stage 1 (COLLECT), GitHub + Farcaster
+    # columns: enqueues this candidate's declared links (if any) for
+    # substance/legitimacy evaluation, DECOUPLED from every filter below --
+    # a link enters its column's watchlist whether or not this token ever
+    # clears liquidity/technical/security. Zero network cost, best-effort,
+    # never raises (see signal_cascade_github.py / signal_cascade_farcaster.py).
+    from aria_core import signal_cascade_farcaster, signal_cascade_github
 
     await signal_cascade_github.enqueue_candidate(
+        contract, chain, best.project_links, symbol=best.base_symbol or None,
+    )
+    await signal_cascade_farcaster.enqueue_candidate(
         contract, chain, best.project_links, symbol=best.base_symbol or None,
     )
 

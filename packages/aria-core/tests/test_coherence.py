@@ -808,6 +808,9 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
     "ARIA_DUNE_ENABLED",
     "ARIA_EXAM_ENABLED",
+    # 08/09 -- signal_cascade_farcaster.py stage 2 refresh cycle. Same
+    # doctrine as its GitHub sibling below. OFF by default.
+    "ARIA_FARCASTER_SIGNAL_CASCADE_ENABLED",
     "ARIA_FIXED_WATCHLIST_POCKET_ENABLED",
     # 08/08 -- signal_cascade_github.py stage 2 refresh cycle. Never a
     # trigger, never blocks the momentum pipeline. OFF by default.

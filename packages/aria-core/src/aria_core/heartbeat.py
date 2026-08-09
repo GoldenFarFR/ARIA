@@ -339,6 +339,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="farcaster_signal_cascade_cycle",
+        name="Multi-source signal cascade -- Farcaster column, stage 2 refresh",
+        description="08/09, second column (operator build order: GitHub/Farcaster free -> web -> X pay-per-use). Stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2, refreshing ONE watchlisted Farcaster profile's legitimacy verdict per pass (services/farcaster.verify_profile, free Warpcast API). Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_FARCASTER_SIGNAL_CASCADE_ENABLED, OFF by default -- standalone research pipeline, independent of paper-trading.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -726,6 +733,13 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "farcaster_signal_cascade_cycle":
+                # 08/09 -- same standalone-pipeline gating as github_signal_
+                # cascade_cycle: single dedicated flag, no paper-trading
+                # double-gate.
+                task.enabled = os.environ.get(
+                    "ARIA_FARCASTER_SIGNAL_CASCADE_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "github_signal_cascade_cycle":
                 # 08/08 -- standalone research pipeline (fed by the momentum
                 # pipeline's own scan, but its own refresh cadence doesn't
@@ -1528,6 +1542,16 @@ class AriaHeartbeat:
                 logger.info(
                     "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
                     opened, closed, len(results),
+                )
+
+        elif task_id == "farcaster_signal_cascade_cycle":
+            from aria_core import signal_cascade_farcaster
+
+            result = await signal_cascade_farcaster.run_refresh_cycle()
+            if result.get("accelerating"):
+                logger.info(
+                    "farcaster_signal_cascade_cycle: %s accelerating (score %s)",
+                    result.get("contract", "")[:10], result.get("score"),
                 )
 
         elif task_id == "github_signal_cascade_cycle":
