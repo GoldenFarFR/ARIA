@@ -87,6 +87,23 @@ def _normalize(contract: str, chain: str) -> tuple[str, str]:
     return contract, chain
 
 
+# 09/08 -- explicit operator decision ("oublie tout critere sur la liste de
+# scan du sourcing et pioche directement dans la liste dexscreener la ou il
+# y aura les 2000 token, cette liste des 2k est deja filtree comme il faut"):
+# this watchlist becomes the SOLE source the signal cascade (GitHub/
+# Farcaster/web/X) pioche from, replacing the raw-discovery-feed wiring from
+# earlier today (momentum_websocket._ingest_frame / discover_momentum_
+# candidates). A conscious reversal of the earlier "scan large sans
+# plancher" decision, made after live-verifying the founding "aeon" case
+# ($724k real liquidity today) sits nowhere near the liquidity floor this
+# watchlist implicitly inherits -- see docs/HANDOFF_SIGNAL_CASCADE.md.
+# `links_json` added here (never previously stored) so the cascade enqueue
+# has what it needs at zero extra network cost -- the PairSnapshot's
+# `project_links` is already resolved by the caller (evaluate_hard_gates)
+# at the exact moment `add_or_touch` runs.
+_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (("links_json", "TEXT"),)
+
+
 async def _ensure_table() -> None:
     async with aiosqlite.connect(str(aria_db_path())) as db:
         await db.execute(
@@ -103,6 +120,12 @@ async def _ensure_table() -> None:
             )
             """
         )
+        existing_cols = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(goplus_watchlist)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing_cols:
+                await db.execute(f"ALTER TABLE goplus_watchlist ADD COLUMN {name} {ddl}")
         await db.commit()
 
 
@@ -120,16 +143,25 @@ def compute_priority_score(liquidity_usd: float | None, volume_24h_usd: float | 
     return round(liq_score + activity_score, 2)
 
 
-async def add_or_touch(contract: str, chain: str, priority_score: float) -> bool:
+async def add_or_touch(
+    contract: str, chain: str, priority_score: float, *, links: list[dict] | None = None,
+) -> bool:
     """Adds a new candidate, or refreshes its priority score if already
     present. Returns True if the candidate has (or keeps) a slot, False if
     the watchlist is full (600) and this candidate's score doesn't beat the
     current worst entry -- in which case nothing is written (no partial
-    state, no eviction attempted for nothing)."""
+    state, no eviction attempted for nothing).
+
+    ``links`` (09/08) -- the caller's already-resolved ``PairSnapshot.
+    project_links``, stored so the signal cascade can enqueue straight from
+    this watchlist (see module docstring). ``COALESCE`` on touch/eviction so
+    a later call with ``links=None`` never erases an already-stored value."""
     await _ensure_table()
     contract, chain = _normalize(contract, chain)
     if not contract or not chain:
         return False
+
+    links_json = json.dumps(links) if links else None
 
     async with aiosqlite.connect(str(aria_db_path())) as db:
         existing = await (
@@ -140,8 +172,9 @@ async def add_or_touch(contract: str, chain: str, priority_score: float) -> bool
         ).fetchone()
         if existing is not None:
             await db.execute(
-                "UPDATE goplus_watchlist SET priority_score = ? WHERE contract = ? AND chain = ?",
-                (priority_score, contract, chain),
+                "UPDATE goplus_watchlist SET priority_score = ?, links_json = COALESCE(?, links_json) "
+                "WHERE contract = ? AND chain = ?",
+                (priority_score, links_json, contract, chain),
             )
             await db.commit()
             return True
@@ -151,9 +184,9 @@ async def add_or_touch(contract: str, chain: str, priority_score: float) -> bool
 
         if count < MAX_WATCHLIST_SIZE:
             await db.execute(
-                "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at) "
-                "VALUES (?, ?, ?, ?)",
-                (contract, chain, priority_score, _now_iso()),
+                "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at, links_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (contract, chain, priority_score, _now_iso(), links_json),
             )
             await db.commit()
             return True
@@ -172,9 +205,9 @@ async def add_or_touch(contract: str, chain: str, priority_score: float) -> bool
             (worst[0], worst[1]),
         )
         await db.execute(
-            "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at) "
-            "VALUES (?, ?, ?, ?)",
-            (contract, chain, priority_score, _now_iso()),
+            "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at, links_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (contract, chain, priority_score, _now_iso(), links_json),
         )
         await db.commit()
         logger.info(

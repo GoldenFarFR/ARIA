@@ -61,6 +61,47 @@ async def test_add_or_touch_updates_score_of_existing_candidate():
 
 
 @pytest.mark.asyncio
+async def test_add_or_touch_stores_links_for_new_candidate():
+    """09/08 -- links now stored so the signal cascade can enqueue straight
+    from this watchlist (explicit operator instruction, see
+    docs/HANDOFF_SIGNAL_CASCADE.md)."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+    await wl.add_or_touch(CONTRACT_A, "base", 50.0, links=links)
+    rows = await wl.list_all()
+    assert json.loads(rows[0]["links_json"]) == links
+
+
+@pytest.mark.asyncio
+async def test_add_or_touch_without_links_stores_none():
+    await wl.add_or_touch(CONTRACT_A, "base", 50.0)
+    rows = await wl.list_all()
+    assert rows[0]["links_json"] is None
+
+
+@pytest.mark.asyncio
+async def test_add_or_touch_touch_never_erases_stored_links_with_none():
+    """A later touch call with no links (e.g. a caller that never resolved
+    them) must never wipe out an already-stored value -- COALESCE, not a
+    blind overwrite."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+    await wl.add_or_touch(CONTRACT_A, "base", 10.0, links=links)
+    await wl.add_or_touch(CONTRACT_A, "base", 90.0)  # touch, no links this time
+    rows = await wl.list_all()
+    assert json.loads(rows[0]["links_json"]) == links
+    assert rows[0]["priority_score"] == 90.0
+
+
+@pytest.mark.asyncio
+async def test_add_or_touch_touch_updates_links_when_provided():
+    old_links = [{"label": "Website", "url": "https://old.example.com"}]
+    new_links = [{"label": "Website", "url": "https://new.example.com"}]
+    await wl.add_or_touch(CONTRACT_A, "base", 10.0, links=old_links)
+    await wl.add_or_touch(CONTRACT_A, "base", 20.0, links=new_links)
+    rows = await wl.list_all()
+    assert json.loads(rows[0]["links_json"]) == new_links
+
+
+@pytest.mark.asyncio
 async def test_watchlist_full_evicts_worst_when_new_score_is_better(monkeypatch):
     monkeypatch.setattr(wl, "MAX_WATCHLIST_SIZE", 2)
     assert await wl.add_or_touch(CONTRACT_A, "base", 10.0) is True

@@ -309,7 +309,7 @@ class MomentumWebsocketListener:
                 # side -- this WebSocket path has its OWN candidate
                 # addition, never covered by the classic heartbeat-side
                 # filter).
-                from aria_core.momentum_entry import enqueue_signal_cascade_candidate, reference_tokens_excluded
+                from aria_core.momentum_entry import reference_tokens_excluded
 
                 if contract.lower() in reference_tokens_excluded(chain):
                     continue
@@ -317,17 +317,13 @@ class MomentumWebsocketListener:
                 last = self._seen.get(key)
                 if last is not None and (now - last[0]) < DEDUP_TTL_SECONDS:
                     continue  # already triggered recently -- never a retrigger loop
-                # 09/08 -- signal cascade stage 1, on the RAW listing (before
-                # the liquidity prefilter applied at drain, see
-                # momentum_entry.enqueue_signal_cascade_candidate's own
-                # docstring) -- ``listing.links`` is already parsed here at
-                # zero extra network cost. Placed AFTER the anti-spam dedup
-                # above (not before) so a token re-seen within
-                # DEDUP_TTL_SECONDS doesn't trigger a redundant enqueue
-                # attempt on every frame -- each column's own watchlist TTL
-                # governs re-evaluation, this just avoids pointless DB churn.
-                if listing.links:
-                    await enqueue_signal_cascade_candidate(contract, chain, listing.links)
+                # 09/08 -- signal cascade stage 1 enqueue REMOVED from this raw
+                # feed on explicit operator instruction the same day ("oublie
+                # tout critere sur la liste de scan du sourcing et pioche
+                # directement dans la liste dexscreener... cette liste des 2k
+                # est deja filtree comme il faut") -- the cascade now enqueues
+                # exclusively from goplus_watchlist (see momentum_entry.
+                # _check_honeypot), never from this raw WebSocket ingestion.
                 # 22/07 -- beyond the anti-spam TTL (15min), the candidate
                 # still joins _pending -- the REAL adaptive cooldown (4h
                 # unless there's a price move) is decided in _drain_once,

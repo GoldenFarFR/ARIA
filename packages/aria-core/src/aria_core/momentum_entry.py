@@ -758,18 +758,19 @@ async def enqueue_signal_cascade_candidate(
     contract: str, chain: str, links: list[dict], *, symbol: str | None = None,
 ) -> None:
     """Signal cascade stage 1 (COLLECT), all 4 columns (GitHub/Farcaster/web/X).
-    09/08 -- moved OUT of ``evaluate_hard_gates`` (which only ever runs on
-    candidates that already cleared the upstream liquidity/volume prefilter,
-    so the cascade was silently inheriting that floor despite the operator's
-    explicit design: "jamais lié à un plancher, un scan large des tokens
-    disponibles"). Called instead directly from the RAW discovery sources
-    that already carry declared social/website links at zero extra network
-    cost (DexScreener ``TokenListing.links``, same shape as
-    ``PairSnapshot.project_links``) -- both the WebSocket ingestion
-    (``momentum_websocket._ingest_frame``) and the REST discovery cycle
-    (``discover_momentum_candidates``, the 4 ``token_profiles_*``/
-    ``token_boosts_*`` sources). Never touches ``base_crawler``/Birdeye raw
-    addresses -- those carry no declared links at all, nothing to enqueue.
+
+    09/08, second design (same day) -- explicit operator instruction:
+    "oublie tout critere sur la liste de scan du sourcing et pioche
+    directement dans la liste dexscreener la ou il y aura les 2000 token,
+    cette liste des 2k est deja filtree comme il faut". Called from
+    ``_check_honeypot`` the FIRST time a candidate earns a fresh slot in
+    ``services/goplus_watchlist.py`` (``MAX_WATCHLIST_SIZE=2000``, priority-
+    ranked by liquidity/volume) -- a conscious reversal of the earlier
+    same-day design (raw-feed wiring, "jamais lié à un plancher"), made
+    after live-verifying the founding "aeon" case sits nowhere near that
+    watchlist's implicit liquidity floor. Never re-enqueued on later
+    watchlist refreshes (``get_fresh`` short-circuits before this point) --
+    each cascade column owns its own re-evaluation TTL from here on.
     Best-effort: each column's own ``enqueue_candidate`` never raises."""
     from aria_core import signal_cascade_farcaster, signal_cascade_github, signal_cascade_web, signal_cascade_x
 
@@ -1068,27 +1069,6 @@ async def discover_momentum_candidates(
             listings = []
         for listing in listings[:limit_per_chain]:
             _add_candidate(out, seen, chains, listing.token_address, listing.chain_id)
-            # 09/08 -- signal cascade stage 1, on the RAW listing (before the
-            # liquidity prefilter below) -- these 4 sources are the only ones
-            # here that carry declared links at zero extra network cost.
-            #
-            # 09/08 (real bug found live, same day): this call originally had
-            # NO chain check at all, unlike the WebSocket ingestion path
-            # (momentum_websocket._ingest_frame, which already filters via
-            # `chain not in _ALLOWED_CHAINS` before ever enqueuing). These 4
-            # REST sources are GLOBAL DexScreener feeds, not scoped to
-            # `chains` -- confirmed live in prod: the web cascade watchlist
-            # picked up 10 different chains (bsc/pulsechain/ethereum/solana/
-            # robinhood/avalanche/berachain/polygon/arbitrum on top of base)
-            # within one hour, most of them never part of DEFAULT_CHAINS.
-            # Same `chain in chains` check as `_add_candidate` above --
-            # "scan large sans plancher" (09/08 decision) always meant "no
-            # ECONOMIC floor", never "no chain scope at all".
-            chain_id = (listing.chain_id or "").strip().lower()
-            if listing.links and chain_id in chains:
-                contract = normalize_contract_case(listing.token_address, chain_id)
-                if contract:
-                    await enqueue_signal_cascade_candidate(contract, chain_id, listing.links)
         source_contributions[fetch.__name__] = _source_snapshot() - before
 
     total_before_prefilter = len(out)
@@ -1304,6 +1284,7 @@ async def _evaluate_security_verdict(security, chain: str = "base") -> tuple[boo
 
 async def _check_honeypot(
     contract: str, chain: str, *, liquidity_usd: float | None = None, volume_24h_usd: float | None = None,
+    links: list[dict] | None = None,
 ) -> tuple[bool, str, str]:
     """The only HARD guardrail in this pipeline. ``(clear, reason, code)`` --
     ``clear=False`` must ALWAYS reject, even if GoPlus is unavailable
@@ -1382,7 +1363,17 @@ async def _check_honeypot(
     security = await goplus_watchlist.get_fresh(contract, chain)
     if security is None:
         priority_score = goplus_watchlist.compute_priority_score(liquidity_usd, volume_24h_usd)
-        added = await goplus_watchlist.add_or_touch(contract, chain, priority_score)
+        added = await goplus_watchlist.add_or_touch(contract, chain, priority_score, links=links)
+        # 09/08 -- explicit operator decision: the signal cascade (GitHub/
+        # Farcaster/web/X) now pioche SOLELY from this watchlist (2000
+        # slots, "deja filtree comme il faut") instead of the raw discovery
+        # feed wired earlier today -- see goplus_watchlist.py's own
+        # docstring for the full reasoning. A candidate only ever reaches
+        # here on its FIRST watchlist entry attempt (get_fresh returned
+        # None) -- never re-enqueued on every later refresh, each cascade
+        # column owns its own re-evaluation TTL from here on.
+        if added and links:
+            await enqueue_signal_cascade_candidate(contract, chain, links)
         reason = (
             "vérification honeypot en file d'attente (cycle de fond GoPlus, "
             "~288s/jeton, prochain passage)"
@@ -3247,6 +3238,7 @@ async def evaluate_hard_gates(
 
     clear, honeypot_reason, honeypot_code = await _check_honeypot(
         contract, chain, liquidity_usd=best.liquidity_usd, volume_24h_usd=best.volume_24h_usd,
+        links=best.project_links,
     )
     if not clear:
         if honeypot_code == "honeypot_rejected":

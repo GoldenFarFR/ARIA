@@ -300,54 +300,20 @@ def test_reference_tokens_excluded_covers_weth_and_base_stablecoins():
     assert "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" in excluded  # USDC
 
 
-# ── signal cascade stage 1 -- decoupled from the liquidity/volume floor ────────
+# ── signal cascade stage 1 -- pioche EXCLUSIVEMENT depuis goplus_watchlist ──
 
 @pytest.mark.asyncio
-async def test_discover_momentum_candidates_enqueues_cascade_even_when_liquidity_prefilter_drops_everything(
-    monkeypatch,
-):
-    """09/08, operator design: "jamais lié à un plancher, un scan large des
-    tokens disponibles" -- a candidate carrying declared links must reach the
-    signal cascade EVEN IF the liquidity prefilter drops it from the returned
-    candidate list right after. Proves the two are decoupled, not just that
-    the cascade happens to run first."""
+async def test_discover_momentum_candidates_never_enqueues_cascade_from_raw_feed(monkeypatch):
+    """09/08, second design (same day, explicit operator instruction):
+    "oublie tout critere sur la liste de scan du sourcing et pioche
+    directement dans la liste dexscreener... cette liste des 2k est deja
+    filtree comme il faut" -- the REST raw-discovery loop must NEVER call
+    the cascade enqueue anymore (moved to _check_honeypot/goplus_watchlist,
+    see test_momentum_entry.py's own test for that path)."""
     links = [{"label": "Website", "url": "https://example.com"}]
 
     async def fake_profiles():
         return [FakeListing(chain_id="base", token_address=CONTRACT, links=links)]
-
-    async def empty_listings():
-        return []
-
-    async def fake_base_tokens(*, limit):
-        return []
-
-    async def drop_everything_prefilter(candidates, **kwargs):
-        return []  # simule TOUS les candidats rejetés par le plancher de liquidité
-
-    enqueued = []
-
-    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
-        enqueued.append((contract, chain, links_arg))
-
-    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
-    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
-    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
-    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
-    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
-    monkeypatch.setattr(me, "_batch_liquidity_prefilter", drop_everything_prefilter)
-    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
-
-    candidates = await me.discover_momentum_candidates(chains=("base",))
-
-    assert candidates == []  # le plancher de liquidité a bien tout rejeté
-    assert (CONTRACT, "base", links) in enqueued  # mais la cascade l'a quand même vu
-
-
-@pytest.mark.asyncio
-async def test_discover_momentum_candidates_never_enqueues_a_listing_without_links(monkeypatch):
-    async def fake_profiles():
-        return [FakeListing(chain_id="base", token_address=CONTRACT, links=[])]
 
     async def empty_listings():
         return []
@@ -371,46 +337,6 @@ async def test_discover_momentum_candidates_never_enqueues_a_listing_without_lin
     await me.discover_momentum_candidates(chains=("base",))
 
     assert enqueued == []
-
-
-@pytest.mark.asyncio
-async def test_discover_momentum_candidates_never_enqueues_cascade_outside_chains(monkeypatch):
-    """09/08, régression réelle trouvée en prod (opérateur : "on est seulement
-    sur base nous") : cet appel n'avait AUCUN filtre de chaîne, contrairement
-    au flux WebSocket (``_ingest_frame``, déjà gardé par
-    ``chain not in _ALLOWED_CHAINS``) -- les 4 sources REST sont des flux
-    DexScreener GLOBAUX, jamais nativement bornés à ``chains``. Confirmé en
-    direct : la watchlist web a récolté 10 chaînes différentes en 1h, la
-    plupart hors de ``DEFAULT_CHAINS``. "Scan large sans plancher" (décision
-    du 09/08) a toujours voulu dire "pas de plancher ÉCONOMIQUE", jamais
-    "aucune portée de chaîne"."""
-    links = [{"label": "Website", "url": "https://example.com"}]
-
-    async def fake_profiles():
-        return [FakeListing(chain_id="solana", token_address=CONTRACT, links=links)]
-
-    async def empty_listings():
-        return []
-
-    async def fake_base_tokens(*, limit):
-        return []
-
-    enqueued = []
-
-    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
-        enqueued.append((contract, chain, links_arg))
-
-    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
-    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
-    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
-    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
-    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
-    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
-    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
-
-    await me.discover_momentum_candidates(chains=("base",))
-
-    assert enqueued == []  # solana n'est pas dans chains=("base",) -- jamais enqueue
 
 
 @pytest.mark.asyncio
@@ -1673,6 +1599,90 @@ async def test_check_honeypot_evm_never_checked_queues_candidate():
     assert code == "honeypot_pending"
     assert "file d'attente" in reason.lower()
     assert await wl.count() == 1
+
+
+# ── signal cascade stage 1 -- enqueued from _check_honeypot/goplus_watchlist ──
+# (09/08, second design, explicit operator instruction: "pioche directement
+# dans la liste dexscreener... cette liste des 2k est deja filtree comme il
+# faut")
+
+@pytest.mark.asyncio
+async def test_check_honeypot_enqueues_cascade_on_first_watchlist_entry(monkeypatch):
+    links = [{"label": "Website", "url": "https://example.com"}]
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    await me._check_honeypot(CONTRACT, "base", links=links)
+
+    assert (CONTRACT, "base", links) in enqueued
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_never_enqueues_cascade_without_links(monkeypatch):
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    await me._check_honeypot(CONTRACT, "base")  # links=None (default)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_never_re_enqueues_cascade_on_fresh_watchlist_hit(monkeypatch):
+    """A candidate already in the watchlist with a fresh status never
+    reaches add_or_touch at all (get_fresh short-circuits) -- so the
+    cascade must never be re-enqueued on every later refresh, only on the
+    candidate's FIRST watchlist entry."""
+    from aria_core.services import goplus_watchlist as wl
+    from aria_core.services.goplus import TokenSecurity
+
+    links = [{"label": "Website", "url": "https://example.com"}]
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    await wl.record_result(CONTRACT, "base", TokenSecurity(address=CONTRACT, is_honeypot=False, available=True))
+    enqueued.clear()  # the add_or_touch call above wasn't through _check_honeypot
+
+    await me._check_honeypot(CONTRACT, "base", links=links)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_never_enqueues_cascade_when_watchlist_rejects(monkeypatch):
+    """A candidate whose priority score doesn't earn a slot (watchlist full)
+    must never reach the cascade -- add_or_touch returned False, nothing to
+    enqueue a signal about."""
+    from aria_core.services import goplus_watchlist as wl
+
+    monkeypatch.setattr(wl, "MAX_WATCHLIST_SIZE", 1)
+    await wl.add_or_touch("0x" + "9" * 40, "base", 1_000.0)  # occupies the only slot, high score
+
+    links = [{"label": "Website", "url": "https://example.com"}]
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    clear, _reason, code = await me._check_honeypot(CONTRACT, "base", links=links)
+
+    assert code == "honeypot_pending"
+    assert enqueued == []
 
 
 @pytest.mark.asyncio
@@ -3242,7 +3252,7 @@ def _patch_pipeline(
     confirm_gate=("BUY", None),
     b20_verdict="not_b20", b20_reason="",
 ):
-    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+    async def fake_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
         if honeypot_clear:
             return True, "honeypot clear (GoPlus)", "honeypot_clear"
         return False, "honeypot confirmé (GoPlus)", "honeypot_rejected"
@@ -3623,7 +3633,7 @@ async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
     contrat répond proprement quelques minutes plus tard)."""
     from aria_core import momentum_blacklist as bl
 
-    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
         return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
 
     _patch_pipeline(monkeypatch)
@@ -5115,7 +5125,7 @@ async def test_evaluate_hold_reason_distinguishes_goplus_outage_from_real_honeyp
     # "indisponible" que ce test vérifie.
     _patch_pipeline(monkeypatch)
 
-    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None):
+    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
         return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
 
     monkeypatch.setattr(me, "_check_honeypot", fake_honeypot_unavailable)
