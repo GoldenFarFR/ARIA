@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from aria_core import momentum_entry as me
 from aria_core import momentum_websocket as mw
 from aria_core import outgoing_pause
 
@@ -207,6 +208,71 @@ async def test_ingest_frame_requeues_after_ttl_expires(monkeypatch):
 
     await listener._ingest_frame(_listing_frame([_item(token_address=A)]))
     assert (A, "base") in listener._pending
+
+
+# ── signal cascade stage 1 -- décorrélé du plancher de liquidité ───────────────
+
+@pytest.mark.asyncio
+async def test_ingest_frame_enqueues_signal_cascade_when_links_present(monkeypatch):
+    """09/08, décision opérateur : la cascade doit voir un scan large, jamais
+    lié au plancher de liquidité -- ici, le token n'a même pas encore atteint
+    le préfiltre de vidange, la cascade le voit dès l'ingestion brute."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    listener = mw.MomentumWebsocketListener()
+    await listener._ingest_frame(_listing_frame(
+        [{"chainId": "base", "tokenAddress": A, "description": "test", "links": links}]
+    ))
+
+    assert (A, "base", links) in enqueued
+
+
+@pytest.mark.asyncio
+async def test_ingest_frame_never_enqueues_cascade_without_links(monkeypatch):
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    listener = mw.MomentumWebsocketListener()
+    await listener._ingest_frame(_listing_frame([_item(chain_id="base", token_address=A)]))  # links=[]
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_frame_never_enqueues_cascade_for_a_deduped_candidate(monkeypatch):
+    """Le token re-vu dans la fenêtre anti-spam (DEDUP_TTL_SECONDS) ne doit
+    pas re-déclencher un enqueue cascade à chaque frame -- chaque colonne a
+    déjà son propre TTL de réévaluation, inutile de multiplier les écritures
+    DB redondantes ici."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    listener = mw.MomentumWebsocketListener()
+    t = [1000.0]
+    monkeypatch.setattr(mw.time, "time", lambda: t[0])
+    listener._seen[(A, "base")] = (t[0], None)  # simule un déclenchement récent
+
+    t[0] += 60  # toujours dans la fenêtre TTL (15 min)
+    await listener._ingest_frame(_listing_frame(
+        [{"chainId": "base", "tokenAddress": A, "description": "test", "links": links}]
+    ))
+
+    assert enqueued == []
 
 
 # ── vidange ───────────────────────────────────────────────────────────────────

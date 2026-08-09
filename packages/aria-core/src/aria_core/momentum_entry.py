@@ -754,6 +754,31 @@ def reference_tokens_excluded(chain: str) -> frozenset[str]:
     return frozenset(stables) | _WRAPPED_NATIVE_ADDRESSES | lsts | bluechips
 
 
+async def enqueue_signal_cascade_candidate(
+    contract: str, chain: str, links: list[dict], *, symbol: str | None = None,
+) -> None:
+    """Signal cascade stage 1 (COLLECT), all 4 columns (GitHub/Farcaster/web/X).
+    09/08 -- moved OUT of ``evaluate_hard_gates`` (which only ever runs on
+    candidates that already cleared the upstream liquidity/volume prefilter,
+    so the cascade was silently inheriting that floor despite the operator's
+    explicit design: "jamais lié à un plancher, un scan large des tokens
+    disponibles"). Called instead directly from the RAW discovery sources
+    that already carry declared social/website links at zero extra network
+    cost (DexScreener ``TokenListing.links``, same shape as
+    ``PairSnapshot.project_links``) -- both the WebSocket ingestion
+    (``momentum_websocket._ingest_frame``) and the REST discovery cycle
+    (``discover_momentum_candidates``, the 4 ``token_profiles_*``/
+    ``token_boosts_*`` sources). Never touches ``base_crawler``/Birdeye raw
+    addresses -- those carry no declared links at all, nothing to enqueue.
+    Best-effort: each column's own ``enqueue_candidate`` never raises."""
+    from aria_core import signal_cascade_farcaster, signal_cascade_github, signal_cascade_web, signal_cascade_x
+
+    await signal_cascade_github.enqueue_candidate(contract, chain, links, symbol=symbol)
+    await signal_cascade_farcaster.enqueue_candidate(contract, chain, links, symbol=symbol)
+    await signal_cascade_web.enqueue_candidate(contract, chain, links, symbol=symbol)
+    await signal_cascade_x.enqueue_candidate(contract, chain, links, symbol=symbol)
+
+
 def _add_candidate(
     out: list[dict], seen: set[tuple[str, str]], chains: tuple[str, ...], contract: str, chain: str,
 ) -> None:
@@ -1043,6 +1068,13 @@ async def discover_momentum_candidates(
             listings = []
         for listing in listings[:limit_per_chain]:
             _add_candidate(out, seen, chains, listing.token_address, listing.chain_id)
+            # 09/08 -- signal cascade stage 1, on the RAW listing (before the
+            # liquidity prefilter below) -- these 4 sources are the only ones
+            # here that carry declared links at zero extra network cost.
+            if listing.links:
+                contract = normalize_contract_case(listing.token_address, listing.chain_id)
+                if contract:
+                    await enqueue_signal_cascade_candidate(contract, listing.chain_id, listing.links)
         source_contributions[fetch.__name__] = _source_snapshot() - before
 
     total_before_prefilter = len(out)
@@ -3041,26 +3073,12 @@ async def evaluate_hard_gates(
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None, None, None
 
-    # 08/08-08/09 -- signal cascade stage 1 (COLLECT), GitHub + Farcaster
-    # columns: enqueues this candidate's declared links (if any) for
-    # substance/legitimacy evaluation, DECOUPLED from every filter below --
-    # a link enters its column's watchlist whether or not this token ever
-    # clears liquidity/technical/security. Zero network cost, best-effort,
-    # never raises (see signal_cascade_github.py / signal_cascade_farcaster.py).
-    from aria_core import signal_cascade_farcaster, signal_cascade_github, signal_cascade_web, signal_cascade_x
-
-    await signal_cascade_github.enqueue_candidate(
-        contract, chain, best.project_links, symbol=best.base_symbol or None,
-    )
-    await signal_cascade_farcaster.enqueue_candidate(
-        contract, chain, best.project_links, symbol=best.base_symbol or None,
-    )
-    await signal_cascade_web.enqueue_candidate(
-        contract, chain, best.project_links, symbol=best.base_symbol or None,
-    )
-    await signal_cascade_x.enqueue_candidate(
-        contract, chain, best.project_links, symbol=best.base_symbol or None,
-    )
+    # 08/08-09/08 -- signal cascade stage 1 (COLLECT) used to enqueue here,
+    # but this function only ever runs on candidates that already cleared
+    # the upstream liquidity/volume prefilter -- silently reintroducing the
+    # floor the cascade was designed to avoid. Moved to the RAW discovery
+    # sources instead (see ``enqueue_signal_cascade_candidate``, called from
+    # ``discover_momentum_candidates`` and ``momentum_websocket._ingest_frame``).
 
     liquidity_usd = best.liquidity_usd or 0.0
     # 26/07 -- Fear regime OVERRIDES the scalping floor (market-wide risk signal,

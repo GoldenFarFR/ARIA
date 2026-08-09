@@ -300,6 +300,103 @@ def test_reference_tokens_excluded_covers_weth_and_base_stablecoins():
     assert "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" in excluded  # USDC
 
 
+# ── signal cascade stage 1 -- decoupled from the liquidity/volume floor ────────
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_enqueues_cascade_even_when_liquidity_prefilter_drops_everything(
+    monkeypatch,
+):
+    """09/08, operator design: "jamais lié à un plancher, un scan large des
+    tokens disponibles" -- a candidate carrying declared links must reach the
+    signal cascade EVEN IF the liquidity prefilter drops it from the returned
+    candidate list right after. Proves the two are decoupled, not just that
+    the cascade happens to run first."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+
+    async def fake_profiles():
+        return [FakeListing(chain_id="base", token_address=CONTRACT, links=links)]
+
+    async def empty_listings():
+        return []
+
+    async def fake_base_tokens(*, limit):
+        return []
+
+    async def drop_everything_prefilter(candidates, **kwargs):
+        return []  # simule TOUS les candidats rejetés par le plancher de liquidité
+
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", drop_everything_prefilter)
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    candidates = await me.discover_momentum_candidates(chains=("base",))
+
+    assert candidates == []  # le plancher de liquidité a bien tout rejeté
+    assert (CONTRACT, "base", links) in enqueued  # mais la cascade l'a quand même vu
+
+
+@pytest.mark.asyncio
+async def test_discover_momentum_candidates_never_enqueues_a_listing_without_links(monkeypatch):
+    async def fake_profiles():
+        return [FakeListing(chain_id="base", token_address=CONTRACT, links=[])]
+
+    async def empty_listings():
+        return []
+
+    async def fake_base_tokens(*, limit):
+        return []
+
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    await me.discover_momentum_candidates(chains=("base",))
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_enqueue_signal_cascade_candidate_calls_all_four_columns(monkeypatch):
+    calls = []
+
+    def _record(name):
+        async def _fake(contract, chain, links, *, symbol=None):
+            calls.append((name, contract, chain, links, symbol))
+        return _fake
+
+    from aria_core import signal_cascade_farcaster, signal_cascade_github, signal_cascade_web, signal_cascade_x
+
+    monkeypatch.setattr(signal_cascade_github, "enqueue_candidate", _record("github"))
+    monkeypatch.setattr(signal_cascade_farcaster, "enqueue_candidate", _record("farcaster"))
+    monkeypatch.setattr(signal_cascade_web, "enqueue_candidate", _record("web"))
+    monkeypatch.setattr(signal_cascade_x, "enqueue_candidate", _record("x"))
+
+    links = [{"label": "Website", "url": "https://example.com"}]
+    await me.enqueue_signal_cascade_candidate(CONTRACT, "base", links, symbol="TP")
+
+    names = {c[0] for c in calls}
+    assert names == {"github", "farcaster", "web", "x"}
+    assert all(c[1:] == (CONTRACT, "base", links, "TP") for c in calls)
+
+
 def test_reference_tokens_excluded_covers_known_lst():
     """24/07 -- 5-agent audit finding: a real paper position was opened on
     JitoSOL (bridged), a blue-chip liquid-staking derivative whose price
