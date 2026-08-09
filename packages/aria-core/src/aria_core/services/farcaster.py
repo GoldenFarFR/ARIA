@@ -19,7 +19,17 @@ logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.warpcast.com/v2/user-by-username"
 _USER_BY_FID_URL = "https://api.warpcast.com/v2/user"
-_USERNAME_RE = re.compile(r"warpcast\.com/([\w.\-]+)", re.IGNORECASE)
+# 09/08, real bug found live (backtest against 8 real Base pump tokens):
+# Warpcast migrated its public-facing domain to farcaster.xyz, but this
+# regex only ever recognized the old warpcast.com/<username> form -- a
+# project declaring a farcaster.xyz/<username> profile link (CLANKER's real
+# case) silently fell through to "unreadable Farcaster URL", never even
+# reaching the API call. [\w.\-]+ naturally does NOT match a channel URL
+# (farcaster.xyz/~/channel/<name>, DEGEN's real case) -- the leading "~" is
+# outside that character class, so a channel link still correctly yields no
+# match rather than a wrong username lookup; verifying a CHANNEL (not a
+# user profile) would need separate logic, not attempted here.
+_USERNAME_RE = re.compile(r"(?:warpcast\.com|farcaster\.xyz)/([\w.\-]+)", re.IGNORECASE)
 _TIMEOUT_S = 10.0
 
 

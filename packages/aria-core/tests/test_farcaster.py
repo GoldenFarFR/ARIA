@@ -83,6 +83,23 @@ def test_parse_username_variants():
     assert _parse_username("not a farcaster url") is None
 
 
+def test_parse_username_recognizes_farcaster_xyz_domain():
+    """09/08, real bug found via backtest against real Base pump tokens
+    (CLANKER): Warpcast migrated its public domain to farcaster.xyz --
+    a project declaring that form must not silently fall through to
+    "unreadable Farcaster URL"."""
+    assert _parse_username("https://farcaster.xyz/clanker") == "clanker"
+    assert _parse_username("https://farcaster.xyz/bankr/") == "bankr"
+
+
+def test_parse_username_never_matches_a_channel_url():
+    """A channel link (DEGEN's real case) is NOT a user profile -- verifying
+    one needs separate logic never attempted here. The leading "~" falls
+    outside [\\w.\\-]+, so this must yield no match rather than a wrong
+    username lookup (e.g. "~" itself)."""
+    assert _parse_username("https://farcaster.xyz/~/channel/degen") is None
+
+
 @pytest.mark.asyncio
 async def test_verify_profile_real_schema_parses_correctly(monkeypatch):
     _patch_client(monkeypatch, FakeResponse(200, REAL_PAYLOAD))
