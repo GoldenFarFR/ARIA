@@ -116,3 +116,70 @@ async def test_gather_fetch_exception_degrades():
 
     facts = await gather_website_substance_facts("https://example.com", crawl_fn=crawl_fn)
     assert facts.available is False
+
+
+# ── contract_confirmed -- gate anti-usurpation (09/08) ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_gather_no_contract_leaves_confirmed_none():
+    long_text = "roadmap tokenomics team docs " + ("mot réel " * 200)
+
+    async def crawl_fn(url):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content=long_text)],
+        )
+
+    facts = await gather_website_substance_facts("https://example.com", crawl_fn=crawl_fn)
+    assert facts.contract_confirmed is None
+
+
+@pytest.mark.asyncio
+async def test_gather_detects_contract_present_case_insensitive():
+    contract = "0xAbCdEf0000000000000000000000000000dEaD"
+    long_text = f"Buy $TOK now, contract: {contract.lower()} " + ("mot réel " * 200)
+
+    async def crawl_fn(url):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content=long_text)],
+        )
+
+    facts = await gather_website_substance_facts(
+        "https://example.com", crawl_fn=crawl_fn, contract=contract,
+    )
+    assert facts.contract_confirmed is True
+
+
+@pytest.mark.asyncio
+async def test_gather_detects_contract_absent():
+    long_text = "roadmap tokenomics team docs " + ("mot réel " * 200)
+
+    async def crawl_fn(url):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content=long_text)],
+        )
+
+    facts = await gather_website_substance_facts(
+        "https://example.com", crawl_fn=crawl_fn, contract="0x" + "a" * 40,
+    )
+    assert facts.contract_confirmed is False
+
+
+@pytest.mark.asyncio
+async def test_gather_checks_contract_even_on_thin_content():
+    """Un contrat peut légitimement apparaître sur une page minimale (cas
+    réel : messyvirgo.com, lien de swap direct) -- ne doit jamais dépendre
+    du seuil de mots minimum utilisé pour le score de substance."""
+    contract = "0x" + "a" * 40
+    thin_text = f"buy now {contract}"
+
+    async def crawl_fn(url):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content=thin_text)],
+        )
+
+    facts = await gather_website_substance_facts(
+        "https://example.com", crawl_fn=crawl_fn, contract=contract,
+    )
+    assert facts.available is False  # toujours "trop mince" pour le score de substance
+    assert facts.contract_confirmed is True  # mais la vérification du contrat, elle, a tourné

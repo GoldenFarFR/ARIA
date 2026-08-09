@@ -291,3 +291,82 @@ async def test_watch_cycle_never_raises_even_on_broken_db(monkeypatch):
     monkeypatch.setattr(scc, "_table_ready", False)
     report = await scc.run_falsifiability_watch_cycle()  # does not raise
     assert report["window_24h"]["enough_data"] is False
+
+
+# ---- impersonation gate (contract_confirmed_on_site, 09/08) ------------
+
+@pytest.mark.asyncio
+async def test_pending_item_exposes_confirmed_none_when_no_web_source():
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="repo x")
+    pending = await scc.list_pending_triage()
+    assert pending[0]["contract_confirmed_on_site"] is None
+
+
+@pytest.mark.asyncio
+async def test_pending_item_exposes_confirmed_true_from_web_source():
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=True,
+    )
+    pending = await scc.list_pending_triage()
+    assert pending[0]["contract_confirmed_on_site"] is True
+
+
+@pytest.mark.asyncio
+async def test_pending_item_exposes_confirmed_false_from_web_source():
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=False,
+    )
+    pending = await scc.list_pending_triage()
+    assert pending[0]["contract_confirmed_on_site"] is False
+
+
+@pytest.mark.asyncio
+async def test_validated_refused_when_contract_not_confirmed():
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=False,
+    )
+    ok = await scc.record_triage_decision(CONTRACT, "base", "validated", "site vérifié mais contrat absent")
+    assert ok is False
+    pending = await scc.list_pending_triage()
+    assert len(pending) == 1  # toujours pending, jamais silencieusement validé
+
+
+@pytest.mark.asyncio
+async def test_validated_allowed_with_explicit_override():
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=False,
+    )
+    ok = await scc.record_triage_decision(
+        CONTRACT, "base", "validated", "confirmé manuellement via sous-domaine docs.*",
+        override_unconfirmed_contract=True,
+    )
+    assert ok is True
+    assert await scc.list_pending_triage() == []
+
+
+@pytest.mark.asyncio
+async def test_validated_never_blocked_when_no_web_source_at_all():
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="repo x")
+    await scc.record_source_signal(CONTRACT, "base", "farcaster", "positive", detail="cast y")
+    ok = await scc.record_triage_decision(CONTRACT, "base", "validated", "2 sources concordantes, pas de web")
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_validated_never_blocked_when_contract_confirmed_true():
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=True,
+    )
+    ok = await scc.record_triage_decision(CONTRACT, "base", "validated", "contrat confirmé sur le site")
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_decision_never_gated_by_confirmation():
+    """Le gate ne s'applique qu'à 'validated' -- rejeter un token reste
+    toujours possible, peu importe l'état de confirmation."""
+    await scc.record_source_signal(
+        CONTRACT, "base", "web", "positive", detail="site x", contract_confirmed_on_site=False,
+    )
+    ok = await scc.record_triage_decision(CONTRACT, "base", "rejected", "substance faible de toute façon")
+    assert ok is True

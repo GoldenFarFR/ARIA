@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS signal_cascade_convergence (
     accelerating INTEGER NOT NULL DEFAULT 0,
     detail TEXT,
     recorded_at TEXT NOT NULL,
+    contract_confirmed_on_site INTEGER,
     PRIMARY KEY (contract, chain, source)
 )
 """
@@ -92,7 +93,19 @@ _QUEUE_ADDED_COLUMNS = (
     ("price_at_decision", "REAL"),
     ("price_after_24h", "REAL"),
     ("price_after_7d", "REAL"),
+    # 09/08, operator design ("je vois pas sur X et sur le site web l'équipe
+    # écrire ce contrat" -- impersonation-risk gate): NULL = no 'web' source
+    # has ever converged for this token (nothing to check), 0 = the declared
+    # site was crawled and did NOT contain this contract, 1 = confirmed.
+    # Propagated from signal_cascade_convergence's own 'web' row, see
+    # _refresh_convergence_and_maybe_queue.
+    ("contract_confirmed_on_site", "INTEGER"),
 )
+
+# 09/08 -- same hot-migration need as the queue table above, but for the
+# per-source convergence table (contract_confirmed_on_site added after its
+# first deployment).
+_CONVERGENCE_ADDED_COLUMNS = (("contract_confirmed_on_site", "INTEGER"),)
 
 _STATE_DDL = """
 CREATE TABLE IF NOT EXISTS signal_cascade_falsifiability_state (
@@ -120,6 +133,13 @@ async def _ensure_tables() -> None:
         for name, ddl in _QUEUE_ADDED_COLUMNS:
             if name not in existing:
                 await db.execute(f"ALTER TABLE signal_cascade_triage_queue ADD COLUMN {name} {ddl}")
+        existing_convergence = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(signal_cascade_convergence)")).fetchall()
+        }
+        for name, ddl in _CONVERGENCE_ADDED_COLUMNS:
+            if name not in existing_convergence:
+                await db.execute(f"ALTER TABLE signal_cascade_convergence ADD COLUMN {name} {ddl}")
         await db.commit()
     _table_ready = True
 
@@ -143,31 +163,38 @@ async def _current_price_usd(contract: str, chain: str) -> float | None:
 async def record_source_signal(
     contract: str, chain: str, source: str, signal: str, *,
     accelerating: bool = False, detail: str | None = None, symbol: str | None = None,
+    contract_confirmed_on_site: bool | None = None,
 ) -> None:
     """Stage 3. Called by a source column's own stage-2 refresh (today:
     ``signal_cascade_github.run_refresh_cycle``) whenever it produces a
     result -- every signal is recorded (not just "positive"), so a source
     that later downgrades a token correctly drops it out of the convergence
     count instead of leaving a stale "positive" row behind. Best-effort:
-    never raises, never blocks the caller's own cycle."""
+    never raises, never blocks the caller's own cycle.
+
+    ``contract_confirmed_on_site`` (09/08): only meaningful from the 'web'
+    column (the only source that crawls real page content) -- ``None`` for
+    every other source, left untouched on their own rows."""
     try:
         await _ensure_tables()
         contract = (contract or "").strip().lower()
         chain = (chain or "base").strip().lower()
         if not contract or not source:
             return
+        confirmed_value = None if contract_confirmed_on_site is None else int(contract_confirmed_on_site)
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO signal_cascade_convergence "
-                "(contract, chain, symbol, source, signal, accelerating, detail, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "(contract, chain, symbol, source, signal, accelerating, detail, recorded_at, "
+                "contract_confirmed_on_site) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(contract, chain, source) DO UPDATE SET "
                 "symbol = excluded.symbol, signal = excluded.signal, "
                 "accelerating = excluded.accelerating, detail = excluded.detail, "
-                "recorded_at = excluded.recorded_at",
+                "recorded_at = excluded.recorded_at, "
+                "contract_confirmed_on_site = excluded.contract_confirmed_on_site",
                 (
                     contract, chain, symbol, source, signal, int(accelerating), detail,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(), confirmed_value,
                 ),
             )
             await db.commit()
@@ -189,29 +216,35 @@ async def _refresh_convergence_and_maybe_queue(contract: str, chain: str, symbol
     source."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT source, detail, accelerating FROM signal_cascade_convergence "
-            "WHERE contract = ? AND chain = ? AND signal = 'positive'",
+            "SELECT source, detail, accelerating, contract_confirmed_on_site "
+            "FROM signal_cascade_convergence WHERE contract = ? AND chain = ? AND signal = 'positive'",
             (contract, chain),
         )
         rows = await cursor.fetchall()
         if not rows:
             return
         sources_detail = [{"source": r[0], "detail": r[1], "accelerating": bool(r[2])} for r in rows]
+        # Only the 'web' column ever computes this (real page content) --
+        # None if that column never converged for this token (nothing to
+        # check yet), otherwise its latest confirmed/not-confirmed verdict.
+        confirmed_on_site = next(
+            (r[3] for r in rows if r[0] == "web" and r[3] is not None), None,
+        )
 
         updated = await db.execute(
-            "UPDATE signal_cascade_triage_queue SET convergence_count = ?, sources_detail = ?, symbol = ? "
-            "WHERE contract = ? AND chain = ? AND status = 'pending'",
-            (len(rows), json.dumps(sources_detail), symbol, contract, chain),
+            "UPDATE signal_cascade_triage_queue SET convergence_count = ?, sources_detail = ?, symbol = ?, "
+            "contract_confirmed_on_site = ? WHERE contract = ? AND chain = ? AND status = 'pending'",
+            (len(rows), json.dumps(sources_detail), symbol, confirmed_on_site, contract, chain),
         )
         if updated.rowcount == 0:
             await db.execute(
                 "INSERT INTO signal_cascade_triage_queue "
-                "(contract, chain, symbol, convergence_count, sources_detail, queued_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "(contract, chain, symbol, convergence_count, sources_detail, queued_at, "
+                "contract_confirmed_on_site) VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(contract, chain) DO NOTHING",  # already decided -- never reopened
                 (
                     contract, chain, symbol, len(rows), json.dumps(sources_detail),
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat(), confirmed_on_site,
                 ),
             )
         await db.commit()
@@ -225,14 +258,14 @@ async def list_pending_triage(limit: int = 20) -> list[dict]:
     await _ensure_tables()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT contract, chain, symbol, convergence_count, sources_detail, queued_at "
-            "FROM signal_cascade_triage_queue WHERE status = 'pending' "
+            "SELECT contract, chain, symbol, convergence_count, sources_detail, queued_at, "
+            "contract_confirmed_on_site FROM signal_cascade_triage_queue WHERE status = 'pending' "
             "ORDER BY convergence_count DESC, queued_at ASC LIMIT ?",
             (limit,),
         )
         rows = await cursor.fetchall()
     out = []
-    for contract, chain, symbol, count, sources_detail, queued_at in rows:
+    for contract, chain, symbol, count, sources_detail, queued_at, confirmed_on_site in rows:
         try:
             sources = json.loads(sources_detail) if sources_detail else []
         except (ValueError, TypeError):
@@ -240,23 +273,65 @@ async def list_pending_triage(limit: int = 20) -> list[dict]:
         out.append({
             "contract": contract, "chain": chain, "symbol": symbol,
             "convergence_count": count, "sources": sources, "queued_at": queued_at,
+            # None = no 'web' source has converged yet (nothing to check),
+            # False = site crawled but did NOT contain this contract (real
+            # impersonation risk -- verify manually before validating),
+            # True = confirmed on the declared site's own raw content.
+            "contract_confirmed_on_site": None if confirmed_on_site is None else bool(confirmed_on_site),
         })
     return out
 
 
-async def record_triage_decision(contract: str, chain: str, decision: str, reasoning: str) -> bool:
+async def record_triage_decision(
+    contract: str, chain: str, decision: str, reasoning: str, *,
+    override_unconfirmed_contract: bool = False,
+) -> bool:
     """Stage 4 write side -- a Claude Code session's own triage call.
     ``decision`` must be 'validated' or 'rejected'; ``reasoning`` is
     REQUIRED and must be non-empty (operator design: a bare verdict with no
     "why" transfers nothing toward a future handover to ARIA -- see module
     docstring). Returns ``False`` (no exception) on invalid input or no
     matching pending row, so a caller can report the real outcome instead
-    of assuming success."""
+    of assuming success.
+
+    Impersonation gate (09/08, operator design: "je vois pas sur X et sur
+    le site web l'équipe écrire ce contrat" -- a token can reference a real
+    project's site without that project ever having launched or acknowledged
+    it). A 'validated' decision is REFUSED when the queued row's
+    ``contract_confirmed_on_site`` is explicitly ``False`` (the 'web' column
+    crawled the declared site and did NOT find this contract in its raw
+    content) UNLESS ``override_unconfirmed_contract=True`` -- deliberately
+    not a silent auto-block: the automated check only scans the ONE declared
+    URL, a real confirmation can legitimately live on a subdomain it never
+    crawled (real case: kVCM/Klima Protocol, confirmed on
+    docs.klimaprotocol.com, missed by a check of the root domain alone) --
+    the override exists for exactly that manually-verified case, never a
+    blanket bypass. Never blocks when ``contract_confirmed_on_site`` is
+    ``None`` (no 'web' source ever converged for this token -- nothing to
+    check)."""
     if decision not in ("validated", "rejected") or not (reasoning or "").strip():
         return False
     await _ensure_tables()
     contract = (contract or "").strip().lower()
     chain = (chain or "base").strip().lower()
+
+    if decision == "validated" and not override_unconfirmed_contract:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT contract_confirmed_on_site FROM signal_cascade_triage_queue "
+                "WHERE contract = ? AND chain = ? AND status = 'pending'",
+                (contract, chain),
+            )
+            row = await cursor.fetchone()
+        if row is not None and row[0] == 0:
+            logger.warning(
+                "signal_cascade_convergence: 'validated' refused for %s -- le site déclaré ne "
+                "confirme pas ce contrat (contract_confirmed_on_site=False), passer "
+                "override_unconfirmed_contract=True après vérification manuelle",
+                contract[:10],
+            )
+            return False
+
     # Best-effort: a failed price lookup never blocks recording the
     # decision itself -- it just means this item can't feed the
     # falsifiability comparison later (price_at_decision stays NULL).

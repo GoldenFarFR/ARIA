@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS web_signal_cascade_watchlist (
 
 _table_ready = False
 
+# 09/08, operator design: "je vois pas sur X et sur le site web l'équipe
+# écrire ce contrat" -- impersonation-risk column, added after the very
+# first deployment. Same hot-migration pattern as
+# signal_cascade_convergence._QUEUE_ADDED_COLUMNS.
+_WATCHLIST_ADDED_COLUMNS = (("contract_confirmed", "INTEGER"),)
+
 
 async def _ensure_table() -> None:
     global _table_ready
@@ -63,6 +69,13 @@ async def _ensure_table() -> None:
         return
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_WATCHLIST_DDL)
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(web_signal_cascade_watchlist)")).fetchall()
+        }
+        for name, ddl in _WATCHLIST_ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE web_signal_cascade_watchlist ADD COLUMN {name} {ddl}")
         await db.commit()
     _table_ready = True
 
@@ -130,28 +143,37 @@ async def run_refresh_cycle() -> dict:
 
         from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
 
-        facts = await gather_website_substance_facts(website_url)
+        facts = await gather_website_substance_facts(website_url, contract=contract)
         verdict = judge_website_substance(facts)
         accelerating = previous_signal in (None, "weak", "unknown") and verdict.signal == "positive"
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "UPDATE web_signal_cascade_watchlist SET last_evaluated_at = ?, last_score = ?, "
-                "previous_signal = last_signal, last_signal = ?, accelerating = ? WHERE website_url = ?",
+                "previous_signal = last_signal, last_signal = ?, accelerating = ?, "
+                "contract_confirmed = ? WHERE website_url = ?",
                 (
                     datetime.now(timezone.utc).isoformat(), verdict.score, verdict.signal,
-                    int(accelerating), website_url,
+                    int(accelerating),
+                    None if facts.contract_confirmed is None else int(facts.contract_confirmed),
+                    website_url,
                 ),
             )
             await db.commit()
 
         from aria_core import signal_cascade_convergence
 
+        confirmed_note = (
+            "contrat NON trouvé sur le site" if facts.contract_confirmed is False
+            else "contrat confirmé sur le site" if facts.contract_confirmed is True
+            else "contenu insuffisant pour vérifier le contrat"
+        )
         await signal_cascade_convergence.record_source_signal(
             contract, chain, "web", verdict.signal,
             accelerating=accelerating,
-            detail=f"{website_url} score {verdict.score or 0.0:.0f}/100",
+            detail=f"{website_url} score {verdict.score or 0.0:.0f}/100 -- {confirmed_note}",
             symbol=symbol,
+            contract_confirmed_on_site=facts.contract_confirmed,
         )
 
         if accelerating:
@@ -175,8 +197,8 @@ async def list_stage2_positive() -> list[dict]:
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT website_url, contract, chain, symbol, last_score, accelerating, last_evaluated_at "
-            "FROM web_signal_cascade_watchlist WHERE last_signal = 'positive' "
+            "SELECT website_url, contract, chain, symbol, last_score, accelerating, last_evaluated_at, "
+            "contract_confirmed FROM web_signal_cascade_watchlist WHERE last_signal = 'positive' "
             "ORDER BY accelerating DESC, last_evaluated_at DESC"
         )
         rows = await cursor.fetchall()
@@ -184,6 +206,7 @@ async def list_stage2_positive() -> list[dict]:
         {
             "website_url": r[0], "contract": r[1], "chain": r[2], "symbol": r[3],
             "score": r[4], "accelerating": bool(r[5]), "last_evaluated_at": r[6],
+            "contract_confirmed": None if r[7] is None else bool(r[7]),
         }
         for r in rows
     ]

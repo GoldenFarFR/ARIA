@@ -52,6 +52,15 @@ class WebsiteSubstanceFacts:
     https: bool = False
     key_sections_found: int = 0
     has_generic_placeholder: bool = False
+    # 09/08, operator design ("je vois pas sur X et sur le site web l'équipe
+    # écrire ce contrat" -- a real impersonation risk: a token can reference a
+    # legitimate project's site/name without that project ever having
+    # launched or acknowledged it): whether the crawled RAW content itself
+    # contains the candidate's own contract address. None = not checked (no
+    # contract passed in, or every existing caller before this field
+    # existed) -- never conflated with the substance SCORE above, a site can
+    # be substantial AND not confirm this specific contract.
+    contract_confirmed: bool | None = None
 
 
 @dataclass
@@ -68,7 +77,7 @@ async def _default_crawl(url: str):
 
 
 async def gather_website_substance_facts(
-    website_url: str | None, *, crawl_fn=None,
+    website_url: str | None, *, crawl_fn=None, contract: str | None = None,
 ) -> WebsiteSubstanceFacts:
     """Best-effort collection, never blocking. ``crawl_fn`` injectable for
     tests (same pattern as ``fetch=`` in ``github_substance.py``)."""
@@ -86,11 +95,18 @@ async def gather_website_substance_facts(
         return WebsiteSubstanceFacts(available=False, error=result.error or "no usable page")
 
     combined = " ".join(p.raw_content for p in result.pages)
+    lower = combined.lower()
+    # Computed BEFORE the thin-content early return below -- orthogonal to
+    # the substance score (a minimal page can legitimately just contain a
+    # contract/"buy" link, real case observed live: messyvirgo.com).
+    contract_confirmed = contract.strip().lower() in lower if contract else None
+
     total_words = len(combined.split())
     if total_words < _MIN_WORDS_FOR_SIGNAL:
-        return WebsiteSubstanceFacts(available=False, error="real content too thin to judge")
+        return WebsiteSubstanceFacts(
+            available=False, error="real content too thin to judge", contract_confirmed=contract_confirmed,
+        )
 
-    lower = combined.lower()
     key_sections = sum(1 for kw in _KEY_SECTION_KEYWORDS if kw in lower)
     generic = any(marker in lower for marker in _GENERIC_PLACEHOLDER_MARKERS)
 
@@ -101,6 +117,7 @@ async def gather_website_substance_facts(
         https=url.lower().startswith("https://"),
         key_sections_found=key_sections,
         has_generic_placeholder=generic,
+        contract_confirmed=contract_confirmed,
     )
 
 

@@ -148,3 +148,57 @@ async def test_positive_signal_reaches_stage3_convergence_and_queue(monkeypatch)
     pending = await scc.list_pending_triage()
     assert len(pending) == 1
     assert pending[0]["sources"][0]["source"] == "web"
+
+
+# ── contract_confirmed -- gate anti-usurpation (09/08) ──────────────────────
+
+
+def _mock_verdict_with_confirmation(monkeypatch, *, confirmed: bool | None, signal="positive"):
+    import aria_core.skills.website_substance as ws
+
+    async def _fake_gather(url, **kwargs):
+        return ws.WebsiteSubstanceFacts(available=True, contract_confirmed=confirmed)
+
+    def _fake_judge(facts):
+        return ws.WebsiteSubstanceVerdict(signal=signal, score=80.0)
+
+    monkeypatch.setattr(ws, "gather_website_substance_facts", _fake_gather)
+    monkeypatch.setattr(ws, "judge_website_substance", _fake_judge)
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_stores_contract_confirmed_true(monkeypatch):
+    await scw.enqueue_candidate(CONTRACT, "base", _links())
+    _mock_verdict_with_confirmation(monkeypatch, confirmed=True)
+    await scw.run_refresh_cycle()
+
+    async with aiosqlite.connect(scw.DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT contract_confirmed FROM web_signal_cascade_watchlist WHERE website_url = ?",
+            (WEBSITE_URL,),
+        )
+        (stored,) = await cursor.fetchone()
+    assert stored == 1
+
+    stage2 = await scw.list_stage2_positive()
+    assert stage2[0]["contract_confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_propagates_confirmed_false_to_convergence(monkeypatch):
+    await scw.enqueue_candidate(CONTRACT, "base", _links())
+    _mock_verdict_with_confirmation(monkeypatch, confirmed=False)
+    await scw.run_refresh_cycle()
+
+    pending = await scc.list_pending_triage()
+    assert pending[0]["contract_confirmed_on_site"] is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_leaves_confirmed_none_when_unchecked(monkeypatch):
+    await scw.enqueue_candidate(CONTRACT, "base", _links())
+    _mock_verdict_with_confirmation(monkeypatch, confirmed=None)
+    await scw.run_refresh_cycle()
+
+    pending = await scc.list_pending_triage()
+    assert pending[0]["contract_confirmed_on_site"] is None
