@@ -1,8 +1,11 @@
 """Firecrawl credit budget tracking -- 09/08, built alongside services/firecrawl.py
-as the crawl provider REPLACING Tavily in website_substance.py (explicit operator
-directive: "construis le remplacement Tavily par Firecrawl" -- Tavily's required
-volume for 100%-in-7-days web-column coverage, ~13,000 crawls/week, sits ~2.8x
-beyond its highest priced tier; Firecrawl's Standard plan covers it in one tier).
+as a candidate crawl provider for website_substance.py (explicit operator
+directive: "construis le remplacement Tavily par Firecrawl"). Real production
+data then showed the required paid tier would cost far more than first
+estimated -- the operator refused it ("je vais pas payer 300 balle") and this
+client is now used on the FREE plan only, as a light supplement alongside a
+free homemade crawler being explored separately, never as the primary
+high-volume provider it was first designed for.
 
 Same family as tavily_budget.py but a SIMPLER cost model: Firecrawl bills a flat
 1 credit per page for markdown-only scrapeOptions (sourced live, docs.firecrawl.dev
@@ -11,10 +14,12 @@ mapping+extraction split. MONTHLY window, "use it or lose it" assumed (standard
 SaaS subscription behavior -- to confirm against the real invoice once the
 operator has purchased a plan).
 
-MONTHLY_CAP_CREDITS below assumes the Standard plan (83$/month, 100,000
-credits/month) -- the tier the cost comparison in docs/HANDOFF_SIGNAL_CASCADE.md
-was built against. RECALIBRATE THIS CONSTANT the day the operator confirms which
-tier was actually purchased (a different tier changes the real quota).
+MONTHLY_CAP_CREDITS below is set for the FREE plan (0$/month, 1,000
+credits/month) -- the operator explicitly refused the Standard/Growth paid
+tiers ("je vais pas payer 300 balle") when their real cost was verified
+09/08 (see docs/HANDOFF_SIGNAL_CASCADE.md). Kept deliberately conservative
+(fail-safe) until the operator confirms which plan was actually created --
+RAISE THIS CONSTANT only after that confirmation, never assume a paid tier.
 
 SHARED across every Firecrawl caller (today: website_substance.py only, once
 wired) -- a single throughput/spend coordination point, never independent
@@ -28,10 +33,10 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-# Sourced (09/08, docs.firecrawl.dev/pricing, live WebFetch): Standard plan =
-# 83$/month, 100,000 credits/month included. 90% margin, CLAUDE.md doctrine.
-# TO RECALIBRATE once the operator confirms the real purchased tier.
-MONTHLY_CAP_CREDITS = 90_000
+# Sourced (09/08, docs.firecrawl.dev/pricing, live WebFetch): Free plan =
+# 0$/month, 1,000 credits/month included. 90% margin, CLAUDE.md doctrine.
+# TO RAISE only once the operator confirms a paid tier was purchased.
+MONTHLY_CAP_CREDITS = 900
 
 # Sourced (09/08, docs.firecrawl.dev/pricing, live WebFetch): "Scrape" and
 # "Crawl" each cost 1 credit/page for markdown-only formats (our only usage --

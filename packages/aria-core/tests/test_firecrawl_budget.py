@@ -20,9 +20,9 @@ def _isolated_db(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_empty_log_starts_with_full_budget():
     status = await budget.monthly_status()
-    assert status["cap_credits"] == 90_000
+    assert status["cap_credits"] == 900
     assert status["spent_credits"] == 0
-    assert status["remaining_credits"] == 90_000
+    assert status["remaining_credits"] == 900
 
 
 @pytest.mark.asyncio
@@ -43,8 +43,8 @@ async def test_db_path_resolved_dynamically_not_cached_at_import(tmp_path, monke
 @pytest.mark.asyncio
 async def test_can_spend_within_cap():
     assert await budget.can_spend(1) is True
-    assert await budget.can_spend(90_000) is True
-    assert await budget.can_spend(90_001) is False
+    assert await budget.can_spend(900) is True
+    assert await budget.can_spend(901) is False
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_recorded_spend_reduces_remaining_budget():
     await budget.record_spend(caller="test", query="crawl:https://example.com", credits=12)
     status = await budget.monthly_status()
     assert status["spent_credits"] == 12
-    assert status["remaining_credits"] == 90_000 - 12
+    assert status["remaining_credits"] == 900 - 12
 
 
 @pytest.mark.asyncio
