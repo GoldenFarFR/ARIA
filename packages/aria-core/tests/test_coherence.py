@@ -846,6 +846,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_SEPOLIA_AUTONOMOUS_ENABLED",
     "ARIA_SEPOLIA_SWAP_ENABLED",
     "ARIA_SEPOLIA_WALLET_ENABLED",
+    # 09/08 -- signal_cascade_convergence.run_falsifiability_watch_cycle:
+    # daily forward-price refresh + one-time WARNING log per window once
+    # _MIN_SAMPLES_PER_SIDE is reached. Own dedicated flag, independent of
+    # every source column's own gate. OFF by default.
+    "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
     "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",
     "ARIA_SMART_SWING_ENABLED",

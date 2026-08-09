@@ -235,3 +235,59 @@ async def test_falsifiability_report_detects_validated_outperforming(monkeypatch
     assert bucket["enough_data"] is True
     assert bucket["avg_return_validated_pct"] > bucket["avg_return_rejected_pct"]
     assert "critère utile" in bucket["verdict"]
+
+
+# ---- falsifiability watch cycle (heartbeat wrapper) --------------------
+
+async def _seed_enough_samples_for_24h(monkeypatch) -> None:
+    validated = [f"0x{i:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+    rejected = [f"0x{i + 100:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+    for contract in validated:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "validated", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+    for contract in rejected:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "rejected", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+
+    async def _fake_price(contract, chain):
+        return 2.0 if contract in validated else 0.1
+
+    monkeypatch.setattr(scc, "_current_price_usd", _fake_price)
+
+
+@pytest.mark.asyncio
+async def test_watch_cycle_logs_once_when_window_crosses_threshold(monkeypatch, caplog):
+    await _seed_enough_samples_for_24h(monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        await scc.run_falsifiability_watch_cycle()
+    assert any("falsifiability [24h]" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_watch_cycle_never_repeats_for_an_already_notified_window(monkeypatch, caplog):
+    await _seed_enough_samples_for_24h(monkeypatch)
+    await scc.run_falsifiability_watch_cycle()
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        await scc.run_falsifiability_watch_cycle()
+    assert not any("falsifiability [24h]" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_watch_cycle_silent_below_minimum_samples(caplog):
+    await scc.record_source_signal(CONTRACT, "base", "github", "positive", detail="x")
+    with caplog.at_level("WARNING"):
+        await scc.run_falsifiability_watch_cycle()
+    assert not any("falsifiability" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_watch_cycle_never_raises_even_on_broken_db(monkeypatch):
+    monkeypatch.setattr(scc, "DB_PATH", "/nonexistent/dir/shadow.db")
+    monkeypatch.setattr(scc, "_table_ready", False)
+    report = await scc.run_falsifiability_watch_cycle()  # does not raise
+    assert report["window_24h"]["enough_data"] is False

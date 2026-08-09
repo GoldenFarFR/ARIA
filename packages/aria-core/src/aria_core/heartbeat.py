@@ -360,6 +360,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="signal_cascade_falsifiability_cycle",
+        name="Multi-source signal cascade -- falsifiability watch",
+        description="09/08, operator design: 'compare forward returns of items Claude VALIDATED vs REJECTED -- if validated ones outperform, the criterion has value and can be transferred; if not, it must NOT be given to ARIA' (signal_cascade_convergence.falsifiability_report). This cycle keeps +24h/+7d forward prices refreshed (lazy fill, same doctrine as narrative_signal_shadow.py) and logs the verdict at WARNING level the FIRST time a window crosses the minimum sample size (_MIN_SAMPLES_PER_SIDE=5 resolved decisions on both sides) -- never repeats for an already-notified window. DAILY cadence -- forward prices only resolve after 24h/7d, no value checking more often. Never a trigger, never touches the momentum/paper-trading pipeline -- purely a research diagnostic. Dedicated gate ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED, OFF by default.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -747,6 +754,13 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "signal_cascade_falsifiability_cycle":
+                # 09/08 -- own dedicated flag, independent of every source
+                # column's own gate (this cycle only reads/refreshes prices
+                # for already-decided triage rows, never touches sourcing).
+                task.enabled = os.environ.get(
+                    "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "x_signal_cascade_cycle":
                 # 08/09 -- same standalone-pipeline gating as its 3
                 # siblings: single dedicated flag. The 15/week spend cap
@@ -1624,6 +1638,14 @@ class AriaHeartbeat:
                     "goplus_watchlist_cycle: %s confirmed honeypot, blacklisted (%s checked)",
                     result["blacklisted"], result.get("checked"),
                 )
+
+        elif task_id == "signal_cascade_falsifiability_cycle":
+            from aria_core import signal_cascade_convergence
+
+            await signal_cascade_convergence.run_falsifiability_watch_cycle()
+            # No routine log here -- run_falsifiability_watch_cycle already
+            # logs at WARNING the first time a window crosses the minimum
+            # sample threshold, never repeating for an already-notified one.
 
         elif task_id == "polymarket_paper_cycle":
             from aria_core import polymarket_paper_trader

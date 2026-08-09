@@ -94,6 +94,13 @@ _QUEUE_ADDED_COLUMNS = (
     ("price_after_7d", "REAL"),
 )
 
+_STATE_DDL = """
+CREATE TABLE IF NOT EXISTS signal_cascade_falsifiability_state (
+    window TEXT PRIMARY KEY,
+    notified_at TEXT NOT NULL
+)
+"""
+
 
 async def _ensure_tables() -> None:
     global _table_ready
@@ -102,6 +109,7 @@ async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_CONVERGENCE_DDL)
         await db.execute(_QUEUE_DDL)
+        await db.execute(_STATE_DDL)
         # Hot migration (09/08): falsifiability-test columns added after
         # this table's first deployment -- same pattern as paper_trader.py's
         # _ADDED_COLUMNS.
@@ -363,3 +371,45 @@ async def falsifiability_report() -> dict:
         }
 
     return {"window_24h": _bucket("24h"), "window_7d": _bucket("7d")}
+
+
+async def run_falsifiability_watch_cycle() -> dict:
+    """Heartbeat wrapper (gate ``ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED``).
+    Refreshes forward prices and surfaces the falsifiability verdict via a
+    WARNING-level log the FIRST time a window (24h or 7d) crosses
+    ``_MIN_SAMPLES_PER_SIDE`` on both sides -- never repeats for a window
+    already notified (state in ``signal_cascade_falsifiability_state``), so a
+    Claude Code session sees the verdict once, not on every daily cycle.
+    Best-effort: never raises -- returns an empty-verdict report on any
+    failure (including a broken DB path) instead of propagating."""
+    _empty_bucket = {
+        "n_validated": 0, "n_rejected": 0,
+        "avg_return_validated_pct": None, "avg_return_rejected_pct": None,
+        "enough_data": False,
+        "verdict": f"pas assez de données (min {_MIN_SAMPLES_PER_SIDE}/côté requis)",
+    }
+    try:
+        await _ensure_tables()
+        report = await falsifiability_report()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute("SELECT window FROM signal_cascade_falsifiability_state")
+            already_notified = {row[0] for row in await cursor.fetchall()}
+            for window_key, bucket in (("24h", report["window_24h"]), ("7d", report["window_7d"])):
+                if bucket["enough_data"] and window_key not in already_notified:
+                    logger.warning(
+                        "signal_cascade falsifiability [%s]: %s "
+                        "(validated avg %.2f%%, rejected avg %.2f%%, n=%d/%d)",
+                        window_key, bucket["verdict"],
+                        bucket["avg_return_validated_pct"], bucket["avg_return_rejected_pct"],
+                        bucket["n_validated"], bucket["n_rejected"],
+                    )
+                    await db.execute(
+                        "INSERT INTO signal_cascade_falsifiability_state (window, notified_at) VALUES (?, ?) "
+                        "ON CONFLICT(window) DO NOTHING",
+                        (window_key, datetime.now(timezone.utc).isoformat()),
+                    )
+            await db.commit()
+        return report
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocking the heartbeat
+        logger.info("signal_cascade_convergence: falsifiability watch cycle failed (%s)", exc)
+        return {"window_24h": dict(_empty_bucket), "window_7d": dict(_empty_bucket)}
