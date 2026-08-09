@@ -120,77 +120,135 @@ async def enqueue_candidate(contract: str, chain: str, project_links: list[dict]
         logger.info("signal_cascade_web: enqueue failed for %s (%s)", contract[:10], exc)
 
 
-async def _pick_next_due(db: aiosqlite.Connection):
+# 09/08, explicit operator instruction ("reste en alerte et adapte la
+# quantité de token pour que ça tienne toujours sous 7 jours"): the fixed
+# 1-candidate-per-cycle batch could never keep up once the backlog grew
+# past ~168 (REEVALUATION_TTL_DAYS * 24 cycles/week at this hourly
+# cadence). Recalculated EVERY cycle from the REAL pending count -- never a
+# guessed constant. Capped at _MAX_BATCH_PER_CYCLE so a single heartbeat
+# pass can never run unboundedly long (each item still processed strictly
+# SEQUENTIALLY, one Tavily crawl at a time -- never parallel, same
+# "jamais plusieurs en même temps" doctrine as the rest of this cascade).
+# If the real deficit exceeds this cap, run_refresh_cycle logs a WARNING
+# rather than silently under-covering (no silent caps doctrine).
+_MAX_BATCH_PER_CYCLE = 20
+
+
+def _adaptive_batch_size(pending_count: int, *, cycle_interval_hours: float = 1.0) -> tuple[int, int]:
+    """Returns (capped_batch_size, real_need) -- the caller logs a warning
+    when real_need exceeds the cap, never silently under-covering."""
+    if pending_count <= 0:
+        return 0, 0
+    cycles_available = max(1, int((REEVALUATION_TTL_DAYS * 24) / cycle_interval_hours))
+    needed = -(-pending_count // cycles_available)  # ceil division
+    return min(needed, _MAX_BATCH_PER_CYCLE), needed
+
+
+async def _count_pending(db: aiosqlite.Connection, cutoff: str) -> int:
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM web_signal_cascade_watchlist WHERE last_evaluated_at IS NULL OR last_evaluated_at < ?",
+        (cutoff,),
+    )
+    row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def _pick_next_due(db: aiosqlite.Connection, *, limit: int = 1) -> list:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=REEVALUATION_TTL_DAYS)).isoformat()
     cursor = await db.execute(
         "SELECT website_url, contract, chain, symbol, last_signal FROM web_signal_cascade_watchlist "
         "WHERE last_evaluated_at IS NULL OR last_evaluated_at < ? "
-        "ORDER BY last_evaluated_at IS NOT NULL, last_evaluated_at ASC LIMIT 1",
-        (cutoff,),
+        "ORDER BY last_evaluated_at IS NOT NULL, last_evaluated_at ASC LIMIT ?",
+        (cutoff, max(0, limit)),
     )
-    return await cursor.fetchone()
+    return await cursor.fetchall()
+
+
+async def _evaluate_one(website_url: str, contract: str, chain: str, symbol: str | None, previous_signal: str | None) -> dict:
+    """One candidate's full stage-2 evaluation -- factored out of
+    run_refresh_cycle so the batch loop below can call it sequentially,
+    never in parallel."""
+    from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
+
+    facts = await gather_website_substance_facts(website_url, contract=contract)
+    verdict = judge_website_substance(facts)
+    accelerating = previous_signal in (None, "weak", "unknown") and verdict.signal == "positive"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE web_signal_cascade_watchlist SET last_evaluated_at = ?, last_score = ?, "
+            "previous_signal = last_signal, last_signal = ?, accelerating = ?, "
+            "contract_confirmed = ? WHERE website_url = ?",
+            (
+                datetime.now(timezone.utc).isoformat(), verdict.score, verdict.signal,
+                int(accelerating),
+                None if facts.contract_confirmed is None else int(facts.contract_confirmed),
+                website_url,
+            ),
+        )
+        await db.commit()
+
+    from aria_core import signal_cascade_convergence
+
+    confirmed_note = (
+        "contrat NON trouvé sur le site" if facts.contract_confirmed is False
+        else "contrat confirmé sur le site" if facts.contract_confirmed is True
+        else "contenu insuffisant pour vérifier le contrat"
+    )
+    await signal_cascade_convergence.record_source_signal(
+        contract, chain, "web", verdict.signal,
+        accelerating=accelerating,
+        detail=f"{website_url} score {verdict.score or 0.0:.0f}/100 -- {confirmed_note}",
+        symbol=symbol,
+        contract_confirmed_on_site=facts.contract_confirmed,
+    )
+
+    if accelerating:
+        logger.info(
+            "signal_cascade_web: %s (%s) accelerating -- %s -> positive (score %.0f)",
+            symbol or contract[:10], website_url, previous_signal, verdict.score or 0.0,
+        )
+    return {
+        "evaluated": website_url, "contract": contract, "chain": chain,
+        "signal": verdict.signal, "score": verdict.score, "accelerating": accelerating,
+    }
 
 
 async def run_refresh_cycle() -> dict:
-    """Stage 2 QUANTITATIVE FILTER, one website per call. Best-effort:
-    never raises. A budget-exhausted Tavily crawl degrades cleanly to an
-    'unknown' verdict (facts.available == False), same as any other
-    unreachable source -- never treated as a failure worth logging loudly."""
+    """Stage 2 QUANTITATIVE FILTER -- an ADAPTIVE batch per call (09/08,
+    explicit operator instruction), never a fixed 1. Batch size recomputed
+    from the REAL pending count every cycle so the backlog always clears
+    within REEVALUATION_TTL_DAYS at this cycle's cadence -- capped at
+    _MAX_BATCH_PER_CYCLE, deficit logged loudly if the real need exceeds it.
+    Each candidate is still processed strictly SEQUENTIALLY (one Tavily
+    crawl at a time). Best-effort: never raises. A budget-exhausted Tavily
+    crawl degrades cleanly to an 'unknown' verdict per candidate, never a
+    failure worth logging loudly."""
     try:
         await _ensure_table()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=REEVALUATION_TTL_DAYS)).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:
-            row = await _pick_next_due(db)
-        if row is None:
-            return {"evaluated": None}
-        website_url, contract, chain, symbol, previous_signal = row
+            pending_total = await _count_pending(db, cutoff)
+            batch_size, needed = _adaptive_batch_size(pending_total)
+            if needed > _MAX_BATCH_PER_CYCLE:
+                logger.warning(
+                    "signal_cascade_web: backlog (%s) needs %s/cycle to stay under %s days, "
+                    "capped at %s -- real coverage will fall behind the target",
+                    pending_total, needed, REEVALUATION_TTL_DAYS, _MAX_BATCH_PER_CYCLE,
+                )
+            if batch_size == 0:
+                return {"evaluated": None, "evaluated_count": 0, "pending_before": pending_total, "results": []}
+            rows = await _pick_next_due(db, limit=batch_size)
 
-        from aria_core.skills.website_substance import gather_website_substance_facts, judge_website_substance
-
-        facts = await gather_website_substance_facts(website_url, contract=contract)
-        verdict = judge_website_substance(facts)
-        accelerating = previous_signal in (None, "weak", "unknown") and verdict.signal == "positive"
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "UPDATE web_signal_cascade_watchlist SET last_evaluated_at = ?, last_score = ?, "
-                "previous_signal = last_signal, last_signal = ?, accelerating = ?, "
-                "contract_confirmed = ? WHERE website_url = ?",
-                (
-                    datetime.now(timezone.utc).isoformat(), verdict.score, verdict.signal,
-                    int(accelerating),
-                    None if facts.contract_confirmed is None else int(facts.contract_confirmed),
-                    website_url,
-                ),
-            )
-            await db.commit()
-
-        from aria_core import signal_cascade_convergence
-
-        confirmed_note = (
-            "contrat NON trouvé sur le site" if facts.contract_confirmed is False
-            else "contrat confirmé sur le site" if facts.contract_confirmed is True
-            else "contenu insuffisant pour vérifier le contrat"
-        )
-        await signal_cascade_convergence.record_source_signal(
-            contract, chain, "web", verdict.signal,
-            accelerating=accelerating,
-            detail=f"{website_url} score {verdict.score or 0.0:.0f}/100 -- {confirmed_note}",
-            symbol=symbol,
-            contract_confirmed_on_site=facts.contract_confirmed,
-        )
-
-        if accelerating:
-            logger.info(
-                "signal_cascade_web: %s (%s) accelerating -- %s -> positive (score %.0f)",
-                symbol or contract[:10], website_url, previous_signal, verdict.score or 0.0,
-            )
+        results = [await _evaluate_one(*row) for row in rows]
         return {
-            "evaluated": website_url, "contract": contract, "chain": chain,
-            "signal": verdict.signal, "score": verdict.score, "accelerating": accelerating,
+            "evaluated": results[0]["evaluated"] if results else None,
+            "evaluated_count": len(results), "pending_before": pending_total,
+            "batch_size": batch_size, "results": results,
         }
     except Exception as exc:  # noqa: BLE001 -- shadow-style stage, never blocking
         logger.info("signal_cascade_web: refresh cycle failed (%s)", exc)
-        return {"evaluated": None, "error": str(exc)}
+        return {"evaluated": None, "evaluated_count": 0, "results": [], "error": str(exc)}
 
 
 async def list_stage2_positive() -> list[dict]:

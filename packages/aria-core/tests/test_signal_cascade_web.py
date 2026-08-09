@@ -66,7 +66,9 @@ async def test_enqueue_never_raises_even_on_broken_db(monkeypatch):
 @pytest.mark.asyncio
 async def test_refresh_cycle_on_empty_watchlist_returns_none():
     result = await scw.run_refresh_cycle()
-    assert result == {"evaluated": None}
+    assert result["evaluated"] is None
+    assert result["evaluated_count"] == 0
+    assert result["results"] == []
 
 
 def _mock_verdict(monkeypatch, *, signal: str, score: float | None = 80.0):
@@ -87,8 +89,8 @@ async def test_refresh_cycle_evaluates_and_records_signal(monkeypatch):
     await scw.enqueue_candidate(CONTRACT, "base", _links())
     _mock_verdict(monkeypatch, signal="positive", score=85.0)
     result = await scw.run_refresh_cycle()
-    assert result["evaluated"] == WEBSITE_URL
-    assert result["signal"] == "positive"
+    assert result["results"][0]["evaluated"] == WEBSITE_URL
+    assert result["results"][0]["signal"] == "positive"
     stage2 = await scw.list_stage2_positive()
     assert len(stage2) == 1
 
@@ -98,9 +100,10 @@ async def test_refresh_cycle_skips_recently_evaluated_website(monkeypatch):
     await scw.enqueue_candidate(CONTRACT, "base", _links())
     _mock_verdict(monkeypatch, signal="weak", score=20.0)
     first = await scw.run_refresh_cycle()
-    assert first["evaluated"] == WEBSITE_URL
+    assert first["results"][0]["evaluated"] == WEBSITE_URL
     second = await scw.run_refresh_cycle()
-    assert second == {"evaluated": None}  # within the 7-day TTL
+    assert second["evaluated"] is None  # within the 7-day TTL
+    assert second["results"] == []
 
 
 @pytest.mark.asyncio
@@ -119,7 +122,7 @@ async def test_refresh_cycle_flags_acceleration_from_weak_to_positive(monkeypatc
 
     _mock_verdict(monkeypatch, signal="positive", score=90.0)
     result = await scw.run_refresh_cycle()
-    assert result["accelerating"] is True
+    assert result["results"][0]["accelerating"] is True
 
 
 @pytest.mark.asyncio
@@ -136,7 +139,7 @@ async def test_budget_exhausted_crawl_degrades_to_unknown_never_raises(monkeypat
 
     monkeypatch.setattr(ws, "gather_website_substance_facts", _budget_exhausted)
     result = await scw.run_refresh_cycle()
-    assert result["signal"] == "unknown"
+    assert result["results"][0]["signal"] == "unknown"
 
 
 @pytest.mark.asyncio
@@ -202,3 +205,75 @@ async def test_refresh_cycle_leaves_confirmed_none_when_unchecked(monkeypatch):
 
     pending = await scc.list_pending_triage()
     assert pending[0]["contract_confirmed_on_site"] is None
+
+
+# ── batch adaptatif -- 09/08, "reste en alerte et adapte la quantité de
+# token pour que ça tienne toujours sous 7 jours" ───────────────────────────
+
+def test_adaptive_batch_size_scales_with_backlog():
+    # 168 cycles/semaine à cadence horaire (REEVALUATION_TTL_DAYS=7) --
+    # un backlog de 168 tient en 1/cycle, un backlog de 500 en a besoin de 3.
+    assert scw._adaptive_batch_size(168) == (1, 1)
+    assert scw._adaptive_batch_size(500) == (3, 3)
+    assert scw._adaptive_batch_size(0) == (0, 0)
+
+
+def test_adaptive_batch_size_capped_but_reports_real_need():
+    capped, needed = scw._adaptive_batch_size(10_000)
+    assert capped == scw._MAX_BATCH_PER_CYCLE
+    assert needed > scw._MAX_BATCH_PER_CYCLE  # le vrai besoin dépasse le plafond -- jamais caché
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_processes_several_candidates_when_backlog_demands_it(monkeypatch):
+    """Preuve directe de la demande opérateur : un backlog suffisamment
+    grand fait sortir PLUSIEURS candidats en un seul appel, jamais 1 fixe.
+    200 candidats / 168 cycles (7j à cadence horaire) -> besoin de 2/cycle."""
+    for i in range(200):
+        await scw.enqueue_candidate(f"0x{i:040x}", "base", _links(url=f"https://project{i}.io"))
+    _mock_verdict(monkeypatch, signal="neutral", score=50.0)
+
+    result = await scw.run_refresh_cycle()
+
+    assert result["pending_before"] == 200
+    assert result["evaluated_count"] == 2
+    assert len(result["results"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_logs_warning_when_real_need_exceeds_cap(monkeypatch, caplog):
+    monkeypatch.setattr(scw, "_MAX_BATCH_PER_CYCLE", 1)
+    for i in range(200):
+        await scw.enqueue_candidate(f"0x{i:040x}", "base", _links(url=f"https://project{i}.io"))
+    _mock_verdict(monkeypatch, signal="neutral", score=50.0)
+
+    with caplog.at_level("WARNING"):
+        await scw.run_refresh_cycle()
+
+    assert any("capped at" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_never_processes_more_than_one_at_a_time_concurrently(monkeypatch):
+    """Le batch est plus grand, mais chaque évaluation reste séquentielle --
+    jamais deux appels _evaluate_one concurrents (doctrine "jamais plusieurs
+    en même temps")."""
+    monkeypatch.setattr(scw, "_MAX_BATCH_PER_CYCLE", 3)
+    for i in range(10):
+        await scw.enqueue_candidate(f"0x{i:040x}", "base", _links(url=f"https://project{i}.io"))
+    _mock_verdict(monkeypatch, signal="neutral", score=50.0)
+
+    concurrent = {"count": 0, "max_seen": 0}
+    real_evaluate_one = scw._evaluate_one
+
+    async def _tracking_evaluate_one(*args, **kwargs):
+        concurrent["count"] += 1
+        concurrent["max_seen"] = max(concurrent["max_seen"], concurrent["count"])
+        result = await real_evaluate_one(*args, **kwargs)
+        concurrent["count"] -= 1
+        return result
+
+    monkeypatch.setattr(scw, "_evaluate_one", _tracking_evaluate_one)
+    await scw.run_refresh_cycle()
+
+    assert concurrent["max_seen"] == 1

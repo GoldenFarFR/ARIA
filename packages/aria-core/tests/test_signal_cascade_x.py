@@ -68,7 +68,9 @@ async def test_enqueue_never_raises_even_on_broken_db(monkeypatch):
 @pytest.mark.asyncio
 async def test_refresh_cycle_on_empty_watchlist_returns_none():
     result = await scx.run_refresh_cycle()
-    assert result == {"evaluated": None}
+    assert result["evaluated"] is None
+    assert result["evaluated_count"] == 0
+    assert result["results"] == []
 
 
 def _mock_verdict(monkeypatch, *, signal: str, score: float | None = 80.0, available: bool = True):
@@ -90,7 +92,7 @@ async def test_refresh_cycle_evaluates_and_records_signal(monkeypatch):
     _mock_verdict(monkeypatch, signal="positive", score=85.0)
     result = await scx.run_refresh_cycle()
     assert result["evaluated"] == "testproject"
-    assert result["signal"] == "positive"
+    assert result["results"][0]["signal"] == "positive"
     stage2 = await scx.list_stage2_positive()
     assert len(stage2) == 1
 
@@ -102,7 +104,8 @@ async def test_refresh_cycle_skips_recently_evaluated_handle(monkeypatch):
     first = await scx.run_refresh_cycle()
     assert first["evaluated"] == "testproject"
     second = await scx.run_refresh_cycle()
-    assert second == {"evaluated": None}  # within the TTL (REEVALUATION_TTL_DAYS)
+    assert second["evaluated"] is None  # within the TTL (REEVALUATION_TTL_DAYS)
+    assert second["results"] == []
 
 
 @pytest.mark.asyncio
@@ -121,7 +124,7 @@ async def test_refresh_cycle_flags_acceleration_from_weak_to_positive(monkeypatc
 
     _mock_verdict(monkeypatch, signal="positive", score=90.0)
     result = await scx.run_refresh_cycle()
-    assert result["accelerating"] is True
+    assert result["results"][0]["accelerating"] is True
 
 
 @pytest.mark.asyncio
@@ -183,3 +186,32 @@ async def test_dedicated_budget_never_touches_x_research_budget_table(monkeypatc
         )
         row = await cursor.fetchone()
     assert row is None  # never created/touched by this module's own DB
+
+
+# ── batch adaptatif -- 09/08, "reste en alerte et adapte la quantité de
+# token pour que ça tienne toujours sous 7 jours" ───────────────────────────
+
+def test_adaptive_batch_size_scales_with_backlog():
+    assert scx._adaptive_batch_size(168) == (1, 1)
+    assert scx._adaptive_batch_size(500) == (3, 3)
+    assert scx._adaptive_batch_size(0) == (0, 0)
+
+
+def test_adaptive_batch_size_capped_but_reports_real_need():
+    capped, needed = scx._adaptive_batch_size(10_000)
+    assert capped == scx._MAX_BATCH_PER_CYCLE
+    assert needed > scx._MAX_BATCH_PER_CYCLE
+
+
+@pytest.mark.asyncio
+async def test_refresh_cycle_processes_several_candidates_when_backlog_demands_it(monkeypatch):
+    """200 candidats / 168 cycles (7j à cadence horaire) -> besoin de 2/cycle."""
+    for i in range(200):
+        await scx.enqueue_candidate(f"0x{i:040x}", "base", _links(url=f"https://x.com/proj{i}"))
+    _mock_verdict(monkeypatch, signal="neutral", score=50.0)
+
+    result = await scx.run_refresh_cycle()
+
+    assert result["pending_before"] == 200
+    assert result["evaluated_count"] == 2
+    assert len(result["results"]) == 2

@@ -1594,21 +1594,23 @@ class AriaHeartbeat:
             from aria_core import signal_cascade_x
 
             result = await signal_cascade_x.run_refresh_cycle()
-            if result.get("accelerating"):
-                logger.info(
-                    "x_signal_cascade_cycle: %s accelerating (score %s)",
-                    result.get("contract", "")[:10], result.get("score"),
-                )
+            for item in result.get("results", []):
+                if item.get("accelerating"):
+                    logger.info(
+                        "x_signal_cascade_cycle: %s accelerating (score %s)",
+                        item.get("contract", "")[:10], item.get("score"),
+                    )
 
         elif task_id == "web_signal_cascade_cycle":
             from aria_core import signal_cascade_web
 
             result = await signal_cascade_web.run_refresh_cycle()
-            if result.get("accelerating"):
-                logger.info(
-                    "web_signal_cascade_cycle: %s accelerating (score %.0f)",
-                    result.get("contract", "")[:10], result.get("score") or 0.0,
-                )
+            for item in result.get("results", []):
+                if item.get("accelerating"):
+                    logger.info(
+                        "web_signal_cascade_cycle: %s accelerating (score %.0f)",
+                        item.get("contract", "")[:10], item.get("score") or 0.0,
+                    )
 
         elif task_id == "farcaster_signal_cascade_cycle":
             from aria_core import signal_cascade_farcaster

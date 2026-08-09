@@ -177,72 +177,122 @@ async def enqueue_candidate(contract: str, chain: str, project_links: list[dict]
         logger.info("signal_cascade_x: enqueue failed for %s (%s)", contract[:10], exc)
 
 
-async def _pick_next_due(db: aiosqlite.Connection):
+# 09/08, explicit operator instruction ("reste en alerte et adapte la
+# quantité de token pour que ça tienne toujours sous 7 jours") -- same
+# adaptive-batch doctrine as signal_cascade_web.py (see that module's own
+# comment for the full reasoning). Duplicated rather than shared, same
+# "never a cross-column import" doctrine as the rest of this cascade.
+_MAX_BATCH_PER_CYCLE = 20
+
+
+def _adaptive_batch_size(pending_count: int, *, cycle_interval_hours: float = 1.0) -> tuple[int, int]:
+    """Returns (capped_batch_size, real_need)."""
+    if pending_count <= 0:
+        return 0, 0
+    cycles_available = max(1, int((REEVALUATION_TTL_DAYS * 24) / cycle_interval_hours))
+    needed = -(-pending_count // cycles_available)  # ceil division
+    return min(needed, _MAX_BATCH_PER_CYCLE), needed
+
+
+async def _count_pending(db: aiosqlite.Connection, cutoff: str) -> int:
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM x_signal_cascade_watchlist WHERE last_evaluated_at IS NULL OR last_evaluated_at < ?",
+        (cutoff,),
+    )
+    row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def _pick_next_due(db: aiosqlite.Connection, *, limit: int = 1) -> list:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=REEVALUATION_TTL_DAYS)).isoformat()
     cursor = await db.execute(
         "SELECT x_handle, contract, chain, symbol, last_signal FROM x_signal_cascade_watchlist "
         "WHERE last_evaluated_at IS NULL OR last_evaluated_at < ? "
-        "ORDER BY last_evaluated_at IS NOT NULL, last_evaluated_at ASC LIMIT 1",
-        (cutoff,),
+        "ORDER BY last_evaluated_at IS NOT NULL, last_evaluated_at ASC LIMIT ?",
+        (cutoff, max(0, limit)),
     )
-    return await cursor.fetchone()
+    return await cursor.fetchall()
+
+
+async def _evaluate_one(handle: str, contract: str, chain: str, symbol: str | None, previous_signal: str | None) -> dict:
+    """One candidate's full stage-2 evaluation -- factored out so the batch
+    loop below can call it sequentially, never in parallel. Re-checks
+    can_spend() on every item (not just once before the batch) -- fail-safe
+    if a cap is ever reintroduced mid-batch."""
+    if not await can_spend():
+        return {"evaluated": None, "reason": "budget dédié X épuisé cette semaine"}
+
+    from aria_core.skills.x_substance import gather_x_substance_facts, judge_x_substance
+
+    facts = await gather_x_substance_facts(handle)
+    await _record_spend(handle, status="ok" if facts.available else "unavailable")
+    verdict = judge_x_substance(facts)
+    accelerating = previous_signal in (None, "weak", "unknown") and verdict.signal == "positive"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE x_signal_cascade_watchlist SET last_evaluated_at = ?, last_score = ?, "
+            "previous_signal = last_signal, last_signal = ?, accelerating = ? WHERE x_handle = ?",
+            (
+                datetime.now(timezone.utc).isoformat(), verdict.score, verdict.signal,
+                int(accelerating), handle,
+            ),
+        )
+        await db.commit()
+
+    from aria_core import signal_cascade_convergence
+
+    await signal_cascade_convergence.record_source_signal(
+        contract, chain, "x", verdict.signal,
+        accelerating=accelerating,
+        detail=f"@{handle} score {verdict.score or 0.0:.0f}/100",
+        symbol=symbol,
+    )
+
+    if accelerating:
+        logger.info(
+            "signal_cascade_x: %s (@%s) accelerating -- %s -> positive (score %.0f)",
+            symbol or contract[:10], handle, previous_signal, verdict.score or 0.0,
+        )
+    return {
+        "evaluated": handle, "contract": contract, "chain": chain,
+        "signal": verdict.signal, "score": verdict.score, "accelerating": accelerating,
+    }
 
 
 async def run_refresh_cycle() -> dict:
-    """Stage 2 QUANTITATIVE FILTER, one handle per call -- DAILY cadence
-    (see module docstring). Checks the dedicated budget BEFORE spending;
-    a spend is only recorded on an actual attempt (never on a budget-
-    skipped or empty-watchlist pass). Best-effort: never raises."""
+    """Stage 2 QUANTITATIVE FILTER -- an ADAPTIVE batch per call (09/08,
+    explicit operator instruction), never a fixed 1. Batch size recomputed
+    from the REAL pending count every cycle so the backlog always clears
+    within REEVALUATION_TTL_DAYS at this cycle's cadence -- capped at
+    _MAX_BATCH_PER_CYCLE, deficit logged loudly if the real need exceeds it.
+    Each candidate still processed strictly SEQUENTIALLY. Best-effort:
+    never raises."""
     try:
         await _ensure_tables()
-        if not await can_spend():
-            return {"evaluated": None, "reason": "budget dédié X épuisé cette semaine"}
-
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=REEVALUATION_TTL_DAYS)).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:
-            row = await _pick_next_due(db)
-        if row is None:
-            return {"evaluated": None}
-        handle, contract, chain, symbol, previous_signal = row
+            pending_total = await _count_pending(db, cutoff)
+            batch_size, needed = _adaptive_batch_size(pending_total)
+            if needed > _MAX_BATCH_PER_CYCLE:
+                logger.warning(
+                    "signal_cascade_x: backlog (%s) needs %s/cycle to stay under %s days, "
+                    "capped at %s -- real coverage will fall behind the target",
+                    pending_total, needed, REEVALUATION_TTL_DAYS, _MAX_BATCH_PER_CYCLE,
+                )
+            if batch_size == 0:
+                return {"evaluated": None, "evaluated_count": 0, "pending_before": pending_total, "results": []}
+            rows = await _pick_next_due(db, limit=batch_size)
 
-        from aria_core.skills.x_substance import gather_x_substance_facts, judge_x_substance
-
-        facts = await gather_x_substance_facts(handle)
-        await _record_spend(handle, status="ok" if facts.available else "unavailable")
-        verdict = judge_x_substance(facts)
-        accelerating = previous_signal in (None, "weak", "unknown") and verdict.signal == "positive"
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "UPDATE x_signal_cascade_watchlist SET last_evaluated_at = ?, last_score = ?, "
-                "previous_signal = last_signal, last_signal = ?, accelerating = ? WHERE x_handle = ?",
-                (
-                    datetime.now(timezone.utc).isoformat(), verdict.score, verdict.signal,
-                    int(accelerating), handle,
-                ),
-            )
-            await db.commit()
-
-        from aria_core import signal_cascade_convergence
-
-        await signal_cascade_convergence.record_source_signal(
-            contract, chain, "x", verdict.signal,
-            accelerating=accelerating,
-            detail=f"@{handle} score {verdict.score or 0.0:.0f}/100",
-            symbol=symbol,
-        )
-
-        if accelerating:
-            logger.info(
-                "signal_cascade_x: %s (@%s) accelerating -- %s -> positive (score %.0f)",
-                symbol or contract[:10], handle, previous_signal, verdict.score or 0.0,
-            )
+        results = [await _evaluate_one(*row) for row in rows]
         return {
-            "evaluated": handle, "contract": contract, "chain": chain,
-            "signal": verdict.signal, "score": verdict.score, "accelerating": accelerating,
+            "evaluated": results[0]["evaluated"] if results else None,
+            "evaluated_count": len(results), "pending_before": pending_total,
+            "batch_size": batch_size, "results": results,
         }
     except Exception as exc:  # noqa: BLE001 -- shadow-style stage, never blocking
         logger.info("signal_cascade_x: refresh cycle failed (%s)", exc)
-        return {"evaluated": None, "error": str(exc)}
+        return {"evaluated": None, "evaluated_count": 0, "results": [], "error": str(exc)}
 
 
 async def list_stage2_positive() -> list[dict]:
