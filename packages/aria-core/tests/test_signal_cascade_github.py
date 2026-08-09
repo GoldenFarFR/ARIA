@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 import pytest
 
+from aria_core import signal_cascade_convergence as scc
 from aria_core import signal_cascade_github as scg
 
 CONTRACT = "0x" + "a" * 40
@@ -18,6 +19,11 @@ def _isolated_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "signal_cascade_github.db")
     monkeypatch.setattr(scg, "DB_PATH", db_path)
     monkeypatch.setattr(scg, "_table_ready", False)
+    # run_refresh_cycle also pushes into stage 3 (convergence) -- same DB,
+    # same isolation, or this test file would silently write to whatever
+    # signal_cascade_convergence.DB_PATH defaults to.
+    monkeypatch.setattr(scc, "DB_PATH", db_path)
+    monkeypatch.setattr(scc, "_table_ready", False)
     yield
 
 
@@ -99,6 +105,22 @@ async def test_refresh_cycle_evaluates_and_records_signal(monkeypatch):
     stage2 = await scg.list_stage2_positive()
     assert len(stage2) == 1
     assert stage2[0]["score"] == 85.0
+
+
+@pytest.mark.asyncio
+async def test_positive_signal_reaches_stage3_convergence_and_queue(monkeypatch):
+    """End-to-end: a positive GitHub verdict must flow into stage 3
+    (convergence row) AND stage 4 (triage queue) without either module
+    needing to know about the other's internals."""
+    await scg.enqueue_candidate(CONTRACT, "base", _links(), symbol="TP")
+    _mock_verdict(monkeypatch, signal="positive", score=91.0)
+    await scg.run_refresh_cycle()
+
+    pending = await scc.list_pending_triage()
+    assert len(pending) == 1
+    assert pending[0]["contract"] == CONTRACT
+    assert pending[0]["convergence_count"] == 1
+    assert pending[0]["sources"][0]["source"] == "github"
 
 
 @pytest.mark.asyncio

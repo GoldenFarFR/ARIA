@@ -149,6 +149,15 @@ async def run_refresh_cycle() -> dict:
             )
             await db.commit()
 
+        from aria_core import signal_cascade_convergence
+
+        await signal_cascade_convergence.record_source_signal(
+            contract, chain, "github", verdict.signal,
+            accelerating=accelerating,
+            detail=f"{repo_url} score {verdict.score or 0.0:.0f}/100",
+            symbol=symbol,
+        )
+
         if accelerating:
             logger.info(
                 "signal_cascade_github: %s (%s) accelerating -- %s -> positive (score %.0f)",
@@ -166,9 +175,11 @@ async def run_refresh_cycle() -> dict:
 async def list_stage2_positive() -> list[dict]:
     """What stage 2 lets through -- score>=70 (``judge_github_substance``'s
     own already-calibrated "positive" threshold, no new one invented here),
-    with the acceleration flag surfaced explicitly. This is the future
-    stage 3 (convergence table)'s intended input -- not built yet, this
-    function is the seam."""
+    with the acceleration flag surfaced explicitly. Every 'positive' result
+    is ALSO pushed to stage 3 (``signal_cascade_convergence.record_source_
+    signal``, called from ``run_refresh_cycle`` above) -- this function
+    stays as a GitHub-only read for a caller that only cares about this one
+    column."""
     await _ensure_table()
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(

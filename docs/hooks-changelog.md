@@ -99,6 +99,15 @@ Injecte l'état réel des gates ARIA (`docker inspect` sur `aria-api`) en début
 de session — évite de citer un gate de mémoire sans vérifier.
 - **2026-08-04** création, avec l'autorisation `deploy.sh` en settings projet.
 
+### signal-cascade-queue-reminder.sh — `SessionStart`
+Injecte le contenu de la file de triage persistante (étage 4 de la cascade
+de signaux multi-source, `signal_cascade_convergence.py`) en début de
+session — lecture seule, réponse vide si aucune entrée en attente ou DB
+absente (environnement web/cloud). Objectif opérateur (08/08) : "lue par
+Claude Code au démarrage de session" — sans ce hook la file existerait
+mais personne n'irait jamais la consulter.
+- **2026-08-09** création, avec `docs/HANDOFF_SIGNAL_CASCADE.md`.
+
 ### block-secret-display.sh — présent sur disque, **NON câblé** dans settings.json
 Bloquait toute commande Bash affichant un secret en clair.
 - **2026-07-24** création (x2 commits le même jour : version initiale +
