@@ -3041,6 +3041,17 @@ async def evaluate_hard_gates(
     if best is None or not best.price_usd or best.price_usd <= 0:
         return None, None, None
 
+    # 08/08 -- signal cascade stage 1 (COLLECT), GitHub column: enqueues this
+    # candidate's GitHub repo (if any) for substance evaluation, DECOUPLED
+    # from every filter below -- a repo enters the watchlist whether or not
+    # this token ever clears liquidity/technical/security. Zero network
+    # cost, best-effort, never raises (see signal_cascade_github.py).
+    from aria_core import signal_cascade_github
+
+    await signal_cascade_github.enqueue_candidate(
+        contract, chain, best.project_links, symbol=best.base_symbol or None,
+    )
+
     liquidity_usd = best.liquidity_usd or 0.0
     # 26/07 -- Fear regime OVERRIDES the scalping floor (market-wide risk signal,
     # independent of trading style -- never silently under-protected during a

@@ -332,6 +332,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="github_signal_cascade_cycle",
+        name="Multi-source signal cascade -- GitHub column, stage 2 refresh",
+        description="08/08 operator design (docs/HANDOFF_PIPELINE_MOMENTUM.md): stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2 (quantitative filter), refreshing ONE watchlisted repo's github_substance score per pass (same throttling doctrine as goplus_watchlist_cycle, protects the authenticated GitHub API budget). Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_GITHUB_SIGNAL_CASCADE_ENABLED, OFF by default -- standalone research pipeline, independent of paper-trading.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -719,6 +726,13 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "github_signal_cascade_cycle":
+                # 08/08 -- standalone research pipeline (fed by the momentum
+                # pipeline's own scan, but its own refresh cadence doesn't
+                # need paper-trading's master gate -- single dedicated flag.
+                task.enabled = os.environ.get(
+                    "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "wallet_copy_shadow_cycle":
                 # 08/08 -- standalone research shadow, independent of the
                 # $1M momentum test (no paper_trading double-gate needed --
@@ -1514,6 +1528,16 @@ class AriaHeartbeat:
                 logger.info(
                     "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
                     opened, closed, len(results),
+                )
+
+        elif task_id == "github_signal_cascade_cycle":
+            from aria_core import signal_cascade_github
+
+            result = await signal_cascade_github.run_refresh_cycle()
+            if result.get("accelerating"):
+                logger.info(
+                    "github_signal_cascade_cycle: %s accelerating (score %.0f)",
+                    result.get("contract", "")[:10], result.get("score") or 0.0,
                 )
 
         elif task_id == "goplus_watchlist_cycle":
