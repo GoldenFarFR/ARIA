@@ -353,6 +353,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="x_signal_cascade_cycle",
+        name="Multi-source signal cascade -- X column, stage 2 refresh",
+        description="08/09, fourth and last column (operator build order: GitHub/Farcaster free -> web budget-bounded -> X pay-per-use). Stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2, refreshing ONE watchlisted X handle's substance verdict per pass (skills/x_substance.py, TwitterAPI.io prepaid credits). Dedicated weekly budget (signal_cascade_x.WEEKLY_REQUEST_CAP=15, operator-approved 08/09, deliberately separate from every other X-related budget so this column can never starve conviction_research's own existing use of the same signal). DAILY cadence, not hourly -- at most 1 real spend/day. Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_X_SIGNAL_CASCADE_ENABLED, OFF by default.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="polymarket_paper_cycle",
         name="Polymarket paper trading (simulation, $100k)",
         description="Item #108 (26/07, operator decision): ARIA bets FICTITIOUS money on real Polymarket prediction markets when her own multi-vote-converged probability of the side she takes clears 85% (skills/polymarket_thesis.py). Structurally separate pocket from the $1M momentum test -- no real order, no wallet, no KYC. Dedicated gate ARIA_POLYMARKET_PAPER_ENABLED, OFF by default.",
@@ -740,6 +747,14 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "x_signal_cascade_cycle":
+                # 08/09 -- same standalone-pipeline gating as its 3
+                # siblings: single dedicated flag. The 15/week spend cap
+                # itself is enforced inside signal_cascade_x.can_spend(),
+                # not by this gate.
+                task.enabled = os.environ.get(
+                    "ARIA_X_SIGNAL_CASCADE_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "web_signal_cascade_cycle":
                 # 08/09 -- same standalone-pipeline gating as its GitHub/
                 # Farcaster siblings: single dedicated flag, no paper-
@@ -1558,6 +1573,16 @@ class AriaHeartbeat:
                 logger.info(
                     "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
                     opened, closed, len(results),
+                )
+
+        elif task_id == "x_signal_cascade_cycle":
+            from aria_core import signal_cascade_x
+
+            result = await signal_cascade_x.run_refresh_cycle()
+            if result.get("accelerating"):
+                logger.info(
+                    "x_signal_cascade_cycle: %s accelerating (score %s)",
+                    result.get("contract", "")[:10], result.get("score"),
                 )
 
         elif task_id == "web_signal_cascade_cycle":
