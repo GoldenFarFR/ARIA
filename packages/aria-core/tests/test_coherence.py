@@ -870,6 +870,10 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_WALLET_SCORING_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",
     "ARIA_WEB_FETCH_ENABLED",
+    # 08/09 -- signal_cascade_web.py stage 2 refresh cycle. Same doctrine as
+    # its GitHub/Farcaster siblings, deliberately hourly (shared Tavily
+    # budget). OFF by default.
+    "ARIA_WEB_SIGNAL_CASCADE_ENABLED",
     "ARIA_X_PROFILE_SYNC_ENABLED",
 }
 

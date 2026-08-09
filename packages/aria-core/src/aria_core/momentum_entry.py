@@ -3047,12 +3047,15 @@ async def evaluate_hard_gates(
     # a link enters its column's watchlist whether or not this token ever
     # clears liquidity/technical/security. Zero network cost, best-effort,
     # never raises (see signal_cascade_github.py / signal_cascade_farcaster.py).
-    from aria_core import signal_cascade_farcaster, signal_cascade_github
+    from aria_core import signal_cascade_farcaster, signal_cascade_github, signal_cascade_web
 
     await signal_cascade_github.enqueue_candidate(
         contract, chain, best.project_links, symbol=best.base_symbol or None,
     )
     await signal_cascade_farcaster.enqueue_candidate(
+        contract, chain, best.project_links, symbol=best.base_symbol or None,
+    )
+    await signal_cascade_web.enqueue_candidate(
         contract, chain, best.project_links, symbol=best.base_symbol or None,
     )
 
