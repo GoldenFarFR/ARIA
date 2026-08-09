@@ -21,6 +21,8 @@ bot/venv/
 .claude/.undeployed-lines
 # État runtime du rappel de rapports Avocat du Diable non lus (throttle par état de file)
 .claude/.architect-pending-reminded-state
+# État runtime du rappel de taille de CLAUDE.md (throttle, session-checkpoint.sh)
+.claude/.claude-md-size-reminded
 
 # IDE / OS
 .idea/
