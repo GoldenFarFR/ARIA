@@ -355,8 +355,8 @@ HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="x_signal_cascade_cycle",
         name="Multi-source signal cascade -- X column, stage 2 refresh",
-        description="08/09, fourth and last column (operator build order: GitHub/Farcaster free -> web budget-bounded -> X pay-per-use). Stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2, refreshing ONE watchlisted X handle's substance verdict per pass (skills/x_substance.py, TwitterAPI.io prepaid credits). Dedicated weekly budget (signal_cascade_x.WEEKLY_REQUEST_CAP=15, operator-approved 08/09, deliberately separate from every other X-related budget so this column can never starve conviction_research's own existing use of the same signal). DAILY cadence, not hourly -- at most 1 real spend/day. Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_X_SIGNAL_CASCADE_ENABLED, OFF by default.",
-        interval_minutes=1440,
+        description="08/09, fourth and last column (operator build order: GitHub/Farcaster free -> web budget-bounded -> X pay-per-use). Stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2, refreshing ONE watchlisted X handle's substance verdict per pass (skills/x_substance.py, TwitterAPI.io prepaid credits). Weekly cap REMOVED same day on explicit operator instruction ('enlève cette limite et laisse tourner') once the real cost was verified as trivial (signal_cascade_x.can_spend always True now) -- the throughput ceiling is now this cycle's own cadence. Raised from DAILY to HOURLY the same day (same cadence as the web column) to clear the real backlog within the operator's 7-day coverage target. Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_X_SIGNAL_CASCADE_ENABLED, OFF by default.",
+        interval_minutes=60,
         enabled=False,
     ),
     HeartbeatTask(
@@ -763,9 +763,10 @@ def _sync_x_curiosity_enabled() -> None:
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "x_signal_cascade_cycle":
                 # 08/09 -- same standalone-pipeline gating as its 3
-                # siblings: single dedicated flag. The 15/week spend cap
-                # itself is enforced inside signal_cascade_x.can_spend(),
-                # not by this gate.
+                # siblings: single dedicated flag. No spend cap anymore
+                # (signal_cascade_x.can_spend always True, removed same
+                # day on explicit operator instruction) -- this gate plus
+                # the cycle's own hourly cadence are the only throttles.
                 task.enabled = os.environ.get(
                     "ARIA_X_SIGNAL_CASCADE_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")

@@ -23,15 +23,18 @@ though (it gates ``conviction_research``'s buzz-search path, not
 ``x_substance``/TwitterAPI.io) -- CLAUDE.md itself needs a correction
 separate from this build.
 
-Since TwitterAPI.io has no built-in cap, this module owns its OWN
-dedicated weekly budget (``WEEKLY_REQUEST_CAP = 15``, operator-approved
-08/09) -- deliberately separate from any other budget in the codebase, so
-this cascade column can NEVER starve ``conviction_research``'s own
-existing use of the same signal for a real post-BUY candidate. Same
-rolling-calendar-week, fail-closed doctrine as ``x_research_budget.py``/
-``tavily_budget.py``. Heartbeat cycle runs DAILY (not hourly like the web
-column) -- at most 1 real spend/day, ~7/week in normal use, wide margin
-under the 15/week cap even if the watchlist backlog is large.
+08/09, initially capped at ``WEEKLY_REQUEST_CAP = 15`` (a dedicated weekly
+budget, deliberately separate from any other budget in the codebase so this
+cascade column could never starve ``conviction_research``'s own existing use
+of the same signal). Removed the SAME DAY on explicit operator instruction
+("enlève cette limite et laisse tourner") once the real cost was verified
+(TwitterAPI.io, ~$0.15-0.18/1000 profiles -- trivial even at the volume
+needed to clear the real backlog, ~150 candidates, within the operator's
+7-day coverage target). ``can_spend()`` always returns ``True`` now -- the
+spend LOG (``x_signal_cascade_budget_log``) is kept for traceability, just
+never used to gate. The real throughput ceiling is now the heartbeat cadence
+itself (1 candidate/cycle, HOURLY -- raised the same day from daily, same
+cadence as the web column), never an artificial extra cap.
 """
 from __future__ import annotations
 
@@ -47,13 +50,10 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-REEVALUATION_TTL_DAYS = 30.0
-
-# Operator-approved 08/09 -- deliberately separate from every other budget
-# in the codebase (x_research_budget.py serves a DIFFERENT purpose --
-# conviction_research's buzz-search -- and must never be starved by this
-# cascade column). See module docstring for the full reasoning.
-WEEKLY_REQUEST_CAP = 15
+# Lowered 15->7 (09/08, same pass as removing the weekly cap below) --
+# matches the operator's global "every column scanned at least once every
+# 7 days" directive, same reasoning as the web column's own TTL correction.
+REEVALUATION_TTL_DAYS = 7.0
 
 _HANDLE_RE = re.compile(r"(?:x|twitter)\.com/(@?[\w]+)", re.IGNORECASE)
 
@@ -115,11 +115,24 @@ async def _used_this_week(now: datetime | None = None) -> int:
     return int(row[0]) if row else 0
 
 
+async def weekly_spend_status(now: datetime | None = None) -> dict:
+    """Pure traceability, never a gate (see ``can_spend``) -- how many real
+    TwitterAPI.io calls this column has made since the start of the current
+    week. Answers "how fast is this actually running" now that no cap
+    bounds it, same spirit as ``tavily_budget.monthly_status``."""
+    return {"spent_this_week": await _used_this_week(now), "week_started_at": _week_start(now).isoformat()}
+
+
 async def can_spend(now: datetime | None = None) -> bool:
-    """Fail-closed: when in doubt, refuse rather than risk exceeding the
-    dedicated 15/week cap."""
-    used = await _used_this_week(now)
-    return used < WEEKLY_REQUEST_CAP
+    """09/08 -- the dedicated 15/week cap was REMOVED the same day on
+    explicit operator instruction ("enlève cette limite et laisse
+    tourner") once the real TwitterAPI.io cost was verified as trivial
+    (~$0.15-0.18/1000 profiles). Always True now -- kept as a function
+    (not inlined at call sites) so the real throughput limiter stays
+    ``run_refresh_cycle``'s own 1-candidate-per-heartbeat-pass cadence,
+    never an artificial extra ceiling. ``_used_this_week`` stays used
+    below for traceability only, never to gate."""
+    return True
 
 
 async def _record_spend(x_handle: str, *, status: str) -> None:

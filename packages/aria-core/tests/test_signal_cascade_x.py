@@ -1,7 +1,7 @@
 """Multi-source signal cascade -- X column (stages 1+2). Never a trigger,
-never blocks the caller (see module docstring). Dedicated weekly budget,
-separate from x_research_budget.py -- must never let this column starve
-conviction_research's own existing use of x_substance."""
+never blocks the caller (see module docstring). No spend cap (removed
+09/08 on explicit operator instruction) -- the spend LOG stays separate
+from x_research_budget.py, purely for traceability now, never to gate."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -102,7 +102,7 @@ async def test_refresh_cycle_skips_recently_evaluated_handle(monkeypatch):
     first = await scx.run_refresh_cycle()
     assert first["evaluated"] == "testproject"
     second = await scx.run_refresh_cycle()
-    assert second == {"evaluated": None}  # within the 30-day TTL
+    assert second == {"evaluated": None}  # within the TTL (REEVALUATION_TTL_DAYS)
 
 
 @pytest.mark.asyncio
@@ -135,28 +135,30 @@ async def test_positive_signal_reaches_stage3_convergence_and_queue(monkeypatch)
     assert pending[0]["sources"][0]["source"] == "x"
 
 
-# ---- dedicated weekly budget -----------------------------------------
+# ---- spend log (traceability only, never a gate since 09/08) --------
 
 @pytest.mark.asyncio
-async def test_can_spend_true_when_under_cap():
+async def test_can_spend_always_true_no_cap_anymore():
+    """09/08, explicit operator instruction ("enlève cette limite et
+    laisse tourner") -- the dedicated 15/week cap is gone, can_spend never
+    refuses."""
     assert await scx.can_spend() is True
 
 
 @pytest.mark.asyncio
-async def test_refresh_cycle_stops_once_weekly_cap_reached(monkeypatch):
+async def test_refresh_cycle_never_blocked_by_a_spend_ceiling(monkeypatch):
+    """Regression for the removed cap: 20 real evaluations (well past the
+    old WEEKLY_REQUEST_CAP=15) must ALL go through, never a budget-reason
+    skip."""
     _mock_verdict(monkeypatch, signal="positive", score=80.0)
-    for i in range(scx.WEEKLY_REQUEST_CAP):
+    for i in range(20):
         await scx.enqueue_candidate(f"0x{i:040x}", "base", _links(url=f"https://x.com/proj{i}"))
         result = await scx.run_refresh_cycle()
-        assert result["evaluated"] is not None  # still under cap
+        assert result["evaluated"] is not None
 
-    assert await scx.can_spend() is False
-
-    # One more candidate queued -- the cap must block it, never overspend.
-    await scx.enqueue_candidate("0x" + "f" * 40, "base", _links(url="https://x.com/oneMore"))
-    blocked = await scx.run_refresh_cycle()
-    assert blocked["evaluated"] is None
-    assert "budget" in blocked.get("reason", "")
+    assert await scx.can_spend() is True
+    status = await scx.weekly_spend_status()
+    assert status["spent_this_week"] == 20
 
 
 @pytest.mark.asyncio
