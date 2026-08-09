@@ -374,6 +374,46 @@ async def test_discover_momentum_candidates_never_enqueues_a_listing_without_lin
 
 
 @pytest.mark.asyncio
+async def test_discover_momentum_candidates_never_enqueues_cascade_outside_chains(monkeypatch):
+    """09/08, régression réelle trouvée en prod (opérateur : "on est seulement
+    sur base nous") : cet appel n'avait AUCUN filtre de chaîne, contrairement
+    au flux WebSocket (``_ingest_frame``, déjà gardé par
+    ``chain not in _ALLOWED_CHAINS``) -- les 4 sources REST sont des flux
+    DexScreener GLOBAUX, jamais nativement bornés à ``chains``. Confirmé en
+    direct : la watchlist web a récolté 10 chaînes différentes en 1h, la
+    plupart hors de ``DEFAULT_CHAINS``. "Scan large sans plancher" (décision
+    du 09/08) a toujours voulu dire "pas de plancher ÉCONOMIQUE", jamais
+    "aucune portée de chaîne"."""
+    links = [{"label": "Website", "url": "https://example.com"}]
+
+    async def fake_profiles():
+        return [FakeListing(chain_id="solana", token_address=CONTRACT, links=links)]
+
+    async def empty_listings():
+        return []
+
+    async def fake_base_tokens(*, limit):
+        return []
+
+    enqueued = []
+
+    async def fake_enqueue(contract, chain, links_arg, *, symbol=None):
+        enqueued.append((contract, chain, links_arg))
+
+    monkeypatch.setattr("aria_core.base_crawler.discover_base_tokens", fake_base_tokens)
+    monkeypatch.setattr(me, "token_profiles_latest", fake_profiles)
+    monkeypatch.setattr(me, "token_profiles_recent_updates", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_latest", empty_listings)
+    monkeypatch.setattr(me, "token_boosts_top", empty_listings)
+    monkeypatch.setattr(me, "_batch_liquidity_prefilter", _passthrough_prefilter)
+    monkeypatch.setattr(me, "enqueue_signal_cascade_candidate", fake_enqueue)
+
+    await me.discover_momentum_candidates(chains=("base",))
+
+    assert enqueued == []  # solana n'est pas dans chains=("base",) -- jamais enqueue
+
+
+@pytest.mark.asyncio
 async def test_enqueue_signal_cascade_candidate_calls_all_four_columns(monkeypatch):
     calls = []
 

@@ -1071,10 +1071,24 @@ async def discover_momentum_candidates(
             # 09/08 -- signal cascade stage 1, on the RAW listing (before the
             # liquidity prefilter below) -- these 4 sources are the only ones
             # here that carry declared links at zero extra network cost.
-            if listing.links:
-                contract = normalize_contract_case(listing.token_address, listing.chain_id)
+            #
+            # 09/08 (real bug found live, same day): this call originally had
+            # NO chain check at all, unlike the WebSocket ingestion path
+            # (momentum_websocket._ingest_frame, which already filters via
+            # `chain not in _ALLOWED_CHAINS` before ever enqueuing). These 4
+            # REST sources are GLOBAL DexScreener feeds, not scoped to
+            # `chains` -- confirmed live in prod: the web cascade watchlist
+            # picked up 10 different chains (bsc/pulsechain/ethereum/solana/
+            # robinhood/avalanche/berachain/polygon/arbitrum on top of base)
+            # within one hour, most of them never part of DEFAULT_CHAINS.
+            # Same `chain in chains` check as `_add_candidate` above --
+            # "scan large sans plancher" (09/08 decision) always meant "no
+            # ECONOMIC floor", never "no chain scope at all".
+            chain_id = (listing.chain_id or "").strip().lower()
+            if listing.links and chain_id in chains:
+                contract = normalize_contract_case(listing.token_address, chain_id)
                 if contract:
-                    await enqueue_signal_cascade_candidate(contract, listing.chain_id, listing.links)
+                    await enqueue_signal_cascade_candidate(contract, chain_id, listing.links)
         source_contributions[fetch.__name__] = _source_snapshot() - before
 
     total_before_prefilter = len(out)
