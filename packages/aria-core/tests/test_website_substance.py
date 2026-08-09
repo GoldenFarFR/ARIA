@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core.services.firecrawl import FirecrawlCrawlResult, FirecrawlPage
 from aria_core.services.tavily import TavilyCrawlResult, TavilyPage
 from aria_core.skills.website_substance import (
     WebsiteSubstanceFacts,
+    _default_crawl,
     gather_website_substance_facts,
     judge_website_substance,
 )
@@ -183,3 +185,80 @@ async def test_gather_checks_contract_even_on_thin_content():
     )
     assert facts.available is False  # toujours "trop mince" pour le score de substance
     assert facts.contract_confirmed is True  # mais la vérification du contrat, elle, a tourné
+
+
+# ── _default_crawl : Firecrawl (gratuit) en premier, Tavily en repli ───────
+# 09/08, "branché le firecrawl la version gratuite" -- jamais une dépendance
+# dure sur Firecrawl : tout cas où il ne répond pas de contenu exploitable
+# doit retomber sur Tavily de façon transparente.
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_uses_firecrawl_when_configured_and_available(monkeypatch):
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+
+    monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "fc-test-key")
+
+    async def fake_firecrawl_crawl(url, *, caller="unknown", **kwargs):
+        return FirecrawlCrawlResult(
+            root_url=url, available=True, pages=[FirecrawlPage(url=url, raw_content="contenu firecrawl")],
+        )
+
+    async def fail_if_called_tavily(url, *, caller="unknown", **kwargs):
+        raise AssertionError("Tavily ne doit jamais être appelé si Firecrawl a répondu")
+
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fake_firecrawl_crawl)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fail_if_called_tavily)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is True
+    assert result.pages[0].raw_content == "contenu firecrawl"
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_falls_back_to_tavily_when_firecrawl_unconfigured(monkeypatch):
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+
+    monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "")  # pas de clé -- jamais tenté
+
+    async def fail_if_called_firecrawl(url, *, caller="unknown", **kwargs):
+        raise AssertionError("Firecrawl ne doit jamais être appelé sans clé configurée")
+
+    async def fake_tavily_crawl(url, *, caller="unknown", **kwargs):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content="contenu tavily")],
+        )
+
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fail_if_called_firecrawl)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fake_tavily_crawl)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is True
+    assert result.pages[0].raw_content == "contenu tavily"
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_falls_back_to_tavily_when_firecrawl_unavailable(monkeypatch):
+    """Clé configurée mais Firecrawl échoue (budget épuisé, erreur, etc.) --
+    jamais bloquant, retombe sur Tavily comme si Firecrawl n'existait pas."""
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+
+    monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "fc-test-key")
+
+    async def fake_firecrawl_crawl(url, *, caller="unknown", **kwargs):
+        return FirecrawlCrawlResult(root_url=url, available=False, error="budget mensuel épuisé")
+
+    async def fake_tavily_crawl(url, *, caller="unknown", **kwargs):
+        return TavilyCrawlResult(
+            root_url=url, available=True, pages=[TavilyPage(url=url, raw_content="contenu tavily")],
+        )
+
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fake_firecrawl_crawl)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fake_tavily_crawl)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is True
+    assert result.pages[0].raw_content == "contenu tavily"

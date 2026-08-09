@@ -1,12 +1,12 @@
-"""Firecrawl web-crawl client -- REPLACES Tavily as the crawl provider for
-website_substance.py (09/08, explicit operator directive: "construis le
-remplacement Tavily par Firecrawl"). Motivation: the cadence needed to scan
-the full watchlist within 7 days (~77 web-column evaluations/hour, computed
-live against the real backlog) requires ~13,000 crawls/week -- ~2.8x beyond
-Tavily's highest priced tier (Growth, 100k credits/month, Enterprise
-unpriced). Firecrawl's Standard plan ($83/month, 100,000 credits/month, 1
-credit/page for markdown) covers this volume in a single paid tier -- full
-cost comparison in docs/HANDOFF_SIGNAL_CASCADE.md.
+"""Firecrawl web-crawl client -- FREE-plan crawl provider for
+website_substance.py, wired in front of Tavily with automatic fallback
+(09/08, explicit operator directive: "branché le firecrawl la version
+gratuite"). Not a paid replacement: the earlier ~13,000 crawls/week volume
+estimate that motivated a paid tier assumed the pre-pivot raw-feed sourcing.
+Since the same-day pivot to goplus_watchlist-exclusive sourcing (see
+signal_cascade_web.py / HANDOFF_SIGNAL_CASCADE.md), the real measured inflow
+is ~1-3 web-linked candidates/day -- comfortably inside the Free plan's
+limits, no paid tier needed at the current volume.
 
 Unlike Tavily's crawl() (a single synchronous POST), Firecrawl's crawl is
 ASYNCHRONOUS: POST /v2/crawl returns a job id immediately, the real content
@@ -16,7 +16,8 @@ the official firecrawl-py SDK, whose crawl() blocks the calling thread for
 the whole crawl duration -- incompatible with aria-core's async-everywhere
 pattern, cf. services/geckoterminal.py).
 
-Sourced (docs.firecrawl.dev, verified live via WebFetch, 09/08):
+Sourced (docs.firecrawl.dev/rate-limits + www.firecrawl.dev/pricing,
+verified live via WebFetch, 09/08):
 - POST https://api.firecrawl.dev/v2/crawl -- starts a job. Body:
   {"url", "limit", "maxDiscoveryDepth", "scrapeOptions": {"formats": [...]}}
   -> {"success": true, "id": "<uuid>", "url": "..."}.
@@ -26,20 +27,26 @@ Sourced (docs.firecrawl.dev, verified live via WebFetch, 09/08):
   "statusCode"}}.
 - Auth: `Authorization: Bearer fc-<key>` (same header shape as Tavily's
   extract/crawl -- different key value, own env var).
-- Rate limits (Standard plan, docs.firecrawl.dev/rate-limits): /crawl 100
-  req/min, /scrape 500 req/min -- HTTP 429 on excess, `Retry-After` header
-  documented. CLAUDE.md "90% of real capacity" doctrine: throttle at 90
-  req/min (0.667s between calls) -- applied to BOTH the start POST and each
-  poll GET (the poll endpoint's own rate-limit family is not documented
-  separately -- fail-safe assumption: shares the same /crawl bucket until
-  proven otherwise).
+- Rate limits, FREE PLAN (not the Standard paid tier previously assumed
+  here): 2 req/min on /crawl, 2 concurrent requests, 1,000 credits/month
+  (renews monthly, confirmed on the pricing page) -- HTTP 429 on excess,
+  `Retry-After` header documented. CLAUDE.md "90% of real capacity"
+  doctrine: throttle at 90% of 2 req/min = 1.8 req/min (33.3s between
+  calls) -- applied to BOTH the start POST and each poll GET (the poll
+  endpoint's own rate-limit family is not documented separately --
+  fail-safe assumption: shares the same /crawl bucket until proven
+  otherwise). At the current ~1-3 crawls/day real volume this throttle is
+  never a practical bottleneck -- it exists as a structural guardrail, not
+  because the real traffic approaches it.
 - Errors: 400 invalid URL, 408 timeout (retryable once), 429 rate limit,
   401/403 refused key.
 
-This module only ever gets CALLED once website_substance.py's crawl swap
-point is wired to it -- kept as an inert, independently-tested addition
-until a real FIRECRAWL_API_KEY is available for a live smoke test (process
-norm: "every new external API client tested against a REAL live call before
+Wired as the FIRST attempt in website_substance._default_crawl, Tavily as
+fallback (unconfigured key, budget exhausted, or any crawl failure) -- frees
+up Tavily's shared monthly budget for its other callers (conviction_research,
+polymarket_thesis) while keeping resilience if Firecrawl is ever unavailable.
+Live-smoke-tested against a real crawl before being wired in (process norm:
+"every new external API client tested against a REAL live call before
 considered done")."""
 from __future__ import annotations
 
@@ -92,16 +99,19 @@ class FirecrawlClient:
     """Async HTTP client, read-only, moderate throttle. Implements the
     start -> poll -> aggregate cycle itself (see module docstring)."""
 
-    # Sourced (09/08, docs.firecrawl.dev/rate-limits, Standard plan, live
-    # WebFetch): 100 req/min on /crawl. CLAUDE.md "90% of real capacity"
-    # doctrine: 90 req/min = 0.667s between calls.
+    # Sourced (09/08, docs.firecrawl.dev/rate-limits + www.firecrawl.dev/
+    # pricing, live WebFetch): FREE plan, 2 req/min on /crawl. CLAUDE.md
+    # "90% of real capacity" doctrine: 90% of 2 req/min = 1.8 req/min =
+    # 33.3s between calls.
     #
-    # poll_interval/max_wait_s: no documented figure for a realistic crawl
-    # duration at limit=15 -- kept conservative (90s ceiling, ~36 polls) to
-    # avoid hogging a heartbeat cycle indefinitely. RECALIBRATE against real
-    # observed durations once live in prod.
+    # poll_interval is a floor under the throttle above (the throttle
+    # dominates in practice at 33.3s > 2.5s) -- kept as the explicit
+    # per-poll pacing intent. max_wait_s raised from 90s to 240s so a
+    # multi-page crawl still gets ~7 polls at the free-plan cadence before
+    # giving up (well inside a single hourly heartbeat cycle).
+    # RECALIBRATE against real observed durations once live in prod.
     def __init__(
-        self, *, min_interval: float = 0.667, poll_interval: float = 2.5, max_wait_s: float = 90.0,
+        self, *, min_interval: float = 33.3, poll_interval: float = 2.5, max_wait_s: float = 240.0,
     ) -> None:
         self._min_interval = min_interval
         self._poll_interval = poll_interval

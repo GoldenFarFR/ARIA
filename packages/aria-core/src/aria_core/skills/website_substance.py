@@ -71,6 +71,20 @@ class WebsiteSubstanceVerdict:
 
 
 async def _default_crawl(url: str):
+    """Firecrawl (free plan) first, Tavily as fallback -- 09/08, explicit
+    operator directive ("branché le firecrawl la version gratuite"). Never
+    a hard dependency on either: Firecrawl returning unavailable (no key,
+    monthly budget exhausted, or any crawl failure) falls straight through
+    to Tavily, exactly as if Firecrawl didn't exist. Frees up Tavily's
+    shared monthly budget for its other callers (conviction_research,
+    polymarket_thesis) at the current low web-column volume."""
+    from aria_core.services.firecrawl import firecrawl_client, is_firecrawl_configured
+
+    if is_firecrawl_configured():
+        result = await firecrawl_client.crawl(url, caller="website_substance")
+        if result.available:
+            return result
+
     from aria_core.services.tavily import tavily_client
 
     return await tavily_client.crawl(url, caller="website_substance")
