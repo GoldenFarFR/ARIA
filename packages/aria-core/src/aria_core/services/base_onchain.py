@@ -69,6 +69,27 @@ _TOKEN_GRAD_THRESHOLD_ABI = [
         "type": "function",
     }
 ]
+# Standard ERC20 reads -- same two functions on every token, never
+# token-specific. 10/08: added as a rescue path for
+# momentum_entry._check_holder_concentration during a real total Blockscout
+# outage (base.blockscout.com returning HTTP 500 on every endpoint,
+# including get_token_metadata) -- see _fetch_erc20_metadata's own docstring.
+_ERC20_METADATA_ABI = [
+    {
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
 
 
 def onchain_graduation_enabled() -> bool:
@@ -128,6 +149,43 @@ def fetch_token_grad_threshold(token_address: str, *, w3=None) -> float | None:
         if threshold <= 0:
             return None
         return threshold
+    except Exception:
+        return None
+
+
+def fetch_erc20_metadata(token_address: str, *, w3=None) -> tuple[int, int] | None:
+    """``(decimals, total_supply_raw)`` read DIRECTLY on-chain via a public
+    RPC -- ``total_supply_raw`` in the token's smallest unit, NOT divided by
+    ``10**decimals`` (caller's job, same convention as the rest of this
+    pipeline). `None` on any failure (bad address, RPC down, non-ERC20
+    contract) -- never a fabricated value, never an exception propagating.
+
+    10/08 -- built as a rescue path for
+    ``momentum_entry._check_holder_concentration``'s paid x402 fallback: that
+    fallback ONLY returns raw per-holder balances (no decimals/total_supply
+    of its own), so the caller has always needed a SEPARATE
+    ``client.get_token_metadata()`` call to interpret them -- and that call
+    went through the same ``base.blockscout.com`` host as the free holders
+    endpoint. During the 10/08 outage (that host returning HTTP 500 on
+    EVERY endpoint, not just holders), the paid x402 fallback was silently
+    never even attempted -- the metadata call failed first and the
+    guardrail degraded straight to "unavailable" without ever reaching
+    x402. `decimals()`/`totalSupply()` are both part of the ERC20 standard
+    itself -- reading them directly on-chain via RPC has zero dependency on
+    Blockscout, free or paid, structurally immune to this exact class of
+    outage."""
+    if not token_address:
+        return None
+    try:
+        client = _client(w3=w3)
+        contract = client.eth.contract(
+            address=client.to_checksum_address(token_address), abi=_ERC20_METADATA_ABI
+        )
+        decimals = int(contract.functions.decimals().call())
+        total_supply = int(contract.functions.totalSupply().call())
+        if total_supply <= 0:
+            return None
+        return decimals, total_supply
     except Exception:
         return None
 

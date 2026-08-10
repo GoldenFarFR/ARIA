@@ -133,3 +133,61 @@ def test_rpc_url_default(monkeypatch):
 def test_rpc_url_override(monkeypatch):
     monkeypatch.setenv("ARIA_BASE_RPC_URL", "https://custom.example/rpc")
     assert bo._rpc_url() == "https://custom.example/rpc"
+
+
+# ── fetch_erc20_metadata (10/08) -- repli decimals()/totalSupply() ──────────
+
+
+class _FakeErc20Functions:
+    def __init__(self, decimals=None, total_supply=None):
+        self._decimals = decimals
+        self._total_supply = total_supply
+
+    def decimals(self):
+        return _FakeCall(self._decimals)
+
+    def totalSupply(self):  # noqa: N802 -- nom ABI
+        return _FakeCall(self._total_supply)
+
+
+class _FakeErc20W3:
+    def __init__(self, decimals=None, total_supply=None):
+        class _Eth:
+            def contract(_self, address, abi):
+                return _FakeContract(address, _FakeErc20Functions(decimals, total_supply))
+
+        self.eth = _Eth()
+
+    def to_checksum_address(self, addr):
+        return addr
+
+
+def test_fetch_erc20_metadata_direct():
+    w3 = _FakeErc20W3(decimals=18, total_supply=1_000_000 * 10**18)
+    assert bo.fetch_erc20_metadata("0xTokenAddress", w3=w3) == (18, 1_000_000 * 10**18)
+
+
+def test_fetch_erc20_metadata_zero_total_supply_is_none():
+    """Un vrai ERC20 n'a jamais une offre totale nulle -- traité comme une
+    lecture invalide/non fiable, jamais une valeur réelle à zéro."""
+    w3 = _FakeErc20W3(decimals=18, total_supply=0)
+    assert bo.fetch_erc20_metadata("0xTokenAddress", w3=w3) is None
+
+
+def test_fetch_erc20_metadata_missing_address_returns_none():
+    w3 = _FakeErc20W3(decimals=18, total_supply=1_000_000)
+    assert bo.fetch_erc20_metadata("", w3=w3) is None
+
+
+def test_fetch_erc20_metadata_rpc_error_degrades_to_none():
+    class _BrokenEth:
+        def contract(self, address, abi):
+            raise ConnectionError("RPC down")
+
+    class _BrokenW3:
+        eth = _BrokenEth()
+
+        def to_checksum_address(self, addr):
+            return addr
+
+    assert bo.fetch_erc20_metadata("0xTokenAddress", w3=_BrokenW3()) is None

@@ -1695,7 +1695,16 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
     that verdict immediately, never re-hitting a struggling/down Blockscout.
     A contract never successfully verified stays exactly as fail-closed as
     before -- this cache is only ever written from a REAL verdict below,
-    never from the ``_HOLDER_DATA_UNAVAILABLE_REASON`` sentinel."""
+    never from the ``_HOLDER_DATA_UNAVAILABLE_REASON`` sentinel.
+
+    10/08 -- on-chain rescue for decimals/total_supply (``base_onchain.
+    fetch_erc20_metadata``) when ``client.get_token_metadata()`` itself
+    fails: a real TOTAL Blockscout outage (base.blockscout.com HTTP 500 on
+    every endpoint, not just holders/Pro credits exhausted) was found to
+    silently starve the paid x402 fallback below -- it was NEVER even
+    attempted, because the metadata call it depends on shared the same
+    failing host. decimals()/totalSupply() are plain ERC20 reads, fetched
+    directly via RPC, structurally independent of Blockscout."""
     from aria_core import holder_concentration_cache
 
     cached = await holder_concentration_cache.cached_verdict(contract, chain)
@@ -1715,15 +1724,31 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
         ]
     else:
         metadata = await client.get_token_metadata(contract)
-        if not metadata.available or not metadata.total_supply or metadata.decimals is None:
+        decimals: int | None = metadata.decimals if metadata.available else None
+        total_supply: int | None = metadata.total_supply if metadata.available else None
+
+        if decimals is None or not total_supply:
+            # 10/08 -- rescue path for a TOTAL Blockscout outage (not just
+            # Pro credits exhausted, the case this x402 fallback was
+            # originally built for on 21/07): get_token_metadata() above
+            # goes through the same base.blockscout.com host as the free
+            # holders endpoint, so a full outage silently killed the x402
+            # fallback before it was ever attempted. decimals()/totalSupply()
+            # are plain ERC20 standard reads -- fetching them directly
+            # on-chain via RPC has zero dependency on Blockscout, free or
+            # paid. See base_onchain.fetch_erc20_metadata's own docstring.
+            from aria_core.services import base_onchain
+
+            onchain = await asyncio.to_thread(base_onchain.fetch_erc20_metadata, contract)
+            if onchain is not None:
+                decimals, total_supply = onchain
+
+        if decimals is None or not total_supply:
             return _holder_data_unavailable_verdict(contract, chain)
 
         raw_holders = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
             return _holder_data_unavailable_verdict(contract, chain)
-
-        decimals = metadata.decimals
-        total_supply = metadata.total_supply
         for h in raw_holders:
             raw_value = h.get("value")
             if raw_value is None:

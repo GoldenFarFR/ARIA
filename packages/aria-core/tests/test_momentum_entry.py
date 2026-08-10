@@ -4063,12 +4063,16 @@ class TestCheckHolderConcentration:
         security-review workflow found this could let an unverifiable
         candidate through on both the real pilot and paper trading)."""
         import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
         from aria_core.services.blockscout import TokenHoldersResult
 
         monkeypatch.setattr(
             blockscout_module, "get_blockscout_client",
             lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
         )
+        # 10/08 -- the on-chain rescue is tried next; force it to also fail
+        # so this stays a test of the double-failure fail-closed path.
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: None)
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is True
         assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
@@ -4077,10 +4081,12 @@ class TestCheckHolderConcentration:
     async def test_fail_closed_when_no_total_supply(self, monkeypatch):
         """03/08 -- was fail-open until this date, see test_fail_closed_when_data_unavailable."""
         import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
         from aria_core.services.blockscout import TokenHoldersResult
 
         result = TokenHoldersResult(holders=[_holder("0xabc", 90.0)], total_supply=None, available=True)
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: None)
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is True
         assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
@@ -4227,17 +4233,86 @@ class TestCheckHolderConcentration:
     @pytest.mark.asyncio
     async def test_x402_fallback_fails_closed_when_metadata_unavailable(self, monkeypatch):
         """03/08 -- was fail-open until this date, see TestCheckHolderConcentration's
-        own test_fail_closed_when_data_unavailable."""
+        own test_fail_closed_when_data_unavailable. 10/08 -- the on-chain
+        rescue is also forced to fail here, so this stays a test of the
+        TRIPLE failure (free holders + Blockscout metadata + on-chain)."""
         import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
         from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
 
         client = _FakeHoldersClient(
             TokenHoldersResult(available=False), metadata=TokenMetadataResult(available=False),
         )
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: None)
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is True
         assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+    # ── repli on-chain (10/08) -- panne TOTALE Blockscout (metadata inclus) ─────────
+
+    @pytest.mark.asyncio
+    async def test_onchain_rescue_used_when_blockscout_metadata_also_fails(self, monkeypatch):
+        """10/08, panne réelle en prod : get_token_metadata() échoue (même hôte
+        que le endpoint holders, en panne totale) -- avant ce correctif, le
+        repli x402 n'était JAMAIS tenté dans ce cas précis. decimals/total_supply
+        récupérés via RPC direct doivent permettre au calcul x402 de continuer
+        normalement, mêmes pourcentages qu'avec la metadata Blockscout."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False), metadata=TokenMetadataResult(available=False),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: (0, 1_000_000))
+
+        raw_holders = [
+            {"holder_address": "0xPOOL", "value": "100000", "is_contract": False, "is_verified": False},
+            {"holder_address": "0xWHALE", "value": "850000", "is_contract": False, "is_verified": False},
+        ]
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            return raw_holders
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
+        assert too_concentrated is True
+        assert "85%" in reason
+
+    @pytest.mark.asyncio
+    async def test_onchain_rescue_not_used_when_blockscout_metadata_succeeds(self, monkeypatch):
+        """Zéro appel RPC incrémental quand la metadata Blockscout répond déjà --
+        même doctrine que le repli x402 lui-même (jamais un coût superflu)."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        called = {"onchain": False}
+
+        def _fail_if_called(*a, **k):
+            called["onchain"] = True
+            return None
+
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", _fail_if_called)
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            return [{"holder_address": "0xreal1", "value": "10000", "is_contract": False, "is_verified": False}]
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+        )
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert called["onchain"] is False
 
     @pytest.mark.asyncio
     async def test_x402_fallback_fails_closed_when_no_holders_returned(self, monkeypatch):
