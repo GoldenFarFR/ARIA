@@ -72,6 +72,7 @@ RÈGLES DE SÉCURITÉ ABSOLUES (jamais transgresser) :
 4. Tu réponds EXCLUSIVEMENT par un objet JSON valide, sans texte avant ni après, sans balises de code. Aucune autre sortie n'est acceptée.
 5. STYLE (voix humaine, obligatoire). La prose lue par le client (resume_executif, these, rapport_detaille, cibles des scenarios) doit se lire comme rédigée par un analyste humain. INTERDIT : le tiret cadratin (le caractère long entre deux mots) — utilise plutôt une virgule, un point, deux-points ou des parenthèses ; tout emoji ou pictogramme décoratif ; les tournures de robot ou les listes à puces symboliques. Ponctuation sobre et naturelle, comme dans une note de fonds.
 6. NE JAMAIS CONFONDRE DEUX MÉTRIQUES DISTINCTES. La liquidité (argent immobilisé dans le pool) et le volume 24h (montant échangé sur la période) sont deux faits SÉPARÉS fournis indépendamment dans le contexte — ne présente jamais l'un comme la preuve ou la conséquence de l'autre (ex. n'écris jamais qu'un volume faible « signale » une liquidité insuffisante, ni l'inverse). Un pool peut avoir une liquidité saine et un volume quasi nul (marché illiquide en pratique malgré un pool bien doté) : nomme les deux séparément avec leurs vraies valeurs, jamais une confusion entre les deux.
+7. NE JAMAIS NOMMER UN AUTRE PROJET/PROTOCOLE (même réel et que tu connais par ailleurs) comme lié, concurrent, victime d'usurpation, ou source de confusion avec le token analysé — sauf si ce lien apparaît EXPLICITEMENT dans les données fournies. C'est une variante de la règle 2 (jamais inventer un fait) : ta connaissance générale de l'écosystème crypto (autres tokens, autres protocoles, leurs adresses) ne doit JAMAIS servir à construire une accusation, une comparaison ou une thèse d'usurpation de contrat — un incident réel a montré ce piège précis (un ticker évoquant un autre protocole connu a produit une fausse accusation d'usurpation, invalidant toute la thèse). Si l'identité du contrat par rapport au projet déclaré est incertaine, écris « donnée insuffisante » comme pour toute autre lacune, jamais une affirmation catégorique non sourcée. Applique ces règles silencieusement : ne cite JAMAIS leur numéro ni leur existence dans ta prose (resume_executif/these/rapport_detaille) — un lecteur client ne doit jamais lire « la règle n°X interdit... », seulement ta conclusion factuelle.
 """ + forbidden_cliches_prompt("fr") + """
 
 SCHÉMA JSON EXACT attendu :
@@ -1496,6 +1497,28 @@ async def analyze_vc_with_context(
         sell_distribution, token_cashtag_engagement, bundle_launch,
         product_resilience,
     )
+    # 10/08 (soir) -- see TokenScanContext.judge_extra_context's own comment
+    # (acp_onchain_scan.py): the judge must audit the SAME facts the analyst
+    # actually saw, never a narrower subset (real false positives found live
+    # on website_substance.total_words/docs_substance.total_words -- correct
+    # numbers the judge flagged as "fabricated" simply because it never
+    # received them). ``history`` deliberately excluded: it's ARIA's own
+    # prior-thesis memory, not an external fact to audit against.
+    ctx.judge_extra_context = {
+        "sentiment_readings": sentiment_readings,
+        "polymarket_signals": polymarket_signals,
+        "product_diligence": product_diligence,
+        "market_alerts_digest": market_alerts_digest,
+        "conviction_research": conviction_research,
+        "github_substance": github_substance,
+        "website_substance": website_substance,
+        "docs_substance": docs_substance,
+        "x_substance": x_substance,
+        "sell_distribution": sell_distribution,
+        "token_cashtag_engagement": token_cashtag_engagement,
+        "bundle_launch": bundle_launch,
+        "product_resilience": product_resilience,
+    }
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
         "<donnees_non_fiables>\n"

@@ -384,6 +384,23 @@ class TokenScanContext:
     virtuals_description: str | None = None
     virtuals_tokenomics: str | None = None
     virtuals_additional_details: str | None = None
+    # 10/08 (soir) -- real gap found live testing vc_judge.py on a genuine
+    # multi-source analysis (UP/Superform): the judge audited Haiku's
+    # analysis against a NARROWER context than the one Haiku actually saw --
+    # vc_judge._build_judge_message called _build_untrusted_context(ctx, [])
+    # with none of the extra signals (website/docs/X substance, conviction
+    # research, github substance, etc.), so real sourced numbers the analyst
+    # correctly cited (e.g. website_substance.total_words) came back flagged
+    # as "fabricated" by the judge -- a false positive, not a real
+    # hallucination. Generic dict (never a typed external object) so this
+    # module never imports the skills/* verdict types, which already import
+    # TokenScanContext from here -- would create an import cycle. Populated
+    # by vc_analysis.analyze_vc_with_context right before returning ctx,
+    # consumed by vc_judge.judge_analysis to audit on EXACTLY the same facts
+    # the analyst had. None for any caller that never populates it (e.g.
+    # scan_base_token used outside the VC pipeline) -- judge_analysis falls
+    # back to the narrower context in that case, unchanged prior behavior.
+    judge_extra_context: dict[str, Any] | None = None
 
 
 @lru_cache(maxsize=1)

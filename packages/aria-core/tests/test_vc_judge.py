@@ -114,6 +114,43 @@ async def test_judge_llm_valid_output(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_judge_message_includes_analyst_extra_context_when_present(monkeypatch):
+    """10/08 (soir) -- real false positives found live (UP/Superform): the judge
+    used to see a NARROWER context than the analyst (Haiku) actually had, so
+    real sourced numbers came back flagged as "fabrication". ctx.judge_extra_context
+    (populated by analyze_vc_with_context) must reach the judge's own prompt."""
+    from aria_core.skills.website_substance import WebsiteSubstanceVerdict
+
+    mock = AsyncMock(return_value=_judge_json())
+    monkeypatch.setattr(vj, "chat_with_context", mock)
+
+    ctx = _ctx()
+    ctx.judge_extra_context = {
+        "website_substance": WebsiteSubstanceVerdict(
+            signal="positive", score=90.0, points=["23786 mots réels, 15 pages, HTTPS"],
+        ),
+    }
+    await vj.judge_analysis(_result(), ctx)
+
+    sent_message = mock.call_args.args[0]
+    assert "23786" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_judge_message_unchanged_when_ctx_has_no_extra_context(monkeypatch):
+    """Behavior for any caller that never populates judge_extra_context (None
+    default) must stay exactly as before this change -- never a crash."""
+    mock = AsyncMock(return_value=_judge_json())
+    monkeypatch.setattr(vj, "chat_with_context", mock)
+
+    ctx = _ctx()
+    assert ctx.judge_extra_context is None
+    v = await vj.judge_analysis(_result(), ctx)
+
+    assert v.llm_used is True
+
+
+@pytest.mark.asyncio
 async def test_judge_llm_clamps_and_allowlists(monkeypatch):
     """Verdict/reco hors allowlist + score hors bornes → défaut sûr / clampé proprement."""
     bad = _judge_json(

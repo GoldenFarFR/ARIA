@@ -2000,3 +2000,20 @@ def test_system_prompt_forbids_generic_ai_cliches():
     """Clause additive #120 -- jamais de mutation du texte genere (risque chiffres/
     adresses sur un rapport dense), uniquement du texte de prompt en amont."""
     assert "CLICHÉS DE REMPLISSAGE IA" in vc._SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_naming_other_projects_without_source():
+    """10/08 (soir) -- real hallucination found live (UP/Superform test): Haiku
+    invented a link to "Unlock Protocol" (a real, unrelated project) to build
+    a fake usurpation thesis, sourced from nowhere in the actual data (verified
+    against every cached external signal for that test). Locks the anti-
+    confusion clause in the prompt so it can't regress silently."""
+    assert "NE JAMAIS NOMMER UN AUTRE PROJET/PROTOCOLE" in vc._SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_citing_its_own_rule_numbers():
+    """Same incident, second-order bug: after the clause above was added, a
+    re-test showed Haiku correctly HEDGING (donnee insuffisante) but leaking
+    the prompt's own internals into client-facing prose ("la regle de
+    securite absolue n 7 interdit..."). Locks the fix."""
+    assert "ne cite JAMAIS leur numéro ni leur existence dans ta prose" in vc._SYSTEM_PROMPT
