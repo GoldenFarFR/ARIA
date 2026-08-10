@@ -28,12 +28,13 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
-# 06/08 -- operator-requested long horizon ("des heures/jours"): holder
-# concentration is a slow-moving property (who holds the token doesn't
-# meaningfully shift within a day for the low-cap tokens this pipeline
-# targets) -- 24h comfortably survives a multi-hour provider outage while
-# still refreshing daily rather than freezing a verdict forever.
-HOLDER_CONCENTRATION_CACHE_TTL_SECONDS = 24 * 3600
+# 10/08 -- raised from 24h to 7 days, explicit operator decision (first
+# set to 30 days, then narrowed to 7 the same day): holder concentration
+# is a slow-moving property (who holds the token doesn't meaningfully
+# shift for the low-cap tokens this pipeline targets) -- a token already
+# verified once (cleared or rejected on real data) doesn't need re-hitting
+# Blockscout/x402 daily, a weekly refresh is enough.
+HOLDER_CONCENTRATION_CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _normalize_contract(contract: str, chain: str) -> str:
