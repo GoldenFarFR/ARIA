@@ -15,6 +15,16 @@ from aria_core.skills.website_substance import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_crawl_failure_log_db(tmp_path, monkeypatch):
+    """10/08 -- _default_crawl now logs to website_crawl_failure_log when
+    every layer fails, same isolation need as the other DB-backed
+    mechanisms this session."""
+    from aria_core import website_crawl_failure_log
+
+    monkeypatch.setattr(website_crawl_failure_log, "DB_PATH", str(tmp_path / "crawl_failure_log_test.db"))
+
+
 # ── Jugement pur ────────────────────────────────────────────────────────────
 
 
@@ -276,6 +286,34 @@ async def test_default_crawl_falls_back_to_tavily_when_scraper_and_firecrawl_unc
     result = await _default_crawl("https://example.com")
     assert result.available is True
     assert result.pages[0].raw_content == "contenu tavily"
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_logs_when_every_layer_fails(monkeypatch):
+    """10/08 -- le compteur de résilience (website_crawl_failure_log)
+    doit s'armer exactement quand les 3 étages échouent tous, jamais avant
+    (les tests de repli ci-dessus n'y touchent jamais, un des 3 répond)."""
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+    from aria_core import website_crawl_failure_log as wcfl
+
+    _unavailable_scraper(monkeypatch, error="homepage WAF-bloquée")
+    monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "")  # non configuré
+
+    async def fake_tavily_crawl(url, *, caller="unknown", **kwargs):
+        return TavilyCrawlResult(root_url=url, available=False, error="budget mensuel épuisé")
+
+    monkeypatch.setattr(tv.tavily_client, "crawl", fake_tavily_crawl)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is False
+
+    assert await wcfl.failure_count_since(days=1) == 1
+    failures = await wcfl.recent_failures()
+    assert failures[0]["url"] == "https://example.com"
+    assert failures[0]["layer_errors"]["scraper_maison"] == "homepage WAF-bloquée"
+    assert failures[0]["layer_errors"]["firecrawl"] == "clé non configurée"
+    assert failures[0]["layer_errors"]["tavily"] == "budget mensuel épuisé"
 
 
 @pytest.mark.asyncio

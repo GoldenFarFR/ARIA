@@ -70,32 +70,85 @@ class WebsiteSubstanceVerdict:
     points: list[str] = field(default_factory=list)
 
 
-async def _default_crawl(url: str):
-    """Homemade scraper (services/website_scraper.py, 10/08, backlog #43)
-    FIRST -- no third-party quota at all, real evidence it covers most
-    real project sites (11/12 on a live sample, see that module's
-    docstring). Firecrawl (free plan) second, Tavily (shared monthly
-    budget) last -- never a hard dependency on any of the three: each
-    returning unavailable (homepage unreachable/WAF-blocked/JS-only-SPA
-    for the scraper; no key/budget exhausted/failure for Firecrawl) falls
-    straight through to the next, exactly as if the failed one didn't
-    exist."""
+@dataclass
+class _EmptyCrawlResult:
+    """Synthetic fallback -- only returned if EVERY layer in _CRAWL_LAYERS
+    raised (none of the current 3 ever does, per their own "never
+    blocking" doctrine; kept as a safety net for a future layer that
+    might not honor it)."""
+
+    root_url: str = ""
+    pages: list = field(default_factory=list)
+    available: bool = False
+    error: str | None = None
+
+
+async def _crawl_via_scraper(url: str):
     from aria_core.services.website_scraper import crawl as scraper_crawl
 
-    result = await scraper_crawl(url, caller="website_substance")
-    if result.available:
-        return result
+    return await scraper_crawl(url, caller="website_substance")
 
+
+async def _crawl_via_firecrawl(url: str):
     from aria_core.services.firecrawl import firecrawl_client, is_firecrawl_configured
+    from aria_core.services.firecrawl import FirecrawlCrawlResult
 
-    if is_firecrawl_configured():
-        result = await firecrawl_client.crawl(url, caller="website_substance")
-        if result.available:
-            return result
+    if not is_firecrawl_configured():
+        return FirecrawlCrawlResult(root_url=url, available=False, error="clé non configurée")
+    return await firecrawl_client.crawl(url, caller="website_substance")
 
+
+async def _crawl_via_tavily(url: str):
     from aria_core.services.tavily import tavily_client
 
     return await tavily_client.crawl(url, caller="website_substance")
+
+
+# 10/08 -- seam left deliberately open (CLAUDE.md "ANTICIPATION" doctrine):
+# a future 4th/5th crawl candidate is added here as ONE more (name, fn)
+# entry, never a structural rewrite of _default_crawl. Order matters (first
+# match wins) -- scraper maison (zero third-party quota) always first,
+# shared-budget providers last. Deliberately NOT expanded speculatively:
+# website_crawl_failure_log.py exists precisely to gather real evidence
+# before that decision is made (operator question 10/08: "firecrawl + tavily
+# ça va suffire ?" -- answer: yes at the current real volume, revisit only
+# if failure_count_since() shows otherwise).
+_CRAWL_LAYERS = [
+    ("scraper_maison", _crawl_via_scraper),
+    ("firecrawl", _crawl_via_firecrawl),
+    ("tavily", _crawl_via_tavily),
+]
+
+
+async def _default_crawl(url: str):
+    """Tries every layer in ``_CRAWL_LAYERS`` in order, first
+    ``available=True`` result wins -- never a hard dependency on any single
+    one: a layer returning unavailable (homepage unreachable/WAF-blocked/
+    JS-only-SPA for the scraper; no key/budget exhausted/failure for
+    Firecrawl/Tavily) falls straight through to the next, exactly as if it
+    didn't exist. If EVERY layer fails, logs the event (with each layer's
+    own error) via ``website_crawl_failure_log`` before returning the last
+    result -- the real signal to consult before deciding a new layer is
+    worth adding, never a guess."""
+    from aria_core import website_crawl_failure_log
+
+    errors: dict[str, str] = {}
+    last_result = None
+    for name, layer_fn in _CRAWL_LAYERS:
+        try:
+            result = await layer_fn(url)
+        except Exception as exc:  # noqa: BLE001 -- a future layer might not guarantee never-raises
+            errors[name] = str(exc)
+            continue
+        last_result = result
+        if result.available:
+            return result
+        errors[name] = result.error or "unavailable"
+
+    await website_crawl_failure_log.record_all_layers_failed(url, errors)
+    if last_result is None:
+        return _EmptyCrawlResult(root_url=url, error="; ".join(f"{k}: {v}" for k, v in errors.items()))
+    return last_result
 
 
 async def gather_website_substance_facts(
