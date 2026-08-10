@@ -207,10 +207,13 @@ observations before ever hard-gating on it.**
 Until the operator judges ARIA ready: (1) verify that the real strengths of an
 AI trader (24/7 availability, criteria consistency, perfect traceability) are
 TRULY exploited, not assumed; (2) actively look for AI-specific weaknesses
-(hallucination, overfitting, **vulnerability to adversarial prompt injection**
-— an angle never audited in depth) and close them, never leave them as a mere
-observation. Comparative/verified evidence only, never a portrait of winners
-(survivorship bias excluded). Ongoing detail: `docs/aria-learning-inbox/`.
+(hallucination, overfitting, **vulnerability to adversarial prompt injection**)
+and close them, never leave them as a mere observation. Comparative/verified
+evidence only, never a portrait of winners (survivorship bias excluded).
+**Internal prompt-injection audit done 10/08** (backlog #277, full financial-pipeline
+trace): `docs/HANDOFF_SECURITE.md`. External landscape watch (incidents, attack
+patterns, ARIA's own exposure re-checked against each) ongoing: `docs/aria-learning-inbox/`,
+most recent `2026-08-10-veille-securite-agents-ia-trading-empoisonnement-memoire.md`.
 
 ## Base / ecosystem watch (16/07, to check at session start)
 Without soliciting anyone until the 1M$ test is conclusive. Full history (Base
