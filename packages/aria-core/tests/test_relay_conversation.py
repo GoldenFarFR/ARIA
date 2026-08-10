@@ -239,6 +239,54 @@ async def test_daily_cap_reached(monkeypatch):
     assert result == {"outcome": "daily_cap_reached"}
 
 
+def test_history_message_truncates_a_long_simulation_bulletin():
+    long_bulletin = "x" * 4000
+    entry = {"sender": "aria", "content": long_bulletin}
+    out = relay_conversation._history_message(entry)
+    assert len(out["content"]) < 400
+    assert out["content"].endswith("…")
+
+
+def test_history_message_leaves_short_content_untouched():
+    entry = {"sender": "aria", "content": "court"}
+    assert relay_conversation._history_message(entry)["content"] == "court"
+
+
+def test_history_message_truncate_false_never_cuts_even_a_long_message():
+    entry = {"sender": "claude", "content": "x" * 4000}
+    out = relay_conversation._history_message(entry, truncate=False)
+    assert out["content"] == f"[Claude] {'x' * 4000}"
+
+
+@pytest.mark.asyncio
+async def test_cycle_truncates_old_history_but_never_the_question_being_answered(monkeypatch):
+    # Real incident found live (10/08): the "🧪 SIMULATION" bulletins hit
+    # relay_message's 4000-char cap, and up to 12 of them in full history
+    # explained a ~10k input token bill per relay reply. Older context gets
+    # truncated now, but the actual Claude question -- however long -- must
+    # reach the model in full (it may cite exact numbers).
+    await relay_chat.log_message("aria", "🧪 SIMULATION " + "x" * 3990)
+    long_question = "Vérifie ces chiffres précis : " + "y" * 900
+    await relay_chat.log_message("claude", long_question)
+
+    captured = {}
+
+    async def fake_chat_with_context(user_message, system_context, history, **kw):
+        captured["user_message"] = user_message
+        captured["history"] = history
+        return "ok"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    monkeypatch.setattr(
+        "aria_core.gateway.telegram_bot.send_message", (await _fake_sender_factory([]))
+    )
+
+    await relay_conversation.run_relay_conversation_cycle()
+
+    assert long_question in captured["user_message"]
+    assert len(captured["history"][0]["content"]) < 400
+
+
 def test_history_message_maps_sender_to_role():
     aria_entry = {"sender": "aria", "content": "bonjour"}
     claude_entry = {"sender": "claude", "content": "salut"}

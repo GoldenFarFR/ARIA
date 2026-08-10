@@ -285,16 +285,35 @@ async def _autoreplies_today() -> int:
     return int(row[0]) if row else 0
 
 
-def _history_message(entry: dict) -> dict:
+# 10/08, operator request ("tu peux faire baisser ce prix encore plus ?") --
+# real cost driver found: `relay_message.content` is capped at 4000 chars
+# (relay_chat.log_message), and the automatic "🧪 SIMULATION" paper-trading
+# bulletins consistently hit that cap -- with up to 12 messages of history
+# sent in FULL on every relay_conversation_cycle call, that alone explained
+# the observed ~10k input tokens/call. The model doesn't need a 4000-char
+# bulletin to hold a conversation -- same truncation doctrine already used
+# elsewhere (llm_economy.resolve_budget's history_msg_chars=350 for STANDARD
+# depth), applied here for the first time on this specific history builder.
+_HISTORY_MSG_CHARS = 350
+
+
+def _truncate_history_content(text: str) -> str:
+    if len(text) <= _HISTORY_MSG_CHARS:
+        return text
+    return text[:_HISTORY_MSG_CHARS].rstrip() + "…"
+
+
+def _history_message(entry: dict, *, truncate: bool = True) -> dict:
+    content = _truncate_history_content(entry["content"]) if truncate else entry["content"]
     if entry["sender"] == "aria":
-        return {"role": "assistant", "content": entry["content"]}
+        return {"role": "assistant", "content": content}
     if entry["sender"] == "claude":
         label = "Claude"
     else:
         from aria_core.runtime import settings
 
         label = getattr(settings, "aria_operator_display_name", "") or "Operator"
-    return {"role": "user", "content": f"[{label}] {entry['content']}"}
+    return {"role": "user", "content": f"[{label}] {content}"}
 
 
 async def run_relay_conversation_cycle() -> dict:
@@ -325,8 +344,13 @@ async def run_relay_conversation_cycle() -> dict:
     # History stops AT the message being answered -- anything logged after it
     # (an automatic bulletin, a later operator message) is irrelevant to answering
     # THIS question and would only confuse the prompt.
-    history = [_history_message(m) for m in messages[: last_claude_idx + 1][-12:]]
-    last_user_message = history[-1]["content"]
+    context_window = messages[:last_claude_idx][-12:]
+    history = [_history_message(m) for m in context_window]
+    # The message actually being answered is NEVER truncated (unlike older
+    # context above) -- a real Claude question can legitimately run past
+    # _HISTORY_MSG_CHARS (e.g. citing exact numbers), truncating it would cut
+    # off the very thing being asked.
+    last_user_message = _history_message(last_claude_message, truncate=False)["content"]
 
     system_context = _SYSTEM_CONTEXT
     matched_position = await _matched_position_for_message(last_claude_message["content"])
@@ -352,7 +376,7 @@ async def run_relay_conversation_cycle() -> dict:
         reply = await chat_with_context(
             last_user_message,
             system_context,
-            history[:-1] if len(history) > 1 else None,
+            history or None,
             # 25/07 -- real test on CHECK: even with the "3-4 sentences" instruction
             # above, the model sometimes still produces a bulleted multi-paragraph
             # reply and got cut mid-word at 350. Raised as a safety net, not a
