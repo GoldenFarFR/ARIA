@@ -491,10 +491,20 @@ async def judge_analysis(
         # aria_llm_anthropic_routing_vc_judge_enabled (off by default,
         # activation deferred to a later, separate operator "go").
         provider, model = anthropic_depth_override(LlmDepth.DEVELOP, vc_final_judge=True)
+        # 10/08 -- real incident found live testing this exact call on Sonnet
+        # (a genuine UP verdict): 1400 was silently maxed out
+        # (stop_reason=max_tokens), truncating the JSON judge output and
+        # forcing the deterministic fallback -- the very call this gate
+        # exists to eventually activate never actually produced a real
+        # verdict. Worst-case output size from this module's own caps:
+        # points_forts/points_faibles/claims_non_etayes can each reach
+        # _LIST_CAP(12) x _ITEM_MAX(240 chars) plus resume (_RESUME_MAX=600) --
+        # 1400 never had real headroom for a thorough judge. Raised with a
+        # real margin, not a license to ramble.
         raw = await chat_with_context(
             user_message,
             _SYSTEM_PROMPT_JUGE + llm_language_directive(lang),
-            max_tokens=1400,
+            max_tokens=2500,
             temperature=0.1,
             depth="develop",
             provider=provider,

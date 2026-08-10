@@ -1517,10 +1517,20 @@ async def analyze_vc_with_context(
 
     t_llm0 = time.monotonic()
     try:
+        # 10/08 -- real incident found live (a genuine multi-source test on
+        # UP): 1800 was silently maxed out (stop_reason=max_tokens) on BOTH
+        # Haiku and Sonnet, truncating the JSON mid-field and forcing the
+        # deterministic fallback -- same class of bug as the 12/07 "enhance"
+        # truncation already documented in llm_economy.py. The schema itself
+        # asks for a genuinely long rapport_detaille (up to the 4000-char
+        # _sanitize cap downstream, ~1000 tokens alone) plus these/
+        # resume_executif/3 scenarios/donnees_insuffisantes -- 1800 never had
+        # real headroom. Raised with a real margin, not a license to ramble
+        # (the prompt's own length instructions are unchanged).
         raw = await chat_with_context(
             user_message,
             _SYSTEM_PROMPT + llm_language_directive(lang),
-            max_tokens=1800,
+            max_tokens=3500,
             temperature=0.2,
             depth="develop",
             provider=vc_provider,
