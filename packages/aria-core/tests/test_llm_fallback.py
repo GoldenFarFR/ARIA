@@ -522,6 +522,98 @@ async def test_anthropic_payload_extracts_system_top_level_and_parses_content_bl
 
 
 @pytest.mark.asyncio
+async def test_anthropic_haiku_payload_still_sends_temperature(monkeypatch):
+    # Momentum's trading gates rely on temperature=0.0 for a deterministic
+    # tie-break -- Haiku 4.5 must keep receiving it explicitly.
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "HOLD"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute(
+        "anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001", "sk-ant-key",
+    )
+    await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "BUY ou HOLD ?"}],
+        temperature=0.0, max_tokens=10, prompt_est=20, depth="brief",
+    )
+    assert captured["json"]["temperature"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_sonnet_payload_never_sends_temperature(monkeypatch):
+    # 10/08, real prod incident: Sonnet 5 400s on ANY non-default
+    # temperature ("temperature is deprecated for this model") -- adaptive
+    # thinking controls its own sampling. Must be omitted entirely, not sent
+    # as any value, for every Sonnet-family model regardless of call site.
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute(
+        "anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", "sk-ant-key",
+    )
+    await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "Juge ceci."}],
+        temperature=0.1, max_tokens=10, prompt_est=20, depth="develop",
+    )
+    assert "temperature" not in captured["json"]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_truncation_detected_via_stop_reason_max_tokens(monkeypatch):
     """Anthropic signale une réponse tronquée via ``stop_reason=max_tokens`` (pas
     ``finish_reason=length`` comme les providers compatibles OpenAI) -- même garde-fou

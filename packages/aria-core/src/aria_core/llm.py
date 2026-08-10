@@ -454,9 +454,23 @@ async def _post_chat_anthropic(
     payload: dict[str, Any] = {
         "model": route.model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": anthropic_messages,
     }
+    # 10/08 -- real prod incident found live (a Sonnet call failed twice with
+    # HTTP 400 "temperature is deprecated for this model" while testing
+    # vc_judge.py): Sonnet 5 rejects any NON-DEFAULT sampling parameter
+    # (temperature/top_p/top_k) -- confirmed via real docs (adaptive
+    # thinking is always on, controls its own sampling, incompatible with an
+    # external override; the literal default, 1.0, is still accepted but
+    # every other value 400s). Haiku 4.5 still needs an explicit temperature
+    # (momentum's trading gates rely on temperature=0.0 for a deterministic
+    # tie-break, documented at their call sites) -- so this is Sonnet-only,
+    # matched the same way llm_usage._price_per_million_usd already matches
+    # model family (substring, case-insensitive, survives an exact model ID
+    # varying by call site).
+    if "sonnet" not in (route.model or "").lower():
+        payload["temperature"] = temperature
+
     if system_text:
         # 10/08 -- prompt caching (operator request, "si ca aide vraiment a
         # economiser sans detruire la qualite c gratuit"): a caller that
