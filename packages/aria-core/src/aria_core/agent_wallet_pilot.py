@@ -1,4 +1,4 @@
-"""Real ~$10-15 agent-wallet pilot (Coinbase Agentic Wallet) — executes ALONE,
+"""Real ~$10-25 agent-wallet pilot (Coinbase Agentic Wallet) — executes ALONE,
 no Telegram click per transaction. Named exception, explicitly decided by the
 operator (16/07) on the open question from `docs/pilote-agent-wallet-10usd.md`
 §4: the "hard cap + isolated wallet + swap only, verified after the fact" model
@@ -56,7 +56,7 @@ from aria_core import agent_wallet_log, custody_pause, outgoing_pause
 logger = logging.getLogger(__name__)
 
 WALLET_PRODUCT = "coinbase_agentic_wallet"
-MAX_TRANSACTION_USD = 15.0
+MAX_TRANSACTION_USD = 25.0
 MAX_SLIPPAGE_BPS = 1000  # 10% -- absolute rule, never a tool's default value.
 
 # 20/07 -- direct extraction of a thesis ARIA wrote herself (aria-brain,
