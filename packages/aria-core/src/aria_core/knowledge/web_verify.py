@@ -507,9 +507,11 @@ async def _translate_query_to_english(query: str) -> str:
     (see CLAUDE.md). Soft degradation: if the LLM is unavailable/fails, we
     fall back to the original query rather than failing the search."""
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     if not is_llm_configured():
         return query
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     translated = await chat_with_context(
         query,
         (
@@ -519,6 +521,8 @@ async def _translate_query_to_english(query: str) -> str:
         ),
         temperature=0.0,
         max_tokens=60,
+        provider=provider,
+        model=model,
     )
     cleaned = (translated or "").strip().strip('"').strip()
     return cleaned or query
@@ -761,6 +765,7 @@ async def web_enhance_calibrated(
     """Re-calibrates via Groq + web snippets if uncertain (or force=True)."""
     from aria_core.knowledge.epistemic import _parse_groq_calibrated
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.runtime import settings
 
     if not getattr(settings, "aria_epistemic_web_verify", True):
@@ -802,7 +807,10 @@ async def web_enhance_calibrated(
         query=query[:400],
         today=today,
     )
-    raw = await chat_with_context(query[:400], prompt, temperature=0.1, max_tokens=280)
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    raw = await chat_with_context(
+        query[:400], prompt, temperature=0.1, max_tokens=280, provider=provider, model=model,
+    )
     if not raw or "FAIT:" not in raw.upper():
         brief = format_live_info_response(
             None, sources, lang=lang, query=query, fallback=True,
@@ -965,6 +973,7 @@ async def answer_from_page(
         return None, {"web_fetch": "unavailable"}
 
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     if not is_llm_configured():
@@ -978,7 +987,10 @@ async def answer_from_page(
         today=today,
         url=sanitize_untrusted_text(url, 300),
     )
-    raw = await chat_with_context(question[:400], prompt, temperature=0.1, max_tokens=350)
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    raw = await chat_with_context(
+        question[:400], prompt, temperature=0.1, max_tokens=350, provider=provider, model=model,
+    )
     if not raw:
         return None, {"web_fetch": "llm_failed"}
     return raw.strip(), {"web_fetch": "ok", "source_url": url}

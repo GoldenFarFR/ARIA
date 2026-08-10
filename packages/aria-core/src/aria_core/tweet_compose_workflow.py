@@ -455,7 +455,12 @@ async def _propose_learning(operator_context: str = "") -> str:
     if operator_context.strip():
         user += f"\n\nDemande / contexte opérateur :\n{operator_context.strip()[:600]}"
     user += f"\n\nContexte mémoire :\n{context}"
-    raw = await chat_with_context(user, system, temperature=0.72, max_tokens=380)
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    raw = await chat_with_context(
+        user, system, temperature=0.72, max_tokens=380, provider=provider, model=model,
+    )
     topic = (raw or f"Approfondir : {angle}").strip()
     _record_compose_intel(learn_topic=topic)
     await _store_compose_learning(content=topic, topic="compose-session")
@@ -504,7 +509,12 @@ async def _propose_role_questions(operator_message: str) -> str:
         "Pas de tweet — seulement tes questions et tes doutes."
     )
     user = operator_message.strip() or "As-tu des questions sur ton travail comme agent ZHC ?"
-    raw = await chat_with_context(user, system, temperature=0.55, max_tokens=480)
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    raw = await chat_with_context(
+        user, system, temperature=0.55, max_tokens=480, provider=provider, model=model,
+    )
     return (raw or "Quelles priorités marketing et produit pour ma première semaine ?").strip()
 
 
@@ -532,7 +542,12 @@ async def _polish_english_tweet(text: str) -> str:
             "Keep every @mention. Summarize French context in English — never copy French words.\n"
             "Output tweet text only."
         )
-        raw = await chat_with_context(body[:400], system, temperature=0.25, max_tokens=120)
+        from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+        provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+        raw = await chat_with_context(
+            body[:400], system, temperature=0.25, max_tokens=120, provider=provider, model=model,
+        )
         polished = _normalize_draft_text(raw or "")
         polished = resolve_handles_in_text(polished)
         if polished and check_tweet_content(polished)[0]:
@@ -624,7 +639,12 @@ async def _draft_tweet(state: dict[str, Any]) -> str:
     if revision:
         user += f"\n\nCorrection demandée :\n{revision}"
     user += f"\n\nContexte mémoire (varier, ne pas répéter) :\n{context}"
-    raw = await chat_with_context(user, system, temperature=0.78, max_tokens=400)
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    raw = await chat_with_context(
+        user, system, temperature=0.78, max_tokens=400, provider=provider, model=model,
+    )
     text = _normalize_draft_text(raw or "")
     from aria_core.handle_registry import resolve_handles_in_text
 
@@ -964,7 +984,12 @@ async def _expand_learn_topic(state: dict[str, Any], operator_message: str) -> s
         )
         if style:
             user += f"\n\nTon souhaité :\n{style}"
-        raw = await chat_with_context(user, system, temperature=0.5, max_tokens=450)
+        from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+        provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+        raw = await chat_with_context(
+            user, system, temperature=0.5, max_tokens=450, provider=provider, model=model,
+        )
         expanded = (raw or learn).strip()
 
     state["learn_topic"] = expanded
@@ -1036,7 +1061,12 @@ async def _acknowledge_operator_feedback(text: str, state: dict[str, Any]) -> st
         user = f"Mode : {mode}\nContexte ARIA :\n{learn}\n\nMessage opérateur :\n{clean}"
         if style:
             user += f"\n\nConsignes de ton déjà notées :\n{style}"
-        raw = await chat_with_context(user, system, temperature=0.35, max_tokens=220)
+        from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+        provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+        raw = await chat_with_context(
+            user, system, temperature=0.35, max_tokens=220, provider=provider, model=model,
+        )
         if raw and raw.strip():
             return raw.strip()
 

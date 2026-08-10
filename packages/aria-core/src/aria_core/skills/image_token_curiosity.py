@@ -45,7 +45,9 @@ async def _extract_ticker(image_data_uri: str) -> str | None:
     """One narrow, cheap LLM vision call -- structured output only, kept
     fully separate from ``_llm_response`` (the actual conversational reply)."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     raw = await chat_with_context(
         "Regarde cette image. Un ticker ou nom de token crypto (ex. $STONK, "
         "PEPE, un contrat 0x...) y est-il mentionne ou visible (post, "
@@ -56,6 +58,8 @@ async def _extract_ticker(image_data_uri: str) -> str | None:
         temperature=0.0,
         max_tokens=20,
         image_data_uri=image_data_uri,
+        provider=provider,
+        model=model,
     )
     if not raw:
         return None
@@ -210,7 +214,9 @@ async def _extract_all_tickers(image_data_uri: str) -> list[str]:
     the default single-ticker curiosity check above. Deduplicated,
     order-preserving, capped at ``_MAX_TICKERS_PER_IMAGE``."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
+    provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
     raw = await chat_with_context(
         "Regarde cette image (probablement un tableau ou un ecran de tri de "
         "tokens crypto, ex. un screener DexScreener). Liste TOUS les tickers "
@@ -221,6 +227,8 @@ async def _extract_all_tickers(image_data_uri: str) -> list[str]:
         temperature=0.0,
         max_tokens=400,
         image_data_uri=image_data_uri,
+        provider=provider,
+        model=model,
     )
     if not raw:
         return []

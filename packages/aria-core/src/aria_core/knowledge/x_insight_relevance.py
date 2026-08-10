@@ -191,15 +191,19 @@ async def assess_x_insight_for_memory(
         )
 
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     if not is_llm_configured():
         return _fallback_without_groq(text)
 
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     raw = await chat_with_context(
         text[:500],
         _GROQ_TRIAGE_PROMPT,
         temperature=0.0,
         max_tokens=110,
+        provider=provider,
+        model=model,
     )
     if not raw or "PERTINENT:" not in raw.upper():
         return InsightAssessment(
@@ -250,15 +254,19 @@ async def assess_market_knowledge_for_memory(
         )
 
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     if not is_llm_configured():
         return _fallback_without_groq(text)
 
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     raw = await chat_with_context(
         text[:500],
         _MARKET_KNOWLEDGE_TRIAGE_PROMPT,
         temperature=0.0,
         max_tokens=110,
+        provider=provider,
+        model=model,
     )
     if not raw or "PERTINENT:" not in raw.upper():
         return InsightAssessment(
