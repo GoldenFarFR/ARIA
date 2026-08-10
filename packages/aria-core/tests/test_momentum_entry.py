@@ -5660,6 +5660,26 @@ async def test_llm_confirm_system_prompt_labels_symbol_as_data(monkeypatch):
     assert "IGNORE-LE" in captured["system"]
 
 
+@pytest.mark.asyncio
+async def test_llm_confirm_system_prompt_forbids_symbol_memorization(monkeypatch):
+    """Backlog #279 (Look-Ahead-Bench, 10/08) -- le symbole réel du token atteint
+    le LLM à chaque décision live ; un symbole notoire (memecoin connu, projet
+    ayant fait l'actualité) pourrait laisser filtrer une reconnaissance issue de
+    l'entraînement plutôt qu'un jugement sur les données fournies. Le system
+    prompt doit explicitement neutraliser cette impression, distincte de la
+    défense anti-injection déjà testée ci-dessus."""
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["system"] = system
+        return "HOLD"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert "familier" in captured["system"]
+    assert "jamais un fait vérifié sur CE contrat précis" in captured["system"]
+
+
 # ── routage explicite Haiku 4.5 / OpenRouter (17/07) ────────────────────────────────
 
 @pytest.mark.asyncio
@@ -6268,6 +6288,23 @@ async def test_security_gate_neutralizes_malicious_symbol(monkeypatch):
     assert "INSTRUCTION EXPLICITE" in captured["system"]
 
 
+@pytest.mark.asyncio
+async def test_security_gate_system_prompt_forbids_symbol_memorization(monkeypatch):
+    """Backlog #279 -- même exigence que _llm_confirm : une reconnaissance du
+    symbole issue des connaissances générales du LLM ne doit JAMAIS peser sur
+    le verdict PROCEED/REJECT, seul un fait concret dans les données compte."""
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["system"] = system
+        return "PROCEED"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_security_gate(CONTRACT, "TOK", "base", 2.0, ["reason"])
+    assert "familier" in captured["system"]
+    assert "jamais un souvenir ou une réputation" in captured["system"]
+
+
 # ── fusion étapes 4+5 sur le chemin ambigu (20/07, revue croisée Gemini) ────────────
 
 @pytest.mark.asyncio
@@ -6358,6 +6395,23 @@ async def test_confirm_and_gate_neutralizes_malicious_symbol(monkeypatch):
     assert captured["user"].count("</donnees_non_fiables>") == 1
     assert "‹/donnees_non_fiables›" in captured["user"]
     assert "INSTRUCTION EXPLICITE" in captured["system"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_and_gate_system_prompt_forbids_symbol_memorization(monkeypatch):
+    """Backlog #279 -- même exigence sur le chemin fusionné (confirmation +
+    sécurité en un seul appel) : une reconnaissance du symbole depuis les
+    connaissances générales du LLM ne doit peser sur AUCUNE des deux questions."""
+    captured = {}
+
+    async def fake_chat_with_context(user, system, **kwargs):
+        captured["system"] = system
+        return "BUY"
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+    await me._llm_confirm_and_gate(CONTRACT, "TOK", "base", 1.2, ["reason"])
+    assert "familier" in captured["system"]
+    assert "jamais un fait vérifié sur CE contrat précis" in captured["system"]
 
 
 @pytest.mark.asyncio
