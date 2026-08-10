@@ -66,6 +66,32 @@ POSITION_SIZE_USD = 1_000.0
 # session can notice and manually look up whether the trader moved.
 INACTIVITY_THRESHOLD_DAYS = 14
 
+# 10/08 -- real bug found auditing this table's live data: several tracked
+# wallets received DUST/SPAM token airdrops (a transfer IN with no real swap
+# behind it -- this module treats every non-quote transfer IN as a "buy",
+# with no way yet to tell an airdrop from a real purchase). DexScreener still
+# returns a "price" for these tokens' near-empty pools (real case found:
+# "(RNDR)" at contract 0x6eba7f...2666, pool liquidity $1.45, price
+# 4.268e-24 -- not a real market, a discarded/scam pool). A tiny denominator
+# then turns an ordinary later price into an absurd ratio (found: one
+# position showing +8.6e15% latent P&L). Below this floor, a DexScreener
+# price is not trusted as a real market price -- same degradation as no
+# price found at all (``None``), never a fabricated number. Not a trading
+# gate (this module never executes anything) -- just enough to keep a
+# spam/rug pool's near-zero liquidity from posing as a real price. $1,000
+# chosen as a sanity floor (same order of magnitude as this module's own
+# ``POSITION_SIZE_USD``), not an empirically calibrated threshold.
+_MIN_POOL_LIQUIDITY_USD_FOR_PRICE = 1_000.0
+
+# A ratio outside this range between two REAL prices of the same token is
+# not a plausible price move for this pipeline's targets (the largest real
+# pumps documented in this codebase are on the order of x10-x50, never
+# anywhere near x1000) -- used as a mechanical safety net in ``summary()``
+# against exactly the artifact above, whether from a future edge case this
+# module's own liquidity floor doesn't catch, or from data recorded before
+# this fix existed.
+_PLAUSIBLE_PRICE_RATIO_BOUNDS = (0.001, 1000.0)
+
 # Transfers of these tokens are the PAYMENT leg of a swap (WETH/USDC/etc in,
 # token-of-interest out, or vice versa) -- never themselves the "buy"/"sell"
 # to copy. Base addresses, lowercase.
@@ -315,6 +341,8 @@ async def _current_price_usd(contract: str) -> float | None:
         if not pairs:
             return None
         best = max(pairs, key=lambda p: p.liquidity_usd or 0.0)
+        if (best.liquidity_usd or 0.0) < _MIN_POOL_LIQUIDITY_USD_FOR_PRICE:
+            return None
         return best.price_usd if best.price_usd and best.price_usd > 0 else None
     except Exception as exc:  # noqa: BLE001 -- shadow, never blocking
         logger.info("wallet_copy_shadow: price lookup failed for %s (%s)", contract, exc)
@@ -450,15 +478,18 @@ async def summary() -> dict[str, dict]:
             closed_count = 0
             open_latent_pnl_usd = 0.0
             open_count = 0
+            lo, hi = _PLAUSIBLE_PRICE_RATIO_BOUNDS
             for status, entry, exit_, mark in rows:
                 if not entry or entry <= 0:
                     continue
                 if status == "closed" and exit_:
+                    if not (lo <= exit_ / entry <= hi):
+                        continue  # dust/spam-price artifact, cf. _MIN_POOL_LIQUIDITY_USD_FOR_PRICE
                     closed_pnl_usd += POSITION_SIZE_USD * (exit_ / entry - 1.0)
                     closed_count += 1
                 elif status == "open":
                     open_count += 1
-                    if mark:
+                    if mark and (lo <= mark / entry <= hi):
                         open_latent_pnl_usd += POSITION_SIZE_USD * (mark / entry - 1.0)
             out[wallet] = {
                 "label": meta["label"],

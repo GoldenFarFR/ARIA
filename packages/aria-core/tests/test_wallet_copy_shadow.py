@@ -198,3 +198,65 @@ async def test_run_scan_cycle_covers_all_eight_wallets(monkeypatch):
 
 def test_position_size_is_a_fixed_fictional_stake_not_real_capital():
     assert wcs.POSITION_SIZE_USD == 1_000.0
+
+
+@pytest.mark.asyncio
+async def test_current_price_rejects_a_dust_pool_below_liquidity_floor(monkeypatch):
+    """10/08 real bug: a spam token's near-empty pool still returns a
+    'price' from DexScreener -- must degrade to None like no pool found,
+    never be trusted as a real market price."""
+    from aria_core.services import dexscreener as ds
+
+    async def _fake_pairs(contract, *, chain="base"):
+        return [ds.PairSnapshot(liquidity_usd=1.45, price_usd=4.268e-24)]
+
+    monkeypatch.setattr(ds, "fetch_token_pairs", _fake_pairs)
+    price = await wcs._current_price_usd(TOKEN)
+    assert price is None
+
+
+@pytest.mark.asyncio
+async def test_current_price_accepts_a_pool_above_liquidity_floor(monkeypatch):
+    from aria_core.services import dexscreener as ds
+
+    async def _fake_pairs(contract, *, chain="base"):
+        return [ds.PairSnapshot(liquidity_usd=50_000.0, price_usd=0.05)]
+
+    monkeypatch.setattr(ds, "fetch_token_pairs", _fake_pairs)
+    price = await wcs._current_price_usd(TOKEN)
+    assert price == 0.05
+
+
+@pytest.mark.asyncio
+async def test_summary_excludes_implausible_price_ratio_artifacts():
+    """A dust-pool artifact recorded before the liquidity-floor fix existed
+    (or any future edge case it doesn't catch) must not pollute the
+    aggregate P&L -- mechanical safety net independent of the floor above."""
+    await wcs._ensure_tables()
+    import aiosqlite
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        # Closed position: absurd ratio (dust artifact) -- must be excluded.
+        await db.execute(
+            "INSERT INTO wallet_copy_shadow_position "
+            "(wallet_address, wallet_label, contract, entry_tx_hash, entry_price_usd, "
+            " entry_at, status, exit_tx_hash, exit_price_usd, exit_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?)",
+            (WALLET, META["label"], TOKEN, "0xdust", 4.268e-24,
+             "2026-08-08T12:00:00Z", "0xdustexit", 3.687e-08, "2026-08-09T12:00:00Z"),
+        )
+        # Closed position: plausible x3 gain -- must be counted.
+        await db.execute(
+            "INSERT INTO wallet_copy_shadow_position "
+            "(wallet_address, wallet_label, contract, entry_tx_hash, entry_price_usd, "
+            " entry_at, status, exit_tx_hash, exit_price_usd, exit_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?)",
+            (WALLET, META["label"], "0x" + "d" * 40, "0xreal", 1.0,
+             "2026-08-08T12:00:00Z", "0xrealexit", 3.0, "2026-08-09T12:00:00Z"),
+        )
+        await db.commit()
+
+    result = await wcs.summary()
+    entry = result[WALLET]
+    assert entry["closed_positions"] == 1
+    assert entry["realized_pnl_usd"] == pytest.approx(2_000.0)
