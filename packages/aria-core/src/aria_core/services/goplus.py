@@ -53,11 +53,13 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.gopluslabs.io/api/v1"
 
 # 08/05 -- self-expiring quota suspension (see _get_json's comment): every
-# call short-circuits to "unavailable" until this ISO date. Set to a few days
-# past the expected monthly-quota renewal (~13/08 per the operator's 29/07
-# "~15 jours" estimate, margin included). ISO-string comparison is correct
-# for dates in this format.
-GOPLUS_QUOTA_SUSPENDED_UNTIL = "2026-08-16"
+# call short-circuits to "unavailable" until this ISO date. 10/08, corrected
+# to 08-18 per explicit operator confirmation of the real exhausted-until
+# date. Last time this MANUAL date needs correcting by hand: past this
+# point, goplus_quota_suspension.py's AUTOMATIC mechanism takes over for
+# any future exhaustion, self-arming/self-disarming from the client's own
+# real rate-limit signal -- no more hardcoded date, no more redeploy.
+GOPLUS_QUOTA_SUSPENDED_UNTIL = "2026-08-18"
 BASE_CHAIN_ID = "8453"  # Base mainnet
 
 # 22/07 -- cooldown after a rejected authentication (code 4012) despite a
@@ -361,6 +363,25 @@ class GoPlusClient:
                 detail,
             )
 
+    async def _record_rate_limit_for_auto_suspension(self) -> None:
+        """10/08 -- called only on a REAL rate-limit signal (429 or code
+        4029), never a generic failure -- see
+        goplus_quota_suspension.py's own docstring. Logs loudly only the
+        instant this call actually ARMS the suspension, never on every
+        rate-limited call."""
+        from aria_core import goplus_quota_suspension
+
+        just_armed = await goplus_quota_suspension.record_rate_limit_failure()
+        if just_armed:
+            logger.warning(
+                "goplus: AUTO quota suspension ARMED -- %s consecutive rate-limit signals, "
+                "suspends for %ss (doubles on further failures, capped at %ss), disarms on "
+                "first real success",
+                goplus_quota_suspension._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES,
+                goplus_quota_suspension._INITIAL_SUSPEND_SECONDS,
+                goplus_quota_suspension._MAX_SUSPEND_SECONDS,
+            )
+
     def circuit_open(self) -> bool:
         return time.time() < self._circuit_open_until
 
@@ -379,6 +400,11 @@ class GoPlusClient:
         # task tracks verifying the renewal.
         if datetime.now(timezone.utc).date().isoformat() < GOPLUS_QUOTA_SUSPENDED_UNTIL:
             return None, f"{UNAVAILABLE} (quota mensuel épuisé, suspendu jusqu'au {GOPLUS_QUOTA_SUSPENDED_UNTIL})"
+
+        from aria_core import goplus_quota_suspension
+
+        if await goplus_quota_suspension.is_suspended():
+            return None, f"{UNAVAILABLE} (quota mensuel épuisé, suspension automatique en cours)"
         if self.circuit_open():
             return None, f"{UNAVAILABLE} (coupe-circuit ouvert, échecs consécutifs récents)"
 
@@ -422,6 +448,7 @@ class GoPlusClient:
                 attempt_429 += 1
                 if attempt_429 >= 3:
                     self._record_failure(f"{url} -> HTTP 429 apres {attempt_429} tentatives")
+                    await self._record_rate_limit_for_auto_suspension()
                     return None, f"{UNAVAILABLE} (rate limit GoPlus)"
                 await asyncio.sleep(0.5 * (2**attempt_429))
                 continue
@@ -445,6 +472,7 @@ class GoPlusClient:
                     attempt_429 += 1
                     if attempt_429 >= 3:
                         self._record_failure(f"{url} -> code 4029 apres {attempt_429} tentatives")
+                        await self._record_rate_limit_for_auto_suspension()
                         return None, f"{UNAVAILABLE} (rate limit GoPlus)"
                     await asyncio.sleep(0.5 * (2**attempt_429))
                     continue
@@ -506,6 +534,9 @@ class GoPlusClient:
                 return None, f"{UNAVAILABLE} ({exc})"
 
             self._record_success()
+            from aria_core import goplus_quota_suspension
+
+            await goplus_quota_suspension.record_success()
             return response.json(), None
 
     async def get_token_security(

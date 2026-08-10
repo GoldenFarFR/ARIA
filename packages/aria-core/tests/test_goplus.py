@@ -26,6 +26,16 @@ def _lift_quota_suspension(monkeypatch):
     tests override this explicitly."""
     monkeypatch.setattr(goplus, "GOPLUS_QUOTA_SUSPENDED_UNTIL", "2000-01-01")
 
+
+@pytest.fixture(autouse=True)
+def _isolated_goplus_quota_suspension_db(tmp_path, monkeypatch):
+    """10/08 -- _get_json now also touches goplus_quota_suspension's own
+    persisted state on every rate-limit failure/success -- same isolation
+    need as the fixture above."""
+    from aria_core import goplus_quota_suspension as gqs
+
+    monkeypatch.setattr(gqs, "DB_PATH", str(tmp_path / "goplus_quota_suspension_test.db"))
+
 ADDR = "0x" + "b" * 40
 
 
@@ -151,14 +161,124 @@ async def test_code_4029_gives_up_after_three_attempts(monkeypatch):
     assert "rate limit" in security.error
 
 
+# ── auto-armement de la suspension de quota (10/08) -- via de vrais signaux ─────
+# rate-limit (429 réel ou code 4029 déguisé), jamais une panne réseau générique.
+
+
+@pytest.mark.asyncio
+async def test_repeated_rate_limit_auto_arms_quota_suspension(monkeypatch):
+    """3 échecs rate-limit CONSÉCUTIFS (chacun via 3 tentatives 4029, comme le
+    test ci-dessus) sur des CONTRATS DIFFÉRENTS -- au 3e, la suspension
+    automatique doit s'armer."""
+    from aria_core import goplus_quota_suspension as gqs
+
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    rate_limited = {"code": 4029, "message": "too many requests"}
+
+    for _ in range(gqs._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
+        _patch_goplus_http(
+            monkeypatch,
+            {url: [_FakeResponse(200, rate_limited)] * 3},
+        )
+        await client.get_token_security(ADDR, chain_id="8453")
+
+    assert await gqs.is_suspended() is True
+
+
+@pytest.mark.asyncio
+async def test_auto_suspension_short_circuits_without_a_network_call(monkeypatch):
+    """Une fois armée, un candidat suivant ne doit JAMAIS toucher le réseau --
+    même doctrine que la suspension manuelle par date qu'elle complète."""
+    from aria_core import goplus_quota_suspension as gqs
+
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    assert await gqs.is_suspended() is True
+
+    called = {"network": False}
+
+    def _fail_if_called(**kw):
+        called["network"] = True
+        raise AssertionError("le réseau ne doit jamais être touché pendant la suspension auto")
+
+    monkeypatch.setattr("aria_core.services.goplus.httpx.AsyncClient", _fail_if_called)
+
+    client = GoPlusClient()
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert called["network"] is False
+    assert security.available is False
+    assert "quota mensuel épuisé" in security.error
+
+
+@pytest.mark.asyncio
+async def test_real_success_disarms_auto_quota_suspension(monkeypatch):
+    from aria_core import goplus_quota_suspension as gqs
+
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    assert await gqs.is_suspended() is True
+    await gqs.record_success()
+    assert await gqs.is_suspended() is False
+
+    # Un appel réel réussi désarme aussi directement via _get_json.
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    await gqs.record_rate_limit_failure()
+    assert await gqs.is_suspended() is True
+
+    _patch_goplus_no_sleep(monkeypatch)
+    client = GoPlusClient()
+    url = f"{client.base_url}/token_security/8453"
+    ok_payload = {"code": 1, "message": "OK", "result": {ADDR.lower(): {"is_honeypot": "0"}}}
+    # La suspension est encore active -- forcer son expiration pour simuler
+    # le moment où la sonde post-fenêtre est tentée.
+    import aiosqlite
+    from datetime import datetime, timedelta, timezone
+
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    async with aiosqlite.connect(gqs.DB_PATH) as db:
+        await db.execute(
+            "UPDATE goplus_quota_suspension_state SET suspended_until = ? WHERE id = 1", (past,),
+        )
+        await db.commit()
+
+    _patch_goplus_http(monkeypatch, {url: [_FakeResponse(200, ok_payload)]})
+    security = await client.get_token_security(ADDR, chain_id="8453")
+
+    assert security.available is True
+    assert await gqs.is_suspended() is False
+
+
 # ── coupe-circuit réactif (filet de sécurité quota, 21/07) ────────────────────
 # Aucun plafond mensuel/journalier GoPlus n'a jamais été confirmé -- le coupe-circuit
 # ne chiffre donc rien sur GoPlus lui-même, il protège juste contre le martèlement
 # d'un compte visiblement en échec soutenu (429/code 4029/5xx/timeout), quelle que
 # soit la cause réelle.
 
+def _neutralize_auto_quota_suspension(monkeypatch):
+    """10/08 -- these 3 tests deliberately drive 5 CONSECUTIVE 429s to
+    exercise the GENERIC circuit breaker (_CIRCUIT_FAIL_THRESHOLD) -- but
+    that now also crosses goplus_quota_suspension's own 3-failure threshold
+    partway through, short-circuiting the later calls before the generic
+    breaker's own threshold is reached. Neutralized here so these tests
+    keep exercising what they were written for; the auto-suspension's own
+    behavior is covered by its dedicated tests above."""
+    from aria_core import goplus_quota_suspension as gqs
+
+    async def _never_arms(*a, **k):
+        return False
+
+    monkeypatch.setattr(gqs, "record_rate_limit_failure", _never_arms)
+
+
 @pytest.mark.asyncio
 async def test_circuit_opens_after_threshold_consecutive_failures(monkeypatch):
+    _neutralize_auto_quota_suspension(monkeypatch)
     _patch_goplus_no_sleep(monkeypatch)
     client = GoPlusClient()
     url = f"{client.base_url}/token_security/8453"
@@ -192,6 +312,7 @@ async def test_circuit_opens_after_threshold_consecutive_failures(monkeypatch):
 async def test_circuit_does_not_open_before_threshold(monkeypatch):
     """4 échecs consécutifs (< 5) -- le circuit reste fermé, le prochain appel touche
     toujours le réseau normalement."""
+    _neutralize_auto_quota_suspension(monkeypatch)
     _patch_goplus_no_sleep(monkeypatch)
     client = GoPlusClient()
     url = f"{client.base_url}/token_security/8453"
@@ -212,6 +333,7 @@ async def test_circuit_does_not_open_before_threshold(monkeypatch):
 async def test_a_success_resets_the_failure_streak_and_prevents_circuit_opening(monkeypatch):
     """4 échecs, puis un succès qui remet le compteur à zéro, puis 4 échecs de plus --
     jamais 5 CONSÉCUTIFS -- le circuit ne doit jamais s'ouvrir."""
+    _neutralize_auto_quota_suspension(monkeypatch)
     _patch_goplus_no_sleep(monkeypatch)
     client = GoPlusClient()
     url = f"{client.base_url}/token_security/8453"
@@ -234,6 +356,7 @@ async def test_a_success_resets_the_failure_streak_and_prevents_circuit_opening(
 
 @pytest.mark.asyncio
 async def test_circuit_closes_automatically_after_cooldown(monkeypatch):
+    _neutralize_auto_quota_suspension(monkeypatch)
     _patch_goplus_no_sleep(monkeypatch)
     client = GoPlusClient()
     url = f"{client.base_url}/token_security/8453"
