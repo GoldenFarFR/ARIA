@@ -196,6 +196,25 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
 # by the operator), same invariant kept intact.
 _MIN_INTERVAL = 4.0
 
+# 10/08 -- adaptive throttle, replaces the manual edit-commit-deploy cycle
+# this constant went through 7 times between 21/07 and 04/08 (each widening
+# above is a real incident that needed a human to notice, diagnose, edit
+# the code and redeploy). The client now tightens its OWN pace in reaction
+# to a real 429 and loosens it back on its own -- but DELIBERATELY
+# ASYMMETRIC, mirroring the operator's own explicit 04/08 warning: a 429 is
+# recoverable, a sustained aggressive rate risking a Cloudflare-level IP
+# block is not, "not a risk to re-test casually". So: tighten FAST (every
+# single 429 widens the interval immediately), loosen SLOW (only after many
+# consecutive successes, in small steps) -- and NEVER below the operator's
+# own last hand-calibrated ``_MIN_INTERVAL``/``_AUTHENTICATED_MIN_INTERVAL``
+# value above, which stays the hard floor. Speeding up past that floor is
+# still a decision only a human makes deliberately, same doctrine as the
+# 04/08 revert.
+_RATE_LIMIT_BACKOFF_FACTOR = 1.5
+_MAX_INTERVAL_MULTIPLIER = 3.0
+_CONSECUTIVE_SUCCESSES_BEFORE_EASING = 30
+_EASE_STEP_FACTOR = 0.9
+
 # Reserve/volume plausibility threshold for `resolve_primary_pool` (14/07 fix,
 # cf. its docstring) -- calibrated on real data (direct GeckoTerminal query,
 # WETH token on Base, 20 pools): the legitimate pools in the list had a
@@ -254,21 +273,63 @@ class OHLCVResult:
 
 
 class GeckoTerminalClient:
-    """Async HTTP client, read-only, conservative throttle (free public API)."""
+    """Async HTTP client, read-only, conservative throttle (free public API).
+    10/08 -- the throttle is now adaptive (see the module-level constants
+    above ``_MIN_INTERVAL`` for the full doctrine): ``_min_interval`` stays
+    the hard floor (never sped past automatically), ``_current_interval`` is
+    the live pace, tightened fast on a real 429, eased back slowly on
+    sustained success."""
 
     def __init__(self, base_url: str = BASE_URL, *, min_interval: float = _MIN_INTERVAL) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
+        self._current_interval = min_interval
+        self._consecutive_successes = 0
         self._lock = asyncio.Lock()
         self._last_request = 0.0
 
     async def _throttle(self) -> None:
         async with self._lock:
             now = asyncio.get_event_loop().time()
-            wait = self._min_interval - (now - self._last_request)
+            wait = self._current_interval - (now - self._last_request)
             if wait > 0:
                 await asyncio.sleep(wait)
             self._last_request = asyncio.get_event_loop().time()
+
+    def _record_rate_limit(self) -> None:
+        """A real 429 -- tighten immediately (never wait for a threshold of
+        consecutive failures, unlike the outage-bypass mechanisms elsewhere
+        in this codebase: here the cost of tightening a bit too eagerly is
+        just a slower scan, while the cost of NOT tightening fast enough is
+        a sustained saturation risking a Cloudflare-level block)."""
+        self._consecutive_successes = 0
+        cap = self._min_interval * _MAX_INTERVAL_MULTIPLIER
+        new_interval = min(self._current_interval * _RATE_LIMIT_BACKOFF_FACTOR, cap)
+        if new_interval > self._current_interval:
+            logger.warning(
+                "geckoterminal: adaptive throttle tightened %.2fs -> %.2fs after a real 429 "
+                "(floor %.2fs, cap %.2fs)",
+                self._current_interval, new_interval, self._min_interval, cap,
+            )
+        self._current_interval = new_interval
+
+    def _record_success(self) -> None:
+        """Eases the pace back toward the floor, but only after a SUSTAINED
+        run of successes and in small steps -- never below the floor, never
+        a fast return to nominal (see the module-level doctrine comment)."""
+        if self._current_interval <= self._min_interval:
+            self._consecutive_successes = 0
+            return
+        self._consecutive_successes += 1
+        if self._consecutive_successes < _CONSECUTIVE_SUCCESSES_BEFORE_EASING:
+            return
+        self._consecutive_successes = 0
+        eased = max(self._current_interval * _EASE_STEP_FACTOR, self._min_interval)
+        logger.info(
+            "geckoterminal: adaptive throttle eased %.2fs -> %.2fs after %s consecutive successes",
+            self._current_interval, eased, _CONSECUTIVE_SUCCESSES_BEFORE_EASING,
+        )
+        self._current_interval = eased
 
     async def _get_json(self, path: str, *, params: dict | None = None) -> tuple[object | None, str | None]:
         """GET with retry on 5xx/timeout, but NO retry on 429 (08/08, real
@@ -305,6 +366,7 @@ class GeckoTerminalClient:
             if response.status_code == 429:
                 attempt_429 += 1
                 logger.warning("geckoterminal: HTTP 429 on %s after %s attempt(s)", url, attempt_429)
+                self._record_rate_limit()
                 return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
 
             if response.status_code >= 500:
@@ -323,6 +385,7 @@ class GeckoTerminalClient:
                 logger.warning("geckoterminal: %s", exc)
                 return None, f"{UNAVAILABLE} ({exc})"
 
+            self._record_success()
             return response.json(), None
 
     async def get_pool_created_at(self, pool_address: str, *, network: str = NETWORK) -> PoolMetadata:

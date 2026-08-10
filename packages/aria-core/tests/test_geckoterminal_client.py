@@ -757,3 +757,96 @@ def test_resolve_min_interval_authenticated_branch_still_selected(monkeypatch):
     monkeypatch.setenv("COINGECKO_DEMO_API_KEY", "cg-demo-abc123")
     assert gt._resolve_min_interval() == gt._AUTHENTICATED_MIN_INTERVAL
     assert gt._AUTHENTICATED_MIN_INTERVAL <= gt._MIN_INTERVAL
+
+
+# ── throttle adaptatif (10/08) -- resserre vite sur un vrai 429, desserre
+# lentement sur du succès soutenu, jamais sous le plancher nominal ─────────
+
+
+class TestAdaptiveThrottle:
+    def test_starts_at_the_nominal_floor(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        assert client._current_interval == 4.0
+
+    def test_a_429_tightens_the_interval_immediately(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        client._record_rate_limit()
+        assert client._current_interval == pytest.approx(4.0 * 1.5)
+
+    def test_tightening_is_capped(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        for _ in range(20):
+            client._record_rate_limit()
+        assert client._current_interval == pytest.approx(4.0 * 3.0)  # _MAX_INTERVAL_MULTIPLIER
+
+    def test_success_never_eases_below_the_floor(self):
+        """Le client n'a jamais été resserré -- rester au plancher, jamais en dessous."""
+        client = GeckoTerminalClient(min_interval=4.0)
+        for _ in range(100):
+            client._record_success()
+        assert client._current_interval == 4.0
+
+    def test_isolated_successes_below_the_easing_threshold_never_ease(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        client._record_rate_limit()
+        tightened = client._current_interval
+        for _ in range(29):  # _CONSECUTIVE_SUCCESSES_BEFORE_EASING - 1
+            client._record_success()
+        assert client._current_interval == tightened
+
+    def test_sustained_success_eases_the_interval_gradually(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        client._record_rate_limit()
+        tightened = client._current_interval
+        for _ in range(30):  # _CONSECUTIVE_SUCCESSES_BEFORE_EASING
+            client._record_success()
+        assert client._current_interval == pytest.approx(tightened * 0.9)
+        assert client._current_interval > 4.0  # toujours au-dessus du plancher
+
+    def test_a_rate_limit_resets_the_success_streak(self):
+        client = GeckoTerminalClient(min_interval=4.0)
+        client._record_rate_limit()
+        for _ in range(29):
+            client._record_success()
+        client._record_rate_limit()  # remet le compteur à zéro
+        for _ in range(29):
+            client._record_success()
+        # 29 succès seulement depuis le dernier 429 -- pas encore assez pour desserrer.
+        assert client._consecutive_successes == 29
+
+    def test_repeated_easing_never_drops_below_the_floor(self):
+        """Beaucoup de cycles resserrement/desserrement ne doivent jamais
+        faire passer l'intervalle sous le plancher nominal, même après de
+        nombreux pas de 0.9x."""
+        client = GeckoTerminalClient(min_interval=4.0)
+        client._record_rate_limit()
+        client._record_rate_limit()
+        for _ in range(300):
+            client._record_success()
+        assert client._current_interval == pytest.approx(4.0)
+        assert client._current_interval >= 4.0
+
+    @pytest.mark.asyncio
+    async def test_get_json_tightens_on_a_real_429(self, monkeypatch):
+        _patch_no_sleep(monkeypatch)
+        client = GeckoTerminalClient(min_interval=4.0)
+        url = f"{client.base_url}/networks/base/pools/0xpool"
+        _patch_client(monkeypatch, {url: FakeResponse(429)})
+
+        await client._get_json("/networks/base/pools/0xpool")
+
+        assert client._current_interval == pytest.approx(4.0 * 1.5)
+
+    @pytest.mark.asyncio
+    async def test_get_json_counts_a_real_success_toward_easing(self, monkeypatch):
+        _patch_no_sleep(monkeypatch)
+        client = GeckoTerminalClient(min_interval=4.0)
+        url = f"{client.base_url}/networks/base/pools/0xpool"
+        client._record_rate_limit()
+        tightened = client._current_interval
+
+        _patch_client(monkeypatch, {url: [FakeResponse(200, {"data": {}})] * 30})
+        for _ in range(30):
+            await client._get_json("/networks/base/pools/0xpool")
+
+        assert client._current_interval == pytest.approx(tightened * 0.9)
