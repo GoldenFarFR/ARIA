@@ -299,6 +299,7 @@ async def _reason_over_evidence(claim: str, evidence: str, lang: str) -> dict | 
     from datetime import datetime, timezone
 
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     if not is_llm_configured():
@@ -311,7 +312,10 @@ async def _reason_over_evidence(claim: str, evidence: str, lang: str) -> dict | 
         claim=sanitize_untrusted_text(claim, 600),
         evidence=sanitize_untrusted_text(evidence, 2000),
     )
-    raw = await chat_with_context(claim[:300], prompt, temperature=0.1, max_tokens=180)
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+    raw = await chat_with_context(
+        claim[:300], prompt, temperature=0.1, max_tokens=180, provider=provider, model=model,
+    )
     return _parse_claim_verdict(raw)
 
 

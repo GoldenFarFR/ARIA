@@ -109,6 +109,7 @@ def _fallback_x_tweet(user_message: str, *, tag_watchlist: bool) -> str:
 async def compose_x_tweet(user_message: str, lang: str = "en") -> str:
     """Draft tweet from operator intent (LLM when available, else template)."""
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     tag_watchlist = _should_tag_watchlist(user_message)
     mentions = _watchlist_mentions() if tag_watchlist else ""
@@ -134,11 +135,14 @@ async def compose_x_tweet(user_message: str, lang: str = "en") -> str:
             f"{f'- Include these @ at the end: {mentions}' if mentions else ''}\n"
             "Tweet text only — no quotes."
         )
+        provider, model = anthropic_depth_override(LlmDepth.BRIEF)
         composed = await chat_with_context(
             f"{user_message}\n\nContexte mémoire :\n{context}",
             system,
             temperature=0.75,
             max_tokens=140,
+            provider=provider,
+            model=model,
         )
         if composed and composed.strip():
             from aria_core.handle_registry import resolve_handles_in_text

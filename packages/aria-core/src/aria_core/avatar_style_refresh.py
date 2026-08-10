@@ -240,6 +240,7 @@ async def propose_style(*, force_new: bool = False) -> str:
 
     from aria_core.grounding import grounded_llm_identity
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.narrative import llm_system_block
 
     history = state.get("history") or []
@@ -263,7 +264,10 @@ async def propose_style(*, force_new: bool = False) -> str:
     if recent:
         user += f"\nStyles récents à éviter : {recent}"
 
-    raw = await chat_with_context(user, system, temperature=0.65, max_tokens=220)
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+    raw = await chat_with_context(
+        user, system, temperature=0.65, max_tokens=220, provider=provider, model=model,
+    )
     style = (raw or "").strip()
     if not style:
         style = (

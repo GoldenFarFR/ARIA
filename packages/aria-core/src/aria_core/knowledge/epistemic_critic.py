@@ -69,13 +69,17 @@ async def critic_check(
     if getattr(settings, "aria_epistemic_critic", True) and issues:
         try:
             from aria_core.llm import chat_with_context, is_llm_configured
+            from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
             if is_llm_configured():
+                provider, model = anthropic_depth_override(LlmDepth.BRIEF)
                 raw = await chat_with_context(
                     reply[:600],
                     _CRITIC_PROMPT_FR.format(reply=reply[:500]),
                     temperature=0.0,
                     max_tokens=30,
+                    provider=provider,
+                    model=model,
                 )
                 if raw and "SAFE: NON" in raw.upper():
                     issues.append("groq_critic")

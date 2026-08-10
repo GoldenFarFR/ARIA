@@ -353,6 +353,7 @@ def _parse_groq_calibrated(raw: str, lang: str) -> tuple[str | None, dict]:
 async def groq_calibrated_answer(query: str, lang: str = "fr") -> tuple[str | None, dict]:
     """Main engine — any question via Groq + probabilities."""
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     if not is_llm_configured():
         return None, {"groq_calibrated": False}
@@ -360,11 +361,14 @@ async def groq_calibrated_answer(query: str, lang: str = "fr") -> tuple[str | No
     lang_key = "fr" if lang == "fr" else "en"
     tpl = _GROQ_CALIBRATED_PROMPT_FR if lang_key == "fr" else _GROQ_CALIBRATED_PROMPT_EN
     prompt = tpl.format(_today_context=_today_context(lang_key))
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     raw = await chat_with_context(
         query[:600],
         prompt,
         temperature=0.15,
         max_tokens=220,
+        provider=provider,
+        model=model,
     )
     if not raw or "FAIT:" not in raw.upper():
         return None, {"groq_calibrated": True, "empty": True}

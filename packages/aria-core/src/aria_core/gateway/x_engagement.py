@@ -135,6 +135,7 @@ async def compose_mention_reply(username: str, mention_text: str) -> str | None:
     """
     from aria_core.identity import x_identity_prompt
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
     from aria_core.x_publication_policy import check_tweet_content, policy_rules_for_llm
     from aria_core.x_voice import human_voice_rules_for_llm, humanize_tweet_for_x
@@ -162,7 +163,10 @@ async def compose_mention_reply(username: str, mention_text: str) -> str | None:
         "Verified facts only; if unsure, say what you are exploring next."
     )
     user = f"<donnees_non_fiables>\n@{safe_username} wrote:\n{safe_text}\n</donnees_non_fiables>\n\nYour reply:"
-    raw = await chat_with_context(user, system, max_tokens=160, temperature=0.6)
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+    raw = await chat_with_context(
+        user, system, max_tokens=160, temperature=0.6, provider=provider, model=model,
+    )
     if not raw:
         return None
 

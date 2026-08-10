@@ -32,6 +32,7 @@ import logging
 from dataclasses import dataclass
 
 from aria_core.llm import chat_with_context
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.sanitize import sanitize_untrusted_text
 from aria_core.skills.vc_analysis import _clamp_int, _extract_json
 
@@ -152,8 +153,10 @@ async def judge_thesis_quality(thesis_text: str) -> ThesisQualityVerdict:
     user_message = f"<donnees_non_fiables>\n{safe_text}\n</donnees_non_fiables>\n\nNote cette thèse."
 
     try:
+        provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
         raw = await chat_with_context(
             user_message, _SYSTEM_PROMPT, max_tokens=700, temperature=0.1, depth="develop",
+            provider=provider, model=model,
         )
     except Exception as exc:  # noqa: BLE001 — never blocking
         logger.error("judge_thesis_quality: LLM call failed (%s)", exc)

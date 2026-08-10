@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from aria_core.llm import chat_with_context
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.paths import memory_dir, truth_ledger_dir
 
 logger = logging.getLogger(__name__)
@@ -215,11 +216,14 @@ async def _consolidate_category(
         "Produis le nouveau contenu consolidé COMPLET pour cette catégorie "
         "(reprend ce qui reste valable du contenu déjà consolidé + les nouvelles entrées)."
     )
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
     return await chat_with_context(
         user_message,
         _CONSOLIDATION_SYSTEM,
         max_tokens=_MAX_TOKENS,
         depth="brief",
+        provider=provider,
+        model=model,
     )
 
 

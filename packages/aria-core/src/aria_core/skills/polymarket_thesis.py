@@ -85,6 +85,7 @@ import time
 from dataclasses import dataclass
 
 from aria_core.llm import chat_with_context
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.services.polymarket import PolymarketCandidateMarket, compute_probability_velocity, polymarket_client
 
 logger = logging.getLogger(__name__)
@@ -312,12 +313,15 @@ async def _single_probability_vote(
     uncached``) always passes one of ``_VOTE_LENSES`` (#146, 28/07) -- see the
     comment above ``_VOTE_LENSES`` for why."""
     try:
+        provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
         raw = await chat_with_context(
             user_message,
             system_prompt,
             max_tokens=400,
             temperature=0.3,
             depth="develop",
+            provider=provider,
+            model=model,
         )
     except Exception as exc:  # noqa: BLE001 -- an LLM outage must never block the cycle
         logger.warning("polymarket_thesis: vote failed (%s)", exc)

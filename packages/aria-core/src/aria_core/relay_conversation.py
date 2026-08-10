@@ -314,6 +314,7 @@ async def run_relay_conversation_cycle() -> dict:
         return {"outcome": "daily_cap_reached"}
 
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     # History stops AT the message being answered -- anything logged after it
     # (an automatic bulletin, a later operator message) is irrelevant to answering
@@ -326,6 +327,7 @@ async def run_relay_conversation_cycle() -> dict:
     if matched_position:
         system_context = f"{system_context}\n\n{_position_facts_block(matched_position)}"
 
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
     reply = await chat_with_context(
         last_user_message,
         system_context,
@@ -337,6 +339,8 @@ async def run_relay_conversation_cycle() -> dict:
         # lever for conciseness.
         max_tokens=500,
         depth="relay_conversation",
+        provider=provider,
+        model=model,
     )
     if not reply:
         return {"outcome": "llm_unavailable"}

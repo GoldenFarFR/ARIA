@@ -285,6 +285,7 @@ def _parse_avatar_choice(raw: str, valid_ids: set[str]) -> tuple[str | None, str
 async def _llm_pick_avatar_id() -> tuple[str | None, str]:
     from aria_core.grounding import grounded_llm_identity
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.narrative import llm_system_block
 
     gallery = list_gallery()
@@ -308,7 +309,10 @@ async def _llm_pick_avatar_id() -> tuple[str | None, str]:
         "zhc-gold\n"
         "NOTE: ..."
     )
-    raw = await chat_with_context(user, system, temperature=0.4, max_tokens=200)
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+    raw = await chat_with_context(
+        user, system, temperature=0.4, max_tokens=200, provider=provider, model=model,
+    )
     if not raw:
         return None, ""
     pick, note = _parse_avatar_choice(raw, valid)

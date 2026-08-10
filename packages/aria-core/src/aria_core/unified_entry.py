@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from aria_core.ai_cliches import forbidden_cliches_prompt
 from aria_core.investment_memory import list_theses_for_token
 from aria_core.llm import chat_with_context
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.skills.acp_onchain_scan import TokenScanContext, scan_base_token
 from aria_core.skills.vc_analysis import (
     MAX_POSITION_SIZE_PCT,
@@ -303,8 +304,10 @@ async def evaluate_unified_entry(
     )
 
     try:
+        provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
         raw = await chat_with_context(
             user_message, _SYSTEM_PROMPT, max_tokens=1800, temperature=0.2, depth="develop",
+            provider=provider, model=model,
         )
     except Exception as exc:  # noqa: BLE001 -- never blocking, deterministic fallback
         logger.error("unified_entry: LLM call failed (%s) -- deterministic fallback", exc)

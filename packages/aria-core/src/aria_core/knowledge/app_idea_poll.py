@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 
 from aria_core.llm import chat_with_context, is_llm_configured
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.memory import append_memory, build_llm_context
 from aria_core.narrative import llm_system_block
 from aria_core.paths import data_dir
@@ -98,7 +99,10 @@ async def _generate_ideas_llm(lang: str) -> list[dict[str, str]]:
         if lang_key == "fr"
         else "Generate the weekly 3-app poll."
     )
-    raw = await chat_with_context(user, system, temperature=0.45, max_tokens=700)
+    provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
+    raw = await chat_with_context(
+        user, system, temperature=0.45, max_tokens=700, provider=provider, model=model,
+    )
     if not raw:
         return []
     parsed = _parse_llm_ideas(raw)

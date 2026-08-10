@@ -6,6 +6,7 @@ import logging
 import re
 
 from aria_core.llm import chat_with_context, is_llm_configured
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.memory import append_memory, build_llm_context, read_recent_memory
 from aria_core.narrative import llm_system_block
 from aria_core.runtime import settings
@@ -182,11 +183,14 @@ async def run_founder_ping(lang: str = "fr") -> str | None:
         if lang_key == "fr"
         else "Generate your spontaneous initiative message to the operator (as if unprompted)."
     )
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
     reply = await chat_with_context(
         user,
         system,
         temperature=max(settings.aria_llm_temperature, 0.35),
         max_tokens=400,
+        provider=provider,
+        model=model,
     )
     if not reply or not reply.strip():
         return None

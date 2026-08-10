@@ -802,6 +802,7 @@ async def _synthesize_potential(
     (the project's own account, not a third party), so it must win over any
     other contradictory web content still present."""
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
     from aria_core.sanitize import sanitize_untrusted_text
 
     if strong_bio_corroboration:
@@ -849,7 +850,10 @@ async def _synthesize_potential(
         # 19/07 -- explicit operator decision ("switch to spark and once spark
         # runs out of value we'll move to anthropic as planned"): Haiku/
         # OpenRouter override removed, now uses the global provider/fallback.
-        reply = await chat_with_context(user, system, max_tokens=150, temperature=0.0)
+        provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+        reply = await chat_with_context(
+            user, system, max_tokens=150, temperature=0.0, provider=provider, model=model,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.info("conviction_research: LLM synthesis failed (%s)", exc)
         return None, ""

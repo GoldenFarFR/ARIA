@@ -93,6 +93,7 @@ async def humanize_tweet_for_x(text: str) -> str:
         return body[:280]
 
     from aria_core.llm import chat_with_context, is_llm_configured
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     if not is_llm_configured():
         return body[:280]
@@ -104,7 +105,10 @@ async def humanize_tweet_for_x(text: str) -> str:
         "Keep verified facts and every @mention. Turn feature lists into 2-3 natural sentences.\n"
         "Output tweet text only — no quotes."
     )
-    raw = await chat_with_context(body[:400], system, temperature=0.45, max_tokens=140)
+    provider, model = anthropic_depth_override(LlmDepth.BRIEF)
+    raw = await chat_with_context(
+        body[:400], system, temperature=0.45, max_tokens=140, provider=provider, model=model,
+    )
     polished = (raw or "").strip().strip('"').strip("'")
     polished = resolve_handles_in_text(polished)
     if polished and check_tweet_content(polished)[0]:

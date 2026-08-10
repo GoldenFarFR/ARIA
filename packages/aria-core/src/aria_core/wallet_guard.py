@@ -186,6 +186,7 @@ async def send_spend_prompt(approval_id: str, action: str, description: str) -> 
 
 async def generate_spend_explanation(action: str, description: str, payload: dict[str, Any]) -> str:
     from aria_core.llm import chat_with_context
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 
     system_context = (
         "Tu es ARIA. Explique en langage simple à ton administrateur pourquoi tu demandes "
@@ -198,7 +199,10 @@ async def generate_spend_explanation(action: str, description: str, payload: dic
         f"Détails : {json.dumps(payload, ensure_ascii=False)}\n\n"
         "Explique pourquoi cette dépense est demandée."
     )
-    explanation = await chat_with_context(user_message, system_context, max_tokens=350)
+    provider, model = anthropic_depth_override(LlmDepth.STANDARD)
+    explanation = await chat_with_context(
+        user_message, system_context, max_tokens=350, provider=provider, model=model
+    )
     return explanation or (
         "Je n'ai pas pu générer d'explication automatique pour le moment — "
         "la demande reste en attente de ta décision (Oui/Non)."

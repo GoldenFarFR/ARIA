@@ -204,7 +204,7 @@ async def test_generate_spend_explanation_falls_back_when_llm_returns_nothing(mo
 
 @pytest.mark.asyncio
 async def test_generate_spend_explanation_returns_llm_output(monkeypatch):
-    async def _fake_llm(message, system, max_tokens=350):
+    async def _fake_llm(message, system, max_tokens=350, **kwargs):
         return "Cette dépense sert à financer un job client validé."
 
     monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_llm)

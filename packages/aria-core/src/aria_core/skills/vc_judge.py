@@ -33,6 +33,7 @@ import logging
 from dataclasses import dataclass, field
 
 from aria_core.llm import chat_with_context
+from aria_core.llm_economy import LlmDepth, anthropic_depth_override
 from aria_core.skills.acp_onchain_scan import TokenScanContext
 from aria_core.skills.vc_analysis import (
     VCResult,
@@ -484,12 +485,15 @@ async def judge_analysis(
     user_message = _build_judge_message(result, ctx)
 
     try:
+        provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
         raw = await chat_with_context(
             user_message,
             _SYSTEM_PROMPT_JUGE + llm_language_directive(lang),
             max_tokens=1400,
             temperature=0.1,
             depth="develop",
+            provider=provider,
+            model=model,
         )
     except Exception as exc:  # noqa: BLE001 — never blocking, falls back to the fallback judge
         logger.error("judge_analysis: LLM call failed (%s) — deterministic fallback", exc)
