@@ -270,54 +270,160 @@ devils_advocate_condense() {
   rm -f "$resp_tmp"
 }
 
-# $1 = diff complet, $2 = cle API, $3 = label pour le journal de cout --
-# retourne (stdout) le diff tel quel s'il tient sous
-# DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS, sinon le condense via Haiku et
-# retourne la version condensee (prefixee d'une note explicite). Echec de
-# condensation (HTTP != 200) -> repli sur une troncature brute (jamais un
-# blocage dur : mieux vaut une couverture partielle connue qu'aucun rapport).
-devils_advocate_diff_for_review() {
-  local diff_content="$1" api_key="$2" cost_label="$3"
-  local len=${#diff_content}
-  if [ "$len" -le "$DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS" ]; then
-    echo "$diff_content"
-    return 0
-  fi
+# 10/08 (soir) -- gap reel trouve par l'Avocat du Diable SUR SON PROPRE
+# fonctionnement (rapport 8e01e6fb, root cause verifiee via WebSearch avant
+# tout correctif, jamais gobee telle quelle) : le repli brut ci-dessous
+# plafonnait a DEVILS_ADVOCATE_CONDENSE_TARGET_CEILING_CHARS (45000) quel
+# que soit len -- sur un diff cumule de 720341 caracteres, Fable 5 ne voyait
+# reellement que ~6% du batch. Cause racine confirmee : Haiku 4.5 a une
+# fenetre de 200k tokens ; un diff de 720341 caracteres tombe autour de
+# 180-240k tokens selon le ratio reel, assez pour depasser la fenetre et
+# produire le HTTP 400 observe -- un simple retry n'aurait RIEN corrige
+# (meme cause, meme echec a coup sur). D'ou le decoupage par tranches
+# ci-dessous : chaque tranche reste tres en-dessous de 200k tokens meme au
+# ratio le plus defavorable (3 car/tok -> 40k tokens pour 120000 caracteres),
+# jamais plus un seul appel monolithique sur un diff de cette taille.
+DEVILS_ADVOCATE_CHUNK_MAX_CHARS=120000
 
-  local target_chars
-  target_chars=$(devils_advocate_condense_target_chars "$len")
+# $1 = diff complet -- decoupe en tranches sur les frontieres de fichiers
+# ("diff --git", jamais un fichier coupe en deux) sans depasser
+# DEVILS_ADVOCATE_CHUNK_MAX_CHARS par tranche (sauf un unique fichier deja
+# plus gros a lui seul, garde entier dans sa propre tranche -- rare, reste
+# un cas degrade connu, jamais silencieux vu le retry+marqueur d'echec plus
+# bas). Ecrit chaque tranche dans un fichier temporaire distinct sous /tmp,
+# imprime la LISTE des chemins sur stdout (un par ligne).
+devils_advocate_split_diff_by_file() {
+  local diff_content="$1"
+  local tmp_prefix
+  tmp_prefix=$(mktemp -u /tmp/devils-advocate-chunk.XXXXXX)
+  # Bin-packing PAR FICHIER COMPLET, pas ligne a ligne : la taille d'un
+  # fichier n'est connue qu'une fois vu son debut ET sa fin (prochaine ligne
+  # "diff --git", ou fin de flux) -- decider AVANT (sur la seule ligne
+  # d'en-tete, ~30 car.) sous-estime systematiquement le risque de
+  # depassement pour tout fichier au corps volumineux (bug reel trouve et
+  # corrige en testant ce script avant tout usage reel : un fichier de
+  # 150000 caracteres pouvait s'ajouter par-dessus un buffer deja a 90000,
+  # produisant une tranche a 240000 caracteres, 2x le plafond vise).
+  echo "$diff_content" | awk -v prefix="$tmp_prefix" -v max_chars="$DEVILS_ADVOCATE_CHUNK_MAX_CHARS" '
+    function flush_tranche() {
+      if (buf_len > 0) {
+        n++
+        outfile = prefix "." n
+        printf "%s", buf > outfile
+        close(outfile)
+        print outfile
+      }
+      buf = ""
+      buf_len = 0
+    }
+    function commit_current_file() {
+      if (cur_len > 0) {
+        if (buf_len > 0 && buf_len + cur_len > max_chars) {
+          flush_tranche()
+        }
+        buf = buf cur
+        buf_len += cur_len
+      }
+      cur = ""
+      cur_len = 0
+    }
+    /^diff --git / { commit_current_file() }
+    {
+      cur = cur $0 "\n"
+      cur_len += length($0) + 1
+    }
+    END {
+      commit_current_file()
+      flush_tranche()
+    }
+  '
+}
 
-  local condense_resp condense_status
-  condense_resp=$(devils_advocate_condense "$diff_content" "$api_key" "$target_chars" 2>/tmp/devils-advocate-condense-status.$$)
-  condense_status=$(grep -oE 'HTTP_STATUS:[0-9]+' /tmp/devils-advocate-condense-status.$$ | cut -d: -f2)
-  rm -f /tmp/devils-advocate-condense-status.$$
+# $1 = chemin du fichier de tranche, $2 = cle API, $3 = label de cout,
+# $4 = index de tranche -- condense CETTE tranche avec 1 retry sur echec
+# HTTP (couvre les echecs transitoires reels deja vecus, ex. 402 credits
+# epuises) ; si les 2 tentatives echouent, retourne un marqueur explicite
+# + la liste des fichiers de CETTE tranche (grep mecanique, jamais perdue)
+# au lieu d'un silence. Ecrit "1" ou "0" (succes de la tranche) sur le
+# descripteur 3 pour que l'appelant compte la couverture reelle sans
+# parser du texte libre.
+devils_advocate_condense_chunk() {
+  local chunk_file="$1" api_key="$2" cost_label="$3" chunk_idx="$4"
+  local chunk_content chunk_len target_chars attempt condense_resp condense_status
+  chunk_content=$(cat "$chunk_file")
+  chunk_len=${#chunk_content}
+  target_chars=$(devils_advocate_condense_target_chars "$chunk_len")
+
+  for attempt in 1 2; do
+    condense_resp=$(devils_advocate_condense "$chunk_content" "$api_key" "$target_chars" 2>/tmp/devils-advocate-condense-status.$$)
+    condense_status=$(grep -oE 'HTTP_STATUS:[0-9]+' /tmp/devils-advocate-condense-status.$$ | cut -d: -f2)
+    rm -f /tmp/devils-advocate-condense-status.$$
+    [ "$condense_status" = "200" ] && break
+  done
+
+  local file_list
+  file_list=$(echo "$chunk_content" | grep -oE '^diff --git a/\S+ b/\S+' | sed -E 's#^diff --git a/\S+ b/##')
 
   if [ "$condense_status" != "200" ]; then
-    echo "[... condensation Haiku 4.5 echouee (HTTP ${condense_status}), repli sur troncature brute a ${target_chars} caracteres sur ${len} ...]
-
-${diff_content:0:$target_chars}"
+    >&3 echo "0"
+    echo "[TRANCHE ${chunk_idx} NON CONDENSEE apres 2 tentatives (dernier HTTP ${condense_status}) -- ${chunk_len} caracteres non resumes. Fichiers de cette tranche (non couverts par cette revue, disponibles via git show) :
+${file_list}]"
     return 0
   fi
 
   local condensed_text
   condensed_text=$(echo "$condense_resp" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")')
   read -r c_in c_out c_cost <<< "$(devils_advocate_cost "$condense_resp" "$DEVILS_ADVOCATE_CONDENSE_INPUT_USD_PER_MTOK" "$DEVILS_ADVOCATE_CONDENSE_OUTPUT_USD_PER_MTOK")"
-  devils_advocate_log_cost "condense-${cost_label}" "$c_in" "$c_out" "$c_cost"
+  devils_advocate_log_cost "condense-${cost_label}-part${chunk_idx}" "$c_in" "$c_out" "$c_cost"
 
-  # 10/08 -- filet mecanique (jamais un modele, un simple grep sur les
-  # en-tetes "diff --git") : garantit que la LISTE des fichiers touches est
-  # toujours correcte meme si Haiku en oublie un dans sa prose -- demande
-  # operateur explicite ("tu as pas peur que Haiku zappe des trous
-  # importants ?"). Ne compense pas une perte de DETAIL a l'interieur d'un
-  # fichier (risque reel, non couvert), seulement une omission de fichier
-  # entier, le cas le plus grave et le plus verifiable a cout nul.
-  local file_list
-  file_list=$(echo "$diff_content" | grep -oE '^diff --git a/\S+ b/\S+' | sed -E 's#^diff --git a/\S+ b/##')
-
-  echo "[DIFF CONDENSE PAR CLAUDE HAIKU 4.5 -- ${len} caracteres bruts originaux, jamais tronque. Diff complet disponible via git log/git show sur ce commit.]
-
-[LISTE DE FICHIERS VERIFIEE MECANIQUEMENT (grep sur le diff brut, PAS par Haiku) -- si un de ces fichiers n'apparait nulle part dans le resume ci-dessous, Haiku l'a omis, signale-le explicitement plutot que de l'ignorer :]
-${file_list}
+  >&3 echo "1"
+  echo "[TRANCHE ${chunk_idx} -- fichiers : ${file_list//$'\n'/, }]
 
 ${condensed_text}"
+}
+
+# $1 = diff complet, $2 = cle API, $3 = label pour le journal de cout --
+# retourne (stdout) le diff tel quel s'il tient sous
+# DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS, sinon le decoupe en tranches
+# (devils_advocate_split_diff_by_file) et condense CHAQUE tranche
+# separement (devils_advocate_condense_chunk, retry inclus) -- plus jamais
+# un seul appel Haiku monolithique sur un diff pouvant depasser sa fenetre
+# de contexte. Ecrit la couverture reelle (tranches reussies/total) dans la
+# variable globale DA_COVERAGE_NOTE avant de retourner, pour que
+# devils-advocate-review.sh l'affiche dans le header de facon MECANIQUE --
+# jamais dependante de si Fable 5 choisit ou non de la mentionner dans sa
+# prose (c'est exactement le gap qui a permis au 6% de rester invisible du
+# rapport de facon structuree).
+devils_advocate_diff_for_review() {
+  local diff_content="$1" api_key="$2" cost_label="$3"
+  local len=${#diff_content}
+  DA_COVERAGE_NOTE=""
+  if [ "$len" -le "$DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS" ]; then
+    echo "$diff_content"
+    return 0
+  fi
+
+  local chunk_files chunk_file chunk_idx=0 ok_count=0 total_count=0
+  chunk_files=$(devils_advocate_split_diff_by_file "$diff_content")
+
+  local combined="[DIFF CONDENSE PAR TRANCHES (CLAUDE HAIKU 4.5) -- ${len} caracteres bruts originaux, decoupes par fichier pour ne jamais depasser la fenetre de contexte de Haiku. Diff complet disponible via git log/git show sur ce commit.]
+"
+  while IFS= read -r chunk_file; do
+    [ -z "$chunk_file" ] && continue
+    chunk_idx=$((chunk_idx + 1))
+    total_count=$((total_count + 1))
+    local chunk_result chunk_ok
+    exec 3>/tmp/devils-advocate-chunk-ok.$$
+    chunk_result=$(devils_advocate_condense_chunk "$chunk_file" "$api_key" "$cost_label" "$chunk_idx")
+    exec 3>&-
+    chunk_ok=$(cat /tmp/devils-advocate-chunk-ok.$$ 2>/dev/null | tail -1)
+    rm -f /tmp/devils-advocate-chunk-ok.$$ "$chunk_file"
+    [ "$chunk_ok" = "1" ] && ok_count=$((ok_count + 1))
+    combined="${combined}
+
+${chunk_result}"
+  done <<< "$chunk_files"
+
+  DA_COVERAGE_NOTE="${ok_count}/${total_count} tranches condensees avec succes"
+  echo "$combined"
 }

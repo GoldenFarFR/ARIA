@@ -206,6 +206,13 @@ fi
     if [ "$HTTP_STATUS" = "200" ]; then
       echo "> Cout reel de cet appel : \$${COST_USD} (${IN_TOKENS} tokens input, ${OUT_TOKENS} tokens output, tarifs Fable 5 verifies 10/08). Journal cumulatif : ${DEVILS_ADVOCATE_COST_LOG}."
     fi
+    # 10/08 (soir) -- couverture reelle du diff ecrite ICI de facon MECANIQUE
+    # (jamais dependante de si Fable 5 la mentionne dans sa prose) -- corrige
+    # le gap trouve sur le rapport 8e01e6fb ou le vrai taux de couverture
+    # (~6%) n'etait visible que si le modele choisissait de le citer.
+    if [ -n "$DA_COVERAGE_NOTE" ]; then
+      echo "> Couverture du diff (condensation par tranches) : ${DA_COVERAGE_NOTE}."
+    fi
     echo ""
     echo "---"
     echo ""
