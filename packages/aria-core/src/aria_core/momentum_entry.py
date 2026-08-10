@@ -2508,6 +2508,18 @@ async def _fetch_candles(
             1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO, _CANDLE_PRICE_CONSISTENCY_RATIO,
         )
         return []
+    if candles:
+        try:
+            from aria_core import candle_staleness_shadow
+
+            age_seconds = time.time() - candles[-1].ts
+            median_interval = _median_candle_interval_seconds(candles)
+            await candle_staleness_shadow.record_observation(
+                contract, chain, mode=mode, source="fetch_candles",
+                age_seconds=age_seconds, median_interval_seconds=median_interval,
+            )
+        except Exception as exc:  # noqa: BLE001 -- shadow observation must never block a real fetch
+            logger.info("_fetch_candles: staleness shadow observation failed (%s)", exc)
     if cacheable and candles:
         _cache_candles(chain, pool_address, mode, skip_daily, candles)
     return candles

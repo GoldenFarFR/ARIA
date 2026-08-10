@@ -2190,6 +2190,67 @@ async def test_fetch_candles_accepts_price_consistent_candles(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_candles_records_staleness_shadow_observation(monkeypatch):
+    """Backlog #261 (10/08): every real (non-cached) candle fetch feeds
+    candle_staleness_shadow -- a shadow-mode-only observer (never blocks a
+    real candidate), see that module's own docstring for why a hard gate
+    isn't built yet (no calibration data)."""
+    from aria_core import candle_staleness_shadow
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=_plain_candles(3), available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    captured = {}
+
+    async def fake_record_observation(contract, chain, *, mode, source, age_seconds, median_interval_seconds, symbol=None):
+        captured["contract"] = contract
+        captured["chain"] = chain
+        captured["mode"] = mode
+        captured["source"] = source
+        captured["age_seconds"] = age_seconds
+        captured["median_interval_seconds"] = median_interval_seconds
+
+    monkeypatch.setattr(candle_staleness_shadow, "record_observation", fake_record_observation)
+
+    result = await me._fetch_candles("0xpool", "base", contract="0xcontract", mode="standard")
+
+    assert len(result) == 3
+    assert captured["contract"] == "0xcontract"
+    assert captured["chain"] == "base"
+    assert captured["mode"] == "standard"
+    assert captured["source"] == "fetch_candles"
+    assert captured["age_seconds"] is not None
+    assert captured["median_interval_seconds"] is not None
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_staleness_shadow_failure_never_blocks_real_fetch(monkeypatch):
+    """Same best-effort contract as wick_filter_shadow -- a broken shadow
+    observer must never turn a real, valid candle fetch into an empty
+    result."""
+    from aria_core import candle_staleness_shadow
+    from aria_core.services import geckoterminal as gt
+
+    gt_candles = _plain_candles(3)
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    async def broken_record_observation(*args, **kwargs):
+        raise RuntimeError("shadow db unavailable")
+
+    monkeypatch.setattr(candle_staleness_shadow, "record_observation", broken_record_observation)
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == gt_candles
+
+
+@pytest.mark.asyncio
 async def test_fetch_candles_falls_back_to_coinmarketcap(monkeypatch):
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
