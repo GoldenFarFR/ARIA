@@ -24,6 +24,21 @@
 # git push --force.
 set -uo pipefail
 
+# Backlog #275 (10/08, CVE-2026-22708 audit) -- Bash(git *) already stops the
+# agent from ever successfully running a PATH/LD_PRELOAD-poisoning command
+# itself (Claude Code matches the FULL command, each chained sub-command must
+# independently match "git *" -- confirmed against the official permissions
+# doc, not assumed). The one residual gap the audit found: that scoping does
+# NOT isolate the shell environment across calls, so an ALREADY-poisoned
+# PATH/LD_PRELOAD (from an unrelated host-level compromise, never from this
+# agent's own allowed actions) would still be inherited. Cron's own ambient
+# env is already minimal (no .bashrc/.profile sourced), so this is
+# defense-in-depth against a scenario outside this script's own reach, not a
+# fix for a live exploit -- pinned explicitly rather than trusting whatever
+# environment cron happens to hand this script.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+unset LD_PRELOAD LD_LIBRARY_PATH
+
 RUN_LOG="/opt/aria-data/promotion-loop/run.log"
 mkdir -p /opt/aria-data/promotion-loop
 echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- demarrage passage promotion ===" >> "$RUN_LOG"
