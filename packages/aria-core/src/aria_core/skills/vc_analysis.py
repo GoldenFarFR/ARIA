@@ -232,6 +232,7 @@ def _build_untrusted_context(
     sell_distribution: "SellDistributionVerdict | None" = None,
     token_cashtag_engagement: "TokenCashtagEngagementVerdict | None" = None,
     bundle_launch: "BundleLaunchVerdict | None" = None,
+    product_resilience: "ProductResilienceVerdict | None" = None,
 ) -> str:
     """Assembles the factual block (untrusted data) from facts already collected.
 
@@ -481,6 +482,19 @@ def _build_untrusted_context(
     if bundle_launch and bundle_launch.signal:
         lines.append(f"Achat groupé au lancement (bundle/sniper) : {_sanitize(bundle_launch.signal, 20)}")
         for pt in bundle_launch.points[:3]:
+            lines.append(f"  · {_sanitize(pt, 250)}")
+    if product_resilience and product_resilience.signal:
+        weight_note = (
+            " -- SIGNAL RARE, à peser FORTEMENT dans ta conviction : peu de projets gardent leur usage "
+            "quand le marché recule, c'est un vrai atout produit indépendant du cycle"
+            if product_resilience.signal == "resilient"
+            else ""
+        )
+        lines.append(
+            f"Résilience produit (usage on-chain vs recul du marché) : "
+            f"{_sanitize(product_resilience.signal, 20)}{weight_note}"
+        )
+        for pt in product_resilience.points[:3]:
             lines.append(f"  · {_sanitize(pt, 250)}")
     # Legitimacy context (JUDGED flags, not raw): mint authority, launchpad,
     # liquidity depth, dev wallet behavior.
@@ -1133,6 +1147,10 @@ _SELL_DISTRIBUTION_TTL_DAYS = 1.0
 # cache entry never outlives a schema change.
 _BUNDLE_LAUNCH_TTL_DAYS = 30.0
 _TOKEN_CASHTAG_ENGAGEMENT_TTL_DAYS = 1.0
+# 10/08 -- on-chain activity (transfer counts) moves fast, same cadence as
+# sell distribution -- a day-old reading is still representative, a week-old
+# one wouldn't catch a real change in usage trend.
+_PRODUCT_RESILIENCE_TTL_DAYS = 1.0
 
 
 async def _fetch_github_substance(ctx: TokenScanContext) -> "GithubSubstanceVerdict | None":
@@ -1343,6 +1361,34 @@ async def _fetch_bundle_launch(ctx: TokenScanContext) -> "BundleLaunchVerdict | 
         return None
 
 
+async def _fetch_product_resilience(ctx: TokenScanContext) -> "ProductResilienceVerdict | None":
+    """10/08 -- operator request: does the token's real on-chain activity hold
+    up while the broader market is falling? A product that keeps its usage
+    while BTC drops is a rare, real signal of traction independent of cycle
+    hype -- distinct from every existing security/holder signal, which never
+    measure USAGE. Reuses `ctx.contract`, no project link needed."""
+    import dataclasses
+
+    from aria_core.services import external_signal_cache
+    from aria_core.skills.product_resilience import (
+        ProductResilienceFacts, gather_product_resilience_facts, judge_product_resilience,
+    )
+
+    try:
+        cached = await external_signal_cache.get_cached(
+            "product_resilience", ctx.contract, ttl_days=_PRODUCT_RESILIENCE_TTL_DAYS,
+        )
+        if cached is not None:
+            return judge_product_resilience(ProductResilienceFacts(**cached))
+        facts = await gather_product_resilience_facts(ctx.contract)
+        if facts.available:
+            await external_signal_cache.store("product_resilience", ctx.contract, dataclasses.asdict(facts))
+        return judge_product_resilience(facts)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.warning("analyze_vc: product resilience failed (%s)", exc)
+        return None
+
+
 async def _fetch_token_cashtag_engagement(ctx: TokenScanContext) -> "TokenCashtagEngagementVerdict | None":
     """03/08 -- "token cashtag engagement" (C-MEM case: a credible dev plus a
     credible product said NOTHING about whether the account was still
@@ -1442,11 +1488,13 @@ async def analyze_vc_with_context(
     sell_distribution = await _fetch_sell_distribution(ctx)
     bundle_launch = await _fetch_bundle_launch(ctx)
     token_cashtag_engagement = await _fetch_token_cashtag_engagement(ctx)
+    product_resilience = await _fetch_product_resilience(ctx)
     untrusted = _build_untrusted_context(
         ctx, history, sentiment_readings, polymarket_signals, product_diligence,
         market_alerts_digest, conviction_research, github_substance,
         website_substance, docs_substance, x_substance,
         sell_distribution, token_cashtag_engagement, bundle_launch,
+        product_resilience,
     )
     user_message = (
         "Analyse VC complète et détaillée du token ci-dessous. Réponds uniquement par le JSON du schéma.\n\n"
@@ -1454,6 +1502,18 @@ async def analyze_vc_with_context(
         f"{untrusted}\n"
         "</donnees_non_fiables>"
     )
+
+    # 10/08 -- this call used to pass no provider/model at all, so it NEVER
+    # went through resolve_budget/anthropic_depth_override and silently
+    # ignored ARIA_LLM_ANTHROPIC_ROUTING_ENABLED -- confirmed live the same
+    # day (real /vc scan on a test contract: Grok 403 team-credits-exhausted,
+    # Groq 429 daily-quota-exhausted, deterministic fallback used, zero
+    # Anthropic attempt despite the gate being on). Same fix as brain.py's
+    # operator chat path -- explicit (provider, model) override, dormant
+    # (None, None) until the operator flips the gate. See docs/HANDOFF_LLM.md.
+    from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+
+    vc_provider, vc_model = anthropic_depth_override(LlmDepth.DEVELOP)
 
     t_llm0 = time.monotonic()
     try:
@@ -1463,6 +1523,8 @@ async def analyze_vc_with_context(
             max_tokens=1800,
             temperature=0.2,
             depth="develop",
+            provider=vc_provider,
+            model=vc_model,
         )
     except Exception as exc:  # noqa: BLE001 — never blocking, falls back to the deterministic path
         logger.error("analyze_vc: LLM call failed (%s) — deterministic fallback", exc)

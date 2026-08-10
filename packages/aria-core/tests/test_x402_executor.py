@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from aria_core import x402_attempt_journal as journal
 from aria_core import x402_budget as budget
 from aria_core import x402_executor as executor
 from aria_core.x402_executor import HttpResult
@@ -25,6 +26,14 @@ def _isolated_db(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _not_paused(monkeypatch):
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_journal(tmp_path, monkeypatch):
+    # 10/08 -- x402_attempt_journal writes to data_dir() -- isolated the same
+    # way _isolated_db isolates aria_db_path() above, same reasoning.
+    monkeypatch.setattr(journal, "data_dir", lambda: tmp_path)
     yield
 
 
@@ -708,3 +717,93 @@ async def test_eip155_network_form_accepted():
         pay_fn=working_pay, http_fetch_fn=fake_fetch,
     )
     assert result.status == "ok"
+
+
+# ── 10/08, real incident: robustness of the settle/reserve/journal chain ────
+# A real 0.01 USDC payment to a known, legitimate provider (twit.sh, 77+
+# prior identical payments) settled on-chain with ZERO trace in
+# x402_spend_log -- not even a "pending" row from try_reserve. Root cause
+# never pinned down with full certainty; these tests cover the structural
+# defenses added regardless of the exact mechanism (journal written before
+# any reservation attempt, try_reserve exceptions no longer propagate
+# unlogged, settle() failures no longer silently swallow a real outcome).
+
+
+@pytest.mark.asyncio
+async def test_attempt_journal_written_before_reservation_even_if_reserve_fails(monkeypatch):
+    async def fake_fetch(url, *, method="GET", headers=None):
+        return HttpResult(status_code=402, body=_payment_required_body(amount="10000"))
+
+    async def raising_reserve(*args, **kwargs):
+        raise RuntimeError("sqlite is locked")
+
+    monkeypatch.setattr(budget, "try_reserve", raising_reserve)
+
+    result = await executor.fetch_paid_resource(
+        "https://example.com/data", resource="tweets-user", provider="twitsh",
+        balance_fn=_never_called_balance, pay_fn=_never_called_pay, http_fetch_fn=fake_fetch,
+    )
+
+    assert result.status == "failed"
+    attempts = journal.recent_attempts()
+    assert len(attempts) == 1
+    assert attempts[0]["resource"] == "tweets-user"
+    assert attempts[0]["provider"] == "twitsh"
+    assert attempts[0]["pay_to"] == "0xrecipient"
+    assert attempts[0]["amount_usd"] == 0.01
+
+
+@pytest.mark.asyncio
+async def test_try_reserve_exception_never_propagates_unlogged(monkeypatch, caplog):
+    async def fake_fetch(url, *, method="GET", headers=None):
+        return HttpResult(status_code=402, body=_payment_required_body())
+
+    async def raising_reserve(*args, **kwargs):
+        raise RuntimeError("sqlite is locked")
+
+    monkeypatch.setattr(budget, "try_reserve", raising_reserve)
+
+    result = await executor.fetch_paid_resource(
+        "https://example.com/data", resource="test", balance_fn=_never_called_balance,
+        pay_fn=_never_called_pay, http_fetch_fn=fake_fetch,
+    )
+
+    assert result.status == "failed"
+    assert "réservation budget échouée" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_settle_failure_still_returns_ok_to_caller_and_logs_loudly(monkeypatch, caplog):
+    """The real incident's structural fix: even if x402_budget.settle()
+    itself fails (e.g. the same SQLite contention as try_reserve), the
+    caller still gets an honest "ok" (the payment DID go through -- the fetch
+    already succeeded by this point) instead of an exception that a broad
+    `except Exception` upstream (twitsh.py and siblings) would silently
+    swallow, hiding the fact that money moved."""
+    async def fake_fetch(url, *, method="GET", headers=None):
+        if headers and executor.X_PAYMENT_HEADER in headers:
+            return HttpResult(status_code=200, body=b"paid content")
+        return HttpResult(status_code=402, body=_payment_required_body(amount="10000"))
+
+    async def sufficient_balance():
+        return 5.0
+
+    async def working_pay(requirement):
+        return "hdr"
+
+    async def raising_settle(*args, **kwargs):
+        raise RuntimeError("sqlite is locked")
+
+    monkeypatch.setattr(budget, "settle", raising_settle)
+
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        result = await executor.fetch_paid_resource(
+            "https://example.com/data", resource="premium-data", provider="acme",
+            balance_fn=sufficient_balance, pay_fn=working_pay, http_fetch_fn=fake_fetch,
+        )
+
+    assert result.status == "ok"
+    assert result.body == b"paid content"
+    assert any("settle FAILED" in rec.message for rec in caplog.records)

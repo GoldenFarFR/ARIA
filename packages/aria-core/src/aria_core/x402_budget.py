@@ -296,3 +296,46 @@ async def list_spends(limit: int = 200) -> list[dict]:
             )
         ).fetchall()
     return [dict(zip(_COLUMNS, row)) for row in rows]
+
+
+# 10/08 -- operator request after the twitsh false-positive incident: every
+# wallet ARIA pays should be identifiable by NAME, automatically, never a
+# registry maintained by hand (the pre-existing `_THIRD_PARTY_ADDRESS_NAMES`
+# in agent_wallet_monitor.py covers exactly 2 manually-added entries and
+# missed twit.sh entirely despite 77+ prior real payments to it). Derived
+# from the FULL history (never `list_spends`'s default 200-row window --
+# a provider paid steadily for months could otherwise fall out of range),
+# grouped by (pay_to, provider) so a provider using more than one address
+# still gets its own entries rather than one merged/ambiguous label.
+_KNOWN_PROVIDER_MIN_OK_COUNT = 3
+
+
+async def known_pay_to_providers(*, min_ok_count: int = _KNOWN_PROVIDER_MIN_OK_COUNT) -> dict[str, str]:
+    """pay_to address (lowercase) -> provider name, for every address with at
+    least ``min_ok_count`` successful ("ok") payments in the FULL history.
+    Display/diagnostic only -- like `_THIRD_PARTY_ADDRESS_NAMES`, never
+    consulted to decide whether a movement is authorized, only to label it
+    once a movement has already been classified."""
+    await _ensure_table()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        rows = await (
+            await db.execute(
+                """
+                SELECT pay_to, provider, COUNT(*) as cnt
+                FROM x402_spend_log
+                WHERE status = 'ok' AND pay_to != '' AND provider != ''
+                GROUP BY pay_to, provider
+                HAVING cnt >= ?
+                ORDER BY cnt DESC
+                """,
+                (min_ok_count,),
+            )
+        ).fetchall()
+    result: dict[str, str] = {}
+    for pay_to, provider, _cnt in rows:
+        key = str(pay_to).lower()
+        # First row per key wins (already ORDER BY cnt DESC) -- the provider
+        # with the most successful payments to this address, if more than
+        # one has ever paired with it.
+        result.setdefault(key, str(provider))
+    return result

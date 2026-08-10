@@ -1303,7 +1303,10 @@ async def test_run_cycle_one_wallet_failing_does_not_block_others(monkeypatch):
     never prevent detection on the others."""
     monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
 
-    async def fake_check(*, wallet_address, chain="base", wallet_name="", known_tx_hashes=None, known_x402_spends=None):
+    async def fake_check(
+        *, wallet_address, chain="base", wallet_name="", known_tx_hashes=None,
+        known_x402_spends=None, known_providers=None,
+    ):
         if wallet_name == "aria-smart-st-EVM":
             raise RuntimeError("blockscout unavailable for this wallet")
         return [monitor.WalletMovement(
@@ -2001,3 +2004,115 @@ async def test_send_outflow_confirmation_degrades_to_false_on_send_failure(monke
     )
     sent = await monitor._send_outflow_confirmation(m)
     assert sent is False
+
+
+# ── 10/08, real incident: a legitimate twit.sh payment settled on-chain with
+# zero trace in x402_spend_log (known_x402_spends found no exact match) --
+# probable_known_provider_unlogged covers this without ever weakening the
+# pause/kill-switch, only the diagnostic improves.
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_classified_probable_known_provider_when_address_recognized(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xunlogged1", from_address=WALLET, to_address="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-08-10T14:43:03Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET,
+        known_providers={"0x9dba414637c611a16bea6f0796bfcbcbdc410df8": "twitsh"},
+    )
+    assert len(result) == 1
+    assert result[0].classification == "probable_known_provider_unlogged"
+    assert result[0].provider == "twitsh"
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_prefers_exact_known_x402_match_over_provider_registry(monkeypatch):
+    """An exact known_x402_spends match must win -- probable_known_provider_
+    unlogged is a fallback, never a competing classification."""
+    transfer = TokenTransfer(
+        tx_hash="0xmatched1", from_address=WALLET, to_address="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-08-10T14:43:03Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    known_x402_spends = [{
+        "pay_to": "0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8", "amount_usd": 0.01,
+        "created_at": "2026-08-10T14:43:00Z", "provider": "twitsh", "resource": "tweets-user",
+    }]
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET, known_x402_spends=known_x402_spends,
+        known_providers={"0x9dba414637c611a16bea6f0796bfcbcbdc410df8": "twitsh"},
+    )
+    assert len(result) == 1
+    assert result[0].classification == "known_x402"
+
+
+@pytest.mark.asyncio
+async def test_outgoing_transfer_stays_unexpected_when_address_not_in_registry(monkeypatch):
+    transfer = TokenTransfer(
+        tx_hash="0xtrulyunknown", from_address=WALLET, to_address="0xneverseen",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=1.0, timestamp="2026-08-10T14:43:03Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+    result = await monitor.check_wallet_activity(
+        wallet_address=WALLET,
+        known_providers={"0x9dba414637c611a16bea6f0796bfcbcbdc410df8": "twitsh"},
+    )
+    assert len(result) == 1
+    assert result[0].classification == "unexpected_outflow"
+
+
+def test_format_movement_alert_probable_known_provider_unlogged_names_the_provider():
+    m = monitor.WalletMovement(
+        tx_hash="0xabc", direction="out", asset="USDC", amount=0.01,
+        counterparty="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8",
+        classification="probable_known_provider_unlogged", provider="twitsh",
+    )
+    text = monitor.format_movement_alert(m)
+    assert "twitsh" in text
+    assert "NON JOURNALISÉE" in text
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_arms_pause_for_probable_known_provider_unlogged(monkeypatch):
+    """The whole point: the pause/kill-switch behavior must be IDENTICAL to
+    unexpected_outflow -- a known-provider match never silently waves an
+    outflow through."""
+    from aria_core import x402_budget
+
+    monkeypatch.setenv("ARIA_AGENT_WALLET_MONITOR_ENABLED", "true")
+    for _ in range(3):
+        await x402_budget.record_spend(
+            resource="tweets-user", provider="twitsh", amount_usd=0.01, status="ok",
+            pay_to="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8",
+        )
+
+    transfer = TokenTransfer(
+        tx_hash="0xunlogged_cycle", from_address=monitor.MONITORED_WALLET_ADDRESS,
+        to_address="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8",
+        token_address=USDC_ADDR, token_symbol="USDC", token_name="USD Coin",
+        amount=0.01, timestamp="2026-08-10T14:43:03Z",
+    )
+    _patch_client(monkeypatch, FakeBlockscoutClient(
+        token_transfers=TokenTransfersResult(transfers=[transfer], available=True),
+    ))
+
+    async def _notifier(text):
+        pass
+
+    assert custody_pause.is_paused() is False
+    await monitor.run_agent_wallet_monitor_cycle(notifier=_notifier)
+    assert custody_pause.is_paused() is True
+    st = custody_pause.pause_status()
+    assert "twitsh" in st["reason"]

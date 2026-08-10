@@ -866,6 +866,13 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_VC_INTELLIGENCE_ENABLED",
     "ARIA_VC_POCKET_SOURCING_ENABLED",
     "ARIA_VISION_ENABLED",
+    # 10/08 -- kill switch for ALL LLM calls reachable from the public site
+    # widget (see llm_economy.set_public_llm_context / is_public_llm_disabled_now).
+    # OFF by default: real incident the same day (grounded budget branch
+    # silently bypassing the Anthropic gate, 85% Grok/Groq failure rate
+    # burning tokens) -- re-enable only after that routing bug is fixed and
+    # verified live.
+    "ARIA_VITRINE_LLM_ENABLED",
     "ARIA_WALLET_CANDIDATE_SOURCING_ENABLED",
     # 08/08 -- wallet_copy_shadow.py : forward-test de copie sur 8 wallets réels,
     # ledgers fictifs indépendants, jamais un trigger réel (jamais de capital

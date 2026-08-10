@@ -178,6 +178,23 @@ class Settings(BaseSettings):
     # AFTER aria_llm_anthropic_routing_enabled has been observed stable on the
     # non-trading roles -- never both at once on a first activation.
     aria_llm_anthropic_routing_trading_enabled: bool = False
+    # 10/08 -- kill switch for ALL LLM calls on the public site widget
+    # (/aria/chat, ARIA_PUBLIC_MODE=true deployment). Off by default: operator
+    # request after a real incident the same day -- the "grounded" budget
+    # branch (llm_economy.resolve_budget) silently skipped the Anthropic
+    # routing gate and fell through to Grok (403, likely an invalid/expired
+    # key) then Groq (429, saturated), burning real API calls with an 85%
+    # failure rate. Rather than chase every public-reachable chat_with_context
+    # call site (brain.py._llm_response/_enhance_with_llm, knowledge/web_verify.py's
+    # translate/web_enhance_calibrated/summarize -- easy to miss one), this
+    # gate is read once per request (llm_economy.set_public_llm_context) and
+    # enforced at the single lowest choke point every path funnels through
+    # (llm.chat_with_context) via a contextvar -- see llm_economy.py. Visitor
+    # chat still works for anything answerable without an LLM (templates,
+    # calibrated/static answers, structured skills); only the LLM fallback is
+    # cut. Re-enable only after the routing bug above is actually fixed and
+    # verified live (cf. docs/HANDOFF_LLM.md, 10/08 entry).
+    aria_vitrine_llm_enabled: bool = False
     image_api_key: str = ""  # xAI Imagine — scènes portrait (/avatar scene)
     image_api_model: str = "grok-imagine-image"  # 0.02$/img — quality = 0.05$/img
     aria_operator_tz: str = "Europe/Paris"  # GMT+2 — planification tweets (/x compose)

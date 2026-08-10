@@ -593,6 +593,11 @@ async def chat_with_context(
     other provider ignores it and sends ``system_context`` whole, unaffected.
     Absent -> behavior strictly unchanged for all existing callers.
     """
+    from aria_core.llm_economy import is_public_llm_disabled_now
+
+    if is_public_llm_disabled_now():
+        return None
+
     routes = _resolve_routes(
         model,
         provider=provider,

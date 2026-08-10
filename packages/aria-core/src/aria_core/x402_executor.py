@@ -54,7 +54,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from aria_core import outgoing_pause, x402_budget
+from aria_core import outgoing_pause, x402_attempt_journal, x402_budget
 from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 
 logger = logging.getLogger(__name__)
@@ -423,15 +423,43 @@ async def fetch_paid_resource(
             pay_to=pay_to, contract=contract, token_symbol=token_symbol,
         )
 
+    # 10/08 -- safety net, written BEFORE any reservation/payment attempt and
+    # INDEPENDENT of SQLite (real incident: a legitimate twit.sh payment
+    # settled on-chain with ZERO trace in x402_spend_log -- not even a
+    # "pending" row, meaning try_reserve itself likely never completed its
+    # write, plausibly SQLite contention from a concurrent process on the
+    # same aria.db). A plain file append can't be starved the same way --
+    # never raises, never blocks a real payment attempt either way.
+    x402_attempt_journal.record_attempt(
+        resource=resource, provider=provider, amount_usd=amount_usd, pay_to=pay_to,
+        contract=contract, token_symbol=token_symbol,
+    )
+
     # 03/08 -- atomic reserve, replacing can_spend() (check-then-act, unsafe
     # under concurrent callers -- see try_reserve's own docstring for the
     # real incident that motivated this). Reserves BEFORE the real balance
     # check/signature/paid fetch below -- any failure from here on MUST
     # settle() this reservation (never leave it "pending", it would still
     # count against the budget for PENDING_TIMEOUT_MINUTES).
-    reservation_id = await x402_budget.try_reserve(
-        amount_usd, resource=resource, provider=provider, contract=contract, token_symbol=token_symbol,
-    )
+    # 10/08 -- try_reserve itself is now wrapped: an exception here (e.g. a
+    # SQLite contention error) used to propagate straight out of this
+    # function, past every OTHER try/except in this file, and get silently
+    # swallowed by callers' own defensive `except Exception: return []`
+    # (twitsh.py and siblings) -- the real cause of the incident above. Never
+    # again allowed to escape unlogged: caught, logged loudly, reported as a
+    # normal "failed" result like every other failure mode in this function.
+    try:
+        reservation_id = await x402_budget.try_reserve(
+            amount_usd, resource=resource, provider=provider, contract=contract, token_symbol=token_symbol,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "x402 try_reserve raised (%s, %s$, pay_to=%s) -- payment journal entry is the only "
+            "trace if a payment is attempted below: %s", resource, amount_usd, pay_to, exc,
+        )
+        return X402ExecutionResult(
+            status="failed", reason=f"réservation budget échouée : {exc}", amount_usd=amount_usd,
+        )
     if reservation_id is None:
         return await _blocked(
             resource, provider, amount_usd,
@@ -443,21 +471,21 @@ async def fetch_paid_resource(
         balance_usd = await balance_fn()
     except Exception as exc:  # noqa: BLE001
         reason = f"solde réel indisponible (fail-closed) : {exc}"
-        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        await _settle_safe(reservation_id, status="failed", reason=reason, pay_to=pay_to)
         return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
     if balance_usd is None:
         reason = "solde réel indisponible (fail-closed) : balance_fn a renvoyé None"
-        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        await _settle_safe(reservation_id, status="failed", reason=reason, pay_to=pay_to)
         return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
     if amount_usd > balance_usd:
         reason = f"montant {amount_usd}$ > solde réel {balance_usd}$"
-        await x402_budget.settle(reservation_id, status="failed", reason=reason, pay_to=pay_to)
+        await _settle_safe(reservation_id, status="failed", reason=reason, pay_to=pay_to)
         return X402ExecutionResult(status="blocked", reason=reason, amount_usd=amount_usd)
 
     try:
         payment_header = await pay_fn(requirement)
     except Exception as exc:  # noqa: BLE001
-        await x402_budget.settle(
+        await _settle_safe(
             reservation_id, status="failed", reason=f"signature échouée : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
@@ -470,14 +498,14 @@ async def fetch_paid_resource(
             url, method=method, headers={payment_header_name: payment_header}, **fetch_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
-        await x402_budget.settle(
+        await _settle_safe(
             reservation_id, status="failed",
             reason=f"{REASON_PREFIX_PAID_BUT_FETCH_FAILED} : {exc}", pay_to=pay_to,
         )
         return X402ExecutionResult(status="failed", reason=str(exc), amount_usd=amount_usd)
 
     if paid.status_code == 402:
-        await x402_budget.settle(
+        await _settle_safe(
             reservation_id, status="failed",
             reason="toujours 402 après paiement (règlement refusé)", pay_to=pay_to,
         )
@@ -486,10 +514,29 @@ async def fetch_paid_resource(
             http_status=402,
         )
 
-    await x402_budget.settle(reservation_id, status="ok", pay_to=pay_to)
+    await _settle_safe(reservation_id, status="ok", pay_to=pay_to)
     return X402ExecutionResult(
         status="ok", amount_usd=amount_usd, http_status=paid.status_code, body=paid.body,
     )
+
+
+async def _settle_safe(reservation_id: int, *, status: str, reason: str = "", pay_to: str = "") -> None:
+    """Wraps x402_budget.settle() -- 10/08, real incident: this call is the
+    ONE place in the whole payment flow where a failure previously propagated
+    straight out of fetch_paid_resource, past every callsite's own broad
+    `except Exception: return []` (twitsh.py and siblings), leaving a REAL
+    on-chain payment with zero trace anywhere. Never raises -- if the DB
+    write itself fails, this is now loud (logger.error) instead of silent;
+    x402_attempt_journal's entry (written before any reservation was even
+    attempted) remains the one thing that can never be lost this way."""
+    try:
+        await x402_budget.settle(reservation_id, status=status, reason=reason, pay_to=pay_to)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "x402_budget.settle FAILED (reservation_id=%s, status=%s, pay_to=%s) -- a real "
+            "payment outcome may now be untracked in x402_spend_log: %s",
+            reservation_id, status, pay_to, exc,
+        )
 
 
 async def _blocked(

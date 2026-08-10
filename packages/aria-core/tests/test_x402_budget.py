@@ -245,3 +245,39 @@ async def test_concurrent_reservations_never_both_succeed_past_the_cap():
     )
     accepted = [r for r in results if r is not None]
     assert len(accepted) == 1
+
+
+# ── 10/08, real incident: known_pay_to_providers (automatic wallet naming) ──
+
+
+@pytest.mark.asyncio
+async def test_known_pay_to_providers_requires_minimum_ok_count():
+    for _ in range(2):
+        await budget.record_spend(resource="r", provider="twitsh", amount_usd=0.01, status="ok", pay_to="0xAAA")
+    result = await budget.known_pay_to_providers(min_ok_count=3)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_known_pay_to_providers_derived_from_full_history():
+    for _ in range(3):
+        await budget.record_spend(resource="r", provider="twitsh", amount_usd=0.01, status="ok", pay_to="0x9dBA414637c611a16BEa6f0796BFcbcBdc410df8")
+    result = await budget.known_pay_to_providers()
+    assert result == {"0x9dba414637c611a16bea6f0796bfcbcbdc410df8": "twitsh"}
+
+
+@pytest.mark.asyncio
+async def test_known_pay_to_providers_ignores_failed_and_blocked_spends():
+    for _ in range(5):
+        await budget.record_spend(resource="r", provider="acme", amount_usd=0.01, status="failed", pay_to="0xAAA")
+    result = await budget.known_pay_to_providers()
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_known_pay_to_providers_keys_are_lowercase():
+    for _ in range(3):
+        await budget.record_spend(resource="r", provider="acme", amount_usd=0.01, status="ok", pay_to="0xAbCdEf")
+    result = await budget.known_pay_to_providers()
+    assert "0xabcdef" in result
+    assert result["0xabcdef"] == "acme"

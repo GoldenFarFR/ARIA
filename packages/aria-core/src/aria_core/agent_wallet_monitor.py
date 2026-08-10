@@ -458,10 +458,27 @@ def _classify(
     tx_hash: str, direction: str, known_tx_hashes: set[str],
     *, counterparty: str = "", amount: float = 0.0, timestamp: str | None = None,
     known_x402_spends: list[dict] | None = None,
+    known_providers: dict[str, str] | None = None,
 ) -> tuple[str, dict | None]:
     """Returns ``(classification, matched_spend)`` -- ``matched_spend`` is only
-    ever non-``None`` when the classification is ``"known_x402"`` (07/22, to
-    enrich the alert with the paid token/service), ``None`` in every other case."""
+    ever non-``None`` when the classification is ``"known_x402"`` or
+    ``"probable_known_provider_unlogged"`` (07/22 / 10/08, to enrich the alert
+    with the paid token/service), ``None`` in every other case.
+
+    ``known_providers`` (10/08, real incident: a legitimate twit.sh payment
+    settled on-chain with ZERO trace in ``x402_spend_log``, so
+    ``_matches_known_x402`` above correctly found nothing and this fell
+    through to a false ``"unexpected_outflow"``): ``x402_budget.
+    known_pay_to_providers()``, an address -> provider-name map derived from
+    the FULL payment history (never just the recent window used for
+    ``known_x402_spends``). An address match here does NOT mean "this
+    specific payment is confirmed known" the way ``known_x402`` does (no
+    exact amount/time match) -- it means "this counterparty has been paid
+    legitimately many times before, so an unlogged repeat is plausible".
+    The pause/kill-switch behavior stays IDENTICAL either way (see
+    ``agent_wallet_monitor_enabled``'s caller) -- this NEVER auto-clears an
+    alert, it only makes the Telegram message honestly more informative
+    than a bare address ever could."""
     if tx_hash in known_tx_hashes:
         return "known", None
     if direction == "in":
@@ -477,6 +494,12 @@ def _classify(
             return "known_x402", matched
     if _is_own_wallet(counterparty):
         return "internal_transfer", None
+    if known_providers:
+        provider_name = known_providers.get((counterparty or "").lower())
+        if provider_name:
+            return "probable_known_provider_unlogged", {
+                "provider": provider_name, "pay_to": counterparty,
+            }
     return "unexpected_outflow", None
 
 
@@ -633,6 +656,7 @@ async def check_wallet_activity(
     *, wallet_address: str, chain: str = "base", wallet_name: str = "",
     known_tx_hashes: set[str] | None = None,
     known_x402_spends: list[dict] | None = None,
+    known_providers: dict[str, str] | None = None,
 ) -> list[WalletMovement]:
     """Queries Blockscout (read-only) for recent USDC (ERC-20) transfers AND
     native ETH movements of ``wallet_address``, logs every NEW movement
@@ -655,6 +679,13 @@ async def check_wallet_activity(
     recipient+amount+time window (not by ``tx_hash``, never guaranteed
     available on the payer side in the x402 protocol, cf. ``_matches_known_x402``).
 
+    ``known_providers`` (10/08): ``await x402_budget.known_pay_to_providers()``
+    -- address -> provider-name map derived from the FULL payment history.
+    Consulted only when ``known_x402_spends`` finds no exact match (see
+    ``_classify``'s own docstring) -- never changes the pause/kill-switch
+    behavior, only enriches the alert with a real provider name instead of a
+    bare address.
+
     07/23 -- swap detection: both sources (token transfers + native tx) are
     first collected WITHOUT being recorded, grouped by ``tx_hash`` -- a group
     with one entry and one exit on two different assets becomes a single
@@ -663,6 +694,7 @@ async def check_wallet_activity(
     await _ensure_table()
     known_tx_hashes = known_tx_hashes or set()
     known_x402_spends = known_x402_spends or []
+    known_providers = known_providers or {}
     address_lower = wallet_address.lower()
     client = get_blockscout_client(chain)
     fresh: list[WalletMovement] = []
@@ -715,7 +747,7 @@ async def check_wallet_activity(
                 classification, matched_spend = _classify(
                     tx_hash, ev["direction"], known_tx_hashes,
                     counterparty=ev["counterparty"], amount=ev["amount"], timestamp=ev["timestamp"],
-                    known_x402_spends=known_x402_spends,
+                    known_x402_spends=known_x402_spends, known_providers=known_providers,
                 )
                 asset_label = ev["asset"]
                 lookalike = _lookalike_target(ev.get("token_symbol"), ev.get("token_address"))
@@ -1038,6 +1070,12 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
         logger.warning("agent_wallet_monitor: x402_budget lookup failed: %s", exc)
     known_x402_spends = [s for s in x402_spends if _x402_spend_may_have_settled(s) and s.get("pay_to")]
 
+    try:
+        known_providers = await x402_budget.known_pay_to_providers()
+    except Exception as exc:  # noqa: BLE001 -- a lookup failure must never block monitoring
+        known_providers = {}
+        logger.warning("agent_wallet_monitor: known_pay_to_providers lookup failed: %s", exc)
+
     movements: list[WalletMovement] = []
     errors: list[str] = []
     for wallet_name, wallet_address in MONITORED_WALLETS.items():
@@ -1045,6 +1083,7 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
             wallet_movements = await check_wallet_activity(
                 wallet_address=wallet_address, wallet_name=wallet_name,
                 known_tx_hashes=known_tx_hashes, known_x402_spends=known_x402_spends,
+                known_providers=known_providers,
             )
         except Exception as exc:  # noqa: BLE001 -- a failure on THIS wallet never blocks the others
             errors.append(f"{wallet_name}: {str(exc)[:200]}")
@@ -1082,7 +1121,14 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
     notified = 0
     if notifier:
         for m in movements:
-            if m.classification != "unexpected_outflow":
+            # 10/08 -- probable_known_provider_unlogged NEVER auto-clears an
+            # alert (see _classify's own docstring): it arms the SAME pause,
+            # requires the SAME human confirmation, as unexpected_outflow --
+            # the classification only changes what the Telegram message says,
+            # never what the system does. A silent "known provider, no pause"
+            # shortcut here would be exactly the kind of false confidence
+            # this whole mechanism exists to avoid.
+            if m.classification not in ("unexpected_outflow", "probable_known_provider_unlogged"):
                 continue
             # Item #62 (08/03): arms the DEDICATED custody flag, never the
             # shared outgoing_pause -- a false positive here (as happened
@@ -1092,10 +1138,16 @@ async def run_agent_wallet_monitor_cycle(*, notifier=None) -> dict:
             # custody_pause.py's own module docstring for the full incident
             # and the two-workflow analysis behind this split.
             if not custody_pause.is_paused():
-                pause_reason = (
-                    f"Sortie non initiee par ARIA detectee automatiquement "
-                    f"(wallet {m.wallet_name}, tx {m.tx_hash})"
-                )
+                if m.classification == "probable_known_provider_unlogged":
+                    pause_reason = (
+                        f"Sortie probablement legitime (provider connu: {m.provider}) mais "
+                        f"non journalisee -- a confirmer (wallet {m.wallet_name}, tx {m.tx_hash})"
+                    )
+                else:
+                    pause_reason = (
+                        f"Sortie non initiee par ARIA detectee automatiquement "
+                        f"(wallet {m.wallet_name}, tx {m.tx_hash})"
+                    )
                 custody_pause.pause(by="auto:agent_wallet_monitor", reason=pause_reason)
                 try:
                     from aria_core import kill_incident_log
@@ -1151,7 +1203,7 @@ def format_movement_alert(m: WalletMovement) -> str:
     icon = {
         "known": "✅", "external_deposit": "💰", "unexpected_outflow": "🚨",
         "suspicious_token": "🎣", "known_x402": "🧾", "swap": "🔄",
-        "internal_transfer": "🏠",
+        "internal_transfer": "🏠", "probable_known_provider_unlogged": "⚠️",
     }.get(m.classification, "•")
     label = {
         "known": "Mouvement initié par ARIA (attendu)",
@@ -1161,6 +1213,16 @@ def format_movement_alert(m: WalletMovement) -> str:
         "known_x402": "Paiement x402 initié par ARIA (attendu)",
         "swap": "Swap détecté",
         "internal_transfer": "Transfert entre wallets ARIA/opérateur (aucune alerte)",
+        # 10/08 -- real incident: this counterparty has 3+ prior legitimate x402
+        # payments (cf. x402_budget.known_pay_to_providers) but THIS specific
+        # movement found no exact match in x402_spend_log -- probably a real
+        # payment whose log write failed (cf. x402_attempt_journal), but never
+        # confirmed the way "known_x402" is. Pause/kill-switch unchanged --
+        # only the message is honest about what is and isn't confirmed.
+        "probable_known_provider_unlogged": (
+            "SORTIE PROBABLEMENT LÉGITIME MAIS NON JOURNALISÉE — "
+            "à confirmer avant de lever la pause"
+        ),
     }.get(m.classification, m.classification)
     # 07/23 -- multi-wallet: name of the wallet involved at the top of the
     # alert, empty -> "Wallet agent" (unchanged historical behavior for any
@@ -1214,6 +1276,12 @@ def format_movement_alert(m: WalletMovement) -> str:
             resource = html.escape(m.resource)
             provider = html.escape(m.provider) if m.provider else ""
             lines.append(f"Raison : {resource} via {provider}" if provider else f"Raison : {resource}")
+    elif m.classification == "probable_known_provider_unlogged" and m.provider:
+        # 10/08 -- this is the whole point of the classification: name the
+        # provider so the operator isn't left staring at a bare address,
+        # even though (unlike known_x402) no exact log entry confirms THIS
+        # specific payment -- phrased as a probability, never a certainty.
+        lines.append(f"Provider probable (paiements passés reconnus) : {html.escape(m.provider)}")
     return "\n".join(lines)
 
 

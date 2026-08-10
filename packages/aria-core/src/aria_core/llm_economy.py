@@ -1,6 +1,7 @@
 """LLM depth — brief / standard / develop (token economy)."""
 from __future__ import annotations
 
+import contextvars
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -261,6 +262,40 @@ _ANTHROPIC_MODEL_SONNET = "claude-sonnet-5"  # Sonnet 5 -- develop depth
 
 def anthropic_routing_enabled() -> bool:
     return bool(getattr(settings, "aria_llm_anthropic_routing_enabled", False))
+
+
+# 10/08 -- kill switch for every LLM call reachable from the public site
+# widget (/aria/chat), operator request after a real token-waste incident
+# (the "grounded" branch of resolve_budget below silently bypassed the
+# Anthropic routing gate and burned Grok/Groq calls at an 85% failure rate).
+# Rather than gate each public-reachable chat_with_context call site
+# individually (brain.py + knowledge/web_verify.py, several of them --
+# missing just one would keep leaking tokens), this is enforced at the one
+# choke point every path funnels through: llm.chat_with_context reads
+# ``is_public_llm_disabled_now()`` and returns None immediately, before any
+# network call. A contextvar (not a plain module global) so it's scoped to
+# the current request/task only -- concurrent operator-chat or heartbeat
+# calls in other tasks are never affected, and nothing leaks across requests.
+_public_llm_disabled: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "public_llm_disabled", default=False,
+)
+
+
+def vitrine_llm_enabled() -> bool:
+    return bool(getattr(settings, "aria_vitrine_llm_enabled", False))
+
+
+def set_public_llm_context(public: bool) -> None:
+    """Call once per request, as early as possible (brain.py._process_inner),
+    with the REAL per-message public/operator flag -- never a deployment-wide
+    default. Every chat_with_context call in this task (and anything it
+    awaits) will short-circuit to None until the request ends, unless the
+    operator has explicitly re-enabled vitrine LLM via ARIA_VITRINE_LLM_ENABLED."""
+    _public_llm_disabled.set(public and not vitrine_llm_enabled())
+
+
+def is_public_llm_disabled_now() -> bool:
+    return _public_llm_disabled.get()
 
 
 # 02/08 -- separate gate for the trading role specifically (momentum_entry.py's

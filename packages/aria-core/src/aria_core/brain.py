@@ -348,6 +348,9 @@ class AriaBrain:
         # applied (commit 7aff8afe) -- those stay as belt-and-suspenders.
         user_message = clamp_intent_text(user_message)
         public = is_public_mode() if public_mode is None else public_mode
+        from aria_core.llm_economy import set_public_llm_context
+
+        set_public_llm_context(public)
         vid = visitor_id if public else ""
         shell_mode = not public and str(visitor_id).startswith("shell")
         route_msg = _routing_message(user_message)
