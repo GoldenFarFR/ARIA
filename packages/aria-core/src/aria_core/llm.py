@@ -470,6 +470,26 @@ async def _post_chat_anthropic(
     # varying by call site).
     if "sonnet" not in (route.model or "").lower():
         payload["temperature"] = temperature
+    else:
+        # 10/08 (soir) -- second real incident on the SAME Sonnet call,
+        # found live re-running the exact vc_judge test that exposed the
+        # temperature bug: raising max_tokens 1400 -> 2500 (dc1d54c6) still
+        # truncated (stop_reason=max_tokens, real usage.output_tokens=2500
+        # exactly). Confirmed via real docs (platform.claude.com), not
+        # assumed: "max_tokens is a hard limit on total output (thinking
+        # plus response text)" -- Sonnet 5's adaptive thinking is on by
+        # DEFAULT at effort "high" even when never requested explicitly,
+        # silently eating most of the budget before the visible JSON is
+        # ever written. vc_judge's job is a bounded structured audit
+        # (fixed schema, output already capped by _LIST_CAP/_ITEM_MAX/
+        # _RESUME_MAX in vc_judge.py) -- not the kind of open-ended
+        # reasoning "high" effort is meant for, so effort is turned down to
+        # "low" (not fully "disabled": the judge still benefits from some
+        # real comparison reasoning against the on-chain facts, this is a
+        # skeptical audit, not pure extraction) to leave real headroom for
+        # the visible response within the same max_tokens budget.
+        payload["thinking"] = {"type": "adaptive"}
+        payload["output_config"] = {"effort": "low"}
 
     if system_text:
         # 10/08 -- prompt caching (operator request, "si ca aide vraiment a

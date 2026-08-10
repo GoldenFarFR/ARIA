@@ -614,6 +614,104 @@ async def test_anthropic_sonnet_payload_never_sends_temperature(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_anthropic_sonnet_payload_requests_low_effort_thinking(monkeypatch):
+    # 10/08 (soir), real prod incident found live re-running the exact
+    # vc_judge test that already exposed the temperature bug: raising
+    # max_tokens 1400 -> 2500 still truncated the response
+    # (usage.output_tokens == max_tokens exactly). Confirmed via real docs:
+    # Sonnet 5's adaptive thinking is on by DEFAULT at effort "high" even
+    # when never requested, and max_tokens is a hard cap on thinking PLUS
+    # visible text combined. vc_judge's bounded structured audit doesn't
+    # need "high" effort -- turned down to "low" to leave real headroom for
+    # the visible JSON within the same budget. Haiku has no thinking concept
+    # and must never receive these keys.
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute(
+        "anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", "sk-ant-key",
+    )
+    await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "Juge ceci."}],
+        temperature=0.1, max_tokens=2500, prompt_est=20, depth="develop",
+    )
+    assert captured["json"]["thinking"] == {"type": "adaptive"}
+    assert captured["json"]["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_haiku_payload_never_sends_thinking_params(monkeypatch):
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "HOLD"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute(
+        "anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001", "sk-ant-key",
+    )
+    await llm_mod._post_chat(
+        route, messages=[{"role": "user", "content": "Decide."}],
+        temperature=0.0, max_tokens=10, prompt_est=20, depth="trading",
+    )
+    assert "thinking" not in captured["json"]
+    assert "output_config" not in captured["json"]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_truncation_detected_via_stop_reason_max_tokens(monkeypatch):
     """Anthropic signale une réponse tronquée via ``stop_reason=max_tokens`` (pas
     ``finish_reason=length`` comme les providers compatibles OpenAI) -- même garde-fou
