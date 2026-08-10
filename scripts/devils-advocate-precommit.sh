@@ -53,7 +53,17 @@ INBOX_INDEX=$(ls "$REPO_DIR"/docs/aria-learning-inbox/*.md 2>/dev/null | xargs -
 
 # 10/08 -- condensation Haiku 4.5 (jamais une troncature brute) si le diff
 # depasse DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS -- voir devils-advocate-lib.sh.
-USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "precommit-$(date -u +%Y%m%dT%H%M%S)")
+# 10/08 (soir) -- couverture recuperee via un fichier, jamais une variable
+# globale (bug trouve/corrige en testant avec un vrai appel API : la
+# fonction tourne dans un sous-shell via $(...), une variable fixee dedans
+# ne remonte jamais a l'appelant).
+DA_COVERAGE_FILE=$(mktemp /tmp/devils-advocate-precommit-coverage.XXXXXX)
+USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "precommit-$(date -u +%Y%m%dT%H%M%S)" "$DA_COVERAGE_FILE")
+DA_COVERAGE_NOTE=$(cat "$DA_COVERAGE_FILE" 2>/dev/null)
+rm -f "$DA_COVERAGE_FILE"
+if [ -n "$DA_COVERAGE_NOTE" ]; then
+  echo "-- couverture du diff (condensation par tranches) : ${DA_COVERAGE_NOTE} --" >&2
+fi
 
 STATUS_TMP=$(mktemp /tmp/devils-advocate-precommit-status.XXXXXX)
 RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$API_KEY" 2>"$STATUS_TMP")

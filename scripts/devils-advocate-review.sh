@@ -169,7 +169,15 @@ fi
 
   # 10/08 -- condensation Haiku 4.5 (jamais une troncature brute) si le diff
   # depasse DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS -- voir devils-advocate-lib.sh.
-  USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "${MAIN_LOCAL_SHA:0:12}")
+  # 10/08 (soir) -- DA_COVERAGE_FILE (jamais une variable globale) : la
+  # fonction tourne dans un sous-shell via $(...), un fichier est le seul
+  # canal fiable pour recuperer la couverture reelle -- bug trouve et
+  # corrige en testant avec un vrai appel API avant tout usage reel.
+  DA_COVERAGE_FILE="/tmp/devils-advocate-coverage.$$"
+  USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "${MAIN_LOCAL_SHA:0:12}" "$DA_COVERAGE_FILE")
+  DA_COVERAGE_NOTE=""
+  [ -f "$DA_COVERAGE_FILE" ] && DA_COVERAGE_NOTE=$(cat "$DA_COVERAGE_FILE")
+  rm -f "$DA_COVERAGE_FILE"
   RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$API_KEY" 2>/tmp/devils-advocate-http-status.$$)
   HTTP_STATUS=$(grep -oE 'HTTP_STATUS:[0-9]+' /tmp/devils-advocate-http-status.$$ | cut -d: -f2)
   rm -f /tmp/devils-advocate-http-status.$$

@@ -382,22 +382,28 @@ ${file_list}]"
 ${condensed_text}"
 }
 
-# $1 = diff complet, $2 = cle API, $3 = label pour le journal de cout --
+# $1 = diff complet, $2 = cle API, $3 = label pour le journal de cout,
+# $4 = chemin OPTIONNEL d'un fichier ou ecrire la couverture reelle --
 # retourne (stdout) le diff tel quel s'il tient sous
 # DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS, sinon le decoupe en tranches
 # (devils_advocate_split_diff_by_file) et condense CHAQUE tranche
 # separement (devils_advocate_condense_chunk, retry inclus) -- plus jamais
 # un seul appel Haiku monolithique sur un diff pouvant depasser sa fenetre
-# de contexte. Ecrit la couverture reelle (tranches reussies/total) dans la
-# variable globale DA_COVERAGE_NOTE avant de retourner, pour que
-# devils-advocate-review.sh l'affiche dans le header de facon MECANIQUE --
-# jamais dependante de si Fable 5 choisit ou non de la mentionner dans sa
-# prose (c'est exactement le gap qui a permis au 6% de rester invisible du
-# rapport de facon structuree).
+# de contexte.
+#
+# 10/08 (soir, bug reel trouve en testant AVEC un vrai appel API avant tout
+# usage reel) : la 1ere version ecrivait la couverture dans une variable
+# globale DA_COVERAGE_NOTE -- mais cette fonction est TOUJOURS appelee via
+# une substitution de commande ($(...)), qui s'execute dans un SOUS-SHELL ;
+# toute variable fixee a l'interieur ne remonte jamais a l'appelant, meme
+# une variable "globale" au sens bash du terme. La note de couverture
+# n'aurait donc jamais fonctionne en prod malgre les tests locaux (gratuits,
+# sans appel API) qui ne pouvaient pas reveler ce bug puisqu'ils
+# n'appelaient jamais la fonction via $(...). Fixe en ecrivant la note dans
+# un FICHIER (le seul canal qui survit a un sous-shell) si $4 est fourni.
 devils_advocate_diff_for_review() {
-  local diff_content="$1" api_key="$2" cost_label="$3"
+  local diff_content="$1" api_key="$2" cost_label="$3" coverage_file="${4:-}"
   local len=${#diff_content}
-  DA_COVERAGE_NOTE=""
   if [ "$len" -le "$DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS" ]; then
     echo "$diff_content"
     return 0
@@ -424,6 +430,8 @@ devils_advocate_diff_for_review() {
 ${chunk_result}"
   done <<< "$chunk_files"
 
-  DA_COVERAGE_NOTE="${ok_count}/${total_count} tranches condensees avec succes"
+  if [ -n "$coverage_file" ]; then
+    echo "${ok_count}/${total_count} tranches condensees avec succes" > "$coverage_file"
+  fi
   echo "$combined"
 }
