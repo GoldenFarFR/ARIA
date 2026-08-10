@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     # AFTER aria_llm_anthropic_routing_enabled has been observed stable on the
     # non-trading roles -- never both at once on a first activation.
     aria_llm_anthropic_routing_trading_enabled: bool = False
+    # 10/08, explicit operator decision: Sonnet is reserved for ONE call site
+    # only -- vc_judge.py's adversarial final verdict (the real "is this risk
+    # worth a long-term investment" judgment, the actual decision point per
+    # the operator, not momentum's fast BUY/HOLD/REJECT gates which stay on
+    # Haiku regardless of aria_llm_anthropic_routing_trading_enabled above).
+    # Ground laid now, activation deliberately deferred to a later, separate
+    # operator "go" -- off by default, a distinct flag so flipping the general
+    # or trading gate above never silently drags this one along.
+    aria_llm_anthropic_routing_vc_judge_enabled: bool = False
     # 10/08 -- kill switch for ALL LLM calls on the public site widget
     # (/aria/chat, ARIA_PUBLIC_MODE=true deployment). Off by default: operator
     # request after a real incident the same day -- the "grounded" budget

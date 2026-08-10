@@ -118,7 +118,11 @@ def test_model_override_dormant_by_default_regardless_of_legacy_settings(tmp_pat
         assert budget.model_provider_override is None
 
 
-def test_anthropic_routing_maps_haiku_for_brief_and_standard_when_enabled(tmp_path):
+def test_anthropic_routing_maps_haiku_for_every_depth_when_enabled(tmp_path):
+    # 10/08, explicit operator decision: non-trading callers (everything
+    # resolve_budget serves -- conversation, /vc, smart_money, Telegram)
+    # NEVER escalate to Sonnet, regardless of depth. A long/"développe"
+    # message must stay on Haiku just like a brief one.
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     configure_test_runtime(
@@ -128,25 +132,68 @@ def test_anthropic_routing_maps_haiku_for_brief_and_standard_when_enabled(tmp_pa
             aria_llm_anthropic_routing_enabled=True,
         ),
     )
-    for depth in (LlmDepth.BRIEF, LlmDepth.STANDARD):
+    for depth in (LlmDepth.BRIEF, LlmDepth.STANDARD, LlmDepth.DEVELOP):
         budget = resolve_budget(depth, public=False)
         assert budget.model_provider_override == "anthropic"
         assert budget.model_override == "claude-haiku-4-5-20251001"
 
 
-def test_anthropic_routing_maps_sonnet_for_develop_when_enabled(tmp_path):
+def test_anthropic_routing_trading_gates_always_haiku_never_sonnet(tmp_path):
+    # 10/08, explicit operator correction: momentum_entry.py's 3 fast
+    # BUY/HOLD/REJECT gates (trading=True) are NOT the "complex trading
+    # decision" -- they run ~20x every 15-20 min and must stay on Haiku,
+    # regardless of depth. Sonnet is reserved for vc_final_judge only.
     from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
 
     configure_test_runtime(
         data_dir=tmp_path / "data",
         settings=AriaRuntimeSettings(
             llm_provider="grok",
-            aria_llm_anthropic_routing_enabled=True,
+            aria_llm_anthropic_routing_trading_enabled=True,
         ),
     )
-    budget = resolve_budget(LlmDepth.DEVELOP, public=False)
-    assert budget.model_provider_override == "anthropic"
-    assert budget.model_override == "claude-sonnet-5"
+    for depth in (LlmDepth.BRIEF, LlmDepth.STANDARD, LlmDepth.DEVELOP):
+        provider, model = anthropic_depth_override(depth, trading=True)
+        assert provider == "anthropic"
+        assert model == "claude-haiku-4-5-20251001"
+
+
+def test_anthropic_routing_trading_gate_alone_never_grants_vc_judge_sonnet(tmp_path):
+    # The trading gate being on must never leak Sonnet access to a
+    # vc_final_judge call -- two fully independent gates.
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="grok",
+            aria_llm_anthropic_routing_trading_enabled=True,
+            aria_llm_anthropic_routing_vc_judge_enabled=False,
+        ),
+    )
+    assert anthropic_depth_override(LlmDepth.DEVELOP, vc_final_judge=True) == (None, None)
+
+
+def test_anthropic_routing_vc_judge_maps_sonnet_when_enabled(tmp_path):
+    # The ONE real caller allowed to reach Sonnet, per the operator ("de
+    # toute facon la decision de trading se fait seulement sur vc pour le
+    # choix final") -- off by default, dedicated gate, activation deferred.
+    from aria_core.testing import AriaRuntimeSettings, configure_test_runtime
+
+    configure_test_runtime(
+        data_dir=tmp_path / "data",
+        settings=AriaRuntimeSettings(
+            llm_provider="grok",
+            aria_llm_anthropic_routing_vc_judge_enabled=True,
+        ),
+    )
+    provider, model = anthropic_depth_override(LlmDepth.DEVELOP, vc_final_judge=True)
+    assert provider == "anthropic"
+    assert model == "claude-sonnet-5"
+
+
+def test_anthropic_routing_vc_judge_dormant_by_default():
+    assert anthropic_depth_override(LlmDepth.DEVELOP, vc_final_judge=True) == (None, None)
 
 
 def test_self_context_model_override_uses_same_ssot(tmp_path):

@@ -109,6 +109,7 @@ class AriaRuntimeSettings(BaseSettings):
     aria_llm_model_brief: str = "grok-3-mini"
     aria_llm_anthropic_routing_enabled: bool = False  # #118, 27/07 -- dormant by default
     aria_llm_anthropic_routing_trading_enabled: bool = False  # 02/08 -- separate trading-role gate, dormant by default
+    aria_llm_anthropic_routing_vc_judge_enabled: bool = False  # 10/08 -- vc_judge.py final verdict only, dormant by default
     aria_vitrine_llm_enabled: bool = False  # 10/08 -- public site widget LLM kill switch, off by default
     aria_llm_cost_footer: bool = True
     aria_proactive_ideas: bool = True

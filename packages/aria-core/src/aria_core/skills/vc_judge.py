@@ -485,7 +485,12 @@ async def judge_analysis(
     user_message = _build_judge_message(result, ctx)
 
     try:
-        provider, model = anthropic_depth_override(LlmDepth.DEVELOP)
+        # 10/08, explicit operator decision: this is the ONE call site
+        # allowed to reach Sonnet -- the real "is this risk worth a
+        # long-term investment" final verdict, gated by its own
+        # aria_llm_anthropic_routing_vc_judge_enabled (off by default,
+        # activation deferred to a later, separate operator "go").
+        provider, model = anthropic_depth_override(LlmDepth.DEVELOP, vc_final_judge=True)
         raw = await chat_with_context(
             user_message,
             _SYSTEM_PROMPT_JUGE + llm_language_directive(lang),

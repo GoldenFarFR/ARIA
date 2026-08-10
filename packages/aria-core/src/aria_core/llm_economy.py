@@ -256,8 +256,8 @@ def _spark_active() -> bool:
 # provider string from .env -- it hardcodes the two real target models and
 # stays fully dormant (returns (None, None), zero behavior change) until the
 # operator flips ARIA_LLM_ANTHROPIC_ROUTING_ENABLED on.
-_ANTHROPIC_MODEL_HAIKU = "claude-haiku-4-5-20251001"  # Haiku 4.5 -- trading + brief/standard
-_ANTHROPIC_MODEL_SONNET = "claude-sonnet-5"  # Sonnet 5 -- develop depth
+_ANTHROPIC_MODEL_HAIKU = "claude-haiku-4-5-20251001"  # Haiku 4.5 -- every non-trading call
+_ANTHROPIC_MODEL_SONNET = "claude-sonnet-5"  # Sonnet 5 -- trading gates ONLY (see 10/08 note below)
 
 
 def anthropic_routing_enabled() -> bool:
@@ -311,22 +311,38 @@ def anthropic_routing_trading_enabled() -> bool:
     return bool(getattr(settings, "aria_llm_anthropic_routing_trading_enabled", False))
 
 
+# 10/08 -- separate gate for the ONE real "complex trading decision" per the
+# operator ("de toute facon la decision de trading se fait seulement sur vc
+# pour le choix final"): vc_judge.py's adversarial final verdict, not
+# momentum_entry.py's fast BUY/HOLD/REJECT gates (those stay on Haiku
+# regardless of anthropic_routing_trading_enabled -- cost, ~20 candidates
+# every 15-20 min, "ça va coûter trop cher si on le branche partout").
+# Ground laid now, activation deliberately deferred -- off by default.
+def anthropic_routing_vc_judge_enabled() -> bool:
+    return bool(getattr(settings, "aria_llm_anthropic_routing_vc_judge_enabled", False))
+
+
 def anthropic_depth_override(
-    depth: LlmDepth, *, trading: bool = False,
+    depth: LlmDepth, *, trading: bool = False, vc_final_judge: bool = False,
 ) -> tuple[str | None, str | None]:
-    """(provider, model) override for this depth. Dormant by default -- see
+    """(provider, model) override for this call. Dormant by default -- see
     the module comment above for the rationale and the incident this replaces.
 
-    ``trading=True`` (momentum_entry.py's 3 entry-gate call sites only) checks
-    the SEPARATE ``anthropic_routing_trading_enabled`` gate instead of the
-    general one -- see that function's docstring. Every other caller
-    (conversation, /vc, smart_money, source_code_audit) keeps using the
-    general gate, unaffected by this parameter's default."""
+    10/08, explicit operator decision: Sonnet is reserved for ONE caller --
+    vc_judge.py's final verdict (``vc_final_judge=True``, its own dedicated
+    ``anthropic_routing_vc_judge_enabled`` gate, off by default). Every other
+    caller (conversation, momentum's 3 trading gates via ``trading=True``,
+    smart_money, source_code_audit) gets Haiku regardless of ``depth`` -- a
+    long/"développe" Telegram reply, or a momentum entry gate, must never
+    silently escalate to Sonnet. ``depth`` no longer influences the model
+    choice at all, kept only for call-site compatibility."""
+    if vc_final_judge:
+        if not anthropic_routing_vc_judge_enabled():
+            return (None, None)
+        return ("anthropic", _ANTHROPIC_MODEL_SONNET)
     enabled = anthropic_routing_trading_enabled() if trading else anthropic_routing_enabled()
     if not enabled:
         return (None, None)
-    if depth == LlmDepth.DEVELOP:
-        return ("anthropic", _ANTHROPIC_MODEL_SONNET)
     return ("anthropic", _ANTHROPIC_MODEL_HAIKU)
 
 

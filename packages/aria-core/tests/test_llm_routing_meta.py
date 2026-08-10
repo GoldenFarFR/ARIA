@@ -27,12 +27,14 @@ def test_llm_routing_reply_anthropic_routing_dormant_by_default():
     assert "claude-sonnet-5" not in out
 
 
-def test_llm_routing_reply_anthropic_routing_active_reports_sonnet_for_develop():
+def test_llm_routing_reply_anthropic_routing_active_reports_haiku_for_develop():
+    # 10/08, explicit operator decision: conversational depth (even develop)
+    # never reaches Sonnet -- reserved for vc_judge.py's final verdict only.
     s = get_settings()
     s.llm_provider = "grok"
     s.aria_llm_anthropic_routing_enabled = True
     out = llm_routing_reply("fr", "/depth develop quel moteur")
-    assert "claude-sonnet-5" in out
+    assert "claude-haiku-4-5-20251001" in out
     assert "ACTIF" in out
 
 
