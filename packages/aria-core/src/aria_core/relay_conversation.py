@@ -89,6 +89,12 @@ _SYSTEM_CONTEXT = (
     "\"Honnetement le vrai probleme c'est le volume pas confirme -- j'ai achete sur un "
     "rebond que personne ne soutenait vraiment. La prochaine fois je regarde ce chiffre "
     "avant de me fier au R/R affiche.\" -- deux phrases, zero puce, zero titre.\n"
+    "CRITIQUE -- honnetete sur tes propres echecs : quand Claude te demande d'expliquer "
+    "une contre-performance ou une erreur reelle de ta part, ne l'adoucis JAMAIS par "
+    "politesse ou pour paraitre sous un meilleur jour. Donne la conclusion la plus dure "
+    "que les donnees reelles supportent, meme si elle t'est defavorable -- 'ca a besoin "
+    "de reglage' quand la vraie conclusion est 'ca ne marchait pas du tout' est exactement "
+    "le genre de minimisation a ne jamais faire, que Claude te pousse dessus ou non.\n"
     + forbidden_cliches_prompt("fr")
 )
 
@@ -328,24 +334,50 @@ async def run_relay_conversation_cycle() -> dict:
         system_context = f"{system_context}\n\n{_position_facts_block(matched_position)}"
 
     provider, model = anthropic_depth_override(LlmDepth.STANDARD)
-    reply = await chat_with_context(
-        last_user_message,
-        system_context,
-        history[:-1] if len(history) > 1 else None,
-        # 25/07 -- real test on CHECK: even with the "3-4 sentences" instruction
-        # above, the model sometimes still produces a bulleted multi-paragraph
-        # reply and got cut mid-word at 350. Raised as a safety net, not a
-        # license to be verbose -- the prompt instruction remains the primary
-        # lever for conciseness.
-        max_tokens=500,
-        depth="relay_conversation",
-        provider=provider,
-        model=model,
+    # 10/08, operator request ("ajoute tous les log sur haiku et sonnet") --
+    # this call was already persisted to data/llm-usage/*.jsonl (record_llm_usage
+    # is called unconditionally inside chat_with_context), but never surfaced a
+    # visible cost line the way the operator's own chat does (brain.py's
+    # begin_chat_usage_tracking/get_chat_usage_totals pattern, gated owner-only
+    # per #06/08's "un court message qui dit XXX$ depense"). Same pattern here.
+    from aria_core.llm_usage import (
+        begin_chat_usage_tracking,
+        clear_chat_usage_tracking,
+        get_chat_usage_totals,
+        monthly_cost_usd,
     )
+
+    begin_chat_usage_tracking()
+    try:
+        reply = await chat_with_context(
+            last_user_message,
+            system_context,
+            history[:-1] if len(history) > 1 else None,
+            # 25/07 -- real test on CHECK: even with the "3-4 sentences" instruction
+            # above, the model sometimes still produces a bulleted multi-paragraph
+            # reply and got cut mid-word at 350. Raised as a safety net, not a
+            # license to be verbose -- the prompt instruction remains the primary
+            # lever for conciseness.
+            max_tokens=500,
+            depth="relay_conversation",
+            provider=provider,
+            model=model,
+        )
+        usage = get_chat_usage_totals()
+    finally:
+        clear_chat_usage_tracking()
     if not reply:
         return {"outcome": "llm_unavailable"}
 
-    sent = await relay_chat.send_aria_relay_reply(reply)
+    reply_with_cost = reply
+    if usage["cost_usd"] > 0 or usage["cost_unknown"]:
+        unknown_note = " (+ appels a prix inconnu)" if usage["cost_unknown"] else ""
+        reply_with_cost = (
+            f"{reply}\n\n💵 {usage['cost_usd']:.5f}${unknown_note} "
+            f"— cumul mois : {monthly_cost_usd():.5f}$"
+        )
+
+    sent = await relay_chat.send_aria_relay_reply(reply_with_cost)
     if sent:
         await _mark_claude_message_answered(last_claude_message["id"])
         # 25/07 -- "qu'elle puisse s'auto-ameliorer" (operator request): only

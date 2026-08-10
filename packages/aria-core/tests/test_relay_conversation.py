@@ -142,6 +142,82 @@ async def test_never_answers_the_same_claude_message_twice(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cycle_appends_a_visible_cost_footer_when_a_real_cost_was_recorded(monkeypatch, tmp_path):
+    from aria_core.testing import configure_test_runtime
+
+    configure_test_runtime(data_dir=tmp_path / "data")
+    await relay_chat.log_message("claude", "Une question ?")
+
+    async def fake_chat_with_context(*a, **kw):
+        from aria_core.llm_usage import record_llm_usage
+
+        record_llm_usage(
+            provider="anthropic", model="claude-haiku-4-5-20251001",
+            input_tokens=1000, output_tokens=50,
+        )
+        return "Reponse reelle."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    sent = []
+    monkeypatch.setattr(
+        "aria_core.gateway.telegram_bot.send_message",
+        (await _fake_sender_factory(sent)),
+    )
+
+    result = await relay_conversation.run_relay_conversation_cycle()
+
+    assert result == {"outcome": "ok"}
+    assert len(sent) == 1
+    assert "Reponse reelle." in sent[0]
+    assert "💵" in sent[0]
+    assert "cumul mois" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_cycle_cost_footer_never_pollutes_the_lessons_journal(monkeypatch, tmp_path):
+    from aria_core.testing import configure_test_runtime
+
+    configure_test_runtime(data_dir=tmp_path / "data")
+    await relay_chat.log_message("claude", "Et le token CHECK, ca donne quoi ?")
+
+    async def fake_get_open(*a, **kw):
+        return [{"symbol": "CHECK", "status": "open", "entry_price": 1.0}]
+
+    monkeypatch.setattr("aria_core.paper_trader.get_open_positions", fake_get_open)
+
+    async def fake_chat_with_context(*a, **kw):
+        from aria_core.llm_usage import record_llm_usage
+
+        record_llm_usage(
+            provider="anthropic", model="claude-haiku-4-5-20251001",
+            input_tokens=1000, output_tokens=50,
+        )
+        return "Reponse reelle."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", fake_chat_with_context)
+
+    sent = []
+    monkeypatch.setattr(
+        "aria_core.gateway.telegram_bot.send_message",
+        (await _fake_sender_factory(sent)),
+    )
+
+    logged = {}
+
+    def fake_log_lesson(position, question, reply):
+        logged["reply"] = reply
+
+    monkeypatch.setattr(relay_conversation, "_log_lesson", fake_log_lesson)
+
+    await relay_conversation.run_relay_conversation_cycle()
+
+    assert "💵" in sent[0]
+    assert logged["reply"] == "Reponse reelle."
+    assert "💵" not in logged["reply"]
+
+
+@pytest.mark.asyncio
 async def test_llm_unavailable_returns_outcome(monkeypatch):
     await relay_chat.log_message("claude", "Une question ?")
 
