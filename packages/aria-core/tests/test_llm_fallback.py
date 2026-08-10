@@ -670,3 +670,153 @@ async def test_chat_with_context_forwards_provider_and_fallback_kwargs(monkeypat
     assert out == "HOLD"
     assert captured_routes["provider"] == "openrouter"
     assert captured_routes["model"] == "anthropic/claude-haiku-4.5"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_prefix_splits_system_into_two_blocks(monkeypatch):
+    """10/08, prompt caching: a system message carrying ``cache_prefix_chars``
+    is split into a cached (stable) block + an uncached (variable) block --
+    the boundary is exactly where the caller said it was, content unchanged."""
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 5, "output_tokens": 2,
+                    "cache_read_input_tokens": 1200, "cache_creation_input_tokens": 0,
+                },
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    recorded: dict = {}
+    import aria_core.llm_usage as llm_usage_mod
+    monkeypatch.setattr(llm_usage_mod, "record_llm_usage", lambda **kw: recorded.update(kw))
+
+    stable = "Tu es ARIA. Règles fixes de personnalité."
+    variable = "Contexte de cette conversation, change à chaque tour."
+    route = llm_mod.LlmRoute("anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", "sk-ant-key")
+    reply = await llm_mod._post_chat(
+        route,
+        messages=[
+            {"role": "system", "content": stable + variable, "cache_prefix_chars": len(stable)},
+            {"role": "user", "content": "salut"},
+        ],
+        temperature=0.5, max_tokens=10, prompt_est=20, depth="brief",
+    )
+    assert reply == "OK"
+    system_blocks = captured["json"]["system"]
+    assert isinstance(system_blocks, list)
+    assert system_blocks[0]["text"] == stable
+    assert system_blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert system_blocks[1]["text"] == variable
+    assert "cache_control" not in system_blocks[1]
+    assert recorded.get("cache_read_tokens") == 1200
+    assert recorded.get("cache_write_tokens") == 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_without_cache_prefix_sends_plain_system_string(monkeypatch):
+    """No ``cache_prefix_chars`` -> unchanged behavior, ``system`` stays a
+    plain string (existing callers untouched)."""
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"content": [{"type": "text", "text": "OK"}], "stop_reason": "end_turn",
+                     "usage": {"input_tokens": 5, "output_tokens": 2}}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute("anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", "sk-ant-key")
+    await llm_mod._post_chat(
+        route,
+        messages=[{"role": "system", "content": "Prompt entier."}, {"role": "user", "content": "salut"}],
+        temperature=0.5, max_tokens=10, prompt_est=20, depth="brief",
+    )
+    assert captured["json"]["system"] == "Prompt entier."
+
+
+@pytest.mark.asyncio
+async def test_non_anthropic_payload_never_leaks_cache_prefix_chars_field(monkeypatch):
+    """The generic OpenAI-compatible payload must never send an unrecognized
+    field to a third-party provider -- ``cache_prefix_chars`` is Anthropic-
+    only and must be stripped before the request is built."""
+    import aria_core.llm as llm_mod
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, *, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("aria_core.llm_usage.record_llm_usage", lambda **kw: None)
+
+    route = llm_mod.LlmRoute("groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", "gsk-key")
+    await llm_mod._post_chat(
+        route,
+        messages=[
+            {"role": "system", "content": "Prompt", "cache_prefix_chars": 5},
+            {"role": "user", "content": "salut"},
+        ],
+        temperature=0.5, max_tokens=10, prompt_est=20, depth="brief",
+    )
+    sent_system = captured["json"]["messages"][0]
+    assert set(sent_system.keys()) == {"role", "content"}

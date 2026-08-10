@@ -196,6 +196,8 @@ def record_llm_usage(
     depth: str | None = None,
     truncated: bool = False,
     latency_ms: float | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
     at: datetime | None = None,
 ) -> None:
     """Appends a line to data/llm-usage/YYYY-MM.jsonl.
@@ -204,7 +206,15 @@ def record_llm_usage(
     REAL data rather than a guess): response time measured on the caller side
     (sending the request until the HTTP response is received), never
     estimated. Absent -> no field written (honest degradation, never a made-up
-    value)."""
+    value).
+
+    ``cache_read_tokens``/``cache_write_tokens`` (10/08, Anthropic prompt
+    caching): the API's own reported ``cache_read_input_tokens``/
+    ``cache_creation_input_tokens`` -- the only honest way to confirm a
+    cache actually hit (never assumed from the fact that ``cache_control``
+    was sent; a prefix under the active model's minimum cacheable size is
+    silently skipped with no error). Absent/zero -> no field written, same
+    degradation as ``latency_ms``."""
     try:
         now = at or datetime.now(timezone.utc)
         day = now.strftime("%Y-%m-%d")
@@ -229,6 +239,10 @@ def record_llm_usage(
             row["truncated"] = True
         if latency_ms is not None:
             row["latency_ms"] = round(float(latency_ms), 1)
+        if cache_read_tokens:
+            row["cache_read_tokens"] = int(cache_read_tokens)
+        if cache_write_tokens:
+            row["cache_write_tokens"] = int(cache_write_tokens)
         cost = cost_usd_for(
             provider=provider, model=model, input_tokens=input_tokens, output_tokens=output_tokens, at=now,
         )

@@ -331,9 +331,15 @@ async def _post_chat(
         )
 
     timeout = 120.0 if route.provider == "ollama" else 90.0
+    # 10/08 -- ``messages`` may carry extra keys meant ONLY for the Anthropic
+    # branch above (e.g. ``cache_prefix_chars``, prompt-caching) -- every
+    # other provider here is a plain OpenAI-compatible chat-completions
+    # endpoint, never sent an unrecognized field (schema strictness varies
+    # by provider, never assumed permissive).
+    clean_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
     payload: dict[str, Any] = {
         "model": route.model,
-        "messages": messages,
+        "messages": clean_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -435,11 +441,13 @@ async def _post_chat_anthropic(
     )
 
     system_text = ""
+    cache_prefix_chars = 0
     anthropic_messages: list[dict[str, Any]] = []
     for m in messages:
         if m.get("role") == "system":
             content = m.get("content", "")
             system_text = content if isinstance(content, str) else ""
+            cache_prefix_chars = int(m.get("cache_prefix_chars") or 0)
             continue
         anthropic_messages.append(m)
 
@@ -450,7 +458,30 @@ async def _post_chat_anthropic(
         "messages": anthropic_messages,
     }
     if system_text:
-        payload["system"] = system_text
+        # 10/08 -- prompt caching (operator request, "si ca aide vraiment a
+        # economiser sans detruire la qualite c gratuit"): a caller that
+        # knows its own system prompt splits into a STABLE prefix (persona/
+        # identity/rules, unchanged between turns of the same conversation)
+        # and a VARIABLE suffix (this turn's context/history) can mark the
+        # boundary via ``cache_prefix_chars`` on the system message dict --
+        # every other provider branch in this file just reads ``content``
+        # and ignores the extra key, so this is a no-op everywhere except
+        # here. Anthropic verified live (platform.claude.com/docs) to have
+        # ZERO effect on output/quality -- purely a cost/latency optimization
+        # on the cached portion (up to 90% cheaper), silently skipped (no
+        # error) if the prefix is under the active model's own minimum
+        # cacheable size -- never guessed or enforced here.
+        if 0 < cache_prefix_chars < len(system_text):
+            payload["system"] = [
+                {
+                    "type": "text",
+                    "text": system_text[:cache_prefix_chars],
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": system_text[cache_prefix_chars:]},
+            ]
+        else:
+            payload["system"] = system_text
 
     async with httpx.AsyncClient(timeout=90.0) as client:
         _t0 = time.monotonic()
@@ -505,6 +536,9 @@ async def _post_chat_anthropic(
                 "output_tokens": estimate_tokens_from_text(reply),
                 "total_tokens": prompt_est + estimate_tokens_from_text(reply),
             }
+        raw_usage = data.get("usage") if isinstance(data, dict) else None
+        cache_read = int((raw_usage or {}).get("cache_read_input_tokens") or 0)
+        cache_write = int((raw_usage or {}).get("cache_creation_input_tokens") or 0)
         record_llm_usage(
             provider=route.provider,
             model=route.model,
@@ -516,6 +550,8 @@ async def _post_chat_anthropic(
             depth=depth,
             truncated=truncated,
             latency_ms=latency_ms,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
         return reply
 
@@ -533,6 +569,7 @@ async def chat_with_context(
     fallback_model: str | None = None,
     depth: str | None = None,
     image_data_uri: str | None = None,
+    cache_system_prefix_chars: int | None = None,
 ) -> str | None:
     """LLM call with injected memory. Spark (virtuals) first, fallback on failure.
 
@@ -548,6 +585,13 @@ async def chat_with_context(
     routing, for specific callers (e.g. momentum tie-breaker on Haiku via
     OpenRouter) independently of the global ``LLM_PROVIDER`` -- see ``_resolve_routes``.
     Absent -> behavior strictly unchanged for all other callers.
+
+    ``cache_system_prefix_chars`` (10/08): the caller states that the FIRST N
+    characters of ``system_context`` are a stable prefix (persona/rules,
+    unchanged between turns of the same conversation) -- ``_post_chat_anthropic``
+    is the only branch that reads it (Anthropic's ``cache_control``); every
+    other provider ignores it and sends ``system_context`` whole, unaffected.
+    Absent -> behavior strictly unchanged for all existing callers.
     """
     routes = _resolve_routes(
         model,
@@ -566,7 +610,10 @@ async def chat_with_context(
             {"type": "image_url", "image_url": {"url": image_data_uri}},
         ]
 
-    messages: list[dict[str, object]] = [{"role": "system", "content": system_context}]
+    system_message: dict[str, object] = {"role": "system", "content": system_context}
+    if cache_system_prefix_chars:
+        system_message["cache_prefix_chars"] = cache_system_prefix_chars
+    messages: list[dict[str, object]] = [system_message]
     if conversation_history:
         messages.extend(conversation_history[-12:])
     messages.append({"role": "user", "content": user_content})

@@ -1674,21 +1674,37 @@ class AriaBrain:
                 "n'est jamais une preuve on-chain vérifiée (contrairement à une analyse /vc) — "
                 "précise-le si l'utilisateur semble vouloir l'utiliser comme telle.\n"
             )
+        system_cache_prefix_len = 0
         if self_context_only:
             system = f"{context}\n\n{concision}\n{local_rule}{vc_extra}{lang_hint}"
         else:
-            system = (
-                f"{context}\n\n"
-                f"{concision}\n"
-                f"{local_rule}"
-                f"{vision_rule}"
-                f"{vc_extra}"
+            # 10/08 -- prompt caching (operator request): the STABLE part
+            # (persona/identity/channel rules -- unchanged between turns of
+            # the SAME conversation) goes FIRST, so it forms a real cacheable
+            # prefix; the VARIABLE part (this turn's context/history/depth
+            # instruction) goes after it. Anthropic's cache only helps a
+            # PREFIX -- putting the ever-changing ``context`` block first (the
+            # previous order) made every single byte after it un-cacheable
+            # too, defeating the point entirely. Pure reordering of the exact
+            # same blocks -- total text content is unchanged, an LLM's
+            # instruction-following doesn't depend on which named rule block
+            # comes first among several (verified via existing test suite).
+            stable_prefix = (
                 f"{persona_block}\n"
                 f"{x_identity_prompt()}\n"
                 f"{channel_rule}\n"
                 f"Public links:\n{get_channel_links_text()}\n"
-                f"{lang_hint}"
+                f"{lang_hint}\n"
             )
+            variable_suffix = (
+                f"\n{context}\n\n"
+                f"{concision}\n"
+                f"{local_rule}"
+                f"{vision_rule}"
+                f"{vc_extra}"
+            )
+            system = stable_prefix + variable_suffix
+            system_cache_prefix_len = len(stable_prefix)
         history = []
         if budget.history_turns > 0:
             try:
@@ -1719,6 +1735,7 @@ class AriaBrain:
             provider=budget.model_provider_override,
             depth=depth.value,
             image_data_uri=image_data_uri,
+            cache_system_prefix_chars=system_cache_prefix_len or None,
         )
 
 
