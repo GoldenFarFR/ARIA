@@ -1615,10 +1615,13 @@ def _holder_concentration_outage_bypass_enabled() -> bool:
     return datetime.now(timezone.utc) < expiry
 
 
-def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, str]:
+async def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, str]:
     """Single choke point for every "couldn't verify" exit of
     ``_check_holder_concentration`` -- see
-    ``_holder_concentration_outage_bypass_enabled``'s own docstring."""
+    ``_holder_concentration_outage_bypass_enabled``'s own docstring (manual,
+    env-var-driven override) and ``holder_concentration_outage_bypass``'s
+    own module docstring (10/08, AUTOMATIC override -- arms itself after
+    several consecutive real failures, no operator action needed)."""
     if _holder_concentration_outage_bypass_enabled():
         logger.warning(
             "holder_concentration: OUTAGE BYPASS active -- %s/%s let through UNVERIFIED "
@@ -1626,6 +1629,25 @@ def _holder_data_unavailable_verdict(contract: str, chain: str) -> tuple[bool, s
             chain, contract[:14],
         )
         return False, ""
+
+    from aria_core import holder_concentration_outage_bypass as auto_bypass
+
+    if await auto_bypass.is_armed():
+        logger.warning(
+            "holder_concentration: AUTO outage bypass active -- %s/%s let through UNVERIFIED "
+            "(sustained failure streak detected, self-expires)",
+            chain, contract[:14],
+        )
+        return False, ""
+
+    just_armed = await auto_bypass.record_unavailable()
+    if just_armed:
+        logger.warning(
+            "holder_concentration: AUTO outage bypass ARMED -- %s consecutive real failures "
+            "(free/Pro + on-chain rescue + x402 all exhausted), disarms on first real success "
+            "or after %ss, whichever comes first",
+            auto_bypass._ARM_AFTER_CONSECUTIVE_FAILURES, auto_bypass._AUTO_ARM_DURATION_SECONDS,
+        )
     return True, _HOLDER_DATA_UNAVAILABLE_REASON
 
 
@@ -1744,11 +1766,11 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
                 decimals, total_supply = onchain
 
         if decimals is None or not total_supply:
-            return _holder_data_unavailable_verdict(contract, chain)
+            return await _holder_data_unavailable_verdict(contract, chain)
 
         raw_holders = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
-            return _holder_data_unavailable_verdict(contract, chain)
+            return await _holder_data_unavailable_verdict(contract, chain)
         for h in raw_holders:
             raw_value = h.get("value")
             if raw_value is None:
@@ -1763,7 +1785,15 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
             ))
 
     if not entries:
-        return _holder_data_unavailable_verdict(contract, chain)
+        return await _holder_data_unavailable_verdict(contract, chain)
+
+    # 10/08 -- a real verdict is about to be computed from real data: reset
+    # the auto-bypass's failure streak and disarm it immediately if it was
+    # armed (Blockscout demonstrably recovered), never wait for the fixed
+    # window to expire.
+    from aria_core import holder_concentration_outage_bypass as auto_bypass
+
+    await auto_bypass.record_available()
 
     excluded = {a.lower() for a in _BURN_ADDRESSES} | {(pool_address or "").lower()}
     ranked = sorted(

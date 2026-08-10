@@ -51,6 +51,17 @@ def _isolated_holder_concentration_cache_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_holder_concentration_outage_bypass_db(tmp_path, monkeypatch):
+    """10/08 -- every "unavailable"/"available" exit of
+    ``_check_holder_concentration`` now also touches
+    ``holder_concentration_outage_bypass``'s own persisted state -- same
+    isolation need as the fixture above."""
+    from aria_core import holder_concentration_outage_bypass as hcob
+
+    monkeypatch.setattr(hcob, "DB_PATH", str(tmp_path / "holder_concentration_outage_bypass_test.db"))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_manual_candidates_db(tmp_path, monkeypatch):
     """Item #236, 30/07: ``discover_momentum_candidates`` now also drains
     ``manual_candidates`` (the /add queue) as its 7th source -- same
@@ -4393,6 +4404,72 @@ class TestCheckHolderConcentration:
         )
         too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
         assert too_concentrated is False
+
+    # ── auto-armement du bypass (10/08) -- bout en bout via _check_holder_concentration ──
+
+    @pytest.mark.asyncio
+    async def test_sustained_failures_across_different_contracts_auto_arm_bypass(self, monkeypatch):
+        """Panne soutenue sur PLUSIEURS candidats différents (le cas réel :
+        le pipeline évalue des dizaines de tokens/heure) -- après le seuil,
+        un token JAMAIS vu doit être laissé passer sans qu'aucune action
+        opérateur n'ait eu lieu."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: None)
+
+        from aria_core import holder_concentration_outage_bypass as auto_bypass
+
+        for i in range(auto_bypass._ARM_AFTER_CONSECUTIVE_FAILURES):
+            too_concentrated, reason = await me._check_holder_concentration(
+                f"0x{i:040x}", "base", "0xpool",
+            )
+            assert too_concentrated is True
+            assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+        # Le token suivant (jamais vu avant) est maintenant laissé passer --
+        # aucune modification de .env, aucun redéploiement.
+        too_concentrated, reason = await me._check_holder_concentration(
+            "0x" + "f" * 40, "base", "0xpool",
+        )
+        assert too_concentrated is False
+        assert reason == ""
+
+    @pytest.mark.asyncio
+    async def test_auto_bypass_disarms_the_moment_a_real_verdict_succeeds(self, monkeypatch):
+        """Blockscout revient -- le bypass auto-armé doit se désarmer
+        IMMÉDIATEMENT sur le premier succès réel, jamais attendre
+        l'expiration de la fenêtre."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services import base_onchain
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        monkeypatch.setattr(
+            blockscout_module, "get_blockscout_client",
+            lambda chain: _FakeHoldersClient(TokenHoldersResult(available=False)),
+        )
+        monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", lambda *a, **k: None)
+
+        from aria_core import holder_concentration_outage_bypass as auto_bypass
+
+        for i in range(auto_bypass._ARM_AFTER_CONSECUTIVE_FAILURES):
+            await me._check_holder_concentration(f"0x{i:040x}", "base", "0xpool")
+        assert await auto_bypass.is_armed() is True
+
+        # Blockscout répond de nouveau normalement pour ce candidat.
+        result = TokenHoldersResult(
+            holders=[_holder("0xPOOL", 10.0)] + [_holder(f"0xreal{i}", 3.0) for i in range(10)],
+            total_supply=1_000_000.0, available=True,
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: _FakeHoldersClient(result))
+        await me._check_holder_concentration("0xrecovered", "base", "0xpool")
+
+        assert await auto_bypass.is_armed() is False
 
 
 # ── cache long-TTL persisté (06/08, panne Blockscout réelle, demande opérateur:
