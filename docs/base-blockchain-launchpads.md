@@ -61,6 +61,20 @@ empirically tested, exact scope of the $CLANKFUN requirement (negligible cost ~$
 not confirmed, no native governance/staking for third-party tokens. **Status:
 recommended candidate.**
 
+**Governance under Neynar re-verified (backlog #276, 10/08)**: confirmed via
+WebSearch that Neynar now controls Clanker's contracts AND treasury (not just brand/
+Discord — the actual business). But the on-chain terms this matters for are protected
+independently of who owns the company: Clanker v4's factory contract is **audited
+(Macro + Cantina) and confirmed NOT upgradeable — no function exists to even set a new
+factory address**. Per-token fee-recipient PERCENTAGES set at deployment (up to 7
+recipients, `rewardBps[]` summing to 10,000) are immutable once deployed; only the
+recipient ADDRESS can later be changed by the token's own admin, never the split
+itself, and never by Clanker/Neynar. **Conclusion: Neynar's ownership is a real
+business/governance change (worth knowing) but does NOT expose a future ARIA token to
+a retroactive on-chain fee-term risk** — the immutability guarantee is structural, not
+a trust assumption resting on the current owner's goodwill. Nothing here changes the
+"recommended candidate" status; if anything it reinforces it.
+
 **Question on its weak point**: does Clanker's Discord support actually respond within
 a reasonable time to a real technical question (to be tested firsthand)? And does the
 $CLANKFUN requirement apply to every deployment path (API/SDK included) or only to the
