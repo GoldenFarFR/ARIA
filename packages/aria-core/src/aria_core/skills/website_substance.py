@@ -71,13 +71,21 @@ class WebsiteSubstanceVerdict:
 
 
 async def _default_crawl(url: str):
-    """Firecrawl (free plan) first, Tavily as fallback -- 09/08, explicit
-    operator directive ("branché le firecrawl la version gratuite"). Never
-    a hard dependency on either: Firecrawl returning unavailable (no key,
-    monthly budget exhausted, or any crawl failure) falls straight through
-    to Tavily, exactly as if Firecrawl didn't exist. Frees up Tavily's
-    shared monthly budget for its other callers (conviction_research,
-    polymarket_thesis) at the current low web-column volume."""
+    """Homemade scraper (services/website_scraper.py, 10/08, backlog #43)
+    FIRST -- no third-party quota at all, real evidence it covers most
+    real project sites (11/12 on a live sample, see that module's
+    docstring). Firecrawl (free plan) second, Tavily (shared monthly
+    budget) last -- never a hard dependency on any of the three: each
+    returning unavailable (homepage unreachable/WAF-blocked/JS-only-SPA
+    for the scraper; no key/budget exhausted/failure for Firecrawl) falls
+    straight through to the next, exactly as if the failed one didn't
+    exist."""
+    from aria_core.services.website_scraper import crawl as scraper_crawl
+
+    result = await scraper_crawl(url, caller="website_substance")
+    if result.available:
+        return result
+
     from aria_core.services.firecrawl import firecrawl_client, is_firecrawl_configured
 
     if is_firecrawl_configured():

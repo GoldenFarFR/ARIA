@@ -6,6 +6,7 @@ import pytest
 
 from aria_core.services.firecrawl import FirecrawlCrawlResult, FirecrawlPage
 from aria_core.services.tavily import TavilyCrawlResult, TavilyPage
+from aria_core.services.website_scraper import WebsiteScraperResult
 from aria_core.skills.website_substance import (
     WebsiteSubstanceFacts,
     _default_crawl,
@@ -187,17 +188,54 @@ async def test_gather_checks_contract_even_on_thin_content():
     assert facts.contract_confirmed is True  # mais la vérification du contrat, elle, a tourné
 
 
-# ── _default_crawl : Firecrawl (gratuit) en premier, Tavily en repli ───────
-# 09/08, "branché le firecrawl la version gratuite" -- jamais une dépendance
-# dure sur Firecrawl : tout cas où il ne répond pas de contenu exploitable
-# doit retomber sur Tavily de façon transparente.
+# ── _default_crawl : scraper maison en premier, Firecrawl puis Tavily en
+# repli ─────────────────────────────────────────────────────────────────
+# 10/08, backlog #43 -- le scraper maison (aucun quota tiers) est tenté
+# EN PREMIER ; Firecrawl (gratuit, 09/08) puis Tavily (budget partagé)
+# restent des replis réels si le scraper échoue (WAF, site JS-only sans
+# SSR, etc.) -- jamais une dépendance dure sur aucun des trois.
+
+
+def _unavailable_scraper(monkeypatch, *, error: str = "homepage inaccessible"):
+    import aria_core.services.website_scraper as wsc
+
+    async def fake_scraper_crawl(url, *, caller="unknown", **kwargs):
+        return WebsiteScraperResult(root_url=url, available=False, error=error)
+
+    monkeypatch.setattr(wsc, "crawl", fake_scraper_crawl)
 
 
 @pytest.mark.asyncio
-async def test_default_crawl_uses_firecrawl_when_configured_and_available(monkeypatch):
+async def test_default_crawl_uses_homemade_scraper_when_available(monkeypatch):
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+    import aria_core.services.website_scraper as wsc
+    from aria_core.services.website_scraper import WebsiteScraperPage
+
+    async def fake_scraper_crawl(url, *, caller="unknown", **kwargs):
+        return WebsiteScraperResult(
+            root_url=url, available=True,
+            pages=[WebsiteScraperPage(url=url, raw_content="contenu scraper maison")],
+        )
+
+    async def fail_if_called(url, *, caller="unknown", **kwargs):
+        raise AssertionError("Firecrawl/Tavily ne doivent jamais être appelés si le scraper maison a répondu")
+
+    monkeypatch.setattr(wsc, "crawl", fake_scraper_crawl)
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fail_if_called)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fail_if_called)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is True
+    assert result.pages[0].raw_content == "contenu scraper maison"
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_uses_firecrawl_when_scraper_unavailable_and_firecrawl_configured(monkeypatch):
     import aria_core.services.firecrawl as fc
     import aria_core.services.tavily as tv
 
+    _unavailable_scraper(monkeypatch)
     monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "fc-test-key")
 
     async def fake_firecrawl_crawl(url, *, caller="unknown", **kwargs):
@@ -217,10 +255,11 @@ async def test_default_crawl_uses_firecrawl_when_configured_and_available(monkey
 
 
 @pytest.mark.asyncio
-async def test_default_crawl_falls_back_to_tavily_when_firecrawl_unconfigured(monkeypatch):
+async def test_default_crawl_falls_back_to_tavily_when_scraper_and_firecrawl_unconfigured(monkeypatch):
     import aria_core.services.firecrawl as fc
     import aria_core.services.tavily as tv
 
+    _unavailable_scraper(monkeypatch)
     monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "")  # pas de clé -- jamais tenté
 
     async def fail_if_called_firecrawl(url, *, caller="unknown", **kwargs):
@@ -240,12 +279,14 @@ async def test_default_crawl_falls_back_to_tavily_when_firecrawl_unconfigured(mo
 
 
 @pytest.mark.asyncio
-async def test_default_crawl_falls_back_to_tavily_when_firecrawl_unavailable(monkeypatch):
-    """Clé configurée mais Firecrawl échoue (budget épuisé, erreur, etc.) --
-    jamais bloquant, retombe sur Tavily comme si Firecrawl n'existait pas."""
+async def test_default_crawl_falls_back_to_tavily_when_scraper_and_firecrawl_unavailable(monkeypatch):
+    """Scraper maison ET Firecrawl échouent tous les deux (WAF, budget
+    épuisé, etc.) -- jamais bloquant, retombe sur Tavily comme si aucun des
+    deux n'existait."""
     import aria_core.services.firecrawl as fc
     import aria_core.services.tavily as tv
 
+    _unavailable_scraper(monkeypatch)
     monkeypatch.setattr(fc, "firecrawl_api_key", lambda: "fc-test-key")
 
     async def fake_firecrawl_crawl(url, *, caller="unknown", **kwargs):

@@ -26,6 +26,9 @@ C = "0x" + "c" * 40
 def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(wsq, "DB_PATH", str(tmp_path / "wallet_scan_queue_test.db"))
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    from aria_core import wallet_scan_concurrency
+
+    monkeypatch.setattr(wallet_scan_concurrency, "DB_PATH", str(tmp_path / "wallet_scan_concurrency_test.db"))
     yield
 
 
@@ -421,15 +424,18 @@ async def test_catchup_wallet_loop_stops_at_soft_deadline(monkeypatch):
 
     monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
 
-    # Clock sequence: deadline computed at t=0 (-> 240s), 1st post-batch check
-    # still under deadline (t=0), 2nd post-batch check jumps past it (t=300).
-    # Patches wsq._monotonic (a dedicated `from time import monotonic as
-    # _monotonic` alias local to this module), NEVER the shared `time` module
-    # itself -- asyncio's own event loop relies on the real time.monotonic
-    # internally, so patching it globally corrupts the loop (this is exactly
-    # what caused a mysterious ~12-minute hang the first time this test was
-    # written that way).
-    clock = iter([0.0, 0.0, 300.0])
+    # Clock sequence (10/08 -- widened by 2 values: run_wallet_scan_queue_cycle
+    # now also calls _monotonic() once right before asyncio.gather and once
+    # right after, to feed wallet_scan_concurrency's adaptive concurrency):
+    # cycle start (t=0), deadline computed at t=0 (-> 240s), 1st post-batch
+    # check still under deadline (t=0), 2nd post-batch check jumps past it
+    # (t=300), cycle end (t=300). Patches wsq._monotonic (a dedicated `from
+    # time import monotonic as _monotonic` alias local to this module), NEVER
+    # the shared `time` module itself -- asyncio's own event loop relies on
+    # the real time.monotonic internally, so patching it globally corrupts
+    # the loop (this is exactly what caused a mysterious ~12-minute hang the
+    # first time this test was written that way).
+    clock = iter([0.0, 0.0, 0.0, 300.0, 300.0])
     monkeypatch.setattr(wsq, "_monotonic", lambda: next(clock))
 
     await wsq.run_wallet_scan_queue_cycle()

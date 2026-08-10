@@ -695,7 +695,10 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
     if outgoing_pause.is_paused():
         return {"outcome": "skipped", "reason": "paused"}
 
-    pending = await list_pending()
+    from aria_core import wallet_scan_concurrency
+
+    current_max = await wallet_scan_concurrency.current_max_wallets()
+    pending = await list_pending(limit=current_max)
     if not pending:
         return {"outcome": "empty_queue"}
 
@@ -715,10 +718,12 @@ async def run_wallet_scan_queue_cycle(notifier=None) -> dict:
             timeout=_WALLET_HARD_TIMEOUT_SECONDS,
         )
 
+    cycle_start = _monotonic()
     results = await asyncio.gather(
         *(_bounded(queued) for queued in pending),
         return_exceptions=True,
     )
+    await wallet_scan_concurrency.record_cycle_duration(_monotonic() - cycle_start)
 
     processed: list[str] = []
     completed_first_time: list[str] = []
