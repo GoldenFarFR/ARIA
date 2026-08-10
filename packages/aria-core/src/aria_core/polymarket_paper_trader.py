@@ -62,22 +62,26 @@ MAX_OPEN_POSITIONS = 15
 # operator explicit request, new standing doctrine (see heartbeat.py's
 # comment on this same task): detect a real technical failure within hours,
 # never sit on the calibrated nominal cadence for days before the first
-# signal. MUST REVERT to 3 once a few cycles have run cleanly -- Item #133.
+# signal. 10/08 -- auto-reverts to NOMINAL_CANDIDATES_PER_CYCLE via
+# burn_in_cadence.py once 6 consecutive clean heartbeat cycles are observed
+# (Item #133, previously a manual revert that never happened for ~2 weeks).
 #
-# Nominal value once confirmed (restore this, not a guess), calibrated
-# 26/07 against the REAL shared Tavily monthly budget (never guessed):
-# checked live, `tavily_budget.monthly_status()` reports a 900 credits/month
-# cap shared across EVERY Tavily caller in this codebase (X/Website/Docs
-# substance, conviction research, operator/visitor web_verify questions) --
-# 110 spent so far this month, 790 remaining at calibration time. The FIRST
-# value tried here (8, at heartbeat's 240min cadence = 6 cycles/day) would
-# cost up to 8*6=48 credits/day = ~1440/month for THIS chantier ALONE -- more
-# than the entire system's shared cap, before counting anything else.
-# Recalibrated to 3 (paired with a 720min/12h cycle in heartbeat.py, 2
-# cycles/day) = up to 6 credits/day = ~180/month (~20% of the shared cap) --
-# a deliberately small, non-dominant share since this is one exploratory
-# consumer among several already-established ones.
+# Nominal value once confirmed (restored automatically by burn_in_cadence.py,
+# 10/08 -- see below), calibrated 26/07 against the REAL shared Tavily
+# monthly budget (never guessed): checked live, `tavily_budget.
+# monthly_status()` reports a 900 credits/month cap shared across EVERY
+# Tavily caller in this codebase (X/Website/Docs substance, conviction
+# research, operator/visitor web_verify questions) -- 110 spent so far this
+# month, 790 remaining at calibration time. The FIRST value tried here (8,
+# at heartbeat's 240min cadence = 6 cycles/day) would cost up to 8*6=48
+# credits/day = ~1440/month for THIS chantier ALONE -- more than the entire
+# system's shared cap, before counting anything else. Recalibrated to 3
+# (paired with a 720min/12h cycle in heartbeat.py, 2 cycles/day) = up to 6
+# credits/day = ~180/month (~20% of the shared cap) -- a deliberately small,
+# non-dominant share since this is one exploratory consumer among several
+# already-established ones.
 CANDIDATES_PER_CYCLE = 1
+NOMINAL_CANDIDATES_PER_CYCLE = 3
 
 
 # 26/07 -- Item #109, drawdown circuit breaker (polymarket_risk_guard.py):
@@ -832,10 +836,17 @@ async def run_polymarket_paper_cycle(notifier=None) -> dict:
             await notifier(polymarket_risk_guard.format_soft_drawdown_alert(risk_state))
 
         if not risk_state.blocked:
+            from aria_core import burn_in_cadence
+
+            candidates_per_cycle = await burn_in_cadence.resolve(
+                "polymarket_paper_cycle",
+                burn_in_value=CANDIDATES_PER_CYCLE,
+                nominal_value=NOMINAL_CANDIDATES_PER_CYCLE,
+            )
             candidates = await polymarket_client.list_liquid_events()
             evaluated = 0
             for market in candidates:
-                if evaluated >= CANDIDATES_PER_CYCLE:
+                if evaluated >= candidates_per_cycle:
                     break
                 if await has_open_position(market.event_slug, market.question):
                     continue

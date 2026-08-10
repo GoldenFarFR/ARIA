@@ -64,7 +64,7 @@ REVIEW_LOG="/opt/aria-data/architect-review.log"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
 ZERO_SHA="0000000000000000000000000000000000000000"
 LAST_REVIEWED_MARKER="/opt/aria-data/architect-reports/last-reviewed-sha"
-BATCH_THRESHOLD_LINES=2000
+BATCH_THRESHOLD_LINES=8000
 
 mkdir -p "$PENDING_DIR" 2>/dev/null || true
 
@@ -142,27 +142,22 @@ if [ "$CUMULATIVE_LINES" -lt "$BATCH_THRESHOLD_LINES" ]; then
   exit 0
 fi
 
-DIFF_LEN=${#DIFF_CONTENT}
-DIFF_TRUNCATED=""
-if [ "$DIFF_LEN" -gt 60000 ]; then
-  DIFF_CONTENT="${DIFF_CONTENT:0:60000}"
-  DIFF_TRUNCATED="\n\n[... diff tronque a 60000 caracteres sur $DIFF_LEN, analyse partielle ...]"
-fi
-
 # Tout le travail reel est detache -- le push aboutit immediatement, sans
 # jamais attendre l'appel API.
 (
   # Cle lue UNIQUEMENT depuis le .env du conteneur au moment du besoin --
   # jamais gardee dans le shell host, jamais affichee/loggee.
-  OR_KEY=$(grep '^OPENROUTER_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
-  if [ -z "$OR_KEY" ]; then
+  # 10/08 -- API Anthropic directe (ANTHROPIC_API_KEY), remplace OPENROUTER_API_KEY
+  # apres un vrai incident credits OpenRouter epuises (HTTP 402).
+  API_KEY=$(grep '^ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+  if [ -z "$API_KEY" ]; then
     {
       echo "# Avocat du Diable -- ECHEC DE GENERATION"
       echo ""
-      echo "OPENROUTER_API_KEY introuvable dans $ENV_FILE au moment du push."
+      echo "ANTHROPIC_API_KEY introuvable dans $ENV_FILE au moment du push."
       echo "Genere le $(date -u +%Y-%m-%dT%H:%M:%SZ)."
     } > "$REPORT_FILE"
-    echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- ECHEC cle OpenRouter absente ===" >> "$REVIEW_LOG"
+    echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- ECHEC cle Anthropic absente ===" >> "$REVIEW_LOG"
     exit 0
   fi
 
@@ -172,24 +167,31 @@ fi
   INBOX_INDEX=$(ls "$REPO_DIR"/docs/aria-learning-inbox/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null)
   [ -z "$INBOX_INDEX" ] && INBOX_INDEX="(aucune fiche deposee pour l'instant)"
 
-  USER_DIFF_CONTENT="${DIFF_CONTENT}${DIFF_TRUNCATED}"
-  RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$OR_KEY" 2>/tmp/devils-advocate-http-status.$$)
+  # 10/08 -- condensation Haiku 4.5 (jamais une troncature brute) si le diff
+  # depasse DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS -- voir devils-advocate-lib.sh.
+  USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "${MAIN_LOCAL_SHA:0:12}")
+  RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$API_KEY" 2>/tmp/devils-advocate-http-status.$$)
   HTTP_STATUS=$(grep -oE 'HTTP_STATUS:[0-9]+' /tmp/devils-advocate-http-status.$$ | cut -d: -f2)
   rm -f /tmp/devils-advocate-http-status.$$
-  unset OR_KEY
+  unset API_KEY
 
   RESPONSE_CONTENT=""
   FINISH_REASON="inconnu"
+  COST_LINE="0 0 0.000000"
   if [ "$HTTP_STATUS" = "200" ]; then
-    RESPONSE_CONTENT=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
-    FINISH_REASON=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].finish_reason // "inconnu"' 2>/dev/null)
+    RESPONSE_CONTENT=$(echo "$RAW_RESPONSE" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")' 2>/dev/null)
+    STOP_REASON=$(echo "$RAW_RESPONSE" | jq -r '.stop_reason // "inconnu"' 2>/dev/null)
+    FINISH_REASON="$STOP_REASON"
+    COST_LINE=$(devils_advocate_cost "$RAW_RESPONSE")
+    read -r IN_TOKENS OUT_TOKENS COST_USD <<< "$COST_LINE"
+    devils_advocate_log_cost "${MAIN_LOCAL_SHA:0:12}" "$IN_TOKENS" "$OUT_TOKENS" "$COST_USD"
   fi
 
   {
     echo "# Avocat du Diable -- rapport de critique post-push"
     echo ""
     echo "> ATTENTION -- REGLE DE LECTURE OBLIGATOIRE : ce rapport vient d'un"
-    echo "> agent IA EXTERNE (${MODEL}, via OpenRouter). Il peut halluciner"
+    echo "> agent IA EXTERNE (${MODEL}, via l'API Anthropic directe). Il peut halluciner"
     echo "> des problemes inexistants ou mal comprendre le contexte du"
     echo "> projet. Verifie CHAQUE affirmation technique contre le vrai code"
     echo "> avant d'ecrire le moindre correctif -- meme discipline que pour"
@@ -201,12 +203,15 @@ fi
       echo "> Diff REELLEMENT analyse (cumul, ${CUMULATIVE_LINES} lignes) : depuis ${BASE_SHA:0:12} -- au moins un push precedent etait sous le seuil de ${BATCH_THRESHOLD_LINES} lignes et a ete reporte ici."
     fi
     echo "> Genere le $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ "$HTTP_STATUS" = "200" ]; then
+      echo "> Cout reel de cet appel : \$${COST_USD} (${IN_TOKENS} tokens input, ${OUT_TOKENS} tokens output, tarifs Fable 5 verifies 10/08). Journal cumulatif : ${DEVILS_ADVOCATE_COST_LOG}."
+    fi
     echo ""
     echo "---"
     echo ""
     if [ -n "$RESPONSE_CONTENT" ]; then
-      if [ "$FINISH_REASON" = "length" ]; then
-        echo "**ATTENTION -- reponse TRONQUEE (finish_reason=length, max_tokens atteint) -- incomplete.**"
+      if [ "$FINISH_REASON" = "max_tokens" ]; then
+        echo "**ATTENTION -- reponse TRONQUEE (stop_reason=max_tokens) -- incomplete.**"
         echo ""
       fi
       echo "$RESPONSE_CONTENT"
@@ -222,7 +227,7 @@ fi
   # sinon la couverture du diff manque silencieusement.
   echo "$MAIN_LOCAL_SHA" > "$LAST_REVIEWED_MARKER"
 
-  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- HTTP ${HTTP_STATUS} (cumul ${CUMULATIVE_LINES} lignes depuis ${BASE_SHA:0:12}) ===" >> "$REVIEW_LOG"
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- HTTP ${HTTP_STATUS} (cumul ${CUMULATIVE_LINES} lignes depuis ${BASE_SHA:0:12}) -- cout \$${COST_USD} (${IN_TOKENS} in / ${OUT_TOKENS} out) ===" >> "$REVIEW_LOG"
 ) &
 disown
 

@@ -15,6 +15,16 @@ def tmp_db(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _isolated_burn_in_cadence_db(tmp_path, monkeypatch):
+    """10/08 -- run_polymarket_paper_cycle now also resolves its
+    CANDIDATES_PER_CYCLE through burn_in_cadence's own persisted state,
+    same isolation need as ``tmp_db`` above."""
+    from aria_core import burn_in_cadence
+
+    monkeypatch.setattr(burn_in_cadence, "DB_PATH", str(tmp_path / "burn_in_cadence_test.db"))
+
+
 def _market(*, event_slug="evt", question="Will X happen?", yes_price=0.5, yes_token="yes-tok", no_token="no-tok"):
     return PolymarketCandidateMarket(
         event_title="Some Event",

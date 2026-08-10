@@ -28,6 +28,15 @@ _LAST_HEARTBEAT: datetime | None = None
 # normal conditions.
 _TASK_TIMEOUT_SECONDS = 300
 
+# 10/08 -- Item #133 auto-restoration: task_id -> nominal interval_minutes to
+# revert to once burn_in_cadence.py confirms enough clean cycles ran. Paired
+# with each task's own nominal CONSTANT documented in its module (never
+# guessed here) -- polymarket_paper_trader.py's own NOMINAL_CANDIDATES_PER_
+# CYCLE resolves independently against the SAME task_id's burn-in state.
+_BURN_IN_NOMINAL_INTERVAL_MINUTES = {
+    "polymarket_paper_cycle": 720,
+}
+
 HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="portfolio_scan",
@@ -379,9 +388,11 @@ HEARTBEAT_TASKS = [
         # for hours before the first real signal). Cost at this cadence: 1
         # candidate x 24 cycles/day = up to 24 Tavily credits/day, acceptable
         # for a short burn-in window, never left running for weeks.
-        # MUST REVERT to the calibrated nominal cadence below once a few
-        # cycles have run cleanly (no exception, no silent no-op) --
-        # tracked as Item #133 in the backlog.
+        # 10/08 -- auto-reverts to the calibrated nominal cadence below via
+        # burn_in_cadence.py (see _BURN_IN_NOMINAL_INTERVAL_MINUTES) once 6
+        # consecutive clean cycles are observed, closing Item #133 (this
+        # burn-in ran ~2 weeks past its intended window before this fix --
+        # the manual "MUST REVERT" note alone was never enough).
         #
         # Nominal cadence once confirmed (restore this, not a guess):
         # 720min (12h, 2 cycles/day) -- prediction markets move far slower
@@ -1125,6 +1136,8 @@ class AriaHeartbeat:
         now = datetime.now(timezone.utc)
         _sync_x_curiosity_enabled()
 
+        from aria_core import burn_in_cadence
+
         for hb_task in HEARTBEAT_TASKS:
             if not hb_task.enabled:
                 continue
@@ -1132,6 +1145,12 @@ class AriaHeartbeat:
             if hb_task.id == "aria_brain_cycle":
                 interval_minutes = _aria_brain_effective_interval_minutes(
                     self._last_runs.get(hb_task.id)
+                )
+            elif hb_task.id in _BURN_IN_NOMINAL_INTERVAL_MINUTES:
+                interval_minutes = await burn_in_cadence.resolve(
+                    hb_task.id,
+                    burn_in_value=hb_task.interval_minutes,
+                    nominal_value=_BURN_IN_NOMINAL_INTERVAL_MINUTES[hb_task.id],
                 )
             if not _task_due(hb_task.id, interval_minutes, self._last_runs):
                 continue
@@ -1147,20 +1166,35 @@ class AriaHeartbeat:
             # persists the state AND marks the task as "attempted" (never retried
             # in a tight loop every 60s -- its normal `interval_minutes` applies,
             # whether the attempt succeeded, timed out, or raised).
+            task_ok = True
             try:
                 await asyncio.wait_for(self._run_task(hb_task.id), timeout=_TASK_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
+                task_ok = False
                 logger.warning(
                     "Heartbeat: task %s exceeded %ss -- abandoned for this tick, "
                     "other tasks are never blocked.",
                     hb_task.id, _TASK_TIMEOUT_SECONDS,
                 )
             except Exception as exc:  # noqa: BLE001 — a broken task no longer cuts off the whole cycle
+                task_ok = False
                 logger.exception("Heartbeat: task %s failed: %s", hb_task.id, exc)
             finally:
                 self._last_runs[hb_task.id] = now
                 hb_task.last_run = now
                 _save_heartbeat_state(self._last_runs)
+                if hb_task.id in _BURN_IN_NOMINAL_INTERVAL_MINUTES:
+                    just_completed = await burn_in_cadence.record_cycle_result(hb_task.id, task_ok)
+                    if just_completed:
+                        nominal = _BURN_IN_NOMINAL_INTERVAL_MINUTES[hb_task.id]
+                        logger.warning(
+                            "Heartbeat: burn-in complete for %s -- reverting to nominal cadence (%s min).",
+                            hb_task.id, nominal,
+                        )
+                        await self._notify_telegram(
+                            f"⚙️ Burn-in terminé pour {hb_task.id} -- cadence accélérée désarmée, "
+                            f"retour à la cadence nominale ({nominal} min). Aucune action requise."
+                        )
 
         _LAST_HEARTBEAT = now
 

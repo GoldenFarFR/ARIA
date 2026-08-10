@@ -19,15 +19,19 @@ Instead, the suspension window backs off exponentially on each
 re-armament (``_INITIAL_SUSPEND_SECONDS`` 12h -> doubles each time the
 window's first post-expiry probe still fails, capped at
 ``_MAX_SUSPEND_SECONDS`` 48h) -- a single real success at any point
-immediately resets the backoff to its floor and disarms."""
+immediately resets the backoff to its floor and disarms.
+
+SQL plumbing shared with ``holder_concentration_outage_bypass.py`` via
+``single_row_state.SingleRowStore`` (factored out 10/08, same day both
+were built with the same hand-duplicated shape) -- the arm/disarm POLICY
+below (exponential backoff, doubling) stays specific to this module."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
 
-import aiosqlite
-
 from aria_core.paths import aria_db_path
+from aria_core.single_row_state import SingleRowStore, parse_iso
 
 logger = logging.getLogger(__name__)
 
@@ -43,52 +47,26 @@ _ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES = 3
 _INITIAL_SUSPEND_SECONDS = 12 * 3600
 _MAX_SUSPEND_SECONDS = 48 * 3600
 
-_ROW_ID = 1
+_TABLE = "goplus_quota_suspension_state"
+_COLUMNS = [
+    ("consecutive_rate_limit_failures", "INTEGER NOT NULL DEFAULT 0", 0),
+    ("suspended_until", "TEXT", None),
+    ("current_backoff_seconds", "INTEGER NOT NULL DEFAULT 0", 0),
+]
 
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS goplus_quota_suspension_state (
-                id INTEGER PRIMARY KEY,
-                consecutive_rate_limit_failures INTEGER NOT NULL DEFAULT 0,
-                suspended_until TEXT,
-                current_backoff_seconds INTEGER NOT NULL DEFAULT 0,
-                last_updated_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.execute(
-            "INSERT OR IGNORE INTO goplus_quota_suspension_state "
-            "(id, consecutive_rate_limit_failures, suspended_until, current_backoff_seconds, last_updated_at) "
-            "VALUES (?, 0, NULL, 0, ?)",
-            (_ROW_ID, datetime.now(timezone.utc).isoformat()),
-        )
-        await db.commit()
-
-
-def _parse(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw)
-    except (TypeError, ValueError):
-        return None
+def _store() -> SingleRowStore:
+    # Constructed fresh on every call (cheap -- just 3 attributes) so a
+    # test monkeypatching the module-level DB_PATH after import is always
+    # honored, never frozen at import time.
+    return SingleRowStore(DB_PATH, _TABLE, _COLUMNS)
 
 
 async def is_suspended() -> bool:
     """Checked FIRST, before even attempting a network call -- same
     short-circuit spirit as the constant it replaces."""
-    await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT suspended_until FROM goplus_quota_suspension_state WHERE id = ?",
-                (_ROW_ID,),
-            )
-        ).fetchone()
-    until = _parse(row[0]) if row else None
+    row = await _store().read("suspended_until")
+    until = parse_iso(row[0]) if row else None
     return until is not None and datetime.now(timezone.utc) < until
 
 
@@ -97,16 +75,9 @@ async def record_rate_limit_failure() -> bool:
     4029) -- never a generic failure. Returns True only on the call that
     ARMS the suspension for the first time (caller logs a loud WARNING
     only in that case)."""
-    await _ensure_table()
     now = datetime.now(timezone.utc)
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT consecutive_rate_limit_failures, current_backoff_seconds "
-                "FROM goplus_quota_suspension_state WHERE id = ?",
-                (_ROW_ID,),
-            )
-        ).fetchone()
+
+    def _apply(row):
         prev_failures, prev_backoff = row or (0, 0)
         failures = prev_failures + 1
 
@@ -124,23 +95,44 @@ async def record_rate_limit_failure() -> bool:
                 just_armed = True
             suspended_until_value = (now + timedelta(seconds=backoff_value)).isoformat()
 
-        await db.execute(
-            "UPDATE goplus_quota_suspension_state SET consecutive_rate_limit_failures = ?, "
-            "suspended_until = ?, current_backoff_seconds = ?, last_updated_at = ? WHERE id = ?",
-            (failures, suspended_until_value, backoff_value, now.isoformat(), _ROW_ID),
-        )
-        await db.commit()
+        values = {
+            "consecutive_rate_limit_failures": failures,
+            "suspended_until": suspended_until_value,
+            "current_backoff_seconds": backoff_value,
+        }
+        return values, (just_armed, suspended_until_value)
+
+    just_armed, suspended_until_value = await _store().mutate(
+        ("consecutive_rate_limit_failures", "current_backoff_seconds"), _apply
+    )
+    if just_armed:
+        await _notify_armed(suspended_until_value)
     return just_armed
+
+
+async def _notify_armed(suspended_until_iso: str | None) -> None:
+    """10/08 -- one-time Telegram notice exactly when the suspension first
+    arms (never repeated on subsequent backoff extensions -- caller only
+    invokes this on ``just_armed``)."""
+    from aria_core.gateway.telegram_bot import send_message
+
+    until_dt = parse_iso(suspended_until_iso)
+    until_str = until_dt.strftime("%Y-%m-%d %H:%M UTC") if until_dt else "?"
+    await send_message(
+        "🛡️ Suspension automatique GoPlus activée -- quota CU probablement épuisé "
+        f"({_ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES} rate-limits consécutifs). "
+        f"Prochaine tentative après {until_str} (recul exponentiel si elle échoue encore, "
+        "réarmement immédiat dès qu'un appel réussit). Aucune action requise."
+    )
 
 
 async def record_success() -> None:
     """A real call succeeded -- reset the streak AND the backoff to their
     floor, disarm immediately (never wait for the window to expire)."""
-    await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE goplus_quota_suspension_state SET consecutive_rate_limit_failures = 0, "
-            "suspended_until = NULL, current_backoff_seconds = 0, last_updated_at = ? WHERE id = ?",
-            (datetime.now(timezone.utc).isoformat(), _ROW_ID),
-        )
-        await db.commit()
+    await _store().write(
+        {
+            "consecutive_rate_limit_failures": 0,
+            "suspended_until": None,
+            "current_backoff_seconds": 0,
+        }
+    )

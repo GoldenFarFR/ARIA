@@ -18,15 +18,19 @@ the instant a REAL verdict succeeds again (Blockscout recovered) OR the
 window expires -- whichever comes first. Renewed (window pushed forward)
 on every failure while already armed, so a longer outage is covered
 without operator involvement -- never left armed indefinitely once
-failures stop."""
+failures stop.
+
+SQL plumbing shared with ``goplus_quota_suspension.py`` via
+``single_row_state.SingleRowStore`` (factored out 10/08, same day both
+were built with the same hand-duplicated shape) -- the arm/disarm POLICY
+below (fixed-window backoff, no doubling) stays specific to this module."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
 
-import aiosqlite
-
 from aria_core.paths import aria_db_path
+from aria_core.single_row_state import SingleRowStore, parse_iso
 
 logger = logging.getLogger(__name__)
 
@@ -44,53 +48,27 @@ _ARM_AFTER_CONSECUTIVE_FAILURES = 3
 # longer outage stays covered -- never left armed once failures stop.
 _AUTO_ARM_DURATION_SECONDS = 2 * 3600
 
-_ROW_ID = 1
+_TABLE = "holder_concentration_outage_bypass_state"
+_COLUMNS = [
+    ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0", 0),
+    ("armed_until", "TEXT", None),
+    ("armed_at", "TEXT", None),
+]
 
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS holder_concentration_outage_bypass_state (
-                id INTEGER PRIMARY KEY,
-                consecutive_failures INTEGER NOT NULL DEFAULT 0,
-                armed_until TEXT,
-                armed_at TEXT,
-                last_updated_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.execute(
-            "INSERT OR IGNORE INTO holder_concentration_outage_bypass_state "
-            "(id, consecutive_failures, armed_until, armed_at, last_updated_at) "
-            "VALUES (?, 0, NULL, NULL, ?)",
-            (_ROW_ID, datetime.now(timezone.utc).isoformat()),
-        )
-        await db.commit()
-
-
-def _parse(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw)
-    except (TypeError, ValueError):
-        return None
+def _store() -> SingleRowStore:
+    # Constructed fresh on every call (cheap -- just 3 attributes) so a
+    # test monkeypatching the module-level DB_PATH after import is always
+    # honored, never frozen at import time.
+    return SingleRowStore(DB_PATH, _TABLE, _COLUMNS)
 
 
 async def is_armed() -> bool:
     """Checked FIRST, before recording anything -- a fresh-armament WARNING
     is only ever logged once (see record_unavailable's return value), never
     on every single check while already armed."""
-    await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT armed_until FROM holder_concentration_outage_bypass_state WHERE id = ?",
-                (_ROW_ID,),
-            )
-        ).fetchone()
-    armed_until = _parse(row[0]) if row else None
+    row = await _store().read("armed_until")
+    armed_until = parse_iso(row[0]) if row else None
     return armed_until is not None and datetime.now(timezone.utc) < armed_until
 
 
@@ -100,19 +78,12 @@ async def record_unavailable() -> bool:
     not-currently-armed state (fresh armament -- caller logs a loud
     WARNING only in that case), False otherwise (already armed, or not yet
     at threshold)."""
-    await _ensure_table()
     now = datetime.now(timezone.utc)
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT consecutive_failures, armed_until, armed_at FROM "
-                "holder_concentration_outage_bypass_state WHERE id = ?",
-                (_ROW_ID,),
-            )
-        ).fetchone()
+
+    def _apply(row):
         prev_failures, prev_armed_until_raw, prev_armed_at = row or (0, None, None)
         failures = prev_failures + 1
-        was_armed = (_parse(prev_armed_until_raw) or datetime.min.replace(tzinfo=timezone.utc)) > now
+        was_armed = (parse_iso(prev_armed_until_raw) or datetime.min.replace(tzinfo=timezone.utc)) > now
 
         armed_until_value = prev_armed_until_raw
         armed_at_value = prev_armed_at
@@ -123,14 +94,37 @@ async def record_unavailable() -> bool:
             if just_armed:
                 armed_at_value = now.isoformat()
 
-        await db.execute(
-            "UPDATE holder_concentration_outage_bypass_state "
-            "SET consecutive_failures = ?, armed_until = ?, armed_at = ?, last_updated_at = ? "
-            "WHERE id = ?",
-            (failures, armed_until_value, armed_at_value, now.isoformat(), _ROW_ID),
-        )
-        await db.commit()
+        values = {
+            "consecutive_failures": failures,
+            "armed_until": armed_until_value,
+            "armed_at": armed_at_value,
+        }
+        return values, (just_armed, armed_until_value)
+
+    just_armed, armed_until_value = await _store().mutate(
+        ("consecutive_failures", "armed_until", "armed_at"), _apply
+    )
+    if just_armed:
+        await _notify_armed(armed_until_value)
     return just_armed
+
+
+async def _notify_armed(armed_until_iso: str | None) -> None:
+    """10/08 -- one-time Telegram notice exactly when the bypass first arms
+    (never repeated while already armed -- caller only invokes this on
+    ``just_armed``). Distinct from the per-refusal ``ACHAT REFUSÉ`` alert
+    (paper_trader.py): those stop firing once armed, this is the one signal
+    that tells the operator WHY without them having to check logs."""
+    from aria_core.gateway.telegram_bot import send_message
+
+    until_text = parse_iso(armed_until_iso)
+    until_str = until_text.strftime("%H:%M UTC") if until_text else "?"
+    await send_message(
+        "🛡️ Bypass automatique activé -- concentration des détenteurs invérifiable "
+        f"depuis {_ARM_AFTER_CONSECUTIVE_FAILURES} tentatives consécutives (Blockscout probablement en panne). "
+        f"Les candidats passent sans ce contrôle jusqu'à {until_str} (prolongé automatiquement si la panne continue, "
+        "désarmé immédiatement dès qu'un vrai contrôle réussit). Aucune action requise."
+    )
 
 
 async def record_available() -> None:
@@ -138,11 +132,4 @@ async def record_available() -> None:
     failure streak AND disarms the auto-bypass immediately -- never waits
     for the fixed window to expire once Blockscout has demonstrably
     recovered. Never touches the independent manual env-var override."""
-    await _ensure_table()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE holder_concentration_outage_bypass_state "
-            "SET consecutive_failures = 0, armed_until = NULL, last_updated_at = ? WHERE id = ?",
-            (datetime.now(timezone.utc).isoformat(), _ROW_ID),
-        )
-        await db.commit()
+    await _store().write({"consecutive_failures": 0, "armed_until": None})

@@ -39,28 +39,27 @@ if [ -z "$DIFF_CONTENT" ]; then
 fi
 
 DIFF_LEN=${#DIFF_CONTENT}
-DIFF_TRUNCATED=""
-if [ "$DIFF_LEN" -gt 60000 ]; then
-  DIFF_CONTENT="${DIFF_CONTENT:0:60000}"
-  DIFF_TRUNCATED="
 
-[... diff tronque a 60000 caracteres sur $DIFF_LEN, analyse partielle ...]"
-fi
-
-OR_KEY=$(grep '^OPENROUTER_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
-if [ -z "$OR_KEY" ]; then
-  echo "OPENROUTER_API_KEY introuvable dans $ENV_FILE." >&2
+# 10/08 -- API Anthropic directe (ANTHROPIC_API_KEY), remplace OPENROUTER_API_KEY
+# apres un vrai incident credits OpenRouter epuises (HTTP 402).
+API_KEY=$(grep '^ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+if [ -z "$API_KEY" ]; then
+  echo "ANTHROPIC_API_KEY introuvable dans $ENV_FILE." >&2
   exit 1
 fi
 
 INBOX_INDEX=$(ls "$REPO_DIR"/docs/aria-learning-inbox/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null)
 [ -z "$INBOX_INDEX" ] && INBOX_INDEX="(aucune fiche deposee pour l'instant)"
 
+# 10/08 -- condensation Haiku 4.5 (jamais une troncature brute) si le diff
+# depasse DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS -- voir devils-advocate-lib.sh.
+USER_DIFF_CONTENT=$(devils_advocate_diff_for_review "$DIFF_CONTENT" "$API_KEY" "precommit-$(date -u +%Y%m%dT%H%M%S)")
+
 STATUS_TMP=$(mktemp /tmp/devils-advocate-precommit-status.XXXXXX)
-RAW_RESPONSE=$(devils_advocate_call "${DIFF_CONTENT}${DIFF_TRUNCATED}" "$INBOX_INDEX" "$OR_KEY" 2>"$STATUS_TMP")
+RAW_RESPONSE=$(devils_advocate_call "$USER_DIFF_CONTENT" "$INBOX_INDEX" "$API_KEY" 2>"$STATUS_TMP")
 HTTP_STATUS=$(grep -oE 'HTTP_STATUS:[0-9]+' "$STATUS_TMP" | cut -d: -f2)
 rm -f "$STATUS_TMP"
-unset OR_KEY
+unset API_KEY
 
 echo "-- diff analyse : ${DIFF_SOURCE}, ${DIFF_LEN} caracteres --" >&2
 
@@ -70,9 +69,13 @@ if [ "$HTTP_STATUS" != "200" ]; then
   exit 1
 fi
 
-FINISH_REASON=$(echo "$RAW_RESPONSE" | jq -r '.choices[0].finish_reason // "inconnu"' 2>/dev/null)
-if [ "$FINISH_REASON" = "length" ]; then
-  echo "ATTENTION -- reponse TRONQUEE (finish_reason=length, max_tokens atteint) -- incomplete." >&2
+STOP_REASON=$(echo "$RAW_RESPONSE" | jq -r '.stop_reason // "inconnu"' 2>/dev/null)
+if [ "$STOP_REASON" = "max_tokens" ]; then
+  echo "ATTENTION -- reponse TRONQUEE (stop_reason=max_tokens) -- incomplete." >&2
 fi
 
-echo "$RAW_RESPONSE" | jq -r '.choices[0].message.content // "ECHEC: reponse 200 sans contenu exploitable."'
+read -r IN_TOKENS OUT_TOKENS COST_USD <<< "$(devils_advocate_cost "$RAW_RESPONSE")"
+devils_advocate_log_cost "precommit-$(date -u +%Y%m%dT%H%M%S)" "$IN_TOKENS" "$OUT_TOKENS" "$COST_USD"
+echo "-- cout reel : \$${COST_USD} (${IN_TOKENS} tokens input, ${OUT_TOKENS} tokens output) --" >&2
+
+echo "$RAW_RESPONSE" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n") | if . == "" then "ECHEC: reponse 200 sans contenu exploitable." else . end'
