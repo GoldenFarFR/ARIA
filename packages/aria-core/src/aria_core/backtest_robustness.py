@@ -1,8 +1,18 @@
 """Backtest overfitting checks -- Monte-Carlo permutation test, multiple-
-comparison (Bonferroni) correction, binomial consistency check. Pure stdlib,
-no numpy/scipy dependency. Built to satisfy backlog #266 ("apply on next
-batch of v8 trades before any new empirical recalibration") -- reusable on
-any future backtest/live comparison, not a one-off script.
+comparison (Bonferroni) correction, binomial consistency check, chronological
+train/validation split. Pure stdlib, no numpy/scipy dependency. Built to
+satisfy backlog #266 ("apply on next batch of v8 trades before any new
+empirical recalibration") -- reusable on any future backtest/live comparison,
+not a one-off script.
+
+The permutation/Bonferroni/binomial trio was built 10/08 and applied inline
+that same day (see below); the chronological split + out-of-sample verdict
+were the part of #266 still explicitly marked "never built" -- added 10/08
+(later pass) to close the gap and operationalize CLAUDE.md's scalping_v8
+methodology rule end to end: (1) split BEFORE looking for a pattern, (2) test
+the SPLIT-OFF validation set with the statistical tools below, (3) too little
+validation data is a reason to keep shadow-logging, never a reason to test
+anyway.
 
 Founding case (10/08): the wick-gate threshold (``wick_filter_shadow.py``)
 was picked from a single 58-trade retrospective sample (05/08), where ~6
@@ -22,6 +32,9 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Sequence, TypeVar
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -138,4 +151,124 @@ def permutation_test_winrate_diff(
     return PermutationTestResult(
         observed_diff=observed_diff, n_permutations=n_permutations, p_value=p_value,
         group_a_n=n_a, group_b_n=n_b,
+    )
+
+
+@dataclass(frozen=True)
+class ChronologicalSplitResult:
+    train: tuple
+    validation: tuple
+    train_fraction_requested: float
+    min_validation_size: int
+    insufficient_validation: bool
+
+
+def chronological_train_validation_split(
+    records: Sequence[T], *, train_fraction: float = 0.7, min_validation_size: int = 10,
+) -> ChronologicalSplitResult:
+    """Splits an ALREADY time-ordered sequence into train/validation without
+    shuffling -- ``records[0]`` must be the earliest, ``records[-1]`` the most
+    recent (caller's responsibility; this function trusts the given order).
+
+    Deliberately never randomizes: CLAUDE.md's scalping_v8 methodology rule
+    (1) requires the split to happen chronologically (train = earlier trades,
+    validation = later, out-of-time trades) so validation genuinely represents
+    "what a filter would have faced going forward", not just a random held-out
+    sample drawn from the same period a pattern was mined on -- a random split
+    would leak information (a filter mined on data adjacent in time to a
+    "held-out" random sample can still overfit to the same regime)."""
+    if not 0.0 < train_fraction < 1.0:
+        raise ValueError("train_fraction must be in (0, 1)")
+    if min_validation_size <= 0:
+        raise ValueError("min_validation_size must be positive")
+    ordered = list(records)
+    split_idx = round(len(ordered) * train_fraction)
+    train = tuple(ordered[:split_idx])
+    validation = tuple(ordered[split_idx:])
+    return ChronologicalSplitResult(
+        train=train,
+        validation=validation,
+        train_fraction_requested=train_fraction,
+        min_validation_size=min_validation_size,
+        insufficient_validation=len(validation) < min_validation_size,
+    )
+
+
+@dataclass(frozen=True)
+class OutOfSampleVerdict:
+    status: str  # "insufficient_validation_data" | "rejected" | "survives"
+    reason: str
+    validation_n: int
+    binomial: BinomialConsistencyResult | None
+    permutation: PermutationTestResult | None
+
+
+def evaluate_filter_candidate_out_of_sample(
+    validation_outcomes: list[bool],
+    *,
+    claimed_p: float,
+    control_outcomes: list[bool] | None = None,
+    min_validation_size: int = 10,
+    alpha: float = 0.05,
+    n_permutations: int = 10000,
+    seed: int | None = None,
+) -> OutOfSampleVerdict:
+    """Applies CLAUDE.md's full 3-step scalping_v8 methodology rule to a
+    filter candidate's OUT-OF-SAMPLE results. ``validation_outcomes`` MUST be
+    the ``validation`` half of a prior ``chronological_train_validation_split``
+    -- never the train half (where the pattern was found) and never the full
+    unsplit sample, or this collapses back into the exact 10/08 wick-gate
+    mistake this module exists to prevent.
+
+    Step (3) of the rule: too little validation data is a reason to keep
+    shadow-logging, never a reason to test anyway -- returns
+    ``insufficient_validation_data`` rather than a false-confidence verdict.
+
+    ``control_outcomes``, if given (e.g. the "filter says HOLD" trades from
+    the same validation window), additionally runs the permutation test --
+    a real edge should show a significant gap against its own out-of-sample
+    control group, not just a plausible-looking raw win rate."""
+    n = len(validation_outcomes)
+    if n < min_validation_size:
+        return OutOfSampleVerdict(
+            status="insufficient_validation_data",
+            reason=(
+                f"only {n} validation trades (< {min_validation_size} minimum) -- "
+                "accumulate more shadow-mode observations before testing, per "
+                "CLAUDE.md's scalping_v8 methodology rule (3)"
+            ),
+            validation_n=n, binomial=None, permutation=None,
+        )
+    successes = sum(validation_outcomes)
+    binomial = binomial_consistency_check(successes, n, claimed_p, alpha=alpha)
+    permutation = None
+    if control_outcomes:
+        permutation = permutation_test_winrate_diff(
+            validation_outcomes, control_outcomes, n_permutations=n_permutations, seed=seed,
+        )
+    if binomial.rejects_claim:
+        return OutOfSampleVerdict(
+            status="rejected",
+            reason=(
+                f"binomial check rejects the claim out-of-sample: {successes}/{n} observed "
+                f"vs claimed_p={claimed_p} (p={binomial.p_value:.4g} < alpha={alpha})"
+            ),
+            validation_n=n, binomial=binomial, permutation=permutation,
+        )
+    if permutation is not None and permutation.p_value >= alpha:
+        return OutOfSampleVerdict(
+            status="rejected",
+            reason=(
+                f"permutation test found no significant difference vs control, out-of-sample "
+                f"(p={permutation.p_value:.4g} >= alpha={alpha}) -- observed edge is plausibly noise"
+            ),
+            validation_n=n, binomial=binomial, permutation=permutation,
+        )
+    return OutOfSampleVerdict(
+        status="survives",
+        reason=(
+            "observed rate consistent with the claim, and significantly different from "
+            "control when tested, on genuinely out-of-sample (validation-only) trades"
+        ),
+        validation_n=n, binomial=binomial, permutation=permutation,
     )
