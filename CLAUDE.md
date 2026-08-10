@@ -191,7 +191,17 @@ v8-log.md` (cron 30min accelerated — verified against the real crontab 07/08, 
 criteria — backlog #2. Wick shadow filter on v6/v7: `wick_filter_shadow_log` table.
 RSI-reversal shadow (08/08, backtest-driven, 60min RSI14/RSI21 oversold/overbought
 round trip): `v8_rsi_reversal_shadow` table, same v8-watch log. Design + backtest basis:
-`docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.08 entry).
+`docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.08 entry). **Wick-gate PAUSED (0/43 live
+winners, statistically confirmed as not a real edge — `backtest_robustness.py`, 10/08
+entry) — methodology rule for any future v8/8.x filter candidate: before promoting ANY
+new empirically-derived threshold to a hard gate, (1) split the sample train/validation
+BEFORE looking for a pattern, never mine one batch until something looks significant,
+(2) run it through `backtest_robustness.py` (Bonferroni-correct for every filter family
+actually tried on that sample, not just the winning one; permutation-test any two-group
+win-rate claim) — a p-value from a single un-split batch is not sufficient evidence
+anymore, (3) if the validation sample is too small for a real split, log the candidate
+in SHADOW mode first (cf. `wick_filter_shadow.py`'s own pattern) and accumulate live
+observations before ever hard-gating on it.**
 
 ## Permanent mandate — strengths/weaknesses of a trading AI (15/07, continuous loop)
 Until the operator judges ARIA ready: (1) verify that the real strengths of an
