@@ -1046,6 +1046,31 @@ class TestEvaluatePortfolioRisk:
         state3 = await risk_guard.evaluate_portfolio_risk("swing", price_lookup=recovered_price)
         assert state3.blocked is True
 
+    @pytest.mark.asyncio
+    async def test_real_price_lookup_failure_falls_back_to_cost_never_crashes(self, tmp_db):
+        """11/08 robustness audit finding: every existing "crashed" test in
+        this file (e.g. TestMacroReminder.test_reminder_after_macro_trigger)
+        actually returns a VALID price (1.0) and simulates the crash by
+        tampering with the persisted high-water mark file -- none of them
+        exercise paper_trader.portfolio_summary's real
+        `except Exception: price = None` fallback (paper_trader.py) with a
+        genuinely raising price_lookup. This locks the real, deliberate
+        behavior: a price lookup failure on an open position falls back to
+        valuing it at cost (never a fabricated gain/loss, never a crash) --
+        the circuit breaker correctly sees zero drawdown from this position
+        during the outage rather than either crashing or hallucinating a
+        loss."""
+        await pt.reset_portfolio(1_000_000.0)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000, wallet="swing")
+
+        async def broken_price_lookup(contract):
+            raise RuntimeError("upstream API unavailable")
+
+        state = await risk_guard.evaluate_portfolio_risk("swing", price_lookup=broken_price_lookup)
+        assert state.equity == 1_000_000.0  # cash + cost_usd, never a crash or a fabricated loss
+        assert state.drawdown_pct == 0.0
+        assert state.blocked is False
+
         risk_guard.resume_new_entries("swing", by=1)
         blocked, _ = risk_guard.blocks_new_entries("swing")
         assert blocked is False
@@ -1310,6 +1335,27 @@ class TestMacroCircuitBreaker:
         state2 = await risk_guard.evaluate_macro_risk()
         assert state2.blocked is False
         assert state2.newly_triggered is False
+        assert outgoing_pause.is_paused() is False
+
+    @pytest.mark.asyncio
+    async def test_real_price_lookup_failure_across_all_pockets_never_crashes(self, tmp_db):
+        """11/08 robustness audit, same class of gap as
+        TestEvaluatePortfolioRisk.test_real_price_lookup_failure_falls_back_
+        to_cost_never_crashes but for the MACRO breaker (which can pause
+        outgoing_pause for the whole portfolio, more drastic than a
+        per-pocket block) -- never exercised with a genuinely raising
+        price_lookup across all 3 pockets before this fix."""
+        for wallet in ("scalping", "swing", "vc"):
+            await pt.reset_portfolio(1_000_000.0, wallet=wallet)
+        await pt.open_position(A, "AAA", 1.0, alloc_usd=100_000, wallet="swing")
+
+        async def broken_price_lookup(contract):
+            raise RuntimeError("upstream API unavailable")
+
+        state = await risk_guard.evaluate_macro_risk(price_lookup=broken_price_lookup)
+        assert round(state.total_equity) == 3_000_000  # cash + cost_usd, never a crash
+        assert state.drawdown_pct == 0.0
+        assert state.blocked is False
         assert outgoing_pause.is_paused() is False
 
     @pytest.mark.asyncio
