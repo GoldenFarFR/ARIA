@@ -2577,17 +2577,31 @@ async def _fetch_candles(
             )
             candles = _rescale_candles(candles, rescale_factor)
     if candles:
+        median_interval = _median_candle_interval_seconds(candles)
         try:
             from aria_core import candle_staleness_shadow
 
             age_seconds = time.time() - candles[-1].ts
-            median_interval = _median_candle_interval_seconds(candles)
             await candle_staleness_shadow.record_observation(
                 contract, chain, mode=mode, source="fetch_candles",
                 age_seconds=age_seconds, median_interval_seconds=median_interval,
             )
         except Exception as exc:  # noqa: BLE001 -- shadow observation must never block a real fetch
             logger.info("_fetch_candles: staleness shadow observation failed (%s)", exc)
+        # 11/08 -- passive candle_history hook (see that module's own
+        # docstring for the full design trail): records whatever this real
+        # fetch already returned, zero extra network call, independent
+        # try/except from the staleness shadow above (one failing must never
+        # take the other down with it).
+        try:
+            from aria_core import candle_history
+
+            await candle_history.record_candles(
+                chain, pool_address, mode=mode, candles=candles,
+                median_interval_seconds=median_interval, contract=contract,
+            )
+        except Exception as exc:  # noqa: BLE001 -- history persistence must never block a real fetch
+            logger.info("_fetch_candles: candle history persist failed (%s)", exc)
     if cacheable and candles:
         _cache_candles(chain, pool_address, mode, skip_daily, candles)
     return candles

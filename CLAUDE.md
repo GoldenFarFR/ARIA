@@ -340,6 +340,7 @@ from scratch.
 - `docs/HANDOFF_AUTOMATISATION.md` — VPS crons (Research watch, Devil's Advocate, backlog promotion, watchdogs).
 - `docs/HANDOFF_WALLET_COPY_SHADOW.md` — forward-test de copie sur 8 wallets réels, ledgers fictifs indépendants, jamais un trigger réel.
 - `docs/HANDOFF_SIGNAL_CASCADE.md` — cascade de signaux multi-source (GitHub/Farcaster/web/X), collecte + filtre + convergence + file d'attente.
+- `docs/HANDOFF_CANDLE_HISTORY.md` — historique persistant de bougies (FIFO par token/timeframe), collecteur watchlist (#98/#97).
 - **This list must stay up to date**: any new `docs/HANDOFF_*.md` file created (a new
   component never touched before) gets added here in the SAME commit — a HANDOFF not
   indexed here is as invisible as a HANDOFF that doesn't exist.
