@@ -72,24 +72,30 @@ async def record_verdict(contract: str, chain: str, too_concentrated: bool, reas
     is not a verified answer, see this module's own docstring). Also
     opportunistically purges expired rows, same low-cost hygiene as
     ``momentum_rejection_cache.record_rejection``."""
-    await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
     if not contract or not chain:
         return
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=HOLDER_CONCENTRATION_CACHE_TTL_SECONDS)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO holder_concentration_verdict_cache "
-            "(contract, chain, too_concentrated, reason, verified_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (contract, chain, int(too_concentrated), reason, now.isoformat(), expires_at.isoformat()),
-        )
-        await db.execute(
-            "DELETE FROM holder_concentration_verdict_cache WHERE expires_at < ?", (now.isoformat(),),
-        )
-        await db.commit()
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO holder_concentration_verdict_cache "
+                "(contract, chain, too_concentrated, reason, verified_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (contract, chain, int(too_concentrated), reason, now.isoformat(), expires_at.isoformat()),
+            )
+            await db.execute(
+                "DELETE FROM holder_concentration_verdict_cache WHERE expires_at < ?", (now.isoformat(),),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- 11/08 robustness audit, same doctrine
+        # as momentum_rejection_cache.record_rejection: the caller has no
+        # try/except of its own -- a missed cache write only costs one
+        # avoidable re-verification next cycle, never a wrong verdict.
+        logger.warning("holder_concentration_cache.record_verdict: DB failure for %s/%s (%s)", chain, contract, exc)
 
 
 async def cached_verdict(contract: str, chain: str) -> tuple[bool, str] | None:
@@ -98,17 +104,22 @@ async def cached_verdict(contract: str, chain: str) -> tuple[bool, str] | None:
     within its TTL, else ``None`` (never verified, or expired -- a fresh
     evaluation is warranted either way). Never raises, never blocks a fresh
     evaluation on a lookup failure."""
-    await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT too_concentrated, reason, expires_at FROM holder_concentration_verdict_cache "
-                "WHERE contract = ? AND chain = ?",
-                (contract, chain),
-            )
-        ).fetchone()
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            row = await (
+                await db.execute(
+                    "SELECT too_concentrated, reason, expires_at FROM holder_concentration_verdict_cache "
+                    "WHERE contract = ? AND chain = ?",
+                    (contract, chain),
+                )
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 -- 11/08 robustness audit: this docstring
+        # already promised "never raises" -- nothing enforced it until now.
+        logger.warning("holder_concentration_cache.cached_verdict: DB failure for %s/%s (%s)", chain, contract, exc)
+        return None
     if row is None:
         return None
     too_concentrated, reason, expires_at_raw = row

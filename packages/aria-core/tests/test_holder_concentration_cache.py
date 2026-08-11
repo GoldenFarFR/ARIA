@@ -106,3 +106,37 @@ async def test_write_purges_other_expired_rows(monkeypatch):
             )
         ).fetchone()
     assert row is None
+
+
+# ── robustness: real DB failure, never blocking the caller (11/08 audit) ──────────
+
+@pytest.mark.asyncio
+async def test_cached_verdict_never_raises_on_db_failure(monkeypatch):
+    """Both docstrings in this module already promised "never raises, never
+    blocks a fresh evaluation on a lookup failure" -- nothing enforced it
+    before this fix. The real caller (_check_holder_concentration) has no
+    try/except of its own around either call."""
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(hcc.aiosqlite, "connect", _broken_connect)
+    assert await hcc.cached_verdict(CONTRACT, "base") is None
+
+
+@pytest.mark.asyncio
+async def test_record_verdict_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(hcc.aiosqlite, "connect", _broken_connect)
+    # must not raise -- a missed cache write only costs one avoidable
+    # re-verification next cycle, never a crash of the whole evaluation.
+    await hcc.record_verdict(CONTRACT, "base", False, "")
+
+
+@pytest.mark.asyncio
+async def test_recovers_once_db_failure_clears():
+    """A transient failure must never leave the module permanently
+    degraded -- the very next call on a healthy DB works normally."""
+    await hcc.record_verdict(CONTRACT, "base", True, "concentration confirmee")
+    assert await hcc.cached_verdict(CONTRACT, "base") == (True, "concentration confirmee")

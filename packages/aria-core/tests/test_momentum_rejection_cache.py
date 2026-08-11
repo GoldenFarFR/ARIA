@@ -139,3 +139,37 @@ async def test_liquidity_tier_ignored_for_non_liquidity_reasons_stays_shared():
     partition, same as omitting the tier entirely."""
     await rc.record_rejection("0xabc", "base", "wash_trading_ratio", liquidity_tier="scalping")
     assert await rc.recently_rejected("0xabc", "base", liquidity_tier="standard") == "wash_trading_ratio"
+
+
+# ── robustness: real DB failure, never blocking the caller (11/08 audit) ──────────
+
+@pytest.mark.asyncio
+async def test_recently_rejected_never_raises_on_db_failure(monkeypatch):
+    """Both docstrings in this module already promised "never raises, never
+    blocks a fresh evaluation on a lookup failure" -- nothing enforced it
+    before this fix. The real caller (evaluate_hard_gates) has no try/except
+    of its own around either call."""
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(rc.aiosqlite, "connect", _broken_connect)
+    assert await rc.recently_rejected("0xabc", "base") is None
+
+
+@pytest.mark.asyncio
+async def test_record_rejection_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(rc.aiosqlite, "connect", _broken_connect)
+    # must not raise -- a missed cache write only costs one avoidable
+    # re-scan next cycle, never a crash of the whole momentum evaluation.
+    await rc.record_rejection("0xabc", "base", "insufficient_liquidity")
+
+
+@pytest.mark.asyncio
+async def test_recovers_once_db_failure_clears():
+    """A transient failure must never leave the module permanently
+    degraded -- the very next call on a healthy DB works normally."""
+    await rc.record_rejection("0xabc", "base", "insufficient_liquidity")
+    assert await rc.recently_rejected("0xabc", "base") == "insufficient_liquidity"

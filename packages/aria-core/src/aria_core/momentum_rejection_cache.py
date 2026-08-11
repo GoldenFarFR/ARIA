@@ -122,7 +122,6 @@ async def record_rejection(
     for every other reason, which always stores under the shared partition."""
     if reason not in CACHEABLE_REASONS:
         return
-    await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
     if not contract or not chain:
@@ -130,16 +129,25 @@ async def record_rejection(
     mode = liquidity_tier if (reason == "insufficient_liquidity" and liquidity_tier) else _SHARED_MODE
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=REJECTION_CACHE_TTL_SECONDS)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO momentum_rejection_cache "
-            "(contract, chain, reason, rejected_at, expires_at, mode) VALUES (?, ?, ?, ?, ?, ?)",
-            (contract, chain, reason, now.isoformat(), expires_at.isoformat(), mode),
-        )
-        await db.execute(
-            "DELETE FROM momentum_rejection_cache WHERE expires_at < ?", (now.isoformat(),),
-        )
-        await db.commit()
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO momentum_rejection_cache "
+                "(contract, chain, reason, rejected_at, expires_at, mode) VALUES (?, ?, ?, ?, ?, ?)",
+                (contract, chain, reason, now.isoformat(), expires_at.isoformat(), mode),
+            )
+            await db.execute(
+                "DELETE FROM momentum_rejection_cache WHERE expires_at < ?", (now.isoformat(),),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- 11/08 robustness audit: the caller
+        # (evaluate_hard_gates) has no try/except of its own around this call --
+        # an uncaught DB failure here would have crashed the whole momentum
+        # evaluation for a candidate that was already correctly rejected,
+        # never just this cache write. A missed cache write only costs one
+        # avoidable re-scan next cycle, never a wrong verdict.
+        logger.warning("momentum_rejection_cache.record_rejection: DB failure for %s/%s (%s)", chain, contract, exc)
 
 
 async def recently_rejected(contract: str, chain: str, *, liquidity_tier: str | None = None) -> str | None:
@@ -159,17 +167,22 @@ async def recently_rejected(contract: str, chain: str, *, liquidity_tier: str | 
     computed for. ``None`` (omitted, no caller left after this fix) falls
     back to the legacy behavior of accepting whatever's cached, regardless
     of tier."""
-    await _ensure_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await (
-            await db.execute(
-                "SELECT reason, expires_at, mode FROM momentum_rejection_cache "
-                "WHERE contract = ? AND chain = ?",
-                (contract, chain),
-            )
-        ).fetchone()
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            row = await (
+                await db.execute(
+                    "SELECT reason, expires_at, mode FROM momentum_rejection_cache "
+                    "WHERE contract = ? AND chain = ?",
+                    (contract, chain),
+                )
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 -- 11/08 robustness audit: this docstring
+        # already promised "never raises" -- nothing enforced it until now.
+        logger.warning("momentum_rejection_cache.recently_rejected: DB failure for %s/%s (%s)", chain, contract, exc)
+        return None
     if row is None:
         return None
     reason, expires_at_raw, stored_mode = row
