@@ -30,6 +30,17 @@ touché.
   blocage** (consigne opérateur explicite : "choisi il faut pas que sa te
   bloque"). Stub réécrit pour chaîner les deux scripts (le premier ne peut
   plus bloquer, seul le code de sortie du secret-scan gate le commit).
+- **2026-08-11** added `english-content-check.sh` -- heuristic French-text
+  tripwire on staged CLAUDE.md/`docs/HANDOFF_*.md` prose and `.py`/`.sh`
+  comments (accented characters or 3+ French stopwords per line, quoted
+  operator citations excluded first). Real incident behind it: 3
+  HANDOFF entries got written straight in French mid-session (23/07's
+  "repo content stays English" rule), caught only by the operator noticing
+  by eye. Alert-only, same doctrine as `guardrail-file-alert.sh` (a
+  heuristic detector has real false-positive risk, must never block a
+  legitimate commit). Log: `/opt/aria-data/english-content-alerts.log`.
+  Stub chained after `guardrail-file-alert.sh`, still before the
+  secret-scan gate.
 
 ### pre-push → `scripts/devils-advocate-review.sh` (+ `scripts/devils-advocate-lib.sh`)
 Critique architecturale post-push par Claude Fable 5 (async, jamais bloquant),
