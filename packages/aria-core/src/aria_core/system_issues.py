@@ -82,73 +82,100 @@ async def open_issue(
     re-detects the SAME ongoing anomaly every passage must never spam a new
     row each time (same hysteresis doctrine as ``vc-watch/run.sh``'s own
     ``alert-state.tsv``). Pass ``dedup_key=None`` (default) for a genuinely
-    one-off event where every occurrence deserves its own row."""
+    one-off event where every occurrence deserves its own row.
+
+    11/08 -- real gap found live (a robustness audit, not a live incident):
+    every DB access here was unprotected, contradicting this whole module's
+    own "never blocking" purpose for its callers (multiple bash watchdogs +
+    Python callers can write concurrently). Returns ``-1`` (never a real id)
+    on a genuine DB failure (locked/corrupt/disk full) -- never raises into
+    a watchdog cycle or a session."""
     severity = severity if severity in _VALID_SEVERITIES else "warning"
-    await _ensure_table()
-    async with aiosqlite.connect(_db_path()) as db:
-        if dedup_key:
-            row = await (
-                await db.execute(
-                    "SELECT id FROM system_issues WHERE source = ? AND dedup_key = ? AND status = 'open'",
-                    (source, dedup_key),
-                )
-            ).fetchone()
-            if row is not None:
-                return int(row[0])
-        cur = await db.execute(
-            "INSERT INTO system_issues (source, title, detail, severity, status, dedup_key, opened_at) "
-            "VALUES (?, ?, ?, ?, 'open', ?, ?)",
-            (source, title, detail, severity, dedup_key, _now_iso()),
-        )
-        await db.commit()
-        return int(cur.lastrowid)
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(_db_path()) as db:
+            if dedup_key:
+                row = await (
+                    await db.execute(
+                        "SELECT id FROM system_issues WHERE source = ? AND dedup_key = ? AND status = 'open'",
+                        (source, dedup_key),
+                    )
+                ).fetchone()
+                if row is not None:
+                    return int(row[0])
+            cur = await db.execute(
+                "INSERT INTO system_issues (source, title, detail, severity, status, dedup_key, opened_at) "
+                "VALUES (?, ?, ?, ?, 'open', ?, ?)",
+                (source, title, detail, severity, dedup_key, _now_iso()),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+    except Exception as exc:  # noqa: BLE001 -- never blocking, see docstring
+        logger.warning("system_issues.open_issue: DB failure for source=%s (%s)", source, exc)
+        return -1
 
 
 async def close_issue(issue_id: int, reason: str) -> bool:
     """Closes an issue -- ``reason`` is mandatory (same doctrine as
     ``signal_cascade_convergence.record_triage_decision``: a close is a
     decision with real reasoning, never a bare status flip). Returns False
-    if the issue doesn't exist or is already closed (idempotent no-op, never
-    raises)."""
+    if the issue doesn't exist, is already closed, or a genuine DB failure
+    occurs (idempotent no-op either way, never raises)."""
     if not reason or not reason.strip():
         return False
-    await _ensure_table()
-    async with aiosqlite.connect(_db_path()) as db:
-        cur = await db.execute(
-            "UPDATE system_issues SET status = 'closed', closed_at = ?, closed_reason = ? "
-            "WHERE id = ? AND status = 'open'",
-            (_now_iso(), reason.strip(), issue_id),
-        )
-        await db.commit()
-        return cur.rowcount > 0
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(_db_path()) as db:
+            cur = await db.execute(
+                "UPDATE system_issues SET status = 'closed', closed_at = ?, closed_reason = ? "
+                "WHERE id = ? AND status = 'open'",
+                (_now_iso(), reason.strip(), issue_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+    except Exception as exc:  # noqa: BLE001 -- never blocking, see open_issue's docstring
+        logger.warning("system_issues.close_issue: DB failure for id=%s (%s)", issue_id, exc)
+        return False
 
 
 async def list_open(*, source: str | None = None, limit: int | None = None) -> list[dict]:
     """Open issues, most severe and most recent first -- the read side for
     the SessionStart hook and for any session wanting the full backlog
     (the hook itself only surfaces a short top-N, this returns everything
-    when ``limit`` is None)."""
-    await _ensure_table()
-    severity_rank = "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END"
-    query = f"SELECT * FROM system_issues WHERE status = 'open'"
-    params: list = []
-    if source:
-        query += " AND source = ?"
-        params.append(source)
-    query += f" ORDER BY {severity_rank} ASC, opened_at DESC"
-    if limit is not None:
-        query += " LIMIT ?"
-        params.append(limit)
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(query, params)).fetchall()
-    return [dict(r) for r in rows]
+    when ``limit`` is None). Returns ``[]`` on a genuine DB failure -- never
+    raises into a caller (same doctrine as open_issue's docstring)."""
+    try:
+        await _ensure_table()
+        severity_rank = "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END"
+        query = f"SELECT * FROM system_issues WHERE status = 'open'"
+        params: list = []
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+        query += f" ORDER BY {severity_rank} ASC, opened_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(query, params)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as exc:  # noqa: BLE001 -- never blocking, see open_issue's docstring
+        logger.warning("system_issues.list_open: DB failure (%s)", exc)
+        return []
 
 
 async def count_open() -> int:
-    await _ensure_table()
-    async with aiosqlite.connect(_db_path()) as db:
-        row = await (
-            await db.execute("SELECT COUNT(*) FROM system_issues WHERE status = 'open'")
-        ).fetchone()
-    return int(row[0]) if row else 0
+    """Returns 0 on a genuine DB failure -- purely informational, never a
+    security gate, so fail-open is the correct default (same doctrine as
+    the rest of this module)."""
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(_db_path()) as db:
+            row = await (
+                await db.execute("SELECT COUNT(*) FROM system_issues WHERE status = 'open'")
+            ).fetchone()
+        return int(row[0]) if row else 0
+    except Exception as exc:  # noqa: BLE001 -- never blocking, see open_issue's docstring
+        logger.warning("system_issues.count_open: DB failure (%s)", exc)
+        return 0

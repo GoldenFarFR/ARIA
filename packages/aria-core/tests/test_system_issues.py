@@ -129,3 +129,56 @@ async def test_count_open_excludes_closed():
     await system_issues.open_issue("s", "b")
     await system_issues.close_issue(issue_id, "resolu")
     assert await system_issues.count_open() == 1
+
+
+# ── robustness: real DB failure, never blocking the caller (11/08 audit) ──────────
+
+@pytest.mark.asyncio
+async def test_open_issue_never_raises_on_db_failure(monkeypatch):
+    """This module's whole purpose is to stay non-blocking for the watchdogs
+    calling it -- before this fix, every DB access was unprotected, contradicting
+    that promise. Simulates a real connection failure (locked/corrupt/disk full),
+    never a mocked business exception."""
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(system_issues.aiosqlite, "connect", _broken_connect)
+    issue_id = await system_issues.open_issue("s", "title")
+    assert issue_id == -1
+
+
+@pytest.mark.asyncio
+async def test_close_issue_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(system_issues.aiosqlite, "connect", _broken_connect)
+    assert await system_issues.close_issue(1, "peu importe") is False
+
+
+@pytest.mark.asyncio
+async def test_list_open_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(system_issues.aiosqlite, "connect", _broken_connect)
+    assert await system_issues.list_open() == []
+
+
+@pytest.mark.asyncio
+async def test_count_open_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(system_issues.aiosqlite, "connect", _broken_connect)
+    assert await system_issues.count_open() == 0
+
+
+@pytest.mark.asyncio
+async def test_open_issue_recovers_once_db_failure_clears():
+    """A transient failure (the common real case -- a concurrent writer
+    holding the lock for a moment) must never leave the module permanently
+    degraded -- the very next call on a healthy DB works normally."""
+    issue_id = await system_issues.open_issue("s", "title")
+    assert issue_id != -1
+    assert await system_issues.count_open() == 1
