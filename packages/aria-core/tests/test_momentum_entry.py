@@ -4023,6 +4023,65 @@ async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
     assert await bl.is_blacklisted(CONTRACT, "base") is False
 
 
+# ── double panne simultanée GoPlus+Blockscout (#109, 11/08) ────────────────────────
+
+@pytest.mark.asyncio
+async def test_evaluate_momentum_entry_never_reaches_holder_concentration_when_honeypot_fails_closed(monkeypatch):
+    """#109 -- double-outage scenario (GoPlus AND Blockscout both down at once):
+    the swing/VC pipeline (evaluate_momentum_entry -> evaluate_hard_gates(defer_
+    holder_concentration=True)) checks honeypot FIRST inside evaluate_hard_gates
+    and returns on the first HOLD (see evaluate_momentum_entry's own
+    `if hard_gate_hold is not None: return hard_gate_hold`) -- holder_concentration
+    is deferred to a later BUY-branch call that's never reached once the hard
+    gate already returned. Locks this fail-fast, single-guardrail-triggers
+    architecture explicitly (both outages can never compound into a new bug
+    given this control flow): a future optimization that parallelizes both
+    checks (e.g. asyncio.gather) would silently break this invariant without
+    this test catching it."""
+    concentration_calls = []
+
+    async def fake_honeypot_unavailable(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
+
+    async def counting_concentration(*args, **kwargs):
+        concentration_calls.append(1)
+        return True, me._HOLDER_DATA_UNAVAILABLE_REASON
+
+    _patch_pipeline(monkeypatch)
+    monkeypatch.setattr(me, "_check_honeypot", fake_honeypot_unavailable)
+    monkeypatch.setattr(me, "_check_holder_concentration", counting_concentration)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "honeypot_unavailable"
+    assert concentration_calls == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_scalping_never_reaches_honeypot_when_concentration_fails_closed(monkeypatch):
+    """#109 -- same double-outage scenario, opposite pocket/ordering: the scalping
+    pocket (scalping_variants.py) calls evaluate_hard_gates WITHOUT defer_holder_
+    concentration, so holder_concentration (Blockscout) runs FIRST and honeypot
+    (GoPlus) second -- the reverse order from the swing/VC pipeline above. Both
+    orderings must independently guarantee the same short-circuit, never a
+    compound double-failure interaction."""
+    honeypot_calls = []
+
+    async def counting_honeypot(*args, **kwargs):
+        honeypot_calls.append(1)
+        return False, "GoPlus indisponible (timeout) -- rejet par prudence", "honeypot_unavailable"
+
+    _patch_pipeline(monkeypatch, concentration=(True, me._HOLDER_DATA_UNAVAILABLE_REASON))
+    monkeypatch.setattr(me, "_check_honeypot", counting_honeypot)
+
+    best, honeypot_reason, hold = await me.evaluate_hard_gates(CONTRACT, "base", mode="scalping")
+
+    assert hold is not None
+    assert hold["hold_reason"] == "holder_concentration_unverifiable"
+    assert honeypot_calls == []
+
+
 # ── plancher de liquidité (19/07, décision opérateur explicite anti-scam) ───────────
 
 @pytest.mark.asyncio
