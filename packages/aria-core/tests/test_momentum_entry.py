@@ -2168,6 +2168,85 @@ async def test_fetch_candles_rejects_price_inconsistent_candles(monkeypatch):
     assert result == []
 
 
+def test_candle_price_scale_factor_none_within_normal_noise():
+    """Below the rescale threshold (normal cross-provider timing noise between
+    the pair snapshot and the candles' own timestamps) nothing should change
+    -- rescaling an already-correct series would just inject float noise."""
+    candles = [Candle(ts=0, open=1.4, high=1.6, low=1.3, close=1.5, volume=0.0)]
+    pair = _pair(price_usd=1.5)
+    assert me._candle_price_scale_factor(candles, pair) is None
+
+    pair_close_but_off = _pair(price_usd=1.5 * 1.9)  # under the 2.0x threshold
+    assert me._candle_price_scale_factor(candles, pair_close_but_off) is None
+
+
+def test_candle_price_scale_factor_computed_above_threshold():
+    candles = [Candle(ts=0, open=1.0, high=1.0, low=1.0, close=0.0115, volume=0.0)]
+    pair = _pair(price_usd=0.2938)
+    factor = me._candle_price_scale_factor(candles, pair)
+    assert factor == pytest.approx(0.2938 / 0.0115)
+
+
+def test_candle_price_scale_factor_none_without_pair_or_price():
+    candles = [Candle(ts=0, open=1.0, high=1.0, low=1.0, close=0.0115, volume=0.0)]
+    assert me._candle_price_scale_factor(candles, None) is None
+    assert me._candle_price_scale_factor(candles, _pair(price_usd=0.0)) is None
+    assert me._candle_price_scale_factor([], _pair(price_usd=0.2938)) is None
+
+
+def test_rescale_candles_multiplies_ohlc_leaves_volume_and_timestamp_untouched():
+    candles = [
+        Candle(ts=123, open=1.0, high=2.0, low=0.5, close=1.5, volume=42.0),
+        Candle(ts=456, open=1.5, high=2.5, low=1.0, close=2.0, volume=99.0),
+    ]
+    rescaled = me._rescale_candles(candles, 10.0)
+    assert [c.open for c in rescaled] == [10.0, 15.0]
+    assert [c.high for c in rescaled] == [20.0, 25.0]
+    assert [c.low for c in rescaled] == [5.0, 10.0]
+    assert [c.close for c in rescaled] == [15.0, 20.0]
+    assert [c.volume for c in rescaled] == [42.0, 99.0]
+    assert [c.ts for c in rescaled] == [123, 456]
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_rescales_moderate_price_mismatch_instead_of_rejecting(monkeypatch):
+    """11/08 -- real incident found live (operator report, HeyAnon/"Anon" swing
+    limit order): DexScreener confirmed the real spot price (0.2938$), but
+    GeckoTerminal labels fBOMB as "base" and Anon as "quote" for this exact
+    pool (verified live against the real API) -- the candles it returns are
+    priced in fBOMB/Anon, not USD, ratio ~25x off. Too small to hit the 1000x
+    reject band (Item #222's own incident was ~330,000x) so it silently
+    passed through as if correct, corrupting golden-pocket/RSI/target/
+    invalidation. Golden pocket/Fibonacci/RSI are scale-invariant (computed
+    from the candles' own relative shape) -- rescaling the whole series onto
+    the known-real spot price recovers a usable signal instead of either
+    trusting a wrong unit or discarding a real one."""
+    from aria_core.services import geckoterminal as gt
+
+    gt_candles = [
+        Candle(ts=0, open=0.0114, high=0.0116, low=0.0113, close=0.0115, volume=100.0),
+        Candle(ts=3600, open=0.0115, high=0.0117, low=0.0114, close=0.0116, volume=200.0),
+    ]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    pair = _pair(price_usd=0.2938, price_change_24h=1.0, price_change_h6=1.0, price_change_h1=1.0, price_change_m5=1.0)
+    result = await me._fetch_candles("0xpool", "base", pair=pair)
+
+    factor = 0.2938 / 0.0116
+    assert len(result) == 2
+    assert result[-1].close == pytest.approx(0.2938)  # anchored exactly on the real spot price
+    assert result[0].close == pytest.approx(0.0115 * factor)
+    assert result[0].open == pytest.approx(0.0114 * factor)
+    assert result[0].high == pytest.approx(0.0116 * factor)
+    assert result[0].low == pytest.approx(0.0113 * factor)
+    assert result[0].volume == 100.0  # volume is not a price -- untouched
+    assert result[0].ts == 0  # timestamps untouched
+
+
 @pytest.mark.asyncio
 async def test_fetch_candles_accepts_price_consistent_candles(monkeypatch):
     """Same mechanism as the rejection test above, inverted: candles whose

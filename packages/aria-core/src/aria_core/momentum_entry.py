@@ -2382,6 +2382,58 @@ async def _standard_fallbacks(
 # resolution and the candles' own timestamps.
 _CANDLE_PRICE_CONSISTENCY_RATIO = 1000.0
 
+# 11/08 -- real bug found live (operator report, HeyAnon/"Anon" swing limit
+# order: chart showed a single diagonal line falling off a cliff, no golden-
+# pocket levels). Root cause confirmed against BOTH real APIs (never assumed):
+# DexScreener gives Anon's real spot price (0.2938$); GeckoTerminal, for the
+# SAME pool, labels fBOMB as "base" and Anon as "quote" (verified live via
+# GET .../pools/<addr>/ohlcv/hour -- meta.base=fBOMB, meta.quote=Anon) --
+# candles that were never rejected by the check above (ratio ~25x, well
+# inside the 1000x band) but were never in USD either: they reflect fBOMB
+# priced in Anon, not Anon priced in USD. Below this ratio, RESCALE the whole
+# series onto the known-real spot price instead of either silently trusting
+# it (the bug) or discarding it (the pre-11/08 fix for this exact class of
+# mismatch, Item #222): golden pocket/Fibonacci/RSI are ALL scale-invariant
+# (computed from the candles' own relative shape, cf. entry_signals.py) --
+# multiplying every OHLC value by a constant factor changes nothing about
+# the signal, it only fixes the UNIT. Anchoring the last candle's close to
+# `pair.price_usd` (DexScreener, already confirmed reliable in real time)
+# recovers a usable signal instead of an honest-but-wasted HOLD. Below this
+# ratio (normal cross-provider timing noise between the pair snapshot and
+# the candles' own timestamps) nothing is touched -- rescaling a series
+# that's already correct would just inject float noise for no gain.
+_CANDLE_RESCALE_MIN_RATIO = 2.0
+
+
+def _candle_price_scale_factor(candles: list[Candle], pair: PairSnapshot | None) -> float | None:
+    """Returns the multiplicative factor to rescale ``candles`` onto
+    ``pair.price_usd``, or ``None`` when nothing should change (no pair/price
+    to compare against, or the two are already within normal noise).
+    Positive-only inputs assumed (a 0/negative close or price already fails
+    upstream checks before candles ever reach here)."""
+    if pair is None or not pair.price_usd or pair.price_usd <= 0:
+        return None
+    last_close = candles[-1].close if candles else None
+    if not last_close or last_close <= 0:
+        return None
+    ratio = last_close / pair.price_usd
+    if (1.0 / _CANDLE_RESCALE_MIN_RATIO) <= ratio <= _CANDLE_RESCALE_MIN_RATIO:
+        return None
+    return pair.price_usd / last_close
+
+
+def _rescale_candles(candles: list[Candle], factor: float) -> list[Candle]:
+    """Multiplies every OHLC value by ``factor`` (volume/timestamp untouched
+    -- not a price). ``Candle`` is frozen, so this rebuilds each entry rather
+    than mutating in place."""
+    return [
+        Candle(
+            ts=c.ts, open=c.open * factor, high=c.high * factor,
+            low=c.low * factor, close=c.close * factor, volume=c.volume,
+        )
+        for c in candles
+    ]
+
 
 def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) -> bool:
     """``True`` if the candles' most recent close is within a sane order of
@@ -2389,8 +2441,10 @@ def _candles_price_consistent(candles: list[Candle], pair: PairSnapshot | None) 
     same ``PairSnapshot`` every caller already resolves via ``_best_pair``'s
     ``base_address`` filter). Fail-OPEN when there's nothing to compare
     against (``pair`` missing, no usable price, or an empty/degenerate candle
-    list) -- this is a sanity check against a catastrophic provider mix-up,
-    never a new hard requirement for data that was always optional."""
+    list) -- this is a sanity check against a catastrophic provider mix-up
+    (Item #222's original incident, ~330,000x), the last-resort reject for a
+    mismatch too extreme to trust even after rescaling (probable real data
+    corruption, not just a base/quote unit mismatch)."""
     if pair is None or not pair.price_usd or pair.price_usd <= 0:
         return True
     last_close = candles[-1].close if candles else None
@@ -2501,13 +2555,27 @@ async def _fetch_candles(
     if candles and not _candles_price_consistent(candles, pair):
         logger.warning(
             "_fetch_candles: rejecting inconsistent candles for %s/%s -- last close %.6g vs "
-            "spot price %.6g (ratio %.3g, outside the [%.4g, %.4g] sanity band) -- treating as "
-            "OHLCV unavailable rather than risk a corrupted golden-pocket/RSI read",
+            "spot price %.6g (ratio %.3g, outside the [%.4g, %.4g] sanity band even after "
+            "rescaling) -- treating as OHLCV unavailable rather than risk a corrupted "
+            "golden-pocket/RSI read on probably-corrupted data",
             chain, pool_address[:10], candles[-1].close, pair.price_usd if pair else float("nan"),
             (candles[-1].close / pair.price_usd) if pair and pair.price_usd else float("nan"),
             1.0 / _CANDLE_PRICE_CONSISTENCY_RATIO, _CANDLE_PRICE_CONSISTENCY_RATIO,
         )
         return []
+    if candles:
+        rescale_factor = _candle_price_scale_factor(candles, pair)
+        if rescale_factor is not None:
+            logger.warning(
+                "_fetch_candles: rescaling candles for %s/%s -- last close %.6g vs spot "
+                "price %.6g (ratio %.3g) -- likely a GeckoTerminal base/quote mismatch for "
+                "this pool (candles priced in the OTHER token, not this one), rescaling the "
+                "whole series onto the known-real spot price rather than discarding a usable "
+                "signal (golden pocket/RSI/Fibonacci are scale-invariant, only the unit was wrong)",
+                chain, pool_address[:10], candles[-1].close, pair.price_usd,
+                candles[-1].close / pair.price_usd,
+            )
+            candles = _rescale_candles(candles, rescale_factor)
     if candles:
         try:
             from aria_core import candle_staleness_shadow
