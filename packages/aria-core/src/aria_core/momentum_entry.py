@@ -846,18 +846,30 @@ async def _load_persisted_birdeye_cache() -> tuple[list[str], float] | None:
     for, and risking two overlapping scans during a blue-green bascule window
     where the old and new container each start with an empty cache). Reads
     the persisted row -- ``None`` if never written, unreadable, or the wrong
-    shape (never raises, a fresh scan is always a safe fallback)."""
+    shape (never raises, a fresh scan is always a safe fallback).
+
+    11/08 -- robustness audit found this docstring's own "never raises"
+    promise unenforced (same anti-pattern found and fixed 3x elsewhere
+    today: system_issues.py/momentum_rejection_cache.py/holder_
+    concentration_cache.py) -- not exploitable today (the one real caller,
+    ``_discover_birdeye_base_tokens``, already wraps this in its own
+    try/except), but the function should keep its own promise regardless
+    of who calls it next."""
     import json
 
     import aiosqlite
 
     from aria_core.paths import aria_db_path
 
-    await _ensure_birdeye_cache_table()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        row = await (
-            await db.execute("SELECT contracts_json, cached_at FROM birdeye_discovery_cache WHERE id = 1")
-        ).fetchone()
+    try:
+        await _ensure_birdeye_cache_table()
+        async with aiosqlite.connect(str(aria_db_path())) as db:
+            row = await (
+                await db.execute("SELECT contracts_json, cached_at FROM birdeye_discovery_cache WHERE id = 1")
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        logger.info("momentum_entry: _load_persisted_birdeye_cache DB failure (%s)", exc)
+        return None
     if row is None:
         return None
     try:
@@ -871,21 +883,27 @@ async def _load_persisted_birdeye_cache() -> tuple[list[str], float] | None:
 
 
 async def _save_persisted_birdeye_cache(contracts: list[str], cached_at: float) -> None:
+    """11/08 -- same robustness doctrine as the read side above: a missed
+    cache write only costs one avoidable Birdeye re-scan next cycle, never
+    a wrong discovery result -- never raises into the caller."""
     import json
 
     import aiosqlite
 
     from aria_core.paths import aria_db_path
 
-    await _ensure_birdeye_cache_table()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            "INSERT INTO birdeye_discovery_cache (id, contracts_json, cached_at) VALUES (1, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET contracts_json = excluded.contracts_json, "
-            "cached_at = excluded.cached_at",
-            (json.dumps(contracts), str(cached_at)),
-        )
-        await db.commit()
+    try:
+        await _ensure_birdeye_cache_table()
+        async with aiosqlite.connect(str(aria_db_path())) as db:
+            await db.execute(
+                "INSERT INTO birdeye_discovery_cache (id, contracts_json, cached_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET contracts_json = excluded.contracts_json, "
+                "cached_at = excluded.cached_at",
+                (json.dumps(contracts), str(cached_at)),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        logger.info("momentum_entry: _save_persisted_birdeye_cache DB failure (%s)", exc)
 
 
 async def _discover_birdeye_base_tokens() -> list[str]:

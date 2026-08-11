@@ -724,6 +724,35 @@ async def test_birdeye_discovery_refetches_when_persisted_cache_is_expired(monke
     assert second != ["0xSTALE"]
 
 
+# ── robustness: real DB failure, never blocking the caller (11/08 audit) ──────────
+
+@pytest.mark.asyncio
+async def test_load_persisted_birdeye_cache_never_raises_on_db_failure(monkeypatch):
+    """Both docstrings already promised "never raises" -- nothing enforced
+    it before this fix (same anti-pattern found and fixed 3x elsewhere
+    today)."""
+    import aiosqlite
+
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(aiosqlite, "connect", _broken_connect)
+    assert await me._load_persisted_birdeye_cache() is None
+
+
+@pytest.mark.asyncio
+async def test_save_persisted_birdeye_cache_never_raises_on_db_failure(monkeypatch):
+    import aiosqlite
+
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(aiosqlite, "connect", _broken_connect)
+    # must not raise -- a missed cache write only costs one avoidable
+    # Birdeye re-scan next cycle, never a wrong discovery result.
+    await me._save_persisted_birdeye_cache(["0xabc"], time.time())
+
+
 @pytest.mark.asyncio
 async def test_discover_momentum_candidates_includes_birdeye_contracts(monkeypatch):
     async def fake_base_tokens(*, limit):
