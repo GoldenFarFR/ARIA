@@ -4023,7 +4023,7 @@ async def test_evaluate_does_not_blacklist_on_honeypot_unavailable(monkeypatch):
     assert await bl.is_blacklisted(CONTRACT, "base") is False
 
 
-# ── double panne simultanée GoPlus+Blockscout (#109, 11/08) ────────────────────────
+# ── simultaneous GoPlus+Blockscout outage (#109, 11/08) ────────────────────────────
 
 @pytest.mark.asyncio
 async def test_evaluate_momentum_entry_never_reaches_holder_concentration_when_honeypot_fails_closed(monkeypatch):
