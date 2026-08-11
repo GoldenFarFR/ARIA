@@ -313,6 +313,37 @@ class BlockscoutClient:
         # real fallback state lives in base_url/_api_key, mutated in place by
         # _get_json on the first 402 encountered on the "base" chain.
         self._pro_credits_exhausted = False
+        # 11/08 -- short-TTL cache (same doctrine as momentum_entry.py's
+        # _security_cache/_pair_snapshot_cache), backlog #93: an Explore
+        # audit found this singleton client hit MULTIPLE times for the SAME
+        # contract within the SAME evaluation window with no cache at all
+        # (e.g. get_address_info called separately by _resolve_dev_behavior
+        # AND _resolve_insider_wallets in the same VC scan; a token that
+        # crosses momentum then VC, or gets its paper_trader_risk invalidation
+        # recheck a few minutes after entry). 60s is short enough to never
+        # mask a genuine on-chain change (ownership/flags rarely flip within
+        # a minute) while covering every real duplicate-call window measured.
+        self._method_cache: dict[tuple[str, str], tuple[float, object]] = {}
+
+    _METHOD_CACHE_TTL_SECONDS = 60.0
+
+    def _cache_get(self, method: str, key: str) -> object | None:
+        cached = self._method_cache.get((method, (key or "").lower()))
+        if cached is None:
+            return None
+        ts, value = cached
+        if (asyncio.get_event_loop().time() - ts) >= self._METHOD_CACHE_TTL_SECONDS:
+            return None
+        return value
+
+    def _cache_set(self, method: str, key: str, value: object) -> None:
+        now = asyncio.get_event_loop().time()
+        self._method_cache[(method, (key or "").lower())] = (now, value)
+        expired = [
+            k for k, (ts, _v) in self._method_cache.items() if (now - ts) >= self._METHOD_CACHE_TTL_SECONDS
+        ]
+        for k in expired:
+            del self._method_cache[k]
 
     async def _throttle(self) -> None:
         async with self._lock:
@@ -502,6 +533,15 @@ class BlockscoutClient:
     # 1. Address info (balance, contract, verification, name)
     # ------------------------------------------------------------------
     async def get_address_info(self, address: str) -> AddressInfo:
+        cached = self._cache_get("get_address_info", address)
+        if cached is not None:
+            return cached
+        result = await self._get_address_info_uncached(address)
+        if result.available:
+            self._cache_set("get_address_info", address, result)
+        return result
+
+    async def _get_address_info_uncached(self, address: str) -> AddressInfo:
         data, error = await self._get_json(f"/addresses/{address}")
         if error is not None:
             return AddressInfo(address=address, available=False, error=error)
@@ -871,6 +911,15 @@ class BlockscoutClient:
         total_supply only, ``/tokens/{address}`` endpoint) to let a caller
         combine this metadata with a separate holders source (e.g. x402,
         see ``momentum_entry._check_holder_concentration``)."""
+        cached = self._cache_get("get_token_metadata", token_address)
+        if cached is not None:
+            return cached
+        result = await self._get_token_metadata_uncached(token_address)
+        if result.available:
+            self._cache_set("get_token_metadata", token_address, result)
+        return result
+
+    async def _get_token_metadata_uncached(self, token_address: str) -> TokenMetadataResult:
         token_data, token_error = await self._get_json(f"/tokens/{token_address}")
         if token_error is not None:
             return TokenMetadataResult(available=False, error=token_error)
@@ -898,6 +947,15 @@ class BlockscoutClient:
         )
 
     async def get_token_holders(self, token_address: str) -> TokenHoldersResult:
+        cached = self._cache_get("get_token_holders", token_address)
+        if cached is not None:
+            return cached
+        result = await self._get_token_holders_uncached(token_address)
+        if result.available:
+            self._cache_set("get_token_holders", token_address, result)
+        return result
+
+    async def _get_token_holders_uncached(self, token_address: str) -> TokenHoldersResult:
         metadata = await self.get_token_metadata(token_address)
         if not metadata.available:
             return TokenHoldersResult(available=False, error=metadata.error)
@@ -945,6 +1003,15 @@ class BlockscoutClient:
     # 5. is_verified + scan for sensitive functions (mint, disable_transfers, blacklist)
     # ------------------------------------------------------------------
     async def check_contract_flags(self, token_address: str) -> ContractFlags:
+        cached = self._cache_get("check_contract_flags", token_address)
+        if cached is not None:
+            return cached
+        result = await self._check_contract_flags_uncached(token_address)
+        if result.available:
+            self._cache_set("check_contract_flags", token_address, result)
+        return result
+
+    async def _check_contract_flags_uncached(self, token_address: str) -> ContractFlags:
         data, error = await self._get_json(f"/smart-contracts/{token_address}")
         if error is not None:
             return ContractFlags(address=token_address, available=False, error=error)
@@ -1017,6 +1084,15 @@ class BlockscoutClient:
         Unverified contract -> ``is_verified=False``, no files (nothing to
         read), never blocking (caller degrades to fail-open on this signal,
         same doctrine as an unresolved GoPlus/Honeypot.is check)."""
+        cached = self._cache_get("get_verified_source", token_address)
+        if cached is not None:
+            return cached
+        result = await self._get_verified_source_uncached(token_address)
+        if result.available:
+            self._cache_set("get_verified_source", token_address, result)
+        return result
+
+    async def _get_verified_source_uncached(self, token_address: str) -> VerifiedSourceResult:
         data, error = await self._get_json(f"/smart-contracts/{token_address}")
         if error is not None:
             return VerifiedSourceResult(address=token_address, available=False, error=error)
@@ -1066,6 +1142,15 @@ class BlockscoutClient:
         shape returns (None, reason) — never an exception (graceful
         degradation).
         """
+        cached = self._cache_get("read_owner", token_address)
+        if cached is not None:
+            return cached
+        result = await self._read_owner_uncached(token_address)
+        if result[1] is None:
+            self._cache_set("read_owner", token_address, result)
+        return result
+
+    async def _read_owner_uncached(self, token_address: str) -> tuple[str | None, str | None]:
         data, error = await self._get_json(f"/smart-contracts/{token_address}/methods-read")
         if error is not None:
             return None, error

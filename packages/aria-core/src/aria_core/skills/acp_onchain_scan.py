@@ -1140,7 +1140,7 @@ async def scan_base_token(
     # Dev wallet behavior: committed builder vs. farmer (contextual judgment,
     # never an outright rejection). Best-effort; any unavailability -> 'unknown'.
     if include_dev_behavior:
-        await _resolve_dev_behavior(ctx, ca)
+        await _resolve_dev_behavior(ctx, ca, holders)
 
     # "Disguised liquidity exit" signal (22/07): insider wallets excluding
     # 'creator' that received a direct distribution and have already sold
@@ -1201,8 +1201,18 @@ async def scan_base_token(
     return ctx
 
 
-async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> None:
-    """Gathers + judges the deployer wallet's behavior. Defensive, never blocking."""
+async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str, holders=None) -> None:
+    """Gathers + judges the deployer wallet's behavior. Defensive, never blocking.
+
+    11/08 -- real gap found live (Explore audit while scoping backlog #93):
+    ``holders`` (a ``TokenHoldersResult`` already fetched once by the caller,
+    ``scan_base_token`` above) was never threaded through here, so
+    ``gather_dev_wallet_facts`` silently refetched ``get_token_holders`` for
+    the SAME contract a second time within the SAME evaluation --
+    ``_resolve_insider_wallets`` right below already reuses it correctly
+    (its own docstring: "reuses `holders` already fetched above, no
+    re-fetch"), this call-site was simply never updated to match when the
+    ``holders=`` param was added to ``gather_dev_wallet_facts`` on 28/07."""
     from aria_core.skills.dev_wallet import (
         gather_dev_wallet_facts,
         judge_dev_wallet,
@@ -1220,6 +1230,7 @@ async def _resolve_dev_behavior(ctx: "TokenScanContext", token_address: str) -> 
             token_address,
             creator,
             lp_address=ctx.best_pair.pair_address if ctx.best_pair else None,
+            holders=holders,
         )
         norms = launchpad_norms(ctx.launchpad)
         team_norm = norms.get("team_allocation_pct")

@@ -1124,4 +1124,95 @@ class TestMultiChainProApi:
         assert UNAVAILABLE in info.error
         # Le client reste engagé sur la Pro API -- aucun repli possible pour cette chaîne.
         assert client.base_url == "https://api.blockscout.com/1/api/v2"
-        assert client._api_key == "test-key"
+
+
+# ── short-TTL method cache (11/08, backlog #93 -- real duplicate-call gap) ──
+# Real doublons found live (Explore audit): get_address_info called
+# separately by _resolve_dev_behavior AND _resolve_insider_wallets for the
+# SAME contract in the same VC evaluation; momentum/VC/paper_trader_risk's
+# invalidation recheck can all hit the same singleton client within minutes.
+# FakeClient's single-element response LIST is the detector here: a second
+# real network call pops an already-empty list -> IndexError.
+
+
+class TestMethodCache:
+    @pytest.mark.asyncio
+    async def test_get_address_info_second_call_same_address_uses_cache(self, monkeypatch):
+        client = BlockscoutClient()
+        url = f"{client.base_url}/addresses/0xabc"
+        _patch_client(monkeypatch, {url: [FakeResponse(200, {"is_contract": True})]})
+
+        first = await client.get_address_info("0xabc")
+        second = await client.get_address_info("0xabc")
+
+        assert first.available is True
+        assert second is first  # same cached object, no second network call
+
+    @pytest.mark.asyncio
+    async def test_get_address_info_cache_is_case_insensitive_on_address(self, monkeypatch):
+        client = BlockscoutClient()
+        url = f"{client.base_url}/addresses/0xABC"
+        _patch_client(monkeypatch, {url: [FakeResponse(200, {"is_contract": True})]})
+
+        first = await client.get_address_info("0xABC")
+        second = await client.get_address_info("0xabc")  # same address, different case
+
+        assert second is first
+
+    @pytest.mark.asyncio
+    async def test_get_address_info_cache_scoped_per_method(self, monkeypatch):
+        """A cache hit on get_address_info must never leak into
+        get_token_holders for the same address -- distinct cache keys."""
+        client = BlockscoutClient()
+        info_url = f"{client.base_url}/addresses/0xabc"
+        meta_url = f"{client.base_url}/tokens/0xabc"
+        holders_url = f"{client.base_url}/tokens/0xabc/holders"
+        _patch_client(monkeypatch, {
+            info_url: [FakeResponse(200, {"is_contract": True})],
+            meta_url: [FakeResponse(200, {"decimals": 18, "total_supply": "1000000000000000000000"})],
+            holders_url: [FakeResponse(200, {"items": []})],
+        })
+
+        await client.get_address_info("0xabc")
+        holders = await client.get_token_holders("0xabc")
+
+        assert holders.available is True
+
+    @pytest.mark.asyncio
+    async def test_unavailable_result_never_cached_keeps_retrying(self, monkeypatch):
+        """Same 500-count doctrine as test_circuit_breaker_opens_after_
+        threshold_consecutive_failures above: 2x500 exhausts _get_json's own
+        internal retry for ONE logical call, producing a real available=False
+        -- the 200 that follows proves the SECOND logical call retried for
+        real instead of replaying a cached failure."""
+        _patch_no_sleep(monkeypatch)
+        client = BlockscoutClient()
+        url = f"{client.base_url}/addresses/0xabc"
+        _patch_client(monkeypatch, {
+            url: [FakeResponse(500), FakeResponse(500), FakeResponse(200, {"is_contract": True})],
+        })
+
+        first = await client.get_address_info("0xabc")
+        second = await client.get_address_info("0xabc")
+
+        assert first.available is False
+        assert second.available is True  # retried for real, not served a cached failure
+
+    @pytest.mark.asyncio
+    async def test_cache_entry_expires_after_ttl(self, monkeypatch):
+        client = BlockscoutClient()
+        url = f"{client.base_url}/addresses/0xabc"
+        _patch_client(monkeypatch, {
+            url: [FakeResponse(200, {"is_contract": True}), FakeResponse(200, {"is_contract": False})],
+        })
+
+        first = await client.get_address_info("0xabc")
+        # Backdate the cached entry past the TTL instead of sleeping for real.
+        key = ("get_address_info", "0xabc")
+        ts, value = client._method_cache[key]
+        client._method_cache[key] = (ts - client._METHOD_CACHE_TTL_SECONDS - 1.0, value)
+
+        second = await client.get_address_info("0xabc")
+
+        assert first.is_contract is True
+        assert second.is_contract is False  # real second fetch, cache had expired
