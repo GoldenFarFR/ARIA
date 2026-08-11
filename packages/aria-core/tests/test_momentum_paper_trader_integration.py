@@ -13,11 +13,14 @@ from ``paper_trader.run_paper_cycle``'s own call site) all run for real."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from aria_core import momentum_entry as me
 from aria_core import momentum_funnel_log
+from aria_core import momentum_websocket as mw
+from aria_core import outgoing_pause
 from aria_core import paper_trader as pt
 from aria_core.skills import market_sentiment
 
@@ -131,3 +134,86 @@ async def test_real_hold_signal_never_reaches_open_position(
     # first would immediately fail on a missing/None price, never silently
     # open a position on bad data.
     assert sig.get("price") is None or "target" not in sig
+
+
+def _listing_frame(items: list[dict]) -> str:
+    return json.dumps({"limit": len(items), "data": items})
+
+
+def _item(*, chain_id="base", token_address=CONTRACT, description="test") -> dict:
+    return {"chainId": chain_id, "tokenAddress": token_address, "description": description, "links": []}
+
+
+@pytest.mark.asyncio
+async def test_real_websocket_frame_reaches_a_real_open_position(
+    monkeypatch,
+    tmp_path,
+    tmp_paper_db,
+    caplog,
+    _isolated_blacklist_db,
+    _isolated_rejection_cache_db,
+    _isolated_holder_concentration_cache_db,
+    _isolated_holder_concentration_outage_bypass_db,
+):
+    """Widest boundary in the pipeline: a raw JSON WebSocket frame (the exact
+    shape DexScreener sends, per parse_listing's own docstring) all the way
+    to a real open_position() call -- through _ingest_frame, _drain_once,
+    the REAL run_paper_cycle, the REAL _default_momentum_analyzer, and the
+    REAL evaluate_momentum_entry. Only external network calls are mocked
+    (DexScreener/GeckoTerminal/GoPlus/Blockscout/LLM via _patch_pipeline,
+    plus the liquidity prefilter and the two remaining real-network lookups
+    run_paper_cycle's WS caller makes: meta-regime and trading_mode). Every
+    existing test_momentum_websocket.py test mocks run_paper_cycle itself at
+    this exact point -- so a WS-side bug in candidate shape (chain/contract
+    keys, chain_by_contract mapping) that only trips inside the REAL
+    evaluate_momentum_entry would be invisible to that file, same failure
+    shape as the other two boundary tests above."""
+    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setattr(outgoing_pause, "is_paused", lambda **kw: False)
+    # Same bypass as test_paper_trader.py's own autouse fixture: run_paper_cycle
+    # re-checks R/R at a fresh price right before open_position -- irrelevant
+    # to what this boundary test verifies (candidate shape survives the WS
+    # drain into a real decision), covered by its own dedicated tests.
+    monkeypatch.setattr(pt, "_execution_rr_still_valid", lambda *_a, **_kw: True)
+
+    from aria_core import fixed_watchlist, limit_orders
+
+    monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "limit_orders.db"))
+    monkeypatch.setattr(fixed_watchlist, "DB_PATH", str(tmp_path / "fixed_watchlist.db"))
+
+    async def _passthrough_prefilter(candidates):
+        for c in candidates:
+            c.setdefault("price_usd", 1.5)
+        return candidates
+
+    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
+
+    async def _neutral_regime():
+        return None
+
+    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _neutral_regime)
+
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=200_000.0)], signal=strong, align=(3, []))
+
+    await pt.reset_portfolio(1_000_000.0)
+
+    listener = mw.MomentumWebsocketListener()
+    await listener._ingest_frame(_listing_frame([_item()]))
+    assert (CONTRACT, "base") in listener._pending
+
+    caplog.set_level("INFO")
+    await listener._drain_once()
+
+    # 11/08 -- this exact assertion is what surfaced the real risk_guard
+    # UnboundLocalError bug (see test_momentum_entry.py's two new
+    # regression tests): this WS path is the first caller to reach
+    # dex_composite_score without conviction research having run first.
+    assert not any("dex composite score failed" in r.message for r in caplog.records)
+
+    positions = await pt.get_open_positions(wallet="swing")
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos["contract"] == CONTRACT
+    assert pos["thesis"], "empty thesis -- same historical bug class as the direct boundary test above"
+    assert pos["rr"] == pytest.approx(2.0)

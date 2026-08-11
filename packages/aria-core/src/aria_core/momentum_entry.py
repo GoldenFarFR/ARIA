@@ -4687,6 +4687,21 @@ async def evaluate_momentum_entry(
         # _check_honeypot earlier in this same evaluation -- zero extra
         # GoPlus call.
         if action == "BUY":
+            # 11/08 -- real bug found live (an end-to-end pipeline test
+            # exercising this branch without conviction research having run
+            # first): `risk_guard` was only imported inside the
+            # `research.available`/`potential_score is not None` branch
+            # above -- Python still treats it as a function-local name, so
+            # reading `risk_guard.DEX_SECURITY_REJECT_THRESHOLD` below raised
+            # UnboundLocalError on ANY path that skips/fails conviction
+            # research (every scalping-mode call, unconditionally -- see
+            # this function's own docstring -- plus any standard call where
+            # research.available is False). Caught by the except below
+            # (never blocking a real trade), but silently disabled the
+            # dex_security_score reject/downgrade signal on those paths.
+            # Re-imported here so it's always bound on this branch,
+            # regardless of what happened above.
+            from aria_core import risk_guard
             from aria_core.dex_composite_score import compute_dex_composite_score
 
             try:

@@ -7077,6 +7077,66 @@ async def test_dex_security_score_critical_rejects_the_buy_outright(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_dex_security_score_works_without_conviction_research_having_run(monkeypatch):
+    """11/08 -- real bug found live by an end-to-end pipeline test: every
+    other test in this section runs with ``aria_conviction_research_enabled
+    = True`` (via ``_neutral_research_stub``), which imports ``risk_guard``
+    as a side effect of the ``research.available``/``potential_score``
+    branch above this one in ``evaluate_momentum_entry``. On the DEFAULT
+    settings (conviction research OFF, the real default for every scalping-
+    mode call per this function's own docstring, and for any standard call
+    where the research genuinely fails), that import never runs -- reading
+    ``risk_guard.DEX_SECURITY_REJECT_THRESHOLD`` a few lines below then
+    raised ``UnboundLocalError``. Deliberately does NOT call
+    ``_neutral_research_stub``/set ``aria_conviction_research_enabled`` --
+    the whole point is exercising the conviction-research-OFF path."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core import dex_composite_score as dcs
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        return dcs.DexSecurityScore(score=72.0, reasons=["score composite DEX 72.0/100"])
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "BUY"
+    assert result["dex_security_score"] == 72.0
+    assert any("score composite DEX" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_dex_security_score_critical_rejects_even_without_conviction_research(monkeypatch):
+    """The real severity of the 11/08 bug above: ``dex_security_score`` gets
+    assigned BEFORE the crash (so the previous test alone wouldn't have
+    caught anything worse than a silently-dropped extra signal), but the
+    CRITICAL-score reject check right after it (same doctrine as the 25/07
+    fundamental-score reject, real CHECK loss) never ran on this path --
+    ``UnboundLocalError`` on ``risk_guard.DEX_SECURITY_REJECT_THRESHOLD``
+    meant a token with a catastrophic composite security score would have
+    been BOUGHT anyway on any call where conviction research is OFF
+    (unconditionally true for every scalping-mode call). Mirrors
+    ``test_dex_security_score_critical_rejects_the_buy_outright`` above but
+    without ``_neutral_research_stub``/``aria_conviction_research_enabled``."""
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    _patch_pipeline(monkeypatch, signal=strong, align=(2, ["EMA12 > EMA26", "MACD"]))
+
+    from aria_core import dex_composite_score as dcs
+    from aria_core import risk_guard
+
+    async def fake_compute(contract, chain, *, pair, security, mode="standard"):
+        below = risk_guard.DEX_SECURITY_REJECT_THRESHOLD - 1.0
+        return dcs.DexSecurityScore(score=below, reasons=["score composite DEX critique"])
+
+    monkeypatch.setattr(dcs, "compute_dex_composite_score", fake_compute)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "dex_security_score_critical"
+
+
+@pytest.mark.asyncio
 async def test_dex_security_score_none_never_rejects(monkeypatch, test_settings):
     """Fail-open doctrine: an unresolved dex_security_score must never reject
     a candidate -- only a CONFIRMED catastrophic score does."""
