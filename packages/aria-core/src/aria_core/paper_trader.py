@@ -1947,10 +1947,21 @@ async def open_position(
     behavior for any caller that doesn't provide it. Distinct from ``wallet``
     above: ``mode`` is the entry-signal flavor (used, among other things, to
     decide the swap-fee simulation below); ``wallet`` is the pocket the
-    resulting position is booked under -- today's single-pocket gate-OFF path
-    always books "scalping"-mode signals into the "swing" wallet (Phase 2 of
-    the 3-pocket plan hasn't yet retired the old portfolio-wide ``trading_mode``
-    switch, see ``get_trading_mode``/``set_trading_mode``).
+    resulting position is booked under -- these two are INDEPENDENT of each
+    other in the default multi-pocket heartbeat path (``multi_pocket_
+    sourcing_enabled()`` ON, the real prod case today): scalping/swing/vc are
+    3 genuinely separate wallets, never mixed (see the 3-way split around
+    ``multi_pocket_mode`` further down this file). The single-pocket legacy
+    behavior -- "scalping"-mode signals always booked into the "swing" wallet
+    -- ONLY still applies to a caller that provides its OWN ``candidates``/
+    ``analyzer`` (e.g. ``momentum_websocket.py``'s real-time drain, or a
+    test) -- multi-pocket sourcing never overrides an explicit caller's own
+    choice (Phase 2 of the 3-pocket plan hasn't retired the old portfolio-
+    wide ``trading_mode`` switch for THAT path, see ``get_trading_mode``/
+    ``set_trading_mode``). Clarified 11/08 after this exact ambiguity
+    produced a wrong claim in conversation (swing was momentarily described
+    as sharing scalping's bookings, which is only true for the minority
+    explicit-caller path, not the default heartbeat one).
 
     ``gp_low``/``gp_high`` (Item #101, 26/07): the golden pocket's own bounds
     (0.618/0.786 retracement) -- persisted so the position's real entry ZONE
