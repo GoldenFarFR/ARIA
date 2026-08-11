@@ -1209,3 +1209,45 @@ def test_handoff_entries_use_valid_status_and_required_fields(path):
         assert re.search(r"\bSolution\b", block), (
             f"{path.name} : entrée sans 'Solution' -- {block[:80]!r}"
         )
+
+
+# ── Anti prompt-injection (mandat #192) -- couverture verrouillée (11/08, backlog #104) ──
+# Audit réel (grep, 11/08) : ces 13 modules appellent sanitize_untrusted_text
+# (aria_core/sanitize.py) sur du texte tiers non fiable avant de l'injecter dans un
+# prompt LLM -- vérifié un par un contre des tests d'attaque comportementale réels
+# (fausse tentative de fermeture de balise/instruction système) déjà présents dans
+# leurs fichiers de test respectifs (community_feedback, x_engagement, vc_analysis,
+# momentum_entry, conviction_research, vc_judge, operator_conversational,
+# market_sentiment, market_alerts, source_code_audit, thesis_quality,
+# paper_ledger_report, polymarket). Ce test ne REJOUE pas ces attaques (déjà fait,
+# ailleurs, avec un vrai mock du LLM) -- il verrouille juste la LISTE : si un de ces
+# fichiers cesse d'importer sanitize_untrusted_text, casse LOUDLY plutôt que de
+# rouvrir silencieusement un vecteur déjà fermé. Retirer un module d'ici doit être
+# une décision de sécurité délibérée (documentée dans le commit), jamais un
+# effet de bord de refactor.
+_KNOWN_SANITIZE_CONSUMERS = (
+    "paper_ledger_report.py",
+    "community_feedback.py",
+    "skills/thesis_quality.py",
+    "skills/source_code_audit.py",
+    "skills/market_sentiment.py",
+    "skills/market_alerts.py",
+    "skills/vc_analysis.py",
+    "conviction_research.py",
+    "gateway/x_engagement.py",
+    "momentum_entry.py",
+    "operator_conversational.py",
+    "knowledge/web_verify.py",
+    "services/polymarket.py",
+)
+
+
+@pytest.mark.parametrize("rel", _KNOWN_SANITIZE_CONSUMERS)
+def test_known_sanitize_untrusted_text_consumers_keep_using_it(rel):
+    text = _read_core(rel)
+    assert "sanitize_untrusted_text" in text, (
+        f"{rel} a cessé d'utiliser sanitize_untrusted_text (mandat #192, anti "
+        "prompt-injection) -- si c'est délibéré (le module ne traite plus de texte "
+        "tiers), retire-le de _KNOWN_SANITIZE_CONSUMERS dans le MÊME commit avec une "
+        "justification ; sinon c'est une régression de sécurité réelle."
+    )
