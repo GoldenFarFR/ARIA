@@ -153,6 +153,21 @@ class VCResult:
     # OFF by default, BTC has no such gate), no coupling between the two.
     # Without data -> section omitted.
     market_context_equities: dict | None = None
+    # 11/08 -- adversarial proof-engine verdict (vc_judge.py), now wired into
+    # the automatic pipeline itself (operator decision: "les deux je veut
+    # tout voir" -- both the model-routing gate AND making the judge
+    # actually run automatically, not just in the operator's manual Telegram
+    # test mode where it was the ONLY real call site before this). Populated
+    # by analyze_vc_with_context, gated by the SAME
+    # anthropic_routing_vc_judge_enabled() flag already active in prod --
+    # the judge only ever makes sense paired with Sonnet, no separate gate
+    # needed. Consultative only: NEVER read by any trading-decision path
+    # (paper_trader._default_analyzer keys off `recommandation`, never this
+    # field) -- same "gate, never a trigger" doctrine vc_judge.py already
+    # documents for itself. None if the gate is off, the LLM call failed, or
+    # this VCResult predates this field (e.g. deserialized from an older
+    # cache entry).
+    judge_verdict: "JudgeVerdict | None" = None
 
     @property
     def actionable(self) -> bool:
@@ -1583,11 +1598,36 @@ async def analyze_vc_with_context(
     result = _validate_llm_output(parsed, ctx)
     _enforce_danger_veto(result, ctx)
     await _attach_extras(result, ctx, lang)
+    if result.llm_used:
+        result.judge_verdict = await _run_judge_if_enabled(result, ctx, lang)
     _log_timing(result.llm_used)
     out = (result, ctx)
     if cache_ttl > 0 and result.llm_used:
         vc_cache.put(cache_key, out, cache_ttl)
     return out
+
+
+async def _run_judge_if_enabled(result: VCResult, ctx: TokenScanContext, lang: str) -> "JudgeVerdict | None":
+    """11/08 -- wires the adversarial judge (vc_judge.py) into the AUTOMATIC
+    pipeline. Local import: vc_judge.py already imports from THIS module
+    (VCResult, _build_untrusted_context...), a top-level import here would
+    cycle. Gated by the same anthropic_routing_vc_judge_enabled() the model
+    router already uses -- the judge only ever makes sense paired with
+    Sonnet, no separate "should it run" gate needed. Never raises: a judge
+    failure must never break the analysis it's grading (same "never
+    blocking" doctrine as every other _fetch_* extra in this module).
+    """
+    from aria_core.llm_economy import anthropic_routing_vc_judge_enabled
+
+    if not anthropic_routing_vc_judge_enabled():
+        return None
+    try:
+        from aria_core.skills.vc_judge import judge_analysis
+
+        return await judge_analysis(result, ctx, lang=lang)
+    except Exception as exc:  # noqa: BLE001 — consultative only, never blocks the analysis
+        logger.warning("analyze_vc: proof-engine judge failed (%s)", exc)
+        return None
 
 
 def _cache_ttl_seconds() -> int:

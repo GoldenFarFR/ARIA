@@ -406,6 +406,66 @@ async def test_analyze_vc_valid_llm_output_used(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analyze_vc_judge_not_called_when_gate_disabled(monkeypatch):
+    """11/08 -- le juge ne doit JAMAIS être appelé si son gate est off (comportement
+    par défaut avant l'activation opérateur du 10/08)."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.llm_economy.anthropic_routing_vc_judge_enabled", lambda: False,
+    )
+    judge_mock = AsyncMock()
+    monkeypatch.setattr("aria_core.skills.vc_judge.judge_analysis", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.judge_verdict is None
+    judge_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_judge_called_and_verdict_attached_when_gate_enabled(monkeypatch):
+    """11/08 -- gate on (ARIA_LLM_ANTHROPIC_ROUTING_VC_JUDGE_ENABLED) : le juge doit
+    tourner automatiquement et son verdict doit être attaché au résultat, sans jamais
+    être consulté par un chemin de décision financière (dôme préservé ailleurs)."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.llm_economy.anthropic_routing_vc_judge_enabled", lambda: True,
+    )
+    sentinel_verdict = object()
+    judge_mock = AsyncMock(return_value=sentinel_verdict)
+    monkeypatch.setattr("aria_core.skills.vc_judge.judge_analysis", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.judge_verdict is sentinel_verdict
+    judge_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_judge_failure_never_breaks_report(monkeypatch):
+    """11/08 -- même doctrine « never blocking » que les autres extras : une exception
+    du juge (panne réseau, timeout Sonnet...) ne doit jamais faire échouer l'analyse
+    qu'il est censé auditer."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    monkeypatch.setattr(
+        "aria_core.llm_economy.anthropic_routing_vc_judge_enabled", lambda: True,
+    )
+    judge_mock = AsyncMock(side_effect=RuntimeError("panne réseau simulée"))
+    monkeypatch.setattr("aria_core.skills.vc_judge.judge_analysis", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.judge_verdict is None
+    assert result.recommandation == "BUY"
+
+
+@pytest.mark.asyncio
 async def test_analyze_vc_wraps_untrusted_data_in_tags(monkeypatch):
     """Défense injection : le contexte factuel doit être encapsulé + instruction système présente."""
     monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
