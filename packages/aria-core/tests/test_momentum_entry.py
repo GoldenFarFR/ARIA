@@ -2083,6 +2083,143 @@ async def test_rugcheck_fallback_fails_closed_when_also_unavailable(monkeypatch)
     assert code == "honeypot_unavailable"
 
 
+# ── run_candle_history_watchlist_cycle (11/08, dedicated candle collector) ──
+# Distinct from run_goplus_watchlist_cycle above (that one refreshes HONEYPOT
+# status; this one refreshes CANDLES) -- each keeps its own round-robin
+# cursor. Both due_for_refresh/mark_watchlist_refreshed are mocked directly
+# in these tests rather than exercised against a real candle_history DB
+# (candle_history.DB_PATH is fixed at module-import time, unlike
+# goplus_watchlist's own aria_db_path()-per-call pattern -- same doctrine as
+# the other DB_PATH-computed-once-at-import fixtures already in this file).
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_empty_watchlist_is_a_noop():
+    result = await me.run_candle_history_watchlist_cycle()
+    assert result == {"fetched": 0, "attempted": 0}
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_fetches_due_tokens(monkeypatch):
+    from aria_core import candle_history
+    from aria_core.services import geckoterminal as gt
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_due_for_refresh(candidates, limit):
+        assert (CONTRACT, "base") in candidates
+        return [(CONTRACT, "base")]
+
+    monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
+
+    pair = PairSnapshot(pair_address="0xpool", base_address=CONTRACT, liquidity_usd=100_000.0)
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [pair]
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    gt_candles = _plain_candles(3)
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=gt_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    recorded = {}
+
+    async def fake_record_candles(chain, pool_address, *, mode, candles, median_interval_seconds, contract=""):
+        recorded["chain"] = chain
+        recorded["pool_address"] = pool_address
+        recorded["mode"] = mode
+        recorded["contract"] = contract
+
+    monkeypatch.setattr(candle_history, "record_candles", fake_record_candles)
+
+    marked = []
+
+    async def fake_mark(contract, chain):
+        marked.append((contract, chain))
+
+    monkeypatch.setattr(candle_history, "mark_watchlist_refreshed", fake_mark)
+
+    result = await me.run_candle_history_watchlist_cycle()
+
+    assert result == {"fetched": 1, "attempted": 1}
+    assert recorded["chain"] == "base"
+    assert recorded["pool_address"] == "0xpool"
+    assert recorded["mode"] == "standard"
+    assert recorded["contract"] == CONTRACT
+    assert marked == [(CONTRACT, "base")]
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_no_pair_still_marks_refreshed(monkeypatch):
+    """A token with no resolvable DexScreener pair contributes 0 to `fetched`
+    but still cycles to the back of the queue -- never stuck retrying the
+    same broken token every passage."""
+    from aria_core import candle_history
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_due_for_refresh(candidates, limit):
+        return [(CONTRACT, "base")]
+
+    monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    marked = []
+
+    async def fake_mark(contract, chain):
+        marked.append((contract, chain))
+
+    monkeypatch.setattr(candle_history, "mark_watchlist_refreshed", fake_mark)
+
+    result = await me.run_candle_history_watchlist_cycle()
+
+    assert result == {"fetched": 0, "attempted": 1}
+    assert marked == [(CONTRACT, "base")]
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_fetch_failure_never_blocks_the_passage(monkeypatch):
+    """A raised exception on one token's fetch must not abort the whole
+    passage, and must still mark that token refreshed (best-effort, same
+    doctrine as run_goplus_watchlist_cycle)."""
+    from aria_core import candle_history
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_due_for_refresh(candidates, limit):
+        return [(CONTRACT, "base")]
+
+    monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
+
+    async def broken_fetch_token_pairs(contract, *, chain="base"):
+        raise RuntimeError("dexscreener unavailable")
+
+    monkeypatch.setattr(me, "fetch_token_pairs", broken_fetch_token_pairs)
+
+    marked = []
+
+    async def fake_mark(contract, chain):
+        marked.append((contract, chain))
+
+    monkeypatch.setattr(candle_history, "mark_watchlist_refreshed", fake_mark)
+
+    result = await me.run_candle_history_watchlist_cycle()
+
+    assert result == {"fetched": 0, "attempted": 1}
+    assert marked == [(CONTRACT, "base")]
+
+
 # ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → Mobula → DexScreener → Dune) ──
 
 def _plain_candles(n: int = 5) -> list[Candle]:

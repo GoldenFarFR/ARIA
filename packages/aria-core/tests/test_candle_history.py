@@ -185,3 +185,53 @@ async def test_get_history_limit_keeps_most_recent_oldest_first():
     rows = await candle_history.get_history("base", POOL, "1H", limit=5)
     assert len(rows) == 5
     assert [r["ts"] for r in rows] == [c.ts for c in candles[-5:]]
+
+
+# -- due_for_refresh / mark_watchlist_refreshed (11/08, watchlist collector cursor) --
+
+CONTRACT_A = ("0x" + "a" * 40, "base")
+CONTRACT_B = ("0x" + "b" * 40, "base")
+CONTRACT_C = ("0x" + "c" * 40, "base")
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_never_fetched_comes_first():
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=2)
+    assert set(due) == {CONTRACT_A, CONTRACT_B}  # both unseen, order among ties unspecified
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_prioritizes_never_fetched_over_stale():
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=1)
+    assert due == [CONTRACT_B]  # B never fetched, beats A's stale-but-known cursor
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_oldest_fetched_first_among_known():
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_B)
+    # re-touch A so it becomes the MORE recently fetched of the two
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=2)
+    assert due == [CONTRACT_B, CONTRACT_A]  # B's cursor is older -- refreshed first
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_respects_limit():
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=2)
+    assert len(due) == 2
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_empty_candidates_or_zero_limit_is_noop():
+    assert await candle_history.due_for_refresh([], limit=5) == []
+    assert await candle_history.due_for_refresh([CONTRACT_A], limit=0) == []
+
+
+@pytest.mark.asyncio
+async def test_mark_watchlist_refreshed_is_idempotent_upsert():
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)  # must not raise / duplicate
+    due = await candle_history.due_for_refresh([CONTRACT_A], limit=1)
+    assert due == [CONTRACT_A]

@@ -1527,6 +1527,68 @@ async def run_goplus_watchlist_cycle() -> dict:
     return result
 
 
+# 11/08, operator-approved plan (see docs/HANDOFF_CANDLE_HISTORY.md) -- 20
+# tokens/passage keeps GeckoTerminal's shared throttle load at ~80s/passage
+# (20 x _MIN_INTERVAL=4.0s), a small fraction of this cycle's own 15min
+# cadence, leaving headroom for the rest of the pipeline's real-time fetches
+# on the SAME shared throttle (services/geckoterminal.py's own
+# wait_for_shared_rate_limit). Deliberately smaller than
+# _GOPLUS_WATCHLIST_BATCH_SIZE (100) -- Honeypot.is (~5 req/s) is far faster
+# than GeckoTerminal (~0.25 req/s), the two cycles are not comparable.
+_CANDLE_HISTORY_WATCHLIST_BATCH_SIZE = 20
+
+
+async def run_candle_history_watchlist_cycle() -> dict:
+    """Background candle-collector cycle over ``services/goplus_watchlist.py``
+    ("the watchlist" -- see feedback_watchlist_means_goplus_watchlist.md, the
+    one and only list this bare term refers to on this project), 11/08,
+    operator-approved plan. Distinct from ``run_goplus_watchlist_cycle``
+    above (that one refreshes HONEYPOT status; this one refreshes CANDLES) --
+    each keeps its own round-robin cursor (``candle_history.
+    due_for_refresh``/``mark_watchlist_refreshed``), never coupled to
+    ``goplus_watchlist``'s own ``last_checked_at``.
+
+    For each due token: resolves its best DexScreener pair (``_best_pair``,
+    same base/quote-mismatch-safe logic as the rest of this file), then
+    fetches candles via ``_fetch_candles`` -- reusing the passive
+    ``candle_history.record_candles`` hook already wired there rather than
+    duplicating the fetch cascade. ``mode="standard"`` only for this first
+    cut (feeds swing + vc, the two pockets sharing that ladder) -- a future
+    iteration can add ``mode="scalping"`` once this first slice is observed
+    clean in prod (explicit operator caution: start small, this shares a
+    throttle with a documented past 6-day live-lock incident).
+
+    Best-effort per token: one broken fetch never stops the passage, and
+    ``mark_watchlist_refreshed`` runs in a ``finally`` so a persistently
+    failing token still cycles to the back of the queue instead of blocking
+    it forever."""
+    from aria_core import candle_history
+    from aria_core.services import goplus_watchlist
+
+    watchlist_rows = await goplus_watchlist.list_all()
+    candidates = [(row["contract"], row["chain"]) for row in watchlist_rows]
+    due = await candle_history.due_for_refresh(candidates, _CANDLE_HISTORY_WATCHLIST_BATCH_SIZE)
+    if not due:
+        return {"fetched": 0, "attempted": 0}
+
+    fetched = 0
+    for contract, chain in due:
+        try:
+            pairs = await fetch_token_pairs(contract, chain=chain)
+            best = _best_pair(pairs, contract)
+            if best is not None and best.pair_address:
+                await _fetch_candles(best.pair_address, chain, contract=contract, pair=best, mode="standard")
+                fetched += 1
+        except Exception as exc:  # noqa: BLE001 -- best-effort collector, one bad token never stops the passage
+            logger.info(
+                "candle_history_watchlist_cycle: fetch failed for %s/%s (%s)", chain, contract[:10], exc,
+            )
+        finally:
+            await candle_history.mark_watchlist_refreshed(contract, chain)
+
+    return {"fetched": fetched, "attempted": len(due)}
+
+
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
     """Solana second opinion (#207) -- called ONLY by ``_check_honeypot`` when
     GoPlus has no data for this contract. Fail-closed unchanged if RugCheck also

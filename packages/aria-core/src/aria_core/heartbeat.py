@@ -334,6 +334,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="candle_history_watchlist_cycle",
+        name="Candle history -- goplus_watchlist collector (FIFO per token/timeframe)",
+        description="11/08 operator-approved plan (docs/HANDOFF_CANDLE_HISTORY.md): dedicated background cycle over services/goplus_watchlist.py (the shared 2000-slot watchlist), refreshing 20 tokens/passage's candle_history entry (mode=standard only, first cut). Own round-robin cursor, independent of goplus_watchlist's own honeypot last_checked_at. GeckoTerminal load ~80s/passage (20 x 4.0s shared throttle interval), a small fraction of this 15min cadence -- deliberately conservative given the shared throttle's documented past 6-day live-lock incident. Standalone infrastructure cycle, no pocket wired to read from it yet (Phase 2, task #97, explicitly blocked until this is observed clean). Dedicated gate ARIA_CANDLE_HISTORY_WATCHLIST_ENABLED, OFF by default -- no paper-trading double-gate (same doctrine as the github/farcaster cascade columns).",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="wallet_copy_shadow_cycle",
         name="Wallet-copy shadow -- 8 tracked wallets, fictional per-wallet ledger",
         description="08/08 operator spec: forward-tests copying 8 real Base wallets (3 fomoscan-verified all-time track records, 4 GMGN Smart Money 30d, 1 confirmed serial front-runner), one INDEPENDENT fictional paper ledger per wallet -- never merged, never real capital, never a live trigger (CLAUDE.md smart-money doctrine: confirmation only). Polls each wallet's recent Base ERC-20 transfers via Blockscout, opens a $1,000 fictional position on a detected buy, closes it on the matching sell. summary() reports each wallet's realized/latent P&L separately so copying each one can be judged on its own. Dedicated gate ARIA_WALLET_COPY_SHADOW_ENABLED, OFF by default -- standalone research shadow, independent of the $1M momentum test.",
@@ -811,6 +818,15 @@ def _sync_x_curiosity_enabled() -> None:
                 # flag only.
                 task.enabled = os.environ.get(
                     "ARIA_WALLET_COPY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "candle_history_watchlist_cycle":
+                # 11/08 -- standalone infrastructure cycle (builds shared
+                # candle history, no pocket reads from it yet -- #97 is
+                # explicitly blocked until this is observed clean). Single
+                # dedicated flag only, same doctrine as the cascade columns
+                # above.
+                task.enabled = os.environ.get(
+                    "ARIA_CANDLE_HISTORY_WATCHLIST_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "goplus_watchlist_cycle":
                 # 29/07 (Item #212) -- same double-gate pattern as
@@ -1675,6 +1691,15 @@ class AriaHeartbeat:
                     "goplus_watchlist_cycle: %s confirmed honeypot, blacklisted (%s checked)",
                     result["blacklisted"], result.get("checked"),
                 )
+
+        elif task_id == "candle_history_watchlist_cycle":
+            from aria_core.momentum_entry import run_candle_history_watchlist_cycle
+
+            result = await run_candle_history_watchlist_cycle()
+            logger.info(
+                "candle_history_watchlist_cycle: %s/%s candle series refreshed",
+                result.get("fetched"), result.get("attempted"),
+            )
 
         elif task_id == "signal_cascade_falsifiability_cycle":
             from aria_core import signal_cascade_convergence

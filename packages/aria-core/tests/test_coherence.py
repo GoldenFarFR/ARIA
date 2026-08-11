@@ -798,6 +798,10 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_BONDING_DISCOVERY_ENABLED",
     "ARIA_BRAIN_ENABLED",
     "ARIA_CABALSPY_SOURCING_ENABLED",
+    # 11/08 -- candle_history.py's dedicated goplus_watchlist collector cycle
+    # (run_candle_history_watchlist_cycle). Standalone infrastructure, no
+    # pocket wired to it yet. OFF by default.
+    "ARIA_CANDLE_HISTORY_WATCHLIST_ENABLED",
     "ARIA_CANONICAL_FACTS_SYNC_ENABLED",
     "ARIA_CLAUDE_MENTOR_ENABLED",
     "ARIA_CODE_PROPOSAL_ENABLED",

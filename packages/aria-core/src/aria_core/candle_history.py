@@ -42,6 +42,7 @@ entirely unaffected, only this module's persistence skips that granularity.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -49,6 +50,10 @@ from aria_core.paths import aria_db_path
 from aria_core.skills.ta_levels import Candle
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 DB_PATH = str(aria_db_path())
 
@@ -151,6 +156,22 @@ async def _ensure_table() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_candle_history_contract "
             "ON candle_history (contract, chain, timeframe)"
+        )
+        # 11/08 -- round-robin cursor for the dedicated goplus_watchlist candle
+        # collector (run_candle_history_watchlist_cycle, momentum_entry.py).
+        # Deliberately its OWN cursor, independent of goplus_watchlist's
+        # `last_checked_at` (that one tracks the HONEYPOT check cadence, this
+        # one the CANDLE refresh cadence -- mixing them would silently couple
+        # two unrelated round-robins).
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS candle_watchlist_cursor (
+                contract TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                last_fetched_at TEXT,
+                PRIMARY KEY (contract, chain)
+            )
+            """
         )
         await db.commit()
     _ensured_db_paths.add(path)
@@ -256,3 +277,44 @@ async def get_history(
             params = [chain, pool_address, timeframe, limit]
         cur = await db.execute(query, params)
         return [dict(r) for r in await cur.fetchall()]
+
+
+async def due_for_refresh(
+    candidates: list[tuple[str, str]], limit: int,
+) -> list[tuple[str, str]]:
+    """Round-robin selection for the watchlist candle-refresh collector --
+    never-fetched ``(contract, chain)`` pairs first, then oldest-fetched
+    first. ``candidates`` is supplied by the CALLER (the collector cycle's
+    own read of ``goplus_watchlist.list_all()``) rather than joined via SQL
+    across modules -- keeps this module decoupled from goplus_watchlist's
+    schema, and at watchlist scale (thousands, not millions) an in-Python
+    sort over the full cursor table is simpler and safer than a cross-module
+    SQL join with no real cost."""
+    if not candidates or limit <= 0:
+        return []
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        rows = await (
+            await db.execute("SELECT contract, chain, last_fetched_at FROM candle_watchlist_cursor")
+        ).fetchall()
+    cursors = {(r[0], r[1]): r[2] for r in rows}
+    ranked = sorted(
+        candidates,
+        key=lambda pair: (cursors.get(pair) is not None, cursors.get(pair) or ""),
+    )
+    return ranked[:limit]
+
+
+async def mark_watchlist_refreshed(contract: str, chain: str) -> None:
+    """Moves ``(contract, chain)`` to the back of the round-robin queue --
+    called after EVERY attempt (success or failure) so a persistently broken
+    token never blocks the queue behind it, same doctrine as
+    ``goplus_watchlist.record_result`` for the honeypot cycle."""
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        await db.execute(
+            "INSERT INTO candle_watchlist_cursor (contract, chain, last_fetched_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (contract, chain) DO UPDATE SET last_fetched_at = excluded.last_fetched_at",
+            (contract, chain, _now_iso()),
+        )
+        await db.commit()
