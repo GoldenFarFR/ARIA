@@ -139,8 +139,17 @@ fi
 
 if [ "$CUMULATIVE_LINES" -lt "$BATCH_THRESHOLD_LINES" ]; then
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- SKIP sous le seuil (${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12}) ===" >> "$REVIEW_LOG"
+  # 12/08 -- real gap found live: this calculation always ran, but only ever
+  # landed in a log file nobody reads at push time -- a session pushing
+  # without deliberately checking the cumulative count first had NOTHING
+  # putting the number in front of it. Echoed to stdout (visible in the
+  # `git push` output itself, still synchronous at this point, well before
+  # the detached background block below) rather than buried in a log --
+  # never blocks the push either way, same doctrine as the rest of this hook.
+  echo "🛡️  Avocat du Diable : ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12} -- sous le seuil, aucun appel paye." >&2
   exit 0
 fi
+echo "🛡️  Avocat du Diable : ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12} -- seuil atteint, revue Fable 5 declenchee en arriere-plan." >&2
 
 # Tout le travail reel est detache -- le push aboutit immediatement, sans
 # jamais attendre l'appel API.
