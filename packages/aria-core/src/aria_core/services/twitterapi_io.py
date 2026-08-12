@@ -10,6 +10,23 @@ page but exposes neither followers_count nor following_count, verified for
 real) provided account counters -- only the Tavily fallback (account age
 via "Joined <month year>") existed until now.
 
+``search_tweets`` (12/08) -- free-form keyword search (``GET
+/twitter/tweet/advanced_search``, verified live against docs.twitterapi.io:
+supports ``from:``/``since_time:``/``until_time:``/exact-phrase/OR/AND
+operators, 0.00015$/tweet returned, i.e. 15 credits/tweet at the account's
+own 1$=100,000-credits rate). Two real uses, both explicit operator
+decisions (12/08): (1) replaces the paid official-X bearer path
+(``gateway.x_twitter.search_recent_tweets``, ~33x more expensive per read
+and requires an active X API subscription the operator just cancelled) as
+``conviction_research.py``'s primary buzz-search tier; (2) the FIRST tier of
+the bonding "detective mode" (``project_name``-based search, tried when
+Virtuals declares no official link at all) -- both keep Tavily as the
+fallback when this is unconfigured/fails. Response shape (``createdAt`` in
+Twitter's own RFC-2822-like format, e.g. "Tue Dec 10 07:00:30 +0000 2024" --
+DIFFERENT from ``fetch_user_profile``/``fetch_last_tweets``'s ISO8601
+``createdAt``, parsed with its own helper) verified live via WebFetch on
+docs.twitterapi.io/api-reference/endpoint/tweet_advanced_search.
+
 ``fetch_last_tweets`` (07/23, same session) adds activity/engagement --
 explicit operator request after a comparison table confirmed that
 twit.sh ALSO provides them, but twit.sh is already used by
@@ -56,6 +73,7 @@ logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.twitterapi.io/twitter/user/info"
 _LAST_TWEETS_URL = "https://api.twitterapi.io/twitter/user/last_tweets"
+_SEARCH_URL = "https://api.twitterapi.io/twitter/tweet/advanced_search"
 _TIMEOUT_SECONDS = 10.0
 # 0.2 QPS real (Free tier, operator dashboard) -> 5s/request at most;
 # 90% margin (CLAUDE.md doctrine) -> 5.5s.
@@ -96,6 +114,22 @@ class TwitterApiIoTweet:
 
 def is_twitterapi_io_configured() -> bool:
     return bool(os.environ.get("TWITTERAPI_IO_KEY", "").strip())
+
+
+def _parse_twitter_format_created_at(raw: object) -> str | None:
+    """``advanced_search``'s own ``createdAt`` shape (e.g. "Tue Dec 10
+    07:00:30 +0000 2024") -- distinct from the ISO8601 one used by
+    ``fetch_user_profile``/``fetch_last_tweets``, see module docstring.
+    Returns the ISO8601 string form (never the raw datetime object) so
+    callers get the exact same shape as ``gateway.x_twitter``'s own
+    ``created_at`` field -- ``None`` on anything unparsable, never a
+    fabricated timestamp."""
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        return datetime.strptime(raw, "%a %b %d %H:%M:%S %z %Y").isoformat()
+    except ValueError:
+        return None
 
 
 async def _throttle() -> None:
@@ -238,4 +272,69 @@ async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[Twi
                 text=str(item.get("text") or ""),
             )
         )
+    return tweets or None
+
+
+async def search_tweets(query: str, *, max_results: int = 10) -> list[dict] | None:
+    """Free-form keyword search (``GET /twitter/tweet/advanced_search``) --
+    same role as ``gateway.x_twitter.search_recent_tweets`` (buzz search on a
+    ticker/contract/project name) but ~33x cheaper per read and doesn't
+    require an active official X API subscription. ``None`` if the key is
+    missing or on any failure -- never a bubbling exception, never a
+    fabricated tweet.
+
+    Output shape matches ``search_recent_tweets``'s own dicts (``text``/
+    ``created_at``/``tweet_id``/``author_id``) so callers (conviction_research.py)
+    don't need a provider-specific branch -- ``author_id`` here is the
+    author's @handle (twitterapi.io exposes no numeric id), never confused
+    with a real X API author_id."""
+    q = (query or "").strip()
+    if not q:
+        return None
+
+    api_key = os.environ.get("TWITTERAPI_IO_KEY", "").strip()
+    if not api_key:
+        return None
+
+    await _throttle()
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+            r = await client.get(
+                _SEARCH_URL,
+                params={"query": q[:500], "queryType": "Latest"},
+                headers={"X-API-Key": api_key},
+            )
+    except httpx.TransportError as exc:
+        logger.info("twitterapi_io: network failure search_tweets (%s)", exc)
+        return None
+
+    if r.status_code != 200:
+        logger.info("twitterapi_io: HTTP %s for search_tweets %r", r.status_code, q)
+        return None
+
+    try:
+        payload = r.json()
+    except Exception:  # noqa: BLE001 -- unreadable body, never a bubbling exception
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    raw_tweets = payload.get("tweets")
+    if not isinstance(raw_tweets, list):
+        return None
+
+    tweets: list[dict] = []
+    for item in raw_tweets[: max(1, min(int(max_results), 100))]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        tweets.append({
+            "text": text,
+            "created_at": _parse_twitter_format_created_at(item.get("createdAt")),
+            "tweet_id": item.get("id"),
+            "author_id": author.get("userName"),
+        })
     return tweets or None

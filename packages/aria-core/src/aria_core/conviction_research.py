@@ -443,6 +443,7 @@ async def research_project_potential(
     cache_max_age_days: int = DEFAULT_RESEARCH_CACHE_MAX_AGE_DAYS,
     known_links: list[dict] | None = None,
     known_launchpad_id: int | str | None = None,
+    project_name: str | None = None,
 ) -> ConvictionResearch:
     """Orchestrates website (Tavily) + X (buzz + cadence) + contract
     corroboration -> bounded potential score. Single entry point called by
@@ -481,7 +482,23 @@ async def research_project_potential(
     overriding the weaker raw-EVM-address heuristic below, which rarely finds
     a bonding-stage token's address verbatim anywhere on the open web. Never
     a hard requirement -- absent/unconfigured/no-match degrades to the
-    existing EVM-address-based corroboration, unchanged."""
+    existing EVM-address-based corroboration, unchanged.
+
+    ``project_name`` (12/08, "detective mode" -- operator, bonding
+    diligence: "en bonding il faut souvent faire une recherche plus
+    profonde car des fois les liens ne sont pas entrés dans la page
+    virtual mais le site web ou x ou autre existe vraiment"): the
+    project's own full name (e.g. ``VirtualToken.name``), distinct from its
+    short ticker symbol -- ONLY used when the standard search above (known
+    links + the generic Tavily query) still leaves BOTH ``website_url`` and
+    ``x_handle`` unresolved. Tried in this order: TwitterAPI.io keyword
+    search (cheap, X-focused, tier 1 once the operator's account is funded)
+    then a wider Tavily web search (tier 2) -- never a hard dependency on
+    either, and never treats a tweet's AUTHOR as the project's own handle
+    (a random account discussing the project isn't the project) -- only the
+    combined TEXT is fed to the same ``_extract_website``/``_extract_x_handle``
+    heuristics already used on Tavily snippets. A no-op when ``project_name``
+    is absent or identical to the ticker (nothing new to search for)."""
     if not _is_conviction_research_enabled():
         return ConvictionResearch(available=False, reason="ARIA_CONVICTION_RESEARCH_ENABLED désactivé")
 
@@ -582,6 +599,51 @@ async def research_project_potential(
     elif tavily_result is not None:
         _trail_note(trail, f"Tavily indisponible ({tavily_result.error or 'raison inconnue'})")
 
+    if (
+        not website_url and not x_handle and project_name
+        and project_name.strip().lower() != safe_symbol.lower()
+    ):
+        safe_project_name = sanitize_untrusted_text(project_name.strip(), 80)
+        _trail_note(trail, f'Mode détective : aucun lien déclaré, recherche par nom du projet ("{safe_project_name}")')
+        detective_texts: list[str] = []
+
+        from aria_core.services.twitterapi_io import is_twitterapi_io_configured
+        from aria_core.services.twitterapi_io import search_tweets as twitterapi_io_search_tweets
+
+        if is_twitterapi_io_configured():
+            try:
+                detective_tweets = await twitterapi_io_search_tweets(safe_project_name, max_results=10) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.info("conviction_research: detective TwitterAPI.io search failed (%s)", exc)
+                detective_tweets = []
+            if detective_tweets:
+                _trail_note(trail, f"Mode détective : {len(detective_tweets)} tweet(s) trouvé(s) via TwitterAPI.io")
+                detective_texts.extend(t.get("text", "") for t in detective_tweets)
+
+        try:
+            detective_tavily = await tavily_client.search(
+                f'"{safe_project_name}" official website twitter crypto token',
+                max_results=5, caller="conviction_research",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("conviction_research: detective Tavily search failed (%s)", exc)
+            detective_tavily = None
+
+        if detective_tavily is not None and detective_tavily.available:
+            _trail_note(trail, f"Mode détective : Tavily a retourné {len(detective_tavily.snippets)} extrait(s)")
+            if website_url is None:
+                found_site = _extract_website(detective_tavily.snippets)
+                if found_site:
+                    website_url = found_site
+                    _trail_note(trail, f"Mode détective : site officiel trouvé via Tavily : {found_site}")
+            detective_texts.extend(f"{text} {url}" for text, url, _pub in detective_tavily.snippets)
+
+        if x_handle is None and detective_texts:
+            found_handle = _extract_x_handle(" ".join(detective_texts))
+            if found_handle:
+                x_handle = found_handle
+                _trail_note(trail, f"Mode détective : handle X trouvé : @{found_handle}")
+
     if website_url:
         # 19/07 -- reuses services/site_snapshot.py (already built for
         # vc_analysis.py, anti-hidden-text defenses, mandate #192): until now
@@ -667,17 +729,21 @@ async def research_project_potential(
 
     tweets: list[dict] = []
     if await x_research_budget.can_spend():
-        from aria_core.gateway.x_twitter import search_recent_tweets
+        from aria_core.services.twitterapi_io import is_twitterapi_io_configured
+        from aria_core.services.twitterapi_io import search_tweets as twitterapi_io_search_tweets
 
-        _trail_note(trail, "Recherche X officielle utilisée (budget disponible)")
-        try:
-            tweets = await search_recent_tweets(query, max_results=10)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("conviction_research: X search failed (%s)", exc)
-            tweets = []
+        if is_twitterapi_io_configured():
+            _trail_note(trail, "Recherche X via TwitterAPI.io utilisée (budget disponible)")
+            try:
+                tweets = await twitterapi_io_search_tweets(query, max_results=10) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.info("conviction_research: TwitterAPI.io search failed (%s)", exc)
+                tweets = []
+        else:
+            _trail_note(trail, "TwitterAPI.io non configuré -- recherche X sautée")
         await x_research_budget.record_request(purpose="buzz_search", contract=contract, status="ok")
     else:
-        _trail_note(trail, "Recherche X officielle sautée (plafond hebdomadaire de 100 req atteint)")
+        _trail_note(trail, "Recherche X sautée (plafond hebdomadaire de 100 req atteint)")
         await x_research_budget.record_request(
             purpose="buzz_search", contract=contract, status="blocked", reason="plafond hebdo atteint",
         )
@@ -696,11 +762,21 @@ async def research_project_potential(
         from aria_core.services.tavily import tavily_client
 
         tavily_query = f"{safe_symbol} {x_handle}" if x_handle else query
-        _trail_note(trail, "Recherche Tavily tentée pour le buzz (recherche X officielle vide/sautée)")
-        tavily_result = await tavily_client.search(
-            tavily_query, include_domains=["x.com", "twitter.com"], max_results=10, caller="conviction_research",
-        )
-        if tavily_result.available:
+        _trail_note(trail, "Recherche Tavily tentée pour le buzz (recherche X vide/sautée)")
+        # 12/08 -- real robustness gap found live (a new test exercising a
+        # Tavily-wide failure): unlike every other Tavily call in this
+        # function, this one had no try/except -- a real exception here
+        # would have bubbled up and blocked the whole diligence, never
+        # degrading to the next fallback (twit.sh) like the dome elsewhere
+        # promises.
+        try:
+            tavily_result = await tavily_client.search(
+                tavily_query, include_domains=["x.com", "twitter.com"], max_results=10, caller="conviction_research",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("conviction_research: Tavily buzz search failed (%s)", exc)
+            tavily_result = None
+        if tavily_result is not None and tavily_result.available:
             tweets = [{"text": text} for text, _url, _pub in tavily_result.snippets]
             _trail_note(trail, f"Tavily : {len(tweets)} résultat(s) trouvé(s)")
 
@@ -727,17 +803,23 @@ async def research_project_potential(
     if x_handle:
         cadence_tweets: list[dict] = []
         if await x_research_budget.can_spend():
-            from aria_core.gateway.x_twitter import fetch_user_recent_tweets
+            from aria_core.services.twitterapi_io import is_twitterapi_io_configured
+            from aria_core.services.twitterapi_io import search_tweets as twitterapi_io_search_tweets
 
-            _trail_note(trail, "Cadence de publication X officielle utilisée (budget disponible)")
-            try:
-                cadence_tweets = await fetch_user_recent_tweets(x_handle, max_results=20)
-            except Exception as exc:  # noqa: BLE001
-                logger.info("conviction_research: X cadence fetch failed (%s)", exc)
-                cadence_tweets = []
+            if is_twitterapi_io_configured():
+                _trail_note(trail, "Cadence de publication via TwitterAPI.io utilisée (budget disponible)")
+                try:
+                    cadence_tweets = await twitterapi_io_search_tweets(
+                        f"from:{x_handle}", max_results=20,
+                    ) or []
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("conviction_research: TwitterAPI.io cadence fetch failed (%s)", exc)
+                    cadence_tweets = []
+            else:
+                _trail_note(trail, "TwitterAPI.io non configuré -- cadence de publication sautée")
             await x_research_budget.record_request(purpose="posting_cadence", contract=contract, status="ok")
         else:
-            _trail_note(trail, "Cadence de publication X officielle sautée (plafond hebdomadaire atteint)")
+            _trail_note(trail, "Cadence de publication X sautée (plafond hebdomadaire atteint)")
             await x_research_budget.record_request(
                 purpose="posting_cadence", contract=contract, status="blocked", reason="plafond hebdo atteint",
             )

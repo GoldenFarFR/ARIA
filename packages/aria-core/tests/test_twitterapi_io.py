@@ -291,3 +291,100 @@ async def test_last_tweets_http_error_returns_none(_fresh):
 async def test_last_tweets_empty_list_returns_none(_fresh):
     _FakeAsyncClient._response = _FakeResponse(200, {"status": "success", "tweets": []})
     assert await tw.fetch_last_tweets("crynuxio") is None
+
+
+# ── search_tweets (12/08, buzz search -- replaces the paid official X path) ─
+
+
+@pytest.mark.asyncio
+async def test_search_without_key_returns_none(monkeypatch):
+    monkeypatch.delenv("TWITTERAPI_IO_KEY", raising=False)
+    assert await tw.search_tweets("COBOT") is None
+
+
+@pytest.mark.asyncio
+async def test_search_empty_query_returns_none(_fresh):
+    assert await tw.search_tweets("") is None
+    assert await tw.search_tweets(None) is None
+
+
+@pytest.mark.asyncio
+async def test_search_success_real_shape(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "tweets": [
+                {
+                    "id": "1234567890",
+                    "text": "COBOT is pumping today!",
+                    "createdAt": "Tue Dec 10 07:00:30 +0000 2024",
+                    "author": {"userName": "cobot_official", "name": "COBOT"},
+                    "likeCount": 12,
+                },
+            ],
+            "has_next_page": False,
+        },
+    )
+    tweets = await tw.search_tweets("COBOT", max_results=10)
+    assert tweets is not None
+    assert len(tweets) == 1
+    assert tweets[0]["text"] == "COBOT is pumping today!"
+    assert tweets[0]["tweet_id"] == "1234567890"
+    assert tweets[0]["author_id"] == "cobot_official"
+    assert tweets[0]["created_at"] == datetime(2024, 12, 10, 7, 0, 30, tzinfo=timezone.utc).isoformat()
+    assert _FakeAsyncClient._captured_headers == {"X-API-Key": "test-key-sentinel"}
+    assert _FakeAsyncClient._captured_params["queryType"] == "Latest"
+
+
+@pytest.mark.asyncio
+async def test_search_skips_entries_without_text(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {"tweets": [{"id": "1", "text": ""}, {"id": "2", "text": "real content here"}]},
+    )
+    tweets = await tw.search_tweets("COBOT")
+    assert len(tweets) == 1
+    assert tweets[0]["text"] == "real content here"
+
+
+@pytest.mark.asyncio
+async def test_search_unparsable_created_at_yields_none_field_not_a_crash(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200, {"tweets": [{"id": "1", "text": "no date here", "createdAt": "not a real date"}]},
+    )
+    tweets = await tw.search_tweets("COBOT")
+    assert tweets[0]["created_at"] is None
+    assert tweets[0]["text"] == "no date here"
+
+
+@pytest.mark.asyncio
+async def test_search_respects_max_results(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(
+        200, {"tweets": [{"id": str(i), "text": f"tweet {i}"} for i in range(50)]},
+    )
+    tweets = await tw.search_tweets("COBOT", max_results=5)
+    assert len(tweets) == 5
+
+
+@pytest.mark.asyncio
+async def test_search_http_error_returns_none(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(500, {})
+    assert await tw.search_tweets("COBOT") is None
+
+
+@pytest.mark.asyncio
+async def test_search_empty_results_returns_none(_fresh):
+    _FakeAsyncClient._response = _FakeResponse(200, {"tweets": []})
+    assert await tw.search_tweets("COBOT") is None
+
+
+@pytest.mark.asyncio
+async def test_search_transport_error_returns_none(_fresh, monkeypatch):
+    import httpx
+
+    class _Boom(_FakeAsyncClient):
+        async def get(self, url, params=None, headers=None):
+            raise httpx.TransportError("panne réseau")
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", _Boom)
+    assert await tw.search_tweets("COBOT") is None

@@ -655,6 +655,11 @@ async def evaluate_bonding_entry(
         # false positive found and fixed on HOLO: wrongly flagged
         # "usurpation probable" against an unrelated homonym site).
         known_launchpad_id=token.virtual_id,
+        # 12/08, "detective mode" (operator, bonding diligence): the token's
+        # own full project name, distinct from its short ticker -- only used
+        # by conviction_research when Virtuals declares NO official link at
+        # all, to search more broadly than a bare, often-ambiguous ticker.
+        project_name=token.name,
     )
     if research.available:
         if research.process_trail:

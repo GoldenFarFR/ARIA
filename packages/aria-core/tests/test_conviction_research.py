@@ -250,18 +250,14 @@ async def test_x_handle_extracted_from_tavily_snippets(test_settings, monkeypatc
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
 
-    calls = {"search_query": None, "cadence_handle": None}
+    calls = {"queries": []}
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
-    async def _fake_search_recent_tweets(query, **kwargs):
-        calls["search_query"] = query
+    async def _fake_search_tweets(query, **kwargs):
+        calls["queries"].append(query)
         return [{"text": "COBOT to the moon", "created_at": "2026-07-19T10:00:00.000Z", "tweet_id": "1"}]
 
-    async def _fake_fetch_user_recent_tweets(username, **kwargs):
-        calls["cadence_handle"] = username
-        return [{"text": "gm", "created_at": "2026-07-19T09:00:00.000Z", "tweet_id": "2"}]
-
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
-    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _fake_fetch_user_recent_tweets)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
 
     async def _fake_chat(user, system, **kwargs):
         return "SCORE: 6\nRAISON: Buzz modéré mais réel."
@@ -270,8 +266,9 @@ async def test_x_handle_extracted_from_tavily_snippets(test_settings, monkeypatc
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
     assert result.x_handle == "cobot_official"
-    assert calls["search_query"] == "from:cobot_official"
-    assert calls["cadence_handle"] == "cobot_official"
+    # Buzz d'abord ("from:handle" puisque le handle est déjà connu via Tavily),
+    # cadence ensuite -- même requête, même source, deux appels distincts.
+    assert calls["queries"] == ["from:cobot_official", "from:cobot_official"]
     # 19/07 (#134) -- exposé sur le dataclass, pas seulement dans le prompt de
     # synthèse interne : vc_analysis.py doit pouvoir reprendre le buzz brut.
     assert any("COBOT to the moon" in line for line in result.buzz_lines)
@@ -294,14 +291,13 @@ async def test_posting_cadence_active_vs_dormant(test_settings, monkeypatch):
         for i in range(5)
     ]
 
-    async def _fake_search_recent_tweets(query, **kwargs):
-        return []
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
-    async def _fake_fetch_user_recent_tweets(username, **kwargs):
-        return recent_tweets
+    async def _fake_search_tweets(query, **kwargs):
+        # Le premier appel (buzz) revient vide -- seule la cadence importe ici.
+        return recent_tweets if kwargs.get("max_results") == 20 else []
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
-    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _fake_fetch_user_recent_tweets)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
 
     async def _fake_chat(user, system, **kwargs):
         assert "actif" in user.lower() or "active" in user.lower()
@@ -324,14 +320,12 @@ async def test_posting_cadence_dormant_when_old_tweets_only(test_settings, monke
 
     old_tweets = [{"text": "last post", "created_at": "2025-01-01T00:00:00.000Z", "tweet_id": "1"}]
 
-    async def _fake_search_recent_tweets(query, **kwargs):
-        return []
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
-    async def _fake_fetch_user_recent_tweets(username, **kwargs):
-        return old_tweets
+    async def _fake_search_tweets(query, **kwargs):
+        return old_tweets if kwargs.get("max_results") == 20 else []
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
-    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _fake_fetch_user_recent_tweets)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
 
     async def _fake_chat(user, system, **kwargs):
         return "SCORE: 2\nRAISON: Compte quasi mort."
@@ -538,10 +532,12 @@ async def test_twitsh_not_called_when_official_search_succeeds(test_settings, mo
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
 
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
     async def _official_success(query, **kwargs):
         return [{"text": "buzz officiel réel", "created_at": None}]
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_success)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _official_success)
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais payer twit.sh, l'officiel a déjà réussi")
@@ -619,14 +615,13 @@ async def test_twitsh_not_called_for_cadence_when_official_succeeds(test_setting
         for i in range(5)
     ]
 
-    async def _official_empty(*a, **k):
-        return []
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
-    async def _official_success(username, **kwargs):
-        return official_tweets
+    async def _search_tweets(query, **kwargs):
+        # buzz vide (max_results=10), cadence réussie (max_results=20).
+        return official_tweets if kwargs.get("max_results") == 20 else []
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_empty)
-    monkeypatch.setattr("aria_core.gateway.x_twitter.fetch_user_recent_tweets", _official_success)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _search_tweets)
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais payer twit.sh, la cadence officielle a réussi")
@@ -1005,10 +1000,12 @@ async def test_process_trail_documents_official_x_used_when_budget_available(tes
 
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily))
 
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
     async def _official_success(query, **kwargs):
         return [{"text": "buzz officiel", "created_at": None}]
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _official_success)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _official_success)
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais payer twit.sh, l'officiel a déjà réussi")
@@ -1022,7 +1019,7 @@ async def test_process_trail_documents_official_x_used_when_budget_available(tes
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
 
-    assert any("Recherche X officielle utilisée" in line for line in result.process_trail)
+    assert any("Recherche X via TwitterAPI.io utilisée" in line for line in result.process_trail)
     assert not any("twit.sh" in line for line in result.process_trail)
 
 
@@ -1406,12 +1403,13 @@ async def test_known_links_handle_used_as_buzz_search_query(test_settings, monke
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
 
     captured = {}
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
-    async def _fake_search_recent_tweets(query, **kwargs):
+    async def _fake_search_tweets(query, **kwargs):
         captured["query"] = query
         return []
 
-    monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fake_search_recent_tweets)
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
 
     async def _fake_chat(user, system, **kwargs):
         return "SCORE: 5\nRAISON: handle connu, pas de buzz trouvé."
@@ -2057,4 +2055,182 @@ async def test_bio_fetch_failure_never_blocks_research(test_settings, monkeypatc
         CONTRACT, "TOK", "base", known_links=known_links, known_launchpad_id=47656,
     )
 
+    assert result.available is True  # never a raised exception, never a blocked cycle
+
+
+# ── project_name "detective mode" (12/08, real operator request on bonding
+# diligence: search deeper when Virtuals declares NO official link at all) ──
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_not_triggered_when_website_already_found(test_settings, monkeypatch):
+    _setup_common_mocks(monkeypatch, tavily_snippets=[("Real site.", "https://cobot.xyz", None)])
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    captured_queries = []
+
+    async def _fake_search_tweets(query, **kwargs):
+        captured_queries.append(query)
+        return []
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
+
+    await cr.research_project_potential(CONTRACT, "COBOT", "base", project_name="Cobot Protocol")
+    # The normal buzz search may still call search_tweets, but never with the
+    # detective-mode query (the project's own full name, verbatim).
+    assert "Cobot Protocol" not in captured_queries
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_not_triggered_without_project_name(test_settings, monkeypatch):
+    _setup_common_mocks(monkeypatch, tavily_available=False)
+
+    calls = []
+
+    async def _fake_tavily_search(query, **kwargs):
+        calls.append(query)
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+
+    await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert not any("official website twitter crypto token" in q for q in calls)
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_not_triggered_when_project_name_equals_symbol(test_settings, monkeypatch):
+    """Rien de nouveau à chercher si le nom complet EST le ticker."""
+    _setup_common_mocks(monkeypatch, tavily_available=False)
+
+    calls = []
+
+    async def _fake_tavily_search(query, **kwargs):
+        calls.append(query)
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+
+    await cr.research_project_potential(CONTRACT, "COBOT", "base", project_name="cobot")
+    assert not any("official website twitter crypto token" in q for q in calls)
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_tries_twitterapi_io_before_tavily(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_tavily_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    captured = {"queries": []}
+
+    async def _fake_search_tweets(query, **kwargs):
+        captured["queries"].append(query)
+        return [{
+            "text": "Follow the real deal at https://realproject.xyz and https://x.com/realproject_x",
+            "tweet_id": "1",
+        }]
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 6\nRAISON: trouvé via le mode détective."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(
+        CONTRACT, "OBSCURE", "base", project_name="Real Project Protocol",
+    )
+    # First call is the detective-mode search (by project name); a later
+    # call is the normal buzz search, once x_handle has been resolved.
+    assert captured["queries"][0] == "Real Project Protocol"
+    assert result.x_handle == "realproject_x"
+    assert any("Mode détective" in line for line in result.process_trail)
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_falls_back_to_tavily_when_twitterapi_io_unconfigured(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: False)
+
+    async def _fake_search_tweets(query, **kwargs):
+        raise AssertionError("ne doit jamais être appelé si TwitterAPI.io n'est pas configuré")
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _fake_search_tweets)
+
+    async def _fake_tavily_search(query, **kwargs):
+        if "official website twitter crypto token" in query:
+            return _fake_tavily_result(
+                snippets=[("Official site right here.", "https://realproject.xyz", None)],
+            )
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 6\nRAISON: trouvé via Tavily en mode détective."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+
+    result = await cr.research_project_potential(
+        CONTRACT, "OBSCURE", "base", project_name="Real Project Protocol",
+    )
+    assert result.website_url == "https://realproject.xyz"
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_finds_nothing_degrades_honestly(test_settings, monkeypatch):
+    """Un vrai négatif reste un vrai négatif -- jamais un site/handle inventé
+    faute de résultat."""
+    test_settings.aria_conviction_research_enabled = True
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: False)
+
+    async def _fake_tavily_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+
+    result = await cr.research_project_potential(
+        CONTRACT, "OBSCURE", "base", project_name="Real Project Protocol",
+    )
+    assert result.website_url is None
+    assert result.x_handle is None
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_twitterapi_io_exception_never_blocks(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _boom)
+
+    async def _fake_tavily_search(query, **kwargs):
+        return _fake_tavily_result(available=False, error="no key")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_tavily_search))
+
+    result = await cr.research_project_potential(
+        CONTRACT, "OBSCURE", "base", project_name="Real Project Protocol",
+    )
+    assert result.available is True  # never a raised exception, never a blocked cycle
+
+
+@pytest.mark.asyncio
+async def test_detective_mode_tavily_exception_never_blocks(test_settings, monkeypatch):
+    test_settings.aria_conviction_research_enabled = True
+    monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: False)
+
+    async def _boom(query, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_boom))
+
+    result = await cr.research_project_potential(
+        CONTRACT, "OBSCURE", "base", project_name="Real Project Protocol",
+    )
     assert result.available is True  # never a raised exception, never a blocked cycle
