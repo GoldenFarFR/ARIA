@@ -3926,6 +3926,19 @@ def test_strategy_label_scalping_v9_shows_v9_not_swing_trading():
     ) == "scalping_v9"
 
 
+def test_strategy_label_vc_wallet_shows_venture_capital_even_without_vc_thesis_strategy():
+    """12/08 -- real bug found live (operator: "swing aussi il beug regarde
+    la photo"): every currently-open position across every pocket (vc
+    included) persists strategy="momentum", never "vc_thesis" anymore -- the
+    VC pocket sourcing pipeline now executes through the same technical
+    momentum entry gate as swing/scalping. Without the wallet=="vc" check,
+    4 real VC-pocket positions (FGRANT/RUNEA/BABYTURBO/HALO) silently showed
+    "(swing trading)" in Telegram alerts. Same class of bug as the v9/
+    megacap fixes above -- a pocket identified only by a ``strategy`` value
+    that's no longer written falls through to the generic default."""
+    assert pt._strategy_label({"mode": "standard", "strategy": "momentum", "wallet": "vc"}) == "venture capital"
+
+
 def test_format_buy_alert_shows_scalping_label():
     buy = pt.format_buy_alert(
         {"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 25_000, "mode": "scalping"}

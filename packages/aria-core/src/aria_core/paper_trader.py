@@ -2538,6 +2538,21 @@ def _strategy_label(pos: dict) -> str:
     all (e.g. an older cached dict), never a crash on a missing field."""
     if pos.get("strategy") == "vc_thesis":
         return "venture capital"
+    # 12/08 -- real bug found live (operator: "swing aussi il beug regarde la
+    # photo" -- 4 positions on the fixed-watchlist bonding tokens FGRANT/
+    # RUNEA/BABYTURBO/HALO all showed "(swing trading)" in Telegram alerts
+    # despite living in the ``vc`` wallet). Root cause: EVERY currently-open
+    # position across every pocket (vc/swing/scalping_v9 alike) persists
+    # ``strategy="momentum"`` -- the VC pocket sourcing pipeline now executes
+    # through the same technical momentum entry gate as everything else, so
+    # ``strategy == "vc_thesis"`` above never matches a real position
+    # anymore. Exact same class of bug as the wallet-prefix fixes just below
+    # (v9 07/08, megacap 02/08) -- a pocket identified only by a ``strategy``
+    # value that no longer gets written falls through to the generic
+    # "swing trading" default. Checked by wallet, same as v9/megacap.
+    wallet = pos.get("wallet")
+    if wallet == "vc":
+        return "venture capital"
     # 07/08 -- real bug found live (operator: "tout passe dans swing au lieu
     # de v9"): this check used to sit UNDER ``mode == "scalping"``, but
     # scalping_v9 persists mode="standard"/strategy="momentum" on its own
@@ -2548,7 +2563,6 @@ def _strategy_label(pos: dict) -> str:
     # below. Wallet-prefix check now runs UNCONDITIONALLY, before the mode
     # check -- v8/v1..v6 (mode="scalping") keep their exact same label,
     # v9 (mode="standard") now gets its own instead of being misattributed.
-    wallet = pos.get("wallet")
     if wallet and wallet.startswith("scalping_v"):
         return wallet
     if pos.get("mode") == "scalping":
