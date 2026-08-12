@@ -631,9 +631,9 @@ def test_bonding_size_reduction_is_conservative():
 # ── Item #156, 28/07: supply-proportion sizing cap ───────────────────────────
 def test_cap_alloc_to_supply_pct_reduces_when_over_tier_cap():
     # 1,000,000 total supply, entry price $0.01 -> full float worth $10,000.
-    # "weak" tier caps at 1% of supply = 10,000 tokens = $100.
+    # "weak" tier caps at 2% of supply (12/08 recalibration) = $200.
     alloc = bonding_entry.cap_alloc_to_supply_pct(500.0, 0.01, 1_000_000.0, "weak")
-    assert alloc == pytest.approx(100.0)
+    assert alloc == pytest.approx(200.0)
 
 
 def test_cap_alloc_to_supply_pct_never_increases_alloc():
@@ -643,19 +643,28 @@ def test_cap_alloc_to_supply_pct_never_increases_alloc():
 
 
 def test_cap_alloc_to_supply_pct_tiers_scale_with_conviction():
+    """12/08 -- recalibrated 5.0/2.5/1.0% -> 4.0/3.0/2.0% (operator's
+    standing judgment, refined twice live: holding up to 5% of a
+    bonding-curve token's supply is not itself a risk on this path,
+    ultimately settled on a "weak=2%, moderate=3%, strong=4%" graduated
+    range)."""
     args = (1_000.0, 0.01, 1_000_000.0)  # full float = $10,000
     strong = bonding_entry.cap_alloc_to_supply_pct(*args, "strong")
     moderate = bonding_entry.cap_alloc_to_supply_pct(*args, "moderate")
     weak = bonding_entry.cap_alloc_to_supply_pct(*args, "weak")
-    assert strong == pytest.approx(500.0)  # 5%
-    assert moderate == pytest.approx(250.0)  # 2.5%
-    assert weak == pytest.approx(100.0)  # 1%
+    assert strong == pytest.approx(400.0)  # 4%
+    assert moderate == pytest.approx(300.0)  # 3%
+    assert weak == pytest.approx(200.0)  # 2%
     assert strong > moderate > weak
 
 
-def test_cap_alloc_to_supply_pct_unknown_tier_uses_most_conservative_default():
+def test_cap_alloc_to_supply_pct_unknown_tier_uses_least_conservative_default():
+    """12/08 -- operator-requested recalibration: an unknown conviction used
+    to silently cap a position at the MOST conservative tier ("weak") -- the
+    default now matches "strong" (the least conservative tier) instead, so
+    an unknown conviction never caps tighter than even a known-weak signal."""
     alloc = bonding_entry.cap_alloc_to_supply_pct(1_000.0, 0.01, 1_000_000.0, None)
-    assert alloc == pytest.approx(100.0)  # same as "weak" -- fail-closed default
+    assert alloc == pytest.approx(400.0)  # same as "strong" -- no longer the worst case
 
 
 def test_cap_alloc_to_supply_pct_fails_open_when_total_supply_unknown():

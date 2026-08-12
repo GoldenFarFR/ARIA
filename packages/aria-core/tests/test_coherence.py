@@ -1068,7 +1068,10 @@ _TRADING_THRESHOLDS = {
         # applies this on top of BONDING_SIZE_REDUCTION); _MAX_SUPPLY_PCT_BY_
         # TIER is a dict, not tracked here (this registry only tracks scalar
         # constants), documented in the markdown table directly instead.
-        "_MAX_SUPPLY_PCT_DEFAULT": 0.01,
+        # 12/08 -- 0.01 -> 0.04 (recalibrated tiers, 2%-4% range): see
+        # bonding_entry.py's own comment on this constant and
+        # _MAX_SUPPLY_PCT_BY_TIER (dict, not tracked here).
+        "_MAX_SUPPLY_PCT_DEFAULT": 0.04,
         # Item #165, 28/07 -- BTC long-cycle sizing lever.
         "_BTC_LATE_CYCLE_SIZE_MULTIPLIER": 0.7,
         # Items #161/#162 (organic-decline/staleness penalty) REMOVED 30/07,

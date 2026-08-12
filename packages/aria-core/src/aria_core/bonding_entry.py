@@ -322,12 +322,20 @@ _SCORE_THRESHOLD = 60.0
 # share of a thin float, never the reverse. Starting values (like every
 # other constant in this module), to recalibrate once real outcomes
 # accumulate on this path.
-_MAX_SUPPLY_PCT_BY_TIER = {"strong": 0.05, "moderate": 0.025, "weak": 0.01}
-# Fail-CLOSED default for an unknown/missing conviction tier -- the most
-# conservative of the three, same doctrine as every other "unknown is not
-# proof of a negative signal, but unknown is also never a free pass" gate
-# in this module.
-_MAX_SUPPLY_PCT_DEFAULT = 0.01
+_MAX_SUPPLY_PCT_BY_TIER = {"strong": 0.04, "moderate": 0.03, "weak": 0.02}
+# 12/08 -- recalibrated 5.0/2.5/1.0% -> 4.0/3.0/2.0% (operator's explicit,
+# standing judgment on this specific chantier, refined twice live: holding
+# up to 5% of a bonding-curve token's supply is not itself a risk on this
+# path -- first raised the tiers' ceiling there, then settled on a
+# "weak=2%, moderate=3%, strong=4%" graduated range on two follow-up
+# instructions). The unknown/missing-tier default now matches the LEAST
+# conservative tier ("strong", 0.04) instead of being the single most
+# conservative value of the three (it used to equal "weak", 0.01) -- an
+# unknown conviction no longer silently caps a position tighter than even a
+# WEAK signal would. Still fail-closed in spirit (never an increase beyond
+# what a known "strong" signal is already allowed), just no longer the
+# worst case among the three.
+_MAX_SUPPLY_PCT_DEFAULT = 0.04
 
 # Item #165, 28/07 -- a tighten-only sizing lever from the LONG-term BTC
 # halving-cycle lens (``skills/btc_cycles.py``), distinct from and
