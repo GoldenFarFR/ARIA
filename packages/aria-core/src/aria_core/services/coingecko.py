@@ -12,7 +12,19 @@ Same error policy as `services/blockscout.py` (cf. AGENTS.md):
 - Missing data is never replaced by a guess — the
   `error` field (and `available=False`) carries the absence of data.
 - Repeated consecutive failures (>3): logged, never blocking, never Telegram spam.
-"""
+
+Monthly credit guard (12/08, backlog #111, real gap found auditing the whole
+pipeline after the CMC quota incident the same day -- CoinGecko was NOT part
+of the original OHLCV-cascade scope but shares the exact same risk pattern
+and is used far more widely: `market_sentiment.py`, `momentum_entry.py`,
+`paper_trader_risk.py`, `arena_signal.py`, and 5 more real call sites).
+Demo tier = 10,000 credits/month, flat 1 credit/call regardless of endpoint
+(confirmed: CoinGecko's own docs describe a "Flat Credit Model", unlike
+Mobula's variable per-endpoint cost). `/api/v3/key` (the live balance-check
+endpoint) returns HTTP 10005 "limited to PRO API subscribers" when tested
+live against the real configured Demo key -- not usable, same class of
+constraint as Mobula/Dune. Same LOCAL-counter pattern as the rest of this
+cascade: capped at 95% of the real 10,000, fails closed once reached."""
 
 from __future__ import annotations
 
@@ -20,16 +32,59 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
+import aiosqlite
 import httpx
+
+from aria_core.paths import aria_db_path
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.coingecko.com/api/v3"
+DB_PATH = str(aria_db_path())
 
 UNAVAILABLE = "donnée fondamentale indisponible"
 
 _FAIL_STREAK_WARN_THRESHOLD = 3
+
+# 12/08 -- 95% of the real documented 10,000 credits/month (5% safety
+# margin, same doctrine as codex.py/mobula.py/dune.py). Flat 1 credit/call.
+_MONTHLY_CREDIT_CAP = 9_500
+
+
+async def _ensure_table() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS coingecko_request_log (requested_at TEXT NOT NULL)")
+        await db.commit()
+
+
+def _month_start(now: datetime | None = None) -> datetime:
+    n = now or datetime.now(timezone.utc)
+    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _credits_this_month(now: datetime | None = None) -> int:
+    await _ensure_table()
+    start = _month_start(now)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM coingecko_request_log WHERE requested_at >= ?", (start.isoformat(),)
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+async def _record_request(now: datetime | None = None) -> None:
+    await _ensure_table()
+    ts = (now or datetime.now(timezone.utc)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO coingecko_request_log (requested_at) VALUES (?)", (ts,))
+        await db.commit()
+
+
+async def _monthly_cap_reached() -> bool:
+    return await _credits_this_month() >= _MONTHLY_CREDIT_CAP
 
 
 @dataclass
@@ -126,7 +181,17 @@ class CoinGeckoClient:
             )
 
     async def _get_json(self, path: str) -> tuple[object | None, str | None]:
-        """GET with the AGENTS.md error policy. Returns (data, error)."""
+        """GET with the AGENTS.md error policy. Returns (data, error).
+
+        12/08 -- guarded by the monthly credit cap (see module docstring):
+        checked BEFORE the network call, never blocking the pipeline."""
+        if await _monthly_cap_reached():
+            logger.info(
+                "coingecko: monthly credit cap reached (%s/%s) -- skipping this call",
+                await _credits_this_month(), _MONTHLY_CREDIT_CAP,
+            )
+            return None, f"{UNAVAILABLE} (plafond mensuel atteint)"
+
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -166,6 +231,11 @@ class CoinGeckoClient:
 
             if response.status_code == 404:
                 self._record_success()
+                # 12/08 -- a 404 still reached CoinGecko's server (unlike a
+                # timeout) and consumes a credit there, same doctrine as
+                # mobula.py's "successful HTTP response bills regardless of
+                # the payload".
+                await _record_request()
                 return None, "token non listé sur CoinGecko"
 
             try:
@@ -176,6 +246,7 @@ class CoinGeckoClient:
                 return None, f"{UNAVAILABLE} ({exc})"
 
             self._record_success()
+            await _record_request()
             return response.json(), None
 
     async def get_token_fundamentals(self, contract: str, *, platform_id: str = "base") -> TokenFundamentals:
