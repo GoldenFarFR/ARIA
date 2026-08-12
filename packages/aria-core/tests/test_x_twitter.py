@@ -1,5 +1,6 @@
 import pytest
 
+from aria_core import system_issues
 from aria_core.gateway.x_twitter import (
     fetch_user_recent_tweets,
     is_x_configured,
@@ -9,6 +10,14 @@ from aria_core.gateway.x_twitter import (
     search_recent_tweets,
     x_status,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_system_issues_db(tmp_path, monkeypatch):
+    # same pattern as test_system_issues.py -- 401-detection tests below write
+    # real rows, never the shared dev DB.
+    monkeypatch.setattr(system_issues, "DB_PATH", str(tmp_path / "system_issues_test.db"))
+    yield
 
 
 def test_x_status_defaults():
@@ -194,3 +203,77 @@ async def test_fetch_user_recent_tweets_user_lookup_fails_returns_empty(test_set
         }),
     )
     assert await fetch_user_recent_tweets("ghost") == []
+
+
+# ── bearer-token 401 -> system_issues (12/08, real bug found live: 4/6 bonding
+# candidates hit a silent 401 during a manual simulation, invisible until then
+# because every X read call degrades gracefully to Tavily/twit.sh on ANY
+# failure) ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_search_recent_tweets_401_opens_system_issue(test_settings, monkeypatch):
+    test_settings.x_bearer_token = "b"
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/tweets/search/recent": _FakeGetResponse(401, {})}),
+    )
+    assert await search_recent_tweets("COBOT") == []
+    open_issues = await system_issues.list_open(source="x_bearer_token")
+    assert len(open_issues) == 1
+    assert "401" in open_issues[0]["title"]
+
+
+@pytest.mark.asyncio
+async def test_search_recent_tweets_401_never_duplicates_the_same_open_issue(test_settings, monkeypatch):
+    """Same hysteresis doctrine as vc-watch/holder_concentration_outage_bypass --
+    every cycle re-hitting the same ongoing 401 must never spam a new row."""
+    test_settings.x_bearer_token = "b"
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/tweets/search/recent": _FakeGetResponse(401, {})}),
+    )
+    await search_recent_tweets("COBOT")
+    await search_recent_tweets("COBOT")
+    assert len(await system_issues.list_open(source="x_bearer_token")) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_recent_tweets_success_after_401_closes_the_issue(test_settings, monkeypatch):
+    test_settings.x_bearer_token = "b"
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/tweets/search/recent": _FakeGetResponse(401, {})}),
+    )
+    await search_recent_tweets("COBOT")
+    assert len(await system_issues.list_open(source="x_bearer_token")) == 1
+
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/tweets/search/recent": _FakeGetResponse(200, {"data": []})}),
+    )
+    await search_recent_tweets("COBOT")
+    assert await system_issues.list_open(source="x_bearer_token") == []
+
+
+@pytest.mark.asyncio
+async def test_search_recent_tweets_other_failure_never_opens_a_401_issue(test_settings, monkeypatch):
+    """A rate-limit/5xx response is normal noise, not an auth problem -- must
+    never be confused with a real invalid/expired bearer token."""
+    test_settings.x_bearer_token = "b"
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/tweets/search/recent": _FakeGetResponse(429, {})}),
+    )
+    await search_recent_tweets("COBOT")
+    assert await system_issues.list_open(source="x_bearer_token") == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_recent_tweets_401_on_user_lookup_opens_system_issue(test_settings, monkeypatch):
+    test_settings.x_bearer_token = "b"
+    monkeypatch.setattr(
+        "aria_core.gateway.x_twitter.httpx.AsyncClient",
+        lambda **kw: _FakeGetOnlyClient({"/users/by/username/ghost": _FakeGetResponse(401, {})}),
+    )
+    assert await fetch_user_recent_tweets("ghost") == []
+    assert len(await system_issues.list_open(source="x_bearer_token")) == 1

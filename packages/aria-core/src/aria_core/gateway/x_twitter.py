@@ -445,6 +445,42 @@ async def fetch_curiosity_feed() -> list[dict]:
     return items
 
 
+_X_BEARER_AUTH_DEDUP_KEY = "x_bearer_token_401"
+
+
+async def _report_bearer_auth_result(status_code: int) -> None:
+    """12/08 -- real bug found live (conviction_research diligence on bonding
+    candidates, 4/6 hitting a silent HTTP 401): every X read call degrades
+    gracefully to Tavily/twit.sh on ANY failure (by design, never blocking),
+    which meant an invalid/expired bearer token stayed invisible until a
+    manual simulation happened to notice it. Surfaces the specific 401 case
+    (never other codes -- a single rate-limited/5xx response is normal noise,
+    not an auth problem) via the system_issues registry so a session sees it
+    at the next SessionStart instead of rediscovering it by chance."""
+    from aria_core import system_issues
+
+    if status_code == 401:
+        await system_issues.open_issue(
+            source="x_bearer_token",
+            title="X API bearer token rejected (HTTP 401)",
+            detail=(
+                "X read calls (search/user lookup) are returning 401 Unauthorized -- the "
+                "configured X_BEARER_TOKEN is likely expired or revoked. Reads silently "
+                "degrade to Tavily/twit.sh fallbacks (never blocking), but real X buzz/"
+                "posting-cadence signal is lost until the token is rotated via the X "
+                "Developer Portal."
+            ),
+            severity="warning",
+            dedup_key=_X_BEARER_AUTH_DEDUP_KEY,
+        )
+    elif status_code == 200:
+        for issue in await system_issues.list_open(source="x_bearer_token"):
+            if issue.get("dedup_key") == _X_BEARER_AUTH_DEDUP_KEY:
+                await system_issues.close_issue(
+                    int(issue["id"]), "A subsequent X API call succeeded (HTTP 200) -- token accepted again.",
+                )
+
+
 async def search_recent_tweets(query: str, *, max_results: int = 10) -> list[dict]:
     """X search by free-form query (ticker, contract address, keyword) --
     ``GET /tweets/search/recent`` (X API v2, 7-day sliding window). Used by
@@ -471,6 +507,7 @@ async def search_recent_tweets(query: str, *, max_results: int = 10) -> list[dic
                     "tweet.fields": "created_at,public_metrics,author_id",
                 },
             )
+            await _report_bearer_auth_result(res.status_code)
             if res.status_code != 200:
                 logger.warning("X search_recent_tweets HTTP %s pour %r", res.status_code, q)
                 return []
@@ -505,6 +542,7 @@ async def fetch_user_recent_tweets(username: str, *, max_results: int = 10) -> l
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             user_res = await client.get(f"{X_API_BASE}/users/by/username/{handle}", headers=headers)
+            await _report_bearer_auth_result(user_res.status_code)
             if user_res.status_code != 200:
                 return []
             user_id = user_res.json().get("data", {}).get("id")
