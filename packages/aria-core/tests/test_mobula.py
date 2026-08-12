@@ -5,9 +5,16 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core.services import mobula
 from aria_core.services.mobula import get_ohlcv, mobula_configured
 
 CONTRACT = "0x4200000000000000000000000000000000000006"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(mobula, "DB_PATH", str(tmp_path / "mobula_test.db"))
+    yield
 
 
 class FakeResponse:
@@ -214,3 +221,84 @@ async def test_get_ohlcv_forwards_blockchain_and_address_params(monkeypatch):
 
     assert captured["address"] == CONTRACT
     assert captured["blockchain"] == "solana"
+
+
+# ── garde-fou crédits mensuels (12/08, backlog #111) ────────────────────────
+# Incident réel confirmé par l'opérateur le jour même : le dashboard Mobula
+# affichait 42.5K/10K crédits consommés (425% de dépassement), API toujours
+# "Operational" -- Mobula ne coupe pas côté serveur, aucun garde-fou local
+# n'existait avant ce correctif.
+
+@pytest.mark.asyncio
+async def test_monthly_credits_start_at_zero():
+    assert await mobula._credits_this_month() == 0
+
+
+@pytest.mark.asyncio
+async def test_monthly_credits_accumulate_per_call_cost():
+    await mobula._record_request()
+    await mobula._record_request()
+    assert await mobula._credits_this_month() == 2 * mobula._OHLCV_CREDIT_COST
+
+
+@pytest.mark.asyncio
+async def test_monthly_cap_not_reached_below_threshold():
+    await mobula._record_request()
+    assert await mobula._monthly_cap_reached() is False
+
+
+@pytest.mark.asyncio
+async def test_monthly_cap_reached_at_threshold(monkeypatch):
+    monkeypatch.setattr(mobula, "_MONTHLY_CREDIT_CAP", 5)
+    await mobula._record_request()
+    assert await mobula._monthly_cap_reached() is True
+
+
+@pytest.mark.asyncio
+async def test_successful_call_records_real_credit_cost(monkeypatch):
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+    _patch_no_sleep(monkeypatch)
+    payload = {"data": [{"v": 1.0, "o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "t": 1000000000000}]}
+    _patch_client(monkeypatch, {_url(): FakeResponse(200, payload)})
+
+    await get_ohlcv(CONTRACT, blockchain="base")
+
+    assert await mobula._credits_this_month() == mobula._OHLCV_CREDIT_COST
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_skips_network_when_monthly_cap_reached(monkeypatch):
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+
+    async def _cap_reached():
+        return True
+
+    monkeypatch.setattr(mobula, "_monthly_cap_reached", _cap_reached)
+    called = {"network": False}
+
+    def _fail_if_called(**kw):
+        called["network"] = True
+        raise AssertionError("ne doit jamais appeler le reseau une fois le plafond atteint")
+
+    monkeypatch.setattr("aria_core.services.mobula.httpx.AsyncClient", _fail_if_called)
+
+    result = await get_ohlcv(CONTRACT, blockchain="base")
+    assert result.available is False
+    assert "plafond mensuel" in (result.error or "")
+    assert called["network"] is False
+
+
+@pytest.mark.asyncio
+async def test_failed_call_never_records_a_credit(monkeypatch):
+    """Une tentative qui echoue (429 epuise) ne doit jamais etre comptee --
+    seul un appel HTTP reussi consomme reellement un credit cote Mobula."""
+    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
+    _patch_no_sleep(monkeypatch)
+    _patch_client(
+        monkeypatch,
+        {_url(): [FakeResponse(429), FakeResponse(429), FakeResponse(429)]},
+    )
+
+    result = await get_ohlcv(CONTRACT, blockchain="base")
+    assert result.available is False
+    assert await mobula._credits_this_month() == 0

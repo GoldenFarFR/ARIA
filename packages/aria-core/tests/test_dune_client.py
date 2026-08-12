@@ -7,6 +7,12 @@ import pytest
 from aria_core.services import dune
 
 
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(dune, "DB_PATH", str(tmp_path / "dune_test.db"))
+    yield
+
+
 class FakeResponse:
     def __init__(self, status_code: int, payload=None):
         self.status_code = status_code
@@ -209,6 +215,87 @@ class TestExecuteSql:
         result = await dune.execute_sql("SELECT 1")
 
         assert result.available is False
+
+
+class TestMonthlyExecutionGuard:
+    """12/08, backlog #111 -- garde-fou local de quota mensuel (2,500
+    crédits/mois documentés, aucun endpoint de solde en direct confirmé chez
+    Dune, contrairement à CoinMarketCap). Compte les EXÉCUTIONS réelles
+    (seul ``execute_sql`` consomme un crédit -- ``get_execution_status``/
+    ``get_execution_result`` sont gratuits, jamais comptés ici)."""
+
+    @pytest.mark.asyncio
+    async def test_monthly_executions_start_at_zero(self):
+        assert await dune._executions_this_month() == 0
+
+    @pytest.mark.asyncio
+    async def test_monthly_executions_increment_on_record(self):
+        await dune._record_execution()
+        await dune._record_execution()
+        assert await dune._executions_this_month() == 2
+
+    @pytest.mark.asyncio
+    async def test_monthly_cap_not_reached_below_threshold(self):
+        await dune._record_execution()
+        assert await dune._monthly_cap_reached() is False
+
+    @pytest.mark.asyncio
+    async def test_monthly_cap_reached_at_threshold(self, monkeypatch):
+        monkeypatch.setattr(dune, "_MONTHLY_EXECUTION_CAP", 2)
+        await dune._record_execution()
+        await dune._record_execution()
+        assert await dune._monthly_cap_reached() is True
+
+    @pytest.mark.asyncio
+    async def test_successful_execute_sql_records_one_execution(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        _patch_client(monkeypatch, [FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"})])
+
+        await dune.execute_sql("SELECT 1")
+
+        assert await dune._executions_this_month() == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_execute_sql_never_records_an_execution(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.execute_sql("SELECT 1")
+
+        assert result.available is False
+        assert await dune._executions_this_month() == 0
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_skips_network_when_monthly_cap_reached(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+
+        async def _cap_reached():
+            return True
+
+        monkeypatch.setattr(dune, "_monthly_cap_reached", _cap_reached)
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.execute_sql("SELECT 1")
+
+        assert result.available is False
+        assert "credit cap" in result.error
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_execution_status_never_counted_as_an_execution(self, monkeypatch):
+        """get_execution_status est explicitement documenté comme gratuit
+        côté Dune (aucun crédit consommé) -- ne doit jamais incrémenter le
+        compteur mensuel, contrairement à execute_sql."""
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        _patch_client(
+            monkeypatch,
+            [FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True})],
+        )
+
+        await dune.get_execution_status("exec-1")
+
+        assert await dune._executions_this_month() == 0
 
 
 class TestGetExecutionStatus:

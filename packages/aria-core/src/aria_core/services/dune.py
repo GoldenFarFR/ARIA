@@ -25,7 +25,23 @@ re-verify these fields before considering this module reliable in prod.
 Scope of this module: client + dedicated SQL query only (plan §3.2). NO
 active wiring (no ``ARIA_DUNE_ENABLED`` gate, no heartbeat task, no call from
 ``wallet_candidate_sourcing.py``) -- explicit operator decision (15/07),
-integration into the existing sourcing is a separate task."""
+integration into the existing sourcing is a separate task.
+
+Monthly credit guard (12/08, backlog #111, real gap found auditing the whole
+OHLCV cascade after the CMC quota incident the same day): Free tier =
+2,500 credits/month, no live balance-check endpoint confirmed in Dune's
+public docs (unlike CoinMarketCap's ``/v1/key/info``). Only ``execute_sql``
+(``POST /v1/sql/execute``) actually spends a credit -- ``get_execution_status``
+is explicitly documented as free (see its own docstring below) and
+``get_execution_result`` reads an already-paid-for execution, so neither is
+counted. HONEST RESERVATION: Dune's real per-execution cost can vary with
+query complexity (no fixed-credits-per-call doc found, unlike Mobula) -- this
+guard counts EXECUTIONS, not confirmed credits, as the best available proxy;
+the module's own ``addresses.stats`` reservation above already recorded a
+real observation of ~1 credit for a small "small"-tier execution, so this
+proxy is a reasonable (if not exact) stand-in. Same LOCAL-counter pattern as
+``codex.py``/``mobula.py``: capped at 95% of the real 2,500 (5% safety
+margin), fails CLOSED on this provider only once reached."""
 
 from __future__ import annotations
 
@@ -34,14 +50,59 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
+import aiosqlite
 import httpx
+
+from aria_core.paths import aria_db_path
 
 logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "Dune data unavailable"
 
 BASE_URL = "https://api.dune.com/api"
+DB_PATH = str(aria_db_path())
+
+# 12/08 -- 95% of the real documented 2,500 credits/month (5% safety margin,
+# same doctrine as codex.py's _MONTHLY_REQUEST_CAP / mobula.py's
+# _MONTHLY_CREDIT_CAP). Counts EXECUTIONS as a proxy for credits -- see the
+# HONEST RESERVATION in the module docstring.
+_MONTHLY_EXECUTION_CAP = 2_375
+
+
+async def _ensure_table() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS dune_execution_log (executed_at TEXT NOT NULL)")
+        await db.commit()
+
+
+def _month_start(now: datetime | None = None) -> datetime:
+    n = now or datetime.now(timezone.utc)
+    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _executions_this_month(now: datetime | None = None) -> int:
+    await _ensure_table()
+    start = _month_start(now)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM dune_execution_log WHERE executed_at >= ?", (start.isoformat(),)
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+async def _record_execution(now: datetime | None = None) -> None:
+    await _ensure_table()
+    ts = (now or datetime.now(timezone.utc)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO dune_execution_log (executed_at) VALUES (?)", (ts,))
+        await db.commit()
+
+
+async def _monthly_cap_reached() -> bool:
+    return await _executions_this_month() >= _MONTHLY_EXECUTION_CAP
 
 # Dune terminal states (prefix "QUERY_STATE_") -- COMPLETED = the only state
 # from which a usable result can be read; the others are terminal failures
@@ -170,7 +231,19 @@ async def execute_sql(sql: str, *, performance: str = "small") -> ExecutionHandl
     key (free account): "medium" AND "large" are BOTH rejected by the API
     ("Invalid performance tier"), contrary to what the general docs suggest
     -- only "small" works on this account. Default fixed accordingly. See
-    docs/dune-integration-plan.md §4 (to be updated)."""
+    docs/dune-integration-plan.md §4 (to be updated).
+
+    12/08 -- guarded by the monthly execution cap (see module docstring):
+    checked BEFORE the network call, never blocking the pipeline -- a real
+    execution is recorded only after a confirmed success (a real
+    ``execution_id`` in the response), never on a failed attempt."""
+    if await _monthly_cap_reached():
+        logger.info(
+            "dune: monthly execution cap reached (%s/%s) -- skipping this call",
+            await _executions_this_month(), _MONTHLY_EXECUTION_CAP,
+        )
+        return ExecutionHandle(available=False, error=f"{UNAVAILABLE} (monthly credit cap reached)")
+
     data, error = await _request("POST", "/v1/sql/execute", json_body={"sql": sql, "performance": performance})
     if error is not None:
         return ExecutionHandle(available=False, error=error)
@@ -180,6 +253,8 @@ async def execute_sql(sql: str, *, performance: str = "small") -> ExecutionHandl
     execution_id = str(data.get("execution_id") or "")
     if not execution_id:
         return ExecutionHandle(available=False, error=f"{UNAVAILABLE} (execution_id missing)")
+
+    await _record_execution()
 
     return ExecutionHandle(execution_id=execution_id, state=data.get("state"), available=True, error=None)
 
