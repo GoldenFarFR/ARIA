@@ -26,7 +26,13 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 from aria_core.services.polymarket import PolymarketCandidateMarket, market_url, polymarket_client
-from aria_core.skills.polymarket_thesis import FREE_SKIP_REASONS, PolymarketJudgment, estimate_market_probability
+from aria_core.skills.polymarket_thesis import (
+    EXTREME_PRICE_CEIL,
+    EXTREME_PRICE_FLOOR,
+    FREE_SKIP_REASONS,
+    PolymarketJudgment,
+    estimate_market_probability,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,18 @@ MAX_BET_PCT = 0.05
 # momentum's scalping mode), this just guards against an unbounded number of
 # tiny concurrent bets diluting attention/observability.
 MAX_OPEN_POSITIONS = 15
+
+# 12/08, real incident found live (operator, "pourquoi si peu de BET sont
+# entrees"): a BET decided on us-announces-end-of-iranian-blockade (reference
+# yes_price=0.045) hit an order book whose best_ask was 0.99 on BOTH sides
+# simultaneously -- a broken/synthetic quote from a book with no real
+# liquidity, wildly inconsistent with the reference price. Confirmed live
+# against the real Polymarket API before this constant was added, not
+# guessed. A tight first-pass threshold (well above normal bid/ask spread
+# noise, nowhere near the 0.945 divergence actually observed) -- recalibrate
+# if real data ever shows a legitimate fill this tight to the reference
+# price getting wrongly rejected.
+_ORDER_BOOK_MAX_DIVERGENCE = 0.15
 
 # How many NEW candidate markets get a full judgment (research + 3 LLM votes)
 # per cycle -- caps the real cost of a single pass, independent of how many
@@ -448,15 +466,39 @@ async def _resolve_entry_price(market: PolymarketCandidateMarket, side: str) -> 
     reference price alone. Degrades to the Gamma price if the book is
     unavailable/empty (never a fabricated price, never a blocked bet on a
     thin book -- same "best effort, never invent" doctrine as the rest of
-    this codebase)."""
+    this codebase).
+
+    12/08, two real gaps found live (operator question: "pourquoi si peu de
+    BET sont entrees"):
+    (1) the reference price itself was never re-checked against
+    EXTREME_PRICE_FLOOR/CEIL here -- a market that was fine when judged but
+    decayed toward resolution by the time this runs (or a stale snapshot
+    that slipped past the judgment-time check) could still produce a
+    boundary-hugging entry price nobody caught; now refused explicitly and
+    early, before touching the order book at all.
+    (2) the order book's best_ask was trusted with NO sanity check against
+    the reference price -- confirmed live (real API call) on an illiquid
+    market: reference yes_price=0.045, but the book returned best_ask=0.99
+    on BOTH sides simultaneously (an empty book's synthetic placeholder, not
+    a real fillable quote). A book that diverges from the reference by more
+    than _ORDER_BOOK_MAX_DIVERGENCE is now distrusted, falling back to the
+    reference price instead of a broken one."""
+    if market.yes_price is None:
+        return None
+    reference_price = market.yes_price if side == "YES" else (1.0 - market.yes_price)
+    if reference_price <= EXTREME_PRICE_FLOOR or reference_price >= EXTREME_PRICE_CEIL:
+        return None
+
     token_id = market.yes_token_id if side == "YES" else market.no_token_id
     if token_id:
         book = await polymarket_client.get_order_book(token_id)
-        if book.available and book.best_ask is not None:
+        if (
+            book.available
+            and book.best_ask is not None
+            and abs(book.best_ask - reference_price) <= _ORDER_BOOK_MAX_DIVERGENCE
+        ):
             return book.best_ask
-    if market.yes_price is None:
-        return None
-    return market.yes_price if side == "YES" else (1.0 - market.yes_price)
+    return reference_price
 
 
 async def open_bet(

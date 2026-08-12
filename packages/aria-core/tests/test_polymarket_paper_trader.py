@@ -195,6 +195,54 @@ async def test_open_bet_refuses_negligible_size(tmp_db, monkeypatch):
     assert pos is None
 
 
+# ── entry-price sanity checks (12/08, real gaps found live: operator asked
+# why so few BET decisions became real positions) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_open_bet_refuses_when_reference_price_already_extreme(tmp_db, monkeypatch):
+    """Real case: iran-full-airspace-closure decayed to yes_price=0.0 (fully
+    resolved/dead) but wasn't caught before open_bet tried to price it --
+    the derived NO entry price would have been exactly 1.0 (no real edge)."""
+    _patch_order_book(monkeypatch, best_ask=0.99)
+    j = _judgment(side="NO", win_probability=0.9)
+    pos = await ppt.open_bet(_market(yes_price=0.0), j)
+    assert pos is None
+
+
+@pytest.mark.asyncio
+async def test_open_bet_refuses_when_reference_price_at_ceiling(tmp_db, monkeypatch):
+    _patch_order_book(monkeypatch, best_ask=0.5)
+    j = _judgment(side="YES", win_probability=0.9)
+    pos = await ppt.open_bet(_market(yes_price=0.97), j)
+    assert pos is None
+
+
+@pytest.mark.asyncio
+async def test_open_bet_distrusts_order_book_diverging_from_reference(tmp_db, monkeypatch):
+    """Real case, confirmed live against the Polymarket API: reference
+    yes_price=0.045, but the order book returned best_ask=0.99 on BOTH sides
+    -- a broken/synthetic quote from an empty book, not a real fillable
+    price. Falls back to the reference price instead of trusting it."""
+    _patch_order_book(monkeypatch, best_ask=0.99)
+    j = _judgment(side="YES", win_probability=0.9)
+    pos = await ppt.open_bet(_market(yes_price=0.4), j)
+    assert pos is not None
+    assert pos["entry_price"] == pytest.approx(0.4)  # reference price, book distrusted
+
+
+@pytest.mark.asyncio
+async def test_open_bet_trusts_order_book_close_to_reference(tmp_db, monkeypatch):
+    """Sanity check: a book price within the normal spread of the reference
+    is still trusted as before -- the new check only rejects WILD
+    divergence, never ordinary bid/ask noise."""
+    _patch_order_book(monkeypatch, best_ask=0.42)
+    j = _judgment(side="YES", win_probability=0.9)
+    pos = await ppt.open_bet(_market(yes_price=0.4), j)
+    assert pos is not None
+    assert pos["entry_price"] == pytest.approx(0.42)  # real book price, trusted
+
+
 # ── check_resolutions ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
