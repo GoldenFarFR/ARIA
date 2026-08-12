@@ -288,8 +288,8 @@ async def test_default_crawl_falls_back_to_tavily_when_scraper_and_firecrawl_unc
     assert result.pages[0].raw_content == "contenu tavily"
 
 
-# ── _default_crawl(contract=...) : repli inter-couches pour la confirmation
-# du contrat (12/08, faux négatif réel trouvé sur HAYLORD) ─────────────────
+# ── _default_crawl(contract=...): cross-layer fallback for contract
+# confirmation (12/08, real false negative found on HAYLORD) ───────────────
 
 
 @pytest.mark.asyncio
@@ -354,8 +354,8 @@ async def test_default_crawl_tries_next_layer_when_contract_not_confirmed(monkey
 
     result = await _default_crawl("https://example.com", contract=contract)
     assert result.available is True
-    # Le contenu du scraper maison (base du score substance) est CONSERVÉ,
-    # la page de Firecrawl est ajoutée en plus -- jamais un remplacement.
+    # The homemade scraper's content (basis of the substance score) is KEPT,
+    # Firecrawl's page is added in addition -- never a replacement.
     contents = [p.raw_content for p in result.pages]
     assert "litepaper complet, aucune adresse dedans" in contents
     assert any(contract in c for c in contents)
