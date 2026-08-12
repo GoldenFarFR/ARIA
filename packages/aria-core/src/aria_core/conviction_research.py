@@ -266,6 +266,20 @@ _SOCIAL_OR_EXPLORER_DOMAINS = (
     "twitter.com", "x.com", "dexscreener.com", "basescan.org", "etherscan.io",
     "solscan.io", "coingecko.com", "coinmarketcap.com", "t.me", "discord.gg",
     "geckoterminal.com", "dextools.io",
+    # 12/08 -- real bug found live (INF, a bonding candidate): ethplorer.io (a
+    # generic block explorer, exactly the same class of non-project link as
+    # etherscan.io/basescan.org already excluded above) was NOT in this list,
+    # so it got accepted as the token's "official website" -- worse, the
+    # address in that explorer URL turned out to be a DIFFERENT contract,
+    # `_contract_mentioned` correctly flagged `contract_corroborated=False`
+    # ("un contrat DIFFERENT est annonce"), but the explorer link and its
+    # scraped content still fed a positive potential_score (6.0/10), pushing
+    # the token's composite score just over the buy threshold on a signal
+    # that was never a real project website in the first place. Extended
+    # with other common generic explorers for the same class of gap on
+    # chains this pipeline can encounter via a Tavily result, not just Base.
+    "ethplorer.io", "blockscout.com", "bscscan.com", "polygonscan.com",
+    "arbiscan.io", "snowtrace.io", "ftmscan.com", "tronscan.org", "moonscan.io",
 )
 _IGNORED_X_HANDLES = {"i", "home", "search", "intent", "share", "hashtag"}
 

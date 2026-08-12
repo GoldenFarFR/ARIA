@@ -195,6 +195,50 @@ async def test_no_contract_mentioned_is_none_not_false(test_settings, monkeypatc
     assert result.contract_corroborated is None
 
 
+def test_explorer_domain_never_extracted_as_official_website():
+    """12/08 -- real bug found live (INF, a bonding candidate): a generic
+    block explorer link (ethplorer.io) was missing from
+    _SOCIAL_OR_EXPLORER_DOMAINS and got accepted as the token's "official
+    website" ahead of the real one -- locks in that every explorer domain
+    added by the fix is actually skipped by the extraction heuristic."""
+    snippets = [
+        (f"Token holders page, contract {OTHER_CONTRACT}.", "https://ethplorer.io/address/0xabc", None),
+        ("Token info.", "https://blockscout.com/base/address/0xabc", None),
+        ("Real project site.", "https://cobot.xyz", None),
+    ]
+    assert cr._extract_website(snippets) == "https://cobot.xyz"
+
+
+@pytest.mark.asyncio
+async def test_explorer_domain_only_result_yields_no_website(test_settings, monkeypatch):
+    """Same real INF scenario end-to-end: the ONLY Tavily result is a generic
+    explorer link announcing a DIFFERENT contract -- must never be treated as
+    a found official website (website_url stays None), even though the
+    contract-mismatch signal is still correctly picked up from the raw text
+    that fed the LLM before this fix and pushed a false-positive BUY."""
+    test_settings.aria_conviction_research_enabled = True
+
+    async def _fake_search(query, **kwargs):
+        return _fake_tavily_result(
+            snippets=[
+                (f"Token holders page, contract {OTHER_CONTRACT}.", "https://ethplorer.io/address/0xabc", None),
+            ],
+        )
+
+    monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fake_search))
+
+    async def _fake_chat(user, system, **kwargs):
+        return "SCORE: 1\nRAISON: Aucun site officiel trouvé, contrat différent annoncé."
+
+    monkeypatch.setattr("aria_core.llm.chat_with_context", _fake_chat)
+    for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
+        await x_research_budget.record_request(purpose="buzz_search", status="ok")
+
+    result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
+    assert result.website_url is None
+    assert result.contract_corroborated is False
+
+
 @pytest.mark.asyncio
 async def test_x_handle_extracted_from_tavily_snippets(test_settings, monkeypatch):
     test_settings.aria_conviction_research_enabled = True
