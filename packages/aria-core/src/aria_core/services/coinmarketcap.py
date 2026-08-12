@@ -124,6 +124,11 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
     the keyed tier (base URL + header) if ``COINMARKETCAP_API_KEY`` is
     present, otherwise the keyless tier -- never blocking if the key is
     absent."""
+    from aria_core import coinmarketcap_quota_guard
+
+    if await coinmarketcap_quota_guard.is_suspended():
+        return None, f"{UNAVAILABLE} (quota mensuel CoinMarketCap presque épuisé, suspension automatique)"
+
     api_key = _api_key()
     base_url = BASE_URL_KEYED if api_key else BASE_URL_KEYLESS
     headers = {"Accept": "application/json"}

@@ -7,6 +7,20 @@ import pytest
 from aria_core.services import coinmarketcap as cmc
 
 
+@pytest.fixture(autouse=True)
+def _quota_never_suspended_by_default(monkeypatch):
+    """12/08 -- _get_json now consults coinmarketcap_quota_guard.is_suspended()
+    first; without this, any test setting COINMARKETCAP_API_KEY would make the
+    guard attempt a REAL unmocked network call to /v1/key/info. Neutralized
+    here for every test except TestQuotaGuard, which overrides it per-test."""
+    from aria_core import coinmarketcap_quota_guard as cqg
+
+    async def _not_suspended():
+        return False
+
+    monkeypatch.setattr(cqg, "is_suspended", _not_suspended)
+
+
 class FakeResponse:
     def __init__(self, status_code: int, payload=None):
         self.status_code = status_code
@@ -99,6 +113,44 @@ class TestErrorEnvelope:
         assert data is None
         assert error is not None
         assert "API key missing" in error
+
+
+class TestQuotaGuard:
+    """12/08 -- _get_json must short-circuit on a suspended monthly quota
+    BEFORE ever touching the network (see coinmarketcap_quota_guard.py)."""
+
+    @pytest.mark.asyncio
+    async def test_suspended_quota_never_reaches_the_network(self, monkeypatch):
+        from aria_core import coinmarketcap_quota_guard as cqg
+
+        async def fake_suspended():
+            return True
+
+        monkeypatch.setattr(cqg, "is_suspended", fake_suspended)
+        holder = _patch_client(monkeypatch, [])  # no response queued -- a real call would raise IndexError
+
+        data, error = await cmc._get_json("/v1/dex/token/pools", params={})
+
+        assert data is None
+        assert error is not None
+        assert "quota mensuel" in error
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_healthy_quota_proceeds_normally(self, monkeypatch):
+        from aria_core import coinmarketcap_quota_guard as cqg
+
+        async def fake_not_suspended():
+            return False
+
+        monkeypatch.setattr(cqg, "is_suspended", fake_not_suspended)
+        monkeypatch.delenv("COINMARKETCAP_API_KEY", raising=False)
+        holder = _patch_client(monkeypatch, [FakeResponse(200, _envelope([]))])
+
+        data, error = await cmc._get_json("/v1/dex/token/pools", params={})
+
+        assert error is None
+        assert len(holder["calls"]) == 1
 
 
 class TestDomeRetry:
