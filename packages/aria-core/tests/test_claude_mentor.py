@@ -273,3 +273,77 @@ async def test_cycle_uses_global_provider_no_openrouter_override(monkeypatch):
     assert "fallback_provider" not in captured
     assert "fallback_model" not in captured
     assert captured.get("max_tokens") == 900
+
+
+# ── mémoire de conversation (12/08, réel incident : la même remarque "0%
+# winrate, il faut calibrer" postée 5 fois en 4 jours, ARIA a dû recorriger
+# le même point à chaque fois) ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recent_relay_history_empty_when_no_prior_exchange():
+    history = await cm._recent_relay_history()
+    assert "no prior exchange" in history
+
+
+@pytest.mark.asyncio
+async def test_recent_relay_history_includes_own_and_arias_messages():
+    await relay_chat.log_message("claude", "Le win rate de V8 est nul, il faudrait calibrer.")
+    await relay_chat.log_message("aria", "C'est du surapprentissage, pas un problème de calibration.")
+
+    history = await cm._recent_relay_history()
+    assert "[claude]" in history
+    assert "[aria]" in history
+    assert "surapprentissage" in history
+
+
+@pytest.mark.asyncio
+async def test_recent_relay_history_excludes_operator_messages():
+    """Le mentor doit voir SON propre historique et celui d'ARIA, jamais les
+    messages de l'opérateur (bruit non pertinent pour éviter la répétition)."""
+    await relay_chat.log_message("operator", "/feedback")
+    await relay_chat.log_message("claude", "remarque réelle")
+
+    history = await cm._recent_relay_history()
+    assert "operator" not in history
+    assert "[claude] remarque réelle" in history
+
+
+@pytest.mark.asyncio
+async def test_cycle_feeds_recent_history_into_the_prompt(monkeypatch):
+    monkeypatch.setenv("ARIA_CLAUDE_MENTOR_ENABLED", "1")
+    _good_snapshot_mocks(monkeypatch)
+    monkeypatch.setattr("aria_core.gateway.telegram_bot.send_message", AsyncMock(return_value=True))
+
+    await relay_chat.log_message("claude", "Le win rate de V8 est nul, il faudrait calibrer.")
+    await relay_chat.log_message("aria", "C'est du surapprentissage, V9 commence tout juste.")
+
+    captured = {}
+
+    async def capturing_llm(prompt, system, **kwargs):
+        captured["prompt"] = prompt
+        return json.dumps({"remark": "ok", "durable": False, "proposal_title": "", "proposal_body": ""})
+
+    await cm.run_claude_mentor_cycle(llm=capturing_llm)
+    assert "surapprentissage" in captured["prompt"]
+    assert "Le win rate de V8 est nul" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_cycle_llm_can_deliberately_skip_when_nothing_new(monkeypatch):
+    """Le modèle a maintenant la consigne explicite de renvoyer une remarque
+    vide plutôt que de répéter un point déjà fait et déjà répondu -- ce
+    chemin existait déjà techniquement (outcome empty_remark), ce test
+    verrouille qu'il reste silencieux (aucun envoi Telegram) dans ce cas."""
+    monkeypatch.setenv("ARIA_CLAUDE_MENTOR_ENABLED", "1")
+    _good_snapshot_mocks(monkeypatch)
+
+    sent = []
+    monkeypatch.setattr(
+        "aria_core.gateway.telegram_bot.send_message",
+        AsyncMock(side_effect=lambda t: sent.append(t)),
+    )
+
+    result = await cm.run_claude_mentor_cycle(llm=_good_llm(remark=""))
+    assert result["outcome"] == "empty_remark"
+    assert sent == []

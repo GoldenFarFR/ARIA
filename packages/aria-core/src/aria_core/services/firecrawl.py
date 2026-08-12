@@ -230,7 +230,16 @@ class FirecrawlClient:
         case = ``limit`` pages, 1 credit/page for markdown-only), real spend
         recorded from the job's own ``creditsUsed`` field once known
         (falls back to the page count actually returned if that field is
-        ever missing -- never silently unrecorded)."""
+        ever missing -- never silently unrecorded).
+
+        12/08 -- also gated by ``firecrawl_overspend_suspension`` (a
+        SEPARATE, cheaper check than the monthly cap above): the worst-case
+        estimate above assumes 1 credit/page, which a real incident showed
+        can be wrong by ~10x (Firecrawl's dedicated X/Twitter engine bills
+        ~30 credits/page, stealth-mode-protected sites bill 5x) -- neither
+        knowable before the call. This suspension arms itself AFTER the
+        fact, the first time a single crawl's real cost blows past a sane
+        ceiling, protecting the rest of the month's budget from a repeat."""
         url = (root_url or "").strip()
         if not url:
             return FirecrawlCrawlResult(available=False, error="URL racine vide")
@@ -239,10 +248,14 @@ class FirecrawlClient:
         if not api_key:
             return FirecrawlCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (FIRECRAWL_API_KEY absente)")
 
+        from aria_core import firecrawl_overspend_suspension
+        from aria_core.services import firecrawl_budget
+
+        if await firecrawl_overspend_suspension.is_suspended():
+            return FirecrawlCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (suspension auto-armée, dépassement anormal détecté)")
+
         page_limit = max(1, min(int(limit), 100))
         depth = max(0, min(int(max_discovery_depth), 5))
-
-        from aria_core.services import firecrawl_budget
 
         worst_case = firecrawl_budget.estimate_crawl_worst_case(page_limit)
         if not await firecrawl_budget.can_spend(worst_case):
@@ -302,7 +315,9 @@ class FirecrawlClient:
 
         real_credits = final.get("creditsUsed")
         credits = int(real_credits) if isinstance(real_credits, int) else len(pages)
-        await firecrawl_budget.record_spend(caller=caller, query=f"crawl:{url}", credits=max(0, credits))
+        credits = max(0, credits)
+        await firecrawl_budget.record_spend(caller=caller, query=f"crawl:{url}", credits=credits)
+        await firecrawl_overspend_suspension.record_crawl_cost(credits=credits, url=url, caller=caller)
 
         if not pages:
             return FirecrawlCrawlResult(root_url=url, available=False, error=f"{UNAVAILABLE} (aucune page exploitable)")

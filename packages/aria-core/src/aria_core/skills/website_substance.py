@@ -18,7 +18,11 @@ ARIA's auto pipeline. Documented as an honest limitation, never simulated or
 fabricated (CLAUDE.md absolute rule)."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 # Structuring section keywords -- TEXTUAL proxy for a site's transparency/
 # structure (real presence of content on these topics), never a
@@ -125,6 +129,48 @@ def _pages_confirm_contract(pages, contract: str) -> bool:
     return contract.strip().lower() in combined
 
 
+# 12/08, real incident (signal-cascade triage, wJUNO diligence): a declared
+# "official website" (seamlessprotocol.com) turned out to 301-redirect to
+# its own X profile (x.com/SeamlessFi). Firecrawl followed that redirect
+# server-side and then discovered/scraped several profile sub-pages through
+# its dedicated (expensive, ~30 credits/page) X engine -- 156 credits for a
+# single crawl (39% of the monthly free-plan budget) for content ARIA
+# already gets far cheaper via services.twitterapi_io. A domain check on
+# the INPUT url alone would have missed this (seamlessprotocol.com itself
+# isn't an X domain) -- the check below resolves redirects FIRST via a
+# cheap HEAD request (no crawl-provider credits spent either way) so a
+# redirect chain landing on X is caught before any paid layer runs.
+_SOCIAL_PLATFORM_HOSTS = ("x.com", "twitter.com")
+
+
+def _is_social_platform_host(host: str) -> bool:
+    host = (host or "").lower().removeprefix("www.")
+    return host in _SOCIAL_PLATFORM_HOSTS
+
+
+async def _resolves_to_social_platform(url: str) -> bool:
+    """Fail-open by design: a HEAD failure/timeout here must never block a
+    legitimate crawl -- worst case is falling back to the pre-12/08
+    behavior for that one call, never worse. Only a CONFIRMED resolution to
+    x.com/twitter.com (following real redirects) returns True."""
+    try:
+        host = urlparse(url).netloc
+    except ValueError:
+        return False
+    if _is_social_platform_host(host):
+        return True
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            response = await client.head(url)
+    except Exception as exc:  # noqa: BLE001 -- fail-open, never blocking
+        logger.info("website_substance: redirect pre-check failed for %s (%s)", url, exc)
+        return False
+    return _is_social_platform_host(urlparse(str(response.url)).netloc)
+
+
 async def _default_crawl(url: str, *, contract: str | None = None):
     """Tries every layer in ``_CRAWL_LAYERS`` in order, first
     ``available=True`` result wins -- never a hard dependency on any single
@@ -152,8 +198,17 @@ async def _default_crawl(url: str, *, contract: str | None = None):
     only extends the search for the one specific security-relevant string.
     Never re-tries a layer already exhausted; ``contract=None`` (the
     default) keeps the exact old one-shot behavior for every other
-    caller."""
+    caller.
+
+    12/08 -- real incident (see ``_resolves_to_social_platform``'s own
+    docstring): checked BEFORE any layer (including the free scraper --
+    X/Twitter content is never the right shape for this pipeline regardless
+    of cost, ARIA already has a dedicated cheaper path via
+    ``services.twitterapi_io``)."""
     from aria_core import website_crawl_failure_log
+
+    if await _resolves_to_social_platform(url):
+        return _EmptyCrawlResult(root_url=url, error="X/Twitter domain -- use services.twitterapi_io instead")
 
     errors: dict[str, str] = {}
     last_result = None

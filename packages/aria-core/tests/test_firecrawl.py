@@ -9,6 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from aria_core import firecrawl_overspend_suspension
 from aria_core.services import firecrawl, firecrawl_budget
 
 
@@ -62,8 +63,9 @@ class _FakeAsyncClient:
 
 
 @pytest.fixture
-def _fresh_client(monkeypatch):
+def _fresh_client(monkeypatch, tmp_path):
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test-key")
+    monkeypatch.setattr(firecrawl_overspend_suspension, "DB_PATH", str(tmp_path / "firecrawl_overspend_test.db"))
     client = firecrawl.FirecrawlClient(min_interval=0.0, poll_interval=0.0, max_wait_s=5.0)
     _FakeAsyncClient._post_response = None
     _FakeAsyncClient._get_responses = []
@@ -219,6 +221,57 @@ async def test_crawl_records_real_credits_used_not_worst_case(_fresh_client, mon
     monkeypatch.setattr(firecrawl_budget, "record_spend", _record)
     await _fresh_client.crawl("https://example.com", limit=15, caller="website_substance")
     assert recorded["credits"] == 3
+
+
+# ── overspend circuit-breaker wiring (12/08, real incident: a single crawl
+# cost 156 credits, ~10x the worst-case estimate this budget check assumes)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_crawl_refused_immediately_when_overspend_suspension_armed(_fresh_client, monkeypatch):
+    await firecrawl_overspend_suspension.record_crawl_cost(credits=999, url="https://x.com/whatever")
+    assert await firecrawl_overspend_suspension.is_suspended() is True
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("suspension armée -- aucun appel réseau ne doit partir")
+
+    monkeypatch.setattr(firecrawl.httpx, "AsyncClient", _fail_if_called)
+
+    result = await _fresh_client.crawl("https://example.com")
+    assert result.available is False
+    assert "suspension auto-armée" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_crawl_records_cost_into_overspend_suspension_and_arms_on_real_overspend(_fresh_client):
+    _FakeAsyncClient._post_response = _FakeResponse(200, {"success": True, "id": "job-123"})
+    _FakeAsyncClient._get_responses = [
+        _FakeResponse(
+            200,
+            {
+                "status": "completed",
+                "creditsUsed": 156,  # real incident shape
+                "data": [{"markdown": "contenu réel", "metadata": {"url": "https://x.com/SeamlessFi"}}],
+            },
+        ),
+    ]
+    assert await firecrawl_overspend_suspension.is_suspended() is False
+    await _fresh_client.crawl("https://www.seamlessprotocol.com/", caller="website_substance")
+    assert await firecrawl_overspend_suspension.is_suspended() is True
+
+
+@pytest.mark.asyncio
+async def test_crawl_normal_cost_never_arms_overspend_suspension(_fresh_client):
+    _FakeAsyncClient._post_response = _FakeResponse(200, {"success": True, "id": "job-123"})
+    _FakeAsyncClient._get_responses = [
+        _FakeResponse(
+            200,
+            {"status": "completed", "creditsUsed": 3, "data": [{"markdown": "contenu", "metadata": {"url": "https://example.com/"}}]},
+        ),
+    ]
+    await _fresh_client.crawl("https://example.com", caller="website_substance")
+    assert await firecrawl_overspend_suspension.is_suspended() is False
 
 
 @pytest.mark.asyncio

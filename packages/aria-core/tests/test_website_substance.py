@@ -523,4 +523,155 @@ async def test_default_crawl_falls_back_to_tavily_when_scraper_and_firecrawl_una
 
     result = await _default_crawl("https://example.com")
     assert result.available is True
-    assert result.pages[0].raw_content == "contenu tavily"
+
+
+# ── _resolves_to_social_platform / _default_crawl's X/Twitter guard (12/08,
+# real incident: seamlessprotocol.com redirected server-side to
+# x.com/SeamlessFi, Firecrawl followed the redirect and billed 156 credits
+# via its dedicated X engine) ───────────────────────────────────────────────
+
+
+class _FakeHeadResponse:
+    def __init__(self, url: str):
+        self.url = url
+
+
+def _fake_async_client_resolving_to(resolved_url: str):
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def head(self, url):
+            return _FakeHeadResponse(resolved_url)
+
+    return _FakeAsyncClient
+
+
+@pytest.mark.asyncio
+async def test_resolves_to_social_platform_true_for_direct_x_url_no_network_call():
+    from aria_core.skills.website_substance import _resolves_to_social_platform
+
+    assert await _resolves_to_social_platform("https://x.com/SeamlessFi") is True
+
+
+@pytest.mark.asyncio
+async def test_resolves_to_social_platform_true_for_direct_twitter_url_no_network_call():
+    from aria_core.skills.website_substance import _resolves_to_social_platform
+
+    assert await _resolves_to_social_platform("https://twitter.com/SeamlessFi") is True
+
+
+@pytest.mark.asyncio
+async def test_resolves_to_social_platform_true_when_redirect_lands_on_x(monkeypatch):
+    """The real incident shape: the INPUT url isn't on X at all
+    (seamlessprotocol.com), only the resolved redirect target is."""
+    import httpx
+
+    from aria_core.skills.website_substance import _resolves_to_social_platform
+
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_async_client_resolving_to("https://x.com/SeamlessFi"))
+
+    assert await _resolves_to_social_platform("https://www.seamlessprotocol.com/") is True
+
+
+@pytest.mark.asyncio
+async def test_resolves_to_social_platform_false_for_normal_site(monkeypatch):
+    import httpx
+
+    from aria_core.skills.website_substance import _resolves_to_social_platform
+
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_async_client_resolving_to("https://example.com/"))
+
+    assert await _resolves_to_social_platform("https://example.com") is False
+
+
+@pytest.mark.asyncio
+async def test_resolves_to_social_platform_fails_open_on_head_error(monkeypatch):
+    """A HEAD failure/timeout must never block a legitimate crawl -- worst
+    case is the pre-12/08 behavior for that one call, never worse."""
+    import httpx
+
+    class _BoomAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def head(self, url):
+            raise httpx.ConnectTimeout("boom")
+
+    from aria_core.skills.website_substance import _resolves_to_social_platform
+
+    monkeypatch.setattr(httpx, "AsyncClient", _BoomAsyncClient)
+
+    assert await _resolves_to_social_platform("https://example.com") is False
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_refuses_x_domain_before_any_layer(monkeypatch):
+    """No layer -- not even the free homemade scraper -- should ever be
+    invoked once the URL is confirmed to resolve to X/Twitter: the content
+    is never the right shape for this pipeline regardless of cost."""
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+    import aria_core.services.website_scraper as wsc
+    import aria_core.skills.website_substance as ws
+
+    async def fail_if_called(url, *, caller="unknown", **kwargs):
+        raise AssertionError("no crawl layer should ever run on a confirmed X/Twitter domain")
+
+    monkeypatch.setattr(wsc, "crawl", fail_if_called)
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fail_if_called)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fail_if_called)
+
+    async def fake_resolves_true(url):
+        return True
+
+    monkeypatch.setattr(ws, "_resolves_to_social_platform", fake_resolves_true)
+
+    result = await _default_crawl("https://www.seamlessprotocol.com/")
+    assert result.available is False
+    assert "twitterapi_io" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_default_crawl_proceeds_normally_when_not_social(monkeypatch):
+    """Sanity check: the new guard must not regress the ordinary path when
+    the URL genuinely isn't X/Twitter."""
+    import aria_core.services.firecrawl as fc
+    import aria_core.services.tavily as tv
+    import aria_core.skills.website_substance as ws
+    from aria_core.services.website_scraper import WebsiteScraperPage
+
+    async def fake_resolves_false(url):
+        return False
+
+    monkeypatch.setattr(ws, "_resolves_to_social_platform", fake_resolves_false)
+
+    import aria_core.services.website_scraper as wsc
+
+    async def fake_scraper_crawl(url, *, caller="unknown", **kwargs):
+        return WebsiteScraperResult(
+            root_url=url, available=True, pages=[WebsiteScraperPage(url=url, raw_content="contenu scraper maison")],
+        )
+
+    async def fail_if_called(url, *, caller="unknown", **kwargs):
+        raise AssertionError("Firecrawl/Tavily ne doivent jamais être appelés si le scraper maison a répondu")
+
+    monkeypatch.setattr(wsc, "crawl", fake_scraper_crawl)
+    monkeypatch.setattr(fc.firecrawl_client, "crawl", fail_if_called)
+    monkeypatch.setattr(tv.tavily_client, "crawl", fail_if_called)
+
+    result = await _default_crawl("https://example.com")
+    assert result.available is True
+    assert result.pages[0].raw_content == "contenu scraper maison"

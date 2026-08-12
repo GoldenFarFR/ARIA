@@ -41,16 +41,41 @@ _MENTOR_SYSTEM = (
     "chatter. Write ONE short, concrete observation, grounded in the provided figures "
     "(a specific strength, or a precise gap between what she predicted and what "
     "actually happened). If the data doesn't yet support saying something solid, "
-    "say so honestly rather than inventing a critique. Answer "
+    "say so honestly rather than inventing a critique. You are also shown your OWN "
+    "recent remarks on this same channel and ARIA's replies to them -- if the "
+    "underlying data hasn't materially changed since your last remark, do NOT repeat "
+    "the same point verbatim (real incident, 12/08: the same '0% win rate, needs "
+    "calibration' complaint was posted 5 times over 4 days, forcing ARIA to correct "
+    "the same misunderstanding every time). Either build on what ARIA already told "
+    "you with a genuinely NEW angle, acknowledge her correction explicitly, or -- if "
+    "you truly have nothing new to add -- return an EMPTY remark rather than repeat "
+    "yourself. Answer "
     "STRICTLY in JSON: "
     '{"remark": "<short message addressed to ARIA, in French (their working language on '
-    'this channel), direct tone between technical peers>", "durable": true|false, '
+    'this channel), direct tone between technical peers -- empty string if nothing new>", '
+    '"durable": true|false, '
     '"proposal_title": "<short title if durable, else empty>", "proposal_body": '
     '"<structured proposal in markdown if durable -- target file knowledge/*.yaml or '
     "truth_ledger/canonical_facts.yaml, precise content proposed, contradiction risk -- "
     'else empty>"}. `durable` = true ONLY if the finding deserves to durably change her '
     "knowledge base, not for a passing remark."
 )
+
+# 12/08 -- how many recent relay turns (both "claude" and "aria" senders) get
+# fed back into the prompt so the mentor can see its own last point and
+# ARIA's reply, instead of re-deriving the same observation from the raw
+# numbers every run with zero memory of the conversation.
+_RECENT_HISTORY_TURNS = 6
+
+
+async def _recent_relay_history() -> str:
+    from aria_core import relay_chat
+
+    messages = await relay_chat.latest_messages(limit=_RECENT_HISTORY_TURNS)
+    ours = [m for m in messages if m["sender"] in ("claude", "aria")]
+    if not ours:
+        return "(no prior exchange on this channel)"
+    return "\n".join(f"[{m['sender']}] {m['content'][:400]}" for m in ours)
 
 
 def claude_mentor_enabled() -> bool:
@@ -164,6 +189,14 @@ def _format_snapshot_for_prompt(snapshot: dict[str, Any]) -> str:
     ])
 
 
+def _format_prompt(snapshot: dict[str, Any], history: str) -> str:
+    return (
+        f"{_format_snapshot_for_prompt(snapshot)}\n\n"
+        f"Your own recent remarks on this channel and ARIA's replies "
+        f"(oldest first -- do not repeat a point already made and answered here):\n{history}"
+    )
+
+
 async def _propose_durable_knowledge(title: str, body: str, *, github_client=None) -> str | None:
     from aria_core.runtime import settings
 
@@ -215,7 +248,8 @@ async def run_claude_mentor_cycle(*, llm=None, github_client=None) -> dict:
     if llm is None:
         from aria_core.llm import chat_with_context as llm
 
-    prompt = _format_snapshot_for_prompt(snapshot)
+    history = await _recent_relay_history()
+    prompt = _format_prompt(snapshot, history)
     # 07/17 -- Claude Sonnet 5 via OpenRouter chosen after a real deep-reasoning
     # review. 07/19 -- explicit operator decision ("switch to spark and once
     # spark runs low on value we'll move to anthropic as planned"): override
