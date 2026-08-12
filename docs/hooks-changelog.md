@@ -61,6 +61,12 @@ rapport écrit dans `/opt/aria-data/architect-reports/pending/<sha>.md`.
   `LAST_REVIEWED_MARKER` — plus de suivi manuel `git diff --stat`, corrige
   un incident réel le jour même (push isolé ~20 lignes sous le seuil ayant
   quand même déclenché un appel payant).
+- **2026-08-12** le cumul de lignes calculé à chaque push est maintenant
+  affiché directement dans la sortie du `git push` (stderr, synchrone,
+  avant le bloc détaché) — gap réel trouvé en direct : le calcul existait
+  déjà mais n'atterrissait que dans un fichier log jamais lu au moment du
+  push, une session poussant sans vérifier elle-même le seuil n'avait rien
+  qui le lui mettait sous les yeux.
 
 ### commit-msg → `scripts/commit-msg-coauthor-check.sh`
 Auto-ajoute la ligne `Co-Authored-By: GoldenFarFR` si `Co-Authored-By: Claude`
