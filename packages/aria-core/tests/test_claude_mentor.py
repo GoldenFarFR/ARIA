@@ -275,9 +275,9 @@ async def test_cycle_uses_global_provider_no_openrouter_override(monkeypatch):
     assert captured.get("max_tokens") == 900
 
 
-# ── mémoire de conversation (12/08, réel incident : la même remarque "0%
-# winrate, il faut calibrer" postée 5 fois en 4 jours, ARIA a dû recorriger
-# le même point à chaque fois) ──────────────────────────────────────────────
+# ── conversation memory (12/08, real incident: the same "0% winrate, needs
+# calibration" remark posted 5 times over 4 days, ARIA had to re-correct the
+# same point every time) ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
