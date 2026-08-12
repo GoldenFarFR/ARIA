@@ -230,7 +230,7 @@ async def test_get_simple_price_rate_limited_never_invents_a_price(monkeypatch):
     assert result.prices == {}
 
 
-# ── garde-fou crédits mensuels (12/08, backlog #111) ────────────────────────
+# ── monthly credit guard (12/08, backlog #111) ──────────────────────────────
 # CoinGecko facture 1 crédit/appel quel que soit l'endpoint ("Flat Credit
 # Model", confirmé) -- même patron que codex.py, contrairement à Mobula.
 
@@ -273,9 +273,9 @@ async def test_successful_call_records_one_credit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_not_listed_404_still_records_a_credit(monkeypatch):
-    """Un 404 a bien atteint le serveur CoinGecko (contrairement a un
-    timeout) -- consomme un credit malgre l'absence de resultat utile,
-    meme doctrine que mobula.py."""
+    """A 404 still reached CoinGecko's server (unlike a timeout) -- consumes
+    a credit despite the lack of a useful result, same doctrine as
+    mobula.py."""
     client = CoinGeckoClient()
     url = f"{client.base_url}/coins/base/contract/0xdead"
     _patch_client(monkeypatch, {url: FakeResponse(404, None)})
@@ -307,7 +307,7 @@ async def test_get_json_skips_network_when_monthly_cap_reached(monkeypatch):
 
     def _fail_if_called(**kw):
         called["network"] = True
-        raise AssertionError("ne doit jamais appeler le reseau une fois le plafond atteint")
+        raise AssertionError("must never call the network once the monthly cap is reached")
 
     monkeypatch.setattr("aria_core.services.coingecko.httpx.AsyncClient", _fail_if_called)
 

@@ -223,11 +223,11 @@ async def test_get_ohlcv_forwards_blockchain_and_address_params(monkeypatch):
     assert captured["blockchain"] == "solana"
 
 
-# ── garde-fou crédits mensuels (12/08, backlog #111) ────────────────────────
-# Incident réel confirmé par l'opérateur le jour même : le dashboard Mobula
-# affichait 42.5K/10K crédits consommés (425% de dépassement), API toujours
-# "Operational" -- Mobula ne coupe pas côté serveur, aucun garde-fou local
-# n'existait avant ce correctif.
+# ── monthly credit guard (12/08, backlog #111) ──────────────────────────────
+# Real incident confirmed by the operator the same day: the Mobula dashboard
+# showed 42.5K/10K credits consumed (425% overage), API status still
+# "Operational" -- Mobula does not cut off server-side, no local guard
+# existed before this fix.
 
 @pytest.mark.asyncio
 async def test_monthly_credits_start_at_zero():
@@ -278,7 +278,7 @@ async def test_get_ohlcv_skips_network_when_monthly_cap_reached(monkeypatch):
 
     def _fail_if_called(**kw):
         called["network"] = True
-        raise AssertionError("ne doit jamais appeler le reseau une fois le plafond atteint")
+        raise AssertionError("must never call the network once the monthly cap is reached")
 
     monkeypatch.setattr("aria_core.services.mobula.httpx.AsyncClient", _fail_if_called)
 
@@ -290,8 +290,8 @@ async def test_get_ohlcv_skips_network_when_monthly_cap_reached(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_call_never_records_a_credit(monkeypatch):
-    """Une tentative qui echoue (429 epuise) ne doit jamais etre comptee --
-    seul un appel HTTP reussi consomme reellement un credit cote Mobula."""
+    """A failed attempt (429 exhausted) must never be counted -- only a
+    successful HTTP call actually consumes a credit on Mobula's side."""
     monkeypatch.setenv("MOBULA_API_KEY", "test-key")
     _patch_no_sleep(monkeypatch)
     _patch_client(
