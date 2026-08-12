@@ -266,8 +266,8 @@ async def test_x_handle_extracted_from_tavily_snippets(test_settings, monkeypatc
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
     assert result.x_handle == "cobot_official"
-    # Buzz d'abord ("from:handle" puisque le handle est déjà connu via Tavily),
-    # cadence ensuite -- même requête, même source, deux appels distincts.
+    # Buzz first ("from:handle" since the handle is already known via Tavily),
+    # then cadence -- same query, same source, two distinct calls.
     assert calls["queries"] == ["from:cobot_official", "from:cobot_official"]
     # 19/07 (#134) -- exposé sur le dataclass, pas seulement dans le prompt de
     # synthèse interne : vc_analysis.py doit pouvoir reprendre le buzz brut.
@@ -618,7 +618,7 @@ async def test_twitsh_not_called_for_cadence_when_official_succeeds(test_setting
     monkeypatch.setattr("aria_core.services.twitterapi_io.is_twitterapi_io_configured", lambda: True)
 
     async def _search_tweets(query, **kwargs):
-        # buzz vide (max_results=10), cadence réussie (max_results=20).
+        # empty buzz (max_results=10), successful cadence (max_results=20).
         return official_tweets if kwargs.get("max_results") == 20 else []
 
     monkeypatch.setattr("aria_core.services.twitterapi_io.search_tweets", _search_tweets)
