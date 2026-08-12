@@ -120,7 +120,12 @@ _CRAWL_LAYERS = [
 ]
 
 
-async def _default_crawl(url: str):
+def _pages_confirm_contract(pages, contract: str) -> bool:
+    combined = " ".join(p.raw_content for p in pages).lower()
+    return contract.strip().lower() in combined
+
+
+async def _default_crawl(url: str, *, contract: str | None = None):
     """Tries every layer in ``_CRAWL_LAYERS`` in order, first
     ``available=True`` result wins -- never a hard dependency on any single
     one: a layer returning unavailable (homepage unreachable/WAF-blocked/
@@ -129,11 +134,30 @@ async def _default_crawl(url: str):
     didn't exist. If EVERY layer fails, logs the event (with each layer's
     own error) via ``website_crawl_failure_log`` before returning the last
     result -- the real signal to consult before deciding a new layer is
-    worth adding, never a guess."""
+    worth adding, never a guess.
+
+    12/08 -- real false negative found live (HAYLORD, signal-cascade
+    triage): the scraper maison (plain HTTP fetch, no JS rendering) returned
+    ``available=True`` with plenty of real content, but missed a
+    dynamically-rendered element carrying the token's own contract address --
+    the old "first available wins" rule stopped right there and never tried
+    Firecrawl (which DOES render JS, and did find the address on manual
+    inspection). When ``contract`` is given and the first available layer's
+    combined content doesn't confirm it, the REMAINING layers are now tried
+    IN ADDITION, purely to look for the contract -- their pages are merged
+    into the first layer's own pages so the caller's own text-search
+    (``gather_website_substance_facts``) picks up the contract from
+    whichever layer actually rendered it. The first layer's content stays
+    the basis for the substance score either way -- this never replaces it,
+    only extends the search for the one specific security-relevant string.
+    Never re-tries a layer already exhausted; ``contract=None`` (the
+    default) keeps the exact old one-shot behavior for every other
+    caller."""
     from aria_core import website_crawl_failure_log
 
     errors: dict[str, str] = {}
     last_result = None
+    primary_result = None
     for name, layer_fn in _CRAWL_LAYERS:
         try:
             result = await layer_fn(url)
@@ -141,9 +165,24 @@ async def _default_crawl(url: str):
             errors[name] = str(exc)
             continue
         last_result = result
-        if result.available:
-            return result
-        errors[name] = result.error or "unavailable"
+        if not result.available:
+            errors[name] = result.error or "unavailable"
+            continue
+
+        if primary_result is None:
+            primary_result = result
+            if not contract or _pages_confirm_contract(result.pages, contract):
+                return primary_result
+            continue  # contract given but not confirmed here -- keep looking
+
+        # A later layer, tried only because `contract` wasn't confirmed yet.
+        if _pages_confirm_contract(result.pages, contract):
+            from dataclasses import replace
+
+            return replace(primary_result, pages=[*primary_result.pages, *result.pages])
+
+    if primary_result is not None:
+        return primary_result  # contract genuinely not found in any layer tried
 
     await website_crawl_failure_log.record_all_layers_failed(url, errors)
     if last_result is None:
@@ -160,9 +199,15 @@ async def gather_website_substance_facts(
     if not url.lower().startswith(("http://", "https://")):
         return WebsiteSubstanceFacts(available=False, error="invalid URL")
 
-    crawl_fn = crawl_fn or _default_crawl
     try:
-        result = await crawl_fn(url)
+        if crawl_fn is None:
+            # Only the real default crawler knows how to try extra layers
+            # when a contract isn't confirmed yet (see _default_crawl's own
+            # 12/08 docstring entry) -- injected test doubles keep their
+            # existing 1-argument `(url)` signature unchanged.
+            result = await _default_crawl(url, contract=contract)
+        else:
+            result = await crawl_fn(url)
     except Exception as exc:  # noqa: BLE001 -- never blocking
         return WebsiteSubstanceFacts(available=False, error=str(exc))
 
