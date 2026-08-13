@@ -93,7 +93,7 @@ async def test_dust_attack_token_never_blocks_the_pilot(monkeypatch):
     monkeypatch.setattr("aria_core.agent_wallet_sizing.size_trade_usd", fake_size)
     monkeypatch.setattr("aria_core.momentum_entry.discover_momentum_candidates", fake_discover)
     result = await cycle.run_agent_wallet_pilot_cycle()
-    # jamais "position_open" -- le cycle continue normalement (ici jusqu'à no_candidate)
+    # never "position_open" -- the cycle proceeds normally (here down to no_candidate)
     assert result == {"outcome": "no_candidate", "checked": 0}
 
 
