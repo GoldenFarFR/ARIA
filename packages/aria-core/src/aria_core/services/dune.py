@@ -495,6 +495,63 @@ def build_early_buyer_multiple_query(
     )
 
 
+@dataclass(frozen=True)
+class EarlyBuyerMultipleRecord:
+    wallet_address: str
+    token_address: str
+    peak_multiple: float
+
+
+@dataclass(frozen=True)
+class EarlyBuyerMultipleResult:
+    records: list[EarlyBuyerMultipleRecord] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+async def get_early_buyer_multiple_winners(
+    *, min_multiple: float = 5.0, lookback_days: int = 90, min_trade_usd: float = 1.0,
+    performance: str = "small",
+) -> EarlyBuyerMultipleResult:
+    """Wraps ``build_early_buyer_multiple_query`` (built 15/07, never called
+    by any production path until 13/08 -- see the query's own docstring):
+    wallets that bought a Base token within its first hour of life AND rode
+    it to at least ``min_multiple``x, across every token launched in the
+    lookback window -- same dome doctrine as ``get_token_early_buyers``
+    above, any failure at any step -> ``available=False``, never an
+    exception, never a fabricated wallet.
+
+    Defaults (13/08, a discovery-funnel starting point, deliberately NOT a
+    hard security gate -- the real judgment happens downstream in
+    ``score_wallets()``, same as every other candidate this project sources):
+    ``min_multiple=5.0`` (the query builder's own docstring example, "at
+    least 5x"), ``lookback_days=90`` (matches ``get_token_early_buyers``'s
+    own default just above, same module, same kind of window)."""
+    try:
+        sql = build_early_buyer_multiple_query(
+            min_multiple=min_multiple, lookback_days=lookback_days, min_trade_usd=min_trade_usd,
+        )
+    except ValueError as exc:
+        return EarlyBuyerMultipleResult(available=False, error=f"{UNAVAILABLE} ({exc})")
+
+    exec_result = await run_sql_and_wait(sql, performance=performance)
+    if not exec_result.available:
+        return EarlyBuyerMultipleResult(available=False, error=exec_result.error)
+
+    records = [
+        EarlyBuyerMultipleRecord(
+            wallet_address=row["wallet_address"],
+            token_address=row["token_address"],
+            peak_multiple=float(row["peak_multiple"]),
+        )
+        for row in exec_result.rows
+        if isinstance(row.get("wallet_address"), str) and row["wallet_address"]
+        and isinstance(row.get("token_address"), str) and row["token_address"]
+        and row.get("peak_multiple") is not None
+    ]
+    return EarlyBuyerMultipleResult(records=records, available=True, error=None)
+
+
 # ---------------------------------------------------------------------------
 # Dedicated SQL query (#134 "wider scan throughput", 15/07) -- SECOND
 # INDEPENDENT source of Base token discovery, complementing (never

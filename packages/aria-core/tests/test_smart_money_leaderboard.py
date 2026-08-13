@@ -335,3 +335,117 @@ async def test_discovery_no_candidate_found(monkeypatch, tmp_path):
 
     result = await lb.discover_and_enqueue_candidates()
     assert result == {"outcome": "no_candidate"}
+
+
+# ── #148 (13/08): second, independent candidate source (Dune early-buyer) ──
+
+
+@pytest.mark.asyncio
+async def test_discovery_cumulates_dune_candidates_alongside_cross_token(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    # no cross-token candidates this time -- the Dune source alone must be
+    # enough to produce a real result.
+
+    from aria_core.services import dune
+
+    async def fake_get_early_buyer_multiple_winners(**kwargs):
+        return dune.EarlyBuyerMultipleResult(
+            records=[dune.EarlyBuyerMultipleRecord(wallet_address=WALLET_B, token_address="0xTOKEN", peak_multiple=8.0)],
+            available=True,
+        )
+
+    monkeypatch.setattr(dune, "get_early_buyer_multiple_winners", fake_get_early_buyer_multiple_winners)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["cross_token_candidates"] == 0
+    assert result["dune_candidates"] == 1
+    assert result["added_to_queue"] == 1
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_dune_failure_never_blocks_the_cross_token_source(monkeypatch, tmp_path):
+    """Best-effort: Dune unavailable (no key, network, monthly cap) must
+    never block the free, already-working cross-token source."""
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+            }],
+        )
+
+    from aria_core.services import dune
+
+    async def broken_get_early_buyer_multiple_winners(**kwargs):
+        raise RuntimeError("dune unreachable")
+
+    monkeypatch.setattr(dune, "get_early_buyer_multiple_winners", broken_get_early_buyer_multiple_winners)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["cross_token_candidates"] == 1
+    assert result["dune_candidates"] == 0
+    assert result["added_to_queue"] == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_deduplicates_a_wallet_found_by_both_sources(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+            }],
+        )
+
+    from aria_core.services import dune
+
+    async def fake_get_early_buyer_multiple_winners(**kwargs):
+        return dune.EarlyBuyerMultipleResult(
+            records=[dune.EarlyBuyerMultipleRecord(wallet_address=WALLET_A, token_address="0xTOKEN_A", peak_multiple=6.0)],
+            available=True,
+        )
+
+    monkeypatch.setattr(dune, "get_early_buyer_multiple_winners", fake_get_early_buyer_multiple_winners)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["candidates_found"] == 1  # WALLET_A counted once, not twice
+    assert result["added_to_queue"] == 1
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 1

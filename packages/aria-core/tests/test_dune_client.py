@@ -846,6 +846,110 @@ class TestGetTokenEarlyBuyers:
         assert result.error
 
 
+class TestGetEarlyBuyerMultipleWinners:
+    @pytest.mark.asyncio
+    async def test_no_key_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DUNE_API_KEY", raising=False)
+
+        result = await dune.get_early_buyer_multiple_winners()
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_params_unavailable_no_network_call(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        holder = _patch_client(monkeypatch, [])
+
+        result = await dune.get_early_buyer_multiple_winners(min_multiple=-1.0)
+
+        assert result.available is False
+        assert holder["calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_parses_records(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {
+                                    "wallet_address": FUNDER, "token_address": WETH_BASE,
+                                    "launch_time": "2026-06-22 20:25:35.000 UTC",
+                                    "launch_price_usd": 0.001, "peak_price_usd": 0.01, "peak_multiple": 10.0,
+                                },
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_early_buyer_multiple_winners(min_multiple=5.0, lookback_days=90)
+
+        assert result.available is True
+        assert result.records == [
+            dune.EarlyBuyerMultipleRecord(wallet_address=FUNDER, token_address=WETH_BASE, peak_multiple=10.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_malformed_rows_skipped_not_a_crash(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(
+            monkeypatch,
+            [
+                FakeResponse(200, {"execution_id": "exec-1", "state": "QUERY_STATE_PENDING"}),
+                FakeResponse(
+                    200,
+                    {"execution_id": "exec-1", "state": "QUERY_STATE_COMPLETED", "is_execution_finished": True},
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "execution_id": "exec-1",
+                        "result": {
+                            "rows": [
+                                {"wallet_address": "", "token_address": WETH_BASE, "peak_multiple": 10.0},
+                                {"wallet_address": FUNDER, "token_address": "", "peak_multiple": 10.0},
+                                {"wallet_address": FUNDER, "token_address": WETH_BASE, "peak_multiple": None},
+                                {"wallet_address": FUNDER, "token_address": WETH_BASE, "peak_multiple": 7.0},
+                            ]
+                        },
+                    },
+                ),
+            ],
+        )
+
+        result = await dune.get_early_buyer_multiple_winners()
+
+        assert result.available is True
+        assert result.records == [
+            dune.EarlyBuyerMultipleRecord(wallet_address=FUNDER, token_address=WETH_BASE, peak_multiple=7.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_execution_failure_propagates_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DUNE_API_KEY", "k")
+        monkeypatch.setattr(dune.asyncio, "sleep", _no_sleep)
+        _patch_client(monkeypatch, [FakeResponse(500), FakeResponse(500)])
+
+        result = await dune.get_early_buyer_multiple_winners()
+
+        assert result.available is False
+        assert result.error
+
+
 class TestBuildSellDistributionQuery:
     def test_substitutes_contract_lowercased(self):
         checksummed = "0x" + WETH_BASE[2:].upper()

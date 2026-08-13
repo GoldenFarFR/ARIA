@@ -34,12 +34,15 @@ now prioritizes new candidates (catch-up) over plain monitoring rescans, so
 discovery is never structurally starved."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
 import aiosqlite
 
 from aria_core.paths import aria_db_path
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = str(aria_db_path())
 
@@ -281,7 +284,28 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     from aria_core import token_holder_intel
 
     candidates = await token_holder_intel.list_cross_token_candidates(min_token_count=min_token_count)
-    if not candidates:
+    cross_token_addresses = {c["holder_address"] for c in candidates}
+
+    # #148 (13/08, operator: "il faut cumulée des données" -- multiple
+    # partial sources feeding the same funnel, not one perfect source):
+    # SECOND, independent candidate source -- wallets that bought a Base
+    # token in its first hour and rode it to a real multiple (Dune SQL,
+    # `dune.build_early_buyer_multiple_query`, built 15/07 but never wired
+    # to any producer until now). Best-effort: Dune being unavailable
+    # (monthly cap, network, no key) never blocks the cross-token source
+    # above, same dome doctrine as the rest of this pipeline.
+    dune_addresses: set[str] = set()
+    try:
+        from aria_core.services import dune
+
+        dune_result = await dune.get_early_buyer_multiple_winners()
+        if dune_result.available:
+            dune_addresses = {r.wallet_address for r in dune_result.records}
+    except Exception as exc:  # noqa: BLE001 -- best-effort second source, never blocks the primary one
+        logger.info("smart_money_leaderboard: dune early-buyer source failed (%s)", exc)
+
+    all_addresses = cross_token_addresses | dune_addresses
+    if not all_addresses:
         return {"outcome": "no_candidate"}
 
     # A wallet already rejected PERMANENTLY (confirmed percentile < 30) must
@@ -289,18 +313,20 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     # (21/07, explicit operator request).
     addresses = []
     already_rejected = 0
-    for c in candidates:
-        if await is_rejected(c["holder_address"]):
+    for addr in all_addresses:
+        if await is_rejected(addr):
             already_rejected += 1
             continue
-        addresses.append(c["holder_address"])
+        addresses.append(addr)
     if not addresses:
         return {"outcome": "no_candidate", "already_rejected": already_rejected}
 
     added = await enqueue_wallets(addresses)
     return {
         "outcome": "ok",
-        "candidates_found": len(candidates),
+        "candidates_found": len(all_addresses),
+        "cross_token_candidates": len(cross_token_addresses),
+        "dune_candidates": len(dune_addresses),
         "already_rejected": already_rejected,
         "added_to_queue": len(added),
     }
