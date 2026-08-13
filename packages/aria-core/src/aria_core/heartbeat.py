@@ -341,6 +341,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="dip_recovery_shadow_cycle",
+        name="Dip-recovery shadow -- operator's -30%/24h dip-buy, -5% stop signal",
+        description="13/08 operator-proposed entry signal, shadow-tested before ever building a live pocket (a manual backtest found the deduplicated sample too small -- 12 trades -- to conclude, same anti-overfitting doctrine as the v8 wick-gate incident). Pure local-DB read: reuses candles already collected by candle_history_watchlist_cycle (mode=standard, 1H series), zero extra network call, scans the full watchlist every passage. Detects a fresh -30%/24h dip episode per token, opens exactly one shadow position per continuous episode, closes on a fixed -5% stop or a 7-day timeout. Standalone research shadow, never touches the real $1M paper portfolio. Dedicated gate ARIA_DIP_RECOVERY_SHADOW_ENABLED, OFF by default.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="wallet_copy_shadow_cycle",
         name="Wallet-copy shadow -- 8 tracked wallets, fictional per-wallet ledger",
         description="08/08 operator spec: forward-tests copying 8 real Base wallets (3 fomoscan-verified all-time track records, 4 GMGN Smart Money 30d, 1 confirmed serial front-runner), one INDEPENDENT fictional paper ledger per wallet -- never merged, never real capital, never a live trigger (CLAUDE.md smart-money doctrine: confirmation only). Polls each wallet's recent Base ERC-20 transfers via Blockscout, opens a $1,000 fictional position on a detected buy, closes it on the matching sell. summary() reports each wallet's realized/latent P&L separately so copying each one can be judged on its own. Dedicated gate ARIA_WALLET_COPY_SHADOW_ENABLED, OFF by default -- standalone research shadow, independent of the $1M momentum test.",
@@ -823,6 +830,14 @@ def _sync_x_curiosity_enabled() -> None:
                 # need paper-trading's master gate -- single dedicated flag.
                 task.enabled = os.environ.get(
                     "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "dip_recovery_shadow_cycle":
+                # 13/08 -- standalone research shadow, independent of the
+                # $1M momentum test (no paper_trading double-gate needed --
+                # it never touches paper_trader positions). Single dedicated
+                # flag only, same doctrine as wallet_copy_shadow_cycle.
+                task.enabled = os.environ.get(
+                    "ARIA_DIP_RECOVERY_SHADOW_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "wallet_copy_shadow_cycle":
                 # 08/08 -- standalone research shadow, independent of the
@@ -1710,6 +1725,15 @@ class AriaHeartbeat:
             logger.info(
                 "candle_history_watchlist_cycle: %s/%s candle series refreshed",
                 result.get("fetched"), result.get("attempted"),
+            )
+
+        elif task_id == "dip_recovery_shadow_cycle":
+            from aria_core.momentum_entry import run_dip_recovery_shadow_cycle
+
+            result = await run_dip_recovery_shadow_cycle()
+            logger.info(
+                "dip_recovery_shadow_cycle: %s/%s watchlist tokens evaluated",
+                result.get("evaluated"), result.get("watchlist_size"),
             )
 
         elif task_id == "twitterapi_io_budget_watch_cycle":

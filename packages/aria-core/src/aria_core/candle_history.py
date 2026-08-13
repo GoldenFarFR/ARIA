@@ -279,6 +279,35 @@ async def get_history(
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def get_history_by_contract(
+    contract: str, chain: str, timeframe: str, *, limit: int | None = None,
+) -> list[dict]:
+    """Same read as ``get_history``, keyed by ``contract`` instead of
+    ``pool_address`` (via ``idx_candle_history_contract``) -- for a consumer
+    that only knows the token's contract (e.g. a shadow cycle iterating over
+    ``goplus_watchlist`` without re-resolving a pool address, zero extra
+    network call). If a contract has candles across more than one pool
+    (a rotated LP), rows from every pool for that key are pooled together and
+    re-sorted by ``ts`` -- acceptable for a coarse variation read, unlike
+    ``get_history``'s single-key precision."""
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        query = (
+            "SELECT * FROM candle_history WHERE chain = ? AND contract = ? AND timeframe = ? "
+            "ORDER BY ts ASC"
+        )
+        params: list = [chain, contract, timeframe]
+        if limit is not None:
+            query = (
+                "SELECT * FROM (SELECT * FROM candle_history WHERE chain = ? AND contract = ? "
+                "AND timeframe = ? ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC"
+            )
+            params = [chain, contract, timeframe, limit]
+        cur = await db.execute(query, params)
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def due_for_refresh(
     candidates: list[tuple[str, str]], limit: int,
 ) -> list[tuple[str, str]]:

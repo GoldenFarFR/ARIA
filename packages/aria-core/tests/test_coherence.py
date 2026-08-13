@@ -808,6 +808,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_CONVICTION_RESEARCH_ENABLED",
     "ARIA_COUNTERFACTUAL_TRACKER_ENABLED",
     "ARIA_DAILY_TRADE_FLOOR_ENABLED",
+    # 13/08 -- dip_recovery_shadow.py : forward-test du signal propose par
+    # l'operateur (-30%/24h + stop -5%), pure lecture locale de candle_history,
+    # jamais un trigger reel (jamais de capital reel, jamais fusionne avec le
+    # test 1M$). OFF par defaut.
+    "ARIA_DIP_RECOVERY_SHADOW_ENABLED",
     "ARIA_DIRECTIVE_CHANNEL_ENABLED",
     "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
     "ARIA_DUNE_ENABLED",

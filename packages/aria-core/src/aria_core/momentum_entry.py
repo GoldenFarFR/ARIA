@@ -1607,6 +1607,51 @@ async def run_candle_history_watchlist_cycle() -> dict:
     return {"fetched": fetched, "attempted": len(due)}
 
 
+async def run_dip_recovery_shadow_cycle() -> dict:
+    """Shadow-evaluation cycle for the operator-proposed "-30%/24h dip-buy,
+    -5% stop" entry signal (13/08, see ``dip_recovery_shadow.py``'s own
+    module docstring for the full design rationale). Pure local-DB read: for
+    every ``goplus_watchlist`` token, reads whatever 1H candles
+    ``candle_history_watchlist_cycle`` has already collected (zero extra
+    network call here) and hands them to
+    ``dip_recovery_shadow.record_evaluation``. No round-robin cursor needed
+    (unlike the network-bound collector above) -- scans the full watchlist
+    every passage, since a local indexed SELECT per token is cheap enough at
+    watchlist scale. Best-effort per token: one broken read never stops the
+    passage."""
+    from aria_core import candle_history, dip_recovery_shadow
+    from aria_core.services import goplus_watchlist
+    from aria_core.skills.ta_levels import Candle
+
+    watchlist_rows = await goplus_watchlist.list_all()
+    evaluated = 0
+    for row in watchlist_rows:
+        contract, chain = row["contract"], row["chain"]
+        try:
+            history = await candle_history.get_history_by_contract(
+                contract, chain, "1H", limit=dip_recovery_shadow.MIN_CANDLES_1H,
+            )
+            if len(history) < dip_recovery_shadow.MIN_CANDLES_1H:
+                continue
+            candles = [
+                Candle(
+                    ts=r["ts"], open=r["open"], high=r["high"], low=r["low"],
+                    close=r["close"], volume=r["volume"],
+                )
+                for r in history
+            ]
+            await dip_recovery_shadow.record_evaluation(
+                contract, chain, symbol=row.get("symbol"), candles_1h=candles,
+            )
+            evaluated += 1
+        except Exception as exc:  # noqa: BLE001 -- best-effort shadow scan, one bad token never stops the passage
+            logger.info(
+                "dip_recovery_shadow_cycle: evaluation failed for %s/%s (%s)", chain, contract[:10], exc,
+            )
+
+    return {"evaluated": evaluated, "watchlist_size": len(watchlist_rows)}
+
+
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
     """Solana second opinion (#207) -- called ONLY by ``_check_honeypot`` when
     GoPlus has no data for this contract. Fail-closed unchanged if RugCheck also

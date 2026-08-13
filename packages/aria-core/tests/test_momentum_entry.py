@@ -2249,6 +2249,91 @@ async def test_candle_history_watchlist_cycle_fetch_failure_never_blocks_the_pas
     assert marked == [(CONTRACT, "base")]
 
 
+# ── run_dip_recovery_shadow_cycle (13/08, operator's -30%/24h dip-buy signal) ──
+# Pure local-DB read (no network, unlike the collector above): mocks
+# candle_history.get_history_by_contract and dip_recovery_shadow.record_evaluation
+# directly rather than exercising the real candle_history DB.
+
+
+@pytest.mark.asyncio
+async def test_dip_recovery_shadow_cycle_empty_watchlist_is_a_noop():
+    result = await me.run_dip_recovery_shadow_cycle()
+    assert result == {"evaluated": 0, "watchlist_size": 0}
+
+
+@pytest.mark.asyncio
+async def test_dip_recovery_shadow_cycle_evaluates_tokens_with_enough_history(monkeypatch):
+    from aria_core import candle_history, dip_recovery_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    history_rows = [
+        {"ts": i * 3600, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0.0}
+        for i in range(dip_recovery_shadow.MIN_CANDLES_1H)
+    ]
+
+    async def fake_get_history(contract, chain, timeframe, *, limit=None):
+        assert contract == CONTRACT and chain == "base" and timeframe == "1H"
+        return history_rows
+
+    monkeypatch.setattr(candle_history, "get_history_by_contract", fake_get_history)
+
+    recorded = []
+
+    async def fake_record_evaluation(contract, chain, *, symbol, candles_1h):
+        recorded.append((contract, chain, len(candles_1h)))
+
+    monkeypatch.setattr(dip_recovery_shadow, "record_evaluation", fake_record_evaluation)
+
+    result = await me.run_dip_recovery_shadow_cycle()
+
+    assert result == {"evaluated": 1, "watchlist_size": 1}
+    assert recorded == [(CONTRACT, "base", dip_recovery_shadow.MIN_CANDLES_1H)]
+
+
+@pytest.mark.asyncio
+async def test_dip_recovery_shadow_cycle_skips_tokens_with_too_little_history(monkeypatch):
+    from aria_core import candle_history, dip_recovery_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_get_history(contract, chain, timeframe, *, limit=None):
+        return []
+
+    monkeypatch.setattr(candle_history, "get_history_by_contract", fake_get_history)
+
+    recorded = []
+
+    async def fake_record_evaluation(contract, chain, *, symbol, candles_1h):
+        recorded.append((contract, chain))
+
+    monkeypatch.setattr(dip_recovery_shadow, "record_evaluation", fake_record_evaluation)
+
+    result = await me.run_dip_recovery_shadow_cycle()
+
+    assert result == {"evaluated": 0, "watchlist_size": 1}
+    assert recorded == []
+
+
+@pytest.mark.asyncio
+async def test_dip_recovery_shadow_cycle_read_failure_never_blocks_the_passage(monkeypatch):
+    from aria_core import candle_history, dip_recovery_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def broken_get_history(contract, chain, timeframe, *, limit=None):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(candle_history, "get_history_by_contract", broken_get_history)
+
+    result = await me.run_dip_recovery_shadow_cycle()
+
+    assert result == {"evaluated": 0, "watchlist_size": 1}
+
+
 # ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → Mobula → DexScreener → Dune) ──
 
 def _plain_candles(n: int = 5) -> list[Candle]:
