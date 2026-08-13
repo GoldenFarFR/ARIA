@@ -178,7 +178,14 @@ async def _reply(message, text: str) -> None:
     # command in this bot has ever relied on a rendered preview card.
     from telegram import LinkPreviewOptions
 
-    await message.reply_text(_format_tg(text), link_preview_options=LinkPreviewOptions(is_disabled=True))
+    # 13/08, real bug found live: this is the ONE shared reply path for every
+    # admin command (/feedback, /ledger, /status...) -- the same over-4096-char
+    # truncation fixed in send_message()'s push-alert path was never applied
+    # here, so a long command reply hit Telegram's hard limit, raised
+    # BadRequest("Message is too long") with no registered error handler, and
+    # the operator got NOTHING back (not even the truncated old behavior).
+    for chunk in _split_for_telegram(_format_tg(text)):
+        await message.reply_text(chunk, link_preview_options=LinkPreviewOptions(is_disabled=True))
     try:
         from aria_core.relay_chat import log_message
 

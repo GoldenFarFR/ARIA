@@ -275,3 +275,41 @@ async def test_feedback_no_message_or_user_does_not_crash():
         effective_user = None
 
     await telegram_bot._handle_feedback(EmptyUpdate(), FakeContext())  # ne doit pas lever
+
+
+@pytest.mark.asyncio
+async def test_feedback_over_limit_reply_splits_into_several_messages(monkeypatch):
+    """13/08, real bug found live: a long /feedback reply hit Telegram's real
+    ~4096-char limit, ``message.reply_text`` raised BadRequest("Message is too
+    long"), and with no registered error handler the operator got NOTHING
+    back -- not even a truncated one. ``_reply`` (the shared path for every
+    admin command) now splits the same way ``send_message`` already does for
+    push alerts, instead of a single oversized call that Telegram rejects."""
+    monkeypatch.setattr(telegram_bot, "is_admin", lambda _uid: True)
+    monkeypatch.setattr(telegram_bot.settings, "admin_ids", [42])
+
+    async def fake_summary(*, price_lookup=None, wallet="swing"):
+        return {
+            "starting": 1_000_000.0, "cash": 1_000_000.0, "equity": 1_000_000.0,
+            "return_pct": 0.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "open_positions": 0, "closed_trades": 0, "win_rate": None,
+        }
+
+    async def fake_huge_detail_block(**kwargs):
+        lines = [f"TOKEN{i} entry {i}.0 https://dexscreener.com/base/0x{i:040d}" for i in range(120)]
+        return "\n".join(lines)
+
+    monkeypatch.setattr("aria_core.paper_trader.portfolio_summary", fake_summary)
+    monkeypatch.setattr(
+        "aria_core.paper_ledger_report.build_positions_detail_block", fake_huge_detail_block,
+    )
+
+    update = FakeUpdate("/feedback", user_id=42)
+    await telegram_bot._handle_feedback(update, FakeContext())
+
+    assert len(update.message.replies) > 1  # never a single over-limit call Telegram would reject
+    for chunk in update.message.replies:
+        assert len(chunk) <= telegram_bot._TELEGRAM_MAX_CHARS
+    combined = "\n".join(update.message.replies)
+    assert "TOKEN0 " in combined
+    assert "TOKEN119 " in combined
