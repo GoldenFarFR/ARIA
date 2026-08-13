@@ -69,3 +69,42 @@ async def _drain_circuit_breaker_background_tasks():
         import asyncio
 
         await asyncio.gather(*list(circuit_breaker_log._background_tasks), return_exceptions=True)
+
+
+def _reset_circuit_breaker_state() -> None:
+    """Resets the in-process circuit-breaker state of the 5 service modules
+    ``circuit_breaker_status.py`` tracks. Plenty of pre-existing error/retry
+    tests deliberately drive one of these module-level counters/timestamps
+    "open" to test retry/degrade behavior, but nothing ever reset them --
+    whichever test happened to run right after inherited a stale "open"
+    state (13/08, found via ``test_get_circuit_status_covers_all_12_tracked_
+    states_closed_by_default`` failing only under the FULL suite, never in
+    isolation)."""
+    from aria_core.services import blockscout, dexscreener, goplus, wallet_transfers_fast
+    from aria_core import momentum_entry
+
+    dexscreener._consecutive_failures = 0
+    dexscreener._circuit_open_until = 0.0
+
+    for client in blockscout._chain_clients.values():
+        client._consecutive_failures = 0
+        client._circuit_open_until = 0.0
+
+    goplus.goplus_client._consecutive_failures = 0
+    goplus.goplus_client._circuit_open_until = 0.0
+    goplus.goplus_client._auth_broken_until = 0.0
+
+    wallet_transfers_fast._consecutive_failures.clear()
+    wallet_transfers_fast._circuit_open_until.clear()
+
+    momentum_entry._provider_fail_counts.clear()
+    momentum_entry._provider_cooldown_until.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_circuit_breaker_state():
+    """Reset BEFORE and AFTER every test so ordering never matters either
+    way -- see ``_reset_circuit_breaker_state`` for why this is needed."""
+    _reset_circuit_breaker_state()
+    yield
+    _reset_circuit_breaker_state()

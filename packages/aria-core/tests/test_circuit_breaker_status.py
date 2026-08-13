@@ -1,7 +1,14 @@
 """aria_core.circuit_breaker_status -- live in-memory state aggregation
 across the 5 service modules that have a real open/closed circuit (04/08).
-Resets every module-level breaker state before/after each test so tests
-never leak into each other or into real service state."""
+Module-level breaker state (all 5 modules, including blockscout) is reset
+before/after EVERY test in the whole suite by conftest.py's
+``_isolated_circuit_breaker_state`` (13/08) -- this file used to carry its
+own local, INCOMPLETE version of that reset (missing blockscout entirely),
+which let a test elsewhere in the full suite leave blockscout's circuit
+"open" and made ``test_get_circuit_status_covers_all_12_tracked_states_
+closed_by_default`` flaky (passed in isolation, failed under the full
+suite). Removed in favor of the global fixture -- no local reset needed
+here anymore."""
 from __future__ import annotations
 
 import asyncio
@@ -11,31 +18,12 @@ import pytest
 from aria_core import circuit_breaker_log as cbl
 from aria_core import circuit_breaker_status as cbs
 from aria_core import momentum_entry
-from aria_core.services import dexscreener, goplus, wallet_transfers_fast
+from aria_core.services import blockscout, dexscreener, goplus, wallet_transfers_fast
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(cbl, "DB_PATH", str(tmp_path / "circuit_breaker_status_test.db"))
-
-
-@pytest.fixture(autouse=True)
-def _reset_breaker_state():
-    """Every breaker touched by these tests is process-global state -- reset
-    before AND after so a failure here never leaks into other test files."""
-    def _reset():
-        dexscreener._consecutive_failures = 0
-        dexscreener._circuit_open_until = 0.0
-        goplus.goplus_client._consecutive_failures = 0
-        goplus.goplus_client._circuit_open_until = 0.0
-        goplus.goplus_client._auth_broken_until = 0.0
-        wallet_transfers_fast._consecutive_failures.clear()
-        wallet_transfers_fast._circuit_open_until.clear()
-        momentum_entry._provider_fail_counts.clear()
-        momentum_entry._provider_cooldown_until.clear()
-    _reset()
-    yield
-    _reset()
 
 
 @pytest.mark.asyncio
@@ -51,6 +39,30 @@ async def test_get_circuit_status_covers_all_12_tracked_states_closed_by_default
     for name in expected:
         assert status[name]["state"] == "closed"
         assert status[name]["circuit_state"] == "tracked"
+
+
+@pytest.mark.asyncio
+async def test_blockscout_open_state_from_a_prior_test_never_leaks_here():
+    """Locks the actual regression (13/08): a test elsewhere in the suite
+    driving blockscout's circuit "open" and never resetting it made this
+    file's OWN "all closed by default" test flaky under the full suite
+    (this file's local reset fixture never covered blockscout). Two tests,
+    in order: this one dirties blockscout's real client state; the next one
+    (any test using ``get_circuit_status``) must see it clean again --
+    proving conftest.py's global reset, not this file's own bookkeeping,
+    is what keeps it isolated."""
+    client = blockscout._chain_clients["base"]
+    for _ in range(blockscout._FAIL_STREAK_WARN_THRESHOLD):
+        client._record_failure("simulated outage")
+    status = await cbs.get_circuit_status()
+    assert status["blockscout:base"]["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_blockscout_state_is_clean_again_after_the_prior_dirtying_test():
+    status = await cbs.get_circuit_status()
+    assert status["blockscout:base"]["state"] == "closed"
+    assert status["blockscout:base"]["consecutive_failures"] == 0
 
 
 @pytest.mark.asyncio
