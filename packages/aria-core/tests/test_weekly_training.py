@@ -48,6 +48,46 @@ async def test_run_weekly_forecasts_records_with_entry_price():
 
 
 @pytest.mark.asyncio
+async def test_format_weekly_forecast_alert_includes_contract_and_chart_link():
+    """13/08, operator request: the walk-forward Telegram alert must show
+    which token was forecast (not just a bare count) with a real chart link
+    to go verify it."""
+    async def drawer():
+        return [{"contract": "0xAAABBBCCCDDDEEEFFF"}]
+
+    ids = await wt.run_weekly_forecasts(n=1, drawer=drawer, analyzer=_fake_analyzer(1.0))
+
+    alert = await wt.format_weekly_forecast_alert(ids)
+
+    assert "1 nouveaux pronostics enregistrés" in alert
+    assert "BUY" in alert
+    assert "potentiel 8/10" in alert
+    assert "https://dexscreener.com/base/0xaaabbbcccdddeeefff" in alert
+
+
+@pytest.mark.asyncio
+async def test_format_weekly_forecast_alert_uses_the_real_horizon_per_strategy():
+    pid = await vc_predictions.record_prediction(
+        contract="0xSPEC", recommandation="BUY", potentiel=6, risque="MODÉRÉ",
+        taille_pct=2.0, security_score=60, llm_used=True,
+        entry_price=1.0, pool_address="pool-spec", strategy="spec", network="base",
+    )
+
+    alert = await wt.format_weekly_forecast_alert([pid])
+
+    assert "résolution ~7j" in alert  # HORIZON_DAYS["spec"]
+
+
+@pytest.mark.asyncio
+async def test_format_weekly_forecast_alert_skips_unknown_ids_without_crashing():
+    """An id that no longer resolves (race, DB hiccup) is silently skipped --
+    the header count still reflects the number of ids passed in, not found."""
+    alert = await wt.format_weekly_forecast_alert([99999])
+    assert "1 nouveaux pronostics enregistrés" in alert
+    assert "dexscreener.com" not in alert
+
+
+@pytest.mark.asyncio
 async def test_failing_analysis_is_skipped_not_fatal():
     async def drawer():
         return [{"contract": "0xGOOD"}, {"contract": "0xBAD"}]

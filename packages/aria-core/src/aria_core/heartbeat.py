@@ -1398,14 +1398,12 @@ class AriaHeartbeat:
                 append_memory("vc", f"[resolve] {summary['resolved']} pronostics clôturés (OHLCV)")
 
         elif task_id == "vc_weekly_forecast":
-            from aria_core.weekly_training import run_weekly_forecasts
+            from aria_core.weekly_training import format_weekly_forecast_alert, run_weekly_forecasts
 
             ids = await run_weekly_forecasts(n=20)
             append_memory("vc", f"[forecast] {len(ids)} pronostics enregistrés")
             if ids:
-                await self._notify_telegram(
-                    f"🎯 ARIA — {len(ids)} nouveaux pronostics enregistrés (walk-forward)."
-                )
+                await self._notify_telegram(await format_weekly_forecast_alert(ids))
 
         elif task_id == "vc_self_report":
             from aria_core.weekly_training import self_report

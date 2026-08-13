@@ -439,6 +439,12 @@ class AriaBrain:
             if manual_close is not None:
                 return manual_close
 
+            polymarket_positions = await self._try_polymarket_positions_response(
+                user_message, route_msg, lang, visitor_id=vid,
+            )
+            if polymarket_positions is not None:
+                return polymarket_positions
+
             trade_status = await self._try_trade_status_response(
                 user_message, route_msg, lang, visitor_id=vid,
             )
@@ -983,6 +989,42 @@ class AriaBrain:
             skill_used=None,
             actions_taken=["Refus fermeture manuelle position (doctrine test pur — sans confabulation)"],
             data={"manual_close_refusal": True, "skip_web": True},
+        )
+
+    async def _try_polymarket_positions_response(
+        self,
+        user_message: str,
+        route_msg: str,
+        lang: str,
+        *,
+        visitor_id: str = "",
+    ) -> ChatResponse | None:
+        """Natural-language route to the Polymarket paper-trading portfolio
+        (13/08 fix). Real incident: "polymarket" / "je veux voir les paris en
+        cours" matched no ``INTENT_PATTERNS`` regex (``ANALYZE_PORTFOLIO`` only
+        matches the bare word "positions?", never "polymarket"/"paris") and
+        fell through all the way to the paid web-search fallback -- returned
+        an unrelated FanDuel/DraftKings/Wikipedia answer at real cost. Checked
+        BEFORE any skill/web routing, same pattern as
+        ``_try_manual_close_refusal_response`` -- deterministic, ZERO LLM or
+        network call (reuses ``polymarket_paper_trader.format_portfolio_report``,
+        the same read-only helper behind the admin-only ``/polymarket`` command)."""
+        from aria_core.skills.polymarket_positions_skill import wants_polymarket_positions
+
+        if not wants_polymarket_positions(route_msg):
+            return None
+        from aria_core.polymarket_paper_trader import format_portfolio_report
+
+        reply = await format_portfolio_report()
+        await repertoire_db.save_message(
+            "agent", reply, skill_used="polymarket_positions", visitor_id=visitor_id,
+        )
+        append_memory("chat", f"User: {user_message[:100]}\nARIA: {reply[:200]}")
+        return ChatResponse(
+            reply=reply,
+            skill_used=None,
+            actions_taken=["Portefeuille Polymarket (paper trading, lecture seule, sans LLM)"],
+            data={"polymarket_positions": True, "skip_web": True},
         )
 
     async def _try_trade_status_response(

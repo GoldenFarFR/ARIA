@@ -83,6 +83,32 @@ async def run_weekly_forecasts(
     return ids
 
 
+async def format_weekly_forecast_alert(ids: list[int]) -> str:
+    """Per-prediction detail + chart link for the walk-forward Telegram
+    alert (13/08, operator request: the notification only showed a bare
+    count before, with no way to see WHICH tokens were forecast or check
+    them without digging through the DB)."""
+    from aria_core import vc_predictions
+    from aria_core.services.dexscreener import token_url
+
+    lines = [f"🎯 ARIA — {len(ids)} nouveaux pronostics enregistrés (walk-forward)."]
+    for pid in ids:
+        pred = await vc_predictions.get_prediction(pid)
+        if not pred:
+            continue
+        contract = pred.get("contract") or ""
+        chain = pred.get("network") or "base"
+        reco = pred.get("recommandation") or "?"
+        potentiel = pred.get("potentiel")
+        pot_txt = f"{potentiel}/10" if potentiel is not None else "?"
+        horizon = HORIZON_DAYS.get(pred.get("strategy") or "vc", 30)
+        lines.append(
+            f"\n{contract[:10]}… — {reco} (potentiel {pot_txt}, résolution ~{horizon}j)\n"
+            f"{token_url(contract, chain=chain)}"
+        )
+    return "\n".join(lines)
+
+
 def _num(v) -> float | None:
     """Parses a price possibly given as text ('$0,012' -> 0.012). None if impossible."""
     try:
