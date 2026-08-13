@@ -716,6 +716,11 @@ async def evaluate_bonding_entry(
         "price": price_usd,
         "target": target_usd,
         "invalidation": invalidation_usd,
+        # 12/08, operator-found gap: a bonding token has no working
+        # DexScreener page (see paper_trader.open_position's own comment) --
+        # `token.virtual_id` (already resolved above via fetch_by_address)
+        # lets Telegram alerts link to the real app.virtuals.io page instead.
+        "virtual_id": token.virtual_id,
         "bonding_score": bonding_score,
         "potential_score": potential_score,
         "conviction_process_trail": conviction_process_trail,

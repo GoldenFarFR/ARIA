@@ -30,6 +30,32 @@ from aria_core.services.dexscreener import console_url, token_url
 
 logger = logging.getLogger(__name__)
 
+# 12/08, operator-found gap: a bonding-curve position (chain == this marker,
+# see bonding_entry.CHAIN_MARKER -- duplicated as a literal here to avoid a
+# paper_trader<->bonding_entry import cycle, both already import each other's
+# neighbors) has no working DexScreener page -- no real DEX pool exists until
+# the token graduates. ``services.dexscreener.token_url`` doesn't know this,
+# it builds a chain-agnostic (and here, broken) URL regardless.
+_BONDING_CHAIN_MARKER = "virtuals-bonding"
+
+
+def _chart_url(contract: str, chain: str | None, virtual_id: object = None) -> str:
+    """The real, working chart link for a position: the Virtuals Protocol
+    page for a bonding-curve token with a known ``virtual_id`` (resolved once
+    at entry, see ``bonding_entry.evaluate_bonding_entry``), DexScreener's
+    token page otherwise -- same degrade-gracefully doctrine as everywhere
+    else in this codebase (a bonding position opened before this work, with
+    no stored ``virtual_id`` yet, keeps the old -- broken -- link rather than
+    a fabricated one)."""
+    if (chain or "").strip().lower() == _BONDING_CHAIN_MARKER:
+        from aria_core.services.virtuals import public_token_url
+
+        url = public_token_url(virtual_id)
+        if url:
+            return url
+    return token_url(contract, chain=chain or "base")
+
+
 DB_PATH = str(aria_db_path())
 
 STARTING_CAPITAL_USD = 1_000_000.0
@@ -800,7 +826,7 @@ _POS_FIELDS = (
     "conviction_process_trail", "conviction_website_corroborated", "conviction_posting_cadence",
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
-    "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd",
+    "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd", "virtual_id",
 )
 
 _ADDED_COLUMNS = [
@@ -984,6 +1010,14 @@ _ADDED_COLUMNS = [
     # used here to size or gate a position. NULL for any position opened
     # before this work or by an analyzer that doesn't provide it.
     ("entry_market_cap_usd", "REAL"),
+    # 12/08, operator-found gap: a bonding-curve position's Telegram alerts
+    # linked to a DexScreener page that never worked (no real DEX pool exists
+    # until the token graduates) -- the Virtuals Strapi id, resolved once at
+    # entry by bonding_entry.py (already had it in hand via fetch_by_address),
+    # lets the alert link to the real app.virtuals.io page instead (see
+    # services.virtuals.public_token_url). NULL for any non-bonding position,
+    # or a bonding one opened before this work -- never an invented value.
+    ("virtual_id", "INTEGER"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -1039,6 +1073,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("velocity_ref_price_at", "TEXT"),
     # 08/01 -- kept in parity with _ADDED_COLUMNS above.
     ("entry_market_cap_usd", "REAL"),
+    # 12/08 -- kept in parity with _ADDED_COLUMNS above.
+    ("virtual_id", "INTEGER"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1906,6 +1942,7 @@ async def open_position(
     align_macd: bool | None = None,
     align_pattern: bool | None = None,
     entry_market_cap_usd: float | None = None,
+    virtual_id: int | None = None,
     allow_multiple: bool = False,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
@@ -2146,8 +2183,8 @@ async def open_position(
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
                liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet,
-               align_ema, align_macd, align_pattern, entry_market_cap_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               align_ema, align_macd, align_pattern, entry_market_cap_usd, virtual_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              # 08/05 -- high_water_price starts at the SPOT entry (the
@@ -2182,7 +2219,7 @@ async def open_position(
              None if align_ema is None else int(align_ema),
              None if align_macd is None else int(align_macd),
              None if align_pattern is None else int(align_pattern),
-             entry_market_cap_usd),
+             entry_market_cap_usd, virtual_id),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -2611,7 +2648,7 @@ def format_buy_alert(pos: dict) -> str:
     if thesis:
         lines.append(f"Thèse : {thesis}")
     if pos.get("contract"):
-        lines.append(f"DexScreener : {token_url(pos['contract'], chain=pos.get('chain') or 'base')}")
+        lines.append(f"Graphique : {_chart_url(pos['contract'], pos.get('chain'), pos.get('virtual_id'))}")
         lines.append(f"Console ARIA : {console_url(pos['contract'], chain=pos.get('chain') or 'base')}")
     lines.append("Aucun argent réel — preuve de performance en cours.")
     return "\n".join(lines)
@@ -2654,7 +2691,7 @@ def _format_tracked_position_line(t: dict) -> str:
         )
         if t.get("contract"):
             line += (
-                f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+                f" · {_chart_url(t['contract'], t.get('chain'), t.get('virtual_id'))}"
                 f" · {console_url(t['contract'], chain=t.get('chain') or 'base')}"
             )
         return line
@@ -2675,7 +2712,7 @@ def _format_tracked_position_line(t: dict) -> str:
         line += f" · entrée {entry:.6g}" + (f" · détenue {hold}" if hold else "")
     if t.get("contract"):
         line += (
-            f" · {token_url(t['contract'], chain=t.get('chain') or 'base')}"
+            f" · {_chart_url(t['contract'], t.get('chain'), t.get('virtual_id'))}"
             f" · {console_url(t['contract'], chain=t.get('chain') or 'base')}"
         )
     return line
@@ -2817,7 +2854,7 @@ def format_sell_alert(closed: dict) -> str:
     if notes:
         lines.append(f"Pourquoi : {notes}")
     if closed.get("contract"):
-        lines.append(f"DexScreener : {token_url(closed['contract'], chain=closed.get('chain') or 'base')}")
+        lines.append(f"Graphique : {_chart_url(closed['contract'], closed.get('chain'), closed.get('virtual_id'))}")
         lines.append(f"Console ARIA : {console_url(closed['contract'], chain=closed.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
@@ -2839,7 +2876,7 @@ def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str
         "Aucun moyen de vérifier la concentration des détenteurs (service gratuit ET payant indisponibles) -- achat refusé par prudence, jamais à l'aveugle.",
     ]
     if contract:
-        lines.append(f"DexScreener : {token_url(contract, chain=chain or 'base')}")
+        lines.append(f"Graphique : {_chart_url(contract, chain, None)}")
         lines.append(f"Console ARIA : {console_url(contract, chain=chain or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
@@ -2868,7 +2905,7 @@ def format_partial_exit_alert(partial: dict) -> str:
     if notes:
         lines.append(f"Pourquoi : {notes}")
     if partial.get("contract"):
-        lines.append(f"DexScreener : {token_url(partial['contract'], chain=partial.get('chain') or 'base')}")
+        lines.append(f"Graphique : {_chart_url(partial['contract'], partial.get('chain'), partial.get('virtual_id'))}")
         lines.append(f"Console ARIA : {console_url(partial['contract'], chain=partial.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
@@ -4031,6 +4068,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             thesis=("; ".join(sig.get("reasons") or []) or None),
             pool_liquidity_usd=sig.get("liquidity_usd"),
             entry_market_cap_usd=sig.get("market_cap_usd"),
+            virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             strategy="momentum",
             entry_regime=sig.get("regime"),
@@ -4995,6 +5033,7 @@ async def _open_new_entries_for_wallet(
             # any analyzer that doesn't provide it (e.g. the old VC-thesis
             # pilot), never an invented value.
             entry_market_cap_usd=sig.get("market_cap_usd"),
+            virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             # 07/20 -- Formula B: the exit discipline applied depends on the
             # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),

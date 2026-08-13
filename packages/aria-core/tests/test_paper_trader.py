@@ -2181,6 +2181,23 @@ async def test_open_position_golden_pocket_bounds_default_to_none(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_position_persists_virtual_id(tmp_db):
+    """12/08 fix: the bonding-curve token's own Virtuals id must survive
+    persistence so the chart link (_chart_url) can be rebuilt later --
+    the analyzer dict field is populated by bonding_entry.evaluate_bonding_entry."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, virtual_id=47656, wallet="swing")
+    assert pos["virtual_id"] == 47656
+
+
+@pytest.mark.asyncio
+async def test_open_position_virtual_id_defaults_to_none(tmp_db):
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+    assert pos["virtual_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_open_position_removes_contract_from_manual_queue(tmp_db):
     """Item #236, 30/07: a contract queued via /add is drained from
     manual_candidates once actually bought -- no longer needs re-discovery
@@ -3707,6 +3724,33 @@ def test_format_buy_alert_includes_dexscreener_link():
 def test_format_buy_alert_defaults_to_base_chain_for_dexscreener_link():
     buy = pt.format_buy_alert({"symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000})
     assert f"https://dexscreener.com/base/{A}" in buy
+
+
+def test_format_buy_alert_uses_virtuals_link_for_bonding_position_with_virtual_id():
+    """12/08 fix: a bonding-curve position never resolves on DexScreener --
+    the real chart lives on Virtuals Protocol's own page."""
+    buy = pt.format_buy_alert({
+        "symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,
+        "chain": "virtuals-bonding", "virtual_id": 47656,
+    })
+    assert "https://app.virtuals.io/virtuals/47656" in buy
+    assert "dexscreener.com" not in buy
+
+
+def test_format_buy_alert_falls_back_to_dexscreener_for_bonding_without_virtual_id():
+    """A bonding position opened before this fix has no stored virtual_id --
+    degrades to the old (broken) link rather than a fabricated one, cf.
+    ``_chart_url``'s own docstring."""
+    buy = pt.format_buy_alert({
+        "symbol": "AAA", "contract": A, "entry_price": 2.0, "cost_usd": 50_000,
+        "chain": "virtuals-bonding",
+    })
+    assert f"https://dexscreener.com/virtuals-bonding/{A}" in buy
+
+
+def test_chart_url_non_bonding_chain_ignores_virtual_id():
+    url = pt._chart_url(A, "solana", virtual_id=47656)
+    assert url == f"https://dexscreener.com/solana/{A}"
 
 
 def test_format_buy_alert_bolds_the_title_line():

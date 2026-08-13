@@ -578,6 +578,26 @@ async def test_buy_forwards_virtual_id_as_known_launchpad_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_buy_dict_carries_virtual_id_for_chart_link(monkeypatch):
+    """The BUY dict must carry the token's own virtual_id so paper_trader
+    can persist it and build a working Virtuals Protocol chart link --
+    the app.virtuals.io page requires this id, a DexScreener link never
+    resolves for a bonding-curve token (real bug found 12/08)."""
+    token = _setup_buy_mocks(monkeypatch)
+    token.virtual_id = 47656
+
+    async def fake_research(contract, symbol, chain, **kwargs):
+        return bonding_entry.ConvictionResearch(available=False)
+
+    monkeypatch.setattr(bonding_entry, "research_project_potential", fake_research)
+
+    result = await bonding_entry.evaluate_bonding_entry("0xabc")
+
+    assert result["action"] == "BUY"
+    assert result["virtual_id"] == 47656
+
+
+@pytest.mark.asyncio
 async def test_buy_uses_conviction_score_for_sizing_when_available(monkeypatch):
     """potential_score/conviction_* must reach the returned dict as-is --
     paper_trader.compute_entry_alloc already reads potential_score from it,

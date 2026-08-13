@@ -25,6 +25,7 @@ from aria_core.services.virtuals import (
     graduation_progress,
     is_in_bonding,
     parse_virtual,
+    public_token_url,
     virtual_usd_rate,
 )
 
@@ -408,6 +409,16 @@ def test_build_token_by_pretoken_url():
         "?filters[preToken][$eq]=0x6f8c2eb585a93b29721b17e050beabd3125fa937"
         "&filters[chain]=BASE"
     )
+
+
+def test_public_token_url():
+    assert public_token_url(987) == "https://app.virtuals.io/virtuals/987"
+
+
+def test_public_token_url_none_when_virtual_id_missing():
+    # Jamais un lien devine/casse -- None force l'appelant à retomber
+    # sur un autre chart plutot que d'afficher une URL brisee.
+    assert public_token_url(None) is None
 
 
 # ----------------------------------------------------------------------

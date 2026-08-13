@@ -503,6 +503,24 @@ def build_token_url(virtual_id: object) -> str:
     return f"{_VIRTUALS_ENDPOINT}/{quote(str(virtual_id), safe='')}"
 
 
+# 12/08, operator-found gap: a bonding-curve token has no working DexScreener
+# page (no real DEX pool exists yet), yet ARIA's Telegram alerts kept linking
+# to one anyway (services.dexscreener.token_url, chain-agnostic). This is the
+# real HUMAN-FACING page (``app.virtuals.io``, distinct from the JSON API
+# endpoint above) -- already referenced/recognized elsewhere in the codebase
+# (bonding_entry.py, conviction_research.py) as "app.virtuals.io/virtuals/<id>",
+# now given a real builder so callers stop hand-writing the string.
+_PUBLIC_TOKEN_BASE_URL = "https://app.virtuals.io/virtuals"
+
+
+def public_token_url(virtual_id: object) -> str | None:
+    """Human-facing Virtuals Protocol page for one token -- ``None`` if
+    ``virtual_id`` is missing (never a broken/guessed URL)."""
+    if virtual_id is None:
+        return None
+    return f"{_PUBLIC_TOKEN_BASE_URL}/{quote(str(virtual_id), safe='')}"
+
+
 def build_token_by_address_url(token_address: str, chain: str = "BASE") -> str:
     """URL filtered by token address (``filters[tokenAddress][$eq]=0x…``).
 
