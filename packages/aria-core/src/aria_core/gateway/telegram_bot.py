@@ -125,7 +125,45 @@ async def _record_kill_incident(
 
 def _format_tg(text: str) -> str:
     """Plain text for Telegram — strip markdown the LLM/skills emit without parse_mode."""
-    return plain_telegram(fix_handle_in_text(text))[:4000]
+    return plain_telegram(fix_handle_in_text(text))
+
+
+# 13/08, real bug found live (operator screenshot): a position-tracking alert
+# announced "25 positions ouvertes" in its header but only showed ONE --
+# ``_format_tg`` silently truncated the message body to 4000 chars with no
+# indication anything was cut. Telegram's real hard limit is 4096 chars/
+# message (``sendMessage`` rejects anything longer with a 400) -- this
+# constant keeps a safety margin under it.
+_TELEGRAM_MAX_CHARS = 4000
+
+
+def _split_for_telegram(text: str) -> list[str]:
+    """Splits ``text`` into chunks that each fit under ``_TELEGRAM_MAX_CHARS``,
+    breaking ONLY on line boundaries (never mid-line, never mid-URL) so a
+    long alert (many tracked positions, many alerts) is sent as several
+    complete messages instead of one silently truncated one. A single line
+    longer than the limit on its own is a pathological case not seen in
+    practice -- hard-cut as a last resort rather than looping forever."""
+    if len(text) <= _TELEGRAM_MAX_CHARS:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.split("\n"):
+        line_len = len(line) + 1  # +1 for the '\n' this line will need
+        if current and current_len + line_len > _TELEGRAM_MAX_CHARS:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        if line_len - 1 > _TELEGRAM_MAX_CHARS:
+            for i in range(0, len(line), _TELEGRAM_MAX_CHARS):
+                chunks.append(line[i : i + _TELEGRAM_MAX_CHARS])
+            continue
+        current.append(line)
+        current_len += line_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 async def _reply(message, text: str) -> None:
@@ -255,12 +293,20 @@ async def send_message(
             kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
         if parse_mode:
             kwargs["parse_mode"] = parse_mode
-        if reply_markup is not None:
-            kwargs["reply_markup"] = reply_markup
         final_text = text if parse_mode else _format_tg(text)
-        await _bot_app.bot.send_message(
-            chat_id=target, text=final_text, message_thread_id=message_thread_id, **kwargs,
-        )
+        # 13/08, real bug found live: a message over Telegram's real ~4096-char
+        # limit used to be silently truncated (header could announce "25
+        # positions ouvertes" while the body showed only 1) -- now split into
+        # several complete messages instead, ``reply_markup`` attached only to
+        # the LAST one (buttons on every chunk would be noisy/misleading).
+        chunks = _split_for_telegram(final_text)
+        for i, chunk in enumerate(chunks):
+            chunk_kwargs = dict(kwargs)
+            if reply_markup is not None and i == len(chunks) - 1:
+                chunk_kwargs["reply_markup"] = reply_markup
+            await _bot_app.bot.send_message(
+                chat_id=target, text=chunk, message_thread_id=message_thread_id, **chunk_kwargs,
+            )
         return True
     except Exception as exc:
         logger.warning("Telegram send failed: %s", exc)
