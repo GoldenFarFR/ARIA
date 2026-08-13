@@ -7,10 +7,10 @@
 # unattended on every push to main with a fixed "Devil's Advocate" role) --
 # this one is invoked ONLY when the operator explicitly asks for a second
 # opinion on a specific plan, mid-conversation, synchronous (the
-# caller waits for the answer, never detached). Reuses the exact same
-# verified pattern (auth, headers, OpenRouter) as the existing post-push
-# mechanism -- same doctrine on why: a model and lab different from the one
-# writing the code, never Claude judging itself.
+# caller waits for the answer, never detached). Same doctrine on why as the
+# post-push mechanism: a model and lab different from the one writing the
+# code, never Claude judging itself -- API auth path now shared with it too
+# (see 13/08 note below, API Anthropic directe).
 #
 # Usage: cat plan.txt | scripts/consult-gemini.sh
 #        echo "some plan text" | scripts/consult-gemini.sh
@@ -74,11 +74,21 @@
 # "reponse vide"/finish_reason guard below already surfaces this loudly
 # rather than silently, but a wasted paid call on a hard, long prompt
 # (exactly this script's use case) remains a real possibility to watch for.
+#
+# 13/08 -- OpenRouter -> API Anthropic directe (backlog #283 audit: this was
+# the ONLY remaining OpenRouter exposure after devils-advocate-lib.sh's own
+# 10/08 migration, itself prompted by a real OpenRouter credits-exhausted
+# incident). Same benefit here: removes a third-party dependency that has
+# already failed once for this same model, same doctrine as the other hook.
+# Reuses devils-advocate-lib.sh's model/pricing constants (same model,
+# single source of truth) rather than a second hardcoded copy.
 set -uo pipefail
 
 REPO_DIR="/opt/aria"
 ENV_FILE="$REPO_DIR/vanguard/backend/.env"
-MODEL="anthropic/claude-fable-5"
+# shellcheck source=./devils-advocate-lib.sh
+source "$REPO_DIR/scripts/devils-advocate-lib.sh"
+MODEL="$DEVILS_ADVOCATE_MODEL"
 
 RAW_PROMPT="$(cat)"
 
@@ -114,9 +124,9 @@ PROMPT_CONTENT=$(
 # Key read ONLY from the container's .env at the moment of need -- never
 # kept in the host shell, never displayed/logged (same doctrine as
 # devils-advocate-review.sh).
-OR_KEY=$(grep '^OPENROUTER_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
-if [ -z "$OR_KEY" ]; then
-  echo "ERREUR: OPENROUTER_API_KEY introuvable dans $ENV_FILE" >&2
+API_KEY=$(grep '^ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+if [ -z "$API_KEY" ]; then
+  echo "ERREUR: ANTHROPIC_API_KEY introuvable dans $ENV_FILE" >&2
   exit 1
 fi
 
@@ -150,29 +160,19 @@ PAYLOAD=$(jq -n \
   --arg model "$MODEL" \
   --arg system "$SYSTEM_PROMPT" \
   --arg user "$PROMPT_CONTENT" \
-  --arg session_id "consult-gemini-manual-$$" \
-  '{
-    model: $model,
-    max_tokens: 96000,
-    reasoning: {effort: "medium"},
-    messages: [
-      {role: "system", content: $system},
-      {role: "user", content: $user}
-    ],
-    session_id: $session_id
-  }')
+  --argjson max_tokens "$DEVILS_ADVOCATE_MAX_TOKENS" \
+  --arg effort "$DEVILS_ADVOCATE_THINKING_EFFORT" \
+  '{model: $model, max_tokens: $max_tokens, system: $system, thinking: {type: "adaptive"}, output_config: {effort: $effort}, messages: [{role: "user", content: $user}]}')
 
 RESP_TMP=$(mktemp /tmp/consult-gemini-response.XXXXXX.json)
 HTTP_STATUS=$(curl -s -o "$RESP_TMP" -w "%{http_code}" \
   --max-time 120 \
-  -X POST https://openrouter.ai/api/v1/chat/completions \
-  -H "Authorization: Bearer $OR_KEY" \
-  -H "Content-Type: application/json" \
-  -H "HTTP-Referer: https://github.com/GoldenFarFR/aria-vanguard" \
-  -H "X-OpenRouter-Title: ARIA Manual Gemini Consult" \
-  -H "X-Title: ARIA Manual Gemini Consult" \
+  -X POST https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
   -d "$PAYLOAD")
-unset OR_KEY
+unset API_KEY
 
 if [ "$HTTP_STATUS" != "200" ]; then
   echo "ERREUR HTTP ${HTTP_STATUS} -- reponse brute :" >&2
@@ -181,12 +181,15 @@ if [ "$HTTP_STATUS" != "200" ]; then
   exit 1
 fi
 
-FINISH_REASON=$(jq -r '.choices[0].finish_reason // "inconnu"' "$RESP_TMP")
-RESPONSE_CONTENT=$(jq -r '.choices[0].message.content // "reponse vide"' "$RESP_TMP")
+FINISH_REASON=$(jq -r '.stop_reason // "inconnu"' "$RESP_TMP")
+RESPONSE_CONTENT=$(jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")' "$RESP_TMP")
+[ -z "$RESPONSE_CONTENT" ] && RESPONSE_CONTENT="reponse vide"
+read -r IN_TOKENS OUT_TOKENS COST_USD <<< "$(devils_advocate_cost "$(cat "$RESP_TMP")")"
+echo "-- cout reel : \$${COST_USD} (${IN_TOKENS} tokens input, ${OUT_TOKENS} tokens output) --" >&2
 rm -f "$RESP_TMP"
 
-if [ "$FINISH_REASON" = "length" ]; then
-  echo "ATTENTION -- reponse TRONQUEE (finish_reason=length, max_tokens atteint) -- la reponse ci-dessous est incomplete, relance avec un contexte plus court ou augmente max_tokens dans ce script." >&2
+if [ "$FINISH_REASON" = "max_tokens" ]; then
+  echo "ATTENTION -- reponse TRONQUEE (stop_reason=max_tokens) -- la reponse ci-dessous est incomplete, relance avec un contexte plus court ou augmente max_tokens dans ce script." >&2
 fi
 
 # Garde-fou mecanique (08/03, recommandation du workflow d'audit) : une
