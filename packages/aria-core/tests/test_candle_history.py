@@ -235,3 +235,49 @@ async def test_mark_watchlist_refreshed_is_idempotent_upsert():
     await candle_history.mark_watchlist_refreshed(*CONTRACT_A)  # must not raise / duplicate
     due = await candle_history.due_for_refresh([CONTRACT_A], limit=1)
     assert due == [CONTRACT_A]
+
+
+# -- due_for_refresh priority (#97, 13/08: open swing/vc positions cut the queue) --
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_priority_beats_never_fetched_non_favorite():
+    # C is never fetched (would normally win the tie against A/B), but only
+    # A is a favorite -- A must still come first.
+    due = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_C], limit=1, priority={CONTRACT_A},
+    )
+    assert due == [CONTRACT_A]
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_priority_still_respects_round_robin_within_group():
+    # Both A and B are favorites; B's cursor is older -- must still come
+    # first WITHIN the favorite group, exactly like the unweighted case.
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_B)
+    await candle_history.mark_watchlist_refreshed(*CONTRACT_A)  # A now more recent than B
+    due = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_B], limit=2, priority={CONTRACT_A, CONTRACT_B},
+    )
+    assert due == [CONTRACT_B, CONTRACT_A]
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_priority_none_or_empty_is_unweighted_default():
+    due_none = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=2)
+    due_empty = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_B], limit=2, priority=set(),
+    )
+    assert set(due_none) == set(due_empty) == {CONTRACT_A, CONTRACT_B}
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_priority_never_drops_non_favorites_from_batch():
+    # A favorite plus 2 non-favorites, limit covers all 3 -- nobody is
+    # dropped, only reordered.
+    due = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=3, priority={CONTRACT_C},
+    )
+    assert set(due) == {CONTRACT_A, CONTRACT_B, CONTRACT_C}
+    assert due[0] == CONTRACT_C

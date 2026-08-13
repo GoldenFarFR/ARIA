@@ -309,7 +309,7 @@ async def get_history_by_contract(
 
 
 async def due_for_refresh(
-    candidates: list[tuple[str, str]], limit: int,
+    candidates: list[tuple[str, str]], limit: int, *, priority: set[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str]]:
     """Round-robin selection for the watchlist candle-refresh collector --
     never-fetched ``(contract, chain)`` pairs first, then oldest-fetched
@@ -318,7 +318,15 @@ async def due_for_refresh(
     across modules -- keeps this module decoupled from goplus_watchlist's
     schema, and at watchlist scale (thousands, not millions) an in-Python
     sort over the full cursor table is simpler and safer than a cross-module
-    SQL join with no real cost."""
+    SQL join with no real cost.
+
+    ``priority`` (#97, 13/08): pairs actually held by a live pocket (swing/vc
+    open positions) sort ahead of the rest of the round-robin, so a real
+    position's own candles never wait behind thousands of never-traded
+    watchlist tokens sharing the same collector -- WITHIN the priority group,
+    the same never-fetched-first/oldest-first order still applies, so a
+    just-refreshed favorite doesn't cut ahead of a stale one. Never removes a
+    non-favorite from the batch; it only reorders."""
     if not candidates or limit <= 0:
         return []
     await _ensure_table()
@@ -327,9 +335,12 @@ async def due_for_refresh(
             await db.execute("SELECT contract, chain, last_fetched_at FROM candle_watchlist_cursor")
         ).fetchall()
     cursors = {(r[0], r[1]): r[2] for r in rows}
+    favorites = priority or set()
     ranked = sorted(
         candidates,
-        key=lambda pair: (cursors.get(pair) is not None, cursors.get(pair) or ""),
+        key=lambda pair: (
+            pair not in favorites, cursors.get(pair) is not None, cursors.get(pair) or "",
+        ),
     )
     return ranked[:limit]
 

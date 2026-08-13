@@ -1576,16 +1576,34 @@ async def run_candle_history_watchlist_cycle() -> dict:
     clean in prod (explicit operator caution: start small, this shares a
     throttle with a documented past 6-day live-lock incident).
 
+    #97 (13/08): open swing/vc positions are passed as ``priority`` to
+    ``due_for_refresh`` so a token ARIA is actually holding gets refreshed
+    ahead of the (much larger) pool of never-traded watchlist entries --
+    best-effort (an error reading open positions degrades to the unweighted
+    round-robin, never blocks the collector).
+
     Best-effort per token: one broken fetch never stops the passage, and
     ``mark_watchlist_refreshed`` runs in a ``finally`` so a persistently
     failing token still cycles to the back of the queue instead of blocking
     it forever."""
-    from aria_core import candle_history
+    from aria_core import candle_history, paper_trader
     from aria_core.services import goplus_watchlist
 
     watchlist_rows = await goplus_watchlist.list_all()
     candidates = [(row["contract"], row["chain"]) for row in watchlist_rows]
-    due = await candle_history.due_for_refresh(candidates, _CANDLE_HISTORY_WATCHLIST_BATCH_SIZE)
+    try:
+        open_positions = await paper_trader.get_open_positions()
+        priority = {
+            (pos["contract"], pos["chain"])
+            for pos in open_positions
+            if pos.get("pocket") in ("swing", "vc")
+        }
+    except Exception as exc:  # noqa: BLE001 -- best-effort priority, never blocks the collector
+        logger.info("candle_history_watchlist_cycle: open-positions priority lookup failed (%s)", exc)
+        priority = set()
+    due = await candle_history.due_for_refresh(
+        candidates, _CANDLE_HISTORY_WATCHLIST_BATCH_SIZE, priority=priority,
+    )
     if not due:
         return {"fetched": 0, "attempted": 0}
 

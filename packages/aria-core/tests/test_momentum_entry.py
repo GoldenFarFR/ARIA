@@ -2136,7 +2136,7 @@ async def test_candle_history_watchlist_cycle_fetches_due_tokens(monkeypatch):
 
     await wl.add_or_touch(CONTRACT, "base", 50.0)
 
-    async def fake_due_for_refresh(candidates, limit):
+    async def fake_due_for_refresh(candidates, limit, priority=None):
         assert (CONTRACT, "base") in candidates
         return [(CONTRACT, "base")]
 
@@ -2193,7 +2193,7 @@ async def test_candle_history_watchlist_cycle_no_pair_still_marks_refreshed(monk
 
     await wl.add_or_touch(CONTRACT, "base", 50.0)
 
-    async def fake_due_for_refresh(candidates, limit):
+    async def fake_due_for_refresh(candidates, limit, priority=None):
         return [(CONTRACT, "base")]
 
     monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
@@ -2226,7 +2226,7 @@ async def test_candle_history_watchlist_cycle_fetch_failure_never_blocks_the_pas
 
     await wl.add_or_touch(CONTRACT, "base", 50.0)
 
-    async def fake_due_for_refresh(candidates, limit):
+    async def fake_due_for_refresh(candidates, limit, priority=None):
         return [(CONTRACT, "base")]
 
     monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
@@ -2247,6 +2247,68 @@ async def test_candle_history_watchlist_cycle_fetch_failure_never_blocks_the_pas
 
     assert result == {"fetched": 0, "attempted": 1}
     assert marked == [(CONTRACT, "base")]
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_prioritizes_open_swing_vc_positions(monkeypatch):
+    """#97 (13/08): an open swing/vc position's own (contract, chain) must
+    reach due_for_refresh's `priority` set -- a scalping-pocket position must
+    NOT (this collector's mode="standard" only feeds swing+vc, see the
+    function's own docstring)."""
+    from aria_core import candle_history, paper_trader
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    other_contract = "0x" + "9" * 40
+    await wl.add_or_touch(other_contract, "base", 50.0)
+
+    async def fake_get_open_positions():
+        return [
+            {"contract": CONTRACT, "chain": "base", "pocket": "swing"},
+            {"contract": other_contract, "chain": "base", "pocket": "scalping_v8"},
+        ]
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
+
+    seen_priority = {}
+
+    async def fake_due_for_refresh(candidates, limit, priority=None):
+        seen_priority["value"] = priority
+        return []
+
+    monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
+
+    await me.run_candle_history_watchlist_cycle()
+
+    assert seen_priority["value"] == {(CONTRACT, "base")}
+
+
+@pytest.mark.asyncio
+async def test_candle_history_watchlist_cycle_priority_lookup_failure_degrades_gracefully(monkeypatch):
+    """A broken open-positions read must never block the collector -- falls
+    back to the unweighted round-robin (empty priority)."""
+    from aria_core import candle_history, paper_trader
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def broken_get_open_positions():
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", broken_get_open_positions)
+
+    seen_priority = {}
+
+    async def fake_due_for_refresh(candidates, limit, priority=None):
+        seen_priority["value"] = priority
+        return []
+
+    monkeypatch.setattr(candle_history, "due_for_refresh", fake_due_for_refresh)
+
+    result = await me.run_candle_history_watchlist_cycle()
+
+    assert seen_priority["value"] == set()
+    assert result == {"fetched": 0, "attempted": 0}
 
 
 # ── run_dip_recovery_shadow_cycle (13/08, operator's -30%/24h dip-buy signal) ──
