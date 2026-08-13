@@ -272,3 +272,164 @@ def evaluate_filter_candidate_out_of_sample(
         ),
         validation_n=n, binomial=binomial, permutation=permutation,
     )
+
+
+# 13/08 -- backlog #293 (arXiv 2605.04004, "Structural Limits of OHLCV-Based
+# Intraday Signals", May 2026): a 5-criteria SIMULTANEOUS falsification
+# protocol tested against 14 intraday signal families over 947 days of 5min
+# candles -- NONE survived all 5 at once. Reused here as a mandatory gate
+# before promoting any future v8/8.x filter candidate, per the operator's own
+# methodology rule already in CLAUDE.md (never mine one batch, split before
+# looking, backtest_robustness before hard-gating). 2 of the 5 criteria were
+# already covered above (walk-forward via chronological_train_validation_split
+# + evaluate_filter_candidate_out_of_sample); this closes the remaining 3:
+# t-stat on returns (not just win/loss), inter-period stability, and an
+# explicit min-trade floor -- net-of-friction is a CONTRACT on the caller's
+# input (see below), not a new statistical check.
+
+
+@dataclass(frozen=True)
+class TStatResult:
+    t_stat: float
+    n: int
+    mean_return_pct: float
+    survives: bool
+
+
+def t_statistic_check(returns_pct: Sequence[float], *, min_t_stat: float = 2.0) -> TStatResult:
+    """One-sample t-statistic on a sequence of per-trade returns (percent,
+    net-of-friction -- see ``falsification_protocol_check``'s docstring for
+    that contract). Pure stdlib (no scipy): t = mean / (stdev / sqrt(n)),
+    sample stdev (n-1 denominator). A t-stat merely measures how far the mean
+    is from zero relative to its own noise -- it says nothing about
+    out-of-sample validity or friction, which is why this is one criterion
+    among 5, never used alone."""
+    n = len(returns_pct)
+    if n < 2:
+        return TStatResult(t_stat=0.0, n=n, mean_return_pct=0.0, survives=False)
+    mean = sum(returns_pct) / n
+    variance = sum((r - mean) ** 2 for r in returns_pct) / (n - 1)
+    stdev = math.sqrt(variance)
+    if stdev == 0:
+        t_stat = 0.0
+    else:
+        t_stat = mean / (stdev / math.sqrt(n))
+    return TStatResult(t_stat=t_stat, n=n, mean_return_pct=mean, survives=t_stat >= min_t_stat)
+
+
+@dataclass(frozen=True)
+class StabilityResult:
+    block_means: list[float]
+    positive_blocks: int
+    n_blocks: int
+    survives: bool
+
+
+def inter_period_stability_check(
+    returns_pct: Sequence[float], *, n_blocks: int = 4, min_positive_blocks: int | None = None,
+) -> StabilityResult:
+    """Splits ``returns_pct`` chronologically (input order is assumed
+    chronological -- never shuffled here) into ``n_blocks`` contiguous
+    blocks and checks the mean return stays positive in enough of them.
+    Same doctrine as the manual quartile-stability checks used throughout
+    this project's signal research (a mean that's only positive because of
+    1-2 outlier trades in a single block is exactly the false-positive
+    pattern this protocol exists to catch -- cf. the 10/08 wick-gate and the
+    13/08 v10 breakout-signal research, both caught this way by hand before
+    this function existed).
+
+    ``min_positive_blocks`` defaults to ALL blocks (strictest reading of
+    "stability" -- a single negative block is enough to reject) -- pass a
+    lower number for a deliberately looser bar."""
+    n = len(returns_pct)
+    if n < n_blocks:
+        return StabilityResult(block_means=[], positive_blocks=0, n_blocks=n_blocks, survives=False)
+    required = n_blocks if min_positive_blocks is None else min_positive_blocks
+    block_size = n // n_blocks
+    block_means = []
+    for i in range(n_blocks):
+        start = i * block_size
+        end = start + block_size if i < n_blocks - 1 else n
+        block = returns_pct[start:end]
+        block_means.append(sum(block) / len(block) if block else 0.0)
+    positive_blocks = sum(1 for m in block_means if m > 0)
+    return StabilityResult(
+        block_means=block_means, positive_blocks=positive_blocks, n_blocks=n_blocks,
+        survives=positive_blocks >= required,
+    )
+
+
+@dataclass(frozen=True)
+class FalsificationProtocolVerdict:
+    survives: bool
+    criteria: dict[str, bool]
+    reason: str
+    t_stat: TStatResult | None
+    stability: StabilityResult | None
+
+
+def falsification_protocol_check(
+    returns_pct: Sequence[float],
+    *,
+    min_trades: int = 30,
+    min_t_stat: float = 2.0,
+    n_stability_blocks: int = 4,
+    min_positive_blocks: int | None = None,
+) -> FalsificationProtocolVerdict:
+    """The full 5-criteria simultaneous falsification protocol (#293,
+    arXiv 2605.04004) -- a candidate filter must pass ALL 5 at once, not any
+    subset, exactly as the paper applies it (14 signal families tested,
+    zero survived all 5 -- a candidate passing 4/5 is still a rejection).
+
+    CONTRACT on ``returns_pct`` (the caller's responsibility, not checked
+    here -- mirrors ``evaluate_filter_candidate_out_of_sample``'s own
+    validation-only contract):
+      1. min_trades: len(returns_pct) >= min_trades (checked here).
+      2. t-stat >= min_t_stat: checked here via ``t_statistic_check``.
+      3. walk-forward out-of-sample: ``returns_pct`` MUST already be the
+         VALIDATION half of a prior ``chronological_train_validation_split``
+         -- never the train half, never an unsplit full sample.
+      4. net-of-friction positive: each value in ``returns_pct`` MUST already
+         include simulated fees/slippage (same doctrine as
+         ``wick_filter_shadow.py``'s +/-1.3% simulated fees) -- this function
+         has no way to verify that from the numbers alone, so it is a
+         documented contract, not a runtime check.
+      5. inter-period stability: checked here via
+         ``inter_period_stability_check``.
+
+    Returns a verdict with per-criterion detail (``criteria`` dict) so a
+    caller can see exactly which of the 5 failed, not just a single bit."""
+    n = len(returns_pct)
+    criteria: dict[str, bool] = {}
+
+    criteria["min_trades"] = n >= min_trades
+    if not criteria["min_trades"]:
+        return FalsificationProtocolVerdict(
+            survives=False,
+            criteria={**criteria, "t_stat": False, "net_of_friction_positive": False, "stability": False},
+            reason=f"only {n} trades (< {min_trades} minimum) -- accumulate more before testing",
+            t_stat=None, stability=None,
+        )
+
+    t_stat_result = t_statistic_check(returns_pct, min_t_stat=min_t_stat)
+    criteria["t_stat"] = t_stat_result.survives
+
+    mean_return = sum(returns_pct) / n
+    criteria["net_of_friction_positive"] = mean_return > 0
+
+    stability_result = inter_period_stability_check(
+        returns_pct, n_blocks=n_stability_blocks, min_positive_blocks=min_positive_blocks,
+    )
+    criteria["stability"] = stability_result.survives
+
+    survives = all(criteria.values())
+    if survives:
+        reason = f"all 5 criteria pass: n={n}, t_stat={t_stat_result.t_stat:.2f}, mean_return={mean_return:.2f}%, {stability_result.positive_blocks}/{stability_result.n_blocks} blocks positive"
+    else:
+        failed = [k for k, v in criteria.items() if not v]
+        reason = f"failed criteria: {', '.join(failed)} (mean_return={mean_return:.2f}%, t_stat={t_stat_result.t_stat:.2f})"
+
+    return FalsificationProtocolVerdict(
+        survives=survives, criteria=criteria, reason=reason,
+        t_stat=t_stat_result, stability=stability_result,
+    )

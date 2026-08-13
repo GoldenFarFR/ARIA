@@ -9,7 +9,10 @@ from aria_core.backtest_robustness import (
     bonferroni_correction,
     chronological_train_validation_split,
     evaluate_filter_candidate_out_of_sample,
+    falsification_protocol_check,
+    inter_period_stability_check,
     permutation_test_winrate_diff,
+    t_statistic_check,
 )
 
 
@@ -170,3 +173,83 @@ def test_out_of_sample_verdict_end_to_end_with_split():
         list(split.validation), claimed_p=0.6, min_validation_size=2,
     )
     assert verdict.validation_n == 3
+
+
+# --- #293 falsification protocol (arXiv 2605.04004) ------------------------
+
+
+def test_t_statistic_check_survives_on_a_consistent_positive_edge():
+    returns = [2.0, 1.5, 2.5, 1.8] * 8  # 32 trades, mean 1.95%, low noise
+    result = t_statistic_check(returns, min_t_stat=2.0)
+    assert result.survives is True
+    assert result.t_stat > 2.0
+    assert result.mean_return_pct == pytest.approx(1.95)
+
+
+def test_t_statistic_check_rejects_pure_noise_around_zero():
+    returns = ([5.0, -5.0] * 15)  # mean exactly 0, pure alternating noise
+    result = t_statistic_check(returns, min_t_stat=2.0)
+    assert result.survives is False
+    assert result.t_stat == pytest.approx(0.0)
+
+
+def test_t_statistic_check_handles_zero_variance_without_crashing():
+    result = t_statistic_check([1.0] * 30, min_t_stat=2.0)
+    assert result.t_stat == 0.0  # stdev=0 -- never a division by zero
+    assert result.survives is False
+
+
+def test_inter_period_stability_check_requires_every_block_positive_by_default():
+    returns = [1.0] * 4 + [1.0] * 4 + [1.0] * 4 + [-1.0] * 4  # 3 good blocks, 1 bad
+    result = inter_period_stability_check(returns, n_blocks=4)
+    assert result.positive_blocks == 3
+    assert result.survives is False  # strict: ALL blocks required by default
+
+
+def test_inter_period_stability_check_looser_bar_via_min_positive_blocks():
+    returns = [1.0] * 4 + [1.0] * 4 + [1.0] * 4 + [-1.0] * 4
+    result = inter_period_stability_check(returns, n_blocks=4, min_positive_blocks=3)
+    assert result.survives is True
+
+
+def test_falsification_protocol_rejects_below_min_trades():
+    verdict = falsification_protocol_check([2.0] * 20, min_trades=30)
+    assert verdict.survives is False
+    assert verdict.criteria["min_trades"] is False
+    assert "20 trades" in verdict.reason
+
+
+def test_falsification_protocol_survives_all_5_criteria_at_once():
+    # 32 trades, consistent positive edge, stable across all 4 blocks --
+    # the ONE case the paper found none of its 14 tested signal families
+    # ever achieved simultaneously.
+    returns = [2.0, 1.5, 2.5, 1.8] * 8
+    verdict = falsification_protocol_check(returns, min_trades=30)
+    assert verdict.survives is True
+    assert all(verdict.criteria.values())
+    assert verdict.t_stat.survives is True
+    assert verdict.stability.survives is True
+
+
+def test_falsification_protocol_rejects_on_stability_alone_despite_positive_mean_and_t_stat():
+    # 24 strong-positive trades + 8 strongly negative ones in the LAST block:
+    # min_trades passes, t-stat passes (mean far from zero), net-of-friction
+    # passes (mean=3.5% > 0) -- but block 4 is entirely negative, exactly the
+    # "1-2 outlier trades inflate a misleading global average" pattern this
+    # criterion exists to catch (cf. the 10/08 wick-gate incident).
+    returns = [5.0] * 24 + [-1.0] * 8
+    verdict = falsification_protocol_check(returns, min_trades=30)
+    assert verdict.survives is False
+    assert verdict.criteria["min_trades"] is True
+    assert verdict.criteria["t_stat"] is True
+    assert verdict.criteria["net_of_friction_positive"] is True
+    assert verdict.criteria["stability"] is False
+
+
+def test_falsification_protocol_reproduces_the_real_wick_gate_rejection():
+    # The real 10/08 case reframed for this protocol: 43 near-zero/negative
+    # live trades against a claimed strong edge -- must reject decisively.
+    returns = [-0.5] * 43
+    verdict = falsification_protocol_check(returns, min_trades=30)
+    assert verdict.survives is False
+    assert verdict.criteria["net_of_friction_positive"] is False
