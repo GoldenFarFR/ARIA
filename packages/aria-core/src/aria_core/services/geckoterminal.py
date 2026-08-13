@@ -256,6 +256,21 @@ class PoolMetadata:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class PoolTrade:
+    tx_from_address: str
+    kind: str  # "buy" or "sell", as GeckoTerminal names it (NOT "type")
+    volume_usd: float
+    block_timestamp: str
+
+
+@dataclass
+class PoolTradesResult:
+    trades: list[PoolTrade] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
 @dataclass
 class OHLCVResult:
     candles: list[Candle] = field(default_factory=list)
@@ -407,6 +422,47 @@ class GeckoTerminalClient:
         if created_at is None:
             return PoolMetadata(pool_address=pool_address, available=False, error="date de création du pool indisponible")
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
+
+    async def get_pool_trades(
+        self, pool_address: str, *, network: str = NETWORK, min_volume_usd: float | None = None,
+    ) -> PoolTradesResult:
+        """Latest trades (up to 300, past 24h) for a pool -- `kind` ("buy"/
+        "sell"), `tx_from_address` (the actual wallet), `volume_usd`. Verified
+        LIVE 13/08 against a real Base pool (this project's own throttled
+        client, not a raw call) -- the real field is `kind`, not `type` as
+        third-party docs claimed. Same dome doctrine as every other method
+        here: any failure -> `available=False`, never an exception."""
+        params: dict = {}
+        if min_volume_usd is not None:
+            params["trade_volume_in_usd_greater_than"] = min_volume_usd
+        data, error = await self._get_json(f"/networks/{network}/pools/{pool_address}/trades", params=params)
+        if error is not None:
+            return PoolTradesResult(available=False, error=error)
+        if not isinstance(data, dict):
+            return PoolTradesResult(available=False, error=UNAVAILABLE)
+
+        trades = []
+        for item in data.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            attrs = item.get("attributes") or {}
+            from_address = attrs.get("tx_from_address")
+            kind = attrs.get("kind")
+            if not isinstance(from_address, str) or not from_address:
+                continue
+            if not isinstance(kind, str) or not kind:
+                continue
+            try:
+                volume = float(attrs.get("volume_in_usd") or 0.0)
+            except (TypeError, ValueError):
+                volume = 0.0
+            trades.append(
+                PoolTrade(
+                    tx_from_address=from_address, kind=kind, volume_usd=volume,
+                    block_timestamp=str(attrs.get("block_timestamp") or ""),
+                )
+            )
+        return PoolTradesResult(trades=trades, available=True, error=None)
 
     async def resolve_primary_pool(self, token_address: str, *, network: str = NETWORK) -> PoolMetadata:
         """Resolves a token's MAIN pool -- #157: `get_pool_created_at`/

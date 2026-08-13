@@ -86,6 +86,105 @@ async def test_get_pool_created_at_missing_date_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_pool_trades_parses_buy_and_sell(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool/trades"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "data": [
+                        {
+                            "attributes": {
+                                "kind": "buy", "tx_from_address": "0xBUYER", "tx_hash": "0xhash1",
+                                "volume_in_usd": "123.45", "block_timestamp": "2026-08-13T22:00:00Z",
+                            },
+                        },
+                        {
+                            "attributes": {
+                                "kind": "sell", "tx_from_address": "0xSELLER", "tx_hash": "0xhash2",
+                                "volume_in_usd": "67.0", "block_timestamp": "2026-08-13T22:01:00Z",
+                            },
+                        },
+                    ],
+                },
+            ),
+        },
+    )
+
+    result = await client.get_pool_trades("0xpool")
+
+    assert result.available is True
+    assert len(result.trades) == 2
+    assert result.trades[0].kind == "buy"
+    assert result.trades[0].tx_from_address == "0xBUYER"
+    assert result.trades[0].volume_usd == 123.45
+    assert result.trades[1].kind == "sell"
+
+
+@pytest.mark.asyncio
+async def test_get_pool_trades_skips_malformed_rows(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool/trades"
+    _patch_client(
+        monkeypatch,
+        {
+            url: FakeResponse(
+                200,
+                {
+                    "data": [
+                        {"attributes": {"kind": "buy", "tx_from_address": ""}},
+                        {"attributes": {"kind": "", "tx_from_address": "0xBUYER"}},
+                        {"attributes": {"tx_from_address": "0xBUYER"}},
+                        {"attributes": {"kind": "buy", "tx_from_address": "0xREAL"}},
+                    ],
+                },
+            ),
+        },
+    )
+
+    result = await client.get_pool_trades("0xpool")
+
+    assert result.available is True
+    assert len(result.trades) == 1
+    assert result.trades[0].tx_from_address == "0xREAL"
+
+
+@pytest.mark.asyncio
+async def test_get_pool_trades_min_volume_param_forwarded(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool/trades"
+    seen_params = {}
+
+    class RecordingFakeClient(FakeClient):
+        async def get(self, url, params=None, headers=None):
+            seen_params.update(params or {})
+            return await super().get(url, params=params, headers=headers)
+
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.httpx.AsyncClient",
+        lambda **kw: RecordingFakeClient({url: FakeResponse(200, {"data": []})}),
+    )
+
+    await client.get_pool_trades("0xpool", min_volume_usd=500.0)
+
+    assert seen_params.get("trade_volume_in_usd_greater_than") == 500.0
+
+
+@pytest.mark.asyncio
+async def test_get_pool_trades_error_propagates_unavailable(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/base/pools/0xpool/trades"
+    _patch_client(monkeypatch, {url: FakeResponse(404)})
+
+    result = await client.get_pool_trades("0xpool")
+
+    assert result.available is False
+
+
+@pytest.mark.asyncio
 async def test_get_ohlcv_delegates_to_wide_ohlcv_client(monkeypatch):
     # #157, correction 14/07 : get_ohlcv ne fait plus sa propre requête HTTP
     # (fenêtre fixe ~8 jours, trop étroite -- root cause confirmée des jambes

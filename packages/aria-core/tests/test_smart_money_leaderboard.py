@@ -449,3 +449,164 @@ async def test_discovery_deduplicates_a_wallet_found_by_both_sources(monkeypatch
     from aria_core.services import wallet_scan_queue
 
     assert await wallet_scan_queue.queue_size() == 1
+
+
+# ── #149 (13/08): third source, recent buyers on open swing/vc positions ───
+
+
+def _empty_dune_result_patch(monkeypatch):
+    """No Dune candidates this pass -- isolates these tests to the 3rd source."""
+    from aria_core.services import dune
+
+    async def fake(**kwargs):
+        return dune.EarlyBuyerMultipleResult(records=[], available=True)
+
+    monkeypatch.setattr(dune, "get_early_buyer_multiple_winners", fake)
+
+
+@pytest.mark.asyncio
+async def test_discovery_cumulates_recent_buyers_on_open_swing_vc_positions(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core import paper_trader
+
+    async def fake_get_open_positions():
+        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "swing"}]
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
+
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_resolve_primary_pool(contract, **kwargs):
+        return gt.PoolMetadata(pool_address="0xPOOL", available=True)
+
+    async def fake_get_pool_trades(pool_address, **kwargs):
+        return gt.PoolTradesResult(
+            trades=[
+                gt.PoolTrade(tx_from_address=WALLET_B, kind="buy", volume_usd=100.0, block_timestamp=""),
+                gt.PoolTrade(tx_from_address=WALLET_A, kind="sell", volume_usd=50.0, block_timestamp=""),
+            ],
+            available=True,
+        )
+
+    monkeypatch.setattr(gt.geckoterminal_client, "resolve_primary_pool", fake_resolve_primary_pool)
+    monkeypatch.setattr(gt.geckoterminal_client, "get_pool_trades", fake_get_pool_trades)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["trade_candidates"] == 1  # only the buy, never the sell
+    assert result["added_to_queue"] == 1
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_ignores_positions_from_other_pockets(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core import paper_trader
+
+    async def fake_get_open_positions():
+        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "scalping_v8"}]
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
+
+    from aria_core.services import geckoterminal as gt
+
+    calls = []
+
+    async def fake_resolve_primary_pool(contract, **kwargs):
+        calls.append(contract)
+        return gt.PoolMetadata(pool_address="0xPOOL", available=True)
+
+    monkeypatch.setattr(gt.geckoterminal_client, "resolve_primary_pool", fake_resolve_primary_pool)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result == {"outcome": "no_candidate"}
+    assert calls == []  # scalping_v8 never triggers a GeckoTerminal call here
+
+
+@pytest.mark.asyncio
+async def test_discovery_pool_resolution_failure_degrades_gracefully(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core import paper_trader
+
+    async def fake_get_open_positions():
+        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "vc"}]
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
+
+    from aria_core.services import geckoterminal as gt
+
+    async def broken_resolve_primary_pool(contract, **kwargs):
+        return gt.PoolMetadata(pool_address=contract, available=False, error="unavailable")
+
+    monkeypatch.setattr(gt.geckoterminal_client, "resolve_primary_pool", broken_resolve_primary_pool)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result == {"outcome": "no_candidate"}
+
+
+@pytest.mark.asyncio
+async def test_discovery_open_positions_lookup_failure_never_blocks_the_other_sources(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+            }],
+        )
+
+    from aria_core import paper_trader
+
+    async def broken_get_open_positions():
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", broken_get_open_positions)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["trade_candidates"] == 0
+    assert result["cross_token_candidates"] == 1
+    assert result["added_to_queue"] == 1

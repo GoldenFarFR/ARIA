@@ -304,7 +304,39 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     except Exception as exc:  # noqa: BLE001 -- best-effort second source, never blocks the primary one
         logger.info("smart_money_leaderboard: dune early-buyer source failed (%s)", exc)
 
-    all_addresses = cross_token_addresses | dune_addresses
+    # #149 (13/08, same night, continuing the "cumulate more sources"
+    # direction from #148): THIRD, independent candidate source -- recent
+    # buyers (`kind=="buy"`, `tx_from_address`) on the specific pools of
+    # swing/vc positions ARIA is ACTUALLY HOLDING right now
+    # (`geckoterminal_client.get_pool_trades`, verified live 13/08 -- see
+    # HANDOFF_WALLET_SCORING.md). Deliberately scoped to open positions only
+    # (never the full watchlist, ~2000 slots) -- this account was already
+    # saturated by the night's own load; 2 extra GeckoTerminal calls per open
+    # position (resolve pool + fetch trades) stays bounded by how many
+    # positions are actually open, not by watchlist size. Best-effort, same
+    # dome doctrine as the two sources above.
+    trade_addresses: set[str] = set()
+    try:
+        from aria_core import paper_trader
+        from aria_core.services.geckoterminal import geckoterminal_client
+
+        open_positions = await paper_trader.get_open_positions()
+        for pos in open_positions:
+            if pos.get("pocket") not in ("swing", "vc"):
+                continue
+            pool = await geckoterminal_client.resolve_primary_pool(pos["contract"])
+            if not pool.available:
+                continue
+            trades_result = await geckoterminal_client.get_pool_trades(pool.pool_address)
+            if not trades_result.available:
+                continue
+            trade_addresses |= {
+                t.tx_from_address for t in trades_result.trades if t.kind == "buy"
+            }
+    except Exception as exc:  # noqa: BLE001 -- best-effort third source, never blocks the other two
+        logger.info("smart_money_leaderboard: geckoterminal recent-buyer source failed (%s)", exc)
+
+    all_addresses = cross_token_addresses | dune_addresses | trade_addresses
     if not all_addresses:
         return {"outcome": "no_candidate"}
 
@@ -327,6 +359,7 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
         "candidates_found": len(all_addresses),
         "cross_token_candidates": len(cross_token_addresses),
         "dune_candidates": len(dune_addresses),
+        "trade_candidates": len(trade_addresses),
         "already_rejected": already_rejected,
         "added_to_queue": len(added),
     }
