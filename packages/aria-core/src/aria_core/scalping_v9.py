@@ -744,6 +744,28 @@ async def run_v9_cycle(*, notifier=None) -> dict:
             await _log("hold", f"honeypot:{hp_reason}", rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance)
             continue
 
+        # 13/08 -- real gap found live: v9 checked the honeypot guardrail but
+        # never the insider-concentration one every other buy path shares
+        # (momentum papier, agent-wallet pilot, limit orders). Watchlist
+        # tokens are operator-picked (lower a priori risk than an
+        # auto-discovered candidate), but that's a mitigation, not a
+        # substitute for the actual check -- reuses the same shared,
+        # 7-day-cached verdict (``holder_concentration_cache``), so a token
+        # already cleared elsewhere costs zero extra network call here.
+        too_concentrated, concentration_reason = await momentum_entry._check_holder_concentration(
+            contract, chain, pair.pair_address,
+        )
+        if too_concentrated:
+            unverifiable = concentration_reason == momentum_entry._HOLDER_DATA_UNAVAILABLE_REASON
+            reason_code = "holder_concentration_unverifiable" if unverifiable else "holder_concentration"
+            actions["holds"].append({"symbol": label, "reason": f"{reason_code}:{concentration_reason}"})
+            logger.info("scalping_v9[%s]: holder-concentration gate refused (%s)", label, concentration_reason)
+            await _log(
+                "hold", f"{reason_code}:{concentration_reason}",
+                rsi_last=rsi_last, mfi_last=mfi_last, provenance=provenance,
+            )
+            continue
+
         cash = await paper_trader.cash_available(wallet=paper_trader.V9_WALLET)
         alloc = cash * BUY_PCT_OF_REMAINING_CASH
         # 07/08 -- operator request, v8 parity: never let a buy represent

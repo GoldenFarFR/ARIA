@@ -116,7 +116,7 @@ def _patch_geckoterminal_dead_mobula_alive(monkeypatch, *, mobula_candles=None):
 
 def _patch_cycle_io(
     monkeypatch, *, spot=1.0, candles=None, rsi=None, mfi=None, honeypot_clear=True,
-    liquidity=None,
+    holder_concentration_clear=True, liquidity=None,
 ):
     """Wires every external dependency of run_v9_cycle to offline fakes.
     ``rsi``/``mfi`` are the series AFTER the still-forming-candle trim --
@@ -156,6 +156,13 @@ def _patch_cycle_io(
         return False, "honeypot confirmé", "honeypot_confirmed"
 
     monkeypatch.setattr(momentum_entry, "_check_honeypot", fake_honeypot)
+
+    async def fake_holder_concentration(contract, chain, pool_address):
+        if holder_concentration_clear:
+            return False, ""
+        return True, "concentration des 10 plus gros détenteurs : 85% >= 80%"
+
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", fake_holder_concentration)
 
 
 def _signal_series(n=60):
@@ -369,6 +376,48 @@ async def test_honeypot_gate_fail_closed(tmp_db, monkeypatch):
 
     assert actions["opened"] == []
     assert any(h["reason"].startswith("honeypot:") for h in actions["holds"])
+
+
+@pytest.mark.asyncio
+async def test_holder_concentration_gate_fail_closed(tmp_db, monkeypatch):
+    """13/08 -- real gap found live: v9 (fixed watchlist, operator-owned)
+    checked the honeypot guardrail but never the insider-concentration one
+    every other buy path shares (momentum papier, agent-wallet pilot, limit
+    orders). A watchlist token is operator-picked (lower a priori risk), but
+    that's a mitigation, never a substitute for the actual check."""
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    rsi, mfi = _signal_series()
+    _patch_cycle_io(monkeypatch, rsi=rsi, mfi=mfi, holder_concentration_clear=False)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["opened"] == []
+    assert any(h["reason"].startswith("holder_concentration:") for h in actions["holds"])
+
+
+@pytest.mark.asyncio
+async def test_holder_concentration_unverifiable_is_also_fail_closed(tmp_db, monkeypatch):
+    """Same fail-closed doctrine as the rest of the pipeline (03/08 operator
+    decision): an unverifiable verdict (both Blockscout paths down) is never
+    treated as a pass -- distinguished by its own reason code for
+    diagnostics, but still refuses the buy."""
+    from aria_core import momentum_entry
+
+    monkeypatch.setenv("ARIA_SCALPING_V9_ENABLED", "true")
+    rsi, mfi = _signal_series()
+    _patch_cycle_io(monkeypatch, rsi=rsi, mfi=mfi)
+
+    async def fake_unverifiable(contract, chain, pool_address):
+        return True, momentum_entry._HOLDER_DATA_UNAVAILABLE_REASON
+
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", fake_unverifiable)
+    await pt.reset_portfolio(1_000_000.0, wallet=pt.V9_WALLET)
+
+    actions = await v9.run_v9_cycle()
+
+    assert actions["opened"] == []
+    assert any(h["reason"].startswith("holder_concentration_unverifiable:") for h in actions["holds"])
 
 
 @pytest.mark.asyncio
