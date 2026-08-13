@@ -57,6 +57,7 @@ comme pour `hooks-changelog.md`.
 | `v8-watch/run.sh` | `*/30 * * * *` | 🟢 actif (cadence accélérée) | monitoring scalping_v8 -- **nominal 6h prévu, pas encore restauré (backlog #1)** |
 | `signal-cascade-watch/run.sh` | `*/15 * * * *` | 🟢 actif | cycles + convergence de la cascade de signaux |
 | `vc-watch/run.sh` | `0 * * * *` | 🟢 actif | silence anormal sur les cycles VC (crawl/radar/thesis/resolve/forecast/self-report) |
+| `outgoing-pause-watch/run.sh` | `0 * * * *` | 🟢 actif | rappel Telegram RÉPÉTÉ (pas d'hystérésis one-shot) tant que le kill-switch `/stop` reste armé |
 
 ### CI / GitHub Actions (`.github/workflows/*.yml`, tourne sur les serveurs GitHub)
 
