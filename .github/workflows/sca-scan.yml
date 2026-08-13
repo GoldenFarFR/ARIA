@@ -10,9 +10,10 @@
 #   publiée après coup sur une dépendance déjà en place, jamais couverte par un diff PR.
 #
 # SARIF publié dans l'onglet Security > Code scanning (gratuit sur repo public).
-# Pour un faux positif : voir la doc de config OSV-Scanner (.osv-scanner.toml, non créé
-# ici tant qu'aucun faux positif réel n'a été audité — cf. .secrets.baseline pour le
-# patron d'audit à suivre si un jour nécessaire).
+# Pour un faux positif : ajouter une entrée [[IgnoredVulns]] dans le fichier
+# osv-scanner.toml du sous-dossier concerné (ex. mobile/osv-scanner.toml, créé
+# 07/08) -- même patron d'audit que .secrets.baseline, chaque exclusion doit être
+# vérifiée contre la vraie chaîne de dépendances avant d'être ignorée.
 
 name: Security — SCA scan (OSV-Scanner)
 
