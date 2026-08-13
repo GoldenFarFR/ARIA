@@ -416,8 +416,8 @@ def test_public_token_url():
 
 
 def test_public_token_url_none_when_virtual_id_missing():
-    # Jamais un lien devine/casse -- None force l'appelant à retomber
-    # sur un autre chart plutot que d'afficher une URL brisee.
+    # Never a guessed/broken link -- None forces the caller to fall back
+    # to another chart instead of showing a broken URL.
     assert public_token_url(None) is None
 
 
