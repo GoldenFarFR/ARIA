@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -43,6 +44,8 @@ import aiosqlite
 from aria_core.paths import aria_db_path
 
 logger = logging.getLogger(__name__)
+
+_EVM_ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 
 DB_PATH = str(aria_db_path())
 
@@ -336,7 +339,37 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
     except Exception as exc:  # noqa: BLE001 -- best-effort third source, never blocks the other two
         logger.info("smart_money_leaderboard: geckoterminal recent-buyer source failed (%s)", exc)
 
-    all_addresses = cross_token_addresses | dune_addresses | trade_addresses
+    # #152 (13/08, same night): FOURTH, independent candidate source --
+    # wallet addresses posted in recent tweets by alpha-caller-style accounts
+    # (`twitterapi_io.search_tweets`, no dedicated weekly cap since 09/08,
+    # operator confirmed ample prepaid credit). Fixed, deliberately narrow
+    # query (never validated against real results yet -- refine after
+    # observing the first real passes in prod, same "start narrow" doctrine
+    # as every other never-before-run cycle this project has shipped).
+    # SECURITY NOTE: only a regex-extracted address ever leaves this block --
+    # the raw tweet TEXT (untrusted external content) is never logged,
+    # stored, relayed to Telegram, or passed to any LLM call, so there is no
+    # indirect-prompt-injection surface here (cf. the #277 audit doctrine).
+    # A human-sourced address is no more or less trusted than any other
+    # candidate here -- same as every other source, the real judgment stays
+    # downstream in `score_wallets()`, never this sourcing step.
+    social_addresses: set[str] = set()
+    try:
+        from aria_core.services import twitterapi_io
+
+        tweets = await twitterapi_io.search_tweets(
+            '("smart wallet" OR "smart money" OR "whale wallet") base 0x -is:retweet',
+            max_results=20,
+        )
+        if tweets:
+            for tweet in tweets:
+                social_addresses |= {
+                    addr.lower() for addr in _EVM_ADDRESS_RE.findall(tweet.get("text", ""))
+                }
+    except Exception as exc:  # noqa: BLE001 -- best-effort fourth source, never blocks the other three
+        logger.info("smart_money_leaderboard: twitterapi_io social source failed (%s)", exc)
+
+    all_addresses = cross_token_addresses | dune_addresses | trade_addresses | social_addresses
     if not all_addresses:
         return {"outcome": "no_candidate"}
 
@@ -360,6 +393,7 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
         "cross_token_candidates": len(cross_token_addresses),
         "dune_candidates": len(dune_addresses),
         "trade_candidates": len(trade_addresses),
+        "social_candidates": len(social_addresses),
         "already_rejected": already_rejected,
         "added_to_queue": len(added),
     }

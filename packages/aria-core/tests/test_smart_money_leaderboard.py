@@ -610,3 +610,128 @@ async def test_discovery_open_positions_lookup_failure_never_blocks_the_other_so
     assert result["trade_candidates"] == 0
     assert result["cross_token_candidates"] == 1
     assert result["added_to_queue"] == 1
+
+
+# ── #152 (13/08): fourth source, addresses extracted from social search ────
+
+
+@pytest.mark.asyncio
+async def test_discovery_extracts_addresses_from_tweet_text(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core.services import twitterapi_io
+
+    async def fake_search_tweets(query, **kwargs):
+        return [
+            {"text": f"this wallet {WALLET_A} is printing on base, smart money"},
+            {"text": "no address in this one"},
+        ]
+
+    monkeypatch.setattr(twitterapi_io, "search_tweets", fake_search_tweets)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["social_candidates"] == 1
+    assert result["added_to_queue"] == 1
+
+    from aria_core.services import wallet_scan_queue
+
+    assert await wallet_scan_queue.queue_size() == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_deduplicates_multiple_addresses_case_insensitively(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core.services import twitterapi_io
+
+    checksummed = "0x" + WALLET_A[2:].upper()  # "0x" prefix always lowercase, body mixed-case
+
+    async def fake_search_tweets(query, **kwargs):
+        return [
+            {"text": f"{checksummed} bought early"},
+            {"text": f"same wallet again: {WALLET_A}"},
+        ]
+
+    monkeypatch.setattr(twitterapi_io, "search_tweets", fake_search_tweets)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["social_candidates"] == 1  # same address, different case -- counted once
+
+
+@pytest.mark.asyncio
+async def test_discovery_social_search_failure_never_blocks_the_other_sources(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+    for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
+        await token_holder_intel.store_holders(
+            contract, "base",
+            [{
+                "holder_address": WALLET_A, "holder_name": None, "is_contract": False,
+                "is_verified": False, "is_scam": False, "reputation": None, "tags": [], "value": "1",
+            }],
+        )
+
+    from aria_core.services import twitterapi_io
+
+    async def broken_search_tweets(query, **kwargs):
+        raise RuntimeError("twitterapi_io unreachable")
+
+    monkeypatch.setattr(twitterapi_io, "search_tweets", broken_search_tweets)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["outcome"] == "ok"
+    assert result["social_candidates"] == 0
+    assert result["cross_token_candidates"] == 1
+    assert result["added_to_queue"] == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_social_search_no_results_is_a_noop_not_a_crash(monkeypatch, tmp_path):
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core.services import twitterapi_io
+
+    async def fake_search_tweets(query, **kwargs):
+        return None  # no key configured / no results -- the client's own dome doctrine
+
+    monkeypatch.setattr(twitterapi_io, "search_tweets", fake_search_tweets)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result == {"outcome": "no_candidate"}
