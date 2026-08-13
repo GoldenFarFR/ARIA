@@ -218,6 +218,14 @@ async def attempt_swap(
         "%s -- swap SUCCEEDED: %s -> %s (%.2f$ -> %.6g), tx=%s",
         _REAL_MONEY_LOG_PREFIX, token_in, token_out, amount_in_usd, amount_out, tx_hash,
     )
+    implied_cost_pct, cost_note = await _compute_implied_cost_pct(
+        chain=chain, token_out=token_out, amount_in_usd=amount_in_usd, amount_out=amount_out,
+    )
+    if implied_cost_pct is not None:
+        logger.info(
+            "%s -- coût réel implicite (frais + slippage) : %.2f%%",
+            _REAL_MONEY_LOG_PREFIX, implied_cost_pct,
+        )
     await agent_wallet_log.record_transaction(
         wallet_product=WALLET_PRODUCT,
         chain=chain,
@@ -229,8 +237,53 @@ async def attempt_swap(
         slippage_bps=MAX_SLIPPAGE_BPS,
         tx_hash=tx_hash,
         status="ok",
+        implied_cost_pct=implied_cost_pct,
+        cost_note=cost_note,
     )
     return SwapAttemptResult(status="ok", tx_hash=tx_hash, amount_out=amount_out)
+
+
+async def _compute_implied_cost_pct(
+    *, chain: str, token_out: str, amount_in_usd: float, amount_out: float,
+) -> tuple[float | None, str]:
+    """Real total cost of a swap (fees + slippage combined), measured against
+    the spot price at the moment of the swap -- NOT the SDK's own gasFee/
+    protocolFee fields, which its ``QuoteSwapResult`` conversion silently
+    drops before ever returning them to a caller (verified against the
+    installed ``cdp-sdk`` source 13/08: ``CreateSwapQuoteResponse.fees``
+    exists in the raw API model, but ``create_swap_quote()``'s internal
+    conversion to the public ``QuoteSwapResult`` never copies it over) --
+    extracting those would mean reaching into undocumented SDK internals,
+    fragile across SDK versions, for a read-only visibility feature.
+    Comparing the real received amount to a spot-price reference is a
+    proxy for the SAME real cost (whatever mix of gas/protocol fee/slippage
+    produced it) without that fragility.
+
+    Best-effort, never blocking: a failed price lookup returns
+    ``(None, note)`` rather than raising -- this runs AFTER a swap has
+    already succeeded, it must never affect the transaction itself."""
+    from aria_core import momentum_entry
+    from aria_core.services import dexscreener
+
+    if amount_in_usd <= 0 or amount_out <= 0:
+        return None, "montant nul, coût implicite non calculable"
+
+    try:
+        pairs = await dexscreener.fetch_token_pairs(token_out, chain=chain)
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks the swap
+        return None, f"prix spot indisponible ({exc})"
+
+    pair = momentum_entry._best_pair(pairs, token_out) if pairs else None
+    spot_price = pair.price_usd if pair else 0.0
+    if not spot_price:
+        return None, "prix spot indisponible (aucune pool DexScreener trouvée)"
+
+    theoretical_amount_out = amount_in_usd / spot_price
+    if theoretical_amount_out <= 0:
+        return None, "prix spot indisponible (calcul dégénéré)"
+
+    pct = (theoretical_amount_out - amount_out) / theoretical_amount_out * 100.0
+    return pct, ""
 
 
 async def _blocked(

@@ -19,12 +19,27 @@ restrictive, hence fewer candidates -- not an issue here, this pilot only
 needs ONE candidate per cycle anyway).
 
 v1 (18/07): one entry at a time, NO automatic exit -- an already-open
-position (any token other than USDC held) blocks any new attempt until a
-future decision (manual, or a v2 with exit logic, not built here). The
-"x402 unlocks a decision blocked by missing data" angle (requested by the
-operator on 18/07) is DEFERRED -- `ethereum-token-verification` (the only
-endpoint that could have helped) remains confirmed broken since 17/07, cf.
-doc §8.7.
+position blocks any new attempt until a future decision (manual, or a v2
+with exit logic, not built here). The "x402 unlocks a decision blocked by
+missing data" angle (requested by the operator on 18/07) is DEFERRED --
+`ethereum-token-verification` (the only endpoint that could have helped)
+remains confirmed broken since 17/07, cf. doc §8.7.
+
+13/08 -- real gap found live: "any token other than USDC held" (the raw
+on-chain balance) used to define "open position" -- the wallet's public
+Base address had silently accumulated 17 held tokens over the past month
+(including one named ``www.bairdrop.co``, a classic dust-attack pattern)
+despite every actual swap ATTEMPT having failed, starving the pilot for a
+month on tokens ARIA never bought. Now uses
+``agent_wallet_log.list_aria_bought_tokens_still_held()`` -- ARIA's own
+append-only journal of swaps it actually executed, matched by CONTRACT
+address, never a wallet-reported ticker (freely chosen by whoever sends a
+token, exactly the spoofable field a dust attack relies on) and never the
+raw balance (can't distinguish a real purchase from unsolicited spam). A
+held token outside that journal with a non-trivial displayed value is
+logged as a security ALERT but never blocks the pilot on its own -- an
+attacker could otherwise fake a high value on a spam token to deliberately
+freeze the pilot (a dust-attack DoS).
 """
 from __future__ import annotations
 
@@ -48,6 +63,15 @@ SWAP_FAILURE_COOLDOWN_MINUTES = 60
 # BEFORE any signing) -- a PROGRESS improvement, not a change to a security guardrail.
 STRUCTURAL_SWAP_FAILURE_COOLDOWN_MINUTES = 7 * 24 * 60
 MAX_CANDIDATES_PER_CYCLE = 5
+
+# 13/08 -- floor for the non-blocking dust-attack visibility alert: a held
+# token outside ARIA's own purchase journal only gets logged if its
+# DexScreener-derived displayed value clears this floor -- avoids log noise
+# from near-zero-value spam while still surfacing anything a human should
+# actually look at. Deliberately never used to BLOCK the pilot (see module
+# docstring): an attacker could otherwise fake a high value on a spam token
+# to freeze real trading via a dust-attack DoS.
+_UNRECOGNIZED_TOKEN_ALERT_USD = 1.0
 
 # HOLD reasons that signal a lack of DATA rather than a hard rejection -- single
 # reference for a future x402-unlock feature (deferred, doc §8.7), not yet used in
@@ -73,10 +97,23 @@ async def run_agent_wallet_pilot_cycle() -> dict:
     if other_tokens is None:
         return {"outcome": "balance_unavailable"}
     if other_tokens:
-        return {
-            "outcome": "position_open",
-            "held": [t.get("symbol") for t in other_tokens],
-        }
+        aria_bought = await agent_wallet_log.list_aria_bought_tokens_still_held()
+        real_positions = [t for t in other_tokens if (t.get("address") or "").lower() in aria_bought]
+        unrecognized = [t for t in other_tokens if (t.get("address") or "").lower() not in aria_bought]
+        for t in unrecognized:
+            value_usd = t.get("value_usd")
+            if value_usd and value_usd >= _UNRECOGNIZED_TOKEN_ALERT_USD:
+                logger.warning(
+                    "agent_wallet_pilot_cycle: held token %s (%s) not in ARIA's own purchase "
+                    "journal, displayed value %.2f$ -- possible dust attack/unsolicited transfer, "
+                    "never counted as a real position but flagged for visibility",
+                    t.get("symbol"), t.get("address"), value_usd,
+                )
+        if real_positions:
+            return {
+                "outcome": "position_open",
+                "held": [t.get("symbol") for t in real_positions],
+            }
 
     sized_usd = await agent_wallet_sizing.size_trade_usd(
         balance_fn=agent_wallet_cdp_adapter.usdc_balance_usd,

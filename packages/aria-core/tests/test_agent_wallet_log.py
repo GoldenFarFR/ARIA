@@ -254,3 +254,67 @@ async def test_recent_failed_swap_defaults_preserve_historical_behavior():
     assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is True
     await _backdate_last_row(120)
     assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is False
+
+
+_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+_TOKEN_A = "0xAaaAaAaaAaaaAaaaAaaAAAAAAAaaaaaaaaAAaaAa"
+_TOKEN_B = "0xBbbbbBbBBbBbbbbBbbBbbbbBBbBbbbbBbBbBBbBb"
+
+
+@pytest.mark.asyncio
+async def test_list_aria_bought_tokens_still_held_empty_by_default():
+    """13/08 -- pas d'historique, pas de position réputée détenue."""
+    assert await awl.list_aria_bought_tokens_still_held() == set()
+
+
+@pytest.mark.asyncio
+async def test_list_aria_bought_tokens_still_held_tracks_a_real_buy():
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_USDC, token_out=_TOKEN_A, status="ok",
+    )
+    assert await awl.list_aria_bought_tokens_still_held() == {_TOKEN_A.lower()}
+
+
+@pytest.mark.asyncio
+async def test_list_aria_bought_tokens_still_held_removes_on_real_sell():
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_USDC, token_out=_TOKEN_A, status="ok",
+    )
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_TOKEN_A, token_out=_USDC, status="ok",
+    )
+    assert await awl.list_aria_bought_tokens_still_held() == set()
+
+
+@pytest.mark.asyncio
+async def test_list_aria_bought_tokens_still_held_ignores_failed_and_blocked_attempts():
+    """Un swap qui a échoué ou a été bloqué n'a jamais mis le token dans le
+    wallet -- ne doit jamais compter comme une position détenue."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_USDC, token_out=_TOKEN_A, status="failed", reason="RPC timeout",
+    )
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_USDC, token_out=_TOKEN_B, status="blocked", reason="slippage",
+    )
+    assert await awl.list_aria_bought_tokens_still_held() == set()
+
+
+@pytest.mark.asyncio
+async def test_list_aria_bought_tokens_still_held_ignores_unsolicited_dust():
+    """13/08 -- coeur du bug réel trouvé en prod : un token reçu sans jamais
+    avoir été acheté par ARIA (dust attack, ex. ``www.bairdrop.co``) ne doit
+    JAMAIS apparaître ici, puisqu'aucune ligne ``status='ok'`` ne l'a jamais
+    mentionné dans le journal."""
+    await awl.record_transaction(
+        wallet_product="coinbase_agentic_wallet", action_type="swap",
+        token_in=_USDC, token_out=_TOKEN_A, status="ok",
+    )
+    held = await awl.list_aria_bought_tokens_still_held()
+    assert held == {_TOKEN_A.lower()}
+    assert _TOKEN_B.lower() not in held
+    assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is False

@@ -40,6 +40,8 @@ _COLUMNS = [
     "reason",
     "created_at",
     "to_address",
+    "implied_cost_pct",
+    "cost_note",
 ]
 
 
@@ -71,6 +73,21 @@ async def _ensure_table() -> None:
         cols = [row[1] async for row in await db.execute("PRAGMA table_info(agent_wallet_tx_log)")]
         if "to_address" not in cols:
             await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN to_address TEXT NOT NULL DEFAULT ''")
+        # 13/08 -- real cost visibility (operator request, "annuler les frais"
+        # investigation): the CDP SDK's swap RESULT never exposes gasFee/
+        # protocolFee (silently dropped in its own internal QuoteSwapResult
+        # conversion, verified against the installed SDK source before
+        # committing to this design -- see agent_wallet_pilot.py's own
+        # docstring on _compute_implied_cost_pct). Instead of extracting
+        # fragile SDK internals, ``implied_cost_pct`` compares the amount
+        # actually received against the spot price at the moment of the
+        # swap -- captures total real cost (fees + slippage combined),
+        # never distinguishing gas from protocol fee, but robust to SDK
+        # internals changing.
+        if "implied_cost_pct" not in cols:
+            await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN implied_cost_pct REAL")
+        if "cost_note" not in cols:
+            await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN cost_note TEXT NOT NULL DEFAULT ''")
         await db.commit()
 
 
@@ -88,6 +105,8 @@ async def record_transaction(
     status: str,
     reason: str = "",
     to_address: str = "",
+    implied_cost_pct: float | None = None,
+    cost_note: str = "",
 ) -> None:
     """Logs a transaction attempt (``status`` in {"ok", "failed",
     "blocked"}). ``wallet_product`` identifies the product used (e.g.
@@ -95,6 +114,10 @@ async def record_transaction(
     — left free-form rather than a closed enum, since the pilot hasn't been
     chosen yet. ``to_address`` (16/07, named exception #4): destination
     address of a transfer -- empty for any other action type (e.g. swap).
+    ``implied_cost_pct``/``cost_note`` (13/08): real total cost (fees +
+    slippage combined) of a successful swap, measured against the spot price
+    -- ``None`` when unavailable (e.g. spot price lookup failed), never a
+    fabricated 0.
     """
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -104,16 +127,60 @@ async def record_transaction(
             INSERT INTO agent_wallet_tx_log
                 (wallet_product, chain, action_type, token_in, token_out,
                  amount_in, amount_out, slippage_bps, tx_hash, status, reason,
-                 created_at, to_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, to_address, implied_cost_pct, cost_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 wallet_product, chain, action_type, token_in, token_out,
                 amount_in, amount_out, slippage_bps, tx_hash, status, reason, now,
-                to_address,
+                to_address, implied_cost_pct, cost_note,
             ),
         )
         await db.commit()
+
+
+async def list_aria_bought_tokens_still_held() -> set[str]:
+    """13/08 -- real gap found live: the pilot's own wallet (public Base
+    address) had accumulated 17 held tokens over the past month despite
+    every logged swap attempt having FAILED, including one named
+    ``www.bairdrop.co`` -- a classic dust-attack pattern (a spammer sends a
+    token named like a URL to a known public address, hoping the owner
+    visits the link). `agent_wallet_pilot_cycle.py` used to treat ANY token
+    balance as an "open position" blocking every new attempt, silently
+    starving the pilot for a month on tokens ARIA never bought.
+
+    Returns the CONTRACT addresses (lowercased) of tokens ARIA has actually
+    bought (a logged ``status="ok"`` swap with this token as ``token_out``)
+    and not yet sold back (no LATER ``status="ok"`` swap with this token as
+    ``token_in``) -- based on ARIA's own append-only journal, never a wallet
+    ticker/symbol (freely chosen by whoever sends a token, exactly the
+    spoofable field a dust attack relies on) and never the raw on-chain
+    balance (which can't distinguish a real purchase from unsolicited spam).
+    """
+    from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
+
+    await _ensure_table()
+    usdc = USDC_BASE_ADDRESS.lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                """
+                SELECT token_in, token_out FROM agent_wallet_tx_log
+                WHERE action_type = 'swap' AND status = 'ok'
+                ORDER BY created_at ASC
+                """
+            )
+        ).fetchall()
+
+    held: set[str] = set()
+    for token_in, token_out in rows:
+        token_in_l = (token_in or "").lower()
+        token_out_l = (token_out or "").lower()
+        if token_out_l and token_out_l != usdc:
+            held.add(token_out_l)
+        if token_in_l and token_in_l != usdc:
+            held.discard(token_in_l)
+    return held
 
 
 async def list_transactions(limit: int = 200) -> list[dict]:

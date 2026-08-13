@@ -18,6 +18,18 @@ def _gate_on(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_real_purchase_journal_lookup(monkeypatch):
+    """13/08 -- ``list_aria_bought_tokens_still_held`` touche une vraie DB ;
+    vide par défaut ici (jamais de token réputé acheté par ARIA) -- les tests
+    qui veulent une position réelle le redéfinissent explicitement."""
+    async def fake_held():
+        return set()
+
+    monkeypatch.setattr("aria_core.agent_wallet_log.list_aria_bought_tokens_still_held", fake_held)
+    yield
+
+
 def _summary(*, other_tokens=(), usdc_usd=1.0, wallet_address="0xAgent"):
     return {
         "wallet_address": wallet_address, "chain": "base",
@@ -44,13 +56,114 @@ async def test_disabled_when_gate_off(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_position_open_when_other_tokens_held(monkeypatch):
+async def test_position_open_when_held_token_is_in_aria_purchase_journal(monkeypatch):
+    """13/08 -- le blocage ne se déclenche QUE pour un token qu'ARIA a
+    réellement acheté (journal), jamais sur le seul solde brut du wallet."""
     async def fake_summary():
-        return _summary(other_tokens=[{"symbol": "SOMECOIN", "amount": 100.0}])
+        return _summary(other_tokens=[{"symbol": "SOMECOIN", "address": "0xReal", "amount": 100.0}])
+
+    async def fake_held():
+        return {"0xreal"}
 
     monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_log.list_aria_bought_tokens_still_held", fake_held)
     result = await cycle.run_agent_wallet_pilot_cycle()
     assert result == {"outcome": "position_open", "held": ["SOMECOIN"]}
+
+
+@pytest.mark.asyncio
+async def test_dust_attack_token_never_blocks_the_pilot(monkeypatch):
+    """13/08 -- gap réel trouvé en prod (~1 mois de blocage silencieux) :
+    un token reçu sans avoir jamais été acheté par ARIA (dust attack, ex.
+    ``www.bairdrop.co``) ne doit JAMAIS compter comme une position ouverte,
+    même avec une valeur affichée non nulle -- sinon un attaquant peut geler
+    le pilote en envoyant un dust token à forte valeur affichée (DoS)."""
+    async def fake_summary():
+        return _summary(usdc_usd=100.0, other_tokens=[
+            {"symbol": "www.bairdrop.co ✅", "address": "0xDust", "amount": 1.0, "value_usd": 50_000.0},
+        ])
+
+    async def fake_size(*, balance_fn):
+        return 0.03
+
+    async def fake_discover(*, chains):
+        return []
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_sizing.size_trade_usd", fake_size)
+    monkeypatch.setattr("aria_core.momentum_entry.discover_momentum_candidates", fake_discover)
+    result = await cycle.run_agent_wallet_pilot_cycle()
+    # jamais "position_open" -- le cycle continue normalement (ici jusqu'à no_candidate)
+    assert result == {"outcome": "no_candidate", "checked": 0}
+
+
+@pytest.mark.asyncio
+async def test_dust_attack_token_logs_a_non_blocking_alert(monkeypatch, caplog):
+    """La visibilité (alerte log) reste utile même si ça ne bloque jamais."""
+    import logging
+
+    async def fake_summary():
+        return _summary(usdc_usd=100.0, other_tokens=[
+            {"symbol": "www.bairdrop.co ✅", "address": "0xDust", "amount": 1.0, "value_usd": 50_000.0},
+        ])
+
+    async def fake_size(*, balance_fn):
+        return 0.03
+
+    async def fake_discover(*, chains):
+        return []
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_sizing.size_trade_usd", fake_size)
+    monkeypatch.setattr("aria_core.momentum_entry.discover_momentum_candidates", fake_discover)
+    with caplog.at_level(logging.WARNING, logger="aria_core.agent_wallet_pilot_cycle"):
+        await cycle.run_agent_wallet_pilot_cycle()
+    assert any("0xDust" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_low_value_unrecognized_token_does_not_alert(monkeypatch, caplog):
+    """Un dust token de valeur négligeable ne mérite même pas le log --
+    évite le bruit sur les dizaines de spams sans valeur réelle."""
+    import logging
+
+    async def fake_summary():
+        return _summary(usdc_usd=100.0, other_tokens=[
+            {"symbol": "spam", "address": "0xTiny", "amount": 1.0, "value_usd": 0.01},
+        ])
+
+    async def fake_size(*, balance_fn):
+        return 0.03
+
+    async def fake_discover(*, chains):
+        return []
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_sizing.size_trade_usd", fake_size)
+    monkeypatch.setattr("aria_core.momentum_entry.discover_momentum_candidates", fake_discover)
+    with caplog.at_level(logging.WARNING, logger="aria_core.agent_wallet_pilot_cycle"):
+        result = await cycle.run_agent_wallet_pilot_cycle()
+    assert result == {"outcome": "no_candidate", "checked": 0}
+    assert not any("0xTiny" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_mixed_real_position_and_dust_only_blocks_on_the_real_one(monkeypatch):
+    """Un vrai token acheté ET un dust token en même temps : seul le premier
+    déclenche position_open, le second n'apparaît jamais dans ``held``."""
+    async def fake_summary():
+        return _summary(other_tokens=[
+            {"symbol": "REAL", "address": "0xReal", "amount": 10.0, "value_usd": 500.0},
+            {"symbol": "dust", "address": "0xDust", "amount": 1.0, "value_usd": 50_000.0},
+        ])
+
+    async def fake_held():
+        return {"0xreal"}
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", fake_summary)
+    monkeypatch.setattr("aria_core.agent_wallet_log.list_aria_bought_tokens_still_held", fake_held)
+    result = await cycle.run_agent_wallet_pilot_cycle()
+    assert result == {"outcome": "position_open", "held": ["REAL"]}
 
 
 @pytest.mark.asyncio
