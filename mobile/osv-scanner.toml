@@ -16,12 +16,3 @@ reason = "image-size: build-time transitive dep of metro (via expo), never parse
 [[IgnoredVulns]]
 id = "GHSA-w3rx-r6r6-pgpr"
 reason = "image-size: build-time transitive dep of metro (via expo), never parses untrusted third-party images. No fixed version exists yet."
-
-# nanoid (GHSA-2v37-7h3g-55p8, infinite loop in customAlphabet/customRandom with
-# size=0): scanner false positive, confirmed 13/08 -- the lockfile's only nanoid
-# resolution is already 3.3.17, the exact version osv.dev itself lists as the
-# fix for the 3.x branch (verified live against https://osv.dev/GHSA-2v37-7h3g-55p8
-# before excluding). Reproduced on a re-run, not a transient DB cache issue.
-[[IgnoredVulns]]
-id = "GHSA-2v37-7h3g-55p8"
-reason = "nanoid: already at 3.3.17, the fixed version for this GHSA -- scanner false positive."
