@@ -864,6 +864,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_TIKTOK_PUBLISH_ENABLED",
     "ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED",
     "ARIA_TRADE_DEVILS_ADVOCATE_ENABLED",
+    # 13/08 -- twitterapi_io_budget.check_and_alert: proactive prepaid-credit
+    # runway monitor, one-time Telegram alert once projected runway < 24h.
+    # Read-only, no suspension/circuit-breaker (Tavily fallback already
+    # covers outages). OFF by default.
+    "ARIA_TWITTERAPI_IO_BUDGET_WATCH_ENABLED",
     "ARIA_TRADE_LOSS_BATCH_REVIEW_ENABLED",
     "ARIA_UX_WATCH_ENABLED",
     "ARIA_VC_EMAIL_ENABLED",

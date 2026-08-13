@@ -376,6 +376,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="twitterapi_io_budget_watch_cycle",
+        name="TwitterAPI.io prepaid-credit runway watch",
+        description="13/08, built after a real incident: the account's prepaid credit silently ran to zero for ~24h, pushing x_substance.py's/conviction_research.py's fallback traffic onto Tavily for that whole window with no alert (root-caused while investigating a Tavily-saturation question). Proactively checks the real balance (twitterapi_io.fetch_credit_balance), projects a runway from the delta against the previous reading, and sends a one-time Telegram alert once the projected runway drops under 24h (hysteresis -- never repeats while still low, re-arms after a recharge). No suspension/circuit-breaker: TwitterAPI.io already degrades gracefully to Tavily on its own, this cycle's only job is giving the operator enough notice to recharge before that fallback accumulates real cost. Dedicated gate ARIA_TWITTERAPI_IO_BUDGET_WATCH_ENABLED, OFF by default.",
+        interval_minutes=360,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="signal_cascade_falsifiability_cycle",
         name="Multi-source signal cascade -- falsifiability watch",
         description="09/08, operator design: 'compare forward returns of items Claude VALIDATED vs REJECTED -- if validated ones outperform, the criterion has value and can be transferred; if not, it must NOT be given to ARIA' (signal_cascade_convergence.falsifiability_report). This cycle keeps +24h/+7d forward prices refreshed (lazy fill, same doctrine as narrative_signal_shadow.py) and logs the verdict at WARNING level the FIRST time a window crosses the minimum sample size (_MIN_SAMPLES_PER_SIDE=5 resolved decisions on both sides) -- never repeats for an already-notified window. DAILY cadence -- forward prices only resolve after 24h/7d, no value checking more often. Never a trigger, never touches the momentum/paper-trading pipeline -- purely a research diagnostic. Dedicated gate ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED, OFF by default.",
@@ -772,6 +779,12 @@ def _sync_x_curiosity_enabled() -> None:
                     and not paper_pause.is_paused()
                 )
                 task.enabled = paper_on and daily_trade_floor_enabled()
+            if task.id == "twitterapi_io_budget_watch_cycle":
+                # 13/08 -- read-only balance monitor, own dedicated flag,
+                # independent of any sourcing gate.
+                task.enabled = os.environ.get(
+                    "ARIA_TWITTERAPI_IO_BUDGET_WATCH_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "signal_cascade_falsifiability_cycle":
                 # 09/08 -- own dedicated flag, independent of every source
                 # column's own gate (this cycle only reads/refreshes prices
@@ -1698,6 +1711,16 @@ class AriaHeartbeat:
                 "candle_history_watchlist_cycle: %s/%s candle series refreshed",
                 result.get("fetched"), result.get("attempted"),
             )
+
+        elif task_id == "twitterapi_io_budget_watch_cycle":
+            from aria_core import twitterapi_io_budget
+
+            result = await twitterapi_io_budget.check_and_alert()
+            if result.get("checked"):
+                logger.info(
+                    "twitterapi_io_budget_watch_cycle: balance=%s runway_hours=%s alerted=%s",
+                    result.get("balance"), result.get("runway_hours"), result.get("alerted"),
+                )
 
         elif task_id == "signal_cascade_falsifiability_cycle":
             from aria_core import signal_cascade_convergence

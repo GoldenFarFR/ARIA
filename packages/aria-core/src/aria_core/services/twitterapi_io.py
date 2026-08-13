@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 _API_URL = "https://api.twitterapi.io/twitter/user/info"
 _LAST_TWEETS_URL = "https://api.twitterapi.io/twitter/user/last_tweets"
 _SEARCH_URL = "https://api.twitterapi.io/twitter/tweet/advanced_search"
+_BALANCE_URL = "https://api.twitterapi.io/oapi/my/info"
 _TIMEOUT_SECONDS = 10.0
 # 0.2 QPS real (Free tier, operator dashboard) -> 5s/request at most;
 # 90% margin (CLAUDE.md doctrine) -> 5.5s.
@@ -97,6 +98,21 @@ class TwitterApiIoProfile:
     # caller can always safely iterate.
     bio: str = ""
     bio_urls: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TwitterApiIoBalance:
+    # 13/08 -- fields verified live against the real prod key
+    # (``GET /oapi/my/info``, header ``X-API-Key``):
+    # {"recharge_credits": 999677, "total_bonus_credits": 0}. Built after a
+    # real ~24h prepaid-credit exhaustion silently starved x_substance.py/
+    # conviction_research.py and pushed their fallback traffic onto Tavily
+    # (see ``twitterapi_io_budget.py``) -- this balance check is the
+    # PROACTIVE signal that incident lacked (the client itself only ever
+    # degrades silently to ``None`` on any HTTP failure, never distinguishing
+    # "no credits" from a generic outage).
+    recharge_credits: int
+    bonus_credits: int
 
 
 @dataclass
@@ -338,3 +354,40 @@ async def search_tweets(query: str, *, max_results: int = 10) -> list[dict] | No
             "author_id": author.get("userName"),
         })
     return tweets or None
+
+
+async def fetch_credit_balance() -> TwitterApiIoBalance | None:
+    """Real prepaid-credit balance on the account (``GET /oapi/my/info``).
+    ``None`` if the key is missing or on any failure -- never a bubbling
+    exception, never a fabricated balance. Consumed by
+    ``twitterapi_io_budget.py``, never by ``x_substance.py``/
+    ``conviction_research.py`` (unrelated concerns)."""
+    api_key = os.environ.get("TWITTERAPI_IO_KEY", "").strip()
+    if not api_key:
+        return None
+
+    await _throttle()
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+            r = await client.get(_BALANCE_URL, headers={"X-API-Key": api_key})
+    except httpx.TransportError as exc:
+        logger.info("twitterapi_io: network failure fetch_credit_balance (%s)", exc)
+        return None
+
+    if r.status_code != 200:
+        logger.info("twitterapi_io: HTTP %s for fetch_credit_balance", r.status_code)
+        return None
+
+    try:
+        payload = r.json()
+    except Exception:  # noqa: BLE001 -- unreadable body, never a bubbling exception
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    recharge = payload.get("recharge_credits")
+    bonus = payload.get("total_bonus_credits")
+    if not isinstance(recharge, int) or not isinstance(bonus, int):
+        return None
+
+    return TwitterApiIoBalance(recharge_credits=recharge, bonus_credits=bonus)
