@@ -30,14 +30,14 @@ Reason in founder mode: 10x ambition, distribution via skills/plugins, ARIA as c
 | **ARIA API** | `backend/app/api/routes/aria.py` | HTTP `/api/aria/*` |
 | **Shared** | `backend/app/auth/`, `config.py`, `paths.py` | Auth + infra |
 
-**Cerveau ARIA** : `aria-sandbox/packages/aria-core` (pip `aria-core`). Ne pas recréer `backend/app/aria/`.
+**Cerveau ARIA** : `packages/aria-core` (même monorepo, library pip `aria-core`). Ne pas recréer `backend/app/aria/`.
 
 ## Conventions
 
 - Backend: Python 3.12+, FastAPI
 - Frontends: React + TypeScript + Tailwind CSS v4
 - Never commit `.env`, API tokens, or `backend/data/`
-- **Render deploy:** Dockerfile multi-stage (`product-frontend` build + Python). Do not commit `product-frontend/dist/` or root `dist/` from CI.
+- **VPS deploy:** Dockerfile multi-stage (`product-frontend` build + Python), blue-green via `deploy.sh`/`deploy-vitrine.sh`. Do not commit `product-frontend/dist/` or root `dist/` from CI.
 - Respect rate limits: DEXScreener 60 req/min, GeckoTerminal 30 req/min
 
 ## Corporate structure
@@ -50,6 +50,6 @@ Reason in founder mode: 10x ambition, distribution via skills/plugins, ARIA as c
 
 ## Truth Ledger
 
-Canonical facts: `aria-sandbox/.../aria_core/truth_ledger/canonical_facts.yaml` — edit in aria-sandbox, sync to prod.
+Canonical facts: `packages/aria-core/src/aria_core/truth_ledger/canonical_facts.yaml`.
 
-See [`docs/ECOSYSTEM-REPOS.md`](./docs/ECOSYSTEM-REPOS.md) for the full repo map.
+See [`VISION.md`](./VISION.md) and the root [`CLAUDE.md`](../CLAUDE.md) for the full architecture.
