@@ -356,3 +356,60 @@ async def test_cycle_list_directory_error_is_logged_not_raised(monkeypatch):
     result = await ki.run_knowledge_inbox_cycle(github_client=fake_client)
     assert result["outcome"] == "error"
     assert "404" in result["error"]
+
+
+class _FakeSettings:
+    def __init__(self, *, github_token="", aria_knowledge_inbox_github_token="", owner="GoldenFarFR"):
+        self.github_token = github_token
+        self.aria_knowledge_inbox_github_token = aria_knowledge_inbox_github_token
+        self.github_owner = owner
+
+
+@pytest.mark.asyncio
+async def test_cycle_prefers_dedicated_aria_token_over_operator_token(monkeypatch):
+    """14/08 -- these issues should be attributed to the separate AriaZHC GitHub
+    account, not the operator's personal PAT, when the dedicated token is set."""
+    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
+    monkeypatch.setenv("ARIA_KNOWLEDGE_INBOX_ENABLED", "1")
+    monkeypatch.setattr(
+        "aria_core.runtime.settings",
+        _FakeSettings(github_token="tok-operator", aria_knowledge_inbox_github_token="tok-aria"),
+    )
+    captured = {}
+
+    class _CapturingClient:
+        def __init__(self, token):
+            captured["token"] = token
+
+        async def list_directory(self, owner, repo, path):
+            raise RuntimeError("stop here, token already captured")
+
+    monkeypatch.setattr("aria_core.github_client.GitHubClient", _CapturingClient)
+
+    result = await ki.run_knowledge_inbox_cycle()
+    assert captured["token"] == "tok-aria"
+    assert result["outcome"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_cycle_falls_back_to_operator_token_when_dedicated_unset(monkeypatch):
+    monkeypatch.setattr("aria_core.skills.github_skill.github_configured", lambda: True)
+    monkeypatch.setenv("ARIA_KNOWLEDGE_INBOX_ENABLED", "1")
+    monkeypatch.setattr(
+        "aria_core.runtime.settings",
+        _FakeSettings(github_token="tok-operator", aria_knowledge_inbox_github_token=""),
+    )
+    captured = {}
+
+    class _CapturingClient:
+        def __init__(self, token):
+            captured["token"] = token
+
+        async def list_directory(self, owner, repo, path):
+            raise RuntimeError("stop here, token already captured")
+
+    monkeypatch.setattr("aria_core.github_client.GitHubClient", _CapturingClient)
+
+    result = await ki.run_knowledge_inbox_cycle()
+    assert captured["token"] == "tok-operator"
+    assert result["outcome"] == "error"

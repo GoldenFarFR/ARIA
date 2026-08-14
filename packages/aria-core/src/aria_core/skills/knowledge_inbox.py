@@ -176,7 +176,12 @@ async def run_knowledge_inbox_cycle(*, llm=None, github_client=None, notifier=No
     from aria_core.runtime import settings
 
     if github_client is None:
-        token = (settings.github_token or "").strip()
+        # Prefer the dedicated AriaZHC-owned token (14/08) so these issues are
+        # attributed to her, not the operator's personal PAT -- falls back to
+        # github_token if unset (dev/local, no regression).
+        token = (
+            getattr(settings, "aria_knowledge_inbox_github_token", "") or settings.github_token or ""
+        ).strip()
         if not token:
             return {"outcome": "no_token"}
         from aria_core.github_client import GitHubClient

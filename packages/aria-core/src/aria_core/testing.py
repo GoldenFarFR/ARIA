@@ -147,6 +147,9 @@ class AriaRuntimeSettings(BaseSettings):
     # repo (ARIA's free-form memory, self-managed, 20/07): never the same credential as
     # the one touching the trading code, structurally isolated.
     aria_brain_github_token: str = ""
+    # Dedicated token owned by the separate "AriaZHC" GitHub account (14/08) --
+    # knowledge_inbox_cycle's own issues get attributed to her, not the operator.
+    aria_knowledge_inbox_github_token: str = ""
     github_read_repos: str = ""
     github_write_repos: str = ""
     github_excluded_repos: str = ""

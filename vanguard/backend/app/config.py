@@ -329,6 +329,12 @@ class Settings(BaseSettings):
     # repo (ARIA's own free-write memory, self-managed, 20/07): never the same credential
     # that touches trading code, structurally isolated.
     aria_brain_github_token: str = ""
+    # Dedicated token owned by the separate "AriaZHC" GitHub account (14/08) --
+    # so ARIA's own knowledge-proposal issues (knowledge_inbox_cycle) are
+    # attributed to her, not to the operator's personal PAT. Classic PAT
+    # (public_repo scope), collaborator "Triage" role on GoldenFarFR/ARIA.
+    # Falls back to github_token if unset (dev/local, no regression).
+    aria_knowledge_inbox_github_token: str = ""
     github_read_repos: str = ""  # comma-separated owner/repo, or * for unlimited read
     github_write_repos: str = ""  # comma-separated owner/repo, or * for unlimited write
     github_excluded_repos: str = ""  # repo names Aria must not touch via GitHub API
