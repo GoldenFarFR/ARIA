@@ -99,6 +99,34 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[CODE] Sujet : watchdog de maintenance hebdomadaire (#167) — purge TTL + compaction LanceDB
+Date : 2026.08.14 / Probleme : `purge_expired_entries()` (#166 ci-dessous) était prêt mais
+jamais appelé automatiquement ; et LanceDB open-source (la version utilisée ici) n'a **aucune**
+maintenance en tâche de fond — sans un appel périodique à `optimize()`, les fragments et
+vieilles versions internes s'accumulent indéfiniment (déjà 237 transactions pour 85 lignes
+actives constatées le 14/08).
+Solution : nouvelle fonction `run_vector_maintenance()` (`lancedb_store.py`) — enchaîne
+`purge_expired_entries()` puis `table.optimize(cleanup_older_than=timedelta(days=30))`,
+fail-safe (un `optimize()` cassé ne fait jamais perdre le résultat du purge). Fenêtre de
+rétention des versions internes délibérément généreuse (30 jours, pas le défaut LanceDB de 7)
+pour les premières semaines de ce mécanisme tout neuf — à resserrer une fois quelques passages
+hebdomadaires propres observés, même doctrine que les autres cadences d'observation accélérée
+du projet (appliquée ici à la fenêtre de rétention, pas à la fréquence du cycle lui-même — le
+cycle reste hebdomadaire, le volume actuel ne justifie pas plus fréquent). Câblé au heartbeat
+(`vector_memory_maintenance_cycle`, `interval_minutes=10080`), gate dédié
+`ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED`, OFF par défaut, standalone (pas de double-gate paper-
+trading, ce mécanisme ne touche jamais le pipeline momentum). API `table.optimize()` vérifiée
+directement dans le SDK installé avant d'écrire le code (`cleanup_older_than: timedelta = 7
+jours par défaut`, `delete_unverified: bool`), jamais supposée. 6 nouveaux tests
+(`test_lancedb_store.py` + nouveau `test_heartbeat_vector_memory_maintenance_cycle.py`). Suite
+complète aria-core verte. `packages/aria-core/src/aria_core/memory/vector/lancedb_store.py`,
+`heartbeat.py`, `packages/aria-core/tests/test_lancedb_store.py`,
+`test_heartbeat_vector_memory_maintenance_cycle.py` (nouveau), `docs/HANDOFF_LANCEDB.md`
+(ce fichier). **Pas encore déployé en prod au moment de cette entrée** — groupé avec #166 pour
+un déploiement commun.
+
+------------------------------------------------------------
+
 [CODE] Sujet : défenses memory-poisoning (#166) — provenance structurelle, TTL câblé, audit d'écriture
 Date : 2026.08.14 / Probleme : audit sécurité (mandat permanent CLAUDE.md sur les faiblesses
 spécifiques IA + risque OWASP ASI06 documenté dans la checklist plus haut) a trouvé 3 trous
@@ -212,9 +240,7 @@ le résultat complet, 7 jours sur la recherche de diligence via LanceDB) opèren
 et sur des objets différents, pas de concurrence constatée.
 
 ## Prochaines étapes possibles (pas encore décidées/construites)
-- Déployer en prod le chantier sécurité #166 ci-dessus (code+tests prêts, pas encore poussé).
-- Watchdog de maintenance périodique (#167) — appelle `purge_expired_entries()` (déjà prêt) +
-  `optimize()`/`cleanup_old_versions()`, même famille que `memory-watch`.
+- Déployer en prod #166+#167 ensemble (code+tests prêts, pas encore poussé/déployé).
 - Décider du sort de `verify_and_remember_wallet` (#168 — brancher à un vrai déclencheur ou
   retirer).
 - Élargir les sources d'écriture au-delà du pipeline VC (#169 — résultats de trades réels,

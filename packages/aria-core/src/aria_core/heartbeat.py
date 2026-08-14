@@ -355,6 +355,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="vector_memory_maintenance_cycle",
+        name="Vector memory maintenance -- TTL purge + LanceDB compaction",
+        description="14/08 (#166/#167): LanceDB OSS (the version used here) does NO automatic background maintenance -- fragments/old internal versions only ever accumulate unless something calls optimize() periodically, the pattern LanceDB's own docs recommend. Weekly pass over aria_cognitive_vectors: applies each entry_type's declared retention_days (schema.yaml, was never enforced before #166) via purge_expired_entries(), then compacts small fragments and prunes old versions via table.optimize() (30-day retention window, deliberately generous for this mechanism's first weeks -- see lancedb_store.py comment). Never touches an entry with no written_at (age unknown, fail-safe). Dedicated gate ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED, OFF by default -- standalone maintenance, independent of the momentum/paper-trading pipeline.",
+        interval_minutes=10080,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="github_signal_cascade_cycle",
         name="Multi-source signal cascade -- GitHub column, stage 2 refresh",
         description="08/08 operator design (docs/HANDOFF_PIPELINE_MOMENTUM.md): stage 1 (enqueue) runs INSIDE momentum_entry.evaluate_hard_gates, decoupled from the technical BUY filter -- this cycle is stage 2 (quantitative filter), refreshing ONE watchlisted repo's github_substance score per pass (same throttling doctrine as goplus_watchlist_cycle, protects the authenticated GitHub API budget). Never a trigger, never blocks the momentum pipeline. Dedicated gate ARIA_GITHUB_SIGNAL_CASCADE_ENABLED, OFF by default -- standalone research pipeline, independent of paper-trading.",
@@ -846,6 +853,13 @@ def _sync_x_curiosity_enabled() -> None:
                 # flag only.
                 task.enabled = os.environ.get(
                     "ARIA_WALLET_COPY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "vector_memory_maintenance_cycle":
+                # 14/08 -- standalone maintenance cycle (TTL purge +
+                # LanceDB compaction), independent of the momentum/
+                # paper-trading pipeline. Single dedicated flag only.
+                task.enabled = os.environ.get(
+                    "ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "candle_history_watchlist_cycle":
                 # 11/08 -- standalone infrastructure cycle (builds shared
@@ -1669,6 +1683,15 @@ class AriaHeartbeat:
                     "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
                     opened, closed, len(results),
                 )
+
+        elif task_id == "vector_memory_maintenance_cycle":
+            from aria_core.memory.vector.lancedb_store import run_vector_maintenance
+
+            result = await run_vector_maintenance()
+            logger.info(
+                "vector_memory_maintenance_cycle: purged=%s optimized=%s",
+                result.get("purged"), result.get("optimized"),
+            )
 
         elif task_id == "x_signal_cascade_cycle":
             from aria_core import signal_cascade_x

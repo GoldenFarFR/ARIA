@@ -252,3 +252,35 @@ async def purge_expired_entries() -> dict[str, int]:
         except Exception as exc:
             logger.warning("lancedb purge failed for entry_type=%s: %s", entry_type, exc)
     return deleted
+
+
+# LanceDB OSS (the version used here) does NO automatic background maintenance
+# -- unlike compaction alone, cleanup_older_than actually reclaims disk space
+# but is IRREVERSIBLE (forfeits time-travel to pruned versions). 30 days is
+# deliberately generous for this cycle's first weeks in prod (still a brand
+# new mechanism, #166/#167 14/08) -- resettle to LanceDB's own 7-day default
+# once a few clean weekly passes are observed (same "accelerated observation"
+# doctrine as CLAUDE.md's other first-deployment cadences, applied to the
+# retention WINDOW here rather than the cycle's own frequency).
+_MAINTENANCE_RETENTION_WINDOW_DAYS = 30
+
+
+async def run_vector_maintenance() -> dict[str, Any]:
+    """Weekly maintenance: applies the declared TTL (``purge_expired_entries``)
+    then compacts small fragments and prunes old internal versions
+    (``table.optimize``) -- LanceDB's own recommended pattern, never automatic
+    in the open-source build. Not yet wired to any cycle by itself; the
+    heartbeat task calling this IS the wiring (#167, 14/08). Fail-safe: a
+    failed optimize() never raises, purge results are still returned."""
+    if not is_available():
+        return {"skipped": "disabled"}
+    purged = await purge_expired_entries()
+    tbl = get_table()
+    optimized = False
+    if tbl is not None:
+        try:
+            tbl.optimize(cleanup_older_than=timedelta(days=_MAINTENANCE_RETENTION_WINDOW_DAYS))
+            optimized = True
+        except Exception as exc:
+            logger.warning("lancedb optimize failed: %s", exc)
+    return {"purged": purged, "optimized": optimized}

@@ -879,6 +879,10 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_VC_EMAIL_ENABLED",
     "ARIA_VC_INTELLIGENCE_ENABLED",
     "ARIA_VC_POCKET_SOURCING_ENABLED",
+    # 14/08 (#166/#167) -- weekly TTL purge + LanceDB compaction for the
+    # vector memory (aria_cognitive_vectors). Standalone maintenance, OFF
+    # by default.
+    "ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED",
     "ARIA_VISION_ENABLED",
     # 10/08 -- kill switch for ALL LLM calls reachable from the public site
     # widget (see llm_economy.set_public_llm_context / is_public_llm_disabled_now).

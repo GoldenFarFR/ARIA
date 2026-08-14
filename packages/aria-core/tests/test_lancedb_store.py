@@ -9,6 +9,7 @@ from aria_core.memory.vector.lancedb_store import (
     contains_injection_marker,
     is_available,
     purge_expired_entries,
+    run_vector_maintenance,
     search,
     store,
     vector_store_status,
@@ -312,3 +313,43 @@ async def test_purge_empty_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "aria_vector_memory", False)
     reset_client_cache()
     assert await purge_expired_entries() == {}
+
+
+# ── run_vector_maintenance (#166/#167, 14/08 -- weekly purge + compaction) ─────
+
+@pytest.mark.asyncio
+async def test_run_vector_maintenance_purges_and_optimizes(vector_on):
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    await _insert_raw("insight", "old-one", written_at=old)
+    result = await run_vector_maintenance()
+    assert result["purged"] == {"insight": 1}
+    assert result["optimized"] is True
+    assert vector_store_status()["collection_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_vector_maintenance_skipped_when_disabled(monkeypatch):
+    from aria_core.runtime import get_settings
+
+    monkeypatch.setattr(get_settings(), "aria_vector_memory", False)
+    reset_client_cache()
+    assert await run_vector_maintenance() == {"skipped": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_run_vector_maintenance_optimize_failure_still_returns_purge(vector_on, monkeypatch):
+    """Un optimize() cassé ne doit jamais faire perdre le résultat du purge --
+    fail-safe, jamais bloquant."""
+    from aria_core.memory.vector import lancedb_client as lc
+
+    await store("lesson", "some content", metadata={"topic": "ops", "confidence": "1"})
+    real_get_table = lc.get_table
+    tbl = real_get_table()
+
+    def _broken_optimize(*_a, **_kw):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(tbl, "optimize", _broken_optimize)
+    result = await run_vector_maintenance()
+    assert result["optimized"] is False
+    assert "purged" in result
