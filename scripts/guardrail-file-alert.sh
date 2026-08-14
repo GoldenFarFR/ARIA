@@ -14,12 +14,17 @@
 # Concrete targets resolved against the real repo (checked 07/08, not guessed
 # from the CLAUDE.md prose alone):
 #   - packages/aria-core/src/aria_core/wallet_guard.py   (real file)
-#   - template-grok-cursor/.cursor/rules/regles-uniques.mdc (real file)
 #   - .claude/settings.json                              (closest real proxy
 #     for "permission_mode" -- no file literally named that exists in the repo)
 #   - any tracked config.toml (glob, excluding *.example) -- no real one exists
-#     yet (only template-grok-cursor/.grok/config.toml.example), covered so a
-#     future real one is caught automatically without a hardcoded dead path.
+#     yet, covered so a future real one is caught automatically without a
+#     hardcoded dead path.
+#
+# 14/08: template-grok-cursor/.cursor/rules/regles-uniques.mdc removed from
+# this watch list -- the whole template-grok-cursor/ monorepo copy it lived
+# in was deleted (operator-confirmed, distinct from the separately-archived
+# GitHub repo GoldenFarFR/template-grok-cursor, which stays protected and
+# untouched). No real file at that path left to watch. See HANDOFF_SECURITE.md.
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +40,6 @@ while IFS= read -r f; do
     [ -z "$f" ] && continue
     case "$f" in
         packages/aria-core/src/aria_core/wallet_guard.py) HITS+=("$f") ;;
-        template-grok-cursor/.cursor/rules/regles-uniques.mdc) HITS+=("$f") ;;
         .claude/settings.json) HITS+=("$f") ;;
         *config.toml) [[ "$f" == *.example ]] || HITS+=("$f") ;;
     esac

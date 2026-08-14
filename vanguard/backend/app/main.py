@@ -244,7 +244,7 @@ async def pulse():
     from aria_core.heartbeat import heartbeat_pulse
     from aria_core.onchain.anchor import anchor_enabled
 
-    commit = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown")[:12]
+    commit = (os.getenv("GIT_COMMIT") or "unknown")[:12]
     paper = os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -276,11 +276,7 @@ async def health():
     from aria_core.llm import is_llm_provider_configured
     from aria_core.skills.github_skill import github_configured, github_unlimited_access
 
-    commit = (
-        os.getenv("RENDER_GIT_COMMIT")
-        or os.getenv("GIT_COMMIT")
-        or "unknown"
-    )[:12]
+    commit = (os.getenv("GIT_COMMIT") or "unknown")[:12]
     payload = {
         "status": "ok",
         "app": settings.app_name,

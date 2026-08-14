@@ -138,7 +138,7 @@ def _idempotency_set(key: str, response: dict) -> None:
 def _backend_version() -> str:
     # Same pattern already used by the health check (app/main.py) -- never a
     # second, divergent source of truth for the deployed commit.
-    return (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown")[:12]
+    return (os.getenv("GIT_COMMIT") or "unknown")[:12]
 
 
 def _bearer_token(authorization: str | None) -> str | None:

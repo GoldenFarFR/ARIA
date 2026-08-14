@@ -194,9 +194,6 @@ class AriaRuntimeSettings(BaseSettings):
         domain = self.holding_domain.strip().lstrip(".")
         if domain and not self.debug:
             return f"https://{domain}"
-        render = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
-        if render:
-            return render
         return "http://localhost:5173"
 
 

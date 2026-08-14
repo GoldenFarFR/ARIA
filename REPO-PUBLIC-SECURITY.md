@@ -1,13 +1,14 @@
 # Sécurité — repos publics GoldenFar
 
-## Visibilité (2026-07-04)
+## Visibilité (2026-08-14, rafraîchi — était daté 2026-07-04)
 
 | Repo | Visibilité | Contenu |
 |------|------------|---------|
 | `GoldenFarFR/ARIA` | **Public** | Produit : aria-core, vanguard (sans operator) |
 | `GoldenFarFR/aria-acp-showcase` | **Public** | Démo ACP / Virtual Protocol |
-| `GoldenFarFR/template-grok-cursor` | **Public** | Template IDE |
+| `GoldenFarFR/template-grok-cursor` | **Public**, archivé (décision opérateur 18/07) | Template IDE — la copie qui vivait dans ce monorepo (`template-grok-cursor/`) a été supprimée le 14/08, distincte de ce repo séparé qui reste archivé et intouché |
 | `GoldenFarFR/aria-ops` | **PRIVÉ** | Mémoire, coffre, scripts opérateur |
+| `GoldenFarFR/aria-brain` | **PRIVÉ** | Mémoire libre d'ARIA (gate `ARIA_BRAIN_ENABLED`, OFF en prod au 14/08) |
 
 ## Secrets
 

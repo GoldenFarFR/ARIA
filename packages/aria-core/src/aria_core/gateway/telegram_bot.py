@@ -553,7 +553,7 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     user = update.effective_user
     import os
-    commit = (os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "")[:12] or "unknown"
+    commit = (os.getenv("GIT_COMMIT") or "")[:12] or "unknown"
     hb = aria_heartbeat.get_status()
     last = hb.get("last_heartbeat")
     last_str = last.strftime("%H:%M UTC") if last else "never"

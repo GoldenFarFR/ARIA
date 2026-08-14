@@ -358,7 +358,7 @@ class Settings(BaseSettings):
         """Webhook Telegram — même hôte que le site public (domaine custom prioritaire)."""
         base = self.public_site_url.strip().rstrip("/")
         if not base or base.startswith("http://localhost"):
-            fallback = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("TELEGRAM_WEBHOOK_URL") or ""
+            fallback = os.getenv("TELEGRAM_WEBHOOK_URL") or ""
             base = fallback.strip().rstrip("/")
         if not base:
             return None
@@ -370,16 +370,13 @@ class Settings(BaseSettings):
 
     @property
     def public_site_url(self) -> str:
-        """Canonical public URL — custom domain (SITE_BASE_URL) beats Render default."""
+        """Canonical public URL — custom domain (SITE_BASE_URL) wins over the holding domain."""
         explicit = self.site_base_url.strip().rstrip("/")
         if explicit:
             return explicit
         domain = self.holding_domain.strip().lstrip(".")
         if domain and not self.debug:
             return f"https://{domain}"
-        render = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
-        if render:
-            return render
         return "http://localhost:5173"
 
     @property
