@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# consult-gemini.sh -- manual, on-demand second opinion (model behind MODEL
+# consult-fable5.sh -- manual, on-demand second opinion (model behind MODEL
 # below, originally Gemini 3.1 Pro, switched to Claude Fable 5 on 08/03 --
-# filename kept as-is, it's the operator's established name for this tool).
+# renamed 14/08 from consult-gemini.sh, operator call: the stale name was
+# dev negligence, not an "established name" worth preserving).
 # Item #65 (08/03), operator request: distinct from
 # devils-advocate-review.sh's automatic post-push hook (which runs
 # unattended on every push to main with a fixed "Devil's Advocate" role) --
@@ -12,8 +13,8 @@
 # code, never Claude judging itself -- API auth path now shared with it too
 # (see 13/08 note below, API Anthropic directe).
 #
-# Usage: cat plan.txt | scripts/consult-gemini.sh
-#        echo "some plan text" | scripts/consult-gemini.sh
+# Usage: cat plan.txt | scripts/consult-fable5.sh
+#        echo "some plan text" | scripts/consult-fable5.sh
 #
 # Reads the prompt from stdin, prints the model's raw response to stdout.
 # Same "verify before acting" doctrine as the post-push report applies to
@@ -93,7 +94,7 @@ MODEL="$DEVILS_ADVOCATE_MODEL"
 RAW_PROMPT="$(cat)"
 
 if [ -z "$RAW_PROMPT" ]; then
-  echo "Usage: cat plan.txt | scripts/consult-gemini.sh (or pipe text via stdin)" >&2
+  echo "Usage: cat plan.txt | scripts/consult-fable5.sh (or pipe text via stdin)" >&2
   exit 1
 fi
 
@@ -164,7 +165,7 @@ PAYLOAD=$(jq -n \
   --arg effort "$DEVILS_ADVOCATE_THINKING_EFFORT" \
   '{model: $model, max_tokens: $max_tokens, system: $system, thinking: {type: "adaptive"}, output_config: {effort: $effort}, messages: [{role: "user", content: $user}]}')
 
-RESP_TMP=$(mktemp /tmp/consult-gemini-response.XXXXXX.json)
+RESP_TMP=$(mktemp /tmp/consult-fable5-response.XXXXXX.json)
 HTTP_STATUS=$(curl -s -o "$RESP_TMP" -w "%{http_code}" \
   --max-time 120 \
   -X POST https://api.anthropic.com/v1/messages \
