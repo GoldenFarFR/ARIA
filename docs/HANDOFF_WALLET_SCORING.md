@@ -8,6 +8,34 @@
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.
 
+[DEPLOYE] Sujet    : wallet disqualifié jamais vérifié dans le chemin de promotion leaderboard (item #151)
+Date : 2026.08.14 / Probleme : en creusant #151 (via un agent dédié), un vrai wallet-contrat
+disqualifié (`0x60dac57d...`, `disqualified=true`, raison "Wallet-contrat (équipe/vesting/LP), pas
+un trader individuel.") a été trouvé SUR le vrai leaderboard en prod
+(`composite_percentile=66.7`). Vérifié dans le code : `card.disqualified` n'était utilisé QUE pour
+l'affichage Telegram/prompt LLM (`smart_money.py:2577/2695`) — jamais vérifié par
+`_update_leaderboard_best_effort`/`_is_confirmed_underperformer` (`wallet_scan_queue.py`, chemin de
+promotion) ni par `_latest_scored_wallets` (`smart_money.py`, population de comparaison utilisée
+pour calculer le percentile des AUTRES wallets). Double pollution : le wallet-contrat pouvait à la
+fois figurer sur le leaderboard réel (signal de confirmation utilisé par le trading momentum) ET
+fausser le percentile de tous les autres wallets comparés à lui.
+Solution : (1) nouvelle fonction `_reject_disqualified_wallet_best_effort` (`wallet_scan_queue.py`,
+même doctrine best-effort que `_reject_wallet_permanently_best_effort`), branchée en early-exit
+AVANT `_is_confirmed_underperformer` dans les 2 branches du cycle (1ère couverture complète +
+monitoring déjà en cours) — un wallet disqualifié est retiré ENTIÈREMENT de la file et rejeté pour
+toujours, quel que soit son percentile mesuré (testé même avec percentile=95 pour prouver que ce
+n'est pas le score qui décide). (2) `_latest_scored_wallets` exclut désormais `disqualified=true` de
+la population de comparaison, même doctrine que les exclusions `full_coverage`/`price_confidence_low`
+déjà en place. 4 nouveaux tests (2 `test_wallet_scan_queue.py`, 2
+`test_smart_money_wallet_scoring.py`). Suite complète verte : 10211 passed. Déployé le jour même
+(bug polluant une capacité déjà en prod — vraies décisions de trading basées sur ce leaderboard).
+`packages/aria-core/src/aria_core/services/smart_money.py`,
+`packages/aria-core/src/aria_core/services/wallet_scan_queue.py`,
+`packages/aria-core/tests/test_wallet_scan_queue.py`,
+`packages/aria-core/tests/test_smart_money_wallet_scoring.py`.
+
+------------------------------------------------------------
+
 [CODE] Sujet    : Log par-source manquant sur smart_money_leaderboard_discovery_cycle (item #151)
 Date : 2026.08.14 / Probleme : item #151 (observer l'impact des 3 sources cumulées #148/#149/#152 sur le débit de wallet_scan_queue) impossible à trancher -- le journal `append_memory("smart_money_leaderboard", ...)` ne loguait que le total agrégé (`added_to_queue`/`candidates_found`) et SEULEMENT quand au moins 1 wallet était ajouté, jamais le détail par source. Diagnostic manuel (13-14/08) : sur 3 cycles observés depuis le câblage, 120-122 candidats détectés mais quasi tous déjà connus (1-2 ajouts nets/jour, pas d'explosion visible). Test isolé pour distinguer la contribution de chaque source impossible depuis une session Claude Code (clés Dune/TwitterAPI.io absentes de l'environnement local par design -- jamais dans un .env lisible hors du conteneur ; `docker exec` dans le conteneur prod bloqué par le classifieur de sécurité de session) -- confirme au passage que le throttle adaptatif GeckoTerminal est bien partagé/coordonné entre session locale et prod (un test isolé a réellement tightened le throttle réel, 4s→9s).
 Solution : `heartbeat.py` loggue désormais à CHAQUE cycle réussi (plus seulement quand `added_to_queue>0`) le détail complet -- `cross_token_candidates`/`dune_candidates`/`trade_candidates`/`social_candidates`/`already_rejected` en plus du total. Rend chaque futur cycle auto-diagnostique (journal `/opt/aria-data/memory/smart_money_leaderboard_*.md`, persiste aux redéploiements contrairement à `docker logs`) sans nécessiter d'intervention manuelle -- `heartbeat.py` (à commiter), tests existants (`test_smart_money_leaderboard.py`, `test_heartbeat_gate_wiring_regression.py`) inchangés (aucun ne teste le contenu du message loggé), suite complète confirmée verte (10169 passed) avant ce commit.

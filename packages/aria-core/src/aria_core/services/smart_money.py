@@ -2056,7 +2056,16 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
     comparability blind spot): a wallet whose cost-basis mostly relies on
     ESTIMATED prices must not serve as a reference to judge another wallet
     whose prices are mostly CONFIRMED -- same doctrine as `full_coverage`,
-    symmetric."""
+    symmetric.
+
+    Also excludes `disqualified=True` (14/08, real gap found auditing #151 --
+    a wallet-contract/wash-trading/malicious-financing hit was already
+    excluded from the LEADERBOARD itself via `wallet_scan_queue.py`'s own
+    fix, but this comparison population read it straight from
+    `wallet_score_log` without checking the flag -- a disqualified wallet
+    was still polluting every OTHER wallet's percentile ranking even after
+    that fix, confirmed live: `0x60dac57d...` sits on the real leaderboard
+    today with `disqualified=true` in its own last score)."""
     await _ensure_wallet_scoring_tables()
     exclude_l = exclude_wallet.lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -2086,6 +2095,12 @@ async def _latest_scored_wallets(exclude_wallet: str) -> list[dict]:
             # population of OTHER wallets -- same doctrine as full_coverage
             # above (a record with dubious data quality isn't a reliable
             # reference to judge another wallet).
+            continue
+        if entry.get("disqualified"):
+            # 14/08 -- a wallet-contract/wash-trading/malicious-financing hit
+            # is not a real trader at all; it must never be a comparison
+            # reference for anyone else's percentile, same doctrine as the
+            # two exclusions above.
             continue
         parsed.append(entry)
     return parsed

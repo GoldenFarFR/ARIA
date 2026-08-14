@@ -3087,3 +3087,56 @@ class TestCopyTradingWiring:
         card = report.wallets[0]
         assert card.available is False  # comportement historique inchangé
 
+
+class TestLatestScoredWalletsExcludesDisqualified:
+    """14/08, real gap found auditing backlog #151: a disqualified wallet
+    (contract/wash-trading/malicious-financing) was still read straight
+    from `wallet_score_log` into the comparison population used to rank
+    every OTHER wallet's percentile -- confirmed live, one such wallet sat
+    on the real leaderboard. Same exclusion doctrine as `full_coverage`/
+    `price_confidence_low` above it."""
+
+    @pytest.mark.asyncio
+    async def test_disqualified_wallet_excluded_from_comparison_population(self, tmp_path, monkeypatch):
+        import json
+
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        await sm._log_wallet_score(
+            "0xdisqualified",
+            json.dumps({
+                "full_coverage": True, "price_confidence_low": False,
+                "disqualified": True, "composite_percentile": 95.0,
+            }),
+        )
+        await sm._log_wallet_score(
+            "0xclean",
+            json.dumps({
+                "full_coverage": True, "price_confidence_low": False,
+                "disqualified": False, "composite_percentile": 50.0,
+            }),
+        )
+
+        population = await sm._latest_scored_wallets("0xsomeone_else")
+
+        assert len(population) == 1
+        assert population[0]["composite_percentile"] == 50.0
+        assert population[0]["disqualified"] is False
+
+    @pytest.mark.asyncio
+    async def test_disqualified_false_still_included(self, tmp_path, monkeypatch):
+        """Regression guard: the new filter must not accidentally exclude
+        clean wallets (``disqualified`` absent from an old-format record,
+        or explicitly False)."""
+        import json
+
+        monkeypatch.setattr(sm, "DB_PATH", str(tmp_path / "wallet_scoring.db"))
+        await sm._log_wallet_score(
+            "0xold_format",
+            json.dumps({"full_coverage": True, "price_confidence_low": False, "composite_percentile": 40.0}),
+        )
+
+        population = await sm._latest_scored_wallets("0xsomeone_else")
+
+        assert len(population) == 1
+        assert population[0]["composite_percentile"] == 40.0
+

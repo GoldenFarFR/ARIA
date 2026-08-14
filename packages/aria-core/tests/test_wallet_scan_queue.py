@@ -649,6 +649,103 @@ async def test_cycle_first_completion_underperformer_removed_entirely_not_monito
 
 
 @pytest.mark.asyncio
+async def test_cycle_first_completion_disqualified_wallet_removed_entirely(monkeypatch):
+    """14/08 -- un wallet structurellement disqualifié (contrat/wash-trading/
+    financement malveillant) n'entre JAMAIS en surveillance ni sur le
+    leaderboard, quel que soit son percentile mesuré -- distinct du rejet
+    par sous-performance, vérifié même avec un TRÈS BON percentile pour
+    prouver que ce n'est pas le score qui décide ici."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, composite_percentile=95.0,
+        disqualified=True, disqualification_reasons=["Wallet-contrat (équipe/vesting/LP)."],
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    reject_calls = []
+
+    async def _fake_mark_rejected(wallet, percentile, reason):
+        reject_calls.append((wallet, percentile, reason))
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.mark_rejected", _fake_mark_rejected,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.remove_and_archive",
+        lambda wallet, reason: _immediate("removed"),
+    )
+    update_calls = []
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.update_leaderboard",
+        lambda wallet, pct: update_calls.append((wallet, pct)) or _immediate(None),
+    )
+
+    notified = []
+
+    async def _notifier(text):
+        notified.append(text)
+
+    result = await wsq.run_wallet_scan_queue_cycle(notifier=_notifier)
+    assert result["completed_first_time"] == []  # jamais entré en surveillance
+    assert result["rejected_wallets"] == [A]
+    assert await wsq.queue_size() == 0
+    assert len(reject_calls) == 1
+    assert reject_calls[0][0] == A
+    assert "Wallet-contrat" in reject_calls[0][2]
+    assert update_calls == []  # jamais promu au leaderboard malgré le percentile 95
+    assert "disqualifié" in notified[0]
+
+
+@pytest.mark.asyncio
+async def test_cycle_monitoring_refresh_disqualified_wallet_removed_entirely(monkeypatch):
+    """14/08 -- un wallet déjà en surveillance qui se révèle disqualifié
+    (ex. re-scan découvre un contrat) est lui aussi retiré ENTIÈREMENT,
+    même logique que la 1ère couverture."""
+    monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
+    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
+    await wsq.enqueue_wallets([A])
+    past = datetime.now(timezone.utc) - timedelta(days=10)
+    await _force_monitoring_state(A, next_check_at=past)
+
+    card = _FakeCard(
+        address=A, tokens_scanned_cumulative=200, tokens_found=200,
+        full_coverage=True, tokens_analyzed=0, composite_percentile=66.7,
+        disqualified=True, disqualification_reasons=["Wallet-contrat (équipe/vesting/LP)."],
+    )
+
+    async def _fake_score_wallets(addresses, **kwargs):
+        return _FakeReport(wallets=[card])
+
+    monkeypatch.setattr("aria_core.services.smart_money.score_wallets", _fake_score_wallets)
+
+    reject_calls = []
+
+    async def _fake_mark_rejected(wallet, percentile, reason):
+        reject_calls.append((wallet, percentile, reason))
+
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.mark_rejected", _fake_mark_rejected,
+    )
+    monkeypatch.setattr(
+        "aria_core.services.smart_money_leaderboard.remove_and_archive",
+        lambda wallet, reason: _immediate("removed"),
+    )
+
+    result = await wsq.run_wallet_scan_queue_cycle()
+    assert result["rejected_wallets"] == [A]
+    assert await wsq.queue_size() == 0
+    assert len(reject_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_cycle_monitoring_refresh_underperformer_removed_entirely(monkeypatch):
     """21/07 -- un wallet déjà en surveillance qui se dégrade sous le seuil
     est lui aussi retiré ENTIÈREMENT de la file, pas seulement du classement."""

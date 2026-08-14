@@ -470,6 +470,28 @@ async def _reject_wallet_permanently_best_effort(wallet: str, card) -> None:
         logger.warning("wallet_scan_queue: permanent rejection failed for %s", wallet)
 
 
+async def _reject_disqualified_wallet_best_effort(wallet: str, card) -> None:
+    """14/08, real gap found auditing #151 -- ``card.disqualified``
+    (wallet-contract/wash-trading/malicious-financing, computed by
+    ``smart_money.py``'s ``HardDisqualifiers``) was previously checked ONLY
+    for Telegram/LLM-prompt display, never in this promotion path -- a
+    disqualified wallet could reach full coverage and sit on the REAL
+    leaderboard indefinitely (confirmed live: one already did). Distinct
+    from ``_reject_wallet_permanently_best_effort`` (measured underperformance)
+    -- this is a structural exclusion, independent of any percentile, using
+    the real reasons already computed (``card.disqualification_reasons``)
+    rather than a generic message. Best-effort, same doctrine as the other
+    leaderboard writes."""
+    from aria_core.services import smart_money_leaderboard
+
+    reason = "; ".join(card.disqualification_reasons) or "disqualified (structural)"
+    try:
+        await smart_money_leaderboard.mark_rejected(wallet, card.composite_percentile, reason)
+        await smart_money_leaderboard.remove_and_archive(wallet, reason)
+    except Exception:  # noqa: BLE001
+        logger.warning("wallet_scan_queue: disqualified rejection failed for %s", wallet)
+
+
 async def _process_one_queued_wallet(queued: "QueuedWallet", now: datetime, notifier) -> dict:
     """One wallet's full advancement logic for this cycle -- extracted from
     `run_wallet_scan_queue_cycle` (26/07) so it can be run CONCURRENTLY
@@ -571,6 +593,21 @@ async def _process_one_queued_wallet(queued: "QueuedWallet", now: datetime, noti
         return result
 
     if not queued.is_monitoring:
+        if card.disqualified:
+            # 14/08 -- structural exclusion (contract/wash-trading/malicious
+            # financing), checked BEFORE the performance-based rejection
+            # below: a disqualified wallet is never a real candidate
+            # regardless of its measured percentile.
+            await remove_from_queue(queued.wallet)
+            await _reject_disqualified_wallet_best_effort(queued.wallet, card)
+            result["rejected"] = queued.wallet
+            if notifier is not None:
+                await notifier(
+                    f"🚫 {queued.wallet} disqualifié ({'; '.join(card.disqualification_reasons)}) -- "
+                    "retiré définitivement, ne sera plus jamais re-scanné ni redécouvert."
+                )
+            return result
+
         if _is_confirmed_underperformer(card):
             # Measured percentile confirmed bad right from the 1st full
             # coverage -- removed ENTIRELY (never permanent monitoring)
@@ -625,6 +662,20 @@ async def _process_one_queued_wallet(queued: "QueuedWallet", now: datetime, noti
             await notifier(
                 f"💤 Surveillance arrêtée -- {queued.wallet} inactif depuis plus de "
                 f"{INACTIVITY_CUTOFF_DAYS} jours (aucune activité on-chain détectée)."
+            )
+        return result
+
+    if card.disqualified:
+        # 14/08 -- same structural exclusion as the 1st-full-coverage branch
+        # above: a wallet can start clean and later be revealed as a
+        # contract/wash-trader/malicious-financing hit during monitoring.
+        await remove_from_queue(queued.wallet)
+        await _reject_disqualified_wallet_best_effort(queued.wallet, card)
+        result["rejected"] = queued.wallet
+        if notifier is not None:
+            await notifier(
+                f"🚫 {queued.wallet} disqualifié ({'; '.join(card.disqualification_reasons)}) -- "
+                "retiré définitivement de la surveillance, ne sera plus jamais re-scanné ni redécouvert."
             )
         return result
 
