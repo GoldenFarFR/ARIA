@@ -44,6 +44,27 @@ render_upstream_conf() {
     printf 'upstream aria_api_backend {\n    server 127.0.0.1:%s;\n}\n' "$port"
 }
 
+# Lit une variable KEY=VALUE depuis un fichier .env -- échoue explicitement (jamais de
+# valeur devinée, même doctrine que read_active_port) si le fichier est absent ou si
+# la variable n'y est pas définie/vide. Ancre `^VAR=` (jamais une correspondance en
+# sous-chaîne, ex. ARIA_DEPLOY_ACTIVATION_SECRET_V2 ne doit jamais répondre à une
+# lecture de ARIA_DEPLOY_ACTIVATION_SECRET). Dernière définition gagne sur une clé
+# dupliquée (comportement standard d'un fichier .env source par l'application).
+read_env_var() {
+    local env_file="$1" var_name="$2"
+    if [ ! -f "$env_file" ]; then
+        echo "fichier .env introuvable : $env_file" >&2
+        return 1
+    fi
+    local value
+    value="$(grep -E "^${var_name}=" "$env_file" | tail -1 | cut -d= -f2-)"
+    if [ -z "$value" ]; then
+        echo "variable ${var_name} absente ou vide dans $env_file" >&2
+        return 1
+    fi
+    echo "$value"
+}
+
 # Réessaie une commande jusqu'à succès (exit 0) ou expiration du plafond
 # max_attempts x interval_seconds. `systemctl reload nginx` n'est pas instantané --
 # les nouveaux workers mettent un court instant à tourner (bug réel constaté en

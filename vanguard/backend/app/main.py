@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
+import secrets as _secrets_module
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,6 +72,18 @@ from app.x402_seller import mount_x402_seller, x402_seller_ready
 logger = logging.getLogger(__name__)
 
 
+def _heartbeat_standby_enabled() -> bool:
+    """14/08 -- root cause of the paper-trading persistence bug (SAPIEN/WMTX
+    vanished, trading_mode stuck 8.5 days, docs/HANDOFF_VPS_OPS.md): deploy.sh's
+    blue-green standby container shares the SAME SQLite bind-mount as the still-live
+    active container, and used to start its own heartbeat loop unconditionally --
+    two loops writing to the same DB, unlocked, for the ~40s health-check + cutover
+    window. When this flag is set, the standby container skips aria_heartbeat.start()
+    entirely; deploy.sh activates it via POST /internal/activate-heartbeat only after
+    the real traffic cutover through nginx is confirmed."""
+    return os.getenv("ARIA_HEARTBEAT_STANDBY", "").strip().lower() in ("1", "true")
+
+
 async def _background_startup() -> None:
     """Non-blocking boot — Render health check must pass before slow init (Telegram API, seed)."""
     from aria_core.knowledge.seed import (
@@ -125,7 +138,14 @@ async def _background_startup() -> None:
 
         boot = bootstrap_style_schedule()
         logger.info("Avatar style schedule: %s", boot.get("action"))
-        await aria_heartbeat.start()
+        if _heartbeat_standby_enabled():
+            logger.info(
+                "Heartbeat standby mode (ARIA_HEARTBEAT_STANDBY) -- skipping "
+                "aria_heartbeat.start(), waiting for POST /internal/activate-heartbeat "
+                "after blue-green cutover is confirmed"
+            )
+        else:
+            await aria_heartbeat.start()
         await momentum_websocket_listener.start()
         logger.info("Aria Vanguard core services started")
     except Exception as exc:
@@ -305,6 +325,28 @@ async def health():
     except ImportError:
         payload["aria_core_build"] = None
     return payload
+
+
+@app.post("/internal/activate-heartbeat")
+async def activate_heartbeat(request: Request):
+    """14/08 -- counterpart to ARIA_HEARTBEAT_STANDBY (see
+    _heartbeat_standby_enabled docstring). deploy.sh calls this ONLY after the real
+    traffic cutover through nginx is confirmed (step [8/8]) -- never public, never
+    reachable outside the VPS (the container port is strictly bound 127.0.0.1).
+    Fail-closed if the secret isn't configured (same doctrine as
+    aria_core.public_mode.is_operator_request), constant-time comparison against
+    timing attacks. Idempotent: aria_heartbeat.start() already no-ops if running."""
+    secret = (settings.deploy_activation_secret or "").strip()
+    if not secret:
+        raise HTTPException(status_code=403, detail="deploy activation secret not configured")
+    provided = (request.headers.get("X-Deploy-Activation-Secret") or "").strip()
+    if not (provided and _secrets_module.compare_digest(provided, secret)):
+        raise HTTPException(status_code=403, detail="invalid deploy activation secret")
+
+    already_running = aria_heartbeat.is_running
+    await aria_heartbeat.start()
+    logger.info("Heartbeat activated via /internal/activate-heartbeat (already_running=%s)", already_running)
+    return {"outcome": "already_active" if already_running else "activated"}
 
 
 def _mount_frontend() -> None:

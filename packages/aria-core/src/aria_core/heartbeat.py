@@ -1141,6 +1141,10 @@ class AriaHeartbeat:
             except (ValueError, TypeError):
                 continue
 
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
     async def start(self) -> None:
         if self._running:
             return

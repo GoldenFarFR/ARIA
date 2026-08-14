@@ -88,6 +88,7 @@ docker run -d --name aria-api-next --restart unless-stopped \
   -p "127.0.0.1:${STANDBY_PORT}:8000" \
   -v "$DATA_DIR":/app/backend/data \
   --env-file "$ENV_FILE" \
+  -e ARIA_HEARTBEAT_STANDBY=1 \
   "$IMAGE:latest"
 
 echo "==> [6/8] Health-check du nouveau conteneur (jusqu'à $((HEALTH_RETRIES * HEALTH_INTERVAL))s), l'ancien continue de tourner"
@@ -172,6 +173,19 @@ docker rm -f aria-api-old >/dev/null 2>&1 || true
 rm -f "$UPSTREAM_BACKUP"
 
 echo "✅ OK — le conteneur $NAME (port $STANDBY_PORT) sert le commit $SHORT"
+
+echo "==> Activation du heartbeat (fin de la fenêtre standby -- #302 root cause fix, 14/08)"
+ACTIVATION_SECRET="$(read_env_var "$ENV_FILE" ARIA_DEPLOY_ACTIVATION_SECRET)"
+ACTIVATION_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "X-Deploy-Activation-Secret: $ACTIVATION_SECRET" \
+  "http://127.0.0.1:${STANDBY_PORT}/internal/activate-heartbeat" 2>/dev/null || true)"
+if [ "$ACTIVATION_CODE" != "200" ]; then
+  echo "❌ Activation du heartbeat a échoué (HTTP $ACTIVATION_CODE) -- le conteneur sert du trafic mais AUCUN cycle heartbeat ne tourne (pas de paper-trading, pas de wallet scan, aucun cycle automatisé)." >&2
+  echo "    Intervention manuelle requise : curl -X POST -H \"X-Deploy-Activation-Secret: ...\" http://127.0.0.1:${STANDBY_PORT}/internal/activate-heartbeat" >&2
+  exit 1
+fi
+echo "    ✓ heartbeat actif"
+
 echo "==> Purge du cache Docker (déploiement réussi)"
 docker image prune -f
 docker builder prune -f

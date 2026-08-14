@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     access_code_enabled: bool = False
     session_ttl_hours: int = 24
     admin_api_secret: str = ""
+    deploy_activation_secret: str = ""  # POST /internal/activate-heartbeat (blue-green standby, 14/08)
     site_base_url: str = ""  # API publique (ex. https://api.ariavanguardzhc.com) — webhooks, Telegram
     holding_domain: str = "ariavanguardzhc.com"  # Site holding statique (Vanguard)
 
