@@ -353,3 +353,42 @@ async def test_run_vector_maintenance_optimize_failure_still_returns_purge(vecto
     result = await run_vector_maintenance()
     assert result["optimized"] is False
     assert "purged" in result
+
+
+def test_get_table_migrates_pre_existing_table_with_old_schema(vector_on, tmp_path):
+    """14/08 -- reproduces the real prod incident: a table already exists on
+    disk with the schema from BEFORE `written_at`/`written_by` were added to
+    `_table_schema()` (exactly the 85-row prod table's state at the moment
+    #166's code was deployed). `create_table(..., exist_ok=True)` does NOT
+    silently accept a schema mismatch against an existing table -- it raises,
+    which `get_table()`'s broad `except Exception` swallowed, permanently
+    returning `None` (vector store silently dead, both read and write) with
+    no visible error beyond a warning log. This asserts the real fix:
+    `get_table()` must return a usable, migrated table for a pre-existing
+    table with an old schema, never `None`."""
+    import lancedb
+    import pyarrow as pa
+
+    from aria_core.memory.vector import lancedb_client as lc
+    from aria_core.memory.vector.embedding import EMBEDDING_DIM
+    from aria_core.memory.vector.schema_validator import collection_name
+
+    old_schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), EMBEDDING_DIM)),
+            pa.field("text", pa.string()),
+            pa.field("entry_type", pa.string()),
+            pa.field("metadata_json", pa.string()),
+        ]
+    )
+    client = lancedb.connect(str(tmp_path / "vector"))
+    client.create_table(collection_name(), schema=old_schema)
+    reset_client_cache()
+
+    tbl = lc.get_table()
+
+    assert tbl is not None
+    assert set(tbl.schema.names) >= {
+        "id", "vector", "text", "entry_type", "metadata_json", "written_at", "written_by",
+    }

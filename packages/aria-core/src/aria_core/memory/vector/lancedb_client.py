@@ -75,7 +75,24 @@ def _migrate_provenance_columns(table: Any) -> None:
 
 
 def get_table():
-    """Returns the LanceDB table or None (flag off / missing import / error)."""
+    """Returns the LanceDB table or None (flag off / missing import / error).
+
+    14/08 -- real bug found in prod right after this same day's #166 migration
+    landed: `create_table(name, schema=_table_schema(), exist_ok=True)` does
+    NOT silently ignore the passed schema for an already-existing table, as a
+    prior comment here assumed without ever testing it against the real
+    pre-existing table (only `add_columns()` itself was verified empirically
+    at the time) -- it raises `Schema Error: Provided schema does not match
+    existing table schema` whenever the declared schema gains a field the
+    on-disk table doesn't have yet (exactly what happened here: `written_at`/
+    `written_by` added to `_table_schema()` while the real 85-row prod table
+    still had the pre-#166 5-column schema). The exception was swallowed by
+    the broad `except Exception` below, so `get_table()` silently returned
+    `None` on every call -- `is_available()` stayed `False` and the whole
+    vector store (read AND write) was dead in prod from that deploy onward,
+    with zero visible error beyond a warning log line. Fix: `open_table()`
+    never compares schemas, so try that FIRST for a table that already
+    exists; only fall back to `create_table()` when it genuinely doesn't."""
     global _client, _table
     if not is_vector_enabled() or not lancedb_installed():
         return None
@@ -85,7 +102,10 @@ def get_table():
         import lancedb
 
         _client = lancedb.connect(str(vector_dir()))
-        _table = _client.create_table(collection_name(), schema=_table_schema(), exist_ok=True)
+        try:
+            _table = _client.open_table(collection_name())
+        except Exception:
+            _table = _client.create_table(collection_name(), schema=_table_schema())
         _migrate_provenance_columns(_table)
         return _table
     except Exception as exc:
