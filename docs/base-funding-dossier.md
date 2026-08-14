@@ -154,7 +154,8 @@ to deploy real capital. That decision follows our own proof, not a grant calenda
 ## Base Ecosystem Fund — official thesis (reference only, not yet pitched)
 Source: Base Build (@buildonbase), published article, confirmed by the operator directly
 (16/07) after this session could not render the X article page (JS-only, 403 on
-automated fetch). High-conviction focus stated as "global onchain finance": tokenization,
+automated fetch). **Re-read directly (14/08, browser fallback) — the summary below matches
+the real text verbatim, no correction needed.** High-conviction focus stated as "global onchain finance": tokenization,
 stablecoins & emerging markets, credit, prediction markets, legacy & institutional
 markets, and agentic commerce. Six named theses, verbatim summary:
 1. **Tokenization** — yield-bearing real-world assets onchain; tokenized brokerage
@@ -178,9 +179,16 @@ published. The closest, "agentic commerce", is scoped by the fund to consumer
 transaction-completion agents (shopping, booking, tickets) — not an autonomous
 trading/VC research agent. Applying will need a pitch that bridges ARIA's actual
 category (onchain intelligence + autonomous trading, proof-before-promise) to one or
-more of these theses, not an assumption that an existing bucket already fits. Revisit
-this once Phase 3 (proof from the 1M$ test) is reached — this is reference material for
-that pitch, not an application in progress.
+more of these theses, not an assumption that an existing bucket already fits. One
+concrete anchor worth keeping: the thesis's own success metric for "agentic commerce" is
+explicitly "stablecoin and x402 volumes" — ARIA already generates real (if tiny) x402
+volume as a seller (`/api/x402/walletscore`, `/api/x402/b20score`), not just the
+consumer-transaction framing the bucket describes. Real leverage only once that volume
+is genuine third-party traffic, not the operator's own smoke test (still the case as of
+14/08, cf. `docs/HANDOFF_X402.md`) — the gap to close before this anchor means anything
+in a pitch is discoverability (no Bazaar/`.well-known` listing yet) and real external
+demand, not the mechanism itself. Revisit this once Phase 3 (proof from the 1M$ test) is
+reached — this is reference material for that pitch, not an application in progress.
 
 ## Links
 - Site: https://ariavanguardzhc.com
