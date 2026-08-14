@@ -56,5 +56,11 @@ Solution : `devils_advocate_split_diff_by_file()` découpe par frontières de fi
 Date : 2026.08.10 / Probleme : crédits OpenRouter épuisés en cours de route (HTTP 402), Avocat du Diable silencieusement mort pendant cette fenêtre — dépendance tierce jugée inutile pour un appel direct au même modèle.
 Solution : appel direct `api.anthropic.com/v1/messages` (`x-api-key`, nom de modèle `claude-fable-5` SANS le préfixe `anthropic/` propre à OpenRouter). C'est cette migration qui a révélé le piège de format payload (entrée ci-dessus, même jour). `scripts/devils-advocate-lib.sh`.
 
+------------------------------------------------------------
+
+[CODE] Sujet : `consult-gemini.sh` renommé en `consult-fable5.sh` -- nom périmé depuis le 03/08, jamais corrigé
+Date : 2026.08.14 / Probleme : opérateur, réagissant à un pic de coût Haiku observé sur la Console Anthropic, a précisé sa doctrine modèle ("jamais de Fable 5, toujours Sonnet ou Haiku") -- l'Avocat du Diable en est explicitement exclu (usage validé, reste sur Fable 5), mais l'opérateur a alors demandé ce qu'était `consult-gemini.sh` et, une fois expliqué, jugé le nom "de la négligence de dev" : le script tourne sur Claude Fable 5 depuis le 03/08 (cf. entrée `max_tokens` ci-dessus), jamais renommé depuis.
+Solution : `git mv scripts/consult-gemini.sh scripts/consult-fable5.sh`, toutes les références vivantes mises à jour (`CLAUDE.md`, `devils-advocate-lib.sh`, `chasing_filter_shadow.py`, le script lui-même -- header, usage, préfixe de fichier temporaire) ; les entrées HANDOFF déjà datées gardent l'ancien nom tel quel (historique figé, jamais réécrit). Aucune référence trouvée dans le crontab VPS -- le script reste 100% manuel, aucun mécanisme de prod cassé par ce renommage. Le mécanisme lui-même (modèle, gouvernance "usage rare sur vrai blocage", gouvernance du 03/08) reste inchangé -- seul le nom du fichier a bougé. `scripts/consult-fable5.sh`, `CLAUDE.md`, `scripts/devils-advocate-lib.sh`, `packages/aria-core/src/aria_core/chasing_filter_shadow.py`.
+
 ## Détail complet et contexte plus large
 `docs/HANDOFF_AUTOMATISATION.md` garde l'historique complet (gouvernance du modèle, comparaison Gemini/DeepSeek/Fable5, seuils de batching, coûts réels par appel) — ce fichier-ci est un résumé orienté "pièges API à ne jamais redécouvrir", pas un remplacement.

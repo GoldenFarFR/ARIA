@@ -57,7 +57,7 @@ _ensured_db_paths: set[str] = set()
 
 
 async def _ensure_table() -> None:
-    # 08/03 -- Gemini second-opinion review (scripts/consult-gemini.sh):
+    # 08/03 -- Gemini second-opinion review (scripts/consult-fable5.sh):
     # re-issuing CREATE TABLE/INDEX IF NOT EXISTS on every real BUY was
     # redundant DDL on a hot path -- skipped once this process has confirmed
     # the table exists FOR THE CURRENT DB_PATH. Keyed by path (not a plain

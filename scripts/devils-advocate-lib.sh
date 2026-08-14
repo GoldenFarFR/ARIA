@@ -16,20 +16,20 @@
 # et a propose une architecture concretement meilleure (file pending/archived,
 # voir devils-advocate-review.sh). Verdict operateur explicite : "cette doctrine
 # n'est pas viable, on a prouve que fable est tellement efficace que la doctrine
-# s'annule". Distinct de la gouvernance "usage rare" de scripts/consult-gemini.sh
+# s'annule". Distinct de la gouvernance "usage rare" de scripts/consult-fable5.sh
 # (second avis MANUEL, sur vrai blocage) -- ce hook-ci reste automatique, sur
 # CHAQUE push vers main, cout accepte explicitement par l'operateur a cette
 # frequence (~0,28$/push, ~3,5x Gemini) A CONDITION de batcher les push (ne pas
 # pousser un commit isole par petit correctif -- meme jour, meme decision).
 #
-# Format de payload Fable 5 (LEÇON DEJA CONNUE dans ce projet, consult-gemini.sh
+# Format de payload Fable 5 (LEÇON DEJA CONNUE dans ce projet, consult-fable5.sh
 # 03/08) : le raisonnement interne ("thinking") est TOUJOURS actif sur Fable 5 et
 # partage le meme budget max_tokens que la reponse visible -- sur un diff
 # long/complexe (le cas typique de cet Avocat du Diable), un max_tokens trop bas
 # (l'ancien 4000, calibre pour Gemini) produit une reponse VIDE, facturee quand
 # meme. 96000 + budget_tokens=32000 laisse 64000 tokens a la reponse visible,
 # meme marge que la config deja verifiee en conditions reelles par
-# consult-gemini.sh -- jamais reinventee ici.
+# consult-fable5.sh -- jamais reinventee ici.
 #
 # 10/08 -- bascule OpenRouter -> API Anthropic directe (decision operateur
 # explicite) : OpenRouter avait deja produit un vrai incident (credits
