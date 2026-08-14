@@ -11,9 +11,9 @@ from aria_core.services import resource_budget
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    # 13/08 (#302) : firecrawl_budget.py délègue maintenant à
-    # resource_budget.py, le ledger unifié -- le chemin DB s'y résout
-    # désormais, plus dans ce module (qui n'importe plus aria_db_path du tout).
+    # 13/08 (#302): firecrawl_budget.py now delegates to resource_budget.py,
+    # the unified ledger -- the DB path is resolved there, not in this
+    # module anymore (which no longer imports aria_db_path at all).
     monkeypatch.setattr(resource_budget, "aria_db_path", lambda: tmp_path / "firecrawl_budget_test.db")
     yield
 
