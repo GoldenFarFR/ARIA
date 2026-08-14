@@ -99,7 +99,7 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
-[CODE] Sujet : extra `[vector]` jamais installé dans le Dockerfile de prod — mécanisme mort depuis sa création
+[DEPLOYE] Sujet : extra `[vector]` jamais installé dans le Dockerfile de prod — mécanisme mort depuis sa création
 Date : 2026.08.14 / Probleme : `lancedb`/`fastembed`/`pyarrow` (paquet `[vector]` de
 `aria-core`) n'ont **jamais** figuré dans `vanguard/Dockerfile` (confirmé par `git log -p` sur
 tout l'historique du fichier), alors que 3 vrais appelants étaient déjà câblés dans le code
@@ -112,11 +112,17 @@ prod... je sais pas ce qu'il y a").
 Solution : extra `[vector]` ajouté à l'installation pip du Dockerfile. Versions déjà pinnées
 dans `requirements-lock.txt` (`lancedb==0.36.0`/`fastembed==0.8.0`/`pyarrow==25.0.0` — déjà
 présentes malgré le paquet jamais installé, probablement issues d'une régénération de lock
-antérieure), une seule dépendance transitive manquante ajoutée (`abnf==2.7.0`). Build réel testé
-sur le VPS : `vector_store_status()` confirme `installed=True`. **Pas encore déployé en prod au
-moment de cette entrée** — commit `bd5dd9e3` poussé sur `main`, déploiement réel (rebuild +
-bascule blue-green) restant à faire/confirmer. `vanguard/Dockerfile`,
-`vanguard/backend/requirements-lock.txt` (bd5dd9e3).
+antérieure), une seule dépendance transitive manquante ajoutée (`abnf==2.7.0`). Déployé en prod
+le 14/08 (bascule blue-green confirmée, commit `db5b1bd9b1b8`) — **`ARIA_VECTOR_MEMORY=true`
+ajouté manuellement au `.env` par l'opérateur, requis en plus du paquet lui-même** (le flag
+`aria_vector_memory` est `False` par défaut dans `app/config.py`, jamais activé automatiquement
+par la seule présence du paquet). Confirmé en conditions réelles serveur (pas un test isolé,
+cf. piège méthodologique documenté dans `docs/HANDOFF_VPS_OPS.md` — un `docker exec` isolé ne
+reflète jamais `aria_core.runtime` sans rejouer `bootstrap.configure()`) :
+`vector_store_status()` retourne `enabled=True, available=True, installed=True,
+collection_count=85` — les 85 entrées déjà présentes sur le disque sont bien retrouvées, le
+montage de `/opt/aria-data/vector` fonctionne de bout en bout. `vanguard/Dockerfile`,
+`vanguard/backend/requirements-lock.txt` (bd5dd9e3, db5b1bd9).
 
 ------------------------------------------------------------
 
