@@ -58,6 +58,7 @@ comme pour `hooks-changelog.md`.
 | `signal-cascade-watch/run.sh` | `*/15 * * * *` | 🟢 actif | cycles + convergence de la cascade de signaux |
 | `vc-watch/run.sh` | `0 * * * *` | 🟢 actif | silence anormal sur les cycles VC (crawl/radar/thesis/resolve/forecast/self-report) |
 | `outgoing-pause-watch/run.sh` | `0 * * * *` | 🟢 actif | rappel Telegram RÉPÉTÉ (pas d'hystérésis one-shot) tant que le kill-switch `/stop` reste armé |
+| `file-staleness-watch/run.sh` | `20 8 * * *` | 🟢 actif | signale (`system_issues`) les docs vivants sans revue depuis >15j, plafonné à 8 nouveaux/passage ; `mark-reviewed.sh` remet le compteur à zéro |
 
 ### CI / GitHub Actions (`.github/workflows/*.yml`, tourne sur les serveurs GitHub)
 
