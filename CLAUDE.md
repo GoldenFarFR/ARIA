@@ -346,6 +346,7 @@ from scratch.
 - `docs/HANDOFF_SIGNAL_CASCADE.md` — cascade de signaux multi-source (GitHub/Farcaster/web/X), collecte + filtre + convergence + file d'attente.
 - `docs/HANDOFF_CANDLE_HISTORY.md` — historique persistant de bougies (FIFO par token/timeframe), collecteur watchlist (#98/#97).
 - `docs/HANDOFF_RESOURCE_BUDGET.md` — garde-fous budget/quota des providers API tiers (CoinMarketCap, CoinGecko, Mobula, Dune, Firecrawl, Tavily, Blockscout, GoPlus, TwitterAPI.io), consolidation `resource_budget.py` (#302).
+- `docs/HANDOFF_LANCEDB.md` — mémoire vectorielle sémantique (recherche par sens, pas mot-clé), extra `[vector]` du Dockerfile, bonnes pratiques LanceDB sourcées, risque memory-poisoning ASI06.
 - **This list must stay up to date**: any new `docs/HANDOFF_*.md` file created (a new
   component never touched before) gets added here in the SAME commit — a HANDOFF not
   indexed here is as invisible as a HANDOFF that doesn't exist.
