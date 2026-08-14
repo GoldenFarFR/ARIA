@@ -306,6 +306,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="watchlist_refill_cycle",
+        name="goplus_watchlist -- pure discovery refill",
+        description="14/08, operator decision: every pocket must read candidates from goplus_watchlist instead of calling discovery APIs itself. Runs discover_momentum_candidates() + the honeypot check ONLY (never golden-pocket/RSI/a buy decision) on every candidate found, so the watchlist keeps getting populated once swing/scalping_v8 stop calling discovery directly (paper_trader._momentum_candidates_and_chain_map). Double gate: ARIA_PAPER_TRADING_ENABLED + ARIA_WATCHLIST_REFILL_ENABLED. No real money, read-only security checks.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="scalping_v9_cycle",
         name="Paper trading $1M — scalping_v9 (RSI+MFI watchlist, 5min)",
         description="06/08 operator spec: fixed watchlist (SPX first), buys when RSI(18)<21 AND MFI(10)<20 on the same closed 5-min candle, 3% of remaining cash per buy, flat -5% trailing stop as the only exit, simulated fees +-1.3%. Own cycle at the candle cadence (5min) -- the signal is rare and fast, the generic 15min cycle would miss it. Double gate: ARIA_PAPER_TRADING_ENABLED + ARIA_SCALPING_V9_ENABLED. No real money.",
@@ -745,6 +752,23 @@ def _sync_x_curiosity_enabled() -> None:
 
                 task.enabled = (
                     os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and not paper_pause.is_paused()
+                )
+            if task.id == "watchlist_refill_cycle":
+                # 14/08 -- double gate: same paper-trading base gate as every
+                # other momentum cycle, PLUS a dedicated gate (OFF by default,
+                # same doctrine as goplus_watchlist_cycle/candle_history) so
+                # this new discovery path is never active without an explicit
+                # operator opt-in even once paper trading itself is on.
+                from aria_core import paper_pause
+
+                task.enabled = (
+                    os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
+                        "1", "true", "yes", "on",
+                    )
+                    and os.environ.get("ARIA_WATCHLIST_REFILL_ENABLED", "").strip().lower() in (
                         "1", "true", "yes", "on",
                     )
                     and not paper_pause.is_paused()
@@ -1613,6 +1637,17 @@ class AriaHeartbeat:
                 append_memory(
                     "paper",
                     f"[paper_trade] fictif 1M$ (découverte horaire) : +{len(actions.get('opened', []))} achats",
+                )
+
+        elif task_id == "watchlist_refill_cycle":
+            from aria_core import momentum_entry
+
+            result = await momentum_entry.run_watchlist_refill_cycle()
+            if result.get("queued"):
+                append_memory(
+                    "paper",
+                    f"[watchlist_refill] {result['candidates_seen']} candidats scannés -- "
+                    f"+{result['queued']} en file honeypot, {result['clear']} déjà clairs",
                 )
 
         elif task_id == "scalping_v9_cycle":

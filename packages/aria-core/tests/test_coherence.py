@@ -904,6 +904,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_WALLET_SCAN_QUEUE_ENABLED",
     "ARIA_WALLET_SCORING_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",
+    # 14/08 -- watchlist_refill_cycle (momentum_entry.run_watchlist_refill_cycle):
+    # pure-discovery honeypot-check-only pass over discover_momentum_candidates(),
+    # populates goplus_watchlist once swing/scalping_v8 stop calling discovery
+    # directly. Double gate with ARIA_PAPER_TRADING_ENABLED, OFF by default.
+    "ARIA_WATCHLIST_REFILL_ENABLED",
     "ARIA_WEB_FETCH_ENABLED",
     # 08/09 -- signal_cascade_web.py stage 2 refresh cycle. Same doctrine as
     # its GitHub/Farcaster siblings, deliberately hourly (shared Tavily

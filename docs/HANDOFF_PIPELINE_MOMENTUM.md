@@ -7,6 +7,26 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Subject : watchlist_refill_cycle -- pure-discovery cycle, first step toward every pocket sourcing from goplus_watchlist only
+Date : 2026.08.14 / Problem : operator decision ("toute les poches doivent piocher dans la
+watchlist... sans appeler les api") -- swing/scalping_v8 currently call discover_momentum_candidates
+directly (via paper_trader._momentum_candidates_and_chain_map) to both discover AND decide what to
+buy; cutting that direct call to migrate them onto goplus_watchlist would starve the watchlist of new
+candidates, since that same call chain (via _check_honeypot/add_or_touch) is currently its only
+populator.
+Solution : new momentum_entry.run_watchlist_refill_cycle() -- calls discover_momentum_candidates()
+and runs ONLY the honeypot check (_check_honeypot, which itself calls add_or_touch) on every
+candidate, deliberately skipping the rest of evaluate_hard_gates (golden pocket/RSI/RVOL/established
+profile) -- never a buy decision. New heartbeat task watchlist_refill_cycle (15min), double-gated
+ARIA_PAPER_TRADING_ENABLED + ARIA_WATCHLIST_REFILL_ENABLED (OFF by default). Also exposed
+liquidity_usd on _batch_liquidity_prefilter's return (previously computed then discarded) so this
+cycle can compute a real goplus_watchlist priority_score instead of defaulting to 0.0. Migrating
+swing/scalping_v8's own sourcing onto the watchlist (paper_trader._momentum_candidates_and_chain_map)
+is the next step, not yet done -- momentum_entry.py, heartbeat.py, tests/test_momentum_entry.py,
+tests/test_coherence.py
+
+------------------------------------------------------------
+
 [CODE] Subject : holder-concentration-unverifiable refusal alert never showed which pocket refused the buy
 Date : 2026.08.14 / Problem : real UX gap found live (operator: "sa precise pas quel poche refuse
 les achat a chaque fois") -- unlike format_buy_alert/format_sell_alert (both show `_strategy_label`

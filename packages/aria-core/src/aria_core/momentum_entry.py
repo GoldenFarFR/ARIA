@@ -710,6 +710,11 @@ async def _batch_liquidity_prefilter(
             kept.append(c)  # no data -- absence of data is never a rejection
             continue
         if best_liquidity.get(key, 0.0) >= min_liquidity_usd:
+            # 14/08 -- also expose liquidity_usd (previously computed but
+            # discarded, only price_usd survived) so a pure-discovery caller
+            # (run_watchlist_refill_cycle) can compute a real priority_score
+            # instead of defaulting every fresh candidate to 0.0.
+            c = {**c, "liquidity_usd": best_liquidity[key]}
             if key in best_price:
                 c = {**c, "price_usd": best_price[key]}
             kept.append(c)
@@ -1474,6 +1479,61 @@ async def _check_watchlist_candidate(contract: str, chain: str, *, allow_goplus:
         contract, chain, security.available,
     )
     return security, True
+
+
+async def run_watchlist_refill_cycle(*, discover=None) -> dict:
+    """14/08, operator decision ("toute les poches doivent piocher dans la
+    watchlist... sans appeler les api") -- pure DISCOVERY, never a buy
+    decision. Separated out of the trading cycles (swing/scalping_v8, via
+    paper_trader._momentum_candidates_and_chain_map) so cutting their direct
+    call to ``discover_momentum_candidates`` doesn't starve
+    ``goplus_watchlist`` of new candidates -- this cycle becomes the sole
+    remaining caller of ``discover_momentum_candidates`` on the momentum
+    path, and every pocket reads from the watchlist it populates instead.
+
+    Runs ONLY the honeypot check (``_check_honeypot``, which itself calls
+    ``goplus_watchlist.add_or_touch`` on a first sighting) on every candidate
+    ``discover_momentum_candidates`` surfaces -- deliberately skips the rest
+    of ``evaluate_hard_gates`` (golden pocket/RSI/RVOL/established profile),
+    which stay each pocket's own job at buy-decision time. Solana candidates
+    are skipped (never enters ``goplus_watchlist``, see ``_check_honeypot``'s
+    own chain branch) -- listed here as "skipped_chain" rather than silently
+    dropped."""
+    discover = discover or discover_momentum_candidates
+    candidates = await discover()
+
+    queued = 0
+    clear = 0
+    rejected = 0
+    unavailable = 0
+    skipped_chain = 0
+
+    for c in candidates:
+        contract, chain = c["contract"], c["chain"]
+        if (chain or "").strip().lower() == "solana":
+            skipped_chain += 1
+            continue
+        _clear, _reason, code = await _check_honeypot(
+            contract, chain, liquidity_usd=c.get("liquidity_usd"),
+        )
+        if code == "honeypot_pending":
+            queued += 1
+        elif code == "honeypot_clear":
+            clear += 1
+        elif code == "honeypot_rejected":
+            rejected += 1
+        else:  # honeypot_unavailable / chain_not_covered
+            unavailable += 1
+
+    logger.info(
+        "run_watchlist_refill_cycle: %d candidates -- queued=%d clear=%d rejected=%d "
+        "unavailable=%d skipped_chain=%d",
+        len(candidates), queued, clear, rejected, unavailable, skipped_chain,
+    )
+    return {
+        "candidates_seen": len(candidates), "queued": queued, "clear": clear,
+        "rejected": rejected, "unavailable": unavailable, "skipped_chain": skipped_chain,
+    }
 
 
 async def run_goplus_watchlist_cycle() -> dict:

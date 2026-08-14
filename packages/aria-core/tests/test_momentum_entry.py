@@ -8869,3 +8869,85 @@ def test_rsi_divergence_watch_candidate_honors_explicit_span_override():
     assert watch["rsi_watch_min_span"] == 4
     assert watch["rsi_watch_max_span"] == 13
     assert "span 4-13 bougies" in watch["reason"]
+
+
+# ── run_watchlist_refill_cycle (pure discovery, 14/08) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_empty_discovery_is_a_no_op():
+    async def discover():
+        return []
+
+    result = await me.run_watchlist_refill_cycle(discover=discover)
+    assert result == {
+        "candidates_seen": 0, "queued": 0, "clear": 0,
+        "rejected": 0, "unavailable": 0, "skipped_chain": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_tallies_by_honeypot_code(monkeypatch):
+    candidates = [
+        {"contract": "0x" + "1" * 40, "chain": "base"},
+        {"contract": "0x" + "2" * 40, "chain": "base"},
+        {"contract": "0x" + "3" * 40, "chain": "base"},
+        {"contract": "0x" + "4" * 40, "chain": "base"},
+    ]
+    codes_by_contract = {
+        "0x" + "1" * 40: "honeypot_pending",
+        "0x" + "2" * 40: "honeypot_clear",
+        "0x" + "3" * 40: "honeypot_rejected",
+        "0x" + "4" * 40: "honeypot_unavailable",
+    }
+
+    async def discover():
+        return candidates
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        code = codes_by_contract[contract]
+        return (code == "honeypot_clear", "stub", code)
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover)
+    assert result == {
+        "candidates_seen": 4, "queued": 1, "clear": 1,
+        "rejected": 1, "unavailable": 1, "skipped_chain": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_skips_solana_without_calling_honeypot(monkeypatch):
+    async def discover():
+        return [{"contract": "SoLTokenAddr", "chain": "solana"}]
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("_check_honeypot should never be called for a Solana candidate")
+
+    monkeypatch.setattr(me, "_check_honeypot", fail_if_called)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover)
+    assert result == {
+        "candidates_seen": 1, "queued": 0, "clear": 0,
+        "rejected": 0, "unavailable": 0, "skipped_chain": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_forwards_liquidity_usd(monkeypatch):
+    contract = "0x" + "5" * 40
+
+    async def discover():
+        return [{"contract": contract, "chain": "base", "liquidity_usd": 42_000.0}]
+
+    received = {}
+
+    async def fake_check_honeypot(c, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        received["liquidity_usd"] = liquidity_usd
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    await me.run_watchlist_refill_cycle(discover=discover)
+    assert received["liquidity_usd"] == 42_000.0
