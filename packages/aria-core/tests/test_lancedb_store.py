@@ -7,6 +7,7 @@ from aria_core.memory.vector import audit
 from aria_core.memory.vector.lancedb_client import lancedb_installed, reset_client_cache
 from aria_core.memory.vector.lancedb_store import (
     contains_injection_marker,
+    find_exact,
     is_available,
     purge_expired_entries,
     run_vector_maintenance,
@@ -103,11 +104,16 @@ def test_status_reflects_install(vector_on):
 
 @pytest.mark.asyncio
 async def test_store_upsert_same_source_id(vector_on):
-    """Deux store() avec le même source_id -> mise à jour, pas duplication (merge_insert)."""
+    """Deux store() avec le même source_id -> mise à jour, pas duplication (merge_insert).
+    14/08 (#170) -- doc_id is now a hash of source_id (fixing a real truncation
+    bug, cf. test_doc_id_hash_avoids_truncation_collision below), never the
+    literal source_id text -- only the upsert behavior (stable id, no dup) is
+    asserted here."""
     meta = {"topic": "ops", "confidence": "0.9", "source_id": "fixed-id"}
     id1 = await store("lesson", "version un", metadata=meta)
     id2 = await store("lesson", "version deux", metadata=meta)
-    assert id1 == id2 == "fixed-id"
+    assert id1 == id2
+    assert id1 is not None
     assert vector_store_status()["collection_count"] == 1
 
 
@@ -391,4 +397,158 @@ def test_get_table_migrates_pre_existing_table_with_old_schema(vector_on, tmp_pa
     assert tbl is not None
     assert set(tbl.schema.names) >= {
         "id", "vector", "text", "entry_type", "metadata_json", "written_at", "written_by",
+        "contract", "chain",
     }
+
+
+# ── typed contract/chain columns + exact-match lookup (#170, 14/08) ────────────
+
+@pytest.mark.asyncio
+async def test_store_records_typed_contract_chain_columns(vector_on):
+    from aria_core.memory.vector.lancedb_client import get_table
+
+    await store(
+        "conviction_research",
+        "some research",
+        metadata={
+            "source": "conviction_research",
+            "source_id": "test-source-id",
+            "contract": "0xabc123",
+            "chain": "base",
+        },
+    )
+    row = get_table().search().where("entry_type = 'conviction_research'").limit(1).to_list()[0]
+    assert row["contract"] == "0xabc123"
+    assert row["chain"] == "base"
+
+
+@pytest.mark.asyncio
+async def test_store_typed_columns_empty_when_metadata_lacks_them(vector_on):
+    from aria_core.memory.vector.lancedb_client import get_table
+
+    await store("lesson", "some content", metadata={"topic": "ops", "confidence": "1"})
+    row = get_table().search().where("entry_type = 'lesson'").limit(1).to_list()[0]
+    assert row["contract"] == ""
+    assert row["chain"] == ""
+
+
+@pytest.mark.asyncio
+async def test_doc_id_hash_avoids_truncation_collision(vector_on):
+    """14/08 real bug: naive str(source_id)[:36] truncation cut BEFORE a long
+    source_id's trailing date suffix, so two different-dated recomputations of
+    the same contract+chain collided on the same 36-char id and silently
+    overwrote each other via merge_insert. Two source_ids sharing the same
+    first 36 characters but differing only after that point must now produce
+    DISTINCT ids (hash of the FULL string) and coexist as separate rows."""
+    long_prefix = "conviction-research-base-0x" + "a" * 40 + "-"
+    source_id_day1 = long_prefix + "2026-08-01"
+    source_id_day2 = long_prefix + "2026-08-02"
+    assert source_id_day1[:36] == source_id_day2[:36]  # the bug's precondition
+
+    id1 = await store(
+        "conviction_research",
+        "research day 1",
+        metadata={"source": "conviction_research", "contract": "0xaaa", "chain": "base", "source_id": source_id_day1},
+    )
+    id2 = await store(
+        "conviction_research",
+        "research day 2",
+        metadata={"source": "conviction_research", "contract": "0xaaa", "chain": "base", "source_id": source_id_day2},
+    )
+    assert id1 != id2
+    assert vector_store_status()["collection_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_doc_id_hash_stable_for_same_source_id(vector_on):
+    """Same-day idempotence must be preserved: the SAME source_id always
+    hashes to the SAME id, so a re-store still upserts instead of duplicating."""
+    meta = {"source": "conviction_research", "contract": "0xaaa", "chain": "base", "source_id": "stable-id"}
+    id1 = await store("conviction_research", "version one", metadata=meta)
+    id2 = await store("conviction_research", "version two", metadata=meta)
+    assert id1 == id2
+    assert vector_store_status()["collection_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_find_exact_filters_by_contract_and_chain(vector_on):
+    await store(
+        "conviction_research",
+        "match",
+        metadata={
+            "source": "conviction_research", "topic": "project-diligence",
+            "source_id": "id-1", "contract": "0xabc", "chain": "base",
+        },
+    )
+    await store(
+        "conviction_research",
+        "different contract",
+        metadata={
+            "source": "conviction_research", "topic": "project-diligence",
+            "source_id": "id-2", "contract": "0xdef", "chain": "base",
+        },
+    )
+    await store(
+        "conviction_research",
+        "different chain",
+        metadata={
+            "source": "conviction_research", "topic": "project-diligence",
+            "source_id": "id-3", "contract": "0xabc", "chain": "solana",
+        },
+    )
+    hits = await find_exact("conviction_research", contract="0xabc", chain="base")
+    assert len(hits) == 1
+    assert hits[0]["content"] == "match"
+
+
+@pytest.mark.asyncio
+async def test_find_exact_sorted_most_recent_first(vector_on):
+    """Direct insertion (bypassing store(), same doctrine as _insert_raw
+    above) to control written_at precisely without depending on the real
+    clock or monkeypatching datetime module-wide."""
+    from aria_core.memory.vector.embedding import embed_text
+    from aria_core.memory.vector.lancedb_client import get_table
+
+    tbl = get_table()
+    for doc_id, written_at, text in (
+        ("old", "2026-08-01T00:00:00+00:00", "research old"),
+        ("new", "2026-08-10T00:00:00+00:00", "research new"),
+    ):
+        tbl.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
+            [
+                {
+                    "id": doc_id,
+                    "vector": embed_text(doc_id),
+                    "text": text,
+                    "entry_type": "conviction_research",
+                    "metadata_json": "{}",
+                    "written_at": written_at,
+                    "written_by": "test_lancedb_store.py",
+                    "contract": "0xabc",
+                    "chain": "base",
+                }
+            ]
+        )
+    hits = await find_exact("conviction_research", contract="0xabc", chain="base")
+    assert [h["content"] for h in hits] == ["research new", "research old"]
+
+
+@pytest.mark.asyncio
+async def test_find_exact_invalid_value_returns_empty(vector_on):
+    await store(
+        "conviction_research", "content",
+        metadata={
+            "source": "conviction_research", "topic": "project-diligence",
+            "source_id": "id-1", "contract": "0xabc", "chain": "base",
+        },
+    )
+    assert await find_exact("conviction_research", contract="0xabc'; DROP TABLE x; --") == []
+
+
+@pytest.mark.asyncio
+async def test_find_exact_empty_when_disabled(monkeypatch):
+    from aria_core.runtime import get_settings
+
+    monkeypatch.setattr(get_settings(), "aria_vector_memory", False)
+    reset_client_cache()
+    assert await find_exact("conviction_research", contract="0xabc") == []

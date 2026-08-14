@@ -6,6 +6,7 @@ Replaces ``chroma_store.py`` 1:1 — same surface (``store``/``search``/``is_ava
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import logging
@@ -29,6 +30,10 @@ from aria_core.paths import vector_dir
 logger = logging.getLogger(__name__)
 
 _ENTRY_TYPE_RE = re.compile(r"^[a-z0-9_]+$")
+# Permissive enough for a hex EVM address or a base58 Solana address plus a
+# plain chain identifier, strict enough to rule out SQL predicate injection
+# via a value embedded in a where() clause (same doctrine as _ENTRY_TYPE_RE).
+_EXACT_MATCH_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,100}$")
 
 # Structural anti-injection guard (#206, 18/07 -- promoted research documenting the
 # real risk of "memory poisoning" on AI agents' vector memory, $45M+ in cumulative
@@ -143,7 +148,23 @@ async def store(
     if tbl is None:
         return None
     meta = normalize_metadata(entry_type, metadata)
-    doc_id = str((metadata or {}).get("source_id") or uuid4())[:36]
+    # (14/08, #170) -- real bug found investigating typed columns: naive
+    # `str(source_id)[:36]` truncation cut INTO a source_id before ever
+    # reaching its trailing date suffix (e.g. conviction_research.py's
+    # "conviction-research-{chain}-{contract}-{date}", ~79 chars for a
+    # typical EVM address) -- two different-dated recomputations of the SAME
+    # contract+chain would collide on the SAME truncated id, so
+    # merge_insert("id").when_matched_update_all() would silently overwrite
+    # history instead of creating a new dated entry, contradicting this
+    # module's own append-only intent. Verified empirically against the 81
+    # real prod conviction_research rows before fixing: 0 collisions YET
+    # (latent, not yet materialized -- no contract had been re-researched on
+    # a different day). Hashing the FULL source_id preserves same-day
+    # idempotence (same input -> same hash) while correctly distinguishing
+    # different-day entries. uuid4()'s str() form is already exactly 36
+    # chars, so the fallback path is unaffected.
+    source_id = (metadata or {}).get("source_id")
+    doc_id = hashlib.sha256(str(source_id).encode("utf-8")).hexdigest()[:36] if source_id else str(uuid4())
     try:
         text = text[:8000]
         row = {
@@ -154,6 +175,11 @@ async def store(
             "metadata_json": json.dumps(meta),
             "written_at": datetime.now(timezone.utc).isoformat(),
             "written_by": written_by,
+            # (14/08, #170) -- promoted from metadata_json to real typed
+            # columns so find_exact() can filter with a SQL predicate instead
+            # of a semantic search + Python parse-and-prefix-match.
+            "contract": str((metadata or {}).get("contract") or ""),
+            "chain": str((metadata or {}).get("chain") or ""),
         }
         tbl.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
             [row]
@@ -205,6 +231,63 @@ async def search(
     except Exception as exc:
         logger.warning("lancedb search failed: %s", exc)
         return []
+
+
+async def find_exact(
+    entry_type: str,
+    *,
+    contract: str | None = None,
+    chain: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Exact-match lookup on the typed ``contract``/``chain`` columns (#170,
+    14/08) -- a pure filtered scan (``table.search(query=None)``, confirmed
+    against the real installed lancedb: "If None then the select/where/limit
+    clauses are applied to filter the table"), NO vector similarity involved.
+
+    Replaces the fragile pattern ``conviction_research.py`` used to rely on:
+    a semantic ``search()`` (which can miss or reorder a match before any
+    filter even runs, since it ranks by embedding distance) followed by a
+    Python parse-and-prefix-match on ``metadata_json``. Sorted most-recent-
+    first (``written_at`` descending). ``[]`` if disabled, nothing matches,
+    an argument fails validation, or on any internal failure -- never
+    raises."""
+    if not is_available():
+        return []
+    if not _ENTRY_TYPE_RE.match(entry_type):
+        logger.warning("lancedb find_exact: invalid entry_type ignored: %r", entry_type)
+        return []
+    clauses = [f"entry_type = '{entry_type}'"]
+    for name, value in (("contract", contract), ("chain", chain)):
+        if value is None:
+            continue
+        if not _EXACT_MATCH_VALUE_RE.match(value):
+            logger.warning("lancedb find_exact: invalid %s ignored: %r", name, value)
+            return []
+        clauses.append(f"{name} = '{value}'")
+    tbl = get_table()
+    if tbl is None:
+        return []
+    try:
+        rows = (
+            tbl.search(query=None)
+            .where(" AND ".join(clauses))
+            .limit(max(1, min(limit, 200)))
+            .to_list()
+        )
+    except Exception as exc:
+        logger.warning("lancedb find_exact failed: %s", exc)
+        return []
+    rows.sort(key=lambda row: row.get("written_at") or "", reverse=True)
+    return [
+        {
+            "id": row.get("id"),
+            "content": row.get("text") or "",
+            "metadata": json.loads(row.get("metadata_json") or "{}"),
+            "distance": None,
+        }
+        for row in rows
+    ]
 
 
 async def purge_expired_entries() -> dict[str, int]:

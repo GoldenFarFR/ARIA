@@ -176,13 +176,19 @@ def _format_research_summary(contract: str, chain: str, symbol: str, research: "
 
 
 async def _find_cached_research(contract: str, chain: str, *, max_age_days: int) -> "ConvictionResearch | None":
-    """Same pattern as cybercentry_insight._find_cached_insight -- semantic
-    search filtered by EXACT ``source_id`` (never a false positive on a
-    neighboring contract) then by freshness. ``None`` if nothing recent enough."""
+    """Exact-match lookup on the typed ``contract``/``chain`` columns (#170,
+    14/08, replaces a semantic ``search()`` + Python ``source_id`` prefix-
+    match -- vector search could miss/reorder a match before the filter even
+    ran; an exact column filter cannot). ``source_id``'s trailing date is
+    still what determines freshness (unaffected by this change -- always
+    present in ``metadata``, independent of ``written_at``'s own
+    availability on older rows). ``None`` if nothing recent enough."""
     from aria_core.memory.vector import lancedb_store
 
     prefix = _source_id_prefix(contract, chain)
-    matches = await lancedb_store.search(contract, entry_type="conviction_research", limit=10)
+    matches = await lancedb_store.find_exact(
+        "conviction_research", contract=contract.strip().lower(), chain=chain, limit=10
+    )
     best_date, best_meta = None, None
     for m in matches:
         meta = m.get("metadata") or {}
@@ -229,7 +235,12 @@ async def get_research_history(contract: str, chain: str, *, limit: int = 20) ->
     from aria_core.memory.vector import lancedb_store
 
     prefix = _source_id_prefix(contract, chain)
-    matches = await lancedb_store.search(contract, entry_type="conviction_research", limit=max(limit * 3, 30))
+    matches = await lancedb_store.find_exact(
+        "conviction_research",
+        contract=contract.strip().lower(),
+        chain=chain,
+        limit=max(limit * 3, 30),
+    )
     dated: list[tuple] = []
     for m in matches:
         meta = m.get("metadata") or {}

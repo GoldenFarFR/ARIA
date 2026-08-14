@@ -48,6 +48,8 @@ def _table_schema() -> Any:
             pa.field("metadata_json", pa.string()),
             pa.field("written_at", pa.string()),
             pa.field("written_by", pa.string()),
+            pa.field("contract", pa.string()),
+            pa.field("chain", pa.string()),
         ]
     )
 
@@ -69,6 +71,24 @@ def _migrate_provenance_columns(table: Any) -> None:
             ("written_by", "cast('' as string)"),
         )
         if name not in existing
+    }
+    if missing:
+        table.add_columns(missing)
+
+
+# (14/08, #170) -- ``contract``/``chain`` promoted from the free-form
+# ``metadata_json`` blob to real typed columns, so a caller can filter with
+# an exact SQL predicate (``where("contract = '...' AND chain = '...'")``)
+# instead of a semantic vector search followed by a Python prefix-match on a
+# parsed blob (the pattern ``conviction_research.py`` was using, fragile
+# because vector search can miss/reorder results before the filter even
+# runs). Same idempotent-migration pattern as ``_migrate_provenance_columns``
+# above -- a second ``add_columns()`` call on an already-present column
+# raises ``ValueError``, hence the ``schema.names`` check.
+def _migrate_typed_columns(table: Any) -> None:
+    existing = set(table.schema.names)
+    missing = {
+        name: "cast('' as string)" for name in ("contract", "chain") if name not in existing
     }
     if missing:
         table.add_columns(missing)
@@ -107,6 +127,7 @@ def get_table():
         except Exception:
             _table = _client.create_table(collection_name(), schema=_table_schema())
         _migrate_provenance_columns(_table)
+        _migrate_typed_columns(_table)
         return _table
     except Exception as exc:
         logger.warning("lancedb client init failed: %s", exc)

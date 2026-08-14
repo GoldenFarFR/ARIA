@@ -99,6 +99,48 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[CODE] Sujet : colonnes typées contract/chain (#170) + fix bug de troncature d'id
+Date : 2026.08.14 / Probleme : `metadata_json` restait un blob opaque — tout filtre exact
+(`conviction_research.py`'s cache par contrat+chaîne) passait par une recherche sémantique
+vectorielle PUIS un filtre Python sur préfixe de `source_id` parsé depuis le blob — fragile
+(la recherche vectorielle peut manquer/réordonner un résultat avant même que le filtre ne
+s'applique, car elle classe par distance d'embedding, pas par exactitude). En creusant, bug
+distinct trouvé (latent, jamais matérialisé) : `doc_id = str(source_id)[:36]` tronquait
+naïvement un `source_id` long (ex. `conviction-research-{chain}-{contract}-{date}`, ~79
+caractères pour une adresse EVM typique) AVANT d'atteindre son suffixe de date — deux
+recherches du même contrat à des dates différentes auraient collisionné sur le même id tronqué,
+et `merge_insert("id").when_matched_update_all()` aurait silencieusement écrasé l'historique au
+lieu de créer une nouvelle entrée datée, contredisant l'intention documentée "append-only,
+jamais un UPDATE". Vérifié empiriquement sur les 81 lignes réelles `conviction_research` avant
+correctif : 0 collision (le bug n'avait encore jamais eu l'occasion de se déclencher — aucun
+contrat encore re-recherché à une date différente).
+Solution : (1) `contract`/`chain` promus en colonnes pyarrow typées (`_table_schema()`),
+migration idempotente `_migrate_typed_columns()` (même doctrine que `_migrate_provenance_columns`
+de #166) ; `store()` les peuple depuis `metadata` en plus du blob JSON existant (non-cassant,
+l'ancien lecteur du blob continue de fonctionner). (2) `doc_id` désormais un hash SHA256 tronqué
+à 36 caractères de l'intégralité du `source_id` (au lieu d'une troncature naïve du texte) —
+préserve l'idempotence même-jour (même `source_id` → même hash) tout en distinguant correctement
+deux dates différentes. (3) Nouvelle fonction `lancedb_store.find_exact(entry_type, *, contract,
+chain, limit)` — un scan filtré pur (`table.search(query=None).where(...)`, confirmé contre la
+lib réelle installée : "If None then the select/where/limit clauses are applied to filter the
+table"), zéro similarité vectorielle, triée `written_at` décroissant. `conviction_research.py`'s
+`_find_cached_research`/`get_research_history` migrés vers cette fonction (le filtrage par date
+via le suffixe de `source_id` reste inchangé, toujours présent dans `metadata`). Validation des
+valeurs (`_EXACT_MATCH_VALUE_RE`) contre l'injection dans la clause `where`, même doctrine que
+`_ENTRY_TYPE_RE` déjà en place pour `search()`.
+Tests : 8 nouveaux (`test_lancedb_store.py` — colonnes typées peuplées/vides, hash évite la
+collision de troncature (reproduit le bug réel avant fix), hash stable pour idempotence,
+`find_exact` filtre/trie/rejette une valeur invalide/vide si désactivé) + migration des ~11
+mocks existants de `test_conviction_research.py` de `lancedb_store.search` vers `find_exact`
+(même comportement testé, nouvelle surface d'appel). Suite complète relancée.
+`packages/aria-core/src/aria_core/memory/vector/lancedb_client.py`,
+`packages/aria-core/src/aria_core/memory/vector/lancedb_store.py`,
+`packages/aria-core/src/aria_core/conviction_research.py`,
+`packages/aria-core/tests/test_lancedb_store.py`,
+`packages/aria-core/tests/test_conviction_research.py`.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet : `get_table()` mort en prod depuis le déploiement #166 lui-même — schéma migré jamais atteint
 Date : 2026.08.14 / Probleme : incident auto-infligé, découvert en creusant #170 (colonnes typées) —
 `create_table(name, schema=_table_schema(), exist_ok=True)` ne "ignore pas silencieusement" un

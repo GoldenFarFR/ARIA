@@ -780,13 +780,13 @@ async def test_cache_hit_skips_all_network_calls(test_settings, monkeypatch):
     test_settings.aria_conviction_research_enabled = True
     today = cr.datetime.now(cr.timezone.utc).date().isoformat()
 
-    async def _fake_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return [_fake_cached_row(CONTRACT, "base", on=today)]
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais être appelé -- résultat déjà en cache")
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fail_if_called))
     monkeypatch.setattr("aria_core.gateway.x_twitter.search_recent_tweets", _fail_if_called)
     monkeypatch.setattr("aria_core.llm.chat_with_context", _fail_if_called)
@@ -806,10 +806,10 @@ async def test_stale_cache_entry_ignored_research_proceeds(test_settings, monkey
 
     stale_date = (cr.datetime.now(cr.timezone.utc) - timedelta(days=30)).date().isoformat()
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return [_fake_cached_row(CONTRACT, "base", on=stale_date, potential_score=1.0)]
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_lancedb_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _noop_store)
 
     async def _fake_tavily_search(query, **kwargs):
@@ -835,11 +835,11 @@ async def test_cache_isolated_by_contract_and_chain(test_settings, monkeypatch):
     test_settings.aria_conviction_research_enabled = True
     today = cr.datetime.now(cr.timezone.utc).date().isoformat()
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         # Cache réel pour OTHER_CONTRACT, jamais pour CONTRACT.
         return [_fake_cached_row(OTHER_CONTRACT, "base", on=today)]
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_lancedb_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _noop_store)
 
     async def _fake_tavily_search(query, **kwargs):
@@ -863,7 +863,7 @@ async def test_cache_miss_triggers_research_then_stores(test_settings, monkeypat
     entrée datée (jamais un UPDATE)."""
     test_settings.aria_conviction_research_enabled = True
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return []
 
     stored_calls = []
@@ -872,7 +872,7 @@ async def test_cache_miss_triggers_research_then_stores(test_settings, monkeypat
         stored_calls.append((entry_type, content, metadata))
         return "doc-new"
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_lancedb_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _fake_store)
 
     async def _fake_tavily_search(query, **kwargs):
@@ -909,7 +909,7 @@ async def test_no_source_found_result_is_still_stored(test_settings, monkeypatch
     mort à chaque cycle, et garde un historique honnête de ce qui a été tenté."""
     test_settings.aria_conviction_research_enabled = True
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return []
 
     stored_calls = []
@@ -918,7 +918,7 @@ async def test_no_source_found_result_is_still_stored(test_settings, monkeypatch
         stored_calls.append((entry_type, content, metadata))
         return "doc-empty"
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_lancedb_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _fake_store)
 
     async def _fake_tavily_search(query, **kwargs):
@@ -1225,10 +1225,10 @@ async def test_process_trail_json_roundtrip_safe_with_embedded_separator(test_se
         stored_calls.append(metadata)
         return "doc-x"
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return []
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_lancedb_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _fake_store)
     for _ in range(x_research_budget.WEEKLY_REQUEST_CAP):
         await x_research_budget.record_request(purpose="buzz_search", status="ok")
@@ -1263,13 +1263,13 @@ async def test_process_trail_survives_cache_roundtrip(test_settings, monkeypatch
         "distance": 0.01,
     }
 
-    async def _fake_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return [cached_row]
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais re-rechercher, résultat en cache")
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fail_if_called))
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
@@ -1304,13 +1304,13 @@ async def test_raw_diligence_content_survives_cache_roundtrip(test_settings, mon
         "distance": 0.01,
     }
 
-    async def _fake_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return [cached_row]
 
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais re-rechercher, résultat en cache")
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fake_search)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fake_find_exact)
     monkeypatch.setattr(type(tavily_mod.tavily_client), "search", staticmethod(_fail_if_called))
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
@@ -1328,7 +1328,7 @@ async def test_gate_off_never_stores_anything(test_settings, monkeypatch):
     async def _fail_if_called(*a, **k):
         raise AssertionError("ne doit jamais toucher la mémoire vectorielle, gate OFF")
 
-    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.search", _fail_if_called)
+    monkeypatch.setattr("aria_core.memory.vector.lancedb_store.find_exact", _fail_if_called)
     monkeypatch.setattr("aria_core.memory.vector.lancedb_store.store", _fail_if_called)
 
     result = await cr.research_project_potential(CONTRACT, "COBOT", "base")
@@ -1341,7 +1341,7 @@ async def test_get_research_history_sorted_most_recent_first():
     une seule valeur, chaque recherche reste une entrée distincte et datée."""
     from datetime import timedelta
 
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return [
             _fake_cached_row(CONTRACT, "base", on="2026-07-01", potential_score=3.0),
             _fake_cached_row(CONTRACT, "base", on="2026-07-15", potential_score=6.0),
@@ -1354,7 +1354,7 @@ async def test_get_research_history_sorted_most_recent_first():
     import pytest as _pytest
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(lancedb_store_mod, "search", _fake_lancedb_search)
+        mp.setattr(lancedb_store_mod, "find_exact", _fake_find_exact)
         history = await cr.get_research_history(CONTRACT, "base")
 
     assert len(history) == 3
@@ -1828,13 +1828,13 @@ async def test_known_links_no_other_platforms_shows_none_placeholder(test_settin
 
 @pytest.mark.asyncio
 async def test_get_research_history_empty_when_never_researched():
-    async def _fake_lancedb_search(query, *, entry_type=None, limit=8):
+    async def _fake_find_exact(entry_type, *, contract=None, chain=None, limit=20):
         return []
 
     import aria_core.memory.vector.lancedb_store as lancedb_store_mod
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(lancedb_store_mod, "search", _fake_lancedb_search)
+        mp.setattr(lancedb_store_mod, "find_exact", _fake_find_exact)
         history = await cr.get_research_history(CONTRACT, "base")
 
     assert history == []
