@@ -44,6 +44,19 @@ async def execute_calibrate(body: str, lang: str = "fr") -> tuple[str, dict]:
     p_map = {"vrai": 0.95, "faux": 0.05, "incertain": 0.5}
     p_true = p_map.get(cal["verdict"], 0.5)
 
+    from aria_core.memory.vector import lancedb_store
+
+    await lancedb_store.store(
+        "lesson",
+        f"[{cal['verdict']}] {claim} (source: {source})",
+        metadata={
+            "topic": "epistemic",
+            "confidence": p_true,
+            "source": source,
+            "source_id": f"calibration-{cal['id']}",
+        },
+    )
+
     promo = None
     if cal["verdict"] == "vrai" and p_true >= 0.9:
         promo = queue_promotion(claim, source=source, p_true=p_true, verdict="vrai")

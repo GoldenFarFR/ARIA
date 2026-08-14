@@ -99,6 +99,33 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[CODE] Sujet : 2e source d'écriture LanceDB -- calibration_ledger comme type "lesson" (#169)
+Date : 2026.08.14 / Probleme : un seul appelant écrivait réellement dans LanceDB depuis sa
+création (`conviction_research.py`), les 4 autres types du schéma (`insight`/`lesson`/
+`reflection`/`decision`) n'avaient aucun vrai producteur. Cartographie complète menée avant tout
+code (agent Explore, tous les appelants + tous les candidats plausibles du dépôt) : le meilleur
+candidat n'était pas le plus gros en volume mais celui qui PERD réellement de la donnée
+aujourd'hui -- `knowledge/calibration_ledger.py::record_calibration()` (corrections humaines
+`/calibrate` sur des affirmations d'ARIA) écrit dans un ring buffer JSON plafonné à 300 entrées,
+les plus anciennes étant écrasées silencieusement sans laisser de trace.
+Solution : `skills/calibrate_skill.py::execute_calibrate` appelle désormais
+`lancedb_store.store("lesson", ...)` juste après `record_calibration()`, best-effort (même
+pattern que `conviction_research.py`, `store()` ne lève jamais -- catch interne déjà en place).
+Texte indexé : `[verdict] affirmation (source: ...)`. Métadonnées : `topic="epistemic"` (aligné
+avec le `topic` déjà utilisé pour `triaged_add_knowledge`/`append_memory` juste en dessous dans
+le même appelant), `confidence` = la même probabilité (`p_true`, 0.95/0.05/0.5) déjà calculée
+pour le calcul du score de Brier, `source_id=f"calibration-{cal['id']}"` pour un futur
+`find_exact` par id. Aucun autre appelant du repo touché -- rayon d'impact minimal, choix
+délibéré (le second candidat identifié, `thesis_journal.py`, reste ouvert pour une prochaine
+itération si l'angle "cœur métier crypto" prime plutôt que "arrêter une perte de données réelle").
+4 tests dans `test_calibrate_skill.py` (fichier neuf -- aucun test n'existait pour ce skill
+avant ce chantier) : type d'entrée + contenu, confidence alignée sur le verdict, aucun appel
+LanceDB si la commande est malformée (pas de `|`).
+`packages/aria-core/src/aria_core/skills/calibrate_skill.py`,
+`packages/aria-core/tests/test_calibrate_skill.py`.
+
+------------------------------------------------------------
+
 [CODE] Sujet : colonnes typées contract/chain (#170) + fix bug de troncature d'id
 Date : 2026.08.14 / Probleme : `metadata_json` restait un blob opaque — tout filtre exact
 (`conviction_research.py`'s cache par contrat+chaîne) passait par une recherche sémantique
