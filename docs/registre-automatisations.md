@@ -52,7 +52,7 @@ comme pour `hooks-changelog.md`.
 | `paper-watchdog/run.sh` | `30 */3 * * *` | 🟢 actif | surveille le test papier 1M$ |
 | `log-health-watch/run.sh` | `15 * * * *` | 🟢 actif | scanne les logs prod pour Traceback/CRITICAL |
 | `circuit-breaker-watch/run.sh` | `45 * * * *` | 🟢 actif | alerte sur `sustained_outage` (5 modules à cooldown) |
-| `memory-watch/run.sh` | `5,20,35,50 * * * *` | 🟢 actif | RAM+swap combinés, seuil 75%, hystérésis 65% |
+| `memory-watch/run.sh` | `5,20,35,50 * * * *` | 🟢 actif | RAM+swap combinés, seuil 75%, hystérésis 65% ; boucle rapprochée (90s) pendant une alerte ; kill auto de sessions ccd-cli orphelines (>48h) au-delà de 90% |
 | `db-backup/run.sh` | `10 4 * * *` | 🟢 actif | backup SQLite quotidien (WAL-safe), rotation 14j |
 | `v8-watch/run.sh` | `*/30 * * * *` | 🟢 actif (cadence accélérée) | monitoring scalping_v8 -- **nominal 6h prévu, pas encore restauré (backlog #1)** |
 | `signal-cascade-watch/run.sh` | `*/15 * * * *` | 🟢 actif | cycles + convergence de la cascade de signaux |
