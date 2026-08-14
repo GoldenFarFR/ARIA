@@ -8,6 +8,28 @@
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.
 
+[CODE] Sujet    : source #149 (trades sur positions swing/vc) ne trouvait JAMAIS aucun candidat -- mauvaise colonne lue (item #151)
+Date : 2026.08.14 / Probleme : en poursuivant #151 (le log par-source déployé plus tôt aujourd'hui
+montrait `trade_candidates=0` sur chaque cycle observé) -- diagnostic direct DB confirmé : 14
+positions réellement ouvertes swing/vc (9 swing + 5 vc, `SELECT wallet, COUNT(*) FROM
+paper_position WHERE status='open' GROUP BY wallet`), mais `discover_and_enqueue_candidates`
+filtrait sur `pos.get("pocket")` -- une colonne SQL SÉPARÉE de `wallet` (`paper_position` a bien
+DEUX colonnes distinctes : `pocket` défaut `'main'`, jamais réellement écrite à `'swing'`/`'vc'`
+par aucun appelant réel ; `wallet` défaut `'swing'`, la VRAIE colonne qui suit la poche depuis le
+plan 3-poches du 27/07 -- confirmé dans le docstring de `paper_trader.open_position` : "``wallet``
+is the pocket"). Résultat : cette source n'a jamais matché une seule des 14 positions ouvertes
+depuis son câblage (#149, 13/08) -- 0 candidat à chaque cycle, silencieusement, aucune erreur.
+Solution : `pos.get("pocket")` -> `pos.get("wallet")` dans `smart_money_leaderboard.py`. 1 nouveau
+test de régression qui reproduit exactement la forme réelle (position avec `pocket='main'`, la
+valeur toujours vraie en prod, ET `wallet='swing'`) -- doit être trouvée malgré `pocket='main'`. 3
+fixtures de test existantes corrigées (utilisaient elles-mêmes `pocket=` au lieu de `wallet=`,
+donc passaient déjà AVANT le fix en reproduisant la même confusion -- jamais un vrai test du
+comportement prod). Suite ciblée verte (39 passed), suite complète en cours de vérification.
+`packages/aria-core/src/aria_core/services/smart_money_leaderboard.py`,
+`packages/aria-core/tests/test_smart_money_leaderboard.py`.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet    : wallet disqualifié jamais vérifié dans le chemin de promotion leaderboard (item #151)
 Date : 2026.08.14 / Probleme : en creusant #151 (via un agent dédié), un vrai wallet-contrat
 disqualifié (`0x60dac57d...`, `disqualified=true`, raison "Wallet-contrat (équipe/vesting/LP), pas

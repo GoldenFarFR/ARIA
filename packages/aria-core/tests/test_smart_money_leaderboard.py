@@ -479,7 +479,7 @@ async def test_discovery_cumulates_recent_buyers_on_open_swing_vc_positions(monk
     from aria_core import paper_trader
 
     async def fake_get_open_positions():
-        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "swing"}]
+        return [{"contract": "0xTOKEN", "chain": "base", "wallet": "swing"}]
 
     monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
 
@@ -512,6 +512,52 @@ async def test_discovery_cumulates_recent_buyers_on_open_swing_vc_positions(monk
 
 
 @pytest.mark.asyncio
+async def test_discovery_uses_wallet_column_not_pocket_column(monkeypatch, tmp_path):
+    """14/08 (#151 investigation) -- real bug found in prod: this source read
+    ``pos["pocket"]`` (a SEPARATE ``paper_position`` column, default 'main',
+    never actually set to 'swing'/'vc' by any real caller) instead of
+    ``pos["wallet"]`` (the column that genuinely tracks the pocket, default
+    'swing') -- silently matched ZERO of the 14 real open swing/vc positions
+    since #149 shipped. This reproduces the exact real-world shape: a position
+    with pocket='main' (the always-true value in prod) but wallet='swing'
+    (the real pocket) must still be picked up."""
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core import paper_trader
+
+    async def fake_get_open_positions():
+        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "main", "wallet": "swing"}]
+
+    monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
+
+    from aria_core.services import geckoterminal as gt
+
+    async def fake_resolve_primary_pool(contract, **kwargs):
+        return gt.PoolMetadata(pool_address="0xPOOL", available=True)
+
+    async def fake_get_pool_trades(pool_address, **kwargs):
+        return gt.PoolTradesResult(
+            trades=[gt.PoolTrade(tx_from_address=WALLET_A, kind="buy", volume_usd=100.0, block_timestamp="")],
+            available=True,
+        )
+
+    monkeypatch.setattr(gt.geckoterminal_client, "resolve_primary_pool", fake_resolve_primary_pool)
+    monkeypatch.setattr(gt.geckoterminal_client, "get_pool_trades", fake_get_pool_trades)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    assert result["trade_candidates"] == 1
+
+
+@pytest.mark.asyncio
 async def test_discovery_ignores_positions_from_other_pockets(monkeypatch, tmp_path):
     _enable_all(monkeypatch)
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
@@ -526,7 +572,7 @@ async def test_discovery_ignores_positions_from_other_pockets(monkeypatch, tmp_p
     from aria_core import paper_trader
 
     async def fake_get_open_positions():
-        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "scalping_v8"}]
+        return [{"contract": "0xTOKEN", "chain": "base", "wallet": "scalping_v8"}]
 
     monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
 
@@ -561,7 +607,7 @@ async def test_discovery_pool_resolution_failure_degrades_gracefully(monkeypatch
     from aria_core import paper_trader
 
     async def fake_get_open_positions():
-        return [{"contract": "0xTOKEN", "chain": "base", "pocket": "vc"}]
+        return [{"contract": "0xTOKEN", "chain": "base", "wallet": "vc"}]
 
     monkeypatch.setattr(paper_trader, "get_open_positions", fake_get_open_positions)
 

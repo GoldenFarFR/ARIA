@@ -325,7 +325,17 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
 
         open_positions = await paper_trader.get_open_positions()
         for pos in open_positions:
-            if pos.get("pocket") not in ("swing", "vc"):
+            # 14/08 (#151 investigation): real bug found -- `pos["pocket"]` is a
+            # SEPARATE column (`paper_position.pocket`, default 'main', never
+            # actually set to 'swing'/'vc' by any real caller) from the column
+            # that genuinely tracks which pocket a position belongs to
+            # (`paper_position.wallet`, default 'swing' -- see
+            # `paper_trader.open_position`'s own docstring: "``wallet`` is the
+            # pocket"). This source silently matched ZERO of the 14 real open
+            # swing/vc positions (9 swing + 5 vc, verified live) since #149 was
+            # wired -- confirmed by the per-source log added in #151/#162
+            # (`trade_candidates=0` on every observed cycle).
+            if pos.get("wallet") not in ("swing", "vc"):
                 continue
             pool = await geckoterminal_client.resolve_primary_pool(pos["contract"])
             if not pool.available:
