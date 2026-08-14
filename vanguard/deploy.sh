@@ -175,7 +175,7 @@ rm -f "$UPSTREAM_BACKUP"
 echo "✅ OK — le conteneur $NAME (port $STANDBY_PORT) sert le commit $SHORT"
 
 echo "==> Activation du heartbeat (fin de la fenêtre standby -- #302 root cause fix, 14/08)"
-ACTIVATION_SECRET="$(read_env_var "$ENV_FILE" ARIA_DEPLOY_ACTIVATION_SECRET)"
+ACTIVATION_SECRET="$(read_env_var "$ENV_FILE" DEPLOY_ACTIVATION_SECRET)"
 ACTIVATION_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "X-Deploy-Activation-Secret: $ACTIVATION_SECRET" \
   "http://127.0.0.1:${STANDBY_PORT}/internal/activate-heartbeat" 2>/dev/null || true)"

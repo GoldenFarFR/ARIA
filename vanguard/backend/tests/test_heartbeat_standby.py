@@ -17,10 +17,24 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from aria_core.heartbeat import aria_heartbeat
-from app.config import settings
+from app.config import Settings, settings
 from app.main import _heartbeat_standby_enabled, app
 
 ACTIVATE_PATH = "/internal/activate-heartbeat"
+
+
+def test_deploy_activation_secret_env_var_name_matches_pydantic_field(monkeypatch):
+    """Real incident (14/08): deploy.sh sent X-Deploy-Activation-Secret using a value
+    read from ARIA_DEPLOY_ACTIVATION_SECRET in .env -- but app.config.Settings has no
+    env_prefix configured (unlike a naive assumption), so Pydantic only ever looks for
+    DEPLOY_ACTIVATION_SECRET (same convention as admin_api_secret -> ADMIN_API_SECRET).
+    The endpoint's mocked-settings tests below never caught this because they
+    monkeypatch settings.deploy_activation_secret directly, bypassing the env-var name
+    entirely -- exactly the gap that let this ship. This test exercises the REAL
+    env-var-name -> Settings-field mapping, the one thing the mocked tests couldn't."""
+    monkeypatch.setenv("DEPLOY_ACTIVATION_SECRET", "real-mapping-check")
+    s = Settings()
+    assert s.deploy_activation_secret == "real-mapping-check"
 
 
 class TestHeartbeatStandbyEnabled:

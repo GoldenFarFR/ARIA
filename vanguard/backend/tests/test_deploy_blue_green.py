@@ -163,46 +163,46 @@ class TestReadEnvVar:
 
     def test_reads_existing_var(self, tmp_path):
         f = tmp_path / ".env"
-        f.write_text("FOO=bar\nARIA_DEPLOY_ACTIVATION_SECRET=s3cr3t-value\nBAZ=qux\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        f.write_text("FOO=bar\nDEPLOY_ACTIVATION_SECRET=s3cr3t-value\nBAZ=qux\n")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == "s3cr3t-value"
 
     def test_missing_file_fails_explicitly_no_guessing(self, tmp_path):
         f = tmp_path / "missing.env"
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.returncode != 0
         assert "introuvable" in res.stderr
 
     def test_missing_var_fails_explicitly(self, tmp_path):
         f = tmp_path / ".env"
         f.write_text("FOO=bar\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.returncode != 0
         assert "absente" in res.stderr
 
     def test_empty_var_fails_explicitly(self, tmp_path):
         f = tmp_path / ".env"
-        f.write_text("ARIA_DEPLOY_ACTIVATION_SECRET=\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        f.write_text("DEPLOY_ACTIVATION_SECRET=\n")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.returncode != 0
 
     def test_value_containing_equals_sign_kept_intact(self, tmp_path):
         f = tmp_path / ".env"
-        f.write_text("ARIA_DEPLOY_ACTIVATION_SECRET=abc=def=ghi\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        f.write_text("DEPLOY_ACTIVATION_SECRET=abc=def=ghi\n")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.stdout.strip() == "abc=def=ghi"
 
     def test_last_definition_wins_on_duplicate_key(self, tmp_path):
         f = tmp_path / ".env"
-        f.write_text("ARIA_DEPLOY_ACTIVATION_SECRET=old\nARIA_DEPLOY_ACTIVATION_SECRET=new\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        f.write_text("DEPLOY_ACTIVATION_SECRET=old\nDEPLOY_ACTIVATION_SECRET=new\n")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.stdout.strip() == "new"
 
     def test_does_not_match_var_name_as_substring(self, tmp_path):
-        """ARIA_DEPLOY_ACTIVATION_SECRET_V2=... ne doit jamais repondre a une lecture
-        de ARIA_DEPLOY_ACTIVATION_SECRET (^VAR= ancre, pas une simple sous-chaine)."""
+        """DEPLOY_ACTIVATION_SECRET_V2=... ne doit jamais repondre a une lecture
+        de DEPLOY_ACTIVATION_SECRET (^VAR= ancre, pas une simple sous-chaine)."""
         f = tmp_path / ".env"
-        f.write_text("ARIA_DEPLOY_ACTIVATION_SECRET_V2=decoy\n")
-        res = _run(DEPLOY_LIB, f"read_env_var '{f}' ARIA_DEPLOY_ACTIVATION_SECRET")
+        f.write_text("DEPLOY_ACTIVATION_SECRET_V2=decoy\n")
+        res = _run(DEPLOY_LIB, f"read_env_var '{f}' DEPLOY_ACTIVATION_SECRET")
         assert res.returncode != 0

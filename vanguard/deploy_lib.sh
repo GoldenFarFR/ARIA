@@ -47,8 +47,8 @@ render_upstream_conf() {
 # Reads a KEY=VALUE variable from a .env file -- fails explicitly (same anti-guessing
 # doctrine as read_active_port) if the file is missing or the variable is
 # undefined/empty there. Anchored `^VAR=` (never a substring match, e.g.
-# ARIA_DEPLOY_ACTIVATION_SECRET_V2 must never answer a lookup of
-# ARIA_DEPLOY_ACTIVATION_SECRET). Last definition wins on a duplicate key (standard
+# DEPLOY_ACTIVATION_SECRET_V2 must never answer a lookup of
+# DEPLOY_ACTIVATION_SECRET). Last definition wins on a duplicate key (standard
 # behavior of a .env file sourced by the application).
 read_env_var() {
     local env_file="$1" var_name="$2"
