@@ -99,7 +99,7 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
-[CODE] Sujet : watchdog de maintenance hebdomadaire (#167) — purge TTL + compaction LanceDB
+[DEPLOYE] Sujet : watchdog de maintenance hebdomadaire (#167) — purge TTL + compaction LanceDB
 Date : 2026.08.14 / Probleme : `purge_expired_entries()` (#166 ci-dessous) était prêt mais
 jamais appelé automatiquement ; et LanceDB open-source (la version utilisée ici) n'a **aucune**
 maintenance en tâche de fond — sans un appel périodique à `optimize()`, les fragments et
@@ -122,12 +122,14 @@ jours par défaut`, `delete_unverified: bool`), jamais supposée. 6 nouveaux tes
 complète aria-core verte. `packages/aria-core/src/aria_core/memory/vector/lancedb_store.py`,
 `heartbeat.py`, `packages/aria-core/tests/test_lancedb_store.py`,
 `test_heartbeat_vector_memory_maintenance_cycle.py` (nouveau), `docs/HANDOFF_LANCEDB.md`
-(ce fichier). **Pas encore déployé en prod au moment de cette entrée** — groupé avec #166 pour
-un déploiement commun.
+(ce fichier). Déployé en prod le 14/08 groupé avec #166 (bascule blue-green confirmée, commit
+`279bdcad7e88`, health-check nginx réel OK, heartbeat actif). Gate
+`ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED` toujours OFF par défaut — code en prod, cycle pas
+encore armé, activation à décider séparément.
 
 ------------------------------------------------------------
 
-[CODE] Sujet : défenses memory-poisoning (#166) — provenance structurelle, TTL câblé, audit d'écriture
+[DEPLOYE] Sujet : défenses memory-poisoning (#166) — provenance structurelle, TTL câblé, audit d'écriture
 Date : 2026.08.14 / Probleme : audit sécurité (mandat permanent CLAUDE.md sur les faiblesses
 spécifiques IA + risque OWASP ASI06 documenté dans la checklist plus haut) a trouvé 3 trous
 concrets, vérifiés dans le code : (1) `retention_days` déclaré dans `schema.yaml` pour chaque
@@ -156,8 +158,8 @@ de sens réel qu'au moment d'ouvrir une source moins fiable). Tests écrits en c
 nouveaux tests (`test_lancedb_store.py` + nouveau `test_lancedb_audit.py`). Suite complète
 aria-core verte : 10210 passed, 0 failed. `packages/aria-core/src/aria_core/memory/vector/
 lancedb_client.py`, `lancedb_store.py`, `audit.py` (nouveau), `packages/aria-core/tests/
-test_lancedb_store.py`, `test_lancedb_audit.py` (nouveau). **Pas encore déployé en prod au
-moment de cette entrée** — commit local, push/déploiement à confirmer.
+test_lancedb_store.py`, `test_lancedb_audit.py` (nouveau). Déployé en prod le 14/08 groupé avec
+#167 (bascule blue-green confirmée, commit `279bdcad7e88`, health-check nginx réel OK).
 
 ------------------------------------------------------------
 
@@ -240,7 +242,8 @@ le résultat complet, 7 jours sur la recherche de diligence via LanceDB) opèren
 et sur des objets différents, pas de concurrence constatée.
 
 ## Prochaines étapes possibles (pas encore décidées/construites)
-- Déployer en prod #166+#167 ensemble (code+tests prêts, pas encore poussé/déployé).
+- #166+#167 déployés en prod le 14/08 (commit `279bdcad7e88`) — reste à décider si/quand armer
+  `ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED`.
 - Décider du sort de `verify_and_remember_wallet` (#168 — brancher à un vrai déclencheur ou
   retirer).
 - Élargir les sources d'écriture au-delà du pipeline VC (#169 — résultats de trades réels,
