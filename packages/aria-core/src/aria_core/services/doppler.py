@@ -40,6 +40,9 @@ import os
 
 import httpx
 
+from aria_core.paths import aria_db_path
+from aria_core.single_row_state import SingleRowStore
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RPC_URL = "https://mainnet.base.org"
@@ -93,6 +96,19 @@ _STATE_VIEW_ABI = [
 
 def _rpc_url() -> str:
     return (os.environ.get("ARIA_BASE_RPC_URL", "") or "").strip() or _DEFAULT_RPC_URL
+
+
+# 14/08 -- discovery scanner (discover_recent_pools below): persistent
+# round-robin cursor (last block scanned), same SingleRowStore pattern as
+# holder_concentration_outage_bypass.py/goplus_quota_suspension.py.
+_SCAN_CURSOR_TABLE = "doppler_pool_scan_cursor"
+
+
+def _scan_cursor_store() -> SingleRowStore:
+    return SingleRowStore(
+        str(aria_db_path()), _SCAN_CURSOR_TABLE,
+        [("last_scanned_block", "INTEGER NOT NULL DEFAULT 0", 0)],
+    )
 
 
 def _client(*, w3=None):
@@ -245,6 +261,90 @@ async def _find_launch_block_via_blockscout(token_address: str) -> int | None:
                 break
             params = next_page
     return oldest_block
+
+
+# >90% of new Base pools route through Doppler's Uniswap v4 PoolManager
+# (Pantera/The Block sourced, 14/08) -- a raw block-range scan of every
+# Initialize event (no argument_filters, unlike find_pool's targeted lookup)
+# is the highest-leverage discovery source ARIA doesn't have yet. Kept well
+# under the empirically-confirmed 413 threshold (module docstring above:
+# even 5000-20000 blocks overflow on this heavily-used contract).
+_DISCOVERY_WINDOW_BLOCKS = 500  # ~15-20min of Base blocks (~2s/block)
+
+
+def discover_new_pools(from_block: int, to_block: int, *, w3=None) -> list[dict] | None:
+    """Raw scan of every PoolManager ``Initialize`` event in
+    ``[from_block, to_block]`` -- unlike ``find_pool``, no ``argument_filters``,
+    so this surfaces EVERY pool created in the window, not just one known
+    token. Returns a list of ``{"pool_id", "currency0", "currency1", "hooks"}``
+    dicts (possibly empty if the window genuinely had no launches), or
+    ``None`` on RPC failure -- never a fabricated empty result standing in
+    for a real failure (callers must be able to tell the two apart to avoid
+    silently skipping a window)."""
+    try:
+        client = _client(w3=w3)
+        pool_manager = client.eth.contract(
+            address=client.to_checksum_address(POOL_MANAGER_ADDRESS), abi=_POOL_MANAGER_ABI
+        )
+        logs = pool_manager.events.Initialize().get_logs(from_block=from_block, to_block=to_block)
+        return [
+            {
+                "pool_id": log["args"]["id"],
+                "currency0": log["args"]["currency0"],
+                "currency1": log["args"]["currency1"],
+                "hooks": log["args"]["hooks"],
+            }
+            for log in logs
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.info(
+            "doppler.discover_new_pools: RPC read failed for blocks %s-%s (%s)", from_block, to_block, exc,
+        )
+        return None
+
+
+async def discover_recent_pools(*, window_size: int = _DISCOVERY_WINDOW_BLOCKS, w3=None, current_block: int | None = None) -> list[dict]:
+    """Persistent-cursor wrapper around ``discover_new_pools`` -- advances a
+    ``SingleRowStore``-backed ``last_scanned_block`` by at most
+    ``window_size`` blocks per call, so repeated calls (the heartbeat's
+    ``watchlist_refill_cycle``, every 15min) progressively cover the chain
+    without ever re-scanning the same blocks twice or attempting a blind
+    full-history scan.
+
+    First-ever call starts near ``current_block - window_size`` (never from
+    block 0 -- a full-history scan is empirically rejected by the public RPC,
+    see module docstring). On RPC failure the cursor is NOT advanced, so the
+    same window is retried on the next call rather than silently skipped.
+    Returns ``[]`` (never ``None``) on failure or when already caught up to
+    the chain tip -- this is the discovery-source contract callers rely on."""
+    try:
+        client = _client(w3=w3)
+        tip = current_block if current_block is not None else client.eth.block_number
+    except Exception as exc:  # noqa: BLE001
+        logger.info("doppler.discover_recent_pools: could not read chain tip (%s)", exc)
+        return []
+
+    store = _scan_cursor_store()
+    await store.ensure_table()
+    row = await store.read("last_scanned_block")
+    last_scanned = row[0] if row else 0
+
+    if last_scanned <= 0:
+        from_block = max(0, tip - window_size)
+    else:
+        from_block = last_scanned + 1
+
+    if from_block > tip:
+        return []
+
+    to_block = min(from_block + window_size - 1, tip)
+
+    pools = discover_new_pools(from_block, to_block, w3=w3)
+    if pools is None:
+        return []
+
+    await store.write({"last_scanned_block": to_block})
+    return pools
 
 
 async def get_token_price_usd(token_address: str, *, token_decimals: int = 18, w3=None) -> float | None:

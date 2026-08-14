@@ -1481,7 +1481,7 @@ async def _check_watchlist_candidate(contract: str, chain: str, *, allow_goplus:
     return security, True
 
 
-async def run_watchlist_refill_cycle(*, discover=None, discover_direct=None) -> dict:
+async def run_watchlist_refill_cycle(*, discover=None, discover_direct=None, discover_doppler=None) -> dict:
     """14/08, operator decision ("toute les poches doivent piocher dans la
     watchlist... sans appeler les api") -- pure DISCOVERY, never a buy
     decision. Separated out of the trading cycles (swing/scalping_v8, via
@@ -1501,6 +1501,16 @@ async def run_watchlist_refill_cycle(*, discover=None, discover_direct=None) -> 
     ``bonding_discovery_cycle``, no gap to close. Deduplicated against
     ``discover_momentum_candidates``'s own output (a token can legitimately
     surface from both).
+
+    Third source (14/08): ``services.doppler.discover_recent_pools`` -- a raw
+    scan of every Uniswap v4 PoolManager ``Initialize`` event in the cursor's
+    current window. >90% of new Base pools route through Doppler, so this is
+    the highest-leverage discovery source added here. Each pool pairs two
+    currencies (``currency0``/``currency1``); whichever one is NOT in
+    ``reference_tokens_excluded("base")`` (stables/LSTs/wrapped-natives/
+    bluechips) is the candidate token. A pool where BOTH or NEITHER currency
+    is a reference asset is skipped -- ambiguous which side is "the token",
+    never guessed.
 
     Runs ONLY the honeypot check (``_check_honeypot``, which itself calls
     ``goplus_watchlist.add_or_touch`` on a first sighting) on every candidate
@@ -1529,6 +1539,30 @@ async def run_watchlist_refill_cycle(*, discover=None, discover_direct=None) -> 
                 continue
             seen.add(key)
             candidates.append({"contract": addr, "chain": "base"})
+
+    if discover_doppler is None:
+        from aria_core.services.doppler import discover_recent_pools
+
+        discover_doppler = discover_recent_pools
+    try:
+        doppler_pools = await discover_doppler()
+    except Exception as exc:  # noqa: BLE001 -- a failing on-chain scan never blocks the rest
+        logger.info("run_watchlist_refill_cycle: discover_doppler failed (%s)", exc)
+        doppler_pools = []
+    reference_base = reference_tokens_excluded("base")
+    for pool in doppler_pools:
+        currency0 = (pool.get("currency0") or "").lower()
+        currency1 = (pool.get("currency1") or "").lower()
+        is_ref0 = currency0 in reference_base
+        is_ref1 = currency1 in reference_base
+        if is_ref0 == is_ref1:  # both reference, or neither -- ambiguous, skip
+            continue
+        token = currency1 if is_ref0 else currency0
+        key = (token, "base")
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"contract": token, "chain": "base"})
 
     queued = 0
     clear = 0

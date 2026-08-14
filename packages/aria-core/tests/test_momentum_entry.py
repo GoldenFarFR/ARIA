@@ -8878,12 +8878,16 @@ async def _no_direct():
     return {}
 
 
+async def _no_doppler():
+    return []
+
+
 @pytest.mark.asyncio
 async def test_watchlist_refill_cycle_empty_discovery_is_a_no_op():
     async def discover():
         return []
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=_no_doppler)
     assert result == {
         "candidates_seen": 0, "queued": 0, "clear": 0,
         "rejected": 0, "unavailable": 0, "skipped_chain": 0,
@@ -8914,7 +8918,7 @@ async def test_watchlist_refill_cycle_tallies_by_honeypot_code(monkeypatch):
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=_no_doppler)
     assert result == {
         "candidates_seen": 4, "queued": 1, "clear": 1,
         "rejected": 1, "unavailable": 1, "skipped_chain": 0,
@@ -8931,7 +8935,7 @@ async def test_watchlist_refill_cycle_skips_solana_without_calling_honeypot(monk
 
     monkeypatch.setattr(me, "_check_honeypot", fail_if_called)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=_no_doppler)
     assert result == {
         "candidates_seen": 1, "queued": 0, "clear": 0,
         "rejected": 0, "unavailable": 0, "skipped_chain": 1,
@@ -8953,7 +8957,7 @@ async def test_watchlist_refill_cycle_forwards_liquidity_usd(monkeypatch):
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
+    await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=_no_doppler)
     assert received["liquidity_usd"] == 42_000.0
 
 
@@ -8985,7 +8989,7 @@ async def test_watchlist_refill_cycle_includes_clanker_and_flaunch(monkeypatch):
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct, discover_doppler=_no_doppler)
     assert set(seen_contracts) == {clanker_addr, flaunch_addr}  # never virtuals_graduated
     assert result["candidates_seen"] == 2
 
@@ -9009,7 +9013,7 @@ async def test_watchlist_refill_cycle_dedupes_clanker_flaunch_against_discovery(
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct, discover_doppler=_no_doppler)
     assert call_count == 1
     assert result["candidates_seen"] == 1
 
@@ -9027,5 +9031,148 @@ async def test_watchlist_refill_cycle_tolerates_discover_direct_failure(monkeypa
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=failing_direct)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=failing_direct, discover_doppler=_no_doppler)
+    assert result["candidates_seen"] == 1  # discover_momentum_candidates' own result survives
+
+
+_WETH_STUB = "0x" + "e" * 40
+_TOKEN_STUB = "0x" + "f" * 40
+
+
+@pytest.fixture
+def _stub_reference_tokens(monkeypatch):
+    """Isolates the Doppler-source tests from smart_money.py's real
+    registries -- only _WETH_STUB is a reference asset, everything else is
+    "the token"."""
+    monkeypatch.setattr(me, "reference_tokens_excluded", lambda chain: frozenset({_WETH_STUB}))
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_includes_doppler_token_side_of_pool(monkeypatch, _stub_reference_tokens):
+    """14/08 -- >90% of new Base pools route through Doppler. The pool pairs
+    a reference currency (WETH here) against the real token -- only the
+    non-reference side becomes a candidate."""
+    async def discover():
+        return []
+
+    async def fake_doppler():
+        return [{"pool_id": b"\x01", "currency0": _WETH_STUB, "currency1": _TOKEN_STUB, "hooks": "0xH"}]
+
+    seen_contracts = []
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        seen_contracts.append(contract)
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=fake_doppler)
+    assert seen_contracts == [_TOKEN_STUB]
+    assert result["candidates_seen"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_doppler_currency_order_does_not_matter(monkeypatch, _stub_reference_tokens):
+    """Never assumes the token is currency0 or currency1 -- the reference
+    asset can sit on either side of the pool."""
+    async def discover():
+        return []
+
+    async def fake_doppler():
+        return [{"pool_id": b"\x01", "currency0": _TOKEN_STUB, "currency1": _WETH_STUB, "hooks": "0xH"}]
+
+    seen_contracts = []
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        seen_contracts.append(contract)
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=fake_doppler)
+    assert seen_contracts == [_TOKEN_STUB]
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_skips_doppler_pool_when_both_sides_are_reference(monkeypatch, _stub_reference_tokens):
+    """A pool pairing two reference assets (e.g. WETH/USDC) is ambiguous --
+    which side is "the token"? Never guessed, skipped entirely."""
+    other_reference = "0x" + "d" * 40
+
+    async def discover():
+        return []
+
+    async def fake_doppler():
+        return [{"pool_id": b"\x01", "currency0": _WETH_STUB, "currency1": other_reference, "hooks": "0xH"}]
+
+    monkeypatch.setattr(
+        me, "reference_tokens_excluded", lambda chain: frozenset({_WETH_STUB, other_reference}),
+    )
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("_check_honeypot should never be called for an all-reference pool")
+
+    monkeypatch.setattr(me, "_check_honeypot", fail_if_called)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=fake_doppler)
+    assert result["candidates_seen"] == 0
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_skips_doppler_pool_when_neither_side_is_reference(monkeypatch, _stub_reference_tokens):
+    """Two non-reference tokens paired together -- ambiguous which one is
+    "the" new candidate, never guessed, skipped entirely."""
+    other_token = "0x" + "c" * 40
+
+    async def discover():
+        return []
+
+    async def fake_doppler():
+        return [{"pool_id": b"\x01", "currency0": _TOKEN_STUB, "currency1": other_token, "hooks": "0xH"}]
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("_check_honeypot should never be called for an all-token pool")
+
+    monkeypatch.setattr(me, "_check_honeypot", fail_if_called)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=fake_doppler)
+    assert result["candidates_seen"] == 0
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_dedupes_doppler_against_discovery(monkeypatch, _stub_reference_tokens):
+    async def discover():
+        return [{"contract": _TOKEN_STUB, "chain": "base"}]
+
+    async def fake_doppler():
+        return [{"pool_id": b"\x01", "currency0": _WETH_STUB, "currency1": _TOKEN_STUB, "hooks": "0xH"}]
+
+    call_count = 0
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        nonlocal call_count
+        call_count += 1
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=fake_doppler)
+    assert call_count == 1
+    assert result["candidates_seen"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_tolerates_discover_doppler_failure(monkeypatch, _stub_reference_tokens):
+    async def discover():
+        return [{"contract": _TOKEN_STUB, "chain": "base"}]
+
+    async def failing_doppler():
+        raise RuntimeError("RPC down")
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=failing_doppler)
     assert result["candidates_seen"] == 1  # discover_momentum_candidates' own result survives

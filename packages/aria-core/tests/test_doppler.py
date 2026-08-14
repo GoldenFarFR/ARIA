@@ -395,3 +395,153 @@ async def test_get_token_price_usd_none_when_numeraire_is_not_weth(monkeypatch, 
 
     price = await doppler.get_token_price_usd(CLOWNS, w3=w3)
     assert price is None
+
+
+# ── discover_new_pools (fake w3, no argument_filters -- raw window scan) ────
+
+class _FakeInitializeEventNoFilter:
+    """Unlike _FakeInitializeEvent, get_logs takes no argument_filters --
+    matches discover_new_pools's raw (unfiltered) scan."""
+
+    def __init__(self, logs=None, *, raises=False):
+        self._logs = logs or []
+        self._raises = raises
+        self.captured_calls = []
+
+    def get_logs(self, *, from_block, to_block):
+        self.captured_calls.append((from_block, to_block))
+        if self._raises:
+            raise RuntimeError("RPC down")
+        return self._logs
+
+
+def test_discover_new_pools_returns_every_pool_in_window():
+    logs = [
+        _FakeLog({"id": b"\x01" * 32, "currency0": WETH, "currency1": CLOWNS, "hooks": "0xHOOK1"}),
+        _FakeLog({"id": b"\x02" * 32, "currency0": WETH, "currency1": "0xOTHER", "hooks": "0xHOOK2"}),
+    ]
+    event = _FakeInitializeEventNoFilter(logs)
+    w3 = _FakeW3(initialize_event=event)
+
+    pools = doppler.discover_new_pools(100, 200, w3=w3)
+    assert pools == [
+        {"pool_id": b"\x01" * 32, "currency0": WETH, "currency1": CLOWNS, "hooks": "0xHOOK1"},
+        {"pool_id": b"\x02" * 32, "currency0": WETH, "currency1": "0xOTHER", "hooks": "0xHOOK2"},
+    ]
+    assert event.captured_calls == [(100, 200)]
+
+
+def test_discover_new_pools_empty_window_returns_empty_list():
+    event = _FakeInitializeEventNoFilter([])
+    w3 = _FakeW3(initialize_event=event)
+    assert doppler.discover_new_pools(100, 200, w3=w3) == []
+
+
+def test_discover_new_pools_returns_none_on_rpc_failure():
+    """None (not []) on failure -- callers must be able to tell "genuinely
+    empty window" apart from "RPC call failed" to avoid silently skipping."""
+    event = _FakeInitializeEventNoFilter(raises=True)
+    w3 = _FakeW3(initialize_event=event)
+    assert doppler.discover_new_pools(100, 200, w3=w3) is None
+
+
+# ── discover_recent_pools (fake w3 + isolated cursor DB) ────────────────────
+
+@pytest.fixture
+def _isolated_cursor(tmp_path, monkeypatch):
+    from aria_core.single_row_state import SingleRowStore
+
+    store = SingleRowStore(
+        str(tmp_path / "doppler_cursor_test.db"), doppler._SCAN_CURSOR_TABLE,
+        [("last_scanned_block", "INTEGER NOT NULL DEFAULT 0", 0)],
+    )
+    monkeypatch.setattr(doppler, "_scan_cursor_store", lambda: store)
+    return store
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_first_run_starts_near_tip(_isolated_cursor):
+    """Never a blind from_block=0 scan on first run -- starts window_size
+    blocks behind the chain tip."""
+    event = _FakeInitializeEventNoFilter([])
+    w3 = _FakeW3(initialize_event=event)
+
+    pools = await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=10_000)
+    assert pools == []
+    assert event.captured_calls == [(9_500, 9_999)]
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_advances_cursor_past_first_window(_isolated_cursor):
+    event = _FakeInitializeEventNoFilter([])
+    w3 = _FakeW3(initialize_event=event)
+
+    await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=10_000)
+    await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=10_600)
+
+    assert event.captured_calls == [(9_500, 9_999), (10_000, 10_499)]
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_returns_no_new_pools_when_caught_up(_isolated_cursor):
+    event = _FakeInitializeEventNoFilter([])
+    w3 = _FakeW3(initialize_event=event)
+
+    await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=9_999)
+    pools = await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=9_998)
+
+    assert pools == []
+    # second call: from_block (9_999) > tip (9_998) -- no RPC call at all.
+    assert event.captured_calls == [(9_499, 9_998)]
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_returns_real_pools_found(_isolated_cursor):
+    log = _FakeLog({"id": b"\x03" * 32, "currency0": WETH, "currency1": CLOWNS, "hooks": "0xHOOK"})
+    event = _FakeInitializeEventNoFilter([log])
+    w3 = _FakeW3(initialize_event=event)
+
+    pools = await doppler.discover_recent_pools(window_size=500, w3=w3, current_block=10_000)
+    assert pools == [{"pool_id": b"\x03" * 32, "currency0": WETH, "currency1": CLOWNS, "hooks": "0xHOOK"}]
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_does_not_advance_cursor_on_rpc_failure(_isolated_cursor):
+    """RPC failure -- cursor stays put so the same window is retried next
+    call, never silently skipped."""
+    seed_event = _FakeInitializeEventNoFilter([])
+    w3_seed = _FakeW3(initialize_event=seed_event)
+    await doppler.discover_recent_pools(window_size=500, w3=w3_seed, current_block=10_000)
+    assert seed_event.captured_calls == [(9_500, 9_999)]
+
+    failing_event = _FakeInitializeEventNoFilter(raises=True)
+    w3_fail = _FakeW3(initialize_event=failing_event)
+    pools = await doppler.discover_recent_pools(window_size=500, w3=w3_fail, current_block=10_600)
+    assert pools == []
+    assert failing_event.captured_calls == [(10_000, 10_499)]
+
+    working_event = _FakeInitializeEventNoFilter([])
+    w3_ok = _FakeW3(initialize_event=working_event)
+    await doppler.discover_recent_pools(window_size=500, w3=w3_ok, current_block=10_600)
+
+    # cursor never advanced past the failed attempt -- the exact SAME window
+    # (10_000-10_499) is retried, not skipped or drifted forward.
+    assert working_event.captured_calls == [(10_000, 10_499)]
+
+
+@pytest.mark.asyncio
+async def test_discover_recent_pools_uses_live_block_number_when_current_block_omitted(_isolated_cursor):
+    event = _FakeInitializeEventNoFilter([])
+
+    class _FakeEthWithBlockNumber(_FakeEth):
+        block_number = 5_000
+
+    class _FakeW3WithTip(_FakeW3):
+        def __init__(self, *, initialize_event=None):
+            super().__init__(initialize_event=initialize_event)
+            self.eth = _FakeEthWithBlockNumber(initialize_event=initialize_event)
+
+    w3 = _FakeW3WithTip(initialize_event=event)
+    pools = await doppler.discover_recent_pools(window_size=500, w3=w3)
+    assert pools == []
+    assert event.captured_calls == [(4_500, 4_999)]
