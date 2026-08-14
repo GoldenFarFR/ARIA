@@ -46,8 +46,32 @@ def _table_schema() -> Any:
             pa.field("text", pa.string()),
             pa.field("entry_type", pa.string()),
             pa.field("metadata_json", pa.string()),
+            pa.field("written_at", pa.string()),
+            pa.field("written_by", pa.string()),
         ]
     )
+
+
+# (14/08, #166) -- provenance columns added to an already-populated table
+# (85 real rows found in prod, never dropped). LanceDB's create_table(...,
+# exist_ok=True) only applies a schema at CREATION time -- it silently
+# ignores the passed schema for a table that already exists on disk, so
+# existing tables need an explicit, idempotent migration via add_columns().
+# Verified empirically before writing this (copy of the real prod data,
+# never the original): add_columns() on an already-present column raises
+# ValueError, so the schema.names check below is required, not optional.
+def _migrate_provenance_columns(table: Any) -> None:
+    existing = set(table.schema.names)
+    missing = {
+        name: default
+        for name, default in (
+            ("written_at", "cast(NULL as string)"),
+            ("written_by", "cast('' as string)"),
+        )
+        if name not in existing
+    }
+    if missing:
+        table.add_columns(missing)
 
 
 def get_table():
@@ -62,6 +86,7 @@ def get_table():
 
         _client = lancedb.connect(str(vector_dir()))
         _table = _client.create_table(collection_name(), schema=_table_schema(), exist_ok=True)
+        _migrate_provenance_columns(_table)
         return _table
     except Exception as exc:
         logger.warning("lancedb client init failed: %s", exc)

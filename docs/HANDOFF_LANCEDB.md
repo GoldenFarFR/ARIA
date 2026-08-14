@@ -99,6 +99,40 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[CODE] Sujet : défenses memory-poisoning (#166) — provenance structurelle, TTL câblé, audit d'écriture
+Date : 2026.08.14 / Probleme : audit sécurité (mandat permanent CLAUDE.md sur les faiblesses
+spécifiques IA + risque OWASP ASI06 documenté dans la checklist plus haut) a trouvé 3 trous
+concrets, vérifiés dans le code : (1) `retention_days` déclaré dans `schema.yaml` pour chaque
+entry_type mais jamais lu/appliqué par aucun code — un TTL fantôme ; (2) `source` obligatoire
+pour seulement 2 des 5 types, aucun champ structurel qui/quand a écrit une entrée — la table
+n'avait même pas de colonne timestamp ; (3) aucune trace persistante des tentatives d'écriture
+rejetées (injection détectée, validation échouée) — seulement des `logger.warning` éphémères.
+Solution : (1) deux colonnes structurelles `written_at`/`written_by` ajoutées au schéma —
+`written_by` dérivé du VRAI call stack (`inspect.stack()[1]`), jamais un paramètre que
+l'appelant pourrait falsifier ; migration idempotente de la table déjà peuplée (85 lignes
+réelles) via `add_columns()`, validée empiriquement sur une copie avant tout code (LanceDB
+`create_table(exist_ok=True)` ignore silencieusement un schéma différent pour une table
+existante — seul `add_columns()` fonctionne, et un second appel sur une colonne déjà présente
+lève `ValueError`, d'où le check `schema.names` avant migration). (2) `purge_expired_entries()`
+exploite enfin `retention_days` — supprime par entry_type au-delà de sa fenêtre, ne touche
+JAMAIS une entrée sans `written_at` (fail-safe : âge réel inconnu = jamais supprimée par
+hypothèse), pas encore appelée automatiquement (le futur watchdog #167 fera l'appel
+périodique). (3) nouveau module `memory/vector/audit.py` (même pattern `system_issues.py` :
+`aiosqlite`, `aria_db_path()`, jamais bloquant) — `log_write_attempt()` trace CHAQUE tentative,
+acceptée ou rejetée, avec motif ; le flag désactivé n'est jamais loggé (pas une "tentative
+repoussée", juste le mécanisme éteint). Score de confiance composite délibérément PAS construit
+maintenant (#169, toutes les sources actuelles sont déjà des pipelines internes fiables — n'a
+de sens réel qu'au moment d'ouvrir une source moins fiable). Tests écrits en conditions réelles
+(extra `[vector]` installé dans le venv de dev pour la première fois — les 15 tests
+`test_lancedb_store.py` existants, tous SKIPPED jusqu'ici, tournent enfin réellement), 21
+nouveaux tests (`test_lancedb_store.py` + nouveau `test_lancedb_audit.py`). Suite complète
+aria-core verte : 10210 passed, 0 failed. `packages/aria-core/src/aria_core/memory/vector/
+lancedb_client.py`, `lancedb_store.py`, `audit.py` (nouveau), `packages/aria-core/tests/
+test_lancedb_store.py`, `test_lancedb_audit.py` (nouveau). **Pas encore déployé en prod au
+moment de cette entrée** — commit local, push/déploiement à confirmer.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet : extra `[vector]` jamais installé dans le Dockerfile de prod — mécanisme mort depuis sa création
 Date : 2026.08.14 / Probleme : `lancedb`/`fastembed`/`pyarrow` (paquet `[vector]` de
 `aria-core`) n'ont **jamais** figuré dans `vanguard/Dockerfile` (confirmé par `git log -p` sur
@@ -178,11 +212,20 @@ le résultat complet, 7 jours sur la recherche de diligence via LanceDB) opèren
 et sur des objets différents, pas de concurrence constatée.
 
 ## Prochaines étapes possibles (pas encore décidées/construites)
-- Confirmer le déploiement réel du fix Docker (rebuild + bascule blue-green + vérification
-  `vector_store_status()` en conditions réelles serveur, pas juste en conteneur isolé).
-- Décider du sort de `verify_and_remember_wallet` (brancher à un vrai déclencheur ou retirer).
-- Élargir les sources d'écriture au-delà du pipeline VC (résultats de trades réels, corpus
-  HANDOFF) — seulement après avoir traité le point sécurité memory-poisoning ci-dessus.
-- Watchdog de compaction périodique (`optimize()`/`cleanup_old_versions()`), même famille que
-  `memory-watch`.
-- Colonnes typées (`contract`/`chain`/`source_id`/date) à la place du blob `metadata_json`.
+- Déployer en prod le chantier sécurité #166 ci-dessus (code+tests prêts, pas encore poussé).
+- Watchdog de maintenance périodique (#167) — appelle `purge_expired_entries()` (déjà prêt) +
+  `optimize()`/`cleanup_old_versions()`, même famille que `memory-watch`.
+- Décider du sort de `verify_and_remember_wallet` (#168 — brancher à un vrai déclencheur ou
+  retirer).
+- Élargir les sources d'écriture au-delà du pipeline VC (#169 — résultats de trades réels,
+  corpus HANDOFF) — maintenant débloqué côté sécurité (provenance + audit + TTL en place),
+  mais le score de confiance composite reste à construire AU MOMENT d'ouvrir une source moins
+  fiable que les pipelines internes actuels.
+- Colonnes typées (#170 — `contract`/`chain`/`source_id`/date) à la place du blob
+  `metadata_json`.
+- Piste de recherche banquée (14/08, hors ce chantier) : `xai-org/x-algorithm` (repo réel,
+  vérifié — X open-source de son feed "For You"), en particulier le composant `user-cred-v2`
+  (scoring de crédibilité de compte) pourrait informer `x_insight_relevance.py`/`smart_money.py`
+  côté détection anti-manipulation. Garde-fou explicite opérateur : rester strictement défensif
+  (jamais growth hacking), prudence sur ce qui devient public si ça débouche sur du code — cf.
+  mémoire `feedback_dont_close_third_party_data_access`.

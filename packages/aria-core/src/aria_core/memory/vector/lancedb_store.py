@@ -6,12 +6,16 @@ Replaces ``chroma_store.py`` 1:1 — same surface (``store``/``search``/``is_ava
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from aria_core.memory.vector import audit
 from aria_core.memory.vector._flags import is_vector_enabled
 from aria_core.memory.vector.embedding import embed_text
 from aria_core.memory.vector.lancedb_client import get_table, lancedb_installed
@@ -101,18 +105,39 @@ async def store(
     *,
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
-    """Persists a document — no-op if flag off or lancedb absent."""
+    """Persists a document — no-op if flag off or lancedb absent.
+
+    Every accepted OR rejected attempt (injection marker, schema validation
+    failure, internal error) is recorded in the write-audit trail
+    (``audit.log_write_attempt``, #166, 14/08) -- never blocks the write
+    itself, a broken audit log must never break a real store(). ``written_by``
+    is captured automatically from the real call stack (never a caller
+    parameter, see ``_caller_module_name``), ``written_at`` is a real
+    timestamp -- both are structural columns, not part of the free-form
+    ``metadata_json`` blob, so every future caller gets them for free."""
     if not is_available():
         return None
+    # Provenance derived from the REAL call stack, never a parameter callers
+    # pass themselves (a caller-supplied value could be forged) -- index 1 is
+    # this function's own direct caller. "unknown" on any introspection
+    # failure, never raises (#166, 14/08).
+    try:
+        written_by = Path(inspect.stack()[1].filename).name
+    except Exception:
+        written_by = "unknown"
     text = (content or "").strip()
     if not text:
         return None
     if contains_injection_marker(text):
         logger.warning("lancedb store rejected: injection marker detected")
+        await audit.log_write_attempt(
+            entry_type, written_by, accepted=False, reason="injection marker detected"
+        )
         return None
     ok, err = validate_entry(entry_type, metadata)
     if not ok:
         logger.warning("lancedb store rejected: %s", err)
+        await audit.log_write_attempt(entry_type, written_by, accepted=False, reason=err)
         return None
     tbl = get_table()
     if tbl is None:
@@ -127,13 +152,19 @@ async def store(
             "text": text,
             "entry_type": entry_type,
             "metadata_json": json.dumps(meta),
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "written_by": written_by,
         }
         tbl.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
             [row]
         )
+        await audit.log_write_attempt(entry_type, written_by, accepted=True)
         return doc_id
     except Exception as exc:
         logger.warning("lancedb store failed: %s", exc)
+        await audit.log_write_attempt(
+            entry_type, written_by, accepted=False, reason=f"internal error: {exc}"[:500]
+        )
         return None
 
 
@@ -174,3 +205,50 @@ async def search(
     except Exception as exc:
         logger.warning("lancedb search failed: %s", exc)
         return []
+
+
+async def purge_expired_entries() -> dict[str, int]:
+    """Applies each entry_type's ``retention_days`` (``schema.yaml``, declared
+    since Phase B but never enforced until now, #166 14/08) -- deletes rows
+    past their retention window, bounding how long a poisoned or stale entry
+    can stay retrievable (OWASP ASI06 mitigation, docs/HANDOFF_LANCEDB.md).
+
+    Entries with no ``written_at`` (the 85 pre-existing rows written by prior
+    Claude Code sessions before this column existed) are NEVER touched --
+    their real age is unknown, and deleting by assumption would be the
+    opposite of fail-safe. Not yet called by any automatic cycle -- the
+    future maintenance watchdog (#167) is expected to call this
+    periodically; built and tested standalone first.
+
+    Returns ``{entry_type: deleted_count}`` for types that had a
+    ``retention_days`` and were actually purged (0 or missing entry -- no
+    purge needed/attempted). ``{}`` if disabled or on failure -- never
+    raises."""
+    if not is_available():
+        return {}
+    tbl = get_table()
+    if tbl is None:
+        return {}
+    schema = load_schema()
+    types = schema.get("entry_types") or {}
+    deleted: dict[str, int] = {}
+    for entry_type, spec in types.items():
+        if not _ENTRY_TYPE_RE.match(entry_type):
+            continue
+        retention_days = spec.get("retention_days")
+        if not retention_days or retention_days <= 0:
+            continue
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat()
+        try:
+            before = tbl.count_rows(f"entry_type = '{entry_type}'")
+            tbl.delete(
+                f"entry_type = '{entry_type}' AND written_at IS NOT NULL "
+                f"AND written_at < '{cutoff}'"
+            )
+            after = tbl.count_rows(f"entry_type = '{entry_type}'")
+            removed = max(0, before - after)
+            if removed:
+                deleted[entry_type] = removed
+        except Exception as exc:
+            logger.warning("lancedb purge failed for entry_type=%s: %s", entry_type, exc)
+    return deleted
