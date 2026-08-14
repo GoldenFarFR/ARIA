@@ -31,6 +31,15 @@ COPY packages/aria-core /packages/aria-core
 # `[agent_wallet]` avant sa correction (#204) : extra jamais ajoute au build,
 # trouve en testant le tout premier vrai paiement x402 en conditions reelles.
 #
+# extra [vector] (14/08) : meme categorie de bug encore une fois -- lancedb/
+# fastembed/pyarrow (memoire vectorielle, packages/aria-core/src/aria_core/
+# memory/vector/) n'etaient jamais installes en prod malgre plusieurs vrais
+# appelants deja cables dans le code (conviction_research.py, ingest.py) --
+# le mecanisme tournait a vide depuis sa creation, jamais detecte car
+# is_vector_enabled()/is_available() degradent silencieusement (no-op, pas
+# une exception). fastembed telecharge son modele d'embedding local
+# (BAAI/bge-small-en-v1.5, ~130 Mo) au premier usage runtime, pas au build.
+#
 # requirements-lock.txt en CONTRAINTES (-c) sur les deux pip install (05/08,
 # reaction directe a l'attaque supply-chain npm keyv/cacheable du 04/08, cf.
 # docs/HANDOFF_SECURITE.md) : sans lui, chaque build tirait silencieusement la
@@ -43,7 +52,7 @@ COPY packages/aria-core /packages/aria-core
 # regenerer via `docker exec aria-api pip freeze --exclude-editable | grep -v
 # '^aria-core'` apres un upgrade voulu et teste, jamais automatiquement.
 COPY vanguard/backend/requirements-lock.txt ./backend/
-RUN pip install --no-cache-dir -c backend/requirements-lock.txt "/packages/aria-core[agent_wallet,x402]"
+RUN pip install --no-cache-dir -c backend/requirements-lock.txt "/packages/aria-core[agent_wallet,x402,vector]"
 
 # Chromium headless (Playwright) : captures d'ecran reelles du site pour ux_watch
 # (tache #155, skills/ux_watch.py) -- +300-500 Mo mesures, accepte tel quel (decision
