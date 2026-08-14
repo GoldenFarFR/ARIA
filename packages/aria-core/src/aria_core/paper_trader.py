@@ -2860,7 +2860,7 @@ def format_sell_alert(closed: dict) -> str:
     return "\n".join(lines)
 
 
-def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str, chain: str) -> str:
+def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str, chain: str, wallet: str | None = None) -> str:
     """03/08 -- new dedicated alert: `momentum_entry._check_holder_concentration`
     now fails CLOSED (refuses the candidate) when neither the free/Pro path
     nor the paid x402 fallback can confirm holder concentration, instead of
@@ -2868,10 +2868,18 @@ def format_holder_concentration_unverifiable_alert(*, contract: str, symbol: str
     Distinct from the normal ``holder_concentration`` HOLD (a confirmed
     over-concentration verdict) -- this one means ARIA COULDN'T CHECK at
     all, an event rare and significant enough to warrant its own alert
-    rather than folding into the silent per-cycle funnel counter."""
+    rather than folding into the silent per-cycle funnel counter.
+
+    14/08 -- real UX gap found live (operator: "sa precise pas quel poche
+    refuse les achat a chaque fois"): unlike format_buy_alert/format_sell_
+    alert (which both show ``_strategy_label`` in the title), this alert's
+    title never carried the pocket at all -- the caller (run_paper_cycle)
+    already has ``wallet`` in scope at the exact point it fires this alert,
+    it just wasn't threaded through. Same ``_strategy_label`` helper, same
+    minimal-dict pattern (no real position exists yet at refusal time)."""
     name = html.escape(symbol or (contract or "")[:10], quote=False)
     lines = [
-        "🧪 SIMULATION — portefeuille papier 1 M$",
+        f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label({'wallet': wallet})})",
         f"<b>ACHAT REFUSÉ {name} — sécurité invérifiable</b>",
         "Aucun moyen de vérifier la concentration des détenteurs (service gratuit ET payant indisponibles) -- achat refusé par prudence, jamais à l'aveugle.",
     ]
@@ -4616,6 +4624,7 @@ async def _open_new_entries_for_wallet(
             if reason_code == "holder_concentration_unverifiable" and notifier:
                 await notifier(format_holder_concentration_unverifiable_alert(
                     contract=contract, symbol=sig.get("symbol") or "", chain=sig.get("chain") or "base",
+                    wallet=wallet,
                 ))
             # 07/20 -- #176 (learning track b): same choke point as the funnel
             # above (already THE only place that sees every HOLD, momentum

@@ -7,6 +7,25 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Subject : holder-concentration-unverifiable refusal alert never showed which pocket refused the buy
+Date : 2026.08.14 / Problem : real UX gap found live (operator: "sa precise pas quel poche refuse
+les achat a chaque fois") -- unlike format_buy_alert/format_sell_alert (both show `_strategy_label`
+in the title since the 26/07 operator request + the 08/02/07/08/12/08 wallet-prefix fixes),
+format_holder_concentration_unverifiable_alert's title never carried any pocket label at all. The
+caller (run_paper_cycle) already has `wallet` in scope at the exact point it fires this alert
+(used one line above for `funnel`/`momentum_scan_log.record_scan`) -- it just was never threaded
+through to this specific alert.
+Solution : `format_holder_concentration_unverifiable_alert` gains a `wallet: str | None = None`
+keyword param, reuses the existing `_strategy_label({'wallet': wallet})` helper (same minimal-dict
+pattern -- no real position exists yet at refusal time), title now reads e.g. "SIMULATION --
+portefeuille papier 1 M$ (scalping_v9)" instead of the pocket-less generic header. Caller updated
+to pass `wallet=wallet`. 3 new tests (`test_paper_trader.py`) -- pocket shown for scalping_v9/vc,
+graceful fallback ("swing trading") when no wallet is passed. 2 existing tests unaffected (didn't
+assert on the title). Suite complète en cours de vérification.
+`packages/aria-core/src/aria_core/paper_trader.py`, `packages/aria-core/tests/test_paper_trader.py`.
+
+------------------------------------------------------------
+
 [CODE] Subject : first end-to-end integration test across the momentum_entry -> paper_trader boundary (backlog #105, test-expansion mandate)
 Date : 2026.08.11 / Problem : operator asked for "hundreds of tests touching everything" including a full pipeline end-to-end cycle (backlog #105, 2nd axis of a 4-axis mandate after #104's security audit). An Explore audit of every test file touching the momentum pipeline found ALL existing coverage strictly unit-level -- every module-to-module boundary is mocked on BOTH sides independently (e.g. `test_paper_trader.py` always monkeypatches `momentum_entry.evaluate_momentum_entry` with a hand-written dict, never the real function). Same failure shape as the historical `_resolve_dev_behavior`/`holders=` bug fixed earlier today (b339bbc1): two independently-mocked sides of one real call can silently drift apart with both test suites staying green.
 Solution : new `test_momentum_paper_trader_integration.py` -- exercises the REAL `evaluate_momentum_entry()` (only the external network boundaries mocked, reusing `test_momentum_entry.py`'s own proven `_patch_pipeline` fixture rather than duplicating it) against the REAL `open_position()`, using the EXACT `sig.get(...)` mapping copied verbatim from `paper_trader.run_paper_cycle`'s real call site -- if `evaluate_momentum_entry` ever renames or drops a key consumed downstream, this test breaks; neither isolated suite would ever catch it. Locks the 17/07 historical `thesis` bug (silently `None` on every momentum trade) against a future regression on the same key. A second test confirms the boundary fails safe on a real HOLD (no BUY-only fields ever present). 2 new tests, full suite green. First of a planned handful of boundary tests across the pipeline's other unverified frontiers (sourcing -> paper_trader, VC crible -> safety_screen) -- not built yet, same axis (#105) stays open for those. — `test_momentum_paper_trader_integration.py` (new).

@@ -3704,6 +3704,31 @@ def test_format_holder_concentration_unverifiable_alert_falls_back_to_contract_p
     assert A[:10] in alert
 
 
+def test_format_holder_concentration_unverifiable_alert_shows_pocket():
+    """14/08 -- real UX gap found live: the operator couldn't tell which
+    pocket refused a buy on holder-concentration grounds, since the title
+    never carried a strategy label unlike format_buy_alert/format_sell_alert."""
+    alert = pt.format_holder_concentration_unverifiable_alert(
+        contract=A, symbol="AAA", chain="base", wallet="scalping_v9"
+    )
+    assert "scalping_v9" in alert
+
+
+def test_format_holder_concentration_unverifiable_alert_vc_pocket_label():
+    alert = pt.format_holder_concentration_unverifiable_alert(
+        contract=A, symbol="AAA", chain="base", wallet="vc"
+    )
+    assert "venture capital" in alert
+
+
+def test_format_holder_concentration_unverifiable_alert_no_wallet_falls_back():
+    """No wallet passed (should never happen from the real caller, but must
+    never crash) -- degrades to the same generic label as an untagged
+    position elsewhere in this module."""
+    alert = pt.format_holder_concentration_unverifiable_alert(contract=A, symbol="AAA", chain="base")
+    assert "swing trading" in alert
+
+
 def test_format_partial_exit_alert_includes_close_notes():
     partial = pt.format_partial_exit_alert(
         {"symbol": "AAA", "contract": A, "exit_price": 1.5, "pnl_usd": 500, "pnl_pct": 50.0,
