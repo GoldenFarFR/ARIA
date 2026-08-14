@@ -7,7 +7,7 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
-[CODE] Subject : watchlist_refill_cycle now also scans Clanker + Flaunch, not just discover_momentum_candidates
+[DEPLOYE] Subject : watchlist_refill_cycle now also scans Clanker + Flaunch, not just discover_momentum_candidates
 Date : 2026.08.14 / Problem : Clanker/Flaunch already have real on-chain discoverers
 (services/clanker.py, services/flaunch.py) but were only wired into bonding_discovery_cycle, which
 feeds the VC narrative pipeline (screened_pool) -- never the momentum watchlist. A token launched via
