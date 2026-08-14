@@ -4566,6 +4566,84 @@ async def test_evaluate_allows_buy_via_coingecko_fallback_when_dexscreener_has_n
     assert result["action"] == "BUY"
 
 
+# ── grâce de maturation 15j pour le gate profil (14/08, décision opérateur) ──
+# "il faut choisir a quelle date apres le lancement sinon il vont etre
+# refuser car pas de lien pas dequipe la fiche risque de pas etre rempli" --
+# un jeune pool n'a pas encore eu le temps d'être indexé par DexScreener/
+# CoinGecko, jamais un signal d'illégitimité en soi.
+
+def _ms_ago(days: float) -> int:
+    return int(time.time() * 1000 - days * 86_400_000)
+
+
+class TestPoolWithinMaturationGrace:
+    def test_none_never_waives(self):
+        assert me._pool_within_maturation_grace(None) is False
+
+    def test_zero_never_waives(self):
+        assert me._pool_within_maturation_grace(0) is False
+
+    def test_young_pool_is_within_grace(self):
+        assert me._pool_within_maturation_grace(_ms_ago(5)) is True
+
+    def test_old_pool_is_not_within_grace(self):
+        assert me._pool_within_maturation_grace(_ms_ago(30)) is False
+
+    def test_exactly_at_the_floor_is_not_within_grace(self):
+        assert me._pool_within_maturation_grace(_ms_ago(15.0)) is False
+
+    def test_just_under_the_floor_is_within_grace(self):
+        assert me._pool_within_maturation_grace(_ms_ago(14.99)) is True
+
+    def test_future_timestamp_never_waives(self):
+        """Horodatage corrompu/dans le futur -- défensif, jamais traité comme
+        'jeune', gate normal appliqué."""
+        assert me._pool_within_maturation_grace(_ms_ago(-1)) is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_waives_profile_gate_for_a_young_pool_without_listing(monkeypatch):
+    """Un pool jeune (< 15j) sans profil DexScreener ni listing CoinGecko doit
+    quand même pouvoir atteindre le BUY, contrairement à un pool âgé dans la
+    même situation (cf. test_evaluate_rejects_when_no_verified_profile)."""
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("CoinGecko ne doit jamais être appelé pour un pool dans la grâce de maturation")
+
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fail_if_called))
+    strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
+    young_pair = _pair(project_links=[], pair_created_at=_ms_ago(3))
+    _patch_pipeline(monkeypatch, pairs=[young_pair], signal=strong, align=(3, []))
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result.get("hold_reason") != "no_verified_profile"
+    assert result["action"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_still_rejects_old_pool_without_listing(monkeypatch):
+    """Non-régression explicite : la grâce de maturation ne doit jamais
+    s'étendre à un pool déjà mature -- même comportement qu'avant ce fix."""
+    async def fake_fundamentals(contract, *, platform_id="base"):
+        return TokenFundamentals(contract=contract, available=False)
+
+    monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fake_fundamentals))
+    old_pair = _pair(project_links=[], pair_created_at=_ms_ago(30))
+    _patch_pipeline(monkeypatch, pairs=[old_pair])
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "no_verified_profile"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_young_pool_still_enforces_safety_gates(monkeypatch):
+    """La grâce ne waive QUE le gate profil -- un jeune pool honeypot doit
+    toujours être rejeté (aucune sécurité assouplie par la jeunesse)."""
+    young_pair = _pair(project_links=[], pair_created_at=_ms_ago(3))
+    _patch_pipeline(monkeypatch, pairs=[young_pair], honeypot_clear=False)
+    result = await me.evaluate_momentum_entry(CONTRACT, "base")
+    assert result["action"] == "HOLD"
+    assert result.get("hold_reason") != "no_verified_profile"
+
+
 # ── concentration des holders (19/07, revue croisée Gemini) ─────────────────────────
 
 @pytest.mark.asyncio

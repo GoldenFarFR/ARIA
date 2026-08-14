@@ -1818,6 +1818,30 @@ async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, s
     )
 
 
+# 14/08 -- operator decision: a token younger than this floor is not held to
+# the same "established project" bar as a mature one -- DexScreener's paid
+# profile / CoinGecko's listing both take real time to appear after launch
+# (the same class of gap the watchlist-sourcing overhaul fixed on the
+# DISCOVERY side: a genuinely early asymmetric bet has no listing yet purely
+# because of indexing lag, never because it's illegitimate). Deliberately
+# narrow -- waives ONLY ``_check_project_profile``, same doctrine as the
+# existing ``relaxed`` floor mode: SAFETY gates (honeypot/liquidity/
+# wash-trading/holder concentration/parabolic cap) are never touched here.
+_YOUNG_POOL_PROFILE_GRACE_DAYS = 15.0
+
+
+def _pool_within_maturation_grace(pair_created_at_ms: int | None) -> bool:
+    """True only when the pool's REAL on-chain age (DexScreener
+    ``pairCreatedAt``) is known and under the grace floor. Fail-closed on
+    missing/invalid data -- ``None``/zero or a bogus future timestamp never
+    waives the gate, only a confirmed-young pool does; an unknown age gets
+    the normal, strict profile check."""
+    if not pair_created_at_ms:
+        return False
+    age_days = (time.time() * 1000 - pair_created_at_ms) / 86_400_000
+    return 0 <= age_days < _YOUNG_POOL_PROFILE_GRACE_DAYS
+
+
 async def _check_project_profile(chain: str, contract: str, pair: PairSnapshot) -> tuple[bool, str]:
     """``(has_profile, reason)`` -- paid DexScreener profile (``project_links``,
     free) OR CoinGecko listing (network, short-circuited if DexScreener already
@@ -3639,7 +3663,15 @@ async def evaluate_hard_gates(
     # paid DexScreener profile / CoinGecko listing is the NORM for the low-info
     # speculation tokens the operator wants sampled -- never a scam vector, only
     # a "we can't confirm the project is established" signal.
-    has_profile, profile_reason = (True, "") if relaxed else await _check_project_profile(chain, contract, best)
+    # 14/08 -- also waived for a genuinely young pool (see
+    # ``_pool_within_maturation_grace``'s own docstring): a real gap found
+    # while auditing sourcing coverage was that a fresh, legitimate token has
+    # no DexScreener/CoinGecko listing yet purely from indexing lag, so it
+    # never cleared this gate no matter how many times it got re-scanned.
+    young_pool = _pool_within_maturation_grace(best.pair_created_at)
+    has_profile, profile_reason = (
+        (True, "") if (relaxed or young_pool) else await _check_project_profile(chain, contract, best)
+    )
     if not has_profile:
         await momentum_rejection_cache.record_rejection(contract, chain, "no_verified_profile")
         return None, None, {
