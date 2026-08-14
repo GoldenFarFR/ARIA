@@ -7,6 +7,22 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Subject : swing/scalping_v8 sourcing migrated to goplus_watchlist (no more direct API discovery)
+Date : 2026.08.14 / Problem : follow-up to watchlist_refill_cycle (entry below) -- swing/scalping_v8
+still called discover_momentum_candidates directly (paper_trader._momentum_candidates_and_chain_map)
+to choose what to evaluate/buy, contradicting the operator's "toute les poche !" decision that every
+pocket reads from the shared watchlist, never calls a discovery API itself.
+Solution : _momentum_candidates_and_chain_map now sources from base_crawler.discover_from_watchlist
+(requested well above the round-robin truncation limit so momentum_scan_log's never-scanned-first
+sort still has a real pool to work from) instead of discover_momentum_candidates. Verified safe before
+the change: discover_momentum_candidates's own DEFAULT_CHAINS=("base",) means this path was already
+Base-only in practice (no caller anywhere overrides it to include solana/robinhood, despite CLAUDE.md
+describing this test as multi-chain) -- confirmed with the operator, staying Base-only deliberately
+for now, other chains revisited once this settles. 15 tests migrated off the old discover_momentum_
+candidates mock onto discover_from_watchlist -- paper_trader.py, tests/test_paper_trader.py
+
+------------------------------------------------------------
+
 [CODE] Subject : watchlist_refill_cycle -- pure-discovery cycle, first step toward every pocket sourcing from goplus_watchlist only
 Date : 2026.08.14 / Problem : operator decision ("toute les poches doivent piocher dans la
 watchlist... sans appeler les api") -- swing/scalping_v8 currently call discover_momentum_candidates

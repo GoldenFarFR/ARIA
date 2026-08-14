@@ -3202,6 +3202,22 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 63) -> tuple[list[s
     the rest of the loop) + the contract->chain table for the momentum
     analyzer below.
 
+    14/08, operator decision ("toute les poches doivent piocher dans la
+    watchlist... sans appeler les api"): sources from ``goplus_watchlist``
+    (``base_crawler.discover_from_watchlist``) instead of calling
+    ``discover_momentum_candidates`` directly -- ``watchlist_refill_cycle``
+    (momentum_entry.py) is now the sole remaining caller of that discovery
+    function on the momentum path, keeping the watchlist populated so this
+    function doesn't need its own API access. Verified before this change:
+    ``discover_momentum_candidates``'s own default (``DEFAULT_CHAINS =
+    ("base",)``) means this was already Base-only in practice -- and
+    ``goplus_watchlist`` itself is also Base/Ethereum-only today (Solana
+    keeps its separate synchronous honeypot path, see ``_check_honeypot``),
+    so this migration drops no chain coverage that actually existed here.
+    Requested well above ``limit`` (watchlist can hold up to 2000 entries)
+    so the round-robin sort below still has a real pool to work from before
+    truncating.
+
     24/07, bonding-entry chantier: Virtuals bonding candidates are appended
     to the SAME list, tagged ``bonding_entry.CHAIN_MARKER`` in the chain map
     instead of a real chain id -- wired directly into this active $1M test
@@ -3211,37 +3227,39 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 63) -> tuple[list[s
     an existing entry.
 
     31/07, operator request ("toujours les derniers scannés en dernier pour
-    être sûr que tous les token passe au scan") -- when ``discover_momentum_
-    candidates`` surfaces more candidates than ``limit``, truncating on the
-    raw discovery order (previously: whatever the 6 sources happened to list
-    first, every cycle) could starve candidates further down the list
-    forever if the same well-liquid tokens keep resurfacing first. Sorted by
-    ``momentum_scan_log.last_scan_map`` before truncating: never-scanned
-    candidates first, then oldest-scanned first -- same round-robin doctrine
-    as ``goplus_watchlist.next_due``. Best-effort: a lookup failure degrades
-    to the original discovery order (never blocks the cycle)."""
-    from aria_core import momentum_entry, momentum_scan_log
+    être sûr que tous les token passe au scan") -- when the watchlist
+    surfaces more candidates than ``limit``, truncating on the raw order
+    (previously: whatever the 6 sources happened to list first, every cycle;
+    now: watchlist priority_score order) could starve candidates further
+    down the list forever if the same well-liquid tokens keep resurfacing
+    first. Sorted by ``momentum_scan_log.last_scan_map`` before truncating:
+    never-scanned candidates first, then oldest-scanned first -- same
+    round-robin doctrine as ``goplus_watchlist.next_due``. Best-effort: a
+    lookup failure degrades to the watchlist's own priority order (never
+    blocks the cycle)."""
+    from aria_core import momentum_scan_log
+    from aria_core.base_crawler import discover_from_watchlist
     from aria_core.bonding_entry import CHAIN_MARKER
 
-    found = await momentum_entry.discover_momentum_candidates()
-    chain_by_contract = {c["contract"]: c["chain"] for c in found}
+    found_contracts = await discover_from_watchlist(limit=max(limit * 10, 500))
+    chain_by_contract = {c: "base" for c in found_contracts}
 
     try:
         last_scan = await momentum_scan_log.last_scan_map(
-            [(c["contract"], c["chain"]) for c in found]
+            [(c, "base") for c in found_contracts]
         )
     except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks discovery
         logger.info("_momentum_candidates_and_chain_map: last_scan_map failed (%s)", exc)
         last_scan = {}
 
-    def _priority_key(entry: dict) -> str:
+    def _priority_key(contract: str) -> str:
         # Never-scanned (absent from last_scan) sorts before any real
         # timestamp -- ISO timestamps compare lexicographically, and the
         # empty string is lexicographically smaller than any real one.
-        return last_scan.get((entry["contract"].lower(), entry["chain"] or "base"), "")
+        return last_scan.get((contract.lower(), "base"), "")
 
-    prioritized = sorted(found, key=_priority_key)
-    contracts = [c["contract"] for c in prioritized[:limit]]
+    prioritized = sorted(found_contracts, key=_priority_key)
+    contracts = prioritized[:limit]
 
     bonding_contracts = await _bonding_candidates(limit=limit)
     for addr in bonding_contracts:

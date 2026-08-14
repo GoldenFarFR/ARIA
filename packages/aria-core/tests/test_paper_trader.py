@@ -1902,15 +1902,15 @@ class TestApplyRegimeToTpStages:
 async def test_run_cycle_fear_regime_halves_new_entry_allocation(tmp_db, monkeypatch):
     """Feu vert opérateur explicite (20/07) : régime macro Peur confirmé -> allocation
     des NOUVELLES entrées divisée par 2 (préserve le capital)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
     async def fake_resolve():
         return "peur"
 
     monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -1919,7 +1919,7 @@ async def test_run_cycle_fear_regime_halves_new_entry_allocation(tmp_db, monkeyp
             "regime": "peur",
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -1931,15 +1931,15 @@ async def test_run_cycle_fear_regime_halves_new_entry_allocation(tmp_db, monkeyp
 
 @pytest.mark.asyncio
 async def test_run_cycle_persists_entry_regime_on_open_position(tmp_db, monkeypatch):
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
     async def fake_resolve():
         return "euphorie"
 
     monkeypatch.setattr(market_sentiment, "resolve_meta_regime", fake_resolve)
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -1948,7 +1948,7 @@ async def test_run_cycle_persists_entry_regime_on_open_position(tmp_db, monkeypa
             "regime": "euphorie",
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -2729,13 +2729,13 @@ async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypa
     evaluate_momentum_entry renvoie désormais "category": "momentum-{chain}" -- ce
     test vérifie le câblage bout en bout (funnel momentum réel -> plafond appliqué),
     pas juste open_position() en isolation (déjà couvert ci-dessus)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
     contracts = [f"0x{i:040x}" for i in range(9)]
     call_index = {"n": 0}
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": c, "chain": "base"} for c in contracts]
+    async def fake_discover(*, limit=100):
+        return list(contracts)
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         call_index["n"] += 1
@@ -2749,7 +2749,7 @@ async def test_momentum_positions_now_respect_concentration_cap(tmp_db, monkeypa
             "category": "momentum-base",
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3069,7 +3069,7 @@ async def test_default_pair_lookup_none_when_contract_never_the_base(monkeypatch
 async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp_db, monkeypatch):
     """#194 : quand ni candidates ni analyzer ne sont fournis (le vrai appel
     heartbeat), le défaut devient le pipeline momentum -- plus candidate_ranking."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
     top_candidates_called = False
 
@@ -3078,11 +3078,14 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
         top_candidates_called = True
         return []
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "solana"}]
+    async def fake_watchlist(*, limit=100):
+        # 14/08 -- goplus_watchlist is Base-only in practice today (see
+        # discover_from_watchlist's own docstring), so this is the only real
+        # chain a candidate from this source can carry.
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
-        assert chain == "solana"
+        assert chain == "base"
         return {"action": "BUY", "symbol": "DDD", "price": 1.0, "target": 2.0,
                 "invalidation": 0.5, "chain": chain}
 
@@ -3090,7 +3093,7 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
         return None  # pas de dépeg -- ne doit jamais bloquer ce test (#187 x #194)
 
     monkeypatch.setattr("aria_core.skills.candidate_ranking.top_candidates", fake_top_candidates)
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_watchlist)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3098,7 +3101,7 @@ async def test_run_cycle_defaults_to_momentum_pipeline_when_nothing_injected(tmp
 
     assert top_candidates_called is False
     assert len(act["opened"]) == 1
-    assert act["opened"][0]["chain"] == "solana"
+    assert act["opened"][0]["chain"] == "base"
 
 
 # ── #194+18/07 : contexte de rythme hebdo + sizing par conviction (pipeline momentum) ──
@@ -3108,10 +3111,10 @@ async def test_run_cycle_threads_weekly_context_to_momentum_analyzer(tmp_db, mon
     """Le contexte de rythme (jour X/7, équité vs objectif) est calculé UNE FOIS par
     cycle et transmis au pipeline momentum -- valeurs cohérentes avec un portefeuille
     tout juste réinitialisé (cycle #1, jour 1, équité == capital de départ)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     captured = {}
 
@@ -3119,7 +3122,7 @@ async def test_run_cycle_threads_weekly_context_to_momentum_analyzer(tmp_db, mon
         captured["weekly_context"] = weekly_context
         return {"action": "HOLD", "chain": chain, "hold_reason": "test"}
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3143,10 +3146,10 @@ async def test_run_cycle_sizes_strong_conviction_signal_at_hard_cap(tmp_db, monk
     alignement parfait (3/3) -> palier FORT, 5 % du capital de départ EXACTEMENT (le
     plafond dur désormais, plus jamais 8 % -- ``CONVICTION_SIZE_MULTIPLIER=1.6``
     retiré). Le plafond de perte (risk_guard) reste appliqué PAR-DESSUS, inchangé."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3154,7 +3157,7 @@ async def test_run_cycle_sizes_strong_conviction_signal_at_hard_cap(tmp_db, monk
             "target": 2.0, "invalidation": 0.5, "rr": 3.0, "align_score": 3,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3173,7 +3176,7 @@ async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(
     """19/07 -- isole l'effet RÉEL des 3 paliers de conviction, avec une invalidation
     assez proche de l'entrée pour que le plafond de perte (risk_guard) ne masque jamais
     la différence entre paliers (contrairement au test ci-dessus, où il domine)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
     tiers = [
         (D, 3.0, 3, 50_000.0),   # palier FORT (R/R>=2.5, align>=2) -> 5 %
@@ -3182,10 +3185,8 @@ async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(
     ]
 
     for contract, rr, align_score, expected_cost in tiers:
-        async def fake_discover(
-            *, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30, _c=contract,
-        ):
-            return [{"contract": _c, "chain": "base"}]
+        async def fake_discover(*, limit=100, _c=contract):
+            return [_c]
 
         async def fake_evaluate(
             contract, chain, *, weekly_context=None, _rr=rr, _align=align_score, **_kwargs,
@@ -3195,7 +3196,7 @@ async def test_run_cycle_conviction_tiers_scale_alloc_when_risk_cap_not_binding(
                 "target": 2.0, "invalidation": 0.9, "rr": _rr, "align_score": _align,
             }
 
-        monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+        monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
         monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
         await pt.reset_portfolio(1_000_000.0)
@@ -3213,10 +3214,10 @@ async def test_run_cycle_wide_atr_stop_reduces_allocation_below_flat_tier(tmp_db
     l'allocation SOUS le plancher historique 5% (50 000$) -- jamais la même allocation
     qu'un token calme au même palier de conviction (cf. test ci-dessus, 50 000$ sans
     ATR connu)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3225,7 +3226,7 @@ async def test_run_cycle_wide_atr_stop_reduces_allocation_below_flat_tier(tmp_db
             "entry_atr_pct": 0.20,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3246,10 +3247,10 @@ async def test_run_cycle_tight_atr_stop_is_capped_at_the_historical_ceiling(tmp_
     5% = 30% du capital) -- le plafond absolu (5%, même maximum que l'ancien système à
     paliers fixes) doit toujours l'emporter, ce mécanisme ne fait jamais GROSSIR une
     position au-delà du maximum historique."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3258,7 +3259,7 @@ async def test_run_cycle_tight_atr_stop_is_capped_at_the_historical_ceiling(tmp_
             "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3276,10 +3277,10 @@ async def test_run_cycle_moderate_tier_tight_atr_capped_at_moderate_ceiling_not_
     (35 000$), jamais remonter jusqu'à 5% (50 000$, le plafond du palier FORT) --
     sinon un signal moins convaincant peut recevoir la même mise qu'un signal plus
     fort, inversant l'intention des paliers de conviction."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3288,7 +3289,7 @@ async def test_run_cycle_moderate_tier_tight_atr_capped_at_moderate_ceiling_not_
             "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3303,10 +3304,10 @@ async def test_run_cycle_weak_tier_tight_atr_capped_at_weak_ceiling_not_strong(t
     """20/07 (suite) -- même bug, palier FAIBLE (R/R=1.0). Un stop serré ne doit
     jamais laisser un signal FAIBLE atteindre 5% (le plafond du palier FORT) -- doit
     rester plafonné à 2% (20 000$)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3315,7 +3316,7 @@ async def test_run_cycle_weak_tier_tight_atr_capped_at_weak_ceiling_not_strong(t
             "entry_atr_pct": 0.01,  # -> trail_pct clampé au plancher ATR (5%)
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3332,10 +3333,10 @@ async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp
     (conviction_research.py) -- le palier fort (5%) est refusé, RÉTROGRADE au palier
     modéré (3.5%), jamais directement au plancher faible (la conviction technique reste
     réelle, seul le bonus maximal est refusé)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3344,7 +3345,7 @@ async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp
             "potential_score": 1.5,  # confirmé faible -- rétrograde le palier fort
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3358,10 +3359,10 @@ async def test_run_cycle_weak_fundamental_downgrades_strong_tier_to_moderate(tmp
 async def test_run_cycle_unknown_fundamental_never_blocks_technical_bonus(tmp_db, monkeypatch):
     """potential_score absent (None) -- fail-open sur inconnu, le bonus technique reste
     intact, exactement comme avant ce chantier (jamais réduit sous la baseline)."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3370,7 +3371,7 @@ async def test_run_cycle_unknown_fundamental_never_blocks_technical_bonus(tmp_db
             "potential_score": None,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3395,10 +3396,10 @@ async def test_run_cycle_dampens_moderate_tier_once_weekly_target_reached(tmp_db
     allocation du palier MODÉRÉ (3.5 %) réduite de moitié (-> 1.75 %), jamais bloquée
     à zéro. 19/07 -- rr=2.0/align=2 est désormais le palier MODÉRÉ (redesign 3
     paliers), plus le "défaut" flat 5% d'avant ce chantier."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3406,7 +3407,7 @@ async def test_run_cycle_dampens_moderate_tier_once_weekly_target_reached(tmp_db
             "target": 2.0, "invalidation": 0.95, "rr": 2.0, "align_score": 2,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -3422,10 +3423,10 @@ async def test_run_cycle_dampens_moderate_tier_once_weekly_target_reached(tmp_db
 async def test_run_cycle_dampens_strong_tier_once_weekly_target_reached(tmp_db, monkeypatch):
     """Le cas décrit par la revue : setup fort (5 % de conviction, plafond dur depuis
     le redesign 19/07) + objectif hebdo déjà atteint -> 2.5 %, jamais 5 % plein ni 0 %."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": D, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [D]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -3433,7 +3434,7 @@ async def test_run_cycle_dampens_strong_tier_once_weekly_target_reached(tmp_db, 
             "target": 2.0, "invalidation": 0.95, "rr": 3.0, "align_score": 3,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -4759,10 +4760,10 @@ async def test_run_cycle_momentum_signal_unaffected_by_taille_pct_branch(tmp_db,
     """Non-régression croisée -- un signal momentum (rr/align_score fournis, jamais
     taille_pct) continue de suivre le système de paliers de conviction existant,
     totalement inchangé par ce chantier."""
-    from aria_core import momentum_entry
+    from aria_core import base_crawler, momentum_entry
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": A, "chain": "base"}]
+    async def fake_discover(*, limit=100):
+        return [A]
 
     async def fake_evaluate(contract, chain, *, weekly_context=None, **_kwargs):
         return {
@@ -4770,7 +4771,7 @@ async def test_run_cycle_momentum_signal_unaffected_by_taille_pct_branch(tmp_db,
             "target": 2.0, "invalidation": 0.9, "rr": 3.0, "align_score": 3,
         }
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_discover)
     monkeypatch.setattr(momentum_entry, "evaluate_momentum_entry", fake_evaluate)
 
     await pt.reset_portfolio(1_000_000.0)
@@ -5839,16 +5840,16 @@ async def test_bonding_candidates_degrades_to_empty_on_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_momentum_candidates_appends_bonding_without_overwriting(monkeypatch):
-    from aria_core import momentum_entry
+    from aria_core import base_crawler
     from aria_core.bonding_entry import CHAIN_MARKER
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": A, "chain": "base"}]
+    async def fake_watchlist(*, limit=100):
+        return [A]
 
     async def fake_bonding(*, limit=20):
         return [B, A]  # A already sourced by standard discovery -- must NOT be overwritten
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_watchlist)
     monkeypatch.setattr(pt, "_bonding_candidates", fake_bonding)
 
     contracts, chain_map = await pt._momentum_candidates_and_chain_map(limit=20)
@@ -5868,19 +5869,14 @@ async def test_momentum_candidates_prioritizes_never_scanned_over_stale(monkeypa
     -- with limit=2, D (never scanned) and A (oldest real scan) must win over
     B/C (scanned more recently), even though D/A are LAST in the raw
     discovery order."""
-    from aria_core import momentum_entry, momentum_scan_log
+    from aria_core import base_crawler, momentum_scan_log
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
+    async def fake_watchlist(*, limit=100):
         # Raw discovery order deliberately puts the recently-scanned ones
         # FIRST -- a naive found[:limit] would pick B/C, never D/A.
-        return [
-            {"contract": B, "chain": "base"},
-            {"contract": C, "chain": "base"},
-            {"contract": A, "chain": "base"},
-            {"contract": D, "chain": "base"},
-        ]
+        return [B, C, A, D]
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_watchlist)
 
     await momentum_scan_log.record_scan(A, "base", "no_entry_signal")
     old_scan = (await momentum_scan_log.last_scan_for(A, "base"))["scanned_at"]
@@ -5899,15 +5895,15 @@ async def test_momentum_candidates_falls_back_to_discovery_order_on_scan_log_fai
     """Best-effort: a last_scan_map failure must never block discovery --
     degrades to the raw discovery order, same doctrine as every other
     optional signal in this pipeline."""
-    from aria_core import momentum_entry, momentum_scan_log
+    from aria_core import base_crawler, momentum_scan_log
 
-    async def fake_discover(*, chains=momentum_entry.DEFAULT_CHAINS, limit_per_chain=30):
-        return [{"contract": A, "chain": "base"}, {"contract": B, "chain": "base"}]
+    async def fake_watchlist(*, limit=100):
+        return [A, B]
 
     async def failing_last_scan_map(pairs):
         raise RuntimeError("DB unavailable")
 
-    monkeypatch.setattr(momentum_entry, "discover_momentum_candidates", fake_discover)
+    monkeypatch.setattr(base_crawler, "discover_from_watchlist", fake_watchlist)
     monkeypatch.setattr(momentum_scan_log, "last_scan_map", failing_last_scan_map)
 
     contracts, _ = await pt._momentum_candidates_and_chain_map(limit=2)
