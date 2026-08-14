@@ -4566,11 +4566,11 @@ async def test_evaluate_allows_buy_via_coingecko_fallback_when_dexscreener_has_n
     assert result["action"] == "BUY"
 
 
-# ── grâce de maturation 15j pour le gate profil (14/08, décision opérateur) ──
+# ── 15-day maturation grace for the profile gate (14/08, operator decision) ──
 # "il faut choisir a quelle date apres le lancement sinon il vont etre
 # refuser car pas de lien pas dequipe la fiche risque de pas etre rempli" --
-# un jeune pool n'a pas encore eu le temps d'être indexé par DexScreener/
-# CoinGecko, jamais un signal d'illégitimité en soi.
+# a young pool hasn't had time to be indexed by DexScreener/CoinGecko yet,
+# never a signal of illegitimacy on its own.
 
 def _ms_ago(days: float) -> int:
     return int(time.time() * 1000 - days * 86_400_000)
@@ -4603,11 +4603,11 @@ class TestPoolWithinMaturationGrace:
 
 @pytest.mark.asyncio
 async def test_evaluate_waives_profile_gate_for_a_young_pool_without_listing(monkeypatch):
-    """Un pool jeune (< 15j) sans profil DexScreener ni listing CoinGecko doit
-    quand même pouvoir atteindre le BUY, contrairement à un pool âgé dans la
-    même situation (cf. test_evaluate_rejects_when_no_verified_profile)."""
+    """A young pool (< 15d) with no DexScreener profile nor CoinGecko listing
+    should still be able to reach BUY, unlike an old pool in the same
+    situation (cf. test_evaluate_rejects_when_no_verified_profile)."""
     async def fail_if_called(*args, **kwargs):
-        raise AssertionError("CoinGecko ne doit jamais être appelé pour un pool dans la grâce de maturation")
+        raise AssertionError("CoinGecko must never be called for a pool within the maturation grace")
 
     monkeypatch.setattr(type(me.coingecko_client), "get_token_fundamentals", staticmethod(fail_if_called))
     strong = EntrySignal(present=True, entry=1.5, invalidation=1.0, target=2.5, rr=2.0)
@@ -4620,8 +4620,8 @@ async def test_evaluate_waives_profile_gate_for_a_young_pool_without_listing(mon
 
 @pytest.mark.asyncio
 async def test_evaluate_still_rejects_old_pool_without_listing(monkeypatch):
-    """Non-régression explicite : la grâce de maturation ne doit jamais
-    s'étendre à un pool déjà mature -- même comportement qu'avant ce fix."""
+    """Explicit non-regression: the maturation grace must never extend to an
+    already-mature pool -- same behavior as before this fix."""
     async def fake_fundamentals(contract, *, platform_id="base"):
         return TokenFundamentals(contract=contract, available=False)
 
@@ -4635,8 +4635,8 @@ async def test_evaluate_still_rejects_old_pool_without_listing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_young_pool_still_enforces_safety_gates(monkeypatch):
-    """La grâce ne waive QUE le gate profil -- un jeune pool honeypot doit
-    toujours être rejeté (aucune sécurité assouplie par la jeunesse)."""
+    """The grace waives ONLY the profile gate -- a young honeypot pool must
+    still be rejected (no safety gate loosened by youth)."""
     young_pair = _pair(project_links=[], pair_created_at=_ms_ago(3))
     _patch_pipeline(monkeypatch, pairs=[young_pair], honeypot_clear=False)
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
