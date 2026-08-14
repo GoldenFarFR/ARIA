@@ -99,7 +99,33 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
-[CODE] Sujet : retrait de `verify_and_remember_wallet` (#168) — code mort, redondant avec GoPlus AML
+[DEPLOYE] Sujet : `get_table()` mort en prod depuis le déploiement #166 lui-même — schéma migré jamais atteint
+Date : 2026.08.14 / Probleme : incident auto-infligé, découvert en creusant #170 (colonnes typées) —
+`create_table(name, schema=_table_schema(), exist_ok=True)` ne "ignore pas silencieusement" un
+schéma différent pour une table déjà existante, contrairement à l'hypothèse écrite dans l'entrée
+#166 ci-dessous (jamais vérifiée empiriquement sur ce cas précis — seul `add_columns()` isolé
+l'avait été). Dès que `_table_schema()` a gagné `written_at`/`written_by` (#166), CHAQUE appel de
+`get_table()` en prod levait `Schema Error: Provided schema does not match existing table schema`
+(la vraie table sur disque, 85 lignes, avait encore l'ancien schéma à 5 colonnes) — avalée par le
+`except Exception` large, donc `is_available()` retournait `False` en permanence, sans erreur
+visible au-delà d'un simple warning log. Conséquence réelle : LanceDB entièrement mort (lecture ET
+écriture) depuis le déploiement du 14/08 vers 13h13 — y compris le cache `conviction_research` que
+le fix Docker du même jour venait tout juste de réparer. Vérifié en conditions réelles serveur
+(`bootstrap.configure()` rejoué, jamais un `docker exec` isolé) : `vector_store_status()` bloqué
+sur `available=False` sur chaque process frais avant le fix.
+Solution : `open_table()` ne compare jamais de schéma — tenté en premier pour une table déjà
+existante, `create_table()` seulement en repli si elle n'existe vraiment pas encore. 1 nouveau test
+de régression reproduisant exactement le scénario réel (table pré-existante à l'ancien schéma,
+`get_table()` appelé avec le nouveau schéma à 7 colonnes) — `test_get_table_migrates_pre_existing_table_with_old_schema`.
+Suite complète verte : 10207 passed. Déployé et confirmé en conditions réelles serveur le jour même
+(commit `c352ba26`) : `available=True`, schéma migré (7 colonnes), `collection_count=85` — aucune
+perte de données, la table était intacte sur disque tout du long, seul l'accès était cassé.
+`packages/aria-core/src/aria_core/memory/vector/lancedb_client.py`,
+`packages/aria-core/tests/test_lancedb_store.py`.
+
+------------------------------------------------------------
+
+[DEPLOYE] Sujet : retrait de `verify_and_remember_wallet` (#168) — code mort, redondant avec GoPlus AML
 Date : 2026.08.14 / Probleme : `skills/cybercentry_insight.py` (premier vrai appelant historique de
 LanceDB, #199, 17/07) n'était en fait appelé par AUCUN code de production — seuls ses propres
 tests l'invoquaient. Question opérateur explicite avant tout retrait : Cybercentry apporte-t-il
