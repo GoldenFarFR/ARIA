@@ -142,15 +142,17 @@ plutot que d'inventer une critique pour remplir le format.
 PROMPT_EOF
 }
 
-# $1 = contenu du diff, $2 = index memoire partagee (noms de fichiers), $3 = cle API Anthropic
+# $1 = contenu du diff, $2 = index memoire partagee (noms de fichiers), $3 = cle API Anthropic,
+# $4 = system prompt optionnel (14/08, review de backlog non-code) -- vide/omis retombe sur
+# devils_advocate_system_prompt (comportement historique inchange pour les 2 appelants existants).
 # Ecrit la reponse JSON brute de l'API Anthropic (Messages API) sur stdout, le
 # statut HTTP sur stderr (prefixe "HTTP_STATUS:") -- laisse l'appelant decider
 # comment reagir a un echec.
 devils_advocate_call() {
-  local diff_content="$1" inbox_index="$2" api_key="$3"
+  local diff_content="$1" inbox_index="$2" api_key="$3" system_prompt_override="${4:-}"
   local user_content system_prompt payload resp_tmp http_status
 
-  system_prompt=$(devils_advocate_system_prompt)
+  system_prompt="${system_prompt_override:-$(devils_advocate_system_prompt)}"
   user_content="[MEMOIRE PARTAGEE -- fiches deja deposees]
 ${inbox_index}
 
@@ -167,7 +169,7 @@ ${diff_content}"
 
   resp_tmp=$(mktemp /tmp/devils-advocate-response.XXXXXX.json)
   http_status=$(curl -s -o "$resp_tmp" -w "%{http_code}" \
-    --max-time 120 \
+    --max-time 300 \
     -X POST https://api.anthropic.com/v1/messages \
     -H "x-api-key: $api_key" \
     -H "anthropic-version: 2023-06-01" \
