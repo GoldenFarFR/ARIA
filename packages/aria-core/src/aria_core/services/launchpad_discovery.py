@@ -115,8 +115,6 @@ _ADAPTERS: dict[str, LaunchpadAdapter] = {
     "flaunch": LaunchpadAdapter("flaunch", "Flaunch", "direct", _discover_flaunch_direct),
     "zora": LaunchpadAdapter("zora", "Zora", "direct", None),
     "bankr": LaunchpadAdapter("bankr", "Bankr", "unknown", None),
-    "ape_store": LaunchpadAdapter("ape_store", "Ape.store", "unknown", None),
-    "mint_club": LaunchpadAdapter("mint_club", "Mint.club", "unknown", None),
 }
 
 

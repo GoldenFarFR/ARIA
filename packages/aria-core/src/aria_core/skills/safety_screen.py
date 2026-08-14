@@ -56,7 +56,7 @@ def _wash_trading_confirmed(ctx: TokenScanContext) -> bool:
 
 # Trainable-pool thresholds (strict by default: we want REALLY tradeable,
 # not just "not a scam"). Adjustable per call.
-DEFAULT_MIN_LIQUIDITY_USD = 30_000.0
+DEFAULT_MIN_LIQUIDITY_USD = 20_000.0
 DEFAULT_MIN_SCORE = 70
 # Beyond this, a single wallet (outside LP/burn) can collapse the token by selling.
 DEFAULT_MAX_TOP_HOLDER_PCT = 30.0

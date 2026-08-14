@@ -14,14 +14,12 @@ def test_registry_has_expected_categories():
     assert by_key["clanker"].category == "direct"
     assert by_key["flaunch"].category == "direct"
     assert by_key["bankr"].category == "unknown"
-    assert by_key["ape_store"].category == "unknown"
-    assert by_key["mint_club"].category == "unknown"
 
 
 def test_seams_have_no_discoverer():
     # 24/07 -- flaunch removed from this list: it now has a real on-chain
     # discoverer (services/flaunch.py), see test_flaunch_has_discoverer below.
-    for key in ("zora", "bankr", "ape_store", "mint_club"):
+    for key in ("zora", "bankr"):
         adapter = next(a for a in ld.list_adapters() if a.key == key)
         assert adapter.discover is None
 

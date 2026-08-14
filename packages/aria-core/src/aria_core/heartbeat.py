@@ -1403,7 +1403,7 @@ class AriaHeartbeat:
                     await self._notify_telegram(msg)
 
         elif task_id == "vc_crawl":
-            from aria_core.base_crawler import crawl_and_absorb, retry_stale_pending
+            from aria_core.base_crawler import crawl_and_absorb, discover_from_watchlist, retry_stale_pending
             from aria_core.token_absorber import absorb as _absorb
 
             # Light wrapper: tags each 'top_pools' absorption for sourcing
@@ -1413,7 +1413,15 @@ class AriaHeartbeat:
             async def _absorb_top_pools(contract, **kw):
                 return await _absorb(contract, source="top_pools", **kw)
 
+            # 14/08, operator decision: source from goplus_watchlist (shared
+            # with every other pocket, populated by momentum's broad
+            # freshness-favoring multi-source discovery) instead of
+            # discover_top_pools's own volume-sorted GeckoTerminal call --
+            # see discover_from_watchlist's own docstring for why an early
+            # asymmetric micro-cap never surfaces in a volume-sorted ranking
+            # no matter how low the liquidity floor is set.
             counts = await crawl_and_absorb(
+                discover=discover_from_watchlist,
                 absorber=_absorb_top_pools, limit=100, max_age_days=182
             )
             append_memory("vc", f"[crawl] {counts} — {counts.get('kept', 0)} gardés")

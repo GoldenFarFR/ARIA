@@ -177,23 +177,25 @@ async def discover_top_pools(
     fetch=None,
     birdeye_discover=None,
     limit: int = 100,
-    min_liquidity_usd: float = 45_000.0,
+    min_liquidity_usd: float = 20_000.0,
     min_age_days: float | None = None,
 ) -> list[str]:
     """Tokens from TOP Base pools (established, liquid), filtered by a liquidity floor.
 
-    The real hunting ground for the 85% VC pocket: tokens with real depth, not
-    illiquid fresh launches. Only returns what can PASS the filter.
+    14/08, operator decision: no longer ``vc_crawl``'s discovery path
+    (superseded by ``discover_from_watchlist``, sourcing from the shared
+    ``goplus_watchlist`` instead of this volume-sorted GeckoTerminal query --
+    the volume sort was the real cause of a real gap, a token meeting every
+    other criterion never surfacing). Kept as a standalone utility
+    (``simulate_lifecycle.py`` still calls it with an explicit liquidity value).
 
-    ``min_liquidity_usd`` (default $45,000, raised from $30,000 on 07/12 —
-    following audit #77 diversification): this floor checks ``reserve_in_usd``
-    via GeckoTerminal, while the real gate in ``safety_screen`` checks
-    liquidity via DexScreener (``scan_base_token``) — two providers that are
-    NOT guaranteed to agree on the same pool. Empirical safety margin (07/12
-    sample: candidates at $30k+ in `reserve_in_usd` scanned at $0 on the
-    DexScreener side), not a new safety criterion — the real threshold ($30k)
-    in ``safety_screen.py`` stays unchanged, this margin just reduces the
-    noise sent to ``absorb()``.
+    ``min_liquidity_usd`` (default $20,000, lowered from $45,000 on 14/08,
+    operator decision -- previously raised as an empirical safety margin
+    above ``safety_screen.py``'s own floor, since GeckoTerminal's
+    ``reserve_in_usd`` and DexScreener's liquidity read aren't guaranteed to
+    agree on the same pool. That margin is deliberately retired here: both
+    floors now match at $20,000, ``safety_screen.py`` remains the real
+    downstream gate regardless of what this function returns.
 
     ``min_age_days`` (optional, default ``None`` = no filter, unchanged
     behavior): excludes pools younger than this threshold. An unknown age
@@ -254,6 +256,50 @@ async def discover_top_pools(
                 break
 
     return list(seen.keys())
+
+
+async def discover_from_watchlist(*, list_all=None, limit: int = 100) -> list[str]:
+    """Base-chain candidates from ``goplus_watchlist`` (14/08, operator decision)
+    -- replaces ``discover_top_pools`` as the VC pocket's sourcing.
+
+    ``discover_top_pools`` trades against GeckoTerminal's ``top_pools`` endpoint
+    sorted by 24h volume -- a genuinely early, low-volume asymmetric bet (a
+    ClawBank-like micro-cap) structurally never surfaces in that ranking,
+    however low the liquidity floor is set (verified live: no pagination, a
+    single request, established/high-volume tokens permanently dominate the
+    top of a volume-sorted list). ``goplus_watchlist`` is instead populated
+    by ``discover_momentum_candidates`` (multi-source, favors FRESHNESS --
+    new pools/boosts/recent profiles -- with only a light liquidity
+    pre-filter, no volume sort at all) -- the same shared pool every other
+    pocket already reads from (candle-history collector, signal cascade).
+    Reusing it here means a small early project surfaced by momentum's
+    sourcing becomes visible to the VC judgment pass too, without VC needing
+    its own biased discovery.
+
+    Sorted by ``priority_score`` (liquidity/volume-derived, computed at
+    watchlist-entry time) -- highest first, same ordering ``list_all``
+    already returns, so more-established Base candidates are still tried
+    first when the pool is larger than ``limit``. ``safety_screen``'s own
+    liquidity floor (independent of this function) still applies downstream
+    via ``token_absorber.absorb`` -- this is sourcing only, no new safety
+    criterion here."""
+    from aria_core.services import goplus_watchlist
+
+    fn = list_all or goplus_watchlist.list_all
+    rows = await fn()
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.get("chain") != "base":
+            continue
+        addr = str(row.get("contract", "")).lower()
+        if not addr or addr in seen:
+            continue
+        seen.add(addr)
+        out.append(addr)
+        if len(out) >= limit:
+            break
+    return out
 
 
 async def discover_virtuals_tokens(*, client=None, limit: int = 50) -> list[str]:

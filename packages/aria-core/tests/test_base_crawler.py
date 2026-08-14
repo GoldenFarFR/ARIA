@@ -216,15 +216,14 @@ async def test_top_pools_requests_sort_by_volume():
 
 
 @pytest.mark.asyncio
-async def test_top_pools_default_liquidity_floor_is_45k():
-    """Suite audit #77 diversification (12/07) : relevé de 30k à 45k -- marge de
-    sécurité contre l'écart GeckoTerminal (reserve_in_usd, checké ici) vs DexScreener
-    (liquidité réellement testée par safety_screen), pas un nouveau critère de
-    sécurité en soi."""
+async def test_top_pools_default_liquidity_floor_is_20k():
+    """14/08, operator decision: lowered from 45k to 20k, retiring the empirical
+    safety margin above safety_screen.py's own floor (both now match at 20k) --
+    see base_crawler.discover_top_pools's own docstring."""
     above, below = "0x" + "e" * 40, "0x" + "f" * 40
 
     async def fetch(path):
-        return _pool_payload([(above, 45_000), (below, 44_999)])
+        return _pool_payload([(above, 20_000), (below, 19_999)])
 
     assert await bc.discover_top_pools(fetch=fetch) == [above]
 
@@ -296,7 +295,7 @@ async def test_top_pools_falls_back_to_birdeye_when_geckoterminal_empty():
         return None  # panne réseau/429, comme _fetch_gt le retourne réellement
 
     async def birdeye(*, min_liquidity_usd):
-        assert min_liquidity_usd == 45_000.0  # même floor que GeckoTerminal, transmis tel quel
+        assert min_liquidity_usd == 20_000.0  # même floor que GeckoTerminal, transmis tel quel
         return [rescued]
 
     got = await bc.discover_top_pools(fetch=fetch, birdeye_discover=birdeye)
@@ -738,3 +737,41 @@ async def test_retry_stale_pending_abandons_skip_prefiltered_past_threshold():
     counts = await bc.retry_stale_pending(lister=lister, absorber=absorber,
                                           abandon_checker=abandon_checker)
     assert counts == {"abandoned": 1}
+
+
+@pytest.mark.asyncio
+async def test_discover_from_watchlist_filters_to_base_chain():
+    rows = [
+        {"contract": "0x" + "1" * 40, "chain": "base", "priority_score": 5.0},
+        {"contract": "0x" + "2" * 40, "chain": "ethereum", "priority_score": 9.0},
+        {"contract": "0x" + "3" * 40, "chain": "base", "priority_score": 1.0},
+    ]
+
+    async def list_all():
+        return rows
+
+    got = await bc.discover_from_watchlist(list_all=list_all)
+    assert got == ["0x" + "1" * 40, "0x" + "3" * 40]
+
+
+@pytest.mark.asyncio
+async def test_discover_from_watchlist_dedupes_and_respects_limit():
+    dup = "0x" + "1" * 40
+
+    async def list_all():
+        return [
+            {"contract": dup, "chain": "base"},
+            {"contract": dup.upper(), "chain": "base"},  # même contrat, casse différente
+            {"contract": "0x" + "2" * 40, "chain": "base"},
+        ]
+
+    got = await bc.discover_from_watchlist(list_all=list_all, limit=1)
+    assert got == [dup]
+
+
+@pytest.mark.asyncio
+async def test_discover_from_watchlist_empty_watchlist():
+    async def list_all():
+        return []
+
+    assert await bc.discover_from_watchlist(list_all=list_all) == []

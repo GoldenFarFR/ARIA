@@ -101,46 +101,20 @@ launchpads:
     norms:
       liquidity_note: "liquidité très élevée par défaut sur chaque lancement (observé opérateur)"
 
-  # Ape.store : diligence FAITE le 24/07 (suite à une observation opérateur directe
-  # -- "en general la page ape propose des token bizarre"). Vraie recherche externe
-  # (site officiel, ScamAdviser, presse) : mécanisme "Fair Launch" (n'importe qui
-  # lance un token pour le prix du gas, listage automatique Uniswap au seuil de
-  # 69 000$ de market cap -- SOUS le plancher de liquidité momentum d'ARIA, 50 000$,
-  # donc un token fraîchement gradué reste en zone à risque de manipulation par
-  # construction). ScamAdviser : "probablement pas un scam" mais trust score "fair"
-  # (pas bon). Signal le plus parlant, confirmant l'observation opérateur : AUCUNE
-  # identité d'équipe trouvée nulle part (site officiel, presse, réseaux) --
-  # contrairement aux 4 autres launchpads déjà couverts ici, qui ont tous une équipe
-  # identifiée (Flaunch -> Flayer Labs/Joel Strahl, Zora -> Jacob Horne). Piège de
-  # nommage réel trouvé en cherchant : "Ape Terminal" (Zurich, IDO launchpad avec
-  # outils de sniping/frontrunning intégrés) est une plateforme TOTALEMENT
-  # différente, jamais à confondre avec Ape.store. Verdict : pas de scandale
-  # documenté publiquement sur Ape.store précisément, mais signaux de légitimité
-  # insuffisants (doctrine "profondeur proportionnelle à l'enjeu") -- reste NON
-  # activé, aucun client construit, adresse factory jamais recherchée (pas la peine
-  # tant que la légitimité de base n'est pas mieux établie).
-  ape_store:
-    label: "Ape.store"
-    confidence: unverified
-    addresses: []
+  # Doppler : découvert 14/08 -- infrastructure de distribution/liquidité sous-jacente
+  # (pas un launchpad "front-end" au sens classique), plus de 90% des nouveaux pools
+  # DEX sur Base y transitent (source : Pantera Capital funding round, The Block,
+  # confirmé 14/08). Porte les tokens de Zora, Base App, Paragraph, FxHash, Bankr --
+  # scanner ses events PoolManager couvrirait potentiellement une bonne partie de
+  # ces launchpads d'un coup. Client existant (services/doppler.py) mais uniquement
+  # en mode lookup ciblé (retrouve le pool d'UN token déjà connu, event
+  # ``Initialize``) -- jamais encore utilisé en scan de découverte (lister les
+  # nouveaux tokens des pools récemment créés). Chantier ouvert, pas encore construit.
+  doppler:
+    label: "Doppler"
+    confidence: high
+    addresses:
+      - "0x498581ff718922c3f8e6a244956af099b2652b2b"   # Uniswap v4 PoolManager (Base)
     norms:
       bonding_curve: false
-      liquidity_note: "Fair Launch prix du gas, listage Uniswap automatique a 69 000$ MC (sous le plancher momentum 50 000$)"
-
-  # Mint.club : cité dans la recherche launchpads (10/07), diligence PAS encore
-  # faite (pas d'API de découverte vérifiée en direct, pas d'adresse confirmée
-  # BaseScan). Seam documenté volontairement vide — même doctrine "profondeur
-  # proportionnelle à l'enjeu" qu'Ape.store ci-dessus. À enrichir seulement après
-  # vraie diligence (docs officielle, modèle de garde, tarification, signaux de
-  # légitimité).
-  mint_club:
-    label: "Mint.club"
-    confidence: unverified
-    addresses: []
-    norms: {}
-
-  mint_club:
-    label: "Mint.club"
-    confidence: unverified
-    addresses: []
-    norms: {}
+      liquidity_note: "infrastructure de distribution -- porte Zora/Base App/Paragraph/FxHash/Bankr"
