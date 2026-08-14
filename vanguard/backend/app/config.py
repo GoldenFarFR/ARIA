@@ -16,8 +16,24 @@ def _parse_id_list(value: str) -> list[int]:
     return [int(x.strip()) for x in value.split(",") if x.strip().lstrip("-").isdigit()]
 
 
+_SENSITIVE_FIELD_NAME_MARKERS = ("key", "secret", "token", "password")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    def __repr_args__(self):
+        # Real incident (14/08): a test that made Settings() raise an exception
+        # caused pytest to print this repr in full, leaking every real secret from
+        # the prod .env into the session's visible output. Redacts by FIELD NAME
+        # (never by sniffing the value), so it also catches secrets that happen to
+        # be empty -- never lets a raised exception or a debug print leak a real
+        # key/secret/token/password value again, from any call site.
+        for name, value in super().__repr_args__():
+            if name and any(marker in name.lower() for marker in _SENSITIVE_FIELD_NAME_MARKERS):
+                yield name, "***REDACTED***"
+            else:
+                yield name, value
 
     app_name: str = "Aria Vanguard ZHC"
     debug: bool = True
@@ -98,6 +114,7 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 24
     admin_api_secret: str = ""
     deploy_activation_secret: str = ""  # POST /internal/activate-heartbeat (blue-green standby, 14/08)
+    internal_diagnostic_secret: str = ""  # POST /internal/diagnose/* (14/08) -- deliberately separate from deploy_activation_secret
     site_base_url: str = ""  # API publique (ex. https://api.ariavanguardzhc.com) — webhooks, Telegram
     holding_domain: str = "ariavanguardzhc.com"  # Site holding statique (Vanguard)
 
