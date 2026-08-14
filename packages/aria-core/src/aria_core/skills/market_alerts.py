@@ -13,7 +13,7 @@ requires dedicated sanitization (mandate #192) that `market_sentiment.py`
 
 Gate `ARIA_MARKET_ALERTS_ENABLED` (OFF by default). Cost: $0.001/call (Otto
 AI), covered by the existing `x402_budget.py` cap ($5/week, shared with
-`conviction_research.py`/`cybercentry_insight.py`) -- same hourly cycle as
+`conviction_research.py`) -- same hourly cycle as
 `market_sentiment_cycle` (60min) = ~$0.024/day, wide margin."""
 from __future__ import annotations
 

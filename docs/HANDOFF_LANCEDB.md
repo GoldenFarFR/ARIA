@@ -99,6 +99,35 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[CODE] Sujet : retrait de `verify_and_remember_wallet` (#168) — code mort, redondant avec GoPlus AML
+Date : 2026.08.14 / Probleme : `skills/cybercentry_insight.py` (premier vrai appelant historique de
+LanceDB, #199, 17/07) n'était en fait appelé par AUCUN code de production — seuls ses propres
+tests l'invoquaient. Question opérateur explicite avant tout retrait : Cybercentry apporte-t-il
+une vraie valeur, vu que GoPlus est déjà utilisé ? Vérifié dans le code réel (pas supposé) :
+`services/goplus.py::get_address_security` (Malicious Address API/AML, GRATUIT) couvre déjà le
+même terrain (sanctions/comportement frauduleux d'une adresse) et est déjà câblé dans
+`smart_money.py:2373` (`financed_by_malicious`). Test empirique demandé par l'opérateur avant
+tranche finale : appel x402 réel sur Cybercentry wallet-verification (2 adresses, dont une
+sanctionnée OFAC connue publiquement) — les 2 tentatives ont échoué ("toujours 402 après paiement
+(règlement refusé)"). Vérifié qu'aucun argent n'a réellement été perdu : historique on-chain réel
+du wallet (Blockscout, indépendant des logs internes) confirmé sans transfert USDC sortant
+correspondant à l'heure du test — le protocole x402 a bien annulé le paiement suite au refus de
+règlement. Prix écarté comme cause (vérifié dans la réponse 402 brute du serveur :
+`maxAmountRequired=20000` = 0,02$, identique à ce qu'ARIA paie). Légitimité du fournisseur
+elle-même vérifiée avant tranche (portail officiel `centry.cybercentry.co.uk`, sur demande
+opérateur explicite) : service réel avec traction on-chain vérifiable (351 vérifications livrées,
+55 wallets payants distincts, 72,56$ USDC réglés au total), certifications Cyber Essentials +
+IASME Cyber Assurance Level One, affiliation OWASP — pas une arnaque, juste redondant et
+actuellement peu fiable (son autre endpoint token-verification était déjà cassé depuis juillet).
+Solution : `skills/cybercentry_insight.py` + `services/cybercentry.py` + leurs 2 fichiers de test
+retirés (code mort, jamais appelé en prod, zéro changement de comportement). Référence orpheline
+nettoyée dans `services/api_registry.py` (entrée du registre `/api` qui aurait affiché un
+provider fantôme) et `skills/market_alerts.py` (commentaire). Suite complète verte : 10206
+passed. `packages/aria-core/src/aria_core/services/api_registry.py`,
+`skills/market_alerts.py`.
+
+------------------------------------------------------------
+
 [DEPLOYE] Sujet : watchdog de maintenance hebdomadaire (#167) — purge TTL + compaction LanceDB
 Date : 2026.08.14 / Probleme : `purge_expired_entries()` (#166 ci-dessous) était prêt mais
 jamais appelé automatiquement ; et LanceDB open-source (la version utilisée ici) n'a **aucune**
