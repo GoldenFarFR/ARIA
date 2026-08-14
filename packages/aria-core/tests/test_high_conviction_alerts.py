@@ -55,6 +55,26 @@ def test_format_alert_points_to_vc_not_an_order():
     assert "pas un ordre d'achat" in text
 
 
+def test_format_alert_contract_is_a_clickable_dexscreener_link():
+    """14/08, operator request: the contract must be clickable, not raw text
+    to copy/paste by hand."""
+    text = hca.format_alert(SAFE_HIGH)
+    assert f'<a href="https://dexscreener.com/base/{A}">{A}</a>' in text
+
+
+def test_format_alert_escapes_html_special_characters_in_external_fields():
+    """A malicious/unusual symbol must never break the HTML markup or let
+    a third party inject a fake link -- same doctrine as
+    agent_wallet_monitor.format_movement_alert."""
+    hostile = RankedCandidate(
+        contract=A, symbol='<script>alert(1)</script>', rank_score=88.5,
+        security_score=90, liquidity_usd=250_000.0, top_holder_pct=6.0, verdict="SAFE",
+    )
+    text = hca.format_alert(hostile)
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+
+
 @pytest.mark.asyncio
 async def test_cycle_skipped_when_disabled():
     result = await hca.run_high_conviction_alert_cycle()

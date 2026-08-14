@@ -1975,7 +1975,10 @@ class AriaHeartbeat:
         elif task_id == "high_conviction_alert_cycle":
             from aria_core.skills.high_conviction_alerts import run_high_conviction_alert_cycle
 
-            result = await run_high_conviction_alert_cycle(notifier=self._notify_telegram)
+            # 14/08 -- HTML notifier (format_alert now builds a clickable
+            # DexScreener link) -- was plain-text before, same pattern
+            # switch as agent_wallet_monitor_cycle's own basescan link.
+            result = await run_high_conviction_alert_cycle(notifier=self._notify_telegram_html)
             if result.get("outcome") == "ok":
                 append_memory(
                     "high_conviction_alert",

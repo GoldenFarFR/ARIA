@@ -71,14 +71,30 @@ def _is_high_conviction(candidate) -> bool:
 
 
 def format_alert(candidate) -> str:
-    label = candidate.symbol or candidate.contract[:10]
+    """HTML format (Telegram ``parse_mode="HTML"``, cf.
+    ``heartbeat._notify_telegram_html``) -- 14/08, operator request: the
+    contract must be a clickable DexScreener link, not raw text the operator
+    has to copy/paste by hand. ANY text field coming from external data
+    (symbol, verdict) is escaped via ``html.escape`` before insertion -- a
+    token symbol controlled by a malicious third party could otherwise
+    inject HTML markup into the message (same doctrine as
+    ``agent_wallet_monitor.format_movement_alert``)."""
+    import html
+
+    from aria_core.services.dexscreener import token_url
+
+    label = html.escape(candidate.symbol or candidate.contract[:10])
     holder = f"{candidate.top_holder_pct:.1f}%" if candidate.top_holder_pct is not None else "indisponible"
+    verdict = html.escape(candidate.verdict)
+    contract_link = (
+        f'<a href="{html.escape(token_url(candidate.contract))}">{html.escape(candidate.contract)}</a>'
+    )
     return (
         "Alerte haute conviction — pool screené\n\n"
-        f"{label} · score {candidate.rank_score:.0f}/100 · {candidate.verdict}\n"
+        f"{label} · score {candidate.rank_score:.0f}/100 · {verdict}\n"
         f"Liquidité : {candidate.liquidity_usd:,.0f} $ · Détention top holder : {holder}\n"
-        f"Contrat : {candidate.contract}\n\n"
-        "Signal de tri automatique, pas un ordre d'achat — envoie /vc <contrat> pour "
+        f"Contrat : {contract_link}\n\n"
+        "Signal de tri automatique, pas un ordre d'achat — envoie /vc &lt;contrat&gt; pour "
         "l'analyse complète avant toute décision."
     )
 
