@@ -16,7 +16,9 @@
 5. **Clé API `ANTHROPIC_API_KEY`** : toujours lue PAR LE SCRIPT LUI-MÊME depuis `vanguard/backend/.env` (`grep '^ANTHROPIC_API_KEY=' "$ENV_FILE"`), JAMAIS par une commande Bash de la session Claude Code elle-même — règle absolue "jamais toucher/afficher un .env via Bash", même en apparence sûr (cf. `docs/HANDOFF_SECURITE.md`).
 6. **Condensation Haiku 4.5** (`devils_advocate_condense`) existe pour un diff/contenu dépassant `DEVILS_ADVOCATE_CONDENSE_THRESHOLD_CHARS` (60000 car.) — mais si l'opérateur demande explicitement le contenu INTÉGRAL sans pré-résumé (ex. 14/08, review de backlog où chaque nuance compte), ne PAS appeler cette étape, envoyer le texte brut tel quel.
 7. **Suivi de coût** : toujours appeler `devils_advocate_cost()`/`devils_advocate_log_cost()` sur la réponse brute — jamais un appel Fable 5 non tracé.
-8. **Tester en conditions réelles avant de considérer un nouveau script "fini"** (process norm du projet, né de l'incident Blockscout) — un `bash -n` de syntaxe ne suffit jamais, il faut un vrai appel API réussi (HTTP 200, coût réel affiché) avant de committer.
+8. **Extraction du texte final : filtrer par `type == "text"`, JAMAIS par index `content[0]`.** Le raisonnement interne ("thinking") est un bloc SÉPARÉ dans le tableau `content[]`, souvent en première position — `.content[0].text` retourne silencieusement `null` (pas une erreur, un piège classique). Pattern correct, déjà établi et à toujours réutiliser : `jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")'` (voir `devils-advocate-review.sh`/`devils-advocate-precommit.sh`/`devils-advocate-lib.sh`).
+9. **Sauvegarder la réponse brute AVANT tout parsing final.** Un appel Fable 5 coûte réel — si le parsing échoue en aval (cf. point 8), il ne faut jamais devoir repayer un appel identique juste pour relire un texte déjà reçu. Écrire `$RAW_RESPONSE` dans un fichier temporaire avant d'extraire le texte, ne le supprimer qu'après confirmation d'un résultat exploitable.
+10. **Tester en conditions réelles avant de considérer un nouveau script "fini"** (process norm du projet, né de l'incident Blockscout) — un `bash -n` de syntaxe ne suffit jamais, il faut un vrai appel API réussi ET un texte final non vide avant de committer.
 
 ## Historique détaillé (repris/condensé depuis `docs/HANDOFF_AUTOMATISATION.md`, où le détail complet reste consultable)
 
@@ -35,6 +37,12 @@ Solution : `max_tokens=96000` (laisse ~64000 tokens à la réponse visible), mê
 [CODE] Sujet : timeout curl 120s trop court pour un appel personnalisé volumineux + effort=high
 Date : 2026.08.14 / Probleme : nouveau script `devils-advocate-backlog-review.sh` (review d'une liste de ~70 idées de backlog, ~14000 caractères, effort=high demandé explicitement par l'opérateur pour un vrai approfondissement) — premier appel a échoué en `HTTP 000` après le timeout de 120s hérité de la review de diff standard, qui n'avait jamais été mis à l'épreuve avec un contenu aussi volumineux à effort élevé.
 Solution : timeout porté de 120s à 300s dans `devils_advocate_call()` (constante partagée, bénéficie aussi aux 2 appelants existants sans changement de comportement en cas normal — juste plus de marge). `scripts/devils-advocate-lib.sh`.
+
+------------------------------------------------------------
+
+[CODE] Sujet : `.content[0].text` retourne `null` en silence — mauvais pattern d'extraction copié à la main
+Date : 2026.08.14 / Probleme : même script `devils-advocate-backlog-review.sh`, second essai (après le fix du timeout ci-dessus) — appel API réussi (HTTP 200, coût réel facturé $0.888230), mais le fichier de sortie ne contenait que `null`. Cause : le script utilisait `jq -r '.content[0].text'` au lieu du pattern déjà établi dans `devils-advocate-review.sh`/`devils-advocate-precommit.sh`/`devils-advocate-lib.sh` (filtre par `type == "text"`, jamais par index) — le bloc de raisonnement ("thinking") occupe `content[0]` quand il est actif, `.text` y est absent. La réponse brute n'avait pas été sauvegardée avant ce parsing raté, donc le texte reçu (payé) était irrécupérable — deuxième appel nécessaire juste pour relire le même résultat.
+Solution : `jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")'` (pattern déjà correct ailleurs, jamais réutilisé ici avant ce fix). Ajout structurel : la réponse brute est désormais TOUJOURS écrite dans un fichier temporaire avant tout parsing, supprimé seulement après confirmation d'un texte exploitable — un futur bug de parsing ne fera plus jamais perdre un appel déjà payé. `scripts/devils-advocate-backlog-review.sh`.
 
 ------------------------------------------------------------
 

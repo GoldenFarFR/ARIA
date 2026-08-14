@@ -108,6 +108,17 @@ if [ "$HTTP_STATUS" != "200" ]; then
   exit 1
 fi
 
+# 14/08 -- sauvegarde la reponse brute AVANT tout parsing, pour ne jamais reperdre un
+# appel deja paye a cause d'un bug de parsing en aval (deja vecu : premier essai de ce
+# script utilisait `.content[0].text`, mais content[0] est le bloc "thinking" quand le
+# raisonnement est actif -- .text y est absent, jq -r renvoie silencieusement "null".
+# Le vrai texte est un bloc separe de type "text" dans le tableau, filtre par TYPE
+# jamais par INDEX -- meme pattern deja etabli dans devils-advocate-review.sh/
+# devils-advocate-precommit.sh/devils-advocate-lib.sh, jamais reutilise ici avant ce fix).
+RAW_RESPONSE_FILE=$(mktemp /tmp/devils-advocate-backlog-raw.XXXXXX.json)
+echo "$RAW_RESPONSE" > "$RAW_RESPONSE_FILE"
+echo "==> Reponse brute sauvegardee : $RAW_RESPONSE_FILE (garde-la jusqu'a confirmation d'un texte exploitable)" >&2
+
 COST_LINE=$(devils_advocate_cost "$RAW_RESPONSE")
 IN_TOK=$(echo "$COST_LINE" | awk '{print $1}')
 OUT_TOK=$(echo "$COST_LINE" | awk '{print $2}')
@@ -115,4 +126,10 @@ COST_USD=$(echo "$COST_LINE" | awk '{print $3}')
 devils_advocate_log_cost "backlog-review" "$IN_TOK" "$OUT_TOK" "$COST_USD" 2>/dev/null || true
 
 echo "==> Cout reel : \$${COST_USD} (${IN_TOK} tok input / ${OUT_TOK} tok output)" >&2
-echo "$RAW_RESPONSE" | jq -r '.content[0].text'
+FINAL_TEXT=$(echo "$RAW_RESPONSE" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")')
+if [ -z "$FINAL_TEXT" ] || [ "$FINAL_TEXT" = "null" ]; then
+  echo "ECHEC PARSING -- reponse brute preservee dans $RAW_RESPONSE_FILE, inspecte-la avant de relancer un appel." >&2
+  exit 1
+fi
+echo "$FINAL_TEXT"
+rm -f "$RAW_RESPONSE_FILE"
