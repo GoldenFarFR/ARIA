@@ -6,16 +6,16 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core.services import resource_budget
 from aria_core.services import tavily_budget as budget
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    # 27/07: DB_PATH stopped being a module-level constant (real bug found --
-    # it froze at import time, before per-test isolation ever ran, see
-    # tavily_budget.py's own comment) -- patch the imported aria_db_path name
-    # instead, resolved dynamically on every call now.
-    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "tavily_budget_test.db")
+    # 13/08 (#302): tavily_budget.py now delegates to resource_budget.py, the
+    # unified ledger -- the DB path is resolved there, not in this module
+    # anymore (which no longer imports aria_db_path at all).
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: tmp_path / "tavily_budget_test.db")
     yield
 
 
@@ -41,11 +41,11 @@ async def test_db_path_resolved_dynamically_not_cached_at_import(tmp_path, monke
     first_path = tmp_path / "first.db"
     second_path = tmp_path / "second.db"
 
-    monkeypatch.setattr(budget, "aria_db_path", lambda: first_path)
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: first_path)
     await budget.record_spend(caller="test", query="first db", credits=500)
     assert await budget.spent_this_month() == 500
 
-    monkeypatch.setattr(budget, "aria_db_path", lambda: second_path)
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: second_path)
     # A fresh path must start at zero spend -- the 500 credits above must
     # never leak across, proving DB_PATH is resolved fresh on every call.
     assert await budget.spent_this_month() == 0

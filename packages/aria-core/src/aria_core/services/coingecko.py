@@ -32,17 +32,15 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 
-import aiosqlite
 import httpx
 
-from aria_core.paths import aria_db_path
+from aria_core.services import resource_budget
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.coingecko.com/api/v3"
-DB_PATH = str(aria_db_path())
 
 UNAVAILABLE = "donnée fondamentale indisponible"
 
@@ -52,39 +50,39 @@ _FAIL_STREAK_WARN_THRESHOLD = 3
 # margin, same doctrine as codex.py/mobula.py/dune.py). Flat 1 credit/call.
 _MONTHLY_CREDIT_CAP = 9_500
 
+_RESOURCE_BUDGET_PROVIDER = "coingecko"
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS coingecko_request_log (requested_at TEXT NOT NULL)")
-        await db.commit()
-
-
-def _month_start(now: datetime | None = None) -> datetime:
-    n = now or datetime.now(timezone.utc)
-    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own coingecko_request_log table + local counting
+# logic. Migration is lazy and idempotent (resource_budget.py copies any
+# pre-existing coingecko_request_log rows in on first use, never resets a
+# mid-month counter to zero). Function names/signatures below kept
+# unchanged -- this module's own callers were never touched.
 
 
 async def _credits_this_month(now: datetime | None = None) -> int:
-    await _ensure_table()
-    start = _month_start(now)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM coingecko_request_log WHERE requested_at >= ?", (start.isoformat(),)
-        )
-        row = await cursor.fetchone()
-        return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, now=now)
+
+
+async def monthly_status(now: datetime | None = None) -> dict:
+    """Human-readable diagnostic, same doctrine as
+    blockscout_credit_budget.daily_status/tavily_budget.monthly_status."""
+    spent = await _credits_this_month(now)
+    return {
+        "cap_credits": _MONTHLY_CREDIT_CAP,
+        "spent_credits": spent,
+        "remaining_credits": max(0, _MONTHLY_CREDIT_CAP - spent),
+    }
 
 
 async def _record_request(now: datetime | None = None) -> None:
-    await _ensure_table()
-    ts = (now or datetime.now(timezone.utc)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO coingecko_request_log (requested_at) VALUES (?)", (ts,))
-        await db.commit()
+    await resource_budget.record_spend(_RESOURCE_BUDGET_PROVIDER, 1, now=now)
 
 
 async def _monthly_cap_reached() -> bool:
-    return await _credits_this_month() >= _MONTHLY_CREDIT_CAP
+    # _MONTHLY_CREDIT_CAP read fresh here (not captured at import time) so
+    # tests that monkeypatch it still take effect.
+    return not await resource_budget.can_spend(_RESOURCE_BUDGET_PROVIDER, cap=_MONTHLY_CREDIT_CAP)
 
 
 @dataclass

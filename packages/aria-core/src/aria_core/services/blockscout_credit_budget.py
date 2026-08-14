@@ -46,16 +46,21 @@ the final safety net if this budget turns out to be miscalibrated).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-import aiosqlite
+from aria_core.services import resource_budget
 
-from aria_core.paths import aria_db_path
+_RESOURCE_BUDGET_PROVIDER = "blockscout"
 
-# 27/07 -- same fix as tavily_budget.py (real bug found via a live test
-# failure): a module-level ``DB_PATH`` froze at import time, before the
-# per-test isolation fixture ever ran, so every test shared one persistent
-# path across every suite run. Resolved dynamically now.
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own blockscout_credit_log table + local counting
+# logic (the 27/07 DB_PATH-at-import fix that used to live here is now
+# resource_budget.py's problem to solve once, not one of six). Migration is
+# lazy and idempotent (resource_budget.py copies any pre-existing
+# blockscout_credit_log rows in on first use, including the ``endpoint``
+# label, never resets a mid-day counter to zero). Function
+# names/signatures below kept unchanged -- ``blockscout.py`` (the actual
+# API client, a separate module) was never touched.
 
 # Sourced (22/07): blog.blockscout.com, authenticated free tier = 100,000
 # credits/day. 90% margin, same doctrine as the other clients calibrated
@@ -85,24 +90,6 @@ def cost_for_endpoint(path: str) -> int:
     return DEFAULT_COST_PER_CALL
 
 
-_COLUMNS = ["id", "endpoint", "credits", "created_at"]
-
-
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS blockscout_credit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                endpoint TEXT NOT NULL DEFAULT '',
-                credits INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.commit()
-
-
 def day_start(now: datetime | None = None) -> datetime:
     """Start of the current calendar day (00:00 UTC)."""
     ref = now if now is not None else datetime.now(timezone.utc)
@@ -115,17 +102,7 @@ async def spent_today(now: datetime | None = None) -> int:
     """Sum of credits actually consumed (SUCCESSFUL Pro calls only -- a
     refused/failed call never debits credits on the provider's side) since
     UTC midnight."""
-    await _ensure_table()
-    start = day_start(now).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        row = await (
-            await db.execute(
-                "SELECT COALESCE(SUM(credits), 0) FROM blockscout_credit_log "
-                "WHERE created_at >= ?",
-                (start,),
-            )
-        ).fetchone()
-    return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, window="daily", now=now)
 
 
 async def remaining_budget(now: datetime | None = None) -> int:
@@ -138,24 +115,16 @@ async def can_spend(credits: int = DEFAULT_COST_PER_CALL, now: datetime | None =
     remaining balance doesn't cover the requested amount, we refuse rather
     than cutting it as close to the cap as possible (leaves margin for a
     concurrent call already in flight at check time)."""
-    if credits <= 0:
-        return False
-    remaining = await remaining_budget(now)
-    return credits <= remaining
+    return await resource_budget.can_spend(
+        _RESOURCE_BUDGET_PROVIDER, credits, cap=DAILY_CAP_CREDITS, window="daily", now=now
+    )
 
 
 async def record_spend(*, endpoint: str = "", credits: int = DEFAULT_COST_PER_CALL) -> None:
     """Only record Pro calls that actually succeeded (200 OK) -- a call
     that fails (402/429/5xx/timeout) never consumed a real credit on
     Blockscout's side, recording it would fabricate data."""
-    await _ensure_table()
-    now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            "INSERT INTO blockscout_credit_log (endpoint, credits, created_at) VALUES (?, ?, ?)",
-            (endpoint, credits, now),
-        )
-        await db.commit()
+    await resource_budget.record_spend(_RESOURCE_BUDGET_PROVIDER, credits, caller=endpoint)
 
 
 async def daily_status(now: datetime | None = None) -> dict:

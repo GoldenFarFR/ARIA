@@ -11,12 +11,6 @@ from aria_core.services.mobula import get_ohlcv, mobula_configured
 CONTRACT = "0x4200000000000000000000000000000000000006"
 
 
-@pytest.fixture(autouse=True)
-def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(mobula, "DB_PATH", str(tmp_path / "mobula_test.db"))
-    yield
-
-
 class FakeResponse:
     def __init__(self, status_code: int, payload=None):
         self.status_code = status_code

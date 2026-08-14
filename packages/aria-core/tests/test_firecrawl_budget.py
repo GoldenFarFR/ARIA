@@ -6,14 +6,15 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services import firecrawl_budget as budget
+from aria_core.services import resource_budget
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    # Même doctrine que test_tavily_budget.py (27/07) : aria_db_path résolu
-    # dynamiquement à chaque appel, jamais un chemin figé à l'import -- le
-    # patch cible le nom importé dans le module, pas une constante gelée.
-    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "firecrawl_budget_test.db")
+    # 13/08 (#302) : firecrawl_budget.py délègue maintenant à
+    # resource_budget.py, le ledger unifié -- le chemin DB s'y résout
+    # désormais, plus dans ce module (qui n'importe plus aria_db_path du tout).
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: tmp_path / "firecrawl_budget_test.db")
     yield
 
 
@@ -32,11 +33,11 @@ async def test_db_path_resolved_dynamically_not_cached_at_import(tmp_path, monke
     first_path = tmp_path / "first.db"
     second_path = tmp_path / "second.db"
 
-    monkeypatch.setattr(budget, "aria_db_path", lambda: first_path)
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: first_path)
     await budget.record_spend(caller="test", query="first db", credits=500)
     assert await budget.spent_this_month() == 500
 
-    monkeypatch.setattr(budget, "aria_db_path", lambda: second_path)
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: second_path)
     assert await budget.spent_this_month() == 0
 
 

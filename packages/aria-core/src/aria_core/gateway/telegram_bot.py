@@ -932,6 +932,42 @@ async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _reply(update.message, "\n".join(lines))
 
 
+async def _handle_runway_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/runwayapi -- 13/08 (#302): consolidated runway across the 6
+    log-based providers migrated onto resource_budget.py (CoinGecko, Mobula,
+    Dune, Blockscout, Firecrawl, Tavily) -- the concrete payoff the
+    Devil's Advocate report named for this consolidation, previously
+    impossible without checking 6 separate modules. Deliberately does NOT
+    cover the 4 SingleRowStore state machines (GoPlus/CMC/Firecrawl-overspend/
+    TwitterAPI.io) -- their semantics (backoff, distant balance, alert-only)
+    don't reduce to a single "runway" number the same way, see
+    docs/HANDOFF_RESOURCE_BUDGET.md for why they stay separate. Read only, no
+    new network call -- every figure below is already-recorded local spend."""
+    if not await _admin_check_reply(update):
+        return
+    from aria_core.services import blockscout_credit_budget, coingecko, dune, firecrawl_budget, mobula, tavily_budget
+
+    lines = ["📊 Runway API (providers log-based consolidés sur resource_budget.py)"]
+    providers = [
+        ("CoinGecko", coingecko.monthly_status, "mois"),
+        ("Mobula", mobula.monthly_status, "mois"),
+        ("Dune", dune.monthly_status, "mois"),
+        ("Blockscout Pro", blockscout_credit_budget.daily_status, "jour"),
+        ("Firecrawl", firecrawl_budget.monthly_status, "mois"),
+        ("Tavily", tavily_budget.monthly_status, "mois"),
+    ]
+    for label, status_fn, window_label in providers:
+        try:
+            status = await status_fn()
+        except Exception as exc:  # noqa: BLE001 -- one broken provider never blocks the others
+            lines.append(f"  {label}: indisponible ({exc})")
+            continue
+        spent, cap = status["spent_credits"], status["cap_credits"]
+        pct = (spent / cap * 100) if cap else 0.0
+        lines.append(f"  {label}: {spent}/{cap} ({pct:.0f}%, fenêtre {window_label})")
+    await _reply(update.message, "\n".join(lines))
+
+
 async def _handle_x402_trending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/x402trending [keywords] -- 19/07: discovery of x402 services (official CDP
     registry), sorted by real 30-day call volume -- response to "isn't there a
@@ -2650,6 +2686,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
     ("resume", "▶️ Reprendre les actions sortantes"),
     ("riskresume", "▶️ Lever le coupe-circuit portefeuille (drawdown/5 pertes)"),
+    ("runwayapi", "Runway budget des 6 providers API consolidés (resource_budget.py)"),
     ("scan", "Scan rapide de risque on-chain d'un contrat"),
     ("sentiment", "Dernière lecture de sentiment marché"),
     ("start", "Message de bienvenue / lever la pause"),
@@ -4292,6 +4329,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
     app.add_handler(CommandHandler("topwallets", _handle_topwallets))
+    app.add_handler(CommandHandler("runwayapi", _handle_runway_api))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))
     # 18/07 -- systematic audit (grep _handle_* vs add_handler): these 7 commands

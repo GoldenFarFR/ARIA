@@ -30,22 +30,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import aiosqlite
+from aria_core.services import resource_budget
 
-from aria_core.paths import aria_db_path
+_RESOURCE_BUDGET_PROVIDER = "tavily"
 
-# 27/07 -- real bug found via a live test failure ("budget mensuel épuisé" on
-# a mocked-network test): a MODULE-LEVEL ``DB_PATH = str(aria_db_path())``
-# resolves ONCE at import time, before the per-test isolation fixture
-# (``tests/conftest.py``'s autouse ``_isolated_runtime``, Item #149, 13/07)
-# ever runs -- so every test in the session shared ONE frozen path
-# (``.aria-test-data/aria.db``, conftest's own pre-fixture default),
-# accumulating spend across EVERY suite run since 22/07 until it hit the
-# real 900-credit cap and started failing non-deterministically. Same root
-# cause already fixed for release_pipeline.py's manifest (Item #149) --
-# reintroduced here because this module (added 22/07, after that fix)
-# never adopted the dynamic-resolution pattern. Resolved on every call now,
-# never cached in a module global.
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own tavily_search_log table + local counting logic
+# (the 27/07 DB_PATH-at-import fix that used to live here is now
+# resource_budget.py's problem to solve once, not one of six). Migration is
+# lazy and idempotent (resource_budget.py copies any pre-existing
+# tavily_search_log rows in on first use, including caller/query, never
+# resets a mid-month counter to zero). Function names/signatures below kept
+# unchanged -- ``tavily.py`` (the actual API client, a separate module) was
+# never touched.
 
 # Sourced (22/07, real Tavily billing dashboard, "Researcher" plan): 1000
 # credits/month, use-it-or-lose-it. 90% margin, CLAUDE.md doctrine.
@@ -93,22 +90,6 @@ def estimate_crawl_worst_case(extract_depth: str, page_limit: int) -> int:
     return cost_for_crawl(extract_depth, page_limit)
 
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tavily_search_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                caller TEXT NOT NULL DEFAULT '',
-                query TEXT NOT NULL DEFAULT '',
-                credits INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.commit()
-
-
 def month_start(now: datetime | None = None) -> datetime:
     """Start of the current calendar month (UTC) -- the provider's "use it or
     lose it" window, never a rolling all-time cumulative total."""
@@ -122,16 +103,7 @@ async def spent_this_month(now: datetime | None = None) -> int:
     """Sum of credits actually consumed (SUCCESSFUL searches only
     -- a failure never debits a real credit on Tavily's side) since the start
     of the current calendar month."""
-    await _ensure_table()
-    start = month_start(now).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        row = await (
-            await db.execute(
-                "SELECT COALESCE(SUM(credits), 0) FROM tavily_search_log WHERE created_at >= ?",
-                (start,),
-            )
-        ).fetchone()
-    return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, now=now)
 
 
 async def remaining_budget(now: datetime | None = None) -> int:
@@ -143,24 +115,16 @@ async def can_spend(credits: int = COST_BASIC, now: datetime | None = None) -> b
     """Fail-closed: a non-positive amount is always refused; if the remaining
     balance doesn't cover the requested amount, we refuse rather than get as
     close as possible to the cap."""
-    if credits <= 0:
-        return False
-    remaining = await remaining_budget(now)
-    return credits <= remaining
+    return await resource_budget.can_spend(_RESOURCE_BUDGET_PROVIDER, credits, cap=MONTHLY_CAP_CREDITS, now=now)
 
 
 async def record_spend(*, caller: str = "", query: str = "", credits: int = COST_BASIC) -> None:
     """Only record ACTUALLY successful searches. ``query`` is
     truncated (ARIA's own operational data, never user PII) -- serves
     traceability, not just budget computation."""
-    await _ensure_table()
-    now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            "INSERT INTO tavily_search_log (caller, query, credits, created_at) VALUES (?, ?, ?, ?)",
-            (caller[:60], query[:300], credits, now),
-        )
-        await db.commit()
+    await resource_budget.record_spend(
+        _RESOURCE_BUDGET_PROVIDER, credits, caller=caller[:60], query=query[:300]
+    )
 
 
 async def monthly_status(now: datetime | None = None) -> dict:
@@ -178,15 +142,8 @@ async def recent_searches(limit: int = 20) -> list[dict]:
     """Traceability: the most recent searches actually executed (query
     truncated, caller, cost, timestamp) -- answers "what is ARIA
     searching for on Tavily", not just the budget consumed."""
-    await _ensure_table()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        cursor = await db.execute(
-            "SELECT caller, query, credits, created_at FROM tavily_search_log "
-            "ORDER BY id DESC LIMIT ?",
-            (max(1, min(limit, 200)),),
-        )
-        rows = await cursor.fetchall()
+    rows = await resource_budget.recent_spends(_RESOURCE_BUDGET_PROVIDER, limit)
     return [
-        {"caller": row[0], "query": row[1], "credits": row[2], "created_at": row[3]}
+        {"caller": row["caller"], "query": row["query"], "credits": row["cost"], "created_at": row["recorded_at"]}
         for row in rows
     ]

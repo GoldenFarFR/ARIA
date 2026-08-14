@@ -6,12 +6,6 @@ from aria_core.services import coingecko
 from aria_core.services.coingecko import CoinGeckoClient, UNAVAILABLE
 
 
-@pytest.fixture(autouse=True)
-def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(coingecko, "DB_PATH", str(tmp_path / "coingecko_test.db"))
-    yield
-
-
 class FakeResponse:
     def __init__(self, status_code: int, payload=None):
         self.status_code = status_code

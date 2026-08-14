@@ -48,12 +48,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 
-import aiosqlite
 import httpx
 
-from aria_core.paths import aria_db_path
+from aria_core.services import resource_budget
 from aria_core.services.geckoterminal import OHLCVResult
 from aria_core.skills.ta_levels import Candle
 
@@ -62,7 +61,6 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE = "donnée Mobula indisponible"
 
 BASE_URL = "https://api.mobula.io/api"
-DB_PATH = str(aria_db_path())
 
 # 21/07 -- calibrated at 90% of the documented 1 req/s (docs.mobula.io/pricing),
 # CLAUDE.md "Rate calibrated at 90%" doctrine: 0.9 req/s = 1.111s.
@@ -79,44 +77,50 @@ _OHLCV_CREDIT_COST = 5
 _MONTHLY_CREDIT_CAP = 9_500
 
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "CREATE TABLE IF NOT EXISTS mobula_request_log ("
-            "requested_at TEXT NOT NULL, credits INTEGER NOT NULL)"
-        )
-        await db.commit()
+_RESOURCE_BUDGET_PROVIDER = "mobula"
 
-
-def _month_start(now: datetime | None = None) -> datetime:
-    n = now or datetime.now(timezone.utc)
-    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own mobula_request_log table + local counting
+# logic. Migration is lazy and idempotent (resource_budget.py copies any
+# pre-existing mobula_request_log rows in on first use, never resets a
+# mid-month counter to zero). Function names/signatures below kept
+# unchanged -- this module's own callers were never touched.
+#
+# Behavior note: the pre-migration check was ``spent >= cap`` (ignoring the
+# size of the call about to be made) -- since a call here costs 5 credits,
+# not 1, that check could authorize a call landing up to 4 credits over cap
+# (e.g. spent=9499 < cap=9500 would pass, landing at 9504). The new
+# ``can_spend(cost=credits)`` check is stricter (``spent + cost <= cap``),
+# a deliberate tightening of a real latent gap, not a silent behavior
+# change -- the 95% safety margin already makes the practical difference
+# negligible either way.
 
 
 async def _credits_this_month(now: datetime | None = None) -> int:
-    await _ensure_table()
-    start = _month_start(now)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(credits), 0) FROM mobula_request_log WHERE requested_at >= ?",
-            (start.isoformat(),),
-        )
-        row = await cursor.fetchone()
-        return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, now=now)
+
+
+async def monthly_status(now: datetime | None = None) -> dict:
+    """Human-readable diagnostic, same doctrine as
+    blockscout_credit_budget.daily_status/tavily_budget.monthly_status."""
+    spent = await _credits_this_month(now)
+    return {
+        "cap_credits": _MONTHLY_CREDIT_CAP,
+        "spent_credits": spent,
+        "remaining_credits": max(0, _MONTHLY_CREDIT_CAP - spent),
+    }
 
 
 async def _record_request(*, credits: int = _OHLCV_CREDIT_COST, now: datetime | None = None) -> None:
-    await _ensure_table()
-    ts = (now or datetime.now(timezone.utc)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO mobula_request_log (requested_at, credits) VALUES (?, ?)", (ts, credits)
-        )
-        await db.commit()
+    await resource_budget.record_spend(_RESOURCE_BUDGET_PROVIDER, credits, now=now)
 
 
 async def _monthly_cap_reached() -> bool:
-    return await _credits_this_month() >= _MONTHLY_CREDIT_CAP
+    # _MONTHLY_CREDIT_CAP read fresh here (not captured at import time) so
+    # tests that monkeypatch it still take effect.
+    return not await resource_budget.can_spend(
+        _RESOURCE_BUDGET_PROVIDER, _OHLCV_CREDIT_COST, cap=_MONTHLY_CREDIT_CAP
+    )
 
 
 def mobula_configured() -> bool:

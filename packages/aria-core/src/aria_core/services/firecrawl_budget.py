@@ -29,9 +29,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import aiosqlite
+from aria_core.services import resource_budget
 
-from aria_core.paths import aria_db_path
+_RESOURCE_BUDGET_PROVIDER = "firecrawl"
 
 # Sourced (09/08, docs.firecrawl.dev/pricing, live WebFetch): Free plan =
 # 0$/month, 1,000 credits/month included. 90% margin, CLAUDE.md doctrine.
@@ -52,20 +52,13 @@ def estimate_crawl_worst_case(page_limit: int) -> int:
     return COST_PER_PAGE * max(0, int(page_limit))
 
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS firecrawl_crawl_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                caller TEXT NOT NULL DEFAULT '',
-                query TEXT NOT NULL DEFAULT '',
-                credits INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.commit()
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own firecrawl_crawl_log table + local counting
+# logic. Migration is lazy and idempotent (resource_budget.py copies any
+# pre-existing firecrawl_crawl_log rows in on first use, including
+# caller/query, never resets a mid-month counter to zero). Function
+# names/signatures below kept unchanged -- ``firecrawl.py`` (the actual API
+# client, a separate module) was never touched.
 
 
 def month_start(now: datetime | None = None) -> datetime:
@@ -80,16 +73,7 @@ def month_start(now: datetime | None = None) -> datetime:
 async def spent_this_month(now: datetime | None = None) -> int:
     """Sum of credits actually consumed (SUCCESSFUL crawls only) since the
     start of the current calendar month."""
-    await _ensure_table()
-    start = month_start(now).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        row = await (
-            await db.execute(
-                "SELECT COALESCE(SUM(credits), 0) FROM firecrawl_crawl_log WHERE created_at >= ?",
-                (start,),
-            )
-        ).fetchone()
-    return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, now=now)
 
 
 async def remaining_budget(now: datetime | None = None) -> int:
@@ -101,24 +85,16 @@ async def can_spend(credits: int, now: datetime | None = None) -> bool:
     """Fail-closed: a non-positive amount is always refused; if the remaining
     balance doesn't cover the requested amount, refuse rather than get as
     close as possible to the cap."""
-    if credits <= 0:
-        return False
-    remaining = await remaining_budget(now)
-    return credits <= remaining
+    return await resource_budget.can_spend(_RESOURCE_BUDGET_PROVIDER, credits, cap=MONTHLY_CAP_CREDITS, now=now)
 
 
 async def record_spend(*, caller: str = "", query: str = "", credits: int = COST_PER_PAGE) -> None:
     """Only record ACTUALLY successful crawls. ``query`` truncated (ARIA's own
     operational data, never user PII) -- serves traceability, not just budget
     computation (same double purpose as tavily_search_log)."""
-    await _ensure_table()
-    now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        await db.execute(
-            "INSERT INTO firecrawl_crawl_log (caller, query, credits, created_at) VALUES (?, ?, ?, ?)",
-            (caller[:60], query[:300], credits, now),
-        )
-        await db.commit()
+    await resource_budget.record_spend(
+        _RESOURCE_BUDGET_PROVIDER, credits, caller=caller[:60], query=query[:300]
+    )
 
 
 async def monthly_status(now: datetime | None = None) -> dict:
@@ -135,15 +111,8 @@ async def monthly_status(now: datetime | None = None) -> dict:
 async def recent_crawls(limit: int = 20) -> list[dict]:
     """Traceability: the most recent crawls actually executed (root URL
     truncated, caller, cost, timestamp)."""
-    await _ensure_table()
-    async with aiosqlite.connect(str(aria_db_path())) as db:
-        cursor = await db.execute(
-            "SELECT caller, query, credits, created_at FROM firecrawl_crawl_log "
-            "ORDER BY id DESC LIMIT ?",
-            (max(1, min(limit, 200)),),
-        )
-        rows = await cursor.fetchall()
+    rows = await resource_budget.recent_spends(_RESOURCE_BUDGET_PROVIDER, limit)
     return [
-        {"caller": row[0], "query": row[1], "credits": row[2], "created_at": row[3]}
+        {"caller": row["caller"], "query": row["query"], "credits": row["cost"], "created_at": row["recorded_at"]}
         for row in rows
     ]

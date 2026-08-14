@@ -6,14 +6,16 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services import blockscout_credit_budget as budget
+from aria_core.services import resource_budget
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    # 27/07: DB_PATH stopped being a module-level constant (real bug found --
-    # it froze at import time, before per-test isolation ever ran) -- patch
-    # the imported aria_db_path name instead, resolved dynamically now.
-    monkeypatch.setattr(budget, "aria_db_path", lambda: tmp_path / "blockscout_credit_budget_test.db")
+    # 13/08 (#302): blockscout_credit_budget.py now delegates to
+    # resource_budget.py, the unified ledger -- the DB path is resolved
+    # there, not in this module anymore (which no longer imports
+    # aria_db_path at all).
+    monkeypatch.setattr(resource_budget, "aria_db_path", lambda: tmp_path / "blockscout_credit_budget_test.db")
     yield
 
 

@@ -52,57 +52,58 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-import aiosqlite
 import httpx
 
-from aria_core.paths import aria_db_path
+from aria_core.services import resource_budget
 
 logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "Dune data unavailable"
 
 BASE_URL = "https://api.dune.com/api"
-DB_PATH = str(aria_db_path())
 
 # 12/08 -- 95% of the real documented 2,500 credits/month (5% safety margin,
 # same doctrine as codex.py's _MONTHLY_REQUEST_CAP / mobula.py's
 # _MONTHLY_CREDIT_CAP). Counts EXECUTIONS as a proxy for credits -- see the
-# HONEST RESERVATION in the module docstring.
+# HONEST RESERVATION in the module docstring. Passed explicitly to
+# resource_budget.can_spend(cap=...) on every call, never duplicated as a
+# second registry entry there (resource_budget.py deliberately owns no
+# provider->cap mapping -- see its own module docstring for why).
 _MONTHLY_EXECUTION_CAP = 2_375
 
+_RESOURCE_BUDGET_PROVIDER = "dune_execution"
 
-async def _ensure_table() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS dune_execution_log (executed_at TEXT NOT NULL)")
-        await db.commit()
-
-
-def _month_start(now: datetime | None = None) -> datetime:
-    n = now or datetime.now(timezone.utc)
-    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+# 13/08 (#302) -- delegates to resource_budget.py, the unified ledger that
+# replaced this module's own dune_execution_log table + local counting
+# logic. Migration is lazy and idempotent (resource_budget.py copies any
+# pre-existing dune_execution_log rows in on first use, never resets a
+# mid-month counter to zero). Function names/signatures below kept
+# unchanged -- this module's own callers were never touched.
 
 
 async def _executions_this_month(now: datetime | None = None) -> int:
-    await _ensure_table()
-    start = _month_start(now)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM dune_execution_log WHERE executed_at >= ?", (start.isoformat(),)
-        )
-        row = await cursor.fetchone()
-        return int(row[0]) if row else 0
+    return await resource_budget.spent_in_window(_RESOURCE_BUDGET_PROVIDER, now=now)
+
+
+async def monthly_status(now: datetime | None = None) -> dict:
+    """Human-readable diagnostic, same doctrine as
+    blockscout_credit_budget.daily_status/tavily_budget.monthly_status."""
+    spent = await _executions_this_month(now)
+    return {
+        "cap_credits": _MONTHLY_EXECUTION_CAP,
+        "spent_credits": spent,
+        "remaining_credits": max(0, _MONTHLY_EXECUTION_CAP - spent),
+    }
 
 
 async def _record_execution(now: datetime | None = None) -> None:
-    await _ensure_table()
-    ts = (now or datetime.now(timezone.utc)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO dune_execution_log (executed_at) VALUES (?)", (ts,))
-        await db.commit()
+    await resource_budget.record_spend(_RESOURCE_BUDGET_PROVIDER, 1, now=now)
 
 
 async def _monthly_cap_reached() -> bool:
-    return await _executions_this_month() >= _MONTHLY_EXECUTION_CAP
+    # _MONTHLY_EXECUTION_CAP read fresh here (not captured at import time) so
+    # tests that monkeypatch it still take effect.
+    return not await resource_budget.can_spend(_RESOURCE_BUDGET_PROVIDER, cap=_MONTHLY_EXECUTION_CAP)
 
 # Dune terminal states (prefix "QUERY_STATE_") -- COMPLETED = the only state
 # from which a usable result can be read; the others are terminal failures

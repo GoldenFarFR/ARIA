@@ -7,12 +7,6 @@ import pytest
 from aria_core.services import dune
 
 
-@pytest.fixture(autouse=True)
-def _isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(dune, "DB_PATH", str(tmp_path / "dune_test.db"))
-    yield
-
-
 class FakeResponse:
     def __init__(self, status_code: int, payload=None):
         self.status_code = status_code
