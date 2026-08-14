@@ -1481,7 +1481,7 @@ async def _check_watchlist_candidate(contract: str, chain: str, *, allow_goplus:
     return security, True
 
 
-async def run_watchlist_refill_cycle(*, discover=None) -> dict:
+async def run_watchlist_refill_cycle(*, discover=None, discover_direct=None) -> dict:
     """14/08, operator decision ("toute les poches doivent piocher dans la
     watchlist... sans appeler les api") -- pure DISCOVERY, never a buy
     decision. Separated out of the trading cycles (swing/scalping_v8, via
@@ -1491,16 +1491,44 @@ async def run_watchlist_refill_cycle(*, discover=None) -> dict:
     remaining caller of ``discover_momentum_candidates`` on the momentum
     path, and every pocket reads from the watchlist it populates instead.
 
+    Also pulls Clanker + Flaunch (``services.launchpad_discovery.
+    discover_direct_candidates``, category "direct") -- both already have
+    real on-chain discoverers (services/clanker.py, services/flaunch.py) but
+    were previously only wired into ``bonding_discovery_cycle``, which feeds
+    the VC narrative pipeline (``screened_pool``), never the momentum
+    watchlist. ``virtuals_graduated`` (the 3rd "direct" adapter) is
+    deliberately left out here -- it's already covered by that same
+    ``bonding_discovery_cycle``, no gap to close. Deduplicated against
+    ``discover_momentum_candidates``'s own output (a token can legitimately
+    surface from both).
+
     Runs ONLY the honeypot check (``_check_honeypot``, which itself calls
     ``goplus_watchlist.add_or_touch`` on a first sighting) on every candidate
-    ``discover_momentum_candidates`` surfaces -- deliberately skips the rest
-    of ``evaluate_hard_gates`` (golden pocket/RSI/RVOL/established profile),
-    which stay each pocket's own job at buy-decision time. Solana candidates
-    are skipped (never enters ``goplus_watchlist``, see ``_check_honeypot``'s
-    own chain branch) -- listed here as "skipped_chain" rather than silently
-    dropped."""
+    found -- deliberately skips the rest of ``evaluate_hard_gates`` (golden
+    pocket/RSI/RVOL/established profile), which stay each pocket's own job
+    at buy-decision time. Solana candidates are skipped (never enters
+    ``goplus_watchlist``, see ``_check_honeypot``'s own chain branch) --
+    listed here as "skipped_chain" rather than silently dropped."""
     discover = discover or discover_momentum_candidates
-    candidates = await discover()
+    candidates = list(await discover())
+    seen = {(c["contract"].lower(), c["chain"]) for c in candidates}
+
+    if discover_direct is None:
+        from aria_core.services.launchpad_discovery import discover_direct_candidates
+
+        discover_direct = discover_direct_candidates
+    try:
+        direct = await discover_direct()
+    except Exception as exc:  # noqa: BLE001 -- a failing launchpad scan never blocks the rest
+        logger.info("run_watchlist_refill_cycle: discover_direct failed (%s)", exc)
+        direct = {}
+    for launchpad_key in ("clanker", "flaunch"):
+        for addr in direct.get(launchpad_key, []):
+            key = (addr.lower(), "base")
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({"contract": addr, "chain": "base"})
 
     queued = 0
     clear = 0

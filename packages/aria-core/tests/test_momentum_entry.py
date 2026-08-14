@@ -8874,12 +8874,16 @@ def test_rsi_divergence_watch_candidate_honors_explicit_span_override():
 # ── run_watchlist_refill_cycle (pure discovery, 14/08) ──────────────────
 
 
+async def _no_direct():
+    return {}
+
+
 @pytest.mark.asyncio
 async def test_watchlist_refill_cycle_empty_discovery_is_a_no_op():
     async def discover():
         return []
 
-    result = await me.run_watchlist_refill_cycle(discover=discover)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
     assert result == {
         "candidates_seen": 0, "queued": 0, "clear": 0,
         "rejected": 0, "unavailable": 0, "skipped_chain": 0,
@@ -8910,7 +8914,7 @@ async def test_watchlist_refill_cycle_tallies_by_honeypot_code(monkeypatch):
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
     assert result == {
         "candidates_seen": 4, "queued": 1, "clear": 1,
         "rejected": 1, "unavailable": 1, "skipped_chain": 0,
@@ -8927,7 +8931,7 @@ async def test_watchlist_refill_cycle_skips_solana_without_calling_honeypot(monk
 
     monkeypatch.setattr(me, "_check_honeypot", fail_if_called)
 
-    result = await me.run_watchlist_refill_cycle(discover=discover)
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
     assert result == {
         "candidates_seen": 1, "queued": 0, "clear": 0,
         "rejected": 0, "unavailable": 0, "skipped_chain": 1,
@@ -8949,5 +8953,79 @@ async def test_watchlist_refill_cycle_forwards_liquidity_usd(monkeypatch):
 
     monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
 
-    await me.run_watchlist_refill_cycle(discover=discover)
+    await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct)
     assert received["liquidity_usd"] == 42_000.0
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_includes_clanker_and_flaunch(monkeypatch):
+    """14/08 -- Clanker/Flaunch have real on-chain discoverers but were
+    previously only wired into bonding_discovery_cycle (VC narrative
+    pipeline), never the momentum watchlist. virtuals_graduated (also a
+    "direct" adapter) is deliberately excluded here -- already covered
+    elsewhere."""
+    clanker_addr = "0x" + "6" * 40
+    flaunch_addr = "0x" + "7" * 40
+    graduated_addr = "0x" + "8" * 40
+
+    async def discover():
+        return []
+
+    async def fake_direct():
+        return {
+            "clanker": [clanker_addr], "flaunch": [flaunch_addr],
+            "virtuals_graduated": [graduated_addr],
+        }
+
+    seen_contracts = []
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        seen_contracts.append(contract)
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct)
+    assert set(seen_contracts) == {clanker_addr, flaunch_addr}  # never virtuals_graduated
+    assert result["candidates_seen"] == 2
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_dedupes_clanker_flaunch_against_discovery(monkeypatch):
+    shared = "0x" + "9" * 40
+
+    async def discover():
+        return [{"contract": shared, "chain": "base"}]
+
+    async def fake_direct():
+        return {"clanker": [shared]}  # same contract, must not be checked twice
+
+    call_count = 0
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        nonlocal call_count
+        call_count += 1
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=fake_direct)
+    assert call_count == 1
+    assert result["candidates_seen"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watchlist_refill_cycle_tolerates_discover_direct_failure(monkeypatch):
+    async def discover():
+        return [{"contract": "0x" + "a" * 40, "chain": "base"}]
+
+    async def failing_direct():
+        raise RuntimeError("launchpad_discovery down")
+
+    async def fake_check_honeypot(contract, chain, *, liquidity_usd=None, volume_24h_usd=None, links=None):
+        return True, "clear", "honeypot_clear"
+
+    monkeypatch.setattr(me, "_check_honeypot", fake_check_honeypot)
+
+    result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=failing_direct)
+    assert result["candidates_seen"] == 1  # discover_momentum_candidates' own result survives

@@ -7,7 +7,22 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
-[CODE] Subject : swing/scalping_v8 sourcing migrated to goplus_watchlist (no more direct API discovery)
+[CODE] Subject : watchlist_refill_cycle now also scans Clanker + Flaunch, not just discover_momentum_candidates
+Date : 2026.08.14 / Problem : Clanker/Flaunch already have real on-chain discoverers
+(services/clanker.py, services/flaunch.py) but were only wired into bonding_discovery_cycle, which
+feeds the VC narrative pipeline (screened_pool) -- never the momentum watchlist. A token launched via
+either of these two never reached goplus_watchlist, hence never swing/scalping_v8 either.
+Solution : run_watchlist_refill_cycle gained a discover_direct parameter (defaults to
+launchpad_discovery.discover_direct_candidates), pulls the "clanker"/"flaunch" keys specifically
+(virtuals_graduated deliberately excluded -- already covered by bonding_discovery_cycle, no gap to
+close there), deduplicated against discover_momentum_candidates's own output before the honeypot
+check. A failing launchpad scan never blocks the rest (same best-effort doctrine as every other source
+here). 5 new tests (inclusion, virtuals_graduated exclusion, dedup, failure tolerance) --
+momentum_entry.py, tests/test_momentum_entry.py
+
+------------------------------------------------------------
+
+[DEPLOYE] Subject : swing/scalping_v8 sourcing migrated to goplus_watchlist (no more direct API discovery)
 Date : 2026.08.14 / Problem : follow-up to watchlist_refill_cycle (entry below) -- swing/scalping_v8
 still called discover_momentum_candidates directly (paper_trader._momentum_candidates_and_chain_map)
 to choose what to evaluate/buy, contradicting the operator's "toute les poche !" decision that every
@@ -23,7 +38,7 @@ candidates mock onto discover_from_watchlist -- paper_trader.py, tests/test_pape
 
 ------------------------------------------------------------
 
-[CODE] Subject : watchlist_refill_cycle -- pure-discovery cycle, first step toward every pocket sourcing from goplus_watchlist only
+[DEPLOYE] Subject : watchlist_refill_cycle -- pure-discovery cycle, first step toward every pocket sourcing from goplus_watchlist only
 Date : 2026.08.14 / Problem : operator decision ("toute les poches doivent piocher dans la
 watchlist... sans appeler les api") -- swing/scalping_v8 currently call discover_momentum_candidates
 directly (via paper_trader._momentum_candidates_and_chain_map) to both discover AND decide what to
