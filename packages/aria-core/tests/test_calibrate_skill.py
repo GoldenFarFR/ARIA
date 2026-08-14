@@ -7,7 +7,7 @@ from aria_core.skills import calibrate_skill
 
 
 def _stub_common(monkeypatch, *, calibration=None):
-    cal = calibration or {"id": "abc1234567", "verdict": "vrai", "brier": None}
+    cal = calibration or {"id": "test-cal-default", "verdict": "vrai", "brier": None}
     monkeypatch.setattr(calibrate_skill, "record_calibration", lambda *a, **k: cal)
     monkeypatch.setattr(calibrate_skill, "check_contradiction", lambda *a, **k: (False, ""))
     monkeypatch.setattr(calibrate_skill, "queue_promotion", lambda *a, **k: None)
