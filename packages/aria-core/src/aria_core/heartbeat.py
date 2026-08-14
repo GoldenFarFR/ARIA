@@ -2094,11 +2094,16 @@ class AriaHeartbeat:
             from aria_core.services.smart_money_leaderboard import discover_and_enqueue_candidates
 
             result = await discover_and_enqueue_candidates()
-            if result.get("outcome") == "ok" and result.get("added_to_queue"):
+            if result.get("outcome") == "ok":
                 append_memory(
                     "smart_money_leaderboard",
-                    f"[smart_money_leaderboard] {result['added_to_queue']} wallet(s) candidat(s) "
-                    f"ajoute(s) a la file (sur {result.get('candidates_found')} detectes)",
+                    f"[smart_money_leaderboard] {result.get('added_to_queue', 0)} wallet(s) "
+                    f"candidat(s) ajoute(s) a la file (sur {result.get('candidates_found')} "
+                    f"detectes, {result.get('already_rejected', 0)} deja rejetes) -- detail par "
+                    f"source : historique={result.get('cross_token_candidates', 0)}, "
+                    f"dune={result.get('dune_candidates', 0)}, "
+                    f"trades_positions_ouvertes={result.get('trade_candidates', 0)}, "
+                    f"social_x={result.get('social_candidates', 0)}",
                 )
 
         elif task_id == "token_holder_extraction_cycle":
