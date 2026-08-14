@@ -899,7 +899,7 @@ _KNOWN_ENABLED_GATES = {
     # 14/08 (#146) -- sub-gate inside the same cycle: sources dynamic wallet
     # candidates off the REAL smart_money_leaderboard (percentile-based),
     # independent of the 8 hand-picked wallets above. Seam for a future
-    # scalping pocket (v11, undesigned) -- OFF par défaut.
+    # scalping pocket (v11, undesigned) -- OFF by default.
     "ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED",
     "ARIA_WALLET_SCAN_QUEUE_ENABLED",
     "ARIA_WALLET_SCORING_ENABLED",
