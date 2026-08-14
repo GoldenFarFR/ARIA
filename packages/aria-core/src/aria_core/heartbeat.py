@@ -1675,6 +1675,19 @@ class AriaHeartbeat:
         elif task_id == "wallet_copy_shadow_cycle":
             from aria_core import wallet_copy_shadow
 
+            # (#146, 14/08) -- sub-gate INSIDE this same cycle, distinct from
+            # the cycle's own ARIA_WALLET_COPY_SHADOW_ENABLED flag: lets the
+            # 8 hand-picked wallets keep running independently of whether
+            # the newer leaderboard-sourced discovery seam is enabled.
+            if os.environ.get(
+                "ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED", "",
+            ).strip().lower() in ("1", "true", "yes", "on"):
+                added = await wallet_copy_shadow.discover_leaderboard_candidates()
+                if added:
+                    logger.info(
+                        "wallet_copy_shadow_cycle: +%s wallet(s) découvert(s) via le leaderboard réel",
+                        added,
+                    )
             results = await wallet_copy_shadow.run_scan_cycle()
             opened = sum(r.opened for r in results)
             closed = sum(r.closed for r in results)

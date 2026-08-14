@@ -8,6 +8,39 @@
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.
 
+[CODE] Sujet    : source dynamique leaderboard -> tracking wallet_copy_shadow (item #146)
+Date : 2026.08.14 / Probleme : `wallet_copy_shadow.py` (forward-test de copie sur ledgers
+fictifs indépendants) ne trackait QUE 8 wallets statiques codés en dur (`TRACKED_WALLETS`) --
+aucune connexion avec `smart_money_leaderboard.py`, le classement dynamique alimenté en continu
+par le funnel de découverte (#147/#148/#149/#152). Un wallet qui grimpe au leaderboard en cours
+de route n'entrait jamais automatiquement dans le forward-test de copie. Objectif opérateur :
+préparer une future poche v11 (scalping, pas encore conçue) en accumulant dès maintenant des
+observations de copie sur les wallets qui s'avèrent réellement performants, pas seulement les 8
+choisis manuellement le 08/08.
+Solution : nouvelle table `wallet_copy_shadow_dynamic_candidates` (wallet_address PRIMARY KEY,
+added_at, composite_percentile_at_add) + `discover_leaderboard_candidates()` (lit
+`smart_money_leaderboard` en SQL brut, exclut les wallets déjà dans `TRACKED_WALLETS` ou déjà
+suivis dynamiquement, insère les nouveaux, best-effort -- ne lève jamais). Seuil
+`LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0` (première calibration arbitraire, le leaderboard
+réel n'a aujourd'hui qu'1 seul wallet à 37.5% -- personne n'entrera tant que le funnel n'aura pas
+fait grossir la population, seuil à revisiter une fois plus de données réelles). `run_scan_cycle`
+et `summary()` fusionnent désormais `{**TRACKED_WALLETS, **_dynamic_tracked_wallets()}` -- les 8
+wallets statiques restent inchangés et distincts (`tier="leaderboard_dynamic"` vs
+`"verified_all_time"`/`"gmgn_smart_money_30d"`/`"frontrunner"`, doctrine "kept honest, never
+blended" déjà en place dans ce module). Nouveau sous-gate `ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED`
+(défaut OFF) câblé dans `heartbeat.py`, appelé avant `run_scan_cycle()` dans le cycle
+`wallet_copy_shadow_cycle` existant -- n'active rien tant que l'opérateur ne confirme pas.
+Enregistré dans `_KNOWN_ENABLED_GATES` (test_coherence.py). 6 nouveaux tests (seuil, pas de
+doublon avec les statiques, idempotence, dégradation gracieuse si table absente, inclusion dans
+le scan, remontée dans `summary()`) -- 22/22 verts sur `test_wallet_copy_shadow.py`, suite
+complète en cours de vérification.
+`packages/aria-core/src/aria_core/wallet_copy_shadow.py`,
+`packages/aria-core/src/aria_core/heartbeat.py`,
+`packages/aria-core/tests/test_wallet_copy_shadow.py`,
+`packages/aria-core/tests/test_coherence.py`.
+
+------------------------------------------------------------
+
 [CODE] Sujet    : source #149 (trades sur positions swing/vc) ne trouvait JAMAIS aucun candidat -- mauvaise colonne lue (item #151)
 Date : 2026.08.14 / Probleme : en poursuivant #151 (le log par-source déployé plus tôt aujourd'hui
 montrait `trade_candidates=0` sur chaque cycle observé) -- diagnostic direct DB confirmé : 14

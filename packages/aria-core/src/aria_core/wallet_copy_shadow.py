@@ -193,6 +193,37 @@ CREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (
 )
 """
 
+# 14/08 (#146) -- backlog item: "hook de tracking continu des wallets
+# performants pour v11" (a future scalping pocket, not yet designed --
+# operator-confirmed this is what "v11" means). Real gap found investigating
+# it: smart_money_leaderboard.py already scores wallets dynamically (feeds
+# the real leaderboard), but this module's TRACKED_WALLETS above stays a
+# hand-picked, never-updated list of 8 -- the two mechanisms never connect.
+# This table + discover_leaderboard_candidates() close that gap: wallets
+# that clear a percentile threshold on the REAL leaderboard get added here
+# and shadow-copied continuously, same engine as the 8 static wallets, but
+# kept in a SEPARATE table/tier (never merged into TRACKED_WALLETS itself)
+# -- same "kept honest, never blended" doctrine as the existing 3 tiers.
+# This is deliberately just the data-collection seam for v11, not v11
+# itself (still undesigned) -- CLAUDE.md anticipation doctrine: "lay the
+# seam now, even empty, rather than rewriting later."
+_DYNAMIC_CANDIDATES_DDL = """
+CREATE TABLE IF NOT EXISTS wallet_copy_shadow_dynamic_candidates (
+    wallet_address TEXT PRIMARY KEY,
+    added_at TEXT NOT NULL,
+    composite_percentile_at_add REAL NOT NULL
+)
+"""
+
+# Arbitrary first calibration, not empirically derived -- the real
+# leaderboard has only 1 active wallet at 37.5%p as of 14/08 (verified live
+# against smart_money_leaderboard), well under this floor, so this seam
+# starts genuinely empty and stays that way until #147/#151's sourcing work
+# grows the leaderboard's population. Recalibrate once enough wallets clear
+# a real percentile to judge a meaningful cutoff -- never lower this just to
+# force candidates through before the leaderboard itself has real signal.
+LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0
+
 _table_ready = False
 
 
@@ -203,6 +234,7 @@ async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_POSITION_DDL)
         await db.execute(_CURSOR_DDL)
+        await db.execute(_DYNAMIC_CANDIDATES_DDL)
         # Hot migration (08/08): last_transfer_at added after this table was
         # first deployed -- a prod DB that already ran a cycle needs it added
         # in place, same pattern as paper_trader.py's _ADDED_COLUMNS.
@@ -431,13 +463,91 @@ async def refresh_open_marks(wallet: str) -> None:
         logger.info("wallet_copy_shadow: mark refresh failed for %s (%s)", wallet[:10], exc)
 
 
+async def discover_leaderboard_candidates(
+    *, min_percentile: float = LEADERBOARD_DISCOVERY_MIN_PERCENTILE,
+) -> int:
+    """(#146, 14/08) Pulls wallets off the REAL ``smart_money_leaderboard``
+    (dynamic scoring, fed by ``wallet_scan_queue``) that clear
+    ``min_percentile`` and aren't already tracked (statically or
+    dynamically) -- adds them to ``wallet_copy_shadow_dynamic_candidates``
+    so the next ``run_scan_cycle()`` picks them up automatically. Pure
+    local-DB read + insert, same doctrine as the rest of this module (no
+    network call of its own). Best-effort: never raises, returns 0 on any
+    failure. Returns the count of NEWLY added wallets."""
+    try:
+        await _ensure_tables()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT wallet, composite_percentile FROM smart_money_leaderboard "
+                "WHERE composite_percentile >= ?",
+                (min_percentile,),
+            )
+            candidates = await cursor.fetchall()
+            if not candidates:
+                return 0
+            existing_static = set(TRACKED_WALLETS.keys())
+            added = 0
+            for wallet, percentile in candidates:
+                wallet_l = wallet.lower()
+                if wallet_l in existing_static:
+                    continue
+                cursor = await db.execute(
+                    "SELECT 1 FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
+                    (wallet_l,),
+                )
+                if await cursor.fetchone():
+                    continue
+                await db.execute(
+                    "INSERT INTO wallet_copy_shadow_dynamic_candidates "
+                    "(wallet_address, added_at, composite_percentile_at_add) VALUES (?, ?, ?)",
+                    (wallet_l, datetime.now(timezone.utc).isoformat(), percentile),
+                )
+                added += 1
+            if added:
+                await db.commit()
+            return added
+    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
+        logger.info("wallet_copy_shadow: leaderboard discovery failed (%s)", exc)
+        return 0
+
+
+async def _dynamic_tracked_wallets() -> dict[str, dict]:
+    """Same ``{wallet: meta}`` shape as ``TRACKED_WALLETS`` (``label``/
+    ``tier``/``evidence`` -- ``scan_wallet``/``summary`` don't care which
+    dict a wallet came from), sourced from ``wallet_copy_shadow_dynamic_
+    candidates`` instead of the hand-picked list. ``tier`` stays distinct
+    (``leaderboard_dynamic``) so reporting never blends this weaker,
+    percentile-only evidence with the 3 manually-vetted tiers above."""
+    try:
+        await _ensure_tables()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT wallet_address, composite_percentile_at_add "
+                "FROM wallet_copy_shadow_dynamic_candidates"
+            )
+            rows = await cursor.fetchall()
+    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
+        logger.info("wallet_copy_shadow: dynamic wallet list read failed (%s)", exc)
+        return {}
+    return {
+        wallet: {
+            "label": f"leaderboard_{wallet[2:8]}",
+            "tier": "leaderboard_dynamic",
+            "evidence": f"smart_money_leaderboard composite_percentile={pct:.1f} at discovery",
+        }
+        for wallet, pct in rows
+    }
+
+
 async def run_scan_cycle() -> list[ShadowScanResult]:
-    """Scans all 8 tracked wallets, one at a time (sequential -- Blockscout
-    is a shared, rate-limited resource, no reason to burst it). Never
-    raises: a single wallet's failure is reported in its own result, the
-    others still run."""
+    """Scans every tracked wallet, one at a time (sequential -- Blockscout
+    is a shared, rate-limited resource, no reason to burst it) -- the 8
+    static wallets PLUS any dynamic candidate sourced off the real
+    leaderboard (#146). Never raises: a single wallet's failure is reported
+    in its own result, the others still run."""
+    all_wallets = {**TRACKED_WALLETS, **await _dynamic_tracked_wallets()}
     results: list[ShadowScanResult] = []
-    for wallet, meta in TRACKED_WALLETS.items():
+    for wallet, meta in all_wallets.items():
         res = await scan_wallet(wallet, meta)
         results.append(res)
         await refresh_open_marks(wallet)
@@ -453,8 +563,9 @@ async def summary() -> dict[str, dict]:
     await _ensure_tables()
     now = datetime.now(timezone.utc)
     out: dict[str, dict] = {}
+    all_wallets = {**TRACKED_WALLETS, **await _dynamic_tracked_wallets()}
     async with aiosqlite.connect(DB_PATH) as db:
-        for wallet, meta in TRACKED_WALLETS.items():
+        for wallet, meta in all_wallets.items():
             activity_row = await db.execute(
                 "SELECT last_transfer_at FROM wallet_copy_shadow_cursor WHERE wallet_address = ?",
                 (wallet,),

@@ -896,6 +896,11 @@ _KNOWN_ENABLED_GATES = {
     # ledgers fictifs indépendants, jamais un trigger réel (jamais de capital
     # réel, jamais fusionné avec le test 1M$). OFF par défaut.
     "ARIA_WALLET_COPY_SHADOW_ENABLED",
+    # 14/08 (#146) -- sub-gate inside the same cycle: sources dynamic wallet
+    # candidates off the REAL smart_money_leaderboard (percentile-based),
+    # independent of the 8 hand-picked wallets above. Seam for a future
+    # scalping pocket (v11, undesigned) -- OFF par défaut.
+    "ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED",
     "ARIA_WALLET_SCAN_QUEUE_ENABLED",
     "ARIA_WALLET_SCORING_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",

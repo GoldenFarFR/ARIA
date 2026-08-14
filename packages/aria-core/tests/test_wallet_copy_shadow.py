@@ -260,3 +260,109 @@ async def test_summary_excludes_implausible_price_ratio_artifacts():
     entry = result[WALLET]
     assert entry["closed_positions"] == 1
     assert entry["realized_pnl_usd"] == pytest.approx(2_000.0)
+
+
+# ── #146 (14/08): leaderboard-sourced dynamic candidates, seam for a future
+#    scalping pocket (v11, undesigned) -- closes the gap between the real
+#    smart_money_leaderboard (dynamic scoring) and this module's previously
+#    static, hand-picked TRACKED_WALLETS list ─────────────────────────────
+
+LEADERBOARD_WALLET_HIGH = "0x" + "1" * 40
+LEADERBOARD_WALLET_LOW = "0x" + "2" * 40
+
+
+async def _seed_leaderboard(entries: list[tuple]) -> None:
+    """``entries``: list of (wallet, composite_percentile). Recreates the
+    real smart_money_leaderboard schema directly in the isolated test DB --
+    this module reads it via a raw SQL SELECT, never imports
+    smart_money_leaderboard.py itself (pure local-DB read, same doctrine as
+    the rest of this module)."""
+    import aiosqlite
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS smart_money_leaderboard ("
+            "wallet TEXT PRIMARY KEY, composite_percentile REAL NOT NULL, "
+            "joined_at TEXT NOT NULL, last_updated_at TEXT NOT NULL)"
+        )
+        for wallet, pct in entries:
+            await db.execute(
+                "INSERT INTO smart_money_leaderboard (wallet, composite_percentile, joined_at, last_updated_at) "
+                "VALUES (?, ?, '2026-08-14T00:00:00Z', '2026-08-14T00:00:00Z')",
+                (wallet, pct),
+            )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_adds_wallets_above_threshold():
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0), (LEADERBOARD_WALLET_LOW, 50.0)])
+    added = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    assert added == 1
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert LEADERBOARD_WALLET_HIGH in dynamic
+    assert LEADERBOARD_WALLET_LOW not in dynamic
+    assert dynamic[LEADERBOARD_WALLET_HIGH]["tier"] == "leaderboard_dynamic"
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_never_duplicates_static_wallets():
+    """A wallet already hand-picked in TRACKED_WALLETS must never also be
+    added dynamically -- would double-scan it and blend evidence tiers."""
+    await _seed_leaderboard([(WALLET, 99.0)])
+    added = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    assert added == 0
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert WALLET not in dynamic
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_idempotent_across_cycles():
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    first = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    second = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    assert first == 1
+    assert second == 0  # already tracked, never re-added/duplicated
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_no_table_degrades_to_zero():
+    """smart_money_leaderboard doesn't exist yet in this isolated DB (never
+    seeded) -- must degrade to 0, never raise."""
+    added = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    assert added == 0
+
+
+@pytest.mark.asyncio
+async def test_run_scan_cycle_includes_dynamic_candidates(monkeypatch):
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    scanned = []
+
+    async def _fake_scan(wallet, meta):
+        scanned.append(wallet)
+        return wcs.ShadowScanResult(wallet, 0, 0)
+
+    async def _fake_refresh(wallet):
+        return None
+
+    monkeypatch.setattr(wcs, "scan_wallet", _fake_scan)
+    monkeypatch.setattr(wcs, "refresh_open_marks", _fake_refresh)
+
+    await wcs.run_scan_cycle()
+
+    assert LEADERBOARD_WALLET_HIGH in scanned
+    assert WALLET in scanned  # the 8 static wallets are still scanned too
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_dynamic_candidates_separately():
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    result = await wcs.summary()
+
+    assert LEADERBOARD_WALLET_HIGH in result
+    assert result[LEADERBOARD_WALLET_HIGH]["tier"] == "leaderboard_dynamic"
+    assert "90.0" in result[LEADERBOARD_WALLET_HIGH]["evidence"]
