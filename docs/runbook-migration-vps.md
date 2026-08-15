@@ -80,6 +80,19 @@ prochaine fois.
     serveur reste up (SSH, données, prêt à redémarrer en une commande) le temps de la
     fenêtre de sécurité voulue par l'opérateur avant décommission définitive.
 
+## Test de déployabilité à froid confirmé (15/08, backlog #188)
+
+Clone frais de `origin/main` construit et lancé en isolation totale sur le VPS de
+prod (répertoire/tag image/nom de conteneur/port/dossier de données tous distincts
+de la prod réelle, jamais les ports 8000/8001, jamais `/opt/aria-data`,
+`ARIA_HEARTBEAT_STANDBY=1` pour ne faire tourner aucun cycle) : build ~2min,
+healthcheck passé au premier essai (3s), démarrage propre (seeding DB depuis une
+base vide, toutes les intégrations reconnues), zéro étape manuelle cachée au-delà de
+ce que `vanguard/Dockerfile` + le motif `docker run` déjà documenté dans
+`deploy.sh` couvrent. Confirme que le Piège n°1 ci-dessous reste la seule marche
+manuelle réelle sur un serveur neuf. Voir aussi Piège n°7 (effet de bord découvert
+pendant ce test).
+
 ## Pièges rencontrés (20/07) — cause précise, pas juste le symptôme
 
 **Piège n°1 — le script de déploiement blue-green habituel ne peut PAS tourner tel
@@ -134,6 +147,20 @@ Let's Encrypt/certbot directement sur le serveur. Ne jamais l'activer si le
 certificat est déjà géré côté serveur. Vérifier aussi la présence d'un verrou
 "Protection de domaine" qui peut bloquer l'édition des enregistrements DNS avant de
 chercher longtemps pourquoi un changement ne prend pas.
+
+**Piège n°7 (découvert 15/08, backlog #188) — un conteneur de TEST démarré avec le
+vrai `.env` produit des effets de bord réels sur des comptes externes, même en mode
+standby.** `ARIA_HEARTBEAT_STANDBY=1` empêche les cycles heartbeat (paper-trading,
+sourcing, etc.) mais PAS la séquence de démarrage FastAPI elle-même : au boot, un
+second conteneur avec les mêmes identifiants réels a re-synchronisé la photo de
+profil du bot Telegram et tenté une synchronisation de photo de profil X — deux
+effets visibles sur des comptes de marque réels, hors de tout risque sur le capital
+mais pas anodins. Le webhook Telegram réenregistré pointait vers le même domaine de
+prod donc sans impact fonctionnel, mais ce n'est pas garanti pour toute variable
+d'environnement. **Pour un futur test/bootstrap similaire** : soit accepter ce
+risque mineur (comme fait le 15/08, conteneur détruit dès le healthcheck confirmé),
+soit neutraliser ces effets de bord au démarrage (variable dédiée à créer si ce test
+doit être répété souvent) avant de laisser tourner le conteneur plus longtemps.
 
 ## Après la bascule : ce qui reste (décommission différée)
 
