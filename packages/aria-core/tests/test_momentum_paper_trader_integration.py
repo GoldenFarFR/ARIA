@@ -176,10 +176,9 @@ async def test_real_websocket_frame_reaches_a_real_open_position(
     # drain into a real decision), covered by its own dedicated tests.
     monkeypatch.setattr(pt, "_execution_rr_still_valid", lambda *_a, **_kw: True)
 
-    from aria_core import fixed_watchlist, limit_orders
+    from aria_core import limit_orders
 
     monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "limit_orders.db"))
-    monkeypatch.setattr(fixed_watchlist, "DB_PATH", str(tmp_path / "fixed_watchlist.db"))
 
     async def _passthrough_prefilter(candidates):
         for c in candidates:
