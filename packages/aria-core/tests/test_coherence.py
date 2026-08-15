@@ -837,6 +837,11 @@ _KNOWN_ENABLED_GATES = {
     # covers outages). OFF by default.
     "ARIA_TWITTERAPI_IO_BUDGET_WATCH_ENABLED",
     "ARIA_TRADE_LOSS_BATCH_REVIEW_ENABLED",
+    # 15/08 (#182/#280) -- LATTICE decision-support-quality judge
+    # (thesis_quality.py) wired into analyze_vc's automatic pipeline.
+    # Consultative only, own dedicated gate distinct from the adversarial
+    # vc_judge.py gate. OFF by default.
+    "ARIA_THESIS_QUALITY_ENABLED",
     "ARIA_UX_WATCH_ENABLED",
     "ARIA_VC_INTELLIGENCE_ENABLED",
     "ARIA_VC_POCKET_SOURCING_ENABLED",

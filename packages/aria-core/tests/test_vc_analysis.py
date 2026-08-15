@@ -539,6 +539,71 @@ async def test_analyze_vc_judge_failure_never_breaks_report(monkeypatch):
     assert result.recommandation == "BUY"
 
 
+# ----------------------- juge LATTICE qualite de these (#182/#280, 15/08) -----------------------
+# Meme patron que le juge adversarial ci-dessus, mais gate DISTINCT
+# (ARIA_THESIS_QUALITY_ENABLED, os.environ.get, pas un attribut settings).
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_thesis_quality_not_called_when_gate_disabled(monkeypatch):
+    monkeypatch.delenv("ARIA_THESIS_QUALITY_ENABLED", raising=False)
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    judge_mock = AsyncMock()
+    monkeypatch.setattr("aria_core.skills.thesis_quality.judge_thesis_quality", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.thesis_quality_verdict is None
+    judge_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_thesis_quality_called_and_verdict_attached_when_gate_enabled(monkeypatch):
+    monkeypatch.setenv("ARIA_THESIS_QUALITY_ENABLED", "true")
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    sentinel_verdict = object()
+    judge_mock = AsyncMock(return_value=sentinel_verdict)
+    monkeypatch.setattr("aria_core.skills.thesis_quality.judge_thesis_quality", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.thesis_quality_verdict is sentinel_verdict
+    judge_mock.assert_awaited_once()
+    # doit noter le texte combine (these + resume_executif + rapport_detaille),
+    # pas juste `these` seul (trop mince pour une notation de qualite fiable)
+    narrative = judge_mock.await_args.args[0]
+    assert result.these in narrative
+    assert result.rapport_detaille in narrative
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_thesis_quality_failure_never_breaks_report(monkeypatch):
+    monkeypatch.setenv("ARIA_THESIS_QUALITY_ENABLED", "true")
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(vc, "chat_with_context", AsyncMock(return_value=_valid_llm_json()))
+    judge_mock = AsyncMock(side_effect=RuntimeError("panne réseau simulée"))
+    monkeypatch.setattr("aria_core.skills.thesis_quality.judge_thesis_quality", judge_mock)
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.thesis_quality_verdict is None
+    assert result.recommandation == "BUY"
+
+
+def test_thesis_quality_enabled_reads_env_var(monkeypatch):
+    monkeypatch.delenv("ARIA_THESIS_QUALITY_ENABLED", raising=False)
+    assert vc._thesis_quality_enabled() is False
+    monkeypatch.setenv("ARIA_THESIS_QUALITY_ENABLED", "true")
+    assert vc._thesis_quality_enabled() is True
+    monkeypatch.setenv("ARIA_THESIS_QUALITY_ENABLED", "0")
+    assert vc._thesis_quality_enabled() is False
+
+
 @pytest.mark.asyncio
 async def test_analyze_vc_wraps_untrusted_data_in_tags(monkeypatch):
     """Défense injection : le contexte factuel doit être encapsulé + instruction système présente."""

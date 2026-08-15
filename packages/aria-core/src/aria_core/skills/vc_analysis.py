@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -178,6 +179,20 @@ class VCResult:
     # this VCResult predates this field (e.g. deserialized from an older
     # cache entry).
     judge_verdict: "JudgeVerdict | None" = None
+    # 15/08 -- LATTICE decision-support-quality verdict (thesis_quality.py,
+    # backlog #182/#280), now wired into the automatic pipeline. DISTINCT axis
+    # from judge_verdict above: that one checks whether the thesis's claims
+    # are factually grounded on-chain; this one checks whether the thesis,
+    # even if true, is clear/actionable/well-structured enough to actually
+    # help the operator decide (6 LATTICE dimensions). Own dedicated gate
+    # (ARIA_THESIS_QUALITY_ENABLED, plain os.environ.get -- NOT the
+    # settings-attribute pattern judge_verdict's gate uses, that one is
+    # specific to llm_economy.py's model-routing settings) so the operator
+    # can enable each judge independently. Consultative only, same "gate,
+    # never a trigger" doctrine as judge_verdict: NEVER read by any
+    # trading-decision path. None if the gate is off, the LLM call failed, or
+    # this VCResult predates this field.
+    thesis_quality_verdict: "ThesisQualityVerdict | None" = None
 
     @property
     def actionable(self) -> bool:
@@ -1641,6 +1656,7 @@ async def analyze_vc_with_context(
     await _attach_extras(result, ctx, lang)
     if result.llm_used:
         result.judge_verdict = await _run_judge_if_enabled(result, ctx, lang)
+        result.thesis_quality_verdict = await _run_thesis_quality_if_enabled(result)
     _log_timing(result.llm_used)
     out = (result, ctx)
     if cache_ttl > 0 and result.llm_used:
@@ -1668,6 +1684,40 @@ async def _run_judge_if_enabled(result: VCResult, ctx: TokenScanContext, lang: s
         return await judge_analysis(result, ctx, lang=lang)
     except Exception as exc:  # noqa: BLE001 — consultative only, never blocks the analysis
         logger.warning("analyze_vc: proof-engine judge failed (%s)", exc)
+        return None
+
+
+def _thesis_quality_enabled() -> bool:
+    return (os.environ.get("ARIA_THESIS_QUALITY_ENABLED", "") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+async def _run_thesis_quality_if_enabled(result: VCResult) -> "ThesisQualityVerdict | None":
+    """15/08 -- wires the LATTICE decision-support-quality judge
+    (thesis_quality.py) into the AUTOMATIC pipeline (backlog #182/#280).
+    Local import: thesis_quality.py already imports from THIS module
+    (_clamp_int, _extract_json), a top-level import here would cycle. Own
+    dedicated gate (ARIA_THESIS_QUALITY_ENABLED, plain os.environ.get --
+    distinct from judge_verdict's settings-attribute-based gate, this one
+    isn't part of llm_economy.py's model-routing settings) so the operator
+    can enable this judge independently of the adversarial one. Mirrors
+    vc_judge.py's own _analysis_narrative construction (thesis + executive
+    summary + detailed report, the richest available text -- `these` alone
+    is too thin at 3-5 sentences for a meaningful decision-support grade).
+    Never raises: a judge failure must never break the analysis it's grading
+    (same "never blocking" doctrine as every other _fetch_* extra here)."""
+    if not _thesis_quality_enabled():
+        return None
+    try:
+        from aria_core.skills.thesis_quality import judge_thesis_quality
+
+        narrative = " ".join(
+            str(x or "") for x in (result.these, result.resume_executif, result.rapport_detaille)
+        )
+        return await judge_thesis_quality(narrative)
+    except Exception as exc:  # noqa: BLE001 — consultative only, never blocks the analysis
+        logger.warning("analyze_vc: LATTICE thesis-quality judge failed (%s)", exc)
         return None
 
 
