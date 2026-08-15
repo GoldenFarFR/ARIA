@@ -1816,6 +1816,75 @@ async def run_dip_recovery_shadow_cycle() -> dict:
     return {"evaluated": evaluated, "watchlist_size": len(watchlist_rows)}
 
 
+_EARLY_LEGITIMACY_SHADOW_BATCH_SIZE = 10
+
+
+async def run_early_legitimacy_shadow_cycle() -> dict:
+    """Shadow-evaluation cycle for the operator research thread (15/08, "how
+    do we tell a real team from noise at token creation") -- see
+    ``early_legitimacy_shadow.py``'s own module docstring for the full
+    design rationale (RPC-direct signals, no Blockscout/GoPlus dependency,
+    workflow-audited before being built).
+
+    Evaluates each ``goplus_watchlist`` token EXACTLY ONCE (``already_
+    computed`` check), skips anything past ``MAX_TOKEN_AGE_HOURS`` (no
+    longer "early", never retried forever -- bounds the pending backlog to a
+    rolling window instead of growing without end). Resolves the DEX pair
+    via the same ``fetch_token_pairs``/``_best_pair`` helpers the candle
+    collector above already uses (no new DexScreener call shape). Small
+    batch size per passage (RPC-bound, no verified rate limit to calibrate
+    against -- see the module's own note on relying on the reactive dome
+    instead of a guessed throttle). Best-effort per token: one broken read
+    never stops the passage."""
+    from datetime import datetime, timezone
+
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist
+
+    watchlist_rows = await goplus_watchlist.list_all()
+    now = datetime.now(timezone.utc)
+    candidates = []
+    for row in watchlist_rows:
+        added_at_raw = row.get("added_at")
+        if not added_at_raw:
+            continue
+        try:
+            added_at = datetime.fromisoformat(added_at_raw)
+        except ValueError:
+            continue
+        age_hours = (now - added_at).total_seconds() / 3600.0
+        if age_hours > early_legitimacy_shadow.MAX_TOKEN_AGE_HOURS:
+            continue
+        contract, chain = row["contract"], row["chain"]
+        if await early_legitimacy_shadow.already_computed(contract, chain):
+            continue
+        candidates.append((contract, chain))
+        if len(candidates) >= _EARLY_LEGITIMACY_SHADOW_BATCH_SIZE:
+            break
+
+    evaluated = 0
+    for contract, chain in candidates:
+        try:
+            pairs = await fetch_token_pairs(contract, chain=chain)
+            best = _best_pair(pairs, contract)
+            pair_age_seconds = None
+            if best is not None and best.pair_created_at:
+                pair_age_seconds = now.timestamp() - (best.pair_created_at / 1000.0)
+            await early_legitimacy_shadow.record_observation(
+                contract, chain,
+                symbol=best.base_symbol if best is not None else None,
+                lp_pair_address=best.pair_address if best is not None else None,
+                pair_age_seconds=pair_age_seconds,
+            )
+            evaluated += 1
+        except Exception as exc:  # noqa: BLE001 -- best-effort shadow scan, one bad token never stops the passage
+            logger.info(
+                "early_legitimacy_shadow_cycle: evaluation failed for %s/%s (%s)", chain, contract[:10], exc,
+            )
+
+    return {"evaluated": evaluated, "candidates": len(candidates)}
+
+
 async def _check_honeypot_rugcheck_fallback(contract: str) -> tuple[bool, str, str]:
     """Solana second opinion (#207) -- called ONLY by ``_check_honeypot`` when
     GoPlus has no data for this contract. Fail-closed unchanged if RugCheck also

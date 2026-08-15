@@ -355,6 +355,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="early_legitimacy_shadow_cycle",
+        name="Early-legitimacy shadow -- RPC-direct signals for brand-new tokens",
+        description="15/08 operator research thread (\"comment differencier un vrai lancement du bruit\"), workflow-audited before being built. The existing legitimacy engine (dev_wallet.py/safety_screen.py/acp_onchain_scan.py) depends entirely on Blockscout, which structurally lags for brand-new tokens (confirmed live). This shadow computes 2 signals via DIRECT RPC only, zero Blockscout/GoPlus dependency: owner() renouncement (best-effort) and LP-token lock/burn percentage (Transfer-log scan on the pair contract, chunked <=500 blocks per call -- doppler.py's own empirically-safe window against mainnet.base.org's 413-on-wide-ranges limit). Evaluates each watchlist token exactly once, skips anything older than 6h (no longer \"early\"). Pure observation, never gates anything, never touches a real/paper trade. Dedicated gate ARIA_EARLY_LEGITIMACY_SHADOW_ENABLED, OFF by default.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="wallet_copy_shadow_cycle",
         name="Wallet-copy shadow -- 8 tracked wallets, fictional per-wallet ledger",
         description="08/08 operator spec: forward-tests copying 8 real Base wallets (3 fomoscan-verified all-time track records, 4 GMGN Smart Money 30d, 1 confirmed serial front-runner), one INDEPENDENT fictional paper ledger per wallet -- never merged, never real capital, never a live trigger (CLAUDE.md smart-money doctrine: confirmation only). Polls each wallet's recent Base ERC-20 transfers via Blockscout, opens a $1,000 fictional position on a detected buy, closes it on the matching sell. summary() reports each wallet's realized/latent P&L separately so copying each one can be judged on its own. Dedicated gate ARIA_WALLET_COPY_SHADOW_ENABLED, OFF by default -- standalone research shadow, independent of the $1M momentum test.",
@@ -862,6 +869,14 @@ def _sync_x_curiosity_enabled() -> None:
                 # flag only, same doctrine as wallet_copy_shadow_cycle.
                 task.enabled = os.environ.get(
                     "ARIA_DIP_RECOVERY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "early_legitimacy_shadow_cycle":
+                # 15/08 -- standalone research shadow, independent of the
+                # $1M momentum test (no paper_trading double-gate needed --
+                # it never touches paper_trader positions). Single dedicated
+                # flag only, same doctrine as dip_recovery_shadow_cycle.
+                task.enabled = os.environ.get(
+                    "ARIA_EARLY_LEGITIMACY_SHADOW_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "wallet_copy_shadow_cycle":
                 # 08/08 -- standalone research shadow, independent of the
@@ -1806,6 +1821,15 @@ class AriaHeartbeat:
             logger.info(
                 "dip_recovery_shadow_cycle: %s/%s watchlist tokens evaluated",
                 result.get("evaluated"), result.get("watchlist_size"),
+            )
+
+        elif task_id == "early_legitimacy_shadow_cycle":
+            from aria_core.momentum_entry import run_early_legitimacy_shadow_cycle
+
+            result = await run_early_legitimacy_shadow_cycle()
+            logger.info(
+                "early_legitimacy_shadow_cycle: %s/%s candidates evaluated",
+                result.get("evaluated"), result.get("candidates"),
             )
 
         elif task_id == "twitterapi_io_budget_watch_cycle":

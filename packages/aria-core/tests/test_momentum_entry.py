@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+import aiosqlite
 import pytest
 
 from aria_core import momentum_entry as me
@@ -2424,6 +2425,200 @@ async def test_dip_recovery_shadow_cycle_read_failure_never_blocks_the_passage(m
     result = await me.run_dip_recovery_shadow_cycle()
 
     assert result == {"evaluated": 0, "watchlist_size": 1}
+
+
+# ── run_early_legitimacy_shadow_cycle (15/08, RPC-direct owner/LP signals) ──
+# Evaluates each goplus_watchlist token EXACTLY ONCE (already_computed check),
+# skips anything past MAX_TOKEN_AGE_HOURS, resolves the DEX pair via the same
+# fetch_token_pairs/_best_pair helpers the candle collector above already
+# uses. early_legitimacy_shadow.already_computed/record_observation are
+# mocked directly (no real RPC calls, no real sqlite for that module here).
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_empty_watchlist_is_a_noop():
+    result = await me.run_early_legitimacy_shadow_cycle()
+    assert result == {"evaluated": 0, "candidates": 0}
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_evaluates_new_tokens(monkeypatch):
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_already_computed(contract, chain):
+        return False
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    pair = PairSnapshot(
+        pair_address="0xpool", base_address=CONTRACT, liquidity_usd=100_000.0,
+        base_symbol="TOK", pair_created_at=1_700_000_000_000,
+    )
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [pair]
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    recorded = []
+
+    async def fake_record_observation(contract, chain, *, symbol=None, lp_pair_address=None, pair_age_seconds=None, w3=None):
+        recorded.append((contract, chain, symbol, lp_pair_address, pair_age_seconds))
+
+    monkeypatch.setattr(early_legitimacy_shadow, "record_observation", fake_record_observation)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": 1, "candidates": 1}
+    assert len(recorded) == 1
+    contract, chain, symbol, lp_pair_address, pair_age_seconds = recorded[0]
+    assert contract == CONTRACT and chain == "base"
+    assert symbol == "TOK"
+    assert lp_pair_address == "0xpool"
+    assert pair_age_seconds is not None and pair_age_seconds > 0
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_skips_already_computed_tokens(monkeypatch):
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_already_computed(contract, chain):
+        return True
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    called = []
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        called.append(contract)
+        return []
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": 0, "candidates": 0}
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_skips_tokens_past_max_age(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+    stale_iso = (datetime.now(timezone.utc) - timedelta(hours=early_legitimacy_shadow.MAX_TOKEN_AGE_HOURS + 1)).isoformat()
+    async with aiosqlite.connect(str(wl.aria_db_path())) as db:
+        await db.execute("UPDATE goplus_watchlist SET added_at = ? WHERE contract = ?", (stale_iso, CONTRACT))
+        await db.commit()
+
+    async def fake_already_computed(contract, chain):
+        return False
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    called = []
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        called.append(contract)
+        return []
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": 0, "candidates": 0}
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_no_pair_still_evaluates(monkeypatch):
+    """No resolvable DexScreener pair -- record_observation is still called
+    (owner_renounced doesn't need a pair), just without LP data."""
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_already_computed(contract, chain):
+        return False
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    recorded = []
+
+    async def fake_record_observation(contract, chain, *, symbol=None, lp_pair_address=None, pair_age_seconds=None, w3=None):
+        recorded.append((contract, chain, symbol, lp_pair_address))
+
+    monkeypatch.setattr(early_legitimacy_shadow, "record_observation", fake_record_observation)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": 1, "candidates": 1}
+    assert recorded == [(CONTRACT, "base", None, None)]
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_failure_never_blocks_the_passage(monkeypatch):
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    await wl.add_or_touch(CONTRACT, "base", 50.0)
+
+    async def fake_already_computed(contract, chain):
+        return False
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    async def broken_fetch_token_pairs(contract, *, chain="base"):
+        raise RuntimeError("dexscreener unavailable")
+
+    monkeypatch.setattr(me, "fetch_token_pairs", broken_fetch_token_pairs)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": 0, "candidates": 1}
+
+
+@pytest.mark.asyncio
+async def test_early_legitimacy_shadow_cycle_respects_batch_size(monkeypatch):
+    from aria_core import early_legitimacy_shadow
+    from aria_core.services import goplus_watchlist as wl
+
+    for i in range(me._EARLY_LEGITIMACY_SHADOW_BATCH_SIZE + 3):
+        await wl.add_or_touch("0x" + str(i).zfill(40), "base", 50.0)
+
+    async def fake_already_computed(contract, chain):
+        return False
+
+    monkeypatch.setattr(early_legitimacy_shadow, "already_computed", fake_already_computed)
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(me, "fetch_token_pairs", fake_fetch_token_pairs)
+
+    async def fake_record_observation(contract, chain, *, symbol=None, lp_pair_address=None, pair_age_seconds=None, w3=None):
+        pass
+
+    monkeypatch.setattr(early_legitimacy_shadow, "record_observation", fake_record_observation)
+
+    result = await me.run_early_legitimacy_shadow_cycle()
+
+    assert result == {"evaluated": me._EARLY_LEGITIMACY_SHADOW_BATCH_SIZE, "candidates": me._EARLY_LEGITIMACY_SHADOW_BATCH_SIZE}
 
 
 # ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → Mobula → DexScreener → Dune) ──

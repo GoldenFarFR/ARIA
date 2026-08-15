@@ -774,6 +774,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_DIRECTIVE_CHANNEL_ENABLED",
     "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
     "ARIA_DUNE_ENABLED",
+    # 15/08 -- RPC-direct legitimacy signals (owner renouncement, LP lock/burn
+    # via chunked Transfer-log scan) for brand-new tokens, zero Blockscout/
+    # GoPlus dependency. Pure observation, never gates a real/paper trade.
+    # OFF by default.
+    "ARIA_EARLY_LEGITIMACY_SHADOW_ENABLED",
     "ARIA_EXAM_ENABLED",
     # 08/09 -- signal_cascade_farcaster.py stage 2 refresh cycle. Same
     # doctrine as its GitHub sibling below. OFF by default.
