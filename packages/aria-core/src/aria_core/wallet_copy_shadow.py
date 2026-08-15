@@ -224,6 +224,26 @@ CREATE TABLE IF NOT EXISTS wallet_copy_shadow_dynamic_candidates (
 # force candidates through before the leaderboard itself has real signal.
 LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0
 
+# 15/08 (#172) -- the dynamic-candidates table had NO lifecycle: once added,
+# a wallet stayed tracked (scanned every cycle via Blockscout, sequentially,
+# forever) with no way back out, even once dormant or no longer competitive.
+# Real gap: #147/#151's sourcing work is actively growing the leaderboard's
+# population (the very thing #146's own comment above says this seam is
+# waiting for) -- unbounded growth here means run_scan_cycle's sequential
+# scan only ever gets slower, never self-corrects. Same "unique registry with
+# a real lifecycle" doctrine as goplus_watchlist.add_or_touch (worst-first
+# eviction when full) -- deliberately NOT applied to the 8 hand-picked
+# TRACKED_WALLETS, which stay permanent by design (manually vetted evidence,
+# never auto-pruned).
+MAX_DYNAMIC_CANDIDATES = 20
+
+# Absolute TTL: a wallet's percentile at discovery is a SNAPSHOT, not a
+# standing guarantee -- tracking it forever just because it's still
+# technically "active" would let an early-lucky wallet ride on a stale
+# justification indefinitely. Forces periodic re-discovery instead (a wallet
+# still worth tracking clears the percentile bar again on its own).
+DYNAMIC_CANDIDATE_MAX_AGE_DAYS = 90
+
 _table_ready = False
 
 
@@ -497,6 +517,34 @@ async def discover_leaderboard_candidates(
                 )
                 if await cursor.fetchone():
                     continue
+
+                count_row = await (
+                    await db.execute("SELECT COUNT(*) FROM wallet_copy_shadow_dynamic_candidates")
+                ).fetchone()
+                count = int(count_row[0]) if count_row else 0
+                if count >= MAX_DYNAMIC_CANDIDATES:
+                    # Full: only a candidate that beats the CURRENT worst
+                    # earns a slot (same worst-first eviction as
+                    # goplus_watchlist.add_or_touch) -- never grows past the
+                    # cap, never evicts for nothing.
+                    worst = await (
+                        await db.execute(
+                            "SELECT wallet_address, composite_percentile_at_add "
+                            "FROM wallet_copy_shadow_dynamic_candidates "
+                            "ORDER BY composite_percentile_at_add ASC LIMIT 1"
+                        )
+                    ).fetchone()
+                    if worst is None or percentile <= worst[1]:
+                        continue
+                    await db.execute(
+                        "DELETE FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
+                        (worst[0],),
+                    )
+                    logger.info(
+                        "wallet_copy_shadow: evicted %s (percentile %.1f) for %s (percentile %.1f) -- registry full",
+                        worst[0][:10], worst[1], wallet_l[:10], percentile,
+                    )
+
                 await db.execute(
                     "INSERT INTO wallet_copy_shadow_dynamic_candidates "
                     "(wallet_address, added_at, composite_percentile_at_add) VALUES (?, ?, ?)",
@@ -508,6 +556,73 @@ async def discover_leaderboard_candidates(
             return added
     except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
         logger.info("wallet_copy_shadow: leaderboard discovery failed (%s)", exc)
+        return 0
+
+
+async def evict_stale_dynamic_candidates(
+    *, max_age_days: float = DYNAMIC_CANDIDATE_MAX_AGE_DAYS,
+    inactivity_threshold_days: float = INACTIVITY_THRESHOLD_DAYS,
+) -> int:
+    """(#172, 15/08) Removes dynamic candidates whose discovery has gone
+    stale, closing the "registry with no lifecycle" gap: (1) TTL -- past
+    ``max_age_days`` since discovery, its percentile snapshot is no longer a
+    standing justification; (2) dormant -- a real cursor exists (at least one
+    scan has run) and its last ON-CHAIN transfer is older than
+    ``inactivity_threshold_days``, same threshold ``summary()`` already uses
+    to LABEL a wallet dormant, now also acted on here. A candidate with NO
+    cursor row yet (not scanned once) is never evicted as dormant -- that's
+    "not scanned yet", not "went quiet".
+
+    Only ever touches ``wallet_copy_shadow_dynamic_candidates`` -- the 8
+    hand-picked ``TRACKED_WALLETS`` are permanent by design, never pruned.
+    Position/cursor history rows are left untouched (historical record); the
+    wallet simply stops being scanned/reported once evicted. Best-effort:
+    never raises, returns 0 on any failure. Returns the count evicted."""
+    try:
+        await _ensure_tables()
+        now = datetime.now(timezone.utc)
+        async with aiosqlite.connect(DB_PATH) as db:
+            rows = await (
+                await db.execute(
+                    "SELECT wallet_address, added_at FROM wallet_copy_shadow_dynamic_candidates"
+                )
+            ).fetchall()
+            evicted = 0
+            for wallet, added_at in rows:
+                reason = None
+                try:
+                    added_dt = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                    if (now - added_dt).days >= max_age_days:
+                        reason = "ttl_expired"
+                except (ValueError, TypeError):
+                    pass
+                if reason is None:
+                    last_row = await (
+                        await db.execute(
+                            "SELECT last_transfer_at FROM wallet_copy_shadow_cursor WHERE wallet_address = ?",
+                            (wallet,),
+                        )
+                    ).fetchone()
+                    last_transfer_at = last_row[0] if last_row else None
+                    if last_transfer_at:
+                        try:
+                            transfer_dt = datetime.fromisoformat(last_transfer_at.replace("Z", "+00:00"))
+                            if (now - transfer_dt).days >= inactivity_threshold_days:
+                                reason = "dormant"
+                        except (ValueError, TypeError):
+                            pass
+                if reason is not None:
+                    await db.execute(
+                        "DELETE FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
+                        (wallet,),
+                    )
+                    logger.info("wallet_copy_shadow: evicted %s (%s)", wallet[:10], reason)
+                    evicted += 1
+            if evicted:
+                await db.commit()
+        return evicted
+    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
+        logger.info("wallet_copy_shadow: stale-eviction pass failed (%s)", exc)
         return 0
 
 

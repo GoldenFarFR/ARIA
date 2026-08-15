@@ -333,6 +333,117 @@ async def test_discover_leaderboard_candidates_no_table_degrades_to_zero():
     assert added == 0
 
 
+# ----------------------- registry lifecycle (#172, 15/08) -----------------------
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_evicts_worst_when_full():
+    entries = [(f"0x{i:040x}", 80.0 + i) for i in range(wcs.MAX_DYNAMIC_CANDIDATES)]
+    await _seed_leaderboard(entries)
+    added = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+    assert added == wcs.MAX_DYNAMIC_CANDIDATES
+    worst_wallet = entries[0][0]  # lowest percentile (80.0) of the batch
+
+    newcomer = "0x" + "9" * 40
+    await _seed_leaderboard([(newcomer, 999.0)])
+    added_second = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    assert added_second == 1
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert len(dynamic) == wcs.MAX_DYNAMIC_CANDIDATES  # never grows past the cap
+    assert newcomer in dynamic
+    assert worst_wallet not in dynamic  # evicted to make room
+
+
+@pytest.mark.asyncio
+async def test_discover_leaderboard_candidates_skips_when_not_better_than_worst_and_full():
+    entries = [(f"0x{i:040x}", 80.0 + i) for i in range(wcs.MAX_DYNAMIC_CANDIDATES)]
+    await _seed_leaderboard(entries)
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    weak_newcomer = "0x" + "8" * 40
+    await _seed_leaderboard([(weak_newcomer, 80.0)])  # ties the current worst, not strictly better
+    added = await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    assert added == 0
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert weak_newcomer not in dynamic
+    assert len(dynamic) == wcs.MAX_DYNAMIC_CANDIDATES  # unchanged, no eviction for nothing
+
+
+@pytest.mark.asyncio
+async def test_evict_stale_dynamic_candidates_removes_expired_ttl():
+    import aiosqlite
+
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        await db.execute(
+            "UPDATE wallet_copy_shadow_dynamic_candidates SET added_at = ? WHERE wallet_address = ?",
+            ("2020-01-01T00:00:00+00:00", LEADERBOARD_WALLET_HIGH),
+        )
+        await db.commit()
+
+    evicted = await wcs.evict_stale_dynamic_candidates()
+
+    assert evicted == 1
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert LEADERBOARD_WALLET_HIGH not in dynamic
+
+
+@pytest.mark.asyncio
+async def test_evict_stale_dynamic_candidates_removes_dormant_wallets():
+    import aiosqlite
+
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO wallet_copy_shadow_cursor "
+            "(wallet_address, last_tx_hash, last_scanned_at, last_transfer_at) "
+            "VALUES (?, 'somehash', '2026-08-15T00:00:00+00:00', ?)",
+            (LEADERBOARD_WALLET_HIGH, "2020-01-01T00:00:00+00:00"),
+        )
+        await db.commit()
+
+    evicted = await wcs.evict_stale_dynamic_candidates()
+
+    assert evicted == 1
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert LEADERBOARD_WALLET_HIGH not in dynamic
+
+
+@pytest.mark.asyncio
+async def test_evict_stale_dynamic_candidates_never_evicts_unscanned_candidate():
+    """No cursor row yet (never scanned once) -- 'not scanned yet' is
+    distinct from 'went quiet', must never be evicted as dormant."""
+    await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])
+    await wcs.discover_leaderboard_candidates(min_percentile=80.0)
+
+    evicted = await wcs.evict_stale_dynamic_candidates()
+
+    assert evicted == 0
+    dynamic = await wcs._dynamic_tracked_wallets()
+    assert LEADERBOARD_WALLET_HIGH in dynamic
+
+
+@pytest.mark.asyncio
+async def test_evict_stale_dynamic_candidates_never_touches_static_wallets():
+    """The 8 hand-picked TRACKED_WALLETS are permanent -- eviction only ever
+    reads/writes wallet_copy_shadow_dynamic_candidates."""
+    evicted = await wcs.evict_stale_dynamic_candidates()
+    assert evicted == 0
+    assert WALLET in wcs.TRACKED_WALLETS
+
+
+@pytest.mark.asyncio
+async def test_evict_stale_dynamic_candidates_no_table_degrades_to_zero():
+    evicted = await wcs.evict_stale_dynamic_candidates()
+    assert evicted == 0
+
+
 @pytest.mark.asyncio
 async def test_run_scan_cycle_includes_dynamic_candidates(monkeypatch):
     await _seed_leaderboard([(LEADERBOARD_WALLET_HIGH, 90.0)])

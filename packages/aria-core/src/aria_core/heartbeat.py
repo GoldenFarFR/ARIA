@@ -1735,6 +1735,13 @@ class AriaHeartbeat:
                         "wallet_copy_shadow_cycle: +%s wallet(s) découvert(s) via le leaderboard réel",
                         added,
                     )
+                # (#172, 15/08) -- registry lifecycle: TTL + dormant eviction,
+                # only meaningful while the dynamic seam itself is enabled.
+                evicted = await wallet_copy_shadow.evict_stale_dynamic_candidates()
+                if evicted:
+                    logger.info(
+                        "wallet_copy_shadow_cycle: -%s wallet(s) évincé(s) (TTL/dormance)", evicted,
+                    )
             results = await wallet_copy_shadow.run_scan_cycle()
             opened = sum(r.opened for r in results)
             closed = sum(r.closed for r in results)
