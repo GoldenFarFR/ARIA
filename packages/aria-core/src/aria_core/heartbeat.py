@@ -516,13 +516,6 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="high_conviction_alert_cycle",
-        name="Proactive high-conviction alerts",
-        description="Pushes a Telegram alert as soon as the screened pool surfaces a SAFE candidate above the composite score threshold (candidate_ranking, already existing -- nothing duplicated). A sorting signal, never a buy order -- points to /vc <contract> for the full analysis. A contract is alerted only once. Gate OFF by default.",
-        interval_minutes=60,
-        enabled=False,
-    ),
-    HeartbeatTask(
         id="pump_dump_autopsy_cycle",
         name="Pump/dump autopsy",
         description="Rereads the real OHLCV series traversed by each recently-closed VC prediction (the point-to-point entry->maturity comparison hides an intermediate pump-then-crash); if a real pattern is detected (deterministic, no LLM), asks the LLM for a short autopsy. Local log + GitHub issue proposal (aria-playbook-proposal) if the lesson is judged durable -- never an autonomous commit or merge. Gate OFF by default.",
@@ -959,10 +952,6 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.telegram_conversation_miner import telegram_miner_enabled
 
                 task.enabled = telegram_miner_enabled()
-            if task.id == "high_conviction_alert_cycle":
-                from aria_core.skills.high_conviction_alerts import high_conviction_alerts_enabled
-
-                task.enabled = high_conviction_alerts_enabled()
             if task.id == "pump_dump_autopsy_cycle":
                 from aria_core.skills.pump_dump_autopsy import pump_dump_autopsy_enabled
 
@@ -1970,20 +1959,6 @@ class AriaHeartbeat:
                 append_memory(
                     "telegram_miner",
                     f"[mineur] proposition -- {result.get('title', '?')}",
-                )
-
-        elif task_id == "high_conviction_alert_cycle":
-            from aria_core.skills.high_conviction_alerts import run_high_conviction_alert_cycle
-
-            # 14/08 -- HTML notifier (format_alert now builds a clickable
-            # DexScreener link) -- was plain-text before, same pattern
-            # switch as agent_wallet_monitor_cycle's own basescan link.
-            result = await run_high_conviction_alert_cycle(notifier=self._notify_telegram_html)
-            if result.get("outcome") == "ok":
-                append_memory(
-                    "high_conviction_alert",
-                    f"[alerte] {result.get('contract', '?')[:10]} -> score "
-                    f"{result.get('rank_score', 0):.0f}",
                 )
 
         elif task_id == "pump_dump_autopsy_cycle":

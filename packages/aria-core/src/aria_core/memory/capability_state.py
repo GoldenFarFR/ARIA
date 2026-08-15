@@ -27,7 +27,6 @@ _CAPABILITY_GATES: tuple[tuple[str, str], ...] = (
     ("ARIA_BONDING_DISCOVERY_ENABLED", "Découverte tokens en phase de bonding (Virtuals)"),
     ("ARIA_PAPER_TRADING_ENABLED", "Paper-trading 1M$ (portefeuille simulé)"),
     ("ARIA_MARKET_SENTIMENT_ENABLED", "Sentiment de marché continu (BTC/ETH)"),
-    ("ARIA_HIGH_CONVICTION_ALERTS_ENABLED", "Alertes proactives haute-conviction"),
     ("ARIA_PUMP_DUMP_AUTOPSY_ENABLED", "Autopsie pump/dump automatique"),
     ("ARIA_KNOWLEDGE_INBOX_ENABLED", "Boîte de dépôt de connaissance"),
     ("ARIA_CLAUDE_MENTOR_ENABLED", "Revue de performance par Claude"),

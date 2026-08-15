@@ -165,14 +165,6 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
   sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
   le cycle ne coûte rien et n'appelle pas le LLM.
-- **Alertes proactives haute-conviction — EN LIGNE, déployée et activée (09/07)** :
-  `skills/high_conviction_alerts.py`, heartbeat `high_conviction_alert_cycle` (60 min),
-  `ARIA_HIGH_CONVICTION_ALERTS_ENABLED=true` sur le VPS. Pousse une alerte Telegram
-  dès que `candidate_ranking` (déjà existant, rien dupliqué) fait remonter un candidat
-  `SAFE` au-dessus du score composite (seuil 80/100) — signal de tri, jamais un ordre
-  d'achat, renvoie vers `/vc <contrat>` pour l'analyse complète. Un contrat n'est alerté
-  qu'une seule fois (mémorisé localement, jamais de spam sur le même candidat). Respecte
-  le kill-switch (`/stop`).
 - **Overlay macro « Contexte marché » dans le rapport /vc — EN LIGNE, feu vert visuel opérateur confirmé (09/07)** :
   tâche #14. Réutilise `btc_cycles.py` (rien dupliqué) : nouvelle fonction pure
   `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) + `fetch_current_macro_phase()`
