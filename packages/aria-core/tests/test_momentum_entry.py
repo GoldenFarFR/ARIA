@@ -1641,6 +1641,36 @@ async def test_check_honeypot_evm_never_checked_queues_candidate():
     assert await wl.count() == 1
 
 
+@pytest.mark.asyncio
+async def test_check_honeypot_reference_asset_never_enters_watchlist():
+    """15/08 -- real x402 ledger audit found WETH/cbETH/cbBTC (reference/quote
+    assets, never legitimate trading candidates) sitting in goplus_watchlist
+    for weeks, each re-paid for (x402 holder-concentration fallback) dozens
+    of times. A reference asset must be rejected BEFORE ever reaching
+    goplus_watchlist.add_or_touch, regardless of which upstream source it
+    came from."""
+    from aria_core.services import goplus_watchlist as wl
+
+    weth_base = "0x4200000000000000000000000000000000000006"
+    assert await wl.count() == 0
+    clear, reason, code = await me._check_honeypot(weth_base, "base")
+    assert clear is False
+    assert code == "reference_asset"
+    assert "référence" in reason.lower()
+    assert await wl.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_check_honeypot_reference_asset_check_is_case_insensitive():
+    from aria_core.services import goplus_watchlist as wl
+
+    weth_upper = "0x4200000000000000000000000000000000000006".upper()
+    clear, _reason, code = await me._check_honeypot(weth_upper, "base")
+    assert clear is False
+    assert code == "reference_asset"
+    assert await wl.count() == 0
+
+
 # ── signal cascade stage 1 -- enqueued from _check_honeypot/goplus_watchlist ──
 # (09/08, second design, explicit operator instruction: "pioche directement
 # dans la liste dexscreener... cette liste des 2k est deja filtree comme il

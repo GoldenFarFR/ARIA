@@ -1356,7 +1356,25 @@ async def _check_honeypot(
     history of rugged tokens" -- that GoPlus structurally cannot see). The
     token must come back CONFIRMED clean by RugCheck to pass; if it also has
     no data, or finds a "danger"/``rugged`` risk, the fail-closed behavior
-    remains unchanged."""
+    remains unchanged.
+
+    15/08 -- real x402 ledger audit found ``0x4200...0006`` (WETH on Base --
+    the reference/quote currency, never a legitimate speculative candidate)
+    sitting in ``goplus_watchlist`` since 02/08 and getting re-evaluated (and
+    re-PAID for, via the x402 holder-concentration fallback) dozens of times
+    over two weeks. The Doppler discovery source already excludes reference
+    tokens via ``reference_tokens_excluded`` (14/08) at ITS OWN insertion
+    point, but that only protects that one source -- WETH's actual entry
+    predates it, meaning some other source (never pinned down precisely)
+    fed it straight into this function without going through that filter.
+    Guarding here, at the single choke point every source's first sighting
+    of a contract passes through before ``goplus_watchlist.add_or_touch``,
+    closes the leak regardless of which upstream source it came from, and
+    protects every future source the same way -- never trust a caller to
+    have already filtered reference assets out."""
+    if contract and contract.lower() in reference_tokens_excluded(chain):
+        return False, "actif de référence (stable/LST/wrapped-native/bluechip) -- jamais un candidat de trading", "reference_asset"
+
     goplus_chain = _DEXSCREENER_TO_GOPLUS_CHAIN_ID.get(chain)
     if not goplus_chain:
         return False, f"chaîne {chain} non couverte par le garde-fou honeypot -- rejet par prudence", "chain_not_covered"
