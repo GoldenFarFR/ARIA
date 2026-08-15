@@ -1,6 +1,8 @@
 """Tests du client GeckoTerminal (lecture seule, #157) — aucun appel réseau
 réel, tout est mocké."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from aria_core.services.geckoterminal import (
@@ -949,3 +951,173 @@ class TestAdaptiveThrottle:
             await client._get_json("/networks/base/pools/0xpool")
 
         assert client._current_interval == pytest.approx(tightened * 0.9)
+
+
+# ── get_all_time_high (14/08, #181) -- no provider exposes a ready-made ATH
+# field, built from the pool's full daily OHLCV history instead ──────────
+
+_DAY = 86400
+
+
+def _ohlcv_payload(rows):
+    """``rows``: list of (ts, open, high, low, close, volume)."""
+    return {"data": {"attributes": {"ohlcv_list": [list(r) for r in rows]}}}
+
+
+def _flat_page(*, first_day: int, count: int, high: float = 1.0, peak_day: int | None = None, peak_high: float | None = None):
+    """``count`` daily rows starting at ``first_day`` (epoch days), all with
+    ``high``, except ``peak_day`` (if given) which gets ``peak_high``."""
+    rows = []
+    for i in range(count):
+        day = first_day + i
+        h = peak_high if (peak_day is not None and day == peak_day) else high
+        rows.append((day * _DAY, h * 0.9, h, h * 0.8, h * 0.85, 1000.0))
+    return rows
+
+
+class TestGetAllTimeHigh:
+    @pytest.mark.asyncio
+    async def test_single_page_returns_highest_high(self, monkeypatch):
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        rows = _flat_page(first_day=1000, count=50, high=2.0, peak_day=1020, peak_high=7.5)
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2026-01-01T00:00:00Z"}}}),
+                ohlcv_url: FakeResponse(200, _ohlcv_payload(rows)),
+            },
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert result.ath_price == pytest.approx(7.5)
+        assert result.ath_at is not None
+
+    @pytest.mark.asyncio
+    async def test_paginates_back_to_pool_creation_and_keeps_the_true_max(self, monkeypatch):
+        from aria_core.services.geckoterminal import _ATH_CANDLES_PER_PAGE
+
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        # Page 1: a FULL page (== _ATH_CANDLES_PER_PAGE rows) -- must trigger
+        # a second, older page. Its own peak (5.0) is LOWER than page 2's.
+        page1_first_day = 1000
+        page1 = _flat_page(first_day=page1_first_day, count=_ATH_CANDLES_PER_PAGE, high=1.0, peak_day=page1_first_day + 5, peak_high=5.0)
+        # Page 2: thinner than a full page (signals the true beginning of
+        # the series) -- carries the REAL all-time high (9.0).
+        page2 = _flat_page(first_day=page1_first_day - 40, count=40, high=1.0, peak_day=page1_first_day - 10, peak_high=9.0)
+        # Pool created before page 2's own oldest day -- so page 1's oldest
+        # timestamp alone must never look like "reached creation" and cut
+        # the scan short before page 2 is even fetched.
+        created_iso = datetime.fromtimestamp((page1_first_day - 100) * _DAY, tz=timezone.utc).isoformat()
+
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": created_iso}}}),
+                ohlcv_url: [FakeResponse(200, _ohlcv_payload(page1)), FakeResponse(200, _ohlcv_payload(page2))],
+            },
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert result.ath_price == pytest.approx(9.0)
+
+    @pytest.mark.asyncio
+    async def test_stops_pagination_once_a_page_is_thinner_than_requested(self, monkeypatch):
+        from aria_core.services.geckoterminal import _ATH_CANDLES_PER_PAGE
+
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        thin_page = _flat_page(first_day=1000, count=_ATH_CANDLES_PER_PAGE - 1, high=3.0)
+        # A SECOND response queued but never consumed -- if the client wrongly
+        # paginates further, this would be popped and change the result/call count.
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2020-01-01T00:00:00Z"}}}),
+                ohlcv_url: [FakeResponse(200, _ohlcv_payload(thin_page)), FakeResponse(500)],
+            },
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert result.ath_price == pytest.approx(3.0)
+
+    @pytest.mark.asyncio
+    async def test_pool_created_at_unavailable_fails_closed_without_ohlcv_call(self, monkeypatch):
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        called = {"ohlcv": False}
+
+        class _RecordingFakeClient(FakeClient):
+            async def get(self, url, params=None, headers=None):
+                if url == ohlcv_url:
+                    called["ohlcv"] = True
+                return await super().get(url, params=params, headers=headers)
+
+        monkeypatch.setattr(
+            "aria_core.services.geckoterminal.httpx.AsyncClient",
+            lambda **kw: _RecordingFakeClient({created_url: FakeResponse(404)}),
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is False
+        assert called["ohlcv"] is False
+
+    @pytest.mark.asyncio
+    async def test_error_on_first_ohlcv_page_fails_closed(self, monkeypatch):
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2020-01-01T00:00:00Z"}}}),
+                ohlcv_url: FakeResponse(429),
+            },
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is False
+
+    @pytest.mark.asyncio
+    async def test_error_after_a_real_first_page_keeps_the_partial_ath(self, monkeypatch):
+        """A page-2 failure (429, timeout, 5xx) must never discard a REAL
+        ATH already computed from page 1 -- a partial-but-real history beats
+        a fabricated "unavailable"."""
+        from aria_core.services.geckoterminal import _ATH_CANDLES_PER_PAGE
+
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        page1 = _flat_page(first_day=1000, count=_ATH_CANDLES_PER_PAGE, high=1.0, peak_day=1005, peak_high=4.2)
+
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2020-01-01T00:00:00Z"}}}),
+                ohlcv_url: [FakeResponse(200, _ohlcv_payload(page1)), FakeResponse(429)],
+            },
+        )
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert result.ath_price == pytest.approx(4.2)

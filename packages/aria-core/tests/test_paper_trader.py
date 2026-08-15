@@ -5082,6 +5082,199 @@ async def test_momentum_strategy_position_unaffected_by_vc_thesis_branch(tmp_db)
     assert act["closed"][0]["close_reason"] == "stop suiveur"
 
 
+# ── 08/15 -- "vc_hold" strategy (see VC_X20_ALERT_MULTIPLE/_vc_x20_potential_filter):
+#    same fundamental security invalidations as vc_thesis (dev-sold, liquidity), but
+#    NO target-reached auto-close, NO Take-Seed partial exit -- only ADDITION is a
+#    one-time x20 alert, never a sale. Explicit operator spec: "pas de stop loss ou
+#    quoi juste tenir pendant plusieurs mois... sa envoi une alerte pour ensuite
+#    surveiller pour un point de sortie que je déciderai moi." ──────────────────────
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_closes_on_absolute_liquidity_floor(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_hold", pool_liquidity_usd=80_000.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=25_000.0),  # < VC_MIN_LIQUIDITY_FLOOR_USD
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+    assert not await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_closes_on_relative_liquidity_drop(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_hold", pool_liquidity_usd=200_000.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=90_000.0),  # 55% de chute, > plancher absolu
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_survives_a_minor_liquidity_dip(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_hold", pool_liquidity_usd=200_000.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.05, liquidity_usd=170_000.0),  # -15%, bruit normal
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_closes_on_dev_wallet_recent_selling(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_hold", pool_liquidity_usd=200_000.0,
+        entry_dev_sold_pct=5.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=1.1, liquidity_usd=200_000.0),  # liquidité saine
+    )
+
+    async def fake_dev_check(contract, chain, entry_sold_pct):
+        assert entry_sold_pct == 5.0
+        return True, "dev wallet a vendu 20.0 points de % supplémentaires depuis l'entrée (5.0%->25.0%)"
+
+    monkeypatch.setattr(pt, "_check_vc_dev_wallet_recent_selling", fake_dev_check)
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "vente déployeur détectée"
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_closes_on_sudden_liquidity_drop_between_cycles(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, strategy="vc_hold", pool_liquidity_usd=200_000.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=190_000.0),
+    )
+    act1 = await pt.run_paper_cycle(candidates=[])
+    assert act1["closed"] == []
+
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup", _vc_position_pair_lookup(price=0.95, liquidity_usd=120_000.0),
+    )
+    act2 = await pt.run_paper_cycle(candidates=[])
+    assert len(act2["closed"]) == 1
+    assert act2["closed"][0]["close_reason"] == "invalidation fondamentale (liquidité)"
+    assert "SOUDAINE" in act2["closed"][0]["close_notes"]
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_never_closes_on_target_reached(tmp_db, monkeypatch):
+    """Contrairement à vc_thesis, "vc_hold" ne clôture JAMAIS automatiquement en
+    atteignant target_price -- aucune décision de vente automatique, seule
+    l'alerte x20 (distincte, non bloquante) réagit à un prix élevé."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=3.0, alloc_usd=50_000,
+        strategy="vc_hold", pool_liquidity_usd=200_000.0, wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=3.2, liquidity_usd=200_000.0),  # au-dessus de target
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_never_take_seeds(tmp_db, monkeypatch):
+    """Contrairement à vc_thesis, "vc_hold" ne prend jamais de profit partiel à 2x --
+    aucune décision de vente automatique du tout."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=100.0, alloc_usd=50_000, strategy="vc_hold", wallet="vc",
+    )
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=5.0, liquidity_usd=200_000.0),  # bien au-dessus de 2x
+    )
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["partial"] == []
+    assert act["closed"] == []
+    assert await pt.has_open(A)
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_sends_x20_alert_once_and_never_sells(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=100.0, alloc_usd=50_000, strategy="vc_hold", wallet="vc",
+    )
+    sent = []
+
+    async def notifier(msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=20.0, liquidity_usd=200_000.0),  # exactement x20
+    )
+    act = await pt.run_paper_cycle(candidates=[], notifier=notifier)
+    assert act["closed"] == []
+    assert act["partial"] == []
+    assert await pt.has_open(A)
+    x20_alerts = [m for m in sent if "SEUIL x20 ATTEINT" in m]
+    assert len(x20_alerts) == 1
+    assert f"x{pt.VC_X20_ALERT_MULTIPLE:.0f}" in x20_alerts[0]
+    assert "Aucune vente automatique" in x20_alerts[0]
+    pos = await pt._get_open(A)
+    assert pos["x20_alert_sent"] == 1
+
+    # Cycle suivant, toujours au-dessus du seuil -- jamais renvoyée une 2e fois.
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=25.0, liquidity_usd=200_000.0),
+    )
+    act2 = await pt.run_paper_cycle(candidates=[], notifier=notifier)
+    assert act2["closed"] == []
+    x20_alerts_after = [m for m in sent if "SEUIL x20 ATTEINT" in m]
+    assert len(x20_alerts_after) == 1  # inchangé
+
+
+@pytest.mark.asyncio
+async def test_vc_hold_position_no_alert_below_x20_threshold(tmp_db, monkeypatch):
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        A, "AAA", 1.0, target_price=100.0, alloc_usd=50_000, strategy="vc_hold", wallet="vc",
+    )
+    sent = []
+
+    async def notifier(msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(
+        pt, "_default_pair_lookup",
+        _vc_position_pair_lookup(price=15.0, liquidity_usd=200_000.0),  # < x20
+    )
+    act = await pt.run_paper_cycle(candidates=[], notifier=notifier)
+    assert act["closed"] == []
+    x20_alerts = [m for m in sent if "SEUIL x20 ATTEINT" in m]
+    assert x20_alerts == []
+    pos = await pt._get_open(A)
+    assert pos["x20_alert_sent"] == 0
+
+
 # ── Fraîcheur d'exécution -- recalcul R/R au prix frais (20/07, remplace le 1er design
 #    à seuil % aveugle, revue croisée Gemini) ──────────────────────────────────────────
 
@@ -5960,8 +6153,12 @@ async def test_vc_analyzer_with_bonding_routes_bonding_chain_to_bonding_entry(mo
         vc_called_with["contract"] = contract
         return {"action": "HOLD", "chain": "base", "hold_reason": "test"}
 
+    async def fake_x20_filter(contract, chain):
+        return True, "test"
+
     monkeypatch.setattr(bonding_entry, "evaluate_bonding_entry", fake_bonding_eval)
     monkeypatch.setattr(pt, "_default_analyzer", fake_default_analyzer)
+    monkeypatch.setattr(pt, "_vc_x20_potential_filter", fake_x20_filter)
 
     analyzer = pt._vc_analyzer_with_bonding({A: CHAIN_MARKER, B: "base"})
 
@@ -5970,6 +6167,161 @@ async def test_vc_analyzer_with_bonding_routes_bonding_chain_to_bonding_entry(mo
 
     assert bonding_called_with["contract"] == A
     assert vc_called_with["contract"] == B
+
+
+# ── x20 potential filter (14/08, #181) -- mechanical, pre-LLM gate for the VC
+# pocket: a candidate only reaches the LLM if it already shows real
+# theoretical room for a x20 from its current price ──────────────────────
+
+def _fake_pair(*, market_cap_usd=None, price_usd=0.0, pair_address="0xpool", liquidity_usd=10_000.0):
+    from aria_core.services.dexscreener import PairSnapshot
+
+    return PairSnapshot(
+        pair_address=pair_address, liquidity_usd=liquidity_usd, price_usd=price_usd,
+        market_cap_usd=market_cap_usd,
+    )
+
+
+class TestVcX20PotentialFilter:
+    @pytest.mark.asyncio
+    async def test_passes_on_low_market_cap_alone(self, monkeypatch):
+        async def _fake_pairs(contract, *, chain="base"):
+            return [_fake_pair(market_cap_usd=500_000.0, price_usd=0.01)]
+
+        monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", _fake_pairs)
+
+        passed, reason = await pt._vc_x20_potential_filter(A, "base")
+
+        assert passed is True
+        assert "market cap" in reason
+
+    @pytest.mark.asyncio
+    async def test_high_market_cap_falls_through_to_ath_check(self, monkeypatch):
+        from aria_core.services.geckoterminal import AthResult
+
+        async def _fake_pairs(contract, *, chain="base"):
+            return [_fake_pair(market_cap_usd=5_000_000.0, price_usd=1.0)]
+
+        async def _fake_ath(pool_address, *, network="base"):
+            return AthResult(ath_price=20.0, available=True)  # 1.0 <= 20.0/15
+
+        monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", _fake_pairs)
+        monkeypatch.setattr(
+            "aria_core.services.geckoterminal.geckoterminal_client.get_all_time_high", _fake_ath,
+        )
+
+        passed, reason = await pt._vc_x20_potential_filter(A, "base")
+
+        assert passed is True
+        assert "ATH" in reason
+
+    @pytest.mark.asyncio
+    async def test_high_market_cap_and_too_close_to_ath_rejected(self, monkeypatch):
+        from aria_core.services.geckoterminal import AthResult
+
+        async def _fake_pairs(contract, *, chain="base"):
+            return [_fake_pair(market_cap_usd=5_000_000.0, price_usd=15.0)]
+
+        async def _fake_ath(pool_address, *, network="base"):
+            return AthResult(ath_price=20.0, available=True)  # 15.0 > 20.0/15
+
+        monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", _fake_pairs)
+        monkeypatch.setattr(
+            "aria_core.services.geckoterminal.geckoterminal_client.get_all_time_high", _fake_ath,
+        )
+
+        passed, _reason = await pt._vc_x20_potential_filter(A, "base")
+
+        assert passed is False
+
+    @pytest.mark.asyncio
+    async def test_no_pair_at_all_fails_closed(self, monkeypatch):
+        async def _fake_pairs(contract, *, chain="base"):
+            return []
+
+        monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", _fake_pairs)
+
+        passed, reason = await pt._vc_x20_potential_filter(A, "base")
+
+        assert passed is False
+        assert "indisponibles" in reason
+
+    @pytest.mark.asyncio
+    async def test_ath_unavailable_fails_closed_never_guesses(self, monkeypatch):
+        from aria_core.services.geckoterminal import AthResult
+
+        async def _fake_pairs(contract, *, chain="base"):
+            return [_fake_pair(market_cap_usd=5_000_000.0, price_usd=1.0)]
+
+        async def _fake_ath(pool_address, *, network="base"):
+            return AthResult(available=False, error="donnée GeckoTerminal indisponible")
+
+        monkeypatch.setattr("aria_core.services.dexscreener.fetch_token_pairs", _fake_pairs)
+        monkeypatch.setattr(
+            "aria_core.services.geckoterminal.geckoterminal_client.get_all_time_high", _fake_ath,
+        )
+
+        passed, reason = await pt._vc_x20_potential_filter(A, "base")
+
+        assert passed is False
+        assert "indisponible" in reason
+
+    @pytest.mark.asyncio
+    async def test_rejected_candidate_never_reaches_the_llm(self, monkeypatch):
+        from aria_core import bonding_entry
+
+        async def _fake_filter(contract, chain):
+            return False, "test rejection"
+
+        async def _fail_if_called(contract):
+            raise AssertionError("the LLM analyzer must never be called on a x20-filter rejection")
+
+        monkeypatch.setattr(pt, "_vc_x20_potential_filter", _fake_filter)
+        monkeypatch.setattr(pt, "_default_analyzer", _fail_if_called)
+
+        analyzer = pt._vc_analyzer_with_bonding({A: "base"})
+        result = await analyzer(A)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_accepted_candidate_gets_vc_hold_strategy_forced(self, monkeypatch):
+        async def _fake_filter(contract, chain):
+            return True, "test"
+
+        async def _fake_default_analyzer(contract):
+            return {"action": "BUY", "strategy": "vc_thesis", "target": 5.0}
+
+        monkeypatch.setattr(pt, "_vc_x20_potential_filter", _fake_filter)
+        monkeypatch.setattr(pt, "_default_analyzer", _fake_default_analyzer)
+
+        analyzer = pt._vc_analyzer_with_bonding({A: "base"})
+        result = await analyzer(A)
+
+        assert result["strategy"] == "vc_hold"
+
+    @pytest.mark.asyncio
+    async def test_bonding_candidate_skips_the_filter_and_keeps_momentum_strategy(self, monkeypatch):
+        from aria_core import bonding_entry
+        from aria_core.bonding_entry import CHAIN_MARKER
+
+        called = {"filter": False}
+
+        async def _fake_filter(contract, chain):
+            called["filter"] = True
+            return True, "test"
+
+        async def _fake_bonding_eval(contract):
+            return {"action": "BUY", "strategy": "momentum", "chain": CHAIN_MARKER}
+
+        monkeypatch.setattr(pt, "_vc_x20_potential_filter", _fake_filter)
+        monkeypatch.setattr(bonding_entry, "evaluate_bonding_entry", _fake_bonding_eval)
+
+        analyzer = pt._vc_analyzer_with_bonding({A: CHAIN_MARKER})
+        result = await analyzer(A)
+
+        assert called["filter"] is False
+        assert result["strategy"] == "momentum"
 
 
 @pytest.mark.asyncio
@@ -7514,6 +7866,11 @@ async def test_multi_pocket_gate_on_sources_three_pockets_independently(tmp_db, 
         }
 
     monkeypatch.setattr(pt, "_default_analyzer", _fake_vc_analyzer)
+
+    async def _fake_x20_filter(contract, chain):
+        return True, "test"
+
+    monkeypatch.setattr(pt, "_vc_x20_potential_filter", _fake_x20_filter)
 
     async def _price_lookup(contract):
         return 1.0

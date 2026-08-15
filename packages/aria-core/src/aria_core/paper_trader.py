@@ -827,6 +827,7 @@ _POS_FIELDS = (
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
     "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd", "virtual_id",
+    "x20_alert_sent",
 )
 
 _ADDED_COLUMNS = [
@@ -1018,6 +1019,13 @@ _ADDED_COLUMNS = [
     # services.virtuals.public_token_url). NULL for any non-bonding position,
     # or a bonding one opened before this work -- never an invented value.
     ("virtual_id", "INTEGER"),
+    # 08/15 -- "vc_hold" strategy (see _vc_x20_potential_filter above): one-time
+    # alert when price reaches VC_X20_ALERT_MULTIPLE times the entry price,
+    # never an automatic sell. 0/1, irrevocable once set (mirrors
+    # breakeven_locked's dedupe pattern) -- prevents re-sending the same alert
+    # every subsequent management cycle while the price stays above the
+    # threshold. 0 by default, meaningless for any other strategy.
+    ("x20_alert_sent", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -1075,6 +1083,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("entry_market_cap_usd", "REAL"),
     # 12/08 -- kept in parity with _ADDED_COLUMNS above.
     ("virtual_id", "INTEGER"),
+    # 08/15 -- kept in parity with _ADDED_COLUMNS above.
+    ("x20_alert_sent", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -2475,6 +2485,18 @@ async def _lock_breakeven_floor(position_id: int) -> None:
         await db.commit()
 
 
+async def _mark_x20_alert_sent(position_id: int) -> None:
+    """08/15 -- "vc_hold" strategy, dedupes the one-time x20 alert (see
+    ``VC_X20_ALERT_MULTIPLE``) -- irrevocable, never reset elsewhere (mirrors
+    ``_lock_breakeven_floor``'s own pattern)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE paper_position SET x20_alert_sent = 1 WHERE id = ?",
+            (position_id,),
+        )
+        await db.commit()
+
+
 async def _set_position_pocket(position_id: int, pocket: str) -> None:
     """07/22 -- Task 2, satellite pocket. UNIDIRECTIONAL promotion ('main' ->
     'satellite') done by ``run_weekly_reset`` -- no function ever moves a
@@ -2915,6 +2937,31 @@ def format_partial_exit_alert(partial: dict) -> str:
     if partial.get("contract"):
         lines.append(f"Graphique : {_chart_url(partial['contract'], partial.get('chain'), partial.get('virtual_id'))}")
         lines.append(f"Console ARIA : {console_url(partial['contract'], chain=partial.get('chain') or 'base')}")
+    lines.append("Aucun argent réel.")
+    return "\n".join(lines)
+
+
+def format_x20_alert(pos: dict) -> str:
+    """08/15 -- "vc_hold" strategy: one-time alert when price crosses
+    VC_X20_ALERT_MULTIPLE times the entry price. NEVER a sell -- the position
+    stays open, the operator decides the exit point manually (explicit
+    operator spec)."""
+    name = pos.get("symbol") or (pos.get("contract") or "")[:10]
+    entry_price = pos.get("entry_price") or 0.0
+    current_price = pos.get("current_price") or 0.0
+    gain_mult = (current_price / entry_price) if entry_price else 0.0
+    lines = [
+        f"🧪 SIMULATION — portefeuille papier 1 M$ ({_strategy_label(pos)})",
+        f"SEUIL x{VC_X20_ALERT_MULTIPLE:.0f} ATTEINT (FICTIF) {name}",
+        f"Prix actuel {current_price:.6g} · {gain_mult:.1f}x l'entrée ({entry_price:.6g})",
+        "Aucune vente automatique -- position toujours ouverte, point de sortie à décider manuellement.",
+    ]
+    hold = _format_hold_duration(pos.get("opened_at"))
+    if hold:
+        lines.append(f"Détenue {hold}")
+    if pos.get("contract"):
+        lines.append(f"Graphique : {_chart_url(pos['contract'], pos.get('chain'), pos.get('virtual_id'))}")
+        lines.append(f"Console ARIA : {console_url(pos['contract'], chain=pos.get('chain') or 'base')}")
     lines.append("Aucun argent réel.")
     return "\n".join(lines)
 
@@ -3502,6 +3549,61 @@ def build_scalping_pocket_entries(
     )
 
 
+# 14/08, #181 -- explicit operator decision: a candidate only enters the VC
+# pocket's LLM evaluation if it already shows real theoretical room for a
+# x20 from here -- either its market cap is still small enough that a x20
+# is plausible on cap growth alone, or its current price already sits far
+# enough below its own real all-time high (>=15x down) that recovering
+# toward that level alone clears x20. Mechanical, applied BEFORE the LLM
+# ever sees the candidate (never wastes an LLM call on one that fails this).
+# No provider exposes a ready-made ATH field (verified live across
+# DexScreener/GeckoTerminal/DexPaprika/CoinGecko-onchain/Birdeye, 14/08) --
+# see services/geckoterminal.get_all_time_high's own docstring for how it's
+# actually computed (full daily OHLCV history, paginated back to the pool's
+# creation).
+VC_X20_MAX_MARKET_CAP_USD = 1_000_000.0
+VC_X20_MIN_ATH_MULTIPLE = 15.0
+
+# 08/15 -- "vc_hold" management (see the strategy=="vc_hold" branch further
+# below): the multiple, from the REAL entry price (not the ATH used by the
+# entry filter above), that triggers the one-time alert. Explicit operator
+# spec: never an automatic sell, alert-only so the operator picks the exit
+# point manually.
+VC_X20_ALERT_MULTIPLE = 20.0
+
+
+async def _vc_x20_potential_filter(contract: str, chain: str) -> tuple[bool, str]:
+    """``(passed, reason)`` -- fails CLOSED (rejects) if neither the market
+    cap nor a real ATH can be resolved, same doctrine as every other hard
+    gate in this pipeline: never guessed, never let through on missing
+    data."""
+    from aria_core.services import dexscreener
+
+    pairs = await dexscreener.fetch_token_pairs(contract, chain=chain)
+    best_pair = max(pairs, key=lambda p: p.liquidity_usd or 0.0) if pairs else None
+    market_cap = best_pair.market_cap_usd if best_pair else None
+    current_price = best_pair.price_usd if best_pair else None
+
+    if market_cap is not None and market_cap < VC_X20_MAX_MARKET_CAP_USD:
+        return True, f"market cap {market_cap:,.0f}$ < {VC_X20_MAX_MARKET_CAP_USD:,.0f}$"
+
+    if not best_pair or not best_pair.pair_address or not current_price:
+        return False, "market cap et prix indisponibles -- filtre x20 refusé par prudence"
+
+    from aria_core.services.geckoterminal import geckoterminal_client
+
+    ath = await geckoterminal_client.get_all_time_high(best_pair.pair_address, network=chain)
+    if not ath.available or not ath.ath_price:
+        mcap_note = f"market cap {market_cap:,.0f}$ >= plafond" if market_cap is not None else "market cap indisponible"
+        return False, f"{mcap_note} et ATH indisponible -- filtre x20 refusé par prudence"
+
+    if current_price <= ath.ath_price / VC_X20_MIN_ATH_MULTIPLE:
+        return True, f"prix {current_price:.6g} <= ATH/{VC_X20_MIN_ATH_MULTIPLE:.0f} ({ath.ath_price:.6g})"
+
+    mcap_note = f"market cap {market_cap:,.0f}$ trop élevé" if market_cap is not None else "market cap indisponible"
+    return False, f"{mcap_note} et prix trop proche de l'ATH ({current_price:.6g} > ATH/{VC_X20_MIN_ATH_MULTIPLE:.0f})"
+
+
 def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
     """Item #157, 28/07: the VC pocket's own analyzer, routing a contract
     tagged ``bonding_entry.CHAIN_MARKER`` to ``evaluate_bonding_entry``
@@ -3525,8 +3627,29 @@ def _vc_analyzer_with_bonding(chain_by_contract: dict[str, str]):
 
     async def analyzer(contract: str) -> dict | None:
         if chain_by_contract.get(contract) == bonding_entry.CHAIN_MARKER:
+            # 14/08, #181 -- the x20 potential filter needs a real DexScreener/
+            # GeckoTerminal pool (market cap, OHLCV history) that structurally
+            # doesn't exist yet for a bonding-curve token -- skipped here,
+            # unchanged from before this work. Keeps its own Take-Seed exit
+            # discipline (strategy="momentum"), never "vc_hold".
             return await bonding_entry.evaluate_bonding_entry(contract)
-        return await _default_analyzer(contract)
+
+        chain = chain_by_contract.get(contract) or "base"
+        passed, reason = await _vc_x20_potential_filter(contract, chain)
+        if not passed:
+            logger.info("vc pocket: %s rejected by x20 potential filter (%s)", contract[:14], reason)
+            return None
+
+        result = await _default_analyzer(contract)
+        # 14/08, #181 -- explicit operator decision: a candidate admitted
+        # through the x20 filter is held with NO automatic exit on reaching
+        # its LLM-computed target ("vc_thesis"'s own discipline) -- only the
+        # dedicated "vc_hold" branch's security invalidations (liquidity
+        # collapse, deployer dumping) and the x20-from-entry alert, see
+        # run_paper_cycle's position-management loop.
+        if result is not None:
+            result["strategy"] = "vc_hold"
+        return result
 
     return analyzer
 
@@ -5690,6 +5813,120 @@ async def _run_paper_cycle_locked(
                                     await notifier(format_partial_exit_alert(partial))
                                 except Exception:  # noqa: BLE001
                                     pass
+                continue
+
+            # 08/15 -- "vc_hold" strategy (see _vc_x20_potential_filter/
+            # VC_X20_ALERT_MULTIPLE above), explicit operator spec: entries
+            # priced deep enough below a real x20 (ATH/15 or market cap under
+            # 1M$) are meant to be held for MONTHS with NO automatic sell
+            # decision at all -- no trailing stop, no target-reached
+            # auto-close, no Take-Seed partial exit (all three removed vs the
+            # vc_thesis branch above). The SAME fundamental security
+            # invalidations survive unchanged (dev-wallet emergency sell,
+            # liquidity floor/cumulative-drop/sudden-drop) -- these detect a
+            # real rug-pull-in-progress, not a price stop-loss, and the
+            # operator never asked to hold through one. Only ADDITION: a
+            # one-time alert (never a sale) once price crosses
+            # VC_X20_ALERT_MULTIPLE times the entry price -- the operator
+            # decides the exit point manually from there.
+            if (p.get("strategy") or "momentum") == "vc_hold":
+                entry_price = p["entry_price"]
+                entry_liq = p.get("entry_liquidity_usd")
+                last_liq = p.get("last_liquidity_usd")
+                current_liq = pair.liquidity_usd if pair is not None else None
+
+                if current_liq is not None:
+                    try:
+                        await _update_vc_liquidity_watermark(p["id"], current_liq)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                dev_sold_triggered, dev_sold_reason = await _check_vc_dev_wallet_recent_selling(
+                    p["contract"], p.get("chain") or "base", p.get("entry_dev_sold_pct"),
+                )
+                if dev_sold_triggered:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Signal SELL d'urgence (surveillance post-entrée VC hold) : {dev_sold_reason} "
+                        f"-- sortie complète ({exit_gain_pct:+.1f}% vs entrée), "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="vente déployeur détectée", notes=exit_notes,
+                        position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                liquidity_invalidated = False
+                liq_reason = ""
+                if current_liq is not None:
+                    if current_liq < VC_MIN_LIQUIDITY_FLOOR_USD:
+                        liquidity_invalidated = True
+                        liq_reason = (
+                            f"liquidité tombée sous le plancher absolu "
+                            f"({current_liq:,.0f}$ < {VC_MIN_LIQUIDITY_FLOOR_USD:,.0f}$)"
+                        )
+                    elif (
+                        entry_liq and entry_liq > 0
+                        and current_liq < entry_liq * VC_LIQUIDITY_DROP_INVALIDATION_PCT
+                    ):
+                        liquidity_invalidated = True
+                        drop_pct = (1 - current_liq / entry_liq) * 100.0
+                        liq_reason = (
+                            f"liquidité en chute de {drop_pct:.0f}% depuis l'entrée "
+                            f"({entry_liq:,.0f}$ -> {current_liq:,.0f}$)"
+                        )
+                    elif (
+                        last_liq and last_liq > 0
+                        and current_liq < last_liq * (1 - VC_LIQUIDITY_SUDDEN_DROP_PCT)
+                    ):
+                        liquidity_invalidated = True
+                        sudden_drop_pct = (1 - current_liq / last_liq) * 100.0
+                        liq_reason = (
+                            f"chute SOUDAINE de liquidité entre deux cycles "
+                            f"({sudden_drop_pct:.0f}%, {last_liq:,.0f}$ -> {current_liq:,.0f}$) "
+                            "-- retrait de LP en formation"
+                        )
+
+                if liquidity_invalidated:
+                    exit_gain_pct = (price / entry_price - 1.0) * 100.0 if entry_price else 0.0
+                    exit_notes = (
+                        f"Invalidation fondamentale VC : {liq_reason} -- thèse invalidée "
+                        f"({exit_gain_pct:+.1f}% vs entrée), sortie complète, "
+                        f"{_duration_phrase(p.get('opened_at'))}."
+                    )
+                    closed = await close_position(
+                        p["contract"], price, reason="invalidation fondamentale (liquidité)",
+                        notes=exit_notes, position_id=p["id"],
+                    )
+                    if closed:
+                        actions["closed"].append(closed)
+                        if notifier:
+                            try:
+                                await notifier(format_sell_alert(closed))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    continue
+
+                already_alerted = bool(p.get("x20_alert_sent"))
+                gain_mult = (price / entry_price) if entry_price else 0.0
+                if not already_alerted and gain_mult >= VC_X20_ALERT_MULTIPLE:
+                    try:
+                        await _mark_x20_alert_sent(p["id"])
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if notifier:
+                        try:
+                            await notifier(format_x20_alert({**p, "current_price": price}))
+                        except Exception:  # noqa: BLE001
+                            pass
                 continue
 
             # #155, 28/07 -- bonding "volet 2/3" stop-loss (see BONDING_

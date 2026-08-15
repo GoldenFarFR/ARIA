@@ -224,6 +224,22 @@ _EASE_STEP_FACTOR = 0.9
 # stay robust without risking excluding a borderline legitimate pool.
 _PLAUSIBILITY_RATIO_MAX = 1000.0
 
+# 14/08, #181 -- no provider checked (DexScreener, GeckoTerminal, DexPaprika,
+# CoinGecko onchain, Birdeye) exposes a ready-made all-time-high price field
+# for a DEX pool, even DexScreener's own web UI (which visibly shows one)
+# never surfaces it through its documented API. The only real source is
+# GeckoTerminal's own daily OHLCV history, paginated back to the pool's
+# creation. Verified live (CoinGecko onchain docs, which serve the same
+# GeckoTerminal data): "Each API call can only retrieve data for a maximum
+# range of 6 months. To fetch older data, use the before_timestamp
+# parameter" -- 180 days/page (~6 months), paginated backward via
+# ``before_timestamp``. Capped at 20 pages (~10 years) -- far beyond any
+# real token's age on this pipeline (micro-caps, recently launched), pure
+# anti-infinite-loop guard, same doctrine as blockscout_x402.py's
+# ``_MAX_PAGES_PER_EXTRACTION``.
+_ATH_CANDLES_PER_PAGE = 180
+_ATH_MAX_PAGES = 20
+
 
 def _pool_is_plausible(reserve_usd: float, volume_h24_usd: float) -> bool:
     """A pool is deemed implausible if its declared reserve and its 24h volume
@@ -267,6 +283,14 @@ class PoolTrade:
 @dataclass
 class PoolTradesResult:
     trades: list[PoolTrade] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+@dataclass
+class AthResult:
+    ath_price: float | None = None
+    ath_at: datetime | None = None
     available: bool = True
     error: str | None = None
 
@@ -422,6 +446,64 @@ class GeckoTerminalClient:
         if created_at is None:
             return PoolMetadata(pool_address=pool_address, available=False, error="date de création du pool indisponible")
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
+
+    async def get_all_time_high(self, pool_address: str, *, network: str = NETWORK) -> AthResult:
+        """The real all-time-high price, scanned from the pool's FULL daily
+        OHLCV history (never a guess, never limited to whatever window a
+        caller happened to already fetch) -- see the module-level comment
+        above ``_ATH_CANDLES_PER_PAGE`` for why this has to be built rather
+        than consumed from a ready-made provider field. Paginates backward
+        via ``before_timestamp`` until the page's oldest candle reaches (or
+        passes) the pool's own creation date, or a page comes back thin
+        (fewer candles than requested -- signals the true beginning of the
+        series, same "less than requested = last page" signal every other
+        paginated client in this codebase uses).
+
+        A page that errors OUT (429, timeout, 5xx) after at least one
+        successful page stops the scan and returns the ATH computed from
+        history ALREADY gathered, rather than discarding real partial
+        coverage -- an ATH from a partial-but-real history is still a
+        genuine (if possibly understated) floor, never a fabricated number.
+        Only fails closed (``available=False``) if not even the first page
+        could be read."""
+        created = await self.get_pool_created_at(pool_address, network=network)
+        if not created.available or created.created_at is None:
+            return AthResult(available=False, error=created.error or UNAVAILABLE)
+        created_ts = int(created.created_at.timestamp())
+
+        from aria_core.services.ohlcv import _parse_candles
+
+        highest_price: float | None = None
+        highest_at: datetime | None = None
+        before_ts: int | None = None
+
+        for _page in range(_ATH_MAX_PAGES):
+            params: dict[str, object] = {"aggregate": 1, "limit": _ATH_CANDLES_PER_PAGE}
+            if before_ts is not None:
+                params["before_timestamp"] = before_ts
+            data, error = await self._get_json(f"/networks/{network}/pools/{pool_address}/ohlcv/day", params=params)
+            if error is not None:
+                if highest_price is None:
+                    return AthResult(available=False, error=error)
+                break
+
+            candles = _parse_candles(data)
+            if not candles:
+                break
+
+            for c in candles:
+                if highest_price is None or c.high > highest_price:
+                    highest_price = c.high
+                    highest_at = datetime.fromtimestamp(c.ts, tz=timezone.utc)
+
+            oldest_ts = min(c.ts for c in candles)
+            if oldest_ts <= created_ts or len(candles) < _ATH_CANDLES_PER_PAGE:
+                break
+            before_ts = oldest_ts
+
+        if highest_price is None:
+            return AthResult(available=False, error=UNAVAILABLE)
+        return AthResult(ath_price=highest_price, ath_at=highest_at, available=True, error=None)
 
     async def get_pool_trades(
         self, pool_address: str, *, network: str = NETWORK, min_volume_usd: float | None = None,
