@@ -267,6 +267,7 @@ def test_patch_relaxes_gas_fee_validation_on_the_real_sdk():
     test asserting the PRE-patch failure mode, so it must be the first to
     touch the real class -- kept in one self-contained test rather than split
     across two, precisely to avoid that ordering trap."""
+    pytest.importorskip("cdp", reason="cdp-sdk is the optional [agent_wallet] extra")
     from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
 
     with pytest.raises(Exception):  # noqa: PT011 -- real pydantic.ValidationError, unpatched
@@ -282,6 +283,7 @@ def test_patch_relaxes_gas_fee_validation_on_the_real_sdk():
 def test_patch_still_parses_a_real_valid_fee_after_patching():
     """The patch only relaxes null -- a genuinely present fee must still parse
     correctly (never silently dropped)."""
+    pytest.importorskip("cdp", reason="cdp-sdk is the optional [agent_wallet] extra")
     from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
 
     adapter._patch_cdp_swap_fee_validation()
@@ -296,6 +298,7 @@ def test_patch_still_parses_a_real_valid_fee_after_patching():
 
 
 def test_patch_is_idempotent():
+    pytest.importorskip("cdp", reason="cdp-sdk is the optional [agent_wallet] extra")
     adapter._patch_cdp_swap_fee_validation()
     adapter._patch_cdp_swap_fee_validation()  # must not raise on a 2nd call
     assert adapter._cdp_swap_fee_validation_patched is True
@@ -311,6 +314,7 @@ def test_patch_degrades_softly_on_unexpected_sdk_shape(monkeypatch):
     the real submodule has been imported anywhere in the process, as the test
     above already does, re-faking its parent package no longer blocks a fresh
     import of an already-cached submodule)."""
+    pytest.importorskip("cdp", reason="cdp-sdk is the optional [agent_wallet] extra")
     from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
 
     monkeypatch.setattr(CommonSwapResponseFees, "model_fields", {})

@@ -21,7 +21,10 @@ Runtime du **cerveau ARIA** (ZHC) — SSOT dans `aria-sandbox`, consommé par **
 
 ## Install
 
-**Dev** : `pip install -e ".[dev]"` depuis ce dossier.
+**Dev** : `pip install -e ".[dev]"` depuis ce dossier. Suffit pour lancer le package et l'immense majorité
+de la suite de tests. Quelques tests couvrant des intégrations optionnelles (wallet agent réel, vente
+x402) importent `cdp`/`x402` et se sautent proprement (`pytest.importorskip`) si ces extras ne sont pas
+installés — `pip install -e ".[dev,agent_wallet,x402]"` pour les inclure.
 
 **Prod / Render** : git pin SHA dans `aria-vanguard/backend/requirements.txt` (jamais `@main`).
 

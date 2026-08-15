@@ -79,6 +79,7 @@ def test_build_resource_config_none_for_unknown_product(monkeypatch):
 
 
 def test_build_resource_config_testnet_by_default(monkeypatch):
+    pytest.importorskip("x402", reason="x402 is the optional [x402] extra")
     monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
     monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
     rc = s.build_resource_config("wallet_score")
@@ -90,6 +91,7 @@ def test_build_resource_config_testnet_by_default(monkeypatch):
 
 
 def test_build_resource_config_mainnet_when_both_gates_on(monkeypatch):
+    pytest.importorskip("x402", reason="x402 is the optional [x402] extra")
     monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
     monkeypatch.setenv("ARIA_X402_SELLER_MAINNET", "true")
     rc = s.build_resource_config("token_analysis_fresh")
@@ -113,6 +115,7 @@ def test_build_resource_config_mainnet_when_both_gates_on(monkeypatch):
 
 
 def test_resolved_network_matches_a_scheme_registered_the_way_the_real_sdk_expects(monkeypatch):
+    pytest.importorskip("x402", reason="x402 is the optional [x402] extra")
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
     from x402.server import x402ResourceServer
 
