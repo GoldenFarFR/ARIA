@@ -73,7 +73,7 @@ Telegram / API chat
 │  journal.py → markdown DATA_DIR/memory/                     │
 │  cognitive_sql.py → SQLite cognitive_knowledge              │
 │  llm_context.py → build_llm_context (journal+cognitive+vector) │
-│  vector/ → Chroma embedded (aria_vector_memory=false défaut)  │
+│  vector/ → LanceDB embedded (aria_vector_memory=false défaut) │
 ├─────────────────────────────────────────────────────────────┤
 │ Truth ledger — truth_ledger/ (hors package memory)          │
 │ calibration_ledger.json — Brier épistémique                 │
@@ -85,13 +85,13 @@ Telegram / API chat
 | `memory/journal.py` | Journal markdown (`append_memory` rétrocompat) |
 | `memory/cognitive_sql.py` | SQLite — wrapper `knowledge/cognitive.py` |
 | `memory/llm_context.py` | Contexte LLM unifié — injection vectorielle opt-in |
-| `memory/vector/` | Chroma embedded — types dans `schema.yaml` |
+| `memory/vector/` | LanceDB embedded — types dans `schema.yaml` |
 | `member_memory.py` | Mémoire visiteurs (chat public) |
 | `knowledge/calibration_ledger.py` | Prédictions P(vrai) + Brier |
 | `truth_ledger/` | Faits vérifiés, sync GitHub |
 | `repertoire_db.py` | Ventures holding (≠ cognitive) |
 
-> **Phase C (2026-06)** : Chroma local opt-in — `pip install -e ".[dev,vector]"` + `aria_vector_memory=true`.  
+> **Phase C (2026-06)** : mémoire vectorielle locale opt-in — `pip install -e ".[dev,vector]"` + `aria_vector_memory=true` (backend migré de Chroma vers LanceDB, cf. `docs/HANDOFF_LANCEDB.md`).  
 > **Phase D (2026-06)** : `llm_context.py` injecte le rappel sémantique dans `build_llm_context` (flag off en prod par défaut).  
 > **Phase E (2026-07)** : `memory/values.py` + `knowledge/aria_values.yaml` — valeurs opérationnelles injectées dans le contexte LLM.  
 > **Phase F (2026-07)** : `memory/goals.py` + `knowledge/aria_goals.yaml` — objectifs + état dynamique (QI, revenu).  

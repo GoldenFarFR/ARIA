@@ -43,7 +43,7 @@ skills/mon_skill.py
 |--------|--------|-----|
 | Log session, heartbeat | `memory/journal.py` | `append()`, `append_memory()` |
 | Leçon approuvée SQLite | `memory/cognitive_sql.py` | `add_knowledge()`, `get_approved()` |
-| Embedding sémantique | `memory/vector/` | `store()`, `search()` — **stub, flag off** |
+| Embedding sémantique | `memory/vector/` | `store()`, `search()` — LanceDB, flag off par défaut |
 | Fait canonique | `truth_ledger/store.py` | hors package memory |
 | Calibration Brier | `knowledge/calibration_ledger.py` | hors package memory |
 | Progression QI (fichier) | `DATA_DIR/memory/capability_progress.json` | via `capability_levels.py` |
@@ -55,7 +55,8 @@ aria_core/memory/
   ├── cognitive_sql.py    # SQLite cognitive_knowledge
   ├── _legacy_journal.py  # impl SSOT journal (ex-memory.py)
   ├── vector/
-  │   ├── chroma_store.py # stub Chroma
+  │   ├── lancedb_store.py # store()/search(), backend LanceDB (migré de Chroma)
+  │   ├── lancedb_client.py # connexion embedded + audit/health
   │   └── schema.yaml     # insight | lesson | reflection | decision
   └── README.md
 ```

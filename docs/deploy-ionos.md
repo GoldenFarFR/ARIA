@@ -73,12 +73,20 @@ Le script échoue explicitement si le health ne confirme pas le commit déployé
 - **commit `unknown`** : un `docker build` sans `--build-arg GIT_COMMIT=…` laisse
   le health afficher `commit:"unknown"` → on ne sait plus quelle version tourne.
   Le script passe systématiquement le hash.
-- **conteneurs en double** : un ancien conteneur `aria-api` resté actif en même
-  temps qu'un nouveau a déjà provoqué un incident (double polling / confusion).
-  Le script fait `docker rm -f` sur **tout** conteneur `aria-api` avant le run.
+- **downtime au déploiement** : depuis #154 (13/07), le script fait du **blue-green
+  par alternance de port** (8000↔8001) — le nouveau conteneur est lancé et vérifié
+  PENDANT que l'ancien tourne encore ; celui-ci n'est retiré (`docker rm -f`)
+  qu'APRÈS confirmation via le trafic réel (nginx). Un health-check en échec ne
+  cause donc plus AUCUNE coupure (l'ancien continue de servir). Détail complet :
+  `docs/deploy-rollback-blue-green.md`.
 - **exposition publique** : binding **strictement `127.0.0.1`** (jamais `8000:8000`).
 
-### Mise à jour manuelle (repli, si le script est indisponible)
+### Mise à jour manuelle (repli d'urgence, si le script est indisponible)
+
+> ⚠️ Repli **simplifié, SANS blue-green** — contrairement à `deploy.sh`, ce cycle
+> `rm -f` + `run` provoque une brève coupure entre l'arrêt de l'ancien conteneur
+> et la disponibilité du nouveau. À réserver aux cas où le script lui-même est
+> cassé/indisponible, jamais comme méthode de routine.
 
 ```bash
 cd /opt/aria \
