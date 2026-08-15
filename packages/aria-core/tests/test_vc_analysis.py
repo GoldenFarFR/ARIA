@@ -273,6 +273,80 @@ def test_enforce_danger_veto_leaves_buy_untouched_when_not_danger():
         assert result.recommandation == "BUY"  # le veto ne s'applique qu'a DANGER
 
 
+# ----------------------- plafond R/R extreme (#181, 15/08) -----------------------
+
+
+def test_enforce_extreme_rr_downgrades_buy_and_clamps_upside():
+    """upside=1000%/downside=10% -> R/R=100, tres au-dessus du plafond (20) --
+    doit clamper upside a 200% (10*20) et retrograder BUY en WATCH."""
+    result = vc._validate_llm_output(
+        json.loads(_valid_llm_json(upside_pct=1000, downside_pct=10)), _ctx(),
+    )
+    assert result.recommandation == "BUY"  # avant le plafond
+    vc._enforce_extreme_rr_downgrade(result)
+    assert result.recommandation == "WATCH"
+    assert result.taille_pct == 0.0
+    assert result.upside_pct == pytest.approx(200.0)
+    assert result.rr == pytest.approx(20.0)
+
+
+def test_enforce_extreme_rr_leaves_non_buy_recommandation_but_still_clamps():
+    """Le clamp d'upside_pct s'applique quelle que soit la recommandation (l'estimation
+    R/R reste malhonnete pour tout le monde) -- seule la retrogradation cible BUY."""
+    result = vc._validate_llm_output(
+        json.loads(_valid_llm_json(recommandation="WATCH", upside_pct=1000, downside_pct=10)), _ctx(),
+    )
+    vc._enforce_extreme_rr_downgrade(result)
+    assert result.recommandation == "WATCH"  # rien a retrograder
+    assert result.upside_pct == pytest.approx(200.0)  # mais le clamp s'applique quand meme
+
+
+def test_enforce_extreme_rr_leaves_plausible_ratio_untouched():
+    """upside=100%/downside=10% -> R/R=10, sous le plafond -- rien ne bouge."""
+    result = vc._validate_llm_output(
+        json.loads(_valid_llm_json(upside_pct=100, downside_pct=10)), _ctx(),
+    )
+    vc._enforce_extreme_rr_downgrade(result)
+    assert result.recommandation == "BUY"
+    assert result.upside_pct == pytest.approx(100.0)
+
+
+def test_enforce_extreme_rr_at_exact_ceiling_untouched():
+    """upside=200%/downside=10% -> R/R=20 pile le plafond -- pas > _MAX_PLAUSIBLE_RR,
+    donc pas d'intervention (le seuil est une borne stricte >, pas >=)."""
+    result = vc._validate_llm_output(
+        json.loads(_valid_llm_json(upside_pct=200, downside_pct=10)), _ctx(),
+    )
+    vc._enforce_extreme_rr_downgrade(result)
+    assert result.recommandation == "BUY"
+    assert result.upside_pct == pytest.approx(200.0)
+
+
+def test_enforce_extreme_rr_noop_without_estimable_rr():
+    """upside/downside absents ou non chiffrables (R/R non estimable, None) -- rien a faire."""
+    result = vc._validate_llm_output(json.loads(_valid_llm_json(upside_pct=0, downside_pct=0)), _ctx())
+    assert result.upside_pct is None and result.downside_pct is None
+    vc._enforce_extreme_rr_downgrade(result)  # ne doit jamais lever
+    assert result.recommandation == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_analyze_vc_extreme_rr_downgrades_llm_buy_end_to_end(monkeypatch):
+    """Meme un R/R extreme auto-declare par le LLM ne doit jamais produire un BUY
+    mecanique -- le plafond s'applique dans le pipeline reel, pas juste en isolation."""
+    monkeypatch.setattr(vc, "scan_base_token", AsyncMock(return_value=_ctx()))
+    monkeypatch.setattr(vc, "list_theses_for_token", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        vc, "chat_with_context",
+        AsyncMock(return_value=_valid_llm_json(upside_pct=1500, downside_pct=5)),
+    )
+
+    result = await vc.analyze_vc(ADDR)
+
+    assert result.recommandation == "WATCH"
+    assert result.rr == pytest.approx(20.0)
+
+
 @pytest.mark.asyncio
 async def test_analyze_vc_danger_verdict_vetoes_llm_buy_end_to_end(monkeypatch):
     """Meme si une donnee on-chain trompeuse convainc le LLM de repondre BUY, un scan

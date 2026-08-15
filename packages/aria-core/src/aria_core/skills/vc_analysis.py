@@ -35,6 +35,16 @@ Two downstream consumers: a short order (Telegram) and a detailed report
    judgment that content could bias). This is the backstop that was missing
    in the public AIXBT incident (an agent drained via an injected command,
    with no non-LLM control before real execution).
+8. **Extreme R/R sanity ceiling** (`_enforce_extreme_rr_downgrade`, 15/08):
+   the LLM's own self-reported upside_pct/downside_pct can imply an R/R far
+   beyond a grounded estimate (e.g. 2000% upside vs a 5% stop = R/R 400) —
+   much more likely an ungrounded guess or an unrealistically tight stop than
+   a real edge. Clamps upside_pct so the stored/displayed R/R never exceeds
+   `_MAX_PLAUSIBLE_RR`, and downgrades a BUY built on that extreme ratio to
+   WATCH. Distinct from the mechanical x20-potential entry filter
+   (`paper_trader._vc_x20_potential_filter`, ATH/market-cap based, runs
+   BEFORE the LLM ever sees the candidate) — this one catches an implausible
+   ratio in the LLM's own AFTER-the-fact estimate.
 """
 from __future__ import annotations
 
@@ -685,6 +695,36 @@ def _enforce_danger_veto(result: VCResult, ctx: TokenScanContext) -> None:
     )
     result.recommandation = "AVOID"
     result.taille_pct = 0.0
+
+
+# A grounded upside/downside estimate shouldn't imply a ratio this extreme --
+# past this ceiling, the LLM's own R/R estimate is far more likely an
+# ungrounded guess (or an unrealistically tight stop) than a real edge.
+_MAX_PLAUSIBLE_RR = 20.0
+
+
+def _enforce_extreme_rr_downgrade(result: VCResult) -> None:
+    """Deterministic backstop on the LLM's own R/R estimate (module docstring
+    point 8). Clamps `upside_pct` so the stored/displayed R/R never exceeds
+    `_MAX_PLAUSIBLE_RR`, and downgrades a BUY built on that extreme ratio to
+    WATCH -- mutates `result` in place, logs the override for audit (never
+    silent, same doctrine as `_enforce_danger_veto`)."""
+    if result.upside_pct is None or result.downside_pct is None or result.downside_pct <= 0:
+        return
+    rr = result.upside_pct / result.downside_pct
+    if rr <= _MAX_PLAUSIBLE_RR:
+        return
+    clamped_upside = round(result.downside_pct * _MAX_PLAUSIBLE_RR, 1)
+    logger.info(
+        "vc_analysis: extreme R/R %.1f for %s (upside=%.1f%%, downside=%.1f%%) -- "
+        "clamping upside to %.1f%% (R/R=%.1f) and downgrading recommandation=%s to WATCH",
+        rr, result.contract, result.upside_pct, result.downside_pct,
+        clamped_upside, _MAX_PLAUSIBLE_RR, result.recommandation,
+    )
+    result.upside_pct = clamped_upside
+    if result.recommandation == "BUY":
+        result.recommandation = "WATCH"
+        result.taille_pct = 0.0
 
 
 def _validate_scenarios(raw: object) -> list[dict]:
@@ -1597,6 +1637,7 @@ async def analyze_vc_with_context(
 
     result = _validate_llm_output(parsed, ctx)
     _enforce_danger_veto(result, ctx)
+    _enforce_extreme_rr_downgrade(result)
     await _attach_extras(result, ctx, lang)
     if result.llm_used:
         result.judge_verdict = await _run_judge_if_enabled(result, ctx, lang)
