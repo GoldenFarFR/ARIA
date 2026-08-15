@@ -72,6 +72,7 @@ comme pour `hooks-changelog.md`.
 | `security-sim.yml` | quotidien 03:17 UTC | 🟢 actif, bloquant | red-team automatisé contre le backend (milliers de requêtes hostiles) |
 | `uptime-watch.yml` | ~15 min | 🟢 actif | surveille l'uptime depuis L'EXTÉRIEUR du VPS (angle mort d'une panne totale) |
 | `dependabot.yml` | continu | 🟢 actif, alerte seule | alertes CVE uniquement, PRs de version routine désactivées |
+| `clean-install-check.yml` | hebdo dimanche 03:00 UTC | 🟢 actif, alerte seule | simule un clone frais (`pip install -e ".[dev]"` seul, sans extras) -- collecte toute la suite + exécute les tests connus pour dépendre d'un extra optionnel, détecte un import non gardé avant qu'un tiers ne tombe dessus (15/08, Task #188) |
 
 ### Sidecars Docker (VPS, tournent en continu, pas un cron/hook événementiel)
 

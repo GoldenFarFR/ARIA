@@ -1,0 +1,59 @@
+# Clean-install check -- weekly, simulates a stranger cloning the public
+# repo and following the README literally: `pip install -e ".[dev]"` with
+# NONE of the optional extras (agent_wallet/x402/vector/polymarket_execution)
+# installed.
+#
+# Why this exists (15/08, Task #188): a real clone-from-scratch test found 7
+# tests failing outright because they imported the optional `cdp`/`x402`
+# packages at module level with no guard. `ci.yml` never caught this --
+# it only runs an explicit allowlist of files (the ones already known to be
+# mock-only), so a brand-new test that repeats the same mistake would slip
+# through silently until the next manual clone-from-scratch test, which had
+# no fixed cadence before this file.
+#
+# Deliberately narrow, not a full-suite run: the full suite hangs on real
+# outbound network I/O around 55-58% (system_issues #101, pre-existing,
+# unrelated to install cleanliness) -- running it here would just produce a
+# meaningless weekly timeout. `--collect-only` imports every test module
+# without executing a single test, so it can never hit that hang, while
+# still catching the exact class of bug this check exists for (an unguarded
+# top-level import of an extra that isn't installed). The two files already
+# known to depend on optional SDKs get a real execution pass on top, to
+# confirm they *skip* cleanly (not just import cleanly).
+
+name: Clean install check (weekly)
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"  # Sunday 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  clean-install:
+    name: pip install -e ".[dev]" only, then collect + targeted run (Python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/aria-core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install with ONLY the [dev] extra (as the README's quick start does)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Collect the full test suite (import-only, never executes a test)
+        run: pytest --collect-only -q
+
+      - name: Execute the tests known to gate on optional SDKs -- must skip, not fail
+        run: |
+          pytest -q \
+            tests/test_agent_wallet_cdp_adapter.py \
+            tests/test_x402_seller.py
