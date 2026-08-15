@@ -2057,6 +2057,18 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
             (h.address or "", h.percentage, h.is_contract, h.is_verified)
             for h in result.holders if h.percentage is not None
         ]
+    elif result.available and not result.holders:
+        # 15/08 -- real x402 ledger audit found 13 "paid but empty" x402
+        # calls in one day, all for contracts where the FREE/Pro holders
+        # call had already come back CLEAN (no error, ``available=True``)
+        # with zero holders -- the paid endpoint hits the exact same
+        # Blockscout indexer, just a different pricing tier, so re-asking
+        # it for data the free tier just confirmed doesn't exist yet is
+        # money spent to relearn the same answer. Only a genuine free-side
+        # FAILURE (``available=False`` -- quota exhausted, timeout, outage)
+        # still falls through to the paid rescue below; a clean-but-empty
+        # free response short-circuits straight to unavailable instead.
+        return await _holder_data_unavailable_verdict(contract, chain)
     else:
         metadata = await client.get_token_metadata(contract)
         decimals: int | None = metadata.decimals if metadata.available else None

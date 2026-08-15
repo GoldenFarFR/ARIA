@@ -5336,6 +5336,36 @@ class TestHolderConcentrationPaidButEmptyCooldown:
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert calls["n"] == 2  # retried both times -- no cooldown warranted
 
+    @pytest.mark.asyncio
+    async def test_clean_empty_free_response_never_attempts_the_paid_call(self, monkeypatch):
+        """15/08 -- real ledger audit: the free/Pro call can come back CLEAN
+        (no error, ``available=True``) with zero holders -- the paid x402
+        endpoint hits the exact same Blockscout indexer, so paying to
+        relearn the same "nothing indexed yet" answer is pure waste. Only a
+        genuine free-side FAILURE (``available=False``) should still fall
+        through to the paid rescue."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=True, holders=[], total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        calls = {"n": 0}
+
+        async def _fail_if_called(contract, *, chain="base", token_symbol=""):
+            calls["n"] += 1
+            return [], True
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fail_if_called,
+        )
+
+        result = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert result == (True, me._HOLDER_DATA_UNAVAILABLE_REASON)
+        assert calls["n"] == 0  # paid fallback never even attempted
+
 
 class TestHolderConcentrationOutageBypass:
     """06/08 -- explicit operator override during a real live Blockscout
