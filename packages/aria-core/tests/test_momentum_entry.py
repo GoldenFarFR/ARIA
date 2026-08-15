@@ -4885,10 +4885,10 @@ class TestCheckHolderConcentration:
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
             called["x402"] = True
-            return []
+            return [], True
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert called["x402"] is False
@@ -4937,10 +4937,10 @@ class TestCheckHolderConcentration:
         ]
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
-            return raw_holders
+            return raw_holders, True
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
         assert too_concentrated is True
@@ -4969,10 +4969,10 @@ class TestCheckHolderConcentration:
         monkeypatch.setattr(base_onchain, "fetch_erc20_metadata", _fail_if_called)
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
-            return [{"holder_address": "0xreal1", "value": "10000", "is_contract": False, "is_verified": False}]
+            return [{"holder_address": "0xreal1", "value": "10000", "is_contract": False, "is_verified": False}], True
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert called["onchain"] is False
@@ -4990,10 +4990,10 @@ class TestCheckHolderConcentration:
         monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
-            return []
+            return [], False
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         assert too_concentrated is True
@@ -5020,10 +5020,10 @@ class TestCheckHolderConcentration:
         ]
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
-            return raw_holders
+            return raw_holders, True
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         too_concentrated, reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
         # pool (100%*... exclu) + contrat vérifié (exclu) -- seul 0xWHALE (85%) compte
@@ -5049,10 +5049,10 @@ class TestCheckHolderConcentration:
         ]
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
-            return raw_holders
+            return raw_holders, True
 
         monkeypatch.setattr(
-            "aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402,
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
         )
         too_concentrated, _reason = await me._check_holder_concentration(CONTRACT, "base", "0xPOOL")
         assert too_concentrated is False
@@ -5234,6 +5234,77 @@ class TestHolderConcentrationLongTermCache:
         too_concentrated, reason = await me._check_holder_concentration(other_contract, "base", "0xpool")
         assert too_concentrated is True
         assert reason == me._HOLDER_DATA_UNAVAILABLE_REASON
+
+
+class TestHolderConcentrationPaidButEmptyCooldown:
+    """14/08 -- a real waste found live: the paid x402 fallback can settle
+    successfully (money moves) while returning zero usable holders for a
+    token Blockscout Pro hasn't indexed yet. Without a cooldown, every
+    heartbeat cycle re-pays for the identical empty answer (verified live:
+    TAO alone racked up 8 successful $0.002 payments over 3 days, zero
+    verdict ever cached)."""
+
+    @pytest.mark.asyncio
+    async def test_paid_but_empty_result_skips_payment_on_next_call(self, monkeypatch):
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        calls = {"n": 0}
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            calls["n"] += 1
+            return [], True  # payment settled, provider had nothing indexed
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
+        )
+
+        first = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert first == (True, me._HOLDER_DATA_UNAVAILABLE_REASON)
+        assert calls["n"] == 1
+
+        # Clear the short-lived (5 min) in-process cache so the second call
+        # is a genuine test of the persisted DB cooldown, not a coincidence
+        # of the unrelated in-memory TTL (see TestHoldersSharedCache).
+        me._holders_x402_cache.clear()
+
+        second = await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert second == (True, me._HOLDER_DATA_UNAVAILABLE_REASON)
+        assert calls["n"] == 1  # NOT re-paid -- cooldown skipped the call
+
+    @pytest.mark.asyncio
+    async def test_payment_that_never_happened_is_not_cooled_down(self, monkeypatch):
+        """A payment that never settled (budget exhausted, /stop, timeout)
+        costs nothing extra to retry -- never suppressed."""
+        import aria_core.services.blockscout as blockscout_module
+        from aria_core.services.blockscout import TokenHoldersResult, TokenMetadataResult
+
+        client = _FakeHoldersClient(
+            TokenHoldersResult(available=False),
+            metadata=TokenMetadataResult(available=True, decimals=0, total_supply=1_000_000.0),
+        )
+        monkeypatch.setattr(blockscout_module, "get_blockscout_client", lambda chain: client)
+
+        calls = {"n": 0}
+
+        async def _fake_x402(contract, *, chain="base", token_symbol=""):
+            calls["n"] += 1
+            return [], False  # never actually paid
+
+        monkeypatch.setattr(
+            "aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402,
+        )
+
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        me._holders_x402_cache.clear()
+        await me._check_holder_concentration(CONTRACT, "base", "0xpool")
+        assert calls["n"] == 2  # retried both times -- no cooldown warranted
 
 
 class TestHolderConcentrationOutageBypass:
@@ -5454,9 +5525,9 @@ class TestHoldersSharedCache:
 
         async def _fake_x402(contract, *, chain="base", token_symbol=""):
             calls["n"] += 1
-            return [{"holder_address": "0xreal1", "value": "30000", "is_contract": False, "is_verified": False}]
+            return [{"holder_address": "0xreal1", "value": "30000", "is_contract": False, "is_verified": False}], True
 
-        monkeypatch.setattr("aria_core.services.blockscout_x402.get_token_holders_x402", _fake_x402)
+        monkeypatch.setattr("aria_core.services.blockscout_x402.get_token_holders_x402_with_status", _fake_x402)
 
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")
         await me._check_holder_concentration(CONTRACT, "base", "0xpool")

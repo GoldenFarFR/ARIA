@@ -95,18 +95,23 @@ def _parse_holders(body: bytes) -> list[dict]:
     return holders
 
 
-async def get_token_holders_x402(
+async def get_token_holders_x402_with_status(
     contract: str, *, chain: str = "base", token_symbol: str = "",
-) -> list[dict]:
-    """Enriched token holders via Blockscout Pro (x402, $0.002/call). Standard
-    dome: never an exception bubbling up, empty list on any failure (budget
-    exhausted, /stop active, insufficient balance, timeout, unreadable
-    response). ``token_symbol`` (traceability, same pattern as #143):
-    passed through as-is all the way to the x402_budget log."""
+) -> tuple[list[dict], bool]:
+    """Same call as ``get_token_holders_x402``, plus the payment's own
+    settlement status (14/08) -- distinguishes "payment succeeded but the
+    response body carried zero usable holders" (a real, billed call that
+    momentum_entry.py needs to recognize and cool down on, see
+    ``holder_concentration_cache.record_paid_but_empty``) from "payment
+    never happened" (budget exhausted, /stop active, insufficient balance,
+    timeout -- retrying immediately next cycle costs nothing extra, so no
+    cooldown is warranted). ``paid_ok`` mirrors ``result.status == "ok"``
+    exactly -- money moved (or the provider explicitly returned 200) iff
+    this is ``True``."""
     addr = (contract or "").strip()
     chain_id = _CHAIN_IDS.get(chain)
     if not addr or not chain_id:
-        return []
+        return [], False
 
     from aria_core import x402_executor
     from aria_core.agent_wallet_cdp_adapter import usdc_balance_usd
@@ -126,10 +131,28 @@ async def get_token_holders_x402(
         )
     except Exception as exc:  # noqa: BLE001
         logger.info("blockscout_x402: get_token_holders_x402 failed (%s)", exc)
-        return []
+        return [], False
     if result.status != "ok" or not result.body:
-        return []
-    return _parse_holders(result.body)
+        return [], False
+    return _parse_holders(result.body), True
+
+
+async def get_token_holders_x402(
+    contract: str, *, chain: str = "base", token_symbol: str = "",
+) -> list[dict]:
+    """Enriched token holders via Blockscout Pro (x402, $0.002/call). Standard
+    dome: never an exception bubbling up, empty list on any failure (budget
+    exhausted, /stop active, insufficient balance, timeout, unreadable
+    response). ``token_symbol`` (traceability, same pattern as #143):
+    passed through as-is all the way to the x402_budget log.
+
+    Thin compat wrapper around ``get_token_holders_x402_with_status`` (14/08)
+    -- kept so every existing caller/test that only cares about the holder
+    list is untouched."""
+    holders, _paid_ok = await get_token_holders_x402_with_status(
+        contract, chain=chain, token_symbol=token_symbol,
+    )
+    return holders
 
 
 # Anti-infinite-loop guard on pagination -- independent of ``target_count``

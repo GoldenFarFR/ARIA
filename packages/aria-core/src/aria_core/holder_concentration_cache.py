@@ -130,3 +130,99 @@ async def cached_verdict(contract: str, chain: str) -> tuple[bool, str] | None:
     if datetime.now(timezone.utc) >= expires_at:
         return None
     return bool(too_concentrated), reason
+
+
+# 14/08 -- separate, much shorter cooldown for a real gap found live: the
+# paid x402 fallback (blockscout_x402.get_token_holders_x402) can settle
+# successfully (money moves, HTTP 200) while returning zero usable holders
+# for a token Blockscout Pro hasn't indexed yet -- this is NOT the
+# "Blockscout unavailable" case the module docstring above deliberately
+# never caches (that case must retry every cycle to catch a real recovery
+# immediately). A token stuck at "paid but empty" doesn't recover on that
+# timescale -- re-paying every heartbeat cycle for the identical empty
+# answer is pure waste (verified live: TAO alone racked up 8 successful
+# $0.002 payments over 3 days with zero verdict ever cached). 6h chosen as
+# a starting value: long enough to stop the cycle-by-cycle re-payment,
+# short enough that a token indexed later the same day is retried well
+# before the 7-day real-verdict TTL above would apply.
+PAID_BUT_EMPTY_COOLDOWN_SECONDS = 6 * 3600
+
+
+async def _ensure_paid_empty_table() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS holder_concentration_paid_empty_cooldown (
+                contract TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY (contract, chain)
+            )
+            """
+        )
+        await db.commit()
+
+
+async def record_paid_but_empty(contract: str, chain: str) -> None:
+    """Called only when the paid x402 fallback settled successfully
+    (``paid_ok=True``) but returned zero usable holders -- never for a
+    payment that didn't happen at all (budget exhausted, /stop active,
+    timeout), which costs nothing extra to retry next cycle."""
+    chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
+    if not contract or not chain:
+        return
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=PAID_BUT_EMPTY_COOLDOWN_SECONDS)
+    try:
+        await _ensure_paid_empty_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO holder_concentration_paid_empty_cooldown "
+                "(contract, chain, recorded_at, expires_at) VALUES (?, ?, ?, ?)",
+                (contract, chain, now.isoformat(), expires_at.isoformat()),
+            )
+            await db.execute(
+                "DELETE FROM holder_concentration_paid_empty_cooldown WHERE expires_at < ?",
+                (now.isoformat(),),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- same doctrine as record_verdict: a
+        # missed write only costs one avoidable re-payment next cycle, never a
+        # wrong verdict.
+        logger.warning(
+            "holder_concentration_cache.record_paid_but_empty: DB failure for %s/%s (%s)",
+            chain, contract, exc,
+        )
+
+
+async def recently_paid_but_empty(contract: str, chain: str) -> bool:
+    """Checked before attempting the paid x402 fallback -- ``True`` skips
+    the payment entirely this cycle (returns unavailable directly), never
+    raises, never blocks a fresh attempt on a lookup failure."""
+    chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
+    try:
+        await _ensure_paid_empty_table()
+        async with aiosqlite.connect(DB_PATH) as db:
+            row = await (
+                await db.execute(
+                    "SELECT expires_at FROM holder_concentration_paid_empty_cooldown "
+                    "WHERE contract = ? AND chain = ?",
+                    (contract, chain),
+                )
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "holder_concentration_cache.recently_paid_but_empty: DB failure for %s/%s (%s)",
+            chain, contract, exc,
+        )
+        return False
+    if row is None:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(row[0])
+    except (TypeError, ValueError):
+        return False
+    return datetime.now(timezone.utc) < expires_at

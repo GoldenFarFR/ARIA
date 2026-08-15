@@ -140,3 +140,70 @@ async def test_recovers_once_db_failure_clears():
     degraded -- the very next call on a healthy DB works normally."""
     await hcc.record_verdict(CONTRACT, "base", True, "concentration confirmee")
     assert await hcc.cached_verdict(CONTRACT, "base") == (True, "concentration confirmee")
+
+
+# ── paid-but-empty cooldown (14/08) -- distinct, much shorter TTL than the
+# real-verdict cache above, see the module's own docstring on this ─────────
+
+@pytest.mark.asyncio
+async def test_paid_but_empty_never_recorded_returns_false():
+    assert await hcc.recently_paid_but_empty(CONTRACT, "base") is False
+
+
+@pytest.mark.asyncio
+async def test_paid_but_empty_recorded_and_read_back():
+    await hcc.record_paid_but_empty(CONTRACT, "base")
+    assert await hcc.recently_paid_but_empty(CONTRACT, "base") is True
+
+
+@pytest.mark.asyncio
+async def test_paid_but_empty_expired_entry_returns_false():
+    import aiosqlite
+    from datetime import datetime, timedelta, timezone
+
+    await hcc.record_paid_but_empty(CONTRACT, "base")
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    async with aiosqlite.connect(hcc.DB_PATH) as db:
+        await db.execute(
+            "UPDATE holder_concentration_paid_empty_cooldown SET expires_at = ? WHERE contract = ?",
+            (past, CONTRACT.lower()),
+        )
+        await db.commit()
+    assert await hcc.recently_paid_but_empty(CONTRACT, "base") is False
+
+
+@pytest.mark.asyncio
+async def test_paid_but_empty_scoped_per_contract_and_chain():
+    await hcc.record_paid_but_empty(CONTRACT, "base")
+    assert await hcc.recently_paid_but_empty("0x" + "b" * 40, "base") is False
+    assert await hcc.recently_paid_but_empty(CONTRACT, "ethereum") is False
+
+
+@pytest.mark.asyncio
+async def test_paid_but_empty_independent_from_real_verdict_cache():
+    """The two caches must never leak into each other -- a real verdict
+    doesn't imply a cooldown and vice versa."""
+    await hcc.record_verdict(CONTRACT, "base", False, "")
+    assert await hcc.recently_paid_but_empty(CONTRACT, "base") is False
+
+    other = "0x" + "d" * 40
+    await hcc.record_paid_but_empty(other, "base")
+    assert await hcc.cached_verdict(other, "base") is None
+
+
+@pytest.mark.asyncio
+async def test_recently_paid_but_empty_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(hcc.aiosqlite, "connect", _broken_connect)
+    assert await hcc.recently_paid_but_empty(CONTRACT, "base") is False
+
+
+@pytest.mark.asyncio
+async def test_record_paid_but_empty_never_raises_on_db_failure(monkeypatch):
+    async def _broken_connect(*_a, **_kw):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(hcc.aiosqlite, "connect", _broken_connect)
+    await hcc.record_paid_but_empty(CONTRACT, "base")

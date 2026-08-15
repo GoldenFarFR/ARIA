@@ -376,22 +376,28 @@ async def _cached_get_token_holders(client, chain: str, contract: str):
         return result
 
 
-async def _cached_get_token_holders_x402(contract: str, chain: str) -> list[dict]:
-    """Shared TTL cache in front of ``blockscout_x402.get_token_holders_x402``
+async def _cached_get_token_holders_x402(contract: str, chain: str) -> tuple[list[dict], bool]:
+    """Shared TTL cache in front of ``blockscout_x402.get_token_holders_x402_with_status``
     -- this is the path that actually spends real USDC per call, see the
-    module comment above ``_HOLDERS_CACHE_TTL_SECONDS``."""
+    module comment above ``_HOLDERS_CACHE_TTL_SECONDS``. Returns
+    ``(holders, paid_ok)`` (14/08) -- ``paid_ok`` lets the caller distinguish
+    a settled-but-empty payment (worth a cooldown, see
+    ``holder_concentration_cache.record_paid_but_empty``) from a payment
+    that never happened at all (nothing to cool down, free to retry next
+    cycle)."""
     key = (chain, contract.lower())
     async with _holders_lock_for(key):
         now = time.monotonic()
         cached = _holders_x402_cache.get(key)
         if cached is not None and (now - cached[0]) < _HOLDERS_CACHE_TTL_SECONDS:
             return cached[1]
-        from aria_core.services.blockscout_x402 import get_token_holders_x402
+        from aria_core.services.blockscout_x402 import get_token_holders_x402_with_status
 
-        raw_holders = await get_token_holders_x402(contract, chain=chain, token_symbol="")
-        _holders_x402_cache[key] = (now, raw_holders)
+        raw_holders, paid_ok = await get_token_holders_x402_with_status(contract, chain=chain, token_symbol="")
+        result = (raw_holders, paid_ok)
+        _holders_x402_cache[key] = (now, result)
         _purge_expired_holders_state(now)
-        return raw_holders
+        return result
 
 
 async def _check_parabolic_smart_money_rescue(
@@ -2057,8 +2063,18 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
         if decimals is None or not total_supply:
             return await _holder_data_unavailable_verdict(contract, chain)
 
-        raw_holders = await _cached_get_token_holders_x402(contract, chain)
+        # 14/08 -- skip the paid call entirely if this contract already paid
+        # for an empty answer recently (see holder_concentration_cache's own
+        # docstring on this cooldown: a token Blockscout Pro hasn't indexed
+        # yet doesn't recover on a per-cycle timescale, repaying for the
+        # identical empty answer every heartbeat is pure waste).
+        if await holder_concentration_cache.recently_paid_but_empty(contract, chain):
+            return await _holder_data_unavailable_verdict(contract, chain)
+
+        raw_holders, paid_ok = await _cached_get_token_holders_x402(contract, chain)
         if not raw_holders:
+            if paid_ok:
+                await holder_concentration_cache.record_paid_but_empty(contract, chain)
             return await _holder_data_unavailable_verdict(contract, chain)
         for h in raw_holders:
             raw_value = h.get("value")
@@ -2072,6 +2088,11 @@ async def _check_holder_concentration(contract: str, chain: str, pool_address: s
                 h.get("holder_address") or "", (balance / total_supply) * 100,
                 h.get("is_contract"), h.get("is_verified"),
             ))
+
+        if not entries:
+            if paid_ok:
+                await holder_concentration_cache.record_paid_but_empty(contract, chain)
+            return await _holder_data_unavailable_verdict(contract, chain)
 
     if not entries:
         return await _holder_data_unavailable_verdict(contract, chain)
