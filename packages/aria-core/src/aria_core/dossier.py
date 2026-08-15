@@ -4,7 +4,7 @@ The operator (and, later, the cockpit) gives a CA (contract address) and
 gets back EVERYTHING ARIA has already recorded on it, merged into one dated
 stream:
 
-- **VC analyses** (`vc_prediction`) — every `/vc` verdict, opening + outcome;
+- **VC analyses** (`vc_prediction`) — every VC verdict (weekly forecast draw), opening + outcome;
 - **journal** (`journal_entry`) — thesis, decision, facts;
 - **thesis follow-up** (`thesis_checkpoint`) — re-checks over time;
 - **investment memory** (`investment_thesis`) — decision → lesson;
@@ -259,7 +259,7 @@ def format_dossier_telegram(dossier: dict, *, limit_events: int = 15) -> str:
     """Renders the dossier as Telegram text (operator). Most recent first.
 
     Graceful degradation: an empty dossier is not a dead end — the next step
-    is suggested (/vc to analyze, /scan for a quick check).
+    is suggested (/scan for a quick check).
     """
     if not dossier.get("valid"):
         return dossier.get("error") or "Adresse invalide."
@@ -276,7 +276,6 @@ def format_dossier_telegram(dossier: dict, *, limit_events: int = 15) -> str:
         return (
             f"{head}\n"
             f"Aucune analyse enregistrée sur ce token pour l'instant.{status_line}\n\n"
-            f"Pour lancer une analyse complète : /vc {contract}\n"
             f"Pour un contrôle de risque rapide : /scan {contract}"
         )
 

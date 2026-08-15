@@ -75,7 +75,7 @@ paying-buyer base yet for this judgment category).
 2. **Forced fresh re-scan** (pricier) — triggers a real network scan (Tavily crawl,
    TwitterAPI.io, GoPlus, Blockscout, one LLM call) → price must cover real per-call cost
    + margin.
-3. **Full consultation** (priciest) — the complete `/vc`-equivalent synthesized thesis.
+3. **Full consultation** (priciest) — the complete `analyze_vc_with_context`-equivalent synthesized thesis (same depth as the retired manual `/vc` command).
 
 Price each tier on its REAL cost-of-goods, verified (same "verify before affirming"
 doctrine as API throttling), never a guessed number.

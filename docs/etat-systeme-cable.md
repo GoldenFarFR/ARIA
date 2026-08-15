@@ -61,15 +61,14 @@ l'utilise — il ne lui « fournit » pas la donnée.
 LLM Vision, images xAI, ACP (CLI absent du conteneur = exécution financière de-facto non câblée).
 Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
 
-- **SMTP Gmail (rapports email) : ACTIF en prod.** `/vc <contrat>` (mode normal, hors `test`)
-  demande la **langue du rapport** (boutons Telegram FR/EN) avant de lancer l'analyse LLM, puis
-  envoie un **PDF sécurisé** (reportlab + chiffrement pypdf, permissions limitées à l'impression
-  — dissuasif, jamais inviolable) en pièce jointe, avec filigrane nominatif traçable (destinataire
-  + empreinte SHA-256). Le corps de l'email ne contient qu'un **teaser court** (badges, R/R) —
-  la thèse et le rapport détaillé complet ne sont JAMAIS en clair dans le corps, seulement dans
-  le PDF joint. Destinataire fixe (jamais demandé). Voir `skills/vc_delivery.py`,
-  `skills/vc_report_pdf.py`, `skills/vc_i18n.py` (`SUPPORTED_VC_LANGS = (fr, en)` seulement —
-  ES/IT/ZH pas encore supportés, à faire si demandé).
+- **SMTP Gmail (rapports email) : mécanisme construit, PLUS DÉCLENCHÉ depuis le 15/08.**
+  Le format lui-même (**PDF sécurisé**, reportlab + chiffrement pypdf, permissions limitées à
+  l'impression — dissuasif, jamais inviolable — filigrane nominatif traçable, destinataire +
+  empreinte SHA-256, corps d'email limité à un **teaser court** badges/R/R, thèse et rapport
+  détaillé JAMAIS en clair dans le corps) reste codé et testé, mais son seul déclencheur était la
+  commande Telegram manuelle `/vc <contrat>`, supprimée (l'opérateur ne l'utilisait plus). Voir
+  `skills/vc_delivery.py`, `skills/vc_report_pdf.py`, `skills/vc_i18n.py`
+  (`SUPPORTED_VC_LANGS = (fr, en)` seulement — ES/IT/ZH pas encore supportés).
 
 ## Cockpit « ARIA en direct » (#21) — EN LIGNE (câblé + déployé 08/07)
 - `/cockpit` sur la vitrine : pouls public (`GET /api/pulse`, sans auth — heartbeat vivant/mort,
@@ -165,7 +164,7 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
   sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
   le cycle ne coûte rien et n'appelle pas le LLM.
-- **Overlay macro « Contexte marché » dans le rapport /vc — EN LIGNE, feu vert visuel opérateur confirmé (09/07)** :
+- **Overlay macro « Contexte marché » dans le rapport VC — EN LIGNE, feu vert visuel opérateur confirmé (09/07)** :
   tâche #14. Réutilise `btc_cycles.py` (rien dupliqué) : nouvelle fonction pure
   `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) + `fetch_current_macro_phase()`
   (async, cache 1h en mémoire, dégradation douce sur une source qui échoue). **Aucun appel LLM** — chiffres
@@ -241,7 +240,7 @@ Commande Telegram toujours disponible (admin-only). Tâche heartbeat quotidienne
 par `ARIA_X_PROFILE_SYNC_ENABLED` — **pas encore activée** sur le VPS.
 
 ## Menu Telegram réduit au kill-switch (09/07 nuit 2 — choix opérateur)
-`set_my_commands` n'expose plus que `/stop`/`/resume`. Les 14 autres commandes (dont `/vc`,
+`set_my_commands` n'expose plus que `/stop`/`/resume`. Les autres commandes (dont
 `/scan`, `/track`, `/watchlist`, `/github`...) restent enregistrées et fonctionnelles si tapées
 — retirées du menu visible seulement (l'opérateur passe par la conversation naturelle).
 
@@ -345,7 +344,7 @@ tiers Arène Virtuals) et tout futur consommateur externe. Cycle macro complet �
 Changement de politique CoinGecko confirmé en direct (`error_code 10012`, HTTP 401 même avec une
 clé Demo valide) : impossible de requêter des données de plus de 365 jours sur le tier gratuit,
 peu importe la taille de la fenêtre. Cassait potentiellement en silence l'overlay macro du rapport
-`/vc` (tâche #14, déjà en prod) puisque `btc_cycles` demande l'historique depuis 2015.
+VC (tâche #14, déjà en prod) puisque `btc_cycles` demande l'historique depuis 2015.
 **Corrigé** : `btc_cycles.fetch_btc_history` bascule sur `services/blockchain_info.py`
 (`charts/market-price`, société établie, gratuit, sans clé, ~1600 points quotidiens 2009→aujourd'hui) —
 segmentation des 3 cycles vérifiée en direct, réelle et complète. CoinGecko reste utilisé pour le

@@ -1,7 +1,7 @@
 # Mini-phrases prêtes à copier-coller pour Telegram (@Aria_ZHC_Bot)
 
 Menu "/" : `/stop` et `/resume` (kill-switch). Les autres commandes admin
-(`/status`, `/vc`, `/feuvert`, `/sentiment`, `/langue`, `/these`, `/issue`,
+(`/status`, `/feuvert`, `/sentiment`, `/langue`, `/these`, `/issue`,
 `/theses`, `/github`) restent fonctionnelles si tapées, juste retirées du menu.
 
 Tout le reste = texte libre. Copie-colle une de ces phrases.
@@ -12,7 +12,6 @@ Quel est ton état actuel ? (LLM, autonomie)
 
 ## Analyse & pronostics
 Analyse ce token/wallet : [colle l'adresse]
-/vc [adresse]
 /feuvert
 
 ## Travail / délégation

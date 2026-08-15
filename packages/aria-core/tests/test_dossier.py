@@ -146,7 +146,7 @@ def test_format_empty_dossier_suggests_next_steps():
          "counts": {}, "events": []}
     )
     assert "Aucune analyse" in out
-    assert f"/vc {A}" in out and f"/scan {A}" in out
+    assert f"/scan {A}" in out
 
 
 def test_format_populated_dossier_shows_chronology():

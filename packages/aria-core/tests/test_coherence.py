@@ -670,18 +670,6 @@ def test_vc_report_pdf_secured_and_email_body_never_leaks_full_report():
     )
 
 
-def test_vc_language_choice_never_asks_confirmation_or_email_address():
-    """/vc (chemin réel) demande la LANGUE avant envoi — jamais une confirmation
-    d'envoi séparée, jamais l'adresse email (destinataire toujours fixe, dôme)."""
-    src = _read_core("gateway/telegram_bot.py")
-    assert "vclang:" in src, "callback de choix de langue manquant"
-    # Le destinataire reste résolu par vc_delivery (ARIA_VC_REPORT_TO / ARIA_SMTP_USER),
-    # jamais saisi depuis Telegram.
-    handler_seg = src.split("async def _handle_vc(", 1)[1][:3000]
-    for forbidden in ("input(", "quelle adresse", "quel email", "confirmer l'envoi"):
-        assert forbidden not in handler_seg.lower(), f"jamais de prompt interdit : {forbidden}"
-
-
 # ── Registre des actions externes (10/07) ────────────────────────────────────────────────
 #
 # Incident : un sous-système entier (aria_worker_queue.py + capability_gap.py), câblé dans

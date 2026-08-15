@@ -1933,7 +1933,7 @@ async def _handle_public_message(update: Update, text: str) -> None:
 # list of slash commands like you did above". Scope validated ("1. ok"): ONLY
 # READ-ONLY commands, no required parameter -- never a command that writes/spends/
 # publishes (/these, /issue, /canal, /x, /stop...) nor one that takes a free-form
-# address parameter (/vc, /scan, /walletscore -- a misunderstood rephrasing must
+# address parameter (/scan, /walletscore -- a misunderstood rephrasing must
 # never misinterpret a contract). Wired ONLY here, in _handle_message, AFTER the
 # admin guard (line ~1434 below) -- never in aria_core.brain.process(),
 # shared with the site's public surface: these 7 commands are internal
@@ -2412,7 +2412,7 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     dossier_addr = extract_contract(text)
     if dossier_addr:
         # A contract address pasted alone (or duplicated by copy-paste) → we pull up the
-        # dated dossier for this token (all past analyses). If empty, the render suggests /vc | /scan.
+        # dated dossier for this token (all past analyses). If empty, the render suggests /scan.
         await message.reply_chat_action("typing")
         try:
             dossier = await build_dossier(dossier_addr)
@@ -2471,24 +2471,6 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     action, approval_id = data.split(":", 1)
-
-    if action == "vclang":
-        await query.answer()
-        lang, _, address = approval_id.partition(":")
-        from aria_core.skills.vc_i18n import norm_lang
-
-        lang = norm_lang(lang)
-        if not address or not _SCAN_ADDR_RE.match(address):
-            return
-        message = query.message
-        if not message:
-            return
-        try:
-            await message.edit_reply_markup(reply_markup=None)  # removes the buttons, only one choice possible
-        except Exception:  # noqa: BLE001 — message already edited/deleted, never blocking
-            pass
-        await _run_vc_analysis(message, address, test_mode=False, lang=lang)
-        return
 
     if action == "explain":
         await query.answer()
@@ -2703,8 +2685,6 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("v9list", "Watchlist scalping_v9 active (avec réglages par token)"),
     ("v9remove", "Retire un contrat de la watchlist scalping_v9"),
     ("v9set", "Règle indicateurs/seuils/trail/timeframe d'un token v9 en temps réel"),
-    ("vc", "Analyse VC complète d'un contrat"),
-    ("vcresult", "Attribue un résultat réel à une prédiction VC"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
     ("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
     ("watchlist", "Top candidats du pool screené"),
@@ -3179,11 +3159,11 @@ async def _handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _reply_manual_candidates_queued(message, addresses, chain)
 
 
-# Dedicated concurrency guard (#157) -- distinct from `_vc_semaphore`: a multi-token
+# Dedicated concurrency guard (#157): a multi-token
 # wallet scan can take up to ~1-2 min (Blockscout pagination +
 # up to the token cap of `wallet_scoring_weights.WEIGHTS.max_tokens_analyzed`
-# x throttled GeckoTerminal), must not compete for the same concurrency
-# budget as /vc.
+# x throttled GeckoTerminal), must not compete for the concurrency
+# budget of any other heavy command.
 _WALLET_SCORE_MAX_CONCURRENT = 2
 _WALLET_SCORE_MAX_WAITERS = 4
 _wallet_score_semaphore = asyncio.Semaphore(_WALLET_SCORE_MAX_CONCURRENT)
@@ -3463,267 +3443,6 @@ def _format_judge_verdict(v, lang: str = "fr") -> str:
     return "\n".join(lines)
 
 
-# Concurrency guard — caps simultaneous VC analyses. Every /vc launches
-# an on-chain scan + a heavy LLM call (analysis, and in test mode the judge). For a
-# 4-5 client shop, 3 in parallel is enough; beyond that we queue, and we
-# politely refuse when the queue is full (avoids memory buildup and
-# LLM provider overload). The semaphore also protects against a burst of
-# closely spaced /vc commands.
-_VC_MAX_CONCURRENT = 3
-_VC_MAX_WAITERS = 6
-_vc_semaphore = asyncio.Semaphore(_VC_MAX_CONCURRENT)
-_vc_waiters = 0
-
-
-_VC_LANG_BUTTONS = (("fr", "🇫🇷 Français"), ("en", "🇬🇧 English"))
-
-
-async def _run_vc_analysis(message, address: str, *, test_mode: bool, lang: str) -> None:
-    """Acquires the concurrency semaphore then launches the analysis. Shared by the
-    test mode (direct) and the real send path (triggered after language choice)."""
-    global _vc_waiters
-    from aria_core.skills.vc_i18n import scaffold_strings
-
-    s = scaffold_strings(lang)
-    if _vc_semaphore.locked() and _vc_waiters >= _VC_MAX_WAITERS:
-        await _reply(message, s["overloaded"])
-        return
-    if _vc_semaphore.locked():
-        await _reply(message, s["busy"])
-
-    _vc_waiters += 1
-    try:
-        await _vc_semaphore.acquire()
-    finally:
-        _vc_waiters -= 1
-    try:
-        await _vc_analyze_and_reply(message, address, test_mode=test_mode, lang=lang, s=s)
-    finally:
-        _vc_semaphore.release()
-
-
-async def _handle_vc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/vc <address> [test] — full VC analysis: short order here, detailed report by email.
-
-    Read only + proposal. No execution: the order is signed manually
-    on Tangem by the operator.
-
-    Admin TEST MODE — `/vc <address> test`: the analysis runs and the full
-    reasoning is displayed here, but NO email is sent and NO prediction
-    is recorded in the track record (counters unchanged). For testing without
-    polluting the stats or spamming. Uses the `/langue` preference directly
-    (no interactive question — quick debug tool for the operator).
-
-    Real send path (non-test): before launching the analysis, ARIA asks for the
-    report language (buttons) — never the email address (fixed recipient,
-    `ARIA_VC_REPORT_TO`), never a separate send confirmation. The language
-    choice directly triggers the analysis + send via the ``vclang`` callback.
-    Concurrency bounded by ``_vc_semaphore`` (see above).
-    """
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-
-    from aria_core.skills import vc_prefs
-    from aria_core.skills.vc_i18n import scaffold_strings
-
-    lang = await vc_prefs.get_output_lang()
-    s = scaffold_strings(lang)
-
-    text = (message.text or "").strip()
-    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
-    if not body and context.args:
-        body = " ".join(context.args).strip()
-
-    parts = body.split()
-    # `test` flag at the end of arguments (case-insensitive) — reserved for the admin
-    # (the whole handler is already admin-gated above).
-    test_mode = len(parts) >= 2 and parts[-1].lower() == "test"
-    address = parts[0].strip() if parts else ""
-    if not _SCAN_ADDR_RE.match(address):
-        await _reply(message, s["usage"])
-        return
-
-    if test_mode:
-        await _run_vc_analysis(message, address, test_mode=True, lang=lang)
-        return
-
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(label, callback_data=f"vclang:{code}:{address}")
-        for code, label in _VC_LANG_BUTTONS
-    ]])
-    await message.reply_text(
-        "🌐 Langue du rapport ?" if lang == "fr" else "🌐 Report language?",
-        reply_markup=keyboard,
-    )
-
-
-async def _vc_analyze_and_reply(message, address: str, *, test_mode: bool, lang: str, s: dict) -> None:
-    """Core of the /vc analysis, executed under the concurrency semaphore.
-
-    Separated from ``_handle_vc`` so the concurrency guard wraps the entirety
-    of the heavy work (scan + LLM + judge + email) in a single try/finally.
-    """
-    import os
-    from datetime import datetime, timezone
-
-    from aria_core import vc_predictions
-    from aria_core.skills.vc_analysis import analyze_vc_with_context, format_telegram_order
-    from aria_core.skills.vc_delivery import send_vc_report
-    from aria_core.skills.vc_report import report_integrity
-
-    await _reply(message, s["analyzing"])
-    # analyze_vc() is just a thin wrapper around analyze_vc_with_context() that discards
-    # the ctx (`result, _ctx = await analyze_vc_with_context(...)`) -- calling directly
-    # the version with context here is therefore a strictly identical network/LLM cost, not
-    # an additional computation. Fixes a real bug (15/07): without ctx, the real
-    # operator path couldn't fill in entry_price/pool_address (below),
-    # which silently excluded ALL real operator /vc analyses from the
-    # public "ARIA wallet" figure (`vc_predictions.live_wallet`) -- only the
-    # automatic draws of the weekly training (`weekly_training.py`, already correct)
-    # appeared there.
-    result, ctx = await analyze_vc_with_context(address, lang=lang)
-    capital_raw = os.environ.get("ARIA_CAPITAL_USD", "").strip()
-    try:
-        capital_usd = float(capital_raw) if capital_raw else None
-    except ValueError:
-        capital_usd = None
-    order_text = format_telegram_order(result, capital_usd=capital_usd, lang=lang)
-    await _reply(message, order_text)
-
-    from aria_core import repertoire_db
-    from aria_core.skills.vc_session_context import queue_video_candidate, record_operator_vc
-
-    try:
-        await repertoire_db.save_message("user", f"/vc {address}", skill_used="vc")
-        await repertoire_db.save_message("agent", order_text, skill_used="vc")
-    except Exception as exc:  # noqa: BLE001 — best-effort history, never blocking for the report
-        logger.warning("save_message /vc échoué: %s", exc)
-
-    if test_mode:
-        # TEST MODE: we display the full reasoning but send no
-        # email and write nothing to the track record (counters unchanged).
-        rapport = result.rapport_detaille or s["no_reasoning"]
-        # Cleanly truncates with a marker; _reply then caps at 4000.
-        limit = 3900
-        if len(rapport) > limit:
-            rapport = rapport[:limit].rstrip() + s["test_truncated"]
-        await _reply(message, s["test_reasoning"] + rapport)
-        # Proof engine (#2) — the adversarial judge audits the analysis on the SAME
-        # on-chain facts. Admin test mode only: no cost/latency added to the
-        # client flow, this is a quality-control tool for the operator.
-        try:
-            from aria_core.skills.vc_judge import judge_analysis
-
-            verdict = await judge_analysis(result, ctx, lang=lang)
-            await _reply(message, _format_judge_verdict(verdict, lang=lang))
-        except Exception as exc:  # noqa: BLE001 — the audit must never break test mode
-            logger.warning("proof engine (juge) échoué: %s", exc)
-        await record_operator_vc(result, prediction_id=None, telegram_summary=order_text)
-        try:
-            await queue_video_candidate(result)
-        except Exception as exc:  # noqa: BLE001 — best-effort video capture, never blocking
-            logger.warning("vc video snapshot (test mode) échoué: %s", exc)
-        await _reply(message, s["test_footer"])
-        return
-
-    tier = (os.environ.get("ARIA_REPORT_TIER") or "premium").strip().lower() or "premium"
-
-    # Auto-log of the (shadow) prediction — builds the relevance track record.
-    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    ref_id, _ = report_integrity(result, generated_at=generated_at)
-    report_number = None
-    series_number = None
-    try:
-        report_number = await vc_predictions.count_predictions_for_contract(result.contract) + 1
-        series_number = await vc_predictions.total_predictions_count() + 1
-        best = ctx.best_pair if ctx else None
-        pred_id = await vc_predictions.record_prediction(
-            contract=result.contract,
-            recommandation=result.recommandation,
-            potentiel=result.potentiel,
-            risque=result.risque,
-            taille_pct=result.taille_pct,
-            security_score=result.security_score,
-            llm_used=result.llm_used,
-            report_ref=ref_id,
-            strategy="vc",
-            entry_price=(best.price_usd if best else None),
-            pool_address=(best.pair_address if best else ""),
-            network="base",
-        )
-        await record_operator_vc(result, prediction_id=pred_id, telegram_summary=order_text)
-        try:
-            await queue_video_candidate(result)
-        except Exception as exc:  # noqa: BLE001 — best-effort video capture, never blocking
-            logger.warning("vc video snapshot échoué: %s", exc)
-        await _reply(message, f"🗃️ Prédiction #{pred_id} enregistrée. Clôture plus tard : /vcresult {pred_id} <pnl%> [note].")
-    except Exception as exc:  # noqa: BLE001 — the log must never break the analysis
-        logger.warning("vc auto-log échoué: %s", exc)
-
-    # Detailed report by email (under kill-switch, safe degradation if SMTP is absent).
-    email_ok, email_error = await send_vc_report(
-        result,
-        generated_at=generated_at,
-        report_number=report_number,
-        series_number=series_number,
-        capital_usd=capital_usd,
-        tier=tier,
-        lang=lang,
-    )
-    if email_ok:
-        await _reply(message, "📧 Rapport détaillé envoyé par email.")
-    else:
-        await _reply(message, f"📧 Rapport email non envoyé : {email_error}")
-
-
-async def _handle_vcresult(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/vcresult <id> <pnl%> [note] — assigns a real outcome to a VC prediction."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-
-    text = (message.text or "").strip()
-    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
-    if not body and context.args:
-        body = " ".join(context.args).strip()
-
-    usage = (
-        "Usage : /vcresult <id> <pnl%> [note]\n"
-        "Ex : /vcresult 3 +18 catalyseur listing.\n"
-        "Le pnl% est le résultat réel de la prédiction (positif ou négatif)."
-    )
-    parts = body.split(maxsplit=2)
-    if len(parts) < 2 or not parts[0].isdigit():
-        await _reply(message, usage)
-        return
-
-    pred_id = int(parts[0])
-    try:
-        outcome_pct = float(parts[1].replace("%", "").replace(",", ".").lstrip("+"))
-    except ValueError:
-        await _reply(message, "pnl% invalide (attendu un nombre, ex. +18 ou -25).\n\n" + usage)
-        return
-    note = parts[2].strip() if len(parts) > 2 else ""
-
-    from aria_core import vc_predictions
-
-    closed = await vc_predictions.close_prediction(pred_id, outcome_pct=outcome_pct, note=note)
-    if closed is None:
-        await _reply(message, f"Prédiction #{pred_id} introuvable ou déjà clôturée.")
-        return
-    await _reply(
-        message,
-        f"✅ Prédiction #{pred_id} clôturée — {closed['recommandation']} → résultat {outcome_pct:+.1f}%.",
-    )
-
-
 async def _handle_langue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/langue [fr|en] — output language for VC analyses (remembered). No argument: shows the current one."""
     if not await _admin_check_reply(update):
@@ -3773,8 +3492,7 @@ async def _handle_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """/watchlist [n] — checklist of the contracts ARIA is closely watching: the screened
     pool ranked by composite score (security + liquidity + concentration + verdict).
 
-    Reading priority, never an order — to see WHAT ARIA is keeping an eye on
-    before the in-depth VC analysis (/vc <address>)."""
+    Reading priority, never an order — to see WHAT ARIA is keeping an eye on."""
     if not await _admin_check_reply(update):
         return
     message = update.message
@@ -4316,8 +4034,6 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("v9indics", _handle_v9indics))
     app.add_handler(CommandHandler("v9set", _handle_v9set))
     app.add_handler(CommandHandler("llmspend", _handle_llmspend))
-    app.add_handler(CommandHandler("vc", _handle_vc))
-    app.add_handler(CommandHandler("vcresult", _handle_vcresult))
     app.add_handler(CommandHandler("track", _handle_track))
     app.add_handler(CommandHandler("watchlist", _handle_watchlist))
     app.add_handler(CommandHandler("cycles", _handle_cycles))
