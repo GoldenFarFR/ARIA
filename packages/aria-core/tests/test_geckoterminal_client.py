@@ -1121,3 +1121,70 @@ class TestGetAllTimeHigh:
 
         assert result.available is True
         assert result.ath_price == pytest.approx(4.2)
+
+    @pytest.mark.asyncio
+    async def test_successful_scan_records_ath_shadow(self, monkeypatch):
+        """15/08 -- Etape 1 (shadow-only): a successful full scan must record
+        its result via ath_shadow.record_scan, with the exact price/pages
+        computed by this scan -- never changes the returned AthResult."""
+        from aria_core import ath_shadow
+
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        rows = _flat_page(first_day=1000, count=50, high=2.0, peak_day=1020, peak_high=7.5)
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2026-01-01T00:00:00Z"}}}),
+                ohlcv_url: FakeResponse(200, _ohlcv_payload(rows)),
+            },
+        )
+
+        recorded = {}
+
+        async def _fake_record_scan(pool_address, network, *, ath_price, ath_at, scanned_until_ts, pages_scanned):
+            recorded["pool_address"] = pool_address
+            recorded["network"] = network
+            recorded["ath_price"] = ath_price
+            recorded["pages_scanned"] = pages_scanned
+
+        monkeypatch.setattr(ath_shadow, "record_scan", _fake_record_scan)
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert recorded["pool_address"] == "0xpool"
+        assert recorded["network"] == "base"
+        assert recorded["ath_price"] == pytest.approx(7.5)
+        assert recorded["pages_scanned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_ath_shadow_failure_never_breaks_a_real_scan(self, monkeypatch):
+        """Shadow logging is best-effort -- a broken ath_shadow.record_scan
+        must never turn a successful scan into a failure."""
+        from aria_core import ath_shadow
+
+        client = GeckoTerminalClient()
+        created_url = f"{client.base_url}/networks/base/pools/0xpool"
+        ohlcv_url = f"{client.base_url}/networks/base/pools/0xpool/ohlcv/day"
+
+        rows = _flat_page(first_day=1000, count=50, high=2.0, peak_day=1020, peak_high=7.5)
+        _patch_client(
+            monkeypatch,
+            {
+                created_url: FakeResponse(200, {"data": {"attributes": {"pool_created_at": "2026-01-01T00:00:00Z"}}}),
+                ohlcv_url: FakeResponse(200, _ohlcv_payload(rows)),
+            },
+        )
+
+        async def _broken_record_scan(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(ath_shadow, "record_scan", _broken_record_scan)
+
+        result = await client.get_all_time_high("0xpool")
+
+        assert result.available is True
+        assert result.ath_price == pytest.approx(7.5)

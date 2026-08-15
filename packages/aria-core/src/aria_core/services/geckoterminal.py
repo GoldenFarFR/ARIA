@@ -476,6 +476,8 @@ class GeckoTerminalClient:
         highest_price: float | None = None
         highest_at: datetime | None = None
         before_ts: int | None = None
+        pages_scanned = 0
+        scanned_until_ts: int | None = None
 
         for _page in range(_ATH_MAX_PAGES):
             params: dict[str, object] = {"aggregate": 1, "limit": _ATH_CANDLES_PER_PAGE}
@@ -490,6 +492,7 @@ class GeckoTerminalClient:
             candles = _parse_candles(data)
             if not candles:
                 break
+            pages_scanned += 1
 
             for c in candles:
                 if highest_price is None or c.high > highest_price:
@@ -497,12 +500,25 @@ class GeckoTerminalClient:
                     highest_at = datetime.fromtimestamp(c.ts, tz=timezone.utc)
 
             oldest_ts = min(c.ts for c in candles)
+            scanned_until_ts = oldest_ts
             if oldest_ts <= created_ts or len(candles) < _ATH_CANDLES_PER_PAGE:
                 break
             before_ts = oldest_ts
 
         if highest_price is None:
             return AthResult(available=False, error=UNAVAILABLE)
+
+        try:
+            from aria_core import ath_shadow
+
+            await ath_shadow.record_scan(
+                pool_address, network,
+                ath_price=highest_price, ath_at=highest_at,
+                scanned_until_ts=scanned_until_ts, pages_scanned=pages_scanned,
+            )
+        except Exception as exc:  # noqa: BLE001 -- shadow logging must never affect a real scan
+            logger.info("get_all_time_high: ath_shadow record failed (%s)", exc)
+
         return AthResult(ath_price=highest_price, ath_at=highest_at, available=True, error=None)
 
     async def get_pool_trades(
