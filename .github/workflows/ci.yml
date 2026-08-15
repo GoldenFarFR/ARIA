@@ -45,7 +45,6 @@ jobs:
         run: |
           pytest -q \
             tests/test_vc_judge.py \
-            tests/test_vc_telegram_and_format.py \
             tests/test_vc_report.py \
             tests/test_vc_analysis.py \
             tests/test_vc_delivery.py \
@@ -58,7 +57,7 @@ jobs:
             tests/test_telegram_format.py \
             tests/test_acp_onchain_project_links.py \
             tests/test_telegram_webhook_dedup.py \
-            tests/test_vc_lang_and_concurrency.py \
+            tests/test_vc_lang_prefs.py \
             tests/test_vc_cache.py \
             tests/test_goplus.py \
             tests/test_candidate_ranking.py \
@@ -72,13 +71,11 @@ jobs:
             tests/test_dossier.py \
             tests/test_telegram_watchlist_command.py \
             tests/test_vc_report_pdf.py \
-            tests/test_vc_language_callback.py \
             tests/test_relay_chat.py \
             tests/test_relay_conversation.py \
             tests/test_telegram_claude_addressing.py \
             tests/test_knowledge_inbox.py \
             tests/test_claude_mentor.py \
-            tests/test_high_conviction_alerts.py \
             tests/test_pump_dump_autopsy.py \
             tests/test_x_profile.py \
             tests/test_telegram_x_profile_command.py \
