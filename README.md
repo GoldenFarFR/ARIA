@@ -36,6 +36,26 @@ The moat is **proven analysis**, not blind execution. Target allocation is 85% l
 | `contracts/` | On-chain anchoring contracts |
 | `skills/` | Standalone skill modules |
 
+## Getting Started (local dev)
+
+Requirements: Python 3.12+.
+
+```bash
+git clone https://github.com/GoldenFarFR/ARIA.git
+cd ARIA
+pip install packages/aria-core
+pip install -r vanguard/backend/requirements.txt
+cp vanguard/backend/env.example vanguard/backend/.env
+cd vanguard/backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+`GET /api/health` should return 200. The backend boots fine with every setting left at its
+default — no Telegram, no LLM answers, no external writes. See `vanguard/backend/env.example`
+for the handful of variables worth knowing about, and `vanguard/backend/app/config.py` for the
+full list. This is a first iteration and will grow. VPS deployment, credentials, and operator
+tooling stay in the private `aria-ops` repo.
+
 ## Docs
 
 Start with `VISION.md` (root, vision SSOT), `docs/architecture-extensibilite.md` (extensibility architecture), and `docs/strategie-aria-investissement.md` (investment strategy). Security posture for this public repo: `REPO-PUBLIC-SECURITY.md`.
