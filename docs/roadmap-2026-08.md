@@ -213,7 +213,7 @@ existing, code-verified brick, never a from-scratch project):
    Zero competitor observed (aixbt and other agents only show their good calls) (#55).
 2. **ARIA vs. market differential index** — contextualizes the weekly report (axis 1)
    against a simple benchmark, instead of an isolated figure (#56).
-3. **Desks in competition** — narrate scalping/swing/vc/megacap as distinct
+3. **Desks in competition** — narrate scalping/swing/vc as distinct
    teams in the weekly report, reuses a segmentation already in the database (#57).
 4. **`x402_trust_score.py` as a 2nd sellable product** — complete, tested engine, never
    wired into prod; proprietary computation (not a resale of third-party data), so it

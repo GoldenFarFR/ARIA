@@ -20,7 +20,7 @@ def _candles() -> list[Candle]:
 
 @pytest.mark.asyncio
 async def test_non_scalping_wallet_uses_standard_mode_and_default_horizon(monkeypatch, tmp_path):
-    """swing/vc/megacap (any non-scalping pocket) still gets a chart -- the
+    """swing/vc (any non-scalping pocket) still gets a chart -- the
     04/08 same-day extension past the scalping_v6/v7 pilot -- but with the
     real timeframe (mode="standard") and chart_render's own multi-week
     horizon label (None override), never the scalping-tuned hour-scale

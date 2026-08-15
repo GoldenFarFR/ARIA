@@ -83,11 +83,6 @@ MAX_POSITIONS = 30        # cash cushion + diversification -- still read by the 
 MAX_POSITIONS_VC = 5
 MAX_POSITIONS_SWING = 15
 MAX_POSITIONS_SCALPING = None  # unlimited, same doctrine as the scalping bypass above
-
-# 02/08 -- "megacap" pocket (fixed_watchlist.py, 8 established tokens,
-# mcap>=100M$) -- one position per listed token, matches the list size. See
-# fixed_watchlist_pocket_enabled() below for the gate.
-MAX_POSITIONS_MEGACAP = 10
 MODE = "trading"
 
 # 08/01 -- real bug found live (operator observation: "no gain accumulation
@@ -2605,10 +2600,10 @@ def _strategy_label(pos: dict) -> str:
     # ``strategy="momentum"`` -- the VC pocket sourcing pipeline now executes
     # through the same technical momentum entry gate as everything else, so
     # ``strategy == "vc_thesis"`` above never matches a real position
-    # anymore. Exact same class of bug as the wallet-prefix fixes just below
-    # (v9 07/08, megacap 02/08) -- a pocket identified only by a ``strategy``
-    # value that no longer gets written falls through to the generic
-    # "swing trading" default. Checked by wallet, same as v9/megacap.
+    # anymore. Exact same class of bug as the wallet-prefix fix just below
+    # (v9 07/08) -- a pocket identified only by a ``strategy`` value that no
+    # longer gets written falls through to the generic "swing trading"
+    # default. Checked by wallet, same as v9.
     wallet = pos.get("wallet")
     if wallet == "vc":
         return "venture capital"
@@ -2626,13 +2621,6 @@ def _strategy_label(pos: dict) -> str:
         return wallet
     if pos.get("mode") == "scalping":
         return "scalping"
-    # 02/08 -- same UX gap as the scalping_v1..v6 fix above, found the same
-    # day for the new "megacap" pocket: it shares mode="standard"/
-    # strategy="momentum" with swing, so without this it would silently show
-    # "swing trading" in every alert -- exactly what this A/B comparison
-    # pocket exists to be distinguishable from.
-    if wallet == "megacap":
-        return "megacap"
     return "swing trading"
 
 
@@ -3321,7 +3309,7 @@ async def _momentum_candidates_and_chain_map(*, limit: int = 63) -> tuple[list[s
 def _default_momentum_analyzer(
     chain_by_contract: dict[str, str], weekly_context: dict | None = None,
     current_regime: str | None = None, *, relaxed: bool = False, mode: str = "standard",
-    waive_holder_concentration: bool = False, rsi_watch_span: tuple[int, int] | None = None,
+    rsi_watch_span: tuple[int, int] | None = None,
 ):
     """Closes over the contract->chain table built at sourcing time (#194) --
     keeps the historical ``analyzer(contract)`` signature unchanged, no
@@ -3339,12 +3327,6 @@ def _default_momentum_analyzer(
     ``evaluate_momentum_entry`` -- ``"standard"`` (default, unchanged) or
     ``"scalping"`` (resolved ONCE per cycle by the caller via
     ``get_trading_mode()``, a portfolio-wide switch, never per-candidate).
-
-    ``waive_holder_concentration`` (03/08, real bug found live: KAITO churned
-    16 pending orders in a single day, "regarde kaito"): forwarded as-is to
-    ``evaluate_momentum_entry`` -- only the "megacap" pocket sets this
-    (hand-curated established-token watchlist, structurally fails the
-    insider-concentration heuristic on legitimate CEX/treasury EOA holders).
 
     ``rsi_watch_span`` (08/04, scalping_v7): forwarded as-is to
     ``evaluate_momentum_entry`` -- ``None`` (default) leaves every pocket on
@@ -3379,8 +3361,7 @@ def _default_momentum_analyzer(
             )
         result = await momentum_entry.evaluate_momentum_entry(
             contract, chain, weekly_context=weekly_context, current_regime=current_regime,
-            relaxed=relaxed, mode=mode, waive_holder_concentration=waive_holder_concentration,
-            rsi_watch_span=rsi_watch_span,
+            relaxed=relaxed, mode=mode, rsi_watch_span=rsi_watch_span,
         )
         momentum_timing.record_evaluation(contract, chain, result.get("action") if result else None)
         return result
@@ -3478,11 +3459,11 @@ MAX_SCALPING_VARIANT_CANDIDATES_PER_CYCLE = 13
 # poches scalping sauf v8"): the scalping entries left this set because those
 # pockets no longer exist in the sourcing code at all (see
 # build_scalping_pocket_entries); vc left it too (operator kept v8/swing/vc
-# as the active trio). Only megacap stays paused (0 trades, API budget
-# concentrated on the active arms).
-SOURCING_PAUSED_WALLETS: frozenset[str] = frozenset({
-    "megacap",
-})
+# as the active trio). Empty for now (15/08, megacap pocket removed entirely
+# -- never opened a position, see paper_position/paper_position_archive) --
+# kept as a generic mechanism for a future pocket that needs the same
+# sourcing-pause-without-touching-open-positions doctrine.
+SOURCING_PAUSED_WALLETS: frozenset[str] = frozenset()
 
 
 def sourcing_paused(wallet: str | None) -> bool:
@@ -3710,26 +3691,6 @@ def vc_pocket_sourcing_enabled() -> bool:
     )
 
 
-def fixed_watchlist_pocket_enabled() -> bool:
-    """02/08 -- the "megacap" pocket (fixed_watchlist.py, 8 established
-    tokens, mcap>=100M$) -- an ADDITIVE A/B comparison arm against the 6
-    scan-large scalping pockets, never a replacement for them (operator's
-    explicit call after a workflow-audited finding that a full substitution
-    would mechanically hurt the existing pipeline). Deliberately SEPARATE
-    from scalping_variants_enabled() -- flipping this never touches the 6
-    existing pockets or their sourcing.
-
-    Requires multi_pocket_sourcing_enabled() to also be on (same doctrine as
-    vc_pocket_sourcing_enabled() above) -- verified true in prod today, no
-    practical consequence, but noted here explicitly so a future session
-    doesn't have to rediscover the same ambiguity already lived once with
-    scalping_variants_enabled(). OFF by default (fail-closed, same idiom as
-    every other gate in this file)."""
-    return os.environ.get("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-
-
 def scalping_variants_enabled() -> bool:
     """08/01: originally swapped the single RSI-divergence scalping pocket
     for the V1-V5 comparison variants. 06/08, v1-v7 retired (operator
@@ -3769,14 +3730,9 @@ _RETIRED_SCALPING_WALLETS = frozenset({
 
 # 08/08 -- operator order ("laisse-la en pause et cache la, je veux plus
 # qu'elle apparaisse sur telegram"): pockets hidden from every operator-facing
-# surface, WIDER than _RETIRED_SCALPING_WALLETS above. Deliberately a SEPARATE
-# frozenset rather than adding "megacap" to the retired-scalping one: that set
-# also feeds is_scalping_pocket(), which would silently give megacap the
-# SCALPING exit discipline/timeframes instead of its mode="standard" design --
-# exactly the class of bug is_scalping_pocket's own docstring documents. Rows
-# STAY in the DB and the MACRO circuit breaker keeps the full list (see
-# visible_reporting_wallets/all_reporting_wallets).
-_HIDDEN_FROM_OPERATOR_SURFACES = _RETIRED_SCALPING_WALLETS | frozenset({"megacap"})
+# surface. Rows STAY in the DB and the MACRO circuit breaker keeps the full
+# list (see visible_reporting_wallets/all_reporting_wallets).
+_HIDDEN_FROM_OPERATOR_SURFACES = _RETIRED_SCALPING_WALLETS
 
 # 06/08 -- scalping_v9 (full operator spec, see scalping_v9.py's module
 # docstring): fixed-watchlist RSI+MFI synchronized-oversold engine, its OWN
@@ -3847,11 +3803,7 @@ def all_pocket_wallets() -> tuple[str, ...]:
     considering the chantier done, not after): without this, the macro
     breaker would silently sum only 3 of 7 pockets' equity, and /riskresume
     would have no way to lift a circuit breaker on scalping_v1..v5, leaving
-    them blocked until the next weekly reset.
-
-    02/08 -- "megacap" appended when fixed_watchlist_pocket_enabled() is on,
-    independent of scalping_variants_enabled()'s own state (additive to both
-    branches below)."""
+    them blocked until the next weekly reset."""
     # 06/08 -- v1-v7 retired: the gate-OFF branch no longer resurrects the
     # legacy "scalping" pocket (its engine arm was removed with v6), it just
     # drops every scalping pocket from sourcing.
@@ -3864,8 +3816,6 @@ def all_pocket_wallets() -> tuple[str, ...]:
     # /riskresume AND the weekly reset loop (heartbeat iterates this list).
     if scalping_v9_enabled():
         base = (V9_WALLET, *base)
-    if fixed_watchlist_pocket_enabled():
-        base = (*base, "megacap")
     return base
 
 
@@ -3879,11 +3829,7 @@ async def visible_reporting_wallets() -> tuple[str, ...]:
     FULL list (see risk_guard.evaluate_macro_risk's comment): dropping ~$1M
     of flat retired capital per pocket from its equity sum against the
     persisted high-water mark would fake a massive drawdown and trip the
-    breaker on nothing.
-
-    08/08 -- "megacap" joined the hidden set (operator order, same reasoning
-    as 06/08): sourcing-paused since 05/08, zero trades ever, no paper_state
-    row -- it only ever added a dead line to every Telegram report."""
+    breaker on nothing."""
     return tuple(
         w for w in await all_reporting_wallets() if w not in _HIDDEN_FROM_OPERATOR_SURFACES
     )
@@ -3948,7 +3894,6 @@ POCKET_LABELS: dict[str, str] = {
     "scalping_v1": "Scalping V1 (Bollinger)", "scalping_v2": "Scalping V2 (VWAP)",
     "scalping_v3": "Scalping V3 (Stochastique)", "scalping_v4": "Scalping V4 (Combo)",
     "scalping_v5": "Scalping V5 (VWAP trailing)",
-    "megacap": "Megacap fixe",
     "scalping_v6": "Scalping V6 (RSI legacy)",
     "scalping_v7": "Scalping V7 (RSI span court)",
     "scalping_v8": "Scalping V8 (wick reversal — agent Claude)",
@@ -6641,33 +6586,11 @@ async def _run_paper_cycle_locked(
             weekly_context=weekly_context, current_regime=current_regime,
         )
 
-        # 02/08 -- "megacap" pocket (fixed_watchlist.py, 8 established
-        # tokens): built unconditionally, same pattern as vc_candidates/
-        # vc_analyzer just above -- build_scalping_pocket_entries() is
-        # structurally scalping-only (every entry it returns hardcodes
-        # mode="scalping") and cannot emit a mode="standard" entry, so this
-        # pocket is NOT routed through it. Deliberately never touches that
-        # function.
-        from aria_core import fixed_watchlist
-
-        megacap_rows = await fixed_watchlist.list_watchlist_candidates()
-        megacap_candidates = [r["contract"] for r in megacap_rows]
-        megacap_chain_by_contract = {
-            **_momentum_chain_by_contract,
-            **{r["contract"]: r["chain"] for r in megacap_rows},
-        }
-        megacap_analyzer = _default_momentum_analyzer(
-            megacap_chain_by_contract, weekly_context=weekly_context,
-            current_regime=current_regime, mode="standard",
-            waive_holder_concentration=True,
-        )
-
         # (wallet, candidates, analyzer, trading_mode-for-thresholds, position cap)
         for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
             *scalping_pocket_entries,
             ("swing", momentum_candidates, swing_analyzer, "standard", MAX_POSITIONS_SWING),
             ("vc", vc_candidates, vc_analyzer, "standard", MAX_POSITIONS_VC),
-            ("megacap", megacap_candidates, megacap_analyzer, "standard", MAX_POSITIONS_MEGACAP),
         ):
             # 08/05 -- operator focus decision: paused pockets never source
             # (see SOURCING_PAUSED_WALLETS) -- their open positions are still
@@ -6717,10 +6640,6 @@ async def _run_paper_cycle_locked(
             if pocket_wallet == "vc" and not vc_pocket_sourcing_enabled():
                 continue
 
-            # 02/08 -- see fixed_watchlist_pocket_enabled()'s own docstring.
-            if pocket_wallet == "megacap" and not fixed_watchlist_pocket_enabled():
-                continue
-
             opened_positions, _ = await _open_new_entries_for_wallet(
                 pocket_wallet, pocket_candidates, pocket_analyzer,
                 price_lookup=price_lookup, notifier=notifier, max_new=max_new,
@@ -6734,7 +6653,7 @@ async def _run_paper_cycle_locked(
         # momentum_candidates is walked TWICE (once per pocket sharing it,
         # scalping+swing) -- reflects the real evaluation count, not just the
         # distinct-candidate count, for this purely informational log line.
-        total_candidates_evaluated = 2 * len(momentum_candidates) + len(vc_candidates) + len(megacap_candidates)
+        total_candidates_evaluated = 2 * len(momentum_candidates) + len(vc_candidates)
     else:
         # gate OFF (default), OR a caller explicitly provided its own
         # candidates/analyzer: EXACT historical single-pocket behavior --

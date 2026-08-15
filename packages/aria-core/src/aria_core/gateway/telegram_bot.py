@@ -3962,8 +3962,8 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 08/08 -- the SUGGESTION list and the no-argument sweep use the VISIBLE
     # list (operator order: a hidden pocket must never surface in Telegram),
     # while `known_pockets` above stays the FULL list so an explicit
-    # `/riskresume megacap` still works if ever needed -- the risk action is
-    # never lost, only its spontaneous display.
+    # `/riskresume scalping_v6` (a retired pocket) still works if ever
+    # needed -- the risk action is never lost, only its spontaneous display.
     visible_pockets = await paper_trader.visible_reporting_wallets()
     if requested and requested not in known_pockets:
         await _reply(

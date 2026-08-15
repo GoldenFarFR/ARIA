@@ -31,14 +31,6 @@ def _gate_off_by_default(monkeypatch, tmp_path):
     from aria_core import limit_orders
 
     monkeypatch.setattr(limit_orders, "DB_PATH", str(tmp_path / "limit_orders.db"))
-    # 02/08 -- "megacap" pocket: fixed_watchlist.list_watchlist_candidates()
-    # is now called unconditionally by _drain_multi_pocket (same doctrine as
-    # vc_candidates), same DB-isolation trap as limit_orders above -- without
-    # this, every test in this file would silently seed/read the real
-    # fixed_watchlist table in the default DB.
-    from aria_core import fixed_watchlist
-
-    monkeypatch.setattr(fixed_watchlist, "DB_PATH", str(tmp_path / "fixed_watchlist.db"))
     yield
 
 
@@ -888,15 +880,12 @@ async def test_drain_multi_pocket_gate_on_dispatches_swing_and_vc_with_correct_a
 
     await listener._drain_once()
 
-    # 02/08 -- megacap_analyzer is built unconditionally (construction never
-    # gated, only the OPEN attempt is), so two "standard" calls appear here
-    # (swing + megacap) even with ARIA_FIXED_WATCHLIST_POCKET_ENABLED off.
     # No "scalping" call since the 06/08 retirement (variants gate OFF here).
-    assert [c["mode"] for c in analyzer_calls] == ["standard", "standard"]
+    # Only "swing" builds via _default_momentum_analyzer -- vc uses its own
+    # _default_analyzer, never counted here.
+    assert [c["mode"] for c in analyzer_calls] == ["standard"]
 
     by_wallet = {c["wallet"]: c for c in captured_calls}
-    # megacap gate is OFF (not set in this test) -- its entry stays in the
-    # static tuple but never reaches _open_new_entries_for_wallet.
     assert set(by_wallet) == {"swing", "vc"}
     assert by_wallet["swing"]["candidates"] == [A]
     assert by_wallet["vc"]["candidates"] == [B]
@@ -905,107 +894,6 @@ async def test_drain_multi_pocket_gate_on_dispatches_swing_and_vc_with_correct_a
     assert by_wallet["swing"]["trading_mode"] == "standard"
     assert by_wallet["vc"]["trading_mode"] == "standard"
     assert all(c["discovery_channel"] == "websocket" for c in captured_calls)
-
-
-@pytest.mark.asyncio
-async def test_drain_multi_pocket_gate_on_dispatches_megacap_pocket_from_fixed_watchlist(
-    monkeypatch,
-):
-    """02/08 -- mirrors test_multi_pocket_gate_on_megacap_pocket_sources_from_
-    fixed_watchlist (test_paper_trader.py) for the WebSocket drain path:
-    megacap sources its candidate from fixed_watchlist.list_watchlist_
-    candidates(), NEVER from the WebSocket-detected momentum_candidates (A) or
-    vc's candidate_ranking (B) -- same triptyque (construction/tuple entry/
-    gated continue) as paper_trader.py, confirmed independently here since
-    the two files historically drifted (build_scalping_pocket_entries
-    docstring)."""
-    # 08/05 -- sourcing pause neutralized: this test validates the pocket
-    # ARCHITECTURE, the pause behavior has its own dedicated tests.
-    from aria_core import paper_trader as _pt_for_pause
-    monkeypatch.setattr(_pt_for_pause, "SOURCING_PAUSED_WALLETS", frozenset())
-    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
-    monkeypatch.setenv("ARIA_FIXED_WATCHLIST_POCKET_ENABLED", "true")
-    monkeypatch.setenv("ARIA_PAPER_TRADING_ENABLED", "true")
-    listener = mw.MomentumWebsocketListener()
-    listener._pending[(A, "base")] = 0.0
-
-    async def _passthrough_prefilter(candidates):
-        return candidates
-
-    monkeypatch.setattr(mw, "_batch_liquidity_prefilter", _passthrough_prefilter)
-
-    from aria_core import fixed_watchlist, paper_trader, risk_guard
-    from aria_core import paper_trader_risk as risk
-    from aria_core.skills import candidate_ranking, market_sentiment
-
-    monkeypatch.setattr(paper_trader, "_run_cycle_lock", asyncio.Lock())
-
-    async def _no_depeg():
-        return 0.0
-
-    monkeypatch.setattr(risk, "usdc_depeg_pct", _no_depeg)
-
-    async def _fake_evaluate(wallet="swing", *, price_lookup=None):
-        return _fake_portfolio_risk_state(risk_guard, wallet=wallet)
-
-    monkeypatch.setattr(risk_guard, "evaluate_portfolio_risk", _fake_evaluate)
-
-    async def _fake_macro(*, price_lookup=None):
-        return risk_guard.MacroRiskState(
-            total_equity=3_000_000.0, total_high_water_mark=3_000_000.0,
-            drawdown_pct=0.0, blocked=False, newly_triggered=False,
-        )
-
-    monkeypatch.setattr(risk_guard, "evaluate_macro_risk", _fake_macro)
-
-    async def _fake_regime():
-        return market_sentiment.META_REGIME_NEUTRAL
-
-    monkeypatch.setattr(market_sentiment, "resolve_meta_regime", _fake_regime)
-
-    async def _fake_top_candidates(limit):
-        return []  # vc pocket sources nothing this cycle (gate off)
-
-    monkeypatch.setattr(candidate_ranking, "top_candidates", _fake_top_candidates)
-
-    C = "0x" + "c" * 40
-
-    async def _fake_list_watchlist_candidates():
-        return [{"contract": C, "chain": "base", "symbol": "MEGA"}]
-
-    monkeypatch.setattr(fixed_watchlist, "list_watchlist_candidates", _fake_list_watchlist_candidates)
-
-    def _fake_analyzer_factory(chain_by_contract, **kwargs):
-        async def _analyzer(contract):
-            return None
-
-        return _analyzer
-
-    monkeypatch.setattr(paper_trader, "_default_momentum_analyzer", _fake_analyzer_factory)
-
-    captured_calls: list[dict] = []
-
-    async def _fake_open_new_entries(wallet, candidates, analyzer, **kwargs):
-        captured_calls.append({
-            "wallet": wallet,
-            "candidates": list(candidates),
-            "max_positions_cap": kwargs.get("max_positions_cap"),
-            "trading_mode": kwargs.get("trading_mode"),
-        })
-        return [], 0
-
-    monkeypatch.setattr(paper_trader, "_open_new_entries_for_wallet", _fake_open_new_entries)
-
-    await listener._drain_once()
-
-    by_wallet = {c["wallet"]: c for c in captured_calls}
-    assert "megacap" in by_wallet
-    assert by_wallet["megacap"]["candidates"] == [C]
-    assert by_wallet["megacap"]["max_positions_cap"] == paper_trader.MAX_POSITIONS_MEGACAP
-    assert by_wallet["megacap"]["trading_mode"] == "standard"
-    # never the WebSocket-detected momentum candidate or vc's candidate
-    assert A not in by_wallet["megacap"]["candidates"]
-    assert B not in by_wallet["megacap"]["candidates"]
 
 
 @pytest.mark.asyncio

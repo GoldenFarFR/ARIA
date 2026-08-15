@@ -2,7 +2,7 @@
 
 Item #64 (08/03), operator request during a live debugging session: GeckoTerminal
 was being hit both by manual investigation calls AND by every pocket's continuous
-scanning (scalping/swing/vc/megacap, heartbeat cycles + the websocket drain), and
+scanning (scalping/swing/vc, heartbeat cycles + the websocket drain), and
 there was no way to halt the LATTER at runtime -- ``ARIA_PAPER_TRADING_ENABLED`` is
 an environment variable, read once at container start, so flipping it requires a
 full rebuild/redeploy (too slow for "stop scanning for the next 10 minutes").

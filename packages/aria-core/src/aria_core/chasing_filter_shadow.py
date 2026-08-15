@@ -47,7 +47,7 @@ CANDIDATE_THRESHOLDS_PCT: tuple[float, ...] = (3.0, 5.0, 7.0, 10.0)
 # workflow found no reason to tie this to "whatever's already computed" for
 # variants that don't use a 14-candle oscillator). Matches each variant's
 # OWN lookback: Stochastique %K (V3/V4) = 14, Bollinger/VWAP (V1/V2/V5) = 20,
-# golden-pocket lookback (V6 legacy + standard momentum/swing/megacap) = 25.
+# golden-pocket lookback (V6 legacy + standard momentum/swing) = 25.
 RECENT_LOW_WINDOW_STOCHASTIC = 14
 RECENT_LOW_WINDOW_BOLLINGER_VWAP = 20
 RECENT_LOW_WINDOW_GOLDEN_POCKET = 25

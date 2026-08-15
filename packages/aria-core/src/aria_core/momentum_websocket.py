@@ -650,26 +650,6 @@ class MomentumWebsocketListener:
                 chain_by_contract, current_regime=current_regime, mode="standard",
             )
 
-            # 02/08 -- "megacap" pocket, same doctrine as vc_candidates just
-            # above: built unconditionally, mirrors paper_trader._run_paper_
-            # cycle_locked's own construction exactly so this drain and the
-            # heartbeat can never silently diverge on this pocket either.
-            from aria_core import fixed_watchlist
-
-            try:
-                megacap_rows = await fixed_watchlist.list_watchlist_candidates()
-            except Exception as exc:  # noqa: BLE001 -- never blocks the other pockets
-                logger.info("momentum_websocket: fixed_watchlist lookup failed (%s)", exc)
-                megacap_rows = []
-            megacap_candidates = [r["contract"] for r in megacap_rows]
-            megacap_chain_by_contract = {
-                **chain_by_contract,
-                **{r["contract"]: r["chain"] for r in megacap_rows},
-            }
-            megacap_analyzer = paper_trader._default_momentum_analyzer(
-                megacap_chain_by_contract, current_regime=current_regime, mode="standard",
-            )
-
             closed_this_cycle: set[str] = set()
             funnel: dict[str, int] = {}
 
@@ -677,7 +657,6 @@ class MomentumWebsocketListener:
                 *scalping_entries,
                 ("swing", candidates, swing_analyzer, "standard", paper_trader.MAX_POSITIONS_SWING),
                 ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
-                ("megacap", megacap_candidates, megacap_analyzer, "standard", paper_trader.MAX_POSITIONS_MEGACAP),
             ):
                 # 08/05 -- operator focus decision: paused pockets never
                 # source here either (same filter as the heartbeat loop,
@@ -731,13 +710,6 @@ class MomentumWebsocketListener:
                     # so this drain and the periodic heartbeat can never
                     # silently diverge on this gate either.
                     if pocket_wallet == "vc" and not paper_trader.vc_pocket_sourcing_enabled():
-                        continue
-
-                    # 02/08 -- see paper_trader.fixed_watchlist_pocket_enabled()'s
-                    # own docstring -- mirrored here so this drain and the
-                    # periodic heartbeat can never silently diverge on this
-                    # gate either.
-                    if pocket_wallet == "megacap" and not paper_trader.fixed_watchlist_pocket_enabled():
                         continue
 
                     await paper_trader._open_new_entries_for_wallet(

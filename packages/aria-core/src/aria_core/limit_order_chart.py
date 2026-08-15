@@ -9,7 +9,7 @@ once the pilot was validated live (operator: "tu pourrais rajouter les
 screenshot sur toutes les poche comme v6 et v7 ?") -- no wallet gate left,
 any pocket's limit order gets a chart. ``mode``/``horizon_label`` still
 branch on ``paper_trader.is_scalping_pocket(wallet)`` since scalping's real
-candle timeframe (15/30min, plays out in hours) and swing/vc/megacap's
+candle timeframe (15/30min, plays out in hours) and swing/vc's
 (daily, plays out in weeks) are genuinely different setups, not a cosmetic
 choice -- reusing the wrong one would show hour-scale noise on a multi-week
 chart or a flat multi-day line on an hour-scale one.
@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 # A scalping setup plays out in hours, not weeks -- the label shown on the
 # chart's simulation panel is overridden accordingly (chart_render.py's
-# horizon_label) for scalping pockets only. Every other pocket (swing/vc/
-# megacap) keeps chart_render's own default ("N sem."), already correct for
-# their real multi-week horizon.
+# horizon_label) for scalping pockets only. Every other pocket (swing/vc)
+# keeps chart_render's own default ("N sem."), already correct for their
+# real multi-week horizon.
 _SCALPING_HORIZON_LABEL = "quelques heures"
 
 

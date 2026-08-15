@@ -2460,24 +2460,6 @@ async def test_wallet_position_cap_gate_on_maps_scalping_variant_wallets(monkeyp
         assert lo._wallet_position_cap(paper_trader, wallet) == paper_trader.MAX_POSITIONS_SCALPING is None
 
 
-@pytest.mark.asyncio
-async def test_wallet_position_cap_gate_on_maps_megacap(monkeypatch):
-    """02/08 -- 4th site found by the plan's design review (§6): "megacap"
-    was missing from this dict entirely, would have fallen back to the
-    generic MAX_POSITIONS (30) instead of MAX_POSITIONS_MEGACAP (10)."""
-    monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
-    assert lo._wallet_position_cap(paper_trader, "megacap") == paper_trader.MAX_POSITIONS_MEGACAP == 10
-
-
-# ── "megacap" pocket -- 4 wallet=="swing" literal sites (02/08) ─────────────
-
-def test_order_uses_rsi_divergence_check_true_for_megacap():
-    """Site 828 -- never had an is_scalping_pocket() clause to preserve, a
-    full replacement by uses_fine_rsi_confirmation() is correct here."""
-    order = {"wallet": "megacap", "signal_json": "{}"}
-    assert lo._order_uses_rsi_divergence_check(order) is True
-
-
 def test_order_uses_rsi_divergence_check_false_for_vc():
     order = {"wallet": "vc", "signal_json": "{}"}
     assert lo._order_uses_rsi_divergence_check(order) is False
@@ -2496,20 +2478,6 @@ def test_order_uses_rsi_divergence_check_no_wallet_defaults_to_swing_like():
     a silent behavior change."""
     order = {"signal_json": "{}"}
     assert lo._order_uses_rsi_divergence_check(order) is True
-
-
-def test_format_limit_order_placed_alert_megacap_shows_rsi_confirmation_line():
-    """Site 1368 -- same doctrine as swing, via uses_fine_rsi_confirmation().
-    Also exercises the local ``paper_trader`` import added at this site
-    (02/08) -- would NameError immediately if missing."""
-    order = {
-        "wallet": "megacap", "symbol": "MEGA", "contract": "0x" + "a" * 40,
-        "target_price": 2.0, "created_at": "2026-08-02T00:00:00+00:00",
-        "expires_at": "2026-08-02T03:00:00+00:00", "signal_json": "{}",
-    }
-    text = lo.format_limit_order_placed_alert(order)
-    assert "divergence RSI sur bougies fines" in text
-    assert "MEGACAP" in text
 
 
 def test_format_limit_order_placed_alert_vc_no_rsi_confirmation_line():

@@ -47,7 +47,7 @@ blacklist.py``) -- one row per decision point, never updated/deleted.
 Best-effort: a write failure here must never break a real trading cycle.
 
 ``last_seen_span``/``last_seen_gap`` (04/08, operator request while
-diagnosing why the "megacap" pocket never triggers: ``expired_unconfirmed``/
+diagnosing why a pocket never triggers: ``expired_unconfirmed``/
 ``cancelled_unconfirmed`` rows always carried ``span=None`` -- there was
 never a CONFIRMED divergence to measure, by definition of those outcomes.
 But ``limit_orders.check_rsi_divergence_watching_order`` re-runs the

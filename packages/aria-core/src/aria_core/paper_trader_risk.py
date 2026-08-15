@@ -235,8 +235,8 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
     # wash-trading-driven move and exit before any post-pump collapse, so a
     # mid-holding re-check adds no protection there. `position.get("mode")`
     # is the same field the position was opened with (paper_position.mode),
-    # no new import needed. swing/megacap (mode="standard", same long-hold
-    # exposure as the entry-time gate's own rationale) keep this check.
+    # no new import needed. swing (mode="standard", same long-hold exposure
+    # as the entry-time gate's own rationale) keeps this check.
     if (
         position.get("mode") != "scalping"
         and pair is not None and pair.liquidity_usd and pair.liquidity_usd > 0

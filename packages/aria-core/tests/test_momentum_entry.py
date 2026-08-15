@@ -5938,7 +5938,7 @@ async def test_evaluate_wash_trading_ratio_resets_below_threshold(monkeypatch):
 async def test_evaluate_wash_trading_ratio_never_rejects_on_scalping_mode(monkeypatch):
     """02/08 -- operator's explicit call: scalping pockets no longer rejected
     on this ratio, sustained or not -- a fast in/out strategy can ride a
-    wash-trading-driven move and exit before any collapse. swing/vc/megacap
+    wash-trading-driven move and exit before any collapse. swing/vc
     (mode="standard", covered by the two tests just above) keep the gate."""
     _patch_pipeline(monkeypatch, pairs=[_pair(liquidity_usd=372_766.0, volume_24h_usd=33_859_669.0)])
     # Two calls (same as the "sustained" test above) to prove even a
@@ -6109,7 +6109,7 @@ async def test_evaluate_momentum_entry_holds_on_scalping_candle_gap_too_wide(mon
 
 @pytest.mark.asyncio
 async def test_evaluate_momentum_entry_ignores_candle_gap_in_standard_mode(monkeypatch):
-    """swing/vc/megacap tolerate multi-day gaps by design (daily candles) --
+    """swing/vc tolerate multi-day gaps by design (daily candles) --
     the scalping-only continuity gate must never fire for them."""
     _patch_pipeline(monkeypatch, candles=_candles_with_trailing_gap())
     result = await me.evaluate_momentum_entry(CONTRACT, "base")
@@ -8987,7 +8987,7 @@ def test_rsi_divergence_watch_candidate_expiry_capped_for_scalping_mode():
 
 
 def test_rsi_divergence_watch_candidate_expiry_not_capped_outside_scalping_mode():
-    """The scalping ceiling must never leak into swing/vc/megacap -- 20
+    """The scalping ceiling must never leak into swing/vc -- 20
     hourly candles legitimately stays at ~20h for every other mode."""
     signal = _in_gp_no_divergence_signal()
     watch = me._rsi_divergence_watch_candidate(

@@ -178,7 +178,7 @@ async def historical_trigger_rate(
 
     ``wallet`` (08/04, real gap found live on scalping_v7's very first
     order): the rate used to aggregate across EVERY pocket sharing the same
-    ``reason`` -- for ``rsi_divergence_pending``, that meant v6/swing/megacap
+    ``reason`` -- for ``rsi_divergence_pending``, that meant v6/swing
     (the operator-validated 15-20 RSI-watch span) and the brand-new v7 (4-13
     span, zero resolved orders of its own) were silently pooled together, so
     v7's first order displayed a rate (~4%) that reflected the OLD window's
@@ -471,14 +471,8 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # covers both the legacy "scalping" name (gate off) and scalping_v1..v6
     # (gate on).
     wallet = order.get("wallet") or ""
-    # 02/08 -- "megacap" pocket added to the OR chain, deliberately NOT a
-    # replacement of this condition by uses_fine_rsi_confirmation(): this
-    # line already carries the is_scalping_pocket() fix from earlier the
-    # same day (see comment above), and a blind textual substitution here
-    # would have silently dropped that clause again, reintroducing the exact
-    # regression it just fixed for scalping_v1..v6.
     watch_mode = "scalping" if (
-        wallet == "swing" or wallet == "megacap" or paper_trader.is_scalping_pocket(wallet)
+        wallet == "swing" or paper_trader.is_scalping_pocket(wallet)
     ) else "standard"
     try:
         candles = await momentum_entry._fetch_candles(
@@ -493,7 +487,7 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # 03/08 -- real bug found live (operator: "jai limpression que dautre
     # token le font aussi dans megacap" -- confirmed empirically: LINK/WETH/
     # cbBTC/cbETH churned a fresh order every ~15 minutes, dozens of times/
-    # day, across swing AND megacap, never a real trigger). Root cause: the
+    # day, on swing, never a real trigger). Root cause: the
     # golden-pocket signal that CREATED this order was detected on the
     # standard-mode ladder (day/4h/1h, ``last_candle_ts`` set from THAT
     # granularity -- see ``_rsi_divergence_watch_candidate``'s own comment on
@@ -539,7 +533,7 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     # for the separate v1-v5 engine (scalping_variants.py::_gates_and_
     # candles_uncached, commit b00db0d8, 03/08) but never ported here, even
     # though THIS function is the actual trigger path for scalping_v6/v7 (and
-    # swing/megacap's own watch phase). Trimmed ONLY for the divergence
+    # swing's own watch phase). Trimmed ONLY for the divergence
     # computation below -- the anchor/horizon bookkeeping above intentionally
     # keeps reading the untrimmed ``candles``, unrelated to this fix.
     #
@@ -552,7 +546,7 @@ async def check_rsi_divergence_watching_order(order: dict, sig: dict) -> str:
     div_candles = candles[:-1]
     div_kwargs = {"period": SCALPING_RSI_PERIOD} if watch_mode == "scalping" else {}
     detail = _bullish_rsi_divergence_detail(div_candles, **div_kwargs)
-    # 04/08 -- operator request while diagnosing megacap's zero-trigger
+    # 04/08 -- operator request while diagnosing a pocket's zero-trigger
     # history ("ajuste les log pour qu'il récupère plus d'informations"):
     # a divergence that formed but landed outside the trigger window
     # (RSI_WATCH_MIN_SPAN-MAX_SPAN) used to leave NO trace at all -- an
@@ -1078,27 +1072,11 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
     Copying the honeypot's fail-closed behavior onto this specific guardrail
     would be inventing a new, undiscussed behavior change; this function only
     reuses ``_check_holder_concentration`` as-is. Returns ``True`` (safe to
-    proceed) or ``False`` (>= 80% confirmed, cancel/block).
-
-    03/08 -- real bug found live (operator: "regarde kaito", 16 pending orders
-    created/cancelled for KAITO in a single day, all ``reanalysis_failed``):
-    the "megacap" pocket (``fixed_watchlist.py``, a HAND-CURATED list of
-    already-established tokens like LINK/KAITO/ICP/ENA, never a raw scanned
-    candidate) structurally fails this guardrail. Real Blockscout data on
-    KAITO: its top 2 EOA holders alone hold ~55% of supply (almost certainly
-    CEX hot wallets / treasury, not memecoin insiders) -- this check's
-    "verified contract" exemption only covers a multisig/staking CONTRACT,
-    never an EOA, so a legitimately concentrated established token can never
-    pass it. Waived for ``wallet == "megacap"`` only -- every other guardrail
-    in this pipeline (honeypot, blacklist, liquidity floor) still applies
-    unchanged, this concentration check alone is the mismatched one for an
-    already hand-vetted watchlist of established tokens."""
+    proceed) or ``False`` (>= 80% confirmed, cancel/block)."""
     from aria_core import momentum_entry
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
-        return True
-    if order.get("wallet") == "megacap":
         return True
 
     try:
@@ -1336,11 +1314,8 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         # value reused at all 3 sites) via paper_trader.is_scalping_pocket(),
         # the single source of truth.
         _log_wallet = order.get("wallet") or ""
-        # 02/08 -- "megacap" added to the OR chain, same reasoning as
-        # check_rsi_divergence_watching_order's own comment: never a blind
-        # replacement of this condition, is_scalping_pocket() stays.
         log_mode = "scalping" if (
-            _log_wallet == "swing" or _log_wallet == "megacap" or paper_trader.is_scalping_pocket(_log_wallet)
+            _log_wallet == "swing" or paper_trader.is_scalping_pocket(_log_wallet)
         ) else "standard"
         if uses_rsi_divergence_check:
             # 01/08 -- MAX_RSI_DIVERGENCE_WATCH_CHECKS_PER_DRAIN's own comment:
@@ -1462,8 +1437,6 @@ def _wallet_position_cap(paper_trader_module, wallet: str) -> int | None:
     return {
         "swing": paper_trader_module.MAX_POSITIONS_SWING,
         "vc": paper_trader_module.MAX_POSITIONS_VC,
-        # 02/08 -- "megacap" pocket, same doctrine as swing/vc above.
-        "megacap": paper_trader_module.MAX_POSITIONS_MEGACAP,
     }.get(wallet, paper_trader_module.MAX_POSITIONS)
 
 
@@ -1668,7 +1641,7 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     return pos
 
 
-_POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC", "megacap": "MEGACAP"}
+_POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC"}
 
 # 29/07 -- operator request: the alert never stated which candle timeframe
 # the setup was analyzed on -- ``momentum_entry.evaluate_momentum_entry``'s
@@ -1680,10 +1653,6 @@ _POCKET_LABEL = {"swing": "SWING", "scalping": "SCALPING", "vc": "VC", "megacap"
 _TIMEFRAME_LABEL = {
     "swing": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
     "vc": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
-    # 02/08 -- "megacap" pocket, mode="standard" like swing/vc -- without this
-    # entry, .get() (no default) silently drops the "Analyse sur ..." line
-    # from the alert (found by a validation workflow, ronde 6).
-    "megacap": "bougies 1h+ (repli jour/4h/1h selon disponibilité, mode standard)",
 }
 
 _SCALPING_TIMEFRAME_LABEL = "bougies 15-30min (mode scalping)"

@@ -3659,7 +3659,7 @@ async def evaluate_hard_gates(
     # only remaining value there was blocking a potentially profitable
     # signal. The risk this guardrail actually protects against (holding
     # through a collapse after the wash-trading stops) is specific to a
-    # LONG-HELD position -- still real for swing/megacap (same mode="standard"
+    # LONG-HELD position -- still real for swing (same mode="standard"
     # exit discipline, same holding-period exposure) and for vc
     # (skills/safety_screen.py, separate call site, untouched by this
     # condition), so the ratio stays fully enforced there. `mode` is already
@@ -4297,7 +4297,7 @@ async def refresh_dex_composite_score(contract: str, chain: str):
 async def evaluate_momentum_entry(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
-    waive_holder_concentration: bool = False, rsi_watch_span: tuple[int, int] | None = None,
+    rsi_watch_span: tuple[int, int] | None = None,
 ) -> dict | None:
     """Momentum entry decision (#194) for ``contract`` on ``chain``.
 
@@ -4483,7 +4483,7 @@ async def evaluate_momentum_entry(
     # silently spans hours, corrupting the read (not just the watch expiry
     # fixed above). A token this thin isn't a scalping candidate by
     # definition (not enough flow) -- HOLD honestly rather than trade a
-    # distorted signal. swing/vc/megacap are unaffected (daily/no candle
+    # distorted signal. swing/vc are unaffected (daily/no candle
     # cadence assumption baked into their thresholds the same way, but
     # their setups already tolerate multi-hour/day gaps by design).
     if mode == "scalping":
@@ -4648,18 +4648,8 @@ async def evaluate_momentum_entry(
     # setup is confirmed to exist, never before. VC-thesis path (unified_entry.py)
     # is unaffected: it never sets defer_holder_concentration, so it still gets
     # this guardrail at its original place inside evaluate_hard_gates.
-    #
-    # 03/08 -- ``waive_holder_concentration`` (real bug found live, operator:
-    # "regarde kaito"): the "megacap" pocket (fixed_watchlist.py, a HAND-
-    # CURATED list of already-established tokens) structurally fails this
-    # check -- real Blockscout data on KAITO shows its top 2 EOA holders alone
-    # hold ~55% of supply (CEX/treasury wallets, not memecoin insiders), and
-    # the check's "verified contract" exemption never covers a plain EOA.
-    # Same waiver applied at the limit-order re-checks, see
-    # ``limit_orders._reanalyze_holder_concentration``'s own docstring.
-    too_concentrated, concentration_reason = (
-        (False, "") if waive_holder_concentration
-        else await _check_holder_concentration(contract, chain, best.pair_address)
+    too_concentrated, concentration_reason = await _check_holder_concentration(
+        contract, chain, best.pair_address,
     )
     if too_concentrated:
         from aria_core import momentum_rejection_cache
@@ -4816,7 +4806,7 @@ async def evaluate_momentum_entry(
     # logged by the caller -- paper_trader.py/limit_orders.py -- NEVER a
     # rejection gate here): distance to the recent low, golden-pocket
     # lookback window (25 candles, RECENT_LOW_WINDOW_GOLDEN_POCKET) -- this
-    # is the standard momentum/swing/megacap path, distinct from the
+    # is the standard momentum/swing path, distinct from the
     # scalping-variant engines' own windows (scalping_variants.py).
     recent_low = None
     if action == "BUY":
