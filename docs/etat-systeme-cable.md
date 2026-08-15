@@ -61,14 +61,13 @@ l'utilise — il ne lui « fournit » pas la donnée.
 LLM Vision, images xAI, ACP (CLI absent du conteneur = exécution financière de-facto non câblée).
 Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
 
-- **SMTP Gmail (rapports email) : mécanisme construit, PLUS DÉCLENCHÉ depuis le 15/08.**
-  Le format lui-même (**PDF sécurisé**, reportlab + chiffrement pypdf, permissions limitées à
-  l'impression — dissuasif, jamais inviolable — filigrane nominatif traçable, destinataire +
-  empreinte SHA-256, corps d'email limité à un **teaser court** badges/R/R, thèse et rapport
-  détaillé JAMAIS en clair dans le corps) reste codé et testé, mais son seul déclencheur était la
-  commande Telegram manuelle `/vc <contrat>`, supprimée (l'opérateur ne l'utilisait plus). Voir
-  `skills/vc_delivery.py`, `skills/vc_report_pdf.py`, `skills/vc_i18n.py`
-  (`SUPPORTED_VC_LANGS = (fr, en)` seulement — ES/IT/ZH pas encore supportés).
+- **SMTP Gmail (rapports email) : SUPPRIMÉ le 15/08.** Le rapport VC premium par email
+  (PDF sécurisé filigrané, teaser court en corps d'email) n'avait plus qu'un seul déclencheur
+  possible — la commande Telegram manuelle `/vc <contrat>`, supprimée le même jour (l'opérateur
+  ne l'utilisait plus) — donc `skills/vc_delivery.py`, `skills/vc_report_pdf.py`,
+  `skills/vc_report.py` (rendu HTML) et `services/mailer.py` (client SMTP générique, lui aussi
+  sans autre appelant) ont été retirés entièrement plutôt que laissés en code mort. Détail :
+  `docs/HANDOFF_MOTEUR_LEGITIMITE.md`.
 
 ## Cockpit « ARIA en direct » (#21) — EN LIGNE (câblé + déployé 08/07)
 - `/cockpit` sur la vitrine : pouls public (`GET /api/pulse`, sans auth — heartbeat vivant/mort,
@@ -164,23 +163,17 @@ Stripe/Privy actifs seulement si leurs clés sont dans le `.env`.
   jamais un commit ni une fusion autonome, revue humaine systématique). Zéro chat libre
   sans ancrage factuel : si aucune donnée de perf n'existe encore (`insufficient_data`),
   le cycle ne coûte rien et n'appelle pas le LLM.
-- **Overlay macro « Contexte marché » dans le rapport VC — EN LIGNE, feu vert visuel opérateur confirmé (09/07)** :
-  tâche #14. Réutilise `btc_cycles.py` (rien dupliqué) : nouvelle fonction pure
-  `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) + `fetch_current_macro_phase()`
-  (async, cache 1h en mémoire, dégradation douce sur une source qui échoue). **Aucun appel LLM** — chiffres
-  déterministes uniquement, zéro coût/latence ajoutés à chaque rapport. Câblé dans `vc_analysis.py`
-  (`VCResult.market_context`, nouveau champ data-gated) via `_attach_extras` (regroupe TA+ROI+macro,
-  chacun indépendant). Rendu dans `vc_report.py` (`_market_context_block_html`, même patron visuel que
-  ROI/TA, section premium uniquement). i18n FR/EN dans `vc_i18n.py`. **Géopolitique/réglementaire reste
-  un seam volontairement VIDE** — aucune source fiable branchée, jamais de donnée inventée pour combler
-  la case (à décider avec l'opérateur : quelle source ? coût ? avant de coder). Conformément à
-  `architecture-extensibilite.md` (« Toute nouvelle section suit ce motif + un preview validé par
-  l'utilisateur avant prod »), un rapport d'exemple a été envoyé à l'opérateur, qui a validé le
-  visuel (« le html est magnifique », 09/07) — **tâche #14 complète**. Code testé et
-  mergé sur `main` (tests ajoutés/étendus dans `test_btc_cycles.py`, `test_vc_analysis.py`,
-  `test_vc_cache.py`, `test_vc_report.py`, suite complète verte). Piège évité : `test_vc_analysis.py`/`test_vc_cache.py`
-  déclarent explicitement « aucun appel réseau réel » — une fixture autouse coupe
-  `fetch_current_macro_phase` par défaut dans ces deux fichiers pour ne jamais régresser cet invariant.
+- **Overlay macro « Contexte marché » (historique 09/07, tâche #14) — la donnée reste
+  calculée, son rendu HTML a disparu avec le rapport email (15/08).** Réutilise `btc_cycles.py`
+  (rien dupliqué) : `current_phase_summary()` (dernier segment du cycle Bitcoin en cours) +
+  `fetch_current_macro_phase()` (async, cache 1h en mémoire, dégradation douce sur une source qui
+  échoue), **aucun appel LLM**. Toujours câblé dans `vc_analysis.py` (`VCResult.market_context`,
+  champ data-gated peuplé via `_attach_extras`) — seul son rendu visuel (`vc_report.py::
+  _market_context_block_html`) a été retiré avec le reste du système de rapport email (voir
+  entrée SMTP Gmail plus haut). **Géopolitique/réglementaire reste un seam volontairement VIDE**
+  — aucune source fiable branchée, jamais de donnée inventée pour combler la case. Tests restants :
+  `test_btc_cycles.py`, `test_vc_analysis.py`, `test_vc_cache.py` (fixture autouse coupant
+  `fetch_current_macro_phase` par défaut, jamais d'appel réseau réel en test).
 - **Gestion de position paper-trading : stop suiveur + prise de profit échelonnée (09/07)** :
   `paper_trader.py` — remplace la sortie binaire (100 % à la cible OU à l'invalidation, tâche
   #38) par une gestion qui protège les gains acquis sans couper le potentiel restant.

@@ -45,9 +45,7 @@ jobs:
         run: |
           pytest -q \
             tests/test_vc_judge.py \
-            tests/test_vc_report.py \
             tests/test_vc_analysis.py \
-            tests/test_vc_delivery.py \
             tests/test_vc_predictions.py \
             tests/test_virtuals_client.py \
             tests/test_virtuals_arena.py \
@@ -70,7 +68,6 @@ jobs:
             tests/test_heartbeat_pulse.py \
             tests/test_dossier.py \
             tests/test_telegram_watchlist_command.py \
-            tests/test_vc_report_pdf.py \
             tests/test_relay_chat.py \
             tests/test_relay_conversation.py \
             tests/test_telegram_claude_addressing.py \

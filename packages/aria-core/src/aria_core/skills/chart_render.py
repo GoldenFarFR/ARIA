@@ -2,12 +2,11 @@
 
 Gmail and most mail clients strip SVG: the **only** truly portable image
 format in email is an inline PNG as a ``data:`` URI. This module draws, with
-Pillow (already a project dependency — see ``vc_report`` which embeds the
-emblem the same way), a small sober price chart and returns it as
+Pillow, a small sober price chart and returns it as
 ``data:image/png;base64,...`` — no external resource, no network call,
 entirely deterministic (same candles -> same PNG).
 
-Palette consistent with the B4 report (ivory body, gold / emerald / ink):
+Palette (ivory body, gold / emerald / ink):
 - price line: warm ink;
 - entry: emerald; invalidation: rust; target: gold.
 
@@ -23,7 +22,7 @@ from PIL import Image, ImageDraw
 
 from aria_core.skills.ta_levels import Candle
 
-# ─── Palette (aligned with vc_report — ivory body, gold/emerald/ink) ───
+# ─── Palette (ivory body, gold/emerald/ink) ───
 _BG = (246, 242, 233)          # ivory (_IVORY)
 _INK = (42, 38, 32)            # warm ink (_INK_WARM) — price line
 _GRID = (226, 216, 189)        # discreet gridline

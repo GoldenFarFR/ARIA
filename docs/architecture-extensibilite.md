@@ -52,7 +52,7 @@ Persistance (paths.py → aria.db, aiosqlite ; fichiers data_dir)
 Chaque capacité est un **module autonome** avec une entrée `async` qui retourne
 une **dataclass typée** (jamais un dict brut), sans effet de bord, dôme-hardened.
 Exemples existants : `vc_analysis`, `vc_judge` (proof engine), `ta_levels`,
-`chart_render`, `vc_report`, `vc_i18n`, `vc_prefs`, `acp_onchain_scan`.
+`chart_render`, `vc_i18n`, `vc_prefs`, `acp_onchain_scan`.
 > **Recette d'un nouvel outil** : nouveau fichier `skills/<nom>.py`, fonction
 > `async def <verbe>(...) -> <Dataclass>`, fallback déterministe, tests offline
 > mockés. Le gateway l'appelle, il ne connaît pas Telegram.
@@ -98,11 +98,15 @@ persistant réutilise ce chemin — jamais de fichier écrit ailleurs.
 Tout texte destiné à l'utilisateur passe par la couche i18n (FR défaut, EN
 additif). Un nouvel outil expose ses libellés ici, jamais en dur dans le code.
 
-### 1.8 Rendu rapport — `vc_report.py`
-Sections **additives et data-gated** : rendues seulement si la donnée existe,
-sinon rapport identique. **Toute nouvelle section (TA, macro) suit ce motif +
-un preview validé par l'utilisateur avant prod** (le visuel actuel est validé,
-ne pas le modifier sans feu vert).
+### 1.8 Rendu rapport — supprimé le 15/08
+`vc_report.py`/`vc_report_pdf.py`/`vc_delivery.py` (rapport VC premium par email,
+PDF sécurisé filigrané) ont été retirés entièrement avec leur seul déclencheur, la
+commande Telegram manuelle `/vc <contrat>` (l'opérateur ne l'utilisait plus).
+Les sections additives/data-gated (TA, macro, ROI comparables) référencées plus bas
+dans ce document décrivent l'ancien point d'ancrage — la donnée elle-même reste
+calculée dans `vc_analysis.py` (`VCResult`), seul son rendu HTML a disparu. Un futur
+canal de rendu (web, x402) repartirait d'un nouveau motif, pas d'une reconstruction
+de ces fichiers. Détail : `docs/HANDOFF_MOTEUR_LEGITIMITE.md`.
 
 ---
 
@@ -135,7 +139,7 @@ ne pas le modifier sans feu vert).
 | **Mineur de conversations opérateur/ARIA** (#57) | skill + heartbeat | `skills/telegram_conversation_miner.py` → tâche `telegram_miner_cycle` (60min, throttle ~1x/jour) | Relit `relay_chat.py` (rien dupliqué), propose un enseignement durable via ISSUE GitHub (label `aria-knowledge-proposal`, même doctrine que `knowledge_inbox`/`claude_mentor` — jamais commit/fusion autonome). Garde-fou dédié : bloque toute publication si le titre/corps ressemble à un secret (`_looks_like_secret`) — une création d'issue ne passe pas par le scan `detect-secrets` de la CI, contrairement à un push. Gate OFF par défaut (`ARIA_TELEGRAM_MINER_ENABLED`). |
 | **Fact-check (Facticity / ArAIstotle)** | service | `services/factcheck.py` → soit `include_factcheck`, soit **2e dimension de juge** | Motif identique à `vc_judge` : audit indépendant, pluggable. Ne pas toucher au token $FACY. |
 | **Moteur de connaissance 24/7** (#8) | worker VPS | tâche de fond réutilisant les MÊMES skills (scan/analyse) → écrit dans un knowledge store | Exige que les skills restent purs et appelables hors Telegram (ils le sont). Surveiller la RAM (~1,8 Gio). |
-| **Overlay macro / géopolitique** (#14) | données + section | source macro → section data-gated de `vc_report` | Additif, non-régression testée, preview avant prod. Facts-only. |
+| **Overlay macro / géopolitique** (#14) | données seulement | source macro → `VCResult.market_context` (déjà peuplé, `vc_analysis.py`) | Le rendu visuel a disparu avec `vc_report.py` (15/08) — un futur canal de rendu repartirait d'un nouveau motif. Facts-only, jamais une donnée inventée. |
 | **Gateway web / API clients** | gateway | nouveau dossier gateway réutilisant les skills | Ne dupliquer aucune logique métier : tout est déjà dans les skills. |
 | **Conformité (Clerk / Solvr, avocat)** | process | hors code — dossier `docs/conformite-*` | Aucun encaissement avant validation juridique. |
 

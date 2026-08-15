@@ -643,33 +643,6 @@ def test_token_dossier_operator_gated_and_read_only():
         assert forbidden not in src, f"le dossier doit rester une lecture pure (trouvé: {forbidden})"
 
 
-def test_vc_report_pdf_secured_and_email_body_never_leaks_full_report():
-    """PDF sécurisé joint au rapport /vc : (a) permissions anti-copie posées avant
-    envoi, jamais un mot de passe propriétaire codé en dur (généré à la volée par
-    l'appelant) ; (b) le corps de l'email (teaser) ne contient JAMAIS la thèse ni
-    le rapport détaillé — sinon la protection PDF anti-copie serait sans objet."""
-    import inspect
-
-    from aria_core.skills import vc_delivery, vc_report_pdf
-
-    delivery_src = inspect.getsource(vc_delivery)
-    assert "secure_pdf_bytes" in delivery_src, "le PDF joint doit être sécurisé avant envoi"
-    assert "secrets.token_urlsafe" in delivery_src, (
-        "le mot de passe propriétaire doit être généré à la volée (jamais codé en dur/réutilisé)"
-    )
-    assert "render_email_teaser_html" in delivery_src and "email_teaser_text" in delivery_src, (
-        "le corps de l'email doit être le teaser court, jamais le rapport complet"
-    )
-    assert "render_html_report" not in delivery_src, (
-        "le rapport HTML complet ne doit plus être envoyé comme corps d'email"
-    )
-
-    pdf_src = inspect.getsource(vc_report_pdf)
-    assert "not unbreakable" in pdf_src, (
-        "the module must honestly document the limit of the PDF protection (deterrent, not absolute)"
-    )
-
-
 # ── Registre des actions externes (10/07) ────────────────────────────────────────────────
 #
 # Incident : un sous-système entier (aria_worker_queue.py + capability_gap.py), câblé dans
@@ -706,7 +679,6 @@ _EXTERNAL_WRITE_RE = re.compile("|".join(_EXTERNAL_WRITE_PATTERNS))
 _EXTERNAL_WRITE_DEFINITION_FILES = {
     "github_client.py",
     "gateway/x_twitter.py",
-    "services/mailer.py",
     "gateway/tiktok.py",
 }
 
@@ -739,8 +711,6 @@ _EXTERNAL_WRITE_ALLOWLIST = {
     "self_maintenance.py",
     "x_profile.py",
     "visual_autonomy.py",
-    # Email
-    "skills/vc_delivery.py",
 }
 
 
@@ -863,7 +833,6 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_TWITTERAPI_IO_BUDGET_WATCH_ENABLED",
     "ARIA_TRADE_LOSS_BATCH_REVIEW_ENABLED",
     "ARIA_UX_WATCH_ENABLED",
-    "ARIA_VC_EMAIL_ENABLED",
     "ARIA_VC_INTELLIGENCE_ENABLED",
     "ARIA_VC_POCKET_SOURCING_ENABLED",
     # 14/08 (#166/#167) -- weekly TTL purge + LanceDB compaction for the
