@@ -746,7 +746,7 @@ def test_wants_acp_prepare_list():
     assert wants_acp_prepare_list("list prepared acp jobs")
     assert not wants_acp_prepare_list("préparer job acp 0xabc123")
     assert not wants_acp_prepare_list("prepare job acp 0xdead")
-    # Les deux regex restent mutuellement exclusives sur les phrases déclencheuses réelles.
+    # The two regexes stay mutually exclusive on real trigger phrases.
     assert not wants_acp_prepare("jobs acp préparés")
 
 
@@ -786,8 +786,8 @@ async def test_acp_prepare_list_shows_saved_jobs(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_acp_email_watch_falls_back_to_full_thread_for_job_id(monkeypatch, tmp_path):
-    """Le snippet est tronqué (aucun job id dedans) mais le thread complet le contient --
-    _extract_alert doit récupérer email_thread() plutôt que renvoyer job_ids=[]."""
+    """Snippet is truncated (no job id in it) but the full thread contains it --
+    _extract_alert must fetch email_thread() instead of returning job_ids=[]."""
     from aria_core.skills import acp_email_watcher as ew
 
     job_id = "0x" + "e" * 64

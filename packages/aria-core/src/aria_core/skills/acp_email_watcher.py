@@ -110,10 +110,11 @@ def _extract_alert(msg: dict[str, Any]) -> dict[str, Any] | None:
     blob = _message_blob(msg)
     job_ids = _JOB_ID_RE.findall(blob)
     if not job_ids:
-        # Le snippet/preview est tronqué -- l'id job apparaît parfois seulement plus
-        # loin dans le corps complet du thread. Sans ce repli, l'opérateur devait
-        # aller le copier lui-même dans Hermès (cf. le message "id à copier depuis
-        # Hermès" plus bas) même quand l'id existait déjà dans l'email.
+        # The snippet/preview is truncated -- the job id sometimes only appears
+        # further down in the full thread body. Without this fallback, the
+        # operator had to go copy it themselves from Hermes (cf. the "id to
+        # copy from Hermes" message further below) even when the id already
+        # existed in the email.
         thread_id = _thread_id(msg)
         if thread_id:
             thread, _err = email_thread(thread_id)
