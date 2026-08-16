@@ -298,4 +298,162 @@ async def test_summary_no_closed_rows_is_none_not_zero():
     result = await shadow.summary(CHAIN)
     assert result["closed"] == 0
     assert result["win_rate_h2"] is None
-    assert result["avg_multiplier_h2"] is None
+
+
+# --- advance_exit_simulation --------------------------------------------
+
+@pytest.mark.asyncio
+async def test_advance_exit_multiple_rungs_filled_in_one_slow_cycle():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": 2.0})  # a slow cycle: price jumped straight past 3 rungs
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["scale_out_fills"] == 3
+    assert client.calls == ["poolA"]  # exactly one snapshot call for this position
+    rows = await _rows()
+    assert rows[0]["remaining_qty"] == pytest.approx(0.421875)
+    assert rows[0]["realized_proceeds"] == pytest.approx(0.880126953125)
+    assert rows[0]["next_scale_level"] == pytest.approx(2.44140625)
+    assert rows[0]["peak_price"] == pytest.approx(2.0)
+    assert rows[0]["exit_reason"] is None  # still open, dust threshold not reached
+    assert rows[0]["final_multiplier"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_scale_out_dust_closes_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": 1000.0})  # far past enough rungs to leave <1% remaining
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_scale_out_complete"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "scale_out_complete"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["final_multiplier"] is not None
+    assert rows[0]["final_multiplier"] > 1.0  # a 1000x spot price is a clear win
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_trailing_stop_triggers():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    # Cycle 1: price rises past the first rung, sets a new peak at 1.3.
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["peak_price"] == pytest.approx(1.3)
+    # Cycle 2: price falls to exactly -20% of the 1.3 peak -> trailing stop.
+    counts = await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["final_multiplier"] == pytest.approx(1.0925)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_max_hold_triggers():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=125.0)
+    client = FakeClient({"poolA": 1.1})  # no rung crossed, no stop hit -- only the timeout fires
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_max_hold"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "max_hold"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["final_multiplier"] == pytest.approx(1.1)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_stays_open_when_nothing_triggers():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": 1.1})  # below the first rung, above the stop, well under 2h
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 1
+    assert counts["scale_out_fills"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["remaining_qty"] == 1.0
+    assert rows[0]["peak_price"] == pytest.approx(1.1)  # still updated even with no fill/exit
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": None})  # unavailable
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["remaining_qty"] == 1.0  # untouched, left for the next passage to retry
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_one_pool_failure_never_blocks_others():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await _insert_open_row(pool_address="poolB", entry_price=1.0, minutes_ago=10.0)
+
+    class RaisingThenWorkingClient(FakeClient):
+        async def get_pool_snapshot(self, pool_address, *, network="solana"):
+            if pool_address == "poolA":
+                raise RuntimeError("boom")
+            return await super().get_pool_snapshot(pool_address, network=network)
+
+    client = RaisingThenWorkingClient({"poolB": 1.1})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 1  # poolB still processed despite poolA's failure
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_never_raises_on_db_failure(monkeypatch):
+    monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
+    shadow._ensured_db_paths.clear()
+    client = FakeClient({})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 0
+
+
+# --- exit_simulation_summary ---------------------------------------------
+
+@pytest.mark.asyncio
+async def test_exit_simulation_summary_computes_over_completed_rows_only():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, exit_reason, final_multiplier) "
+            "VALUES (?, ?, 'open', ?, 1.0, 'trailing_stop', 1.5)",
+            ("poolA", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, exit_reason, final_multiplier) "
+            "VALUES (?, ?, 'open', ?, 1.0, 'max_hold', 0.7)",
+            ("poolB", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log (pool_address, chain, status, detected_at, entry_price) "
+            "VALUES (?, ?, 'open', ?, 1.0)",
+            ("poolC", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.exit_simulation_summary(CHAIN)
+    assert result["completed"] == 2
+    assert result["wins"] == 1
+    assert result["win_rate"] == pytest.approx(0.5)
+    assert result["avg_multiplier"] == pytest.approx((1.5 + 0.7) / 2)
+    assert result["by_exit_reason"] == {"trailing_stop": 1, "max_hold": 1}
+
+
+@pytest.mark.asyncio
+async def test_exit_simulation_summary_no_completed_rows_is_none_not_zero():
+    result = await shadow.exit_simulation_summary(CHAIN)
+    assert result["completed"] == 0
+    assert result["win_rate"] is None
+    assert result["avg_multiplier"] is None
+
+
+# --- run_cycle wires both measurement passes ------------------------------
+
+@pytest.mark.asyncio
+async def test_run_cycle_also_advances_exit_simulation():
+    client = FakeGeckoClient([_pool(m15=30.0)], {})
+    result = await shadow.run_cycle(client, network=CHAIN)
+    assert "exit_sim" in result
+    assert result["exit_sim"]["checked"] == 0  # poolA has no price in FakeGeckoClient's map -> unavailable, skipped

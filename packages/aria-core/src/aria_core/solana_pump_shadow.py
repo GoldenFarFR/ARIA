@@ -41,7 +41,7 @@ fact is stated explicitly rather than glossed over, per the project's
   yet, not set in any ``.env`` -- naming it here is documentation, not
   activation).
 
-Two-pass design, same "detect now, measure later" doctrine as
+Three-pass design, same "detect now, measure later" doctrine as
 ``v8_rsi_reversal_shadow.py``'s open/closed state machine:
 1. ``record_signals()`` -- called with already-fetched
    ``GeckoTerminalClient.get_trending_pools()`` results, logs one row per pool
@@ -49,23 +49,44 @@ Two-pass design, same "detect now, measure later" doctrine as
    per ``(pool_address, chain)``: an already-OPEN signal for the same pool is
    never re-logged while still running (an ongoing pump would otherwise spam
    one row per cycle) -- a deliberate design choice, not an oversight.
-2. ``evaluate_open_signals()`` -- the forward-validation pass THIS research
-   actually needs: re-fetches each open signal's CURRENT price
-   (``GeckoTerminalClient.get_pool_snapshot``) once it has aged past 15min/1h/
-   2h since detection, and records the real forward price/return at each
-   horizon. Closes the row once the 2h checkpoint is captured.
+2. ``evaluate_open_signals()`` -- a pragmatic proxy pass: re-fetches each
+   open signal's CURRENT price (``GeckoTerminalClient.get_pool_snapshot``)
+   once it has aged past 15min/1h/2h since detection, and records the real
+   forward price/return at each fixed horizon. Closes the row (``status``
+   column) once the 2h checkpoint is captured.
+3. ``advance_exit_simulation()`` (added in a second pass, same day) -- the
+   REAL calibrated exit rule itself, not a proxy: 25%-of-remaining scale-out
+   ladder at every +25% rung above entry, -20% trailing stop from the
+   running high since entry, 2h hard max-hold. Stateful and incremental
+   (tracks ``remaining_qty``/``peak_price``/``next_scale_level`` per row) so
+   it can resume correctly regardless of how irregularly ``run_cycle`` is
+   actually called. Uses its own ``exit_reason``/``final_multiplier``
+   columns, entirely independent of pass 2's ``status``/``forward_pct_h2`` --
+   both mechanisms coexist and are read separately, neither replaces the
+   other (two complementary out-of-sample checks on the same signals).
 
-**Honest scope limit (documented, not hidden)**: the 3 horizons (m15/h1/h2)
-are a pragmatic proxy for "did the signal pay off", not a full simulation of
-the calibrated exit rule itself (25%-of-position ladder at every +25% step,
--20% trailing stop from the running high, 2h hard timeout) -- that would
-require tracking the running high-water mark and partial fills tick by tick,
-which this first cut does not attempt. The 3 horizon prices are still enough
-to compute a real out-of-sample win rate (forward_pct_h2 > 0) and to sanity
-check the calibrated multiplier (1.68x) against genuinely unseen tokens --
-the core question this shadow layer exists to answer. A full ladder/trailing-
-stop simulation is a natural next step, left as an explicit TODO rather than
-built now (time-boxed 16/08 build).
+**Honest scope limit, pass 2 (m15/h1/h2 proxy, documented, not hidden)**: the
+3 horizons are a pragmatic proxy for "did the signal pay off", not the exact
+calibrated exit rule -- still enough on their own to compute a real
+out-of-sample win rate (forward_pct_h2 > 0) and sanity-check the calibrated
+multiplier (1.68x) against genuinely unseen tokens.
+
+**Honest scope limit, pass 3 (the real exit rule, documented, not hidden)**:
+the Dune backtest reconstructs each candle's real high/low, so its -20%
+trailing stop fires against the true intra-candle low. ``advance_exit_
+simulation`` only has whatever spot price ``get_pool_snapshot`` returns at
+the moment it happens to run -- an irregular, POINT-SAMPLE cadence (however
+long the gap between two ``run_cycle`` calls turns out to be), never a
+continuous low. A stop that would have touched and recovered between two
+polls is invisible here, and a stop that does fire here may register at a
+worse price than a true tick-by-tick simulation would have caught it at.
+This is a real, structural divergence from the backtest -- never to be
+glossed over when reading this shadow's numbers against the 97.6%/1.68x
+calibration figures. Scale-out rung fills, by contrast, are modeled at their
+OWN threshold price (limit-sell semantics), not at the observed spot price,
+since the calibrated rule is defined per-threshold; a slow cycle that jumps
+past several rungs at once fills each one independently, at its own price
+(see ``advance_exit_simulation``'s docstring for the exact mechanics).
 
 Best-effort throughout, same contract as every other shadow module in this
 codebase: a logging/measurement failure must NEVER raise into whatever calls
@@ -97,6 +118,34 @@ M15_SURGE_THRESHOLD_PCT = 25.0
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
 # position that hasn't resolved by 2h is force-closed in the real rule too).
 _HORIZON_MINUTES: dict[str, int] = {"m15": 15, "h1": 60, "h2": 120}
+
+# The CALIBRATED exit rule itself (16/08 Dune backtest, see module
+# docstring) -- distinct from M15_SURGE_THRESHOLD_PCT (the ENTRY signal) and
+# from _HORIZON_MINUTES (the older 3-checkpoint proxy above).
+SCALE_OUT_STEP_PCT = 25.0  # each new rung is +25% above the PREVIOUS rung, cumulative from entry
+SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) position at each rung crossed
+TRAILING_STOP_PCT = 20.0  # close the rest if price falls 20% below the running high since entry
+MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibrated rule's own max-hold
+
+# Below this fraction of the ORIGINAL position, a scale-out rung liquidates
+# whatever is left in full and closes the row -- the calibrated ladder
+# (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
+# this is a documented modeling choice (see module docstring), never a
+# fabricated price -- the dust stub is valued at the current observed spot
+# price, the only real observation available for it.
+_SCALE_OUT_DUST_FRACTION = 0.01
+
+# Columns added after the table's first version (16/08, same day) -- PRAGMA-
+# guarded ALTER TABLE so an already-existing prod DB migrates in place,
+# same pattern as limit_orders.py/rsi_divergence_log.py/screened_pool.py.
+_ADDED_COLUMNS: list[tuple[str, str]] = [
+    ("remaining_qty", "REAL NOT NULL DEFAULT 1.0"),
+    ("realized_proceeds", "REAL NOT NULL DEFAULT 0.0"),
+    ("peak_price", "REAL"),
+    ("next_scale_level", "REAL"),
+    ("exit_reason", "TEXT"),
+    ("final_multiplier", "REAL"),
+]
 
 _ensured_db_paths: set[str] = set()
 
@@ -144,10 +193,23 @@ async def _ensure_table() -> None:
                 forward_price_h2 REAL,
                 forward_pct_h2 REAL,
                 forward_h2_measured_at TEXT,
-                closed_at TEXT
+                closed_at TEXT,
+                remaining_qty REAL NOT NULL DEFAULT 1.0,
+                realized_proceeds REAL NOT NULL DEFAULT 0.0,
+                peak_price REAL,
+                next_scale_level REAL,
+                exit_reason TEXT,
+                final_multiplier REAL
             )
             """
         )
+        existing = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(solana_pump_shadow_log)")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE solana_pump_shadow_log ADD COLUMN {name} {ddl}")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_solana_pump_shadow_lookup "
             "ON solana_pump_shadow_log (pool_address, chain, status)"
@@ -155,6 +217,10 @@ async def _ensure_table() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_solana_pump_shadow_detected_at "
             "ON solana_pump_shadow_log (detected_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_solana_pump_shadow_exit_reason "
+            "ON solana_pump_shadow_log (chain, exit_reason)"
         )
         await db.commit()
     _ensured_db_paths.add(path)
@@ -191,14 +257,19 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
 
                 transactions_m15 = pool.transactions_m15 or {}
+                # Exit-simulation state initialized right here at detection --
+                # peak starts at entry (no higher price observed yet), first
+                # rung is the calibrated ladder's own first step above entry.
+                first_scale_level = pool.price_usd * (1 + SCALE_OUT_STEP_PCT / 100.0)
                 await db.execute(
                     """
                     INSERT INTO solana_pump_shadow_log (
                         pool_address, token_address, chain, symbol, status,
                         detected_at, entry_price,
                         m5_pct, m15_pct, m30_pct, h1_pct, h6_pct, h24_pct,
-                        buyers_m15, sellers_m15, volume_usd_m15, reserve_usd
-                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        buyers_m15, sellers_m15, volume_usd_m15, reserve_usd,
+                        remaining_qty, realized_proceeds, peak_price, next_scale_level
+                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?)
                     """,
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
@@ -208,6 +279,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                         pool.price_change_pct.get("h24"),
                         transactions_m15.get("buyers"), transactions_m15.get("sellers"),
                         pool.volume_usd_m15, pool.reserve_usd,
+                        pool.price_usd, first_scale_level,
                     ),
                 )
                 logged += 1
@@ -305,16 +377,155 @@ async def evaluate_open_signals(
     return counts
 
 
+async def advance_exit_simulation(
+    client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 50,
+) -> dict[str, int]:
+    """Stateful, incremental simulation of the CALIBRATED exit rule itself
+    (25%-of-remaining scale-out ladder every +25% rung above entry, -20%
+    trailing stop from the running high since entry, 2h hard max-hold) --
+    distinct from ``evaluate_open_signals``'s 3-fixed-horizon proxy above,
+    the two coexist (see module docstring). One ``get_pool_snapshot`` call
+    per still-simulating row per call (never more), all state needed to
+    resume lives in the row itself (``remaining_qty``/``peak_price``/
+    ``next_scale_level``) so this is safe to call on an arbitrarily
+    irregular cadence -- nothing here assumes a fixed interval between two
+    ``run_cycle`` passages.
+
+    Per row, in this fixed order (matches the calibrated rule's own
+    precedence -- scale-out first since it's a rising-price event, trailing
+    stop next, max-hold as the final catch-all):
+    1. Update ``peak_price`` to the running high since entry.
+    2. Walk the scale-out ladder: while the CURRENT price has reached the
+       next not-yet-filled rung and more than the dust fraction remains,
+       sell 25% of the REMAINING position -- filled at that RUNG'S OWN price
+       (limit-sell semantics, matching the calibrated rule's per-threshold
+       definition), not at the possibly-higher observed price. A slow cycle
+       that jumps past several rungs at once fills each one independently,
+       never collapsed into a single fill.
+    3. If what's left has dropped under 1% of the original position, close
+       it out (``scale_out_complete``) -- the ladder is asymptotic and would
+       otherwise never reach a literal zero; the dust stub is valued at the
+       CURRENT observed price (the only real observation available for it),
+       never fabricated.
+    4. Otherwise, if the current price sits >=20% below the running peak,
+       close the remainder (``trailing_stop``) at the current price. **Point-
+       sample limitation, documented not hidden**: this can only see the
+       spot price observed AT this call, never a true intra-cycle low --
+       see the module docstring's "Honest scope limit, pass 3".
+    5. Otherwise, if 2h have elapsed since detection, force-close the
+       remainder (``max_hold``) at the current price.
+    ``final_multiplier`` (``realized_proceeds / entry_price``) is only ever
+    written once ``remaining_qty`` reaches 0 via one of the 3 closes above --
+    never estimated on a still-open row."""
+    client = client or geckoterminal_client
+    counts = {
+        "checked": 0, "scale_out_fills": 0, "closed_scale_out_complete": 0,
+        "closed_trailing_stop": 0, "closed_max_hold": 0,
+    }
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM solana_pump_shadow_log WHERE chain = ? AND exit_reason IS NULL "
+                "ORDER BY detected_at ASC LIMIT ?",
+                (chain, limit),
+            )
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        for row in rows:
+            age_minutes = _minutes_since(row["detected_at"])
+            if age_minutes is None:
+                continue
+            entry_price = row["entry_price"]
+            if not entry_price:
+                continue
+
+            try:
+                snapshot: PoolSnapshot = await client.get_pool_snapshot(row["pool_address"], network=chain)
+            except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
+                logger.info(
+                    "solana_pump_shadow: advance_exit_simulation snapshot failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
+                continue
+            if not snapshot.available or snapshot.price_usd is None:
+                continue
+            counts["checked"] += 1
+            current_price = snapshot.price_usd
+
+            peak_price = row["peak_price"] or entry_price
+            next_scale_level = row["next_scale_level"] or (entry_price * (1 + SCALE_OUT_STEP_PCT / 100.0))
+            remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
+            realized_proceeds = row["realized_proceeds"] or 0.0
+
+            peak_price = max(peak_price, current_price)
+
+            fills_this_cycle = 0
+            while remaining_qty > _SCALE_OUT_DUST_FRACTION and current_price >= next_scale_level:
+                sell_fraction = remaining_qty * SCALE_OUT_SELL_FRACTION
+                realized_proceeds += sell_fraction * next_scale_level
+                remaining_qty -= sell_fraction
+                next_scale_level *= (1 + SCALE_OUT_STEP_PCT / 100.0)
+                fills_this_cycle += 1
+            counts["scale_out_fills"] += fills_this_cycle
+
+            exit_reason: str | None = None
+            if remaining_qty <= _SCALE_OUT_DUST_FRACTION and fills_this_cycle:
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "scale_out_complete"
+            elif current_price <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "trailing_stop"
+            elif age_minutes >= MAX_HOLD_MINUTES:
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "max_hold"
+
+            final_multiplier = (realized_proceeds / entry_price) if exit_reason else None
+
+            async with aiosqlite.connect(_db_path()) as db:
+                await db.execute(
+                    """
+                    UPDATE solana_pump_shadow_log SET
+                        peak_price = ?, next_scale_level = ?, remaining_qty = ?,
+                        realized_proceeds = ?, exit_reason = ?, final_multiplier = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        peak_price, next_scale_level, remaining_qty,
+                        realized_proceeds, exit_reason, final_multiplier, row["id"],
+                    ),
+                )
+                await db.commit()
+
+            if exit_reason == "scale_out_complete":
+                counts["closed_scale_out_complete"] += 1
+            elif exit_reason == "trailing_stop":
+                counts["closed_trailing_stop"] += 1
+            elif exit_reason == "max_hold":
+                counts["closed_max_hold"] += 1
+    except Exception as exc:  # noqa: BLE001 -- shadow simulation must never raise into a caller
+        logger.info("solana_pump_shadow: advance_exit_simulation failed (%s)", exc)
+    return counts
+
+
 async def run_cycle(
     client: GeckoTerminalClient | None = None, *, network: str = "solana", duration: str = "5m",
 ) -> dict[str, int]:
     """One full shadow passage: fetch Solana's currently-trending pools,
-    log any new +25%/15min signal, then advance the forward-measurement pass
-    on already-open signals. Self-contained (no caller needed to sequence the
-    two steps itself) -- but, per the module's bright-line doctrine, this
-    function is NOT called by ``heartbeat.py`` in this change; wiring it in
-    (under the reserved ``ARIA_SOLANA_PUMP_SHADOW_ENABLED`` gate name) is an
-    explicit follow-up left to a future step."""
+    log any new +25%/15min signal, then advance BOTH forward-measurement
+    passes on already-open signals -- the m15/h1/h2 proxy
+    (``evaluate_open_signals``) AND the calibrated exit-rule simulation
+    (``advance_exit_simulation``), two complementary angles on the same
+    signals, neither replacing the other. Self-contained (no caller needed
+    to sequence the steps itself) -- but, per the module's bright-line
+    doctrine, this function is NOT called by ``heartbeat.py`` in this
+    change; wiring it in (under the reserved
+    ``ARIA_SOLANA_PUMP_SHADOW_ENABLED`` gate name) is an explicit follow-up
+    left to a future step."""
     client = client or geckoterminal_client
     result = await client.get_trending_pools(network=network, duration=duration)
     logged = 0
@@ -323,7 +534,8 @@ async def run_cycle(
     else:
         logger.info("solana_pump_shadow: get_trending_pools unavailable (%s)", result.error)
     measured = await evaluate_open_signals(client, chain=network)
-    return {"fetched_pools": len(result.pools), "signals_logged": logged, **measured}
+    exit_sim = await advance_exit_simulation(client, chain=network)
+    return {"fetched_pools": len(result.pools), "signals_logged": logged, **measured, "exit_sim": exit_sim}
 
 
 async def summary(chain: str = "solana") -> dict:
@@ -349,4 +561,36 @@ async def summary(chain: str = "solana") -> dict:
         "avg_multiplier_h2": (
             sum(1.0 + r["forward_pct_h2"] / 100.0 for r in closed) / len(closed)
         ) if closed else None,
+    }
+
+
+async def exit_simulation_summary(chain: str = "solana") -> dict:
+    """The real out-of-sample winrate/multiplier for the CALIBRATED exit
+    rule itself (``advance_exit_simulation``), the number this whole
+    second pass exists to produce -- to compare against the 16/08 Dune
+    backtest calibration (97.6% win rate / 1.68x average multiplier).
+    Computed ONLY over rows whose exit simulation actually completed
+    (``final_multiplier`` populated), never estimated from a still-open
+    position. ``win`` = ``final_multiplier > 1.0`` (the position finished
+    above its entry-normalized value), same convention as ``summary()``'s
+    ``forward_pct_h2 > 0``."""
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT exit_reason, final_multiplier FROM solana_pump_shadow_log "
+            "WHERE chain = ? AND final_multiplier IS NOT NULL",
+            (chain,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    wins = sum(1 for r in rows if r["final_multiplier"] > 1.0)
+    by_exit_reason: dict[str, int] = {}
+    for r in rows:
+        by_exit_reason[r["exit_reason"]] = by_exit_reason.get(r["exit_reason"], 0) + 1
+    return {
+        "completed": len(rows),
+        "wins": wins,
+        "win_rate": (wins / len(rows)) if rows else None,
+        "avg_multiplier": (sum(r["final_multiplier"] for r in rows) / len(rows)) if rows else None,
+        "by_exit_reason": by_exit_reason,
     }
