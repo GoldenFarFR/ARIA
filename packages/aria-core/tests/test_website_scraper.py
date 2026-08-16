@@ -69,6 +69,37 @@ async def test_single_page_no_links():
     assert result.pages[0].title == "Ex"
 
 
+def test_extract_page_text_includes_href_only_contract():
+    """Real case (16/08, fetchr.guru): a contract referenced only inside a
+    "Buy on Uniswap" link's href, never in the visible anchor text, must
+    still surface in the returned text -- otherwise website_substance.py's
+    downstream substring check wrongly reports "contract not found"."""
+    contract = "0x610a5a297fe2135289b8565ef645de2a7c00eba3"
+    html = (
+        "<html><body>Need 10,000,000 $FETCHR.<br>"
+        f'<a href="https://app.uniswap.org/swap?outputCurrency={contract}&chain=base">Buy</a>'
+        "</body></html>"
+    )
+    _title, text = website_scraper._extract_page_text(html)
+    assert contract in text
+
+
+@pytest.mark.asyncio
+async def test_crawl_surfaces_href_only_contract_in_raw_content():
+    contract = "0x610a5a297fe2135289b8565ef645de2a7c00eba3"
+    _set(
+        "https://example.com",
+        text=(
+            "<html><body>Buy the token below.<br>"
+            f'<a href="https://app.uniswap.org/swap?outputCurrency={contract}">Buy</a>'
+            "</body></html>"
+        ),
+    )
+    result = await website_scraper.crawl("https://example.com")
+    assert result.available is True
+    assert contract in result.pages[0].raw_content
+
+
 @pytest.mark.asyncio
 async def test_follows_internal_links_same_domain():
     _set(

@@ -96,10 +96,16 @@ def _extract_page_text(html: str) -> tuple[str, str]:
 
     body = _SCRIPT_STYLE_RE.sub(" ", html)
     body = _HIDDEN_ELEMENT_RE.sub(" ", body)
+    # A contract only referenced inside a link's href (a "Buy on Uniswap"
+    # button, never shown as visible anchor text) would otherwise vanish
+    # once _TAG_RE below strips the whole <a href="..."> tag -- real case
+    # found live 16/08 (fetchr.guru), wrongly flagged as "contract not
+    # found on site" by website_substance.py's substring check downstream.
+    hrefs = _clean_text(" ".join(_HREF_RE.findall(body)))
     body = _TAG_RE.sub(" ", body)
     visible_text = _clean_text(body)
 
-    parts = [p for p in (description, visible_text) if p]
+    parts = [p for p in (description, visible_text, hrefs) if p]
     return title, " — ".join(parts)
 
 
