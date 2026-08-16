@@ -42,7 +42,7 @@ entirely unaffected, only this module's persistence skips that granularity.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -308,8 +308,26 @@ async def get_history_by_contract(
         return [dict(r) for r in await cur.fetchall()]
 
 
+# Tiering (#301, Devil's Advocate b5ed70d2, 16/08): a flat round-robin at
+# _CANDLE_HISTORY_WATCHLIST_BATCH_SIZE (20) tokens/pass takes ~8h for a full
+# sweep of the real watchlist (~640 tokens) -- fine for a token nobody
+# trades, too slow for a live position's price to matter. A candidate whose
+# cursor is older than this many days (and isn't a live-position favorite)
+# is demoted to the SLOW tier below instead of competing evenly with
+# recently-touched candidates for every single batch.
+_DEFAULT_STALE_AFTER_DAYS = 7
+# Share of each batch reserved for the SLOW tier -- keeps old, never-traded
+# tokens from being starved forever behind an ever-growing FAST tier, without
+# meaningfully slowing down the fast tier's own cadence. Always at least 1
+# slot when any slow candidate exists, so the guarantee holds even at a small
+# `limit`.
+_DEFAULT_STALE_BATCH_FRACTION = 0.2
+
+
 async def due_for_refresh(
     candidates: list[tuple[str, str]], limit: int, *, priority: set[tuple[str, str]] | None = None,
+    stale_after_days: int = _DEFAULT_STALE_AFTER_DAYS,
+    stale_batch_fraction: float = _DEFAULT_STALE_BATCH_FRACTION,
 ) -> list[tuple[str, str]]:
     """Round-robin selection for the watchlist candle-refresh collector --
     never-fetched ``(contract, chain)`` pairs first, then oldest-fetched
@@ -326,7 +344,18 @@ async def due_for_refresh(
     watchlist tokens sharing the same collector -- WITHIN the priority group,
     the same never-fetched-first/oldest-first order still applies, so a
     just-refreshed favorite doesn't cut ahead of a stale one. Never removes a
-    non-favorite from the batch; it only reorders."""
+    non-favorite from the batch; it only reorders.
+
+    Tiering (#301, 16/08): candidates are split into a FAST tier (favorites,
+    never-fetched pairs, and anything fetched within ``stale_after_days``)
+    and a SLOW tier (everything else). The FAST tier gets first call on
+    ``limit``; the SLOW tier only gets ``stale_batch_fraction`` of it
+    (rounded up to at least 1 slot when non-empty) so an old, untraded token
+    still cycles back eventually instead of waiting behind a FAST tier that
+    keeps growing as more tokens get scanned. Either tier backfills the
+    other's leftover slots if it doesn't have enough candidates to fill its
+    own quota -- ``limit`` is never left under-used just because one tier ran
+    dry."""
     if not candidates or limit <= 0:
         return []
     await _ensure_table()
@@ -336,13 +365,32 @@ async def due_for_refresh(
         ).fetchall()
     cursors = {(r[0], r[1]): r[2] for r in rows}
     favorites = priority or set()
-    ranked = sorted(
-        candidates,
-        key=lambda pair: (
-            pair not in favorites, cursors.get(pair) is not None, cursors.get(pair) or "",
-        ),
-    )
-    return ranked[:limit]
+
+    def _sort_key(pair: tuple[str, str]) -> tuple[bool, bool, str]:
+        return (pair not in favorites, cursors.get(pair) is not None, cursors.get(pair) or "")
+
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_after_days)).isoformat()
+    fast: list[tuple[str, str]] = []
+    slow: list[tuple[str, str]] = []
+    for pair in candidates:
+        last_fetched = cursors.get(pair)
+        if pair in favorites or last_fetched is None or last_fetched >= stale_cutoff:
+            fast.append(pair)
+        else:
+            slow.append(pair)
+
+    if not slow:
+        return sorted(fast, key=_sort_key)[:limit]
+
+    fast.sort(key=_sort_key)
+    slow.sort(key=_sort_key)
+    slow_quota = min(len(slow), limit, max(1, round(limit * stale_batch_fraction)))
+    fast_quota = limit - slow_quota
+    selected = fast[:fast_quota] + slow[:slow_quota]
+    if len(selected) < limit:
+        leftover = fast[fast_quota:] + slow[slow_quota:]
+        selected += leftover[: limit - len(selected)]
+    return selected
 
 
 async def mark_watchlist_refreshed(contract: str, chain: str) -> None:

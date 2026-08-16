@@ -4,6 +4,9 @@ watchlist cycle. Mirrors test_candle_staleness_shadow.py's structure (same
 shadow/history append-only pattern, tmp DB fixture)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import aiosqlite
 import pytest
 
 from aria_core import candle_history
@@ -281,3 +284,105 @@ async def test_due_for_refresh_priority_never_drops_non_favorites_from_batch():
     )
     assert set(due) == {CONTRACT_A, CONTRACT_B, CONTRACT_C}
     assert due[0] == CONTRACT_C
+
+
+# -- due_for_refresh tiering (#301, 16/08: fast/slow split so an old,
+#    never-traded token isn't starved forever behind a growing fast tier) --
+
+
+async def _set_last_fetched_at(contract: str, chain: str, iso_ts: str) -> None:
+    await candle_history._ensure_table()
+    async with aiosqlite.connect(candle_history._db_path()) as db:
+        await db.execute(
+            "INSERT INTO candle_watchlist_cursor (contract, chain, last_fetched_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (contract, chain) DO UPDATE SET last_fetched_at = excluded.last_fetched_at",
+            (contract, chain, iso_ts),
+        )
+        await db.commit()
+
+
+def _days_ago(n: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_stale_candidate_loses_fast_tier_slots_at_larger_limit():
+    # A was fetched 30 days ago (stale, default cutoff is 7 days); B and C
+    # are never-fetched (fast tier). At limit=2 (slow quota = 1 of 2), the
+    # fast tier still claims the majority of slots -- B/C both beat A for
+    # the single non-guaranteed slot, A only gets in via its guaranteed slot.
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(30))
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=2)
+    assert CONTRACT_A in due
+    assert len(due) == 2
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_stale_always_gets_at_least_one_guaranteed_slot():
+    # Even at the degenerate limit=1, a stale candidate still wins its
+    # guaranteed slow-tier slot over a never-fetched fast candidate -- the
+    # guarantee is absolute, not just "usually eventually" (real batches are
+    # sized 20, where this costs the fast tier one slot out of twenty).
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(30))
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=1)
+    assert due == [CONTRACT_A]
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_stale_tier_still_gets_a_guaranteed_slot():
+    # B (never-fetched) and C (never-fetched) fill the fast tier; A is
+    # stale. At limit=3 (20% of 3 rounds up to 1), A must still appear --
+    # never permanently starved just because the fast tier keeps growing.
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(30))
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=3)
+    assert CONTRACT_A in due
+    assert set(due) == {CONTRACT_A, CONTRACT_B, CONTRACT_C}
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_favorite_bypasses_staleness():
+    # A is stale (30 days) but a live-position favorite -- must stay in the
+    # fast tier exactly like the existing priority behavior, unaffected by
+    # tiering.
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(30))
+    due = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_B], limit=1, priority={CONTRACT_A},
+    )
+    assert due == [CONTRACT_A]
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_no_stale_candidates_is_unaffected():
+    # Nobody is stale -- tiering must be a no-op, identical to the flat
+    # round-robin behavior tested above.
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=2)
+    assert len(due) == 2
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_stale_backfills_when_fast_tier_runs_dry():
+    # Only A (stale) and B (stale) exist -- no fast candidates at all. The
+    # slow tier must backfill the whole limit rather than leaving it
+    # under-used.
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(30))
+    await _set_last_fetched_at(*CONTRACT_B, _days_ago(30))
+    due = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B], limit=2)
+    assert set(due) == {CONTRACT_A, CONTRACT_B}
+
+
+@pytest.mark.asyncio
+async def test_due_for_refresh_custom_stale_after_days_respected():
+    # A was fetched 3 days ago -- "fresh" under the default 7-day cutoff
+    # (stays in the fast tier, loses the limit=1 tie against never-fetched
+    # B/C), but demoted to the slow tier under a tightened 1-day cutoff --
+    # where its guaranteed slow-tier slot makes it win DESPITE B/C never
+    # having been fetched at all, proving the cutoff is actually load-bearing
+    # rather than cosmetic.
+    await _set_last_fetched_at(*CONTRACT_A, _days_ago(3))
+    due_default = await candle_history.due_for_refresh([CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=1)
+    assert due_default != [CONTRACT_A]
+
+    due_tight = await candle_history.due_for_refresh(
+        [CONTRACT_A, CONTRACT_B, CONTRACT_C], limit=1, stale_after_days=1,
+    )
+    assert due_tight == [CONTRACT_A]
