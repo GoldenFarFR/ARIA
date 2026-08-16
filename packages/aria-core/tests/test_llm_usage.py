@@ -18,7 +18,9 @@ from aria_core.llm_usage import (
     monthly_cost_usd,
     parse_usage_from_response,
     paid_usage_snapshot,
+    reconcile_monthly_cost,
     record_llm_usage,
+    run_monthly_cost_reconcile_cycle,
     summarize_grok_build_usage,
     summarize_paid_usage,
     summarize_usage,
@@ -254,6 +256,61 @@ def test_chat_usage_tracking_flags_unknown_cost():
         assert totals["cost_unknown"] is True
     finally:
         clear_chat_usage_tracking()
+
+
+def test_reconcile_monthly_cost_no_drift_when_cache_matches_scan(tmp_path, caplog):
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="anthropic", model="claude-haiku-4-5-20251001",
+        input_tokens=100_000, output_tokens=10_000,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    with caplog.at_level("WARNING"):
+        result = reconcile_monthly_cost(month="2026-07")
+    assert result["drifted"] is False
+    assert "drift" not in caplog.text
+    assert result["scanned"] == pytest.approx(monthly_cost_usd(month="2026-07"))
+
+
+def test_reconcile_monthly_cost_corrects_drifted_cache_and_logs(tmp_path, caplog):
+    from aria_core import llm_usage as llm_usage_module
+
+    configure_test_runtime(data_dir=tmp_path)
+    record_llm_usage(
+        provider="anthropic", model="claude-haiku-4-5-20251001",
+        input_tokens=100_000, output_tokens=10_000,
+        at=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    # Simulate a second, unaccounted writer having bumped the in-memory
+    # running total without a matching JSONL row -- the exact multi-writer
+    # scenario the Devil's Advocate report (7aff8afe) flagged as undetected.
+    llm_usage_module._running_month_total["2026-07"] += 5.0
+
+    with caplog.at_level("WARNING"):
+        result = reconcile_monthly_cost(month="2026-07")
+
+    assert result["drifted"] is True
+    assert "drift" in caplog.text.lower()
+    corrected = monthly_cost_usd(month="2026-07")
+    assert corrected == pytest.approx(result["scanned"])
+    assert corrected < result["cached_before"]
+
+
+def test_reconcile_monthly_cost_evicts_stale_months(tmp_path):
+    from aria_core import llm_usage as llm_usage_module
+
+    configure_test_runtime(data_dir=tmp_path)
+    llm_usage_module._running_month_total["2024-01"] = 42.0
+    reconcile_monthly_cost(month="2026-07")
+    assert "2024-01" not in llm_usage_module._running_month_total
+
+
+@pytest.mark.asyncio
+async def test_run_monthly_cost_reconcile_cycle_returns_current_month(tmp_path):
+    configure_test_runtime(data_dir=tmp_path)
+    result = await run_monthly_cost_reconcile_cycle()
+    assert result["month"] == datetime.now(timezone.utc).strftime("%Y-%m")
+    assert result["drifted"] is False
 
 
 def test_cursor_usage_dashboard(tmp_path, monkeypatch):

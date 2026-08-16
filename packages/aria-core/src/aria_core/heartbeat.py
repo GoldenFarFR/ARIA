@@ -675,6 +675,20 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="llm_usage_reconcile_cycle",
+        name="LLM usage cost reconciliation",
+        description="Devil's Advocate report 7aff8afe (06/08): the incremental monthly-cost "
+        "running total (llm_usage.py) only survives a single-writer assumption -- a "
+        "multi-writer scenario drifts it silently for the rest of the month. Hourly "
+        "rescan of the current month's real JSONL total, self-corrects the running "
+        "total if it drifted past $0.01, logs a warning when it does. Also evicts "
+        "past months from the in-memory accumulator. Pure internal read + "
+        "self-correction, no ARIA_*_ENABLED gate needed (same reasoning as "
+        "xai_balance_monitor_cycle/approval_ttl_cycle above).",
+        interval_minutes=60,
+        enabled=True,
+    ),
 ]
 
 
@@ -2137,6 +2151,18 @@ class AriaHeartbeat:
                     "approvals",
                     f"[approval_ttl] {result['expired_count']} demande(s) expirée(s) "
                     f"sans décision : {', '.join(result['expired_ids'])}",
+                )
+
+        elif task_id == "llm_usage_reconcile_cycle":
+            from aria_core.llm_usage import run_monthly_cost_reconcile_cycle
+
+            result = await run_monthly_cost_reconcile_cycle()
+            if result.get("drifted"):
+                append_memory(
+                    "llm_usage",
+                    f"[llm_usage_reconcile] dérive détectée sur {result['month']} "
+                    f"(cache={result['cached_before']:.5f}$, réel={result['scanned']:.5f}$) "
+                    "-- auto-corrigée",
                 )
 
         elif task_id == "wallet_scan_queue_cycle":

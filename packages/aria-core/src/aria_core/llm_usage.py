@@ -539,6 +539,52 @@ def clear_monthly_cost_state() -> None:
     _running_month_total.clear()
 
 
+# Reconciliation epsilon (Devil's Advocate report 7aff8afe, 06/08): the
+# incremental running total only survives the "single writer, never a
+# rescan" assumption -- a multi-writer scenario (overlapping-deploy
+# processes, a second worker, an import script appending to the JSONL)
+# drifts it silently for the rest of the month with zero detection.
+# $0.01 is well above any float rounding noise from repeated += on ~5
+# decimal cost_usd values, but tight enough to catch a real missed/
+# duplicated row.
+_RECONCILE_EPSILON_USD = 0.01
+
+
+def reconcile_monthly_cost(month: str | None = None) -> dict[str, Any]:
+    """Recomputes the exact scanned total for ``month`` (default: current)
+    and corrects ``_running_month_total`` if it has drifted past
+    ``_RECONCILE_EPSILON_USD`` -- turns a silent multi-writer drift into an
+    observable, self-healing event instead of a permanently wrong monthly
+    figure. Also evicts any month that isn't the current or previous one
+    from the running-total dict (the accumulator never evicted on its own,
+    a slow real leak on a long-lived process per the same report)."""
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    scanned = _compute_monthly_cost_usd(month)
+    cached = _running_month_total.get(month)
+    drifted = cached is not None and abs(cached - scanned) > _RECONCILE_EPSILON_USD
+    if drifted:
+        logger.warning(
+            "llm_usage: monthly cost drift detected for %s (cached=%.5f, scanned=%.5f, "
+            "delta=%.5f) -- self-correcting to the scanned value",
+            month, cached, scanned, scanned - cached,
+        )
+    _running_month_total[month] = scanned
+
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    keep = {current_month, month}
+    for stale in [m for m in _running_month_total if m not in keep]:
+        del _running_month_total[stale]
+
+    return {"month": month, "cached_before": cached, "scanned": scanned, "drifted": drifted}
+
+
+async def run_monthly_cost_reconcile_cycle() -> dict[str, Any]:
+    """Heartbeat entry point (hourly, see heartbeat.py's
+    ``llm_usage_reconcile_cycle``) -- synchronous work wrapped in an async
+    def only to match every other heartbeat task's calling convention."""
+    return reconcile_monthly_cost()
+
+
 def monthly_cost_usd(*, month: str | None = None) -> float:
     """Sum of known-price cost across this month's rows (Haiku/Sonnet today
     -- any provider _price_per_million_usd() doesn't know stays excluded,
