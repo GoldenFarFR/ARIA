@@ -6062,6 +6062,52 @@ async def test_evaluate_rejects_non_trusted_pegged_asset_before_any_network_call
 
 
 @pytest.mark.asyncio
+async def test_evaluate_rejects_robinhood_stock_token_before_any_network_call(monkeypatch):
+    """#309, 16/08 -- a Robinhood Chain tokenized stock (e.g. NVDA) must never
+    be judged by the memecoin golden-pocket/RSI-divergence thesis. Same
+    "reject before any network call" contract as the blacklist/pegged-asset
+    gates above."""
+    from aria_core.services import robinhood_stock_tokens
+
+    async def _never_called(*args, **kwargs):
+        raise AssertionError("no network call should be attempted on a confirmed stock token")
+
+    monkeypatch.setattr(me, "_check_honeypot", _never_called)
+    monkeypatch.setattr(me, "fetch_token_pairs", _never_called)
+
+    async def _fake_is_stock_token(contract, chain):
+        return chain == "robinhood"
+
+    monkeypatch.setattr(robinhood_stock_tokens, "is_stock_token", _fake_is_stock_token)
+
+    result = await me.evaluate_momentum_entry(CONTRACT, "robinhood")
+
+    assert result["action"] == "HOLD"
+    assert result["hold_reason"] == "stock_token_excluded"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_hard_gates_passes_the_real_chain_to_stock_token_check(monkeypatch):
+    """``evaluate_hard_gates``'s call site must thread the CANDIDATE's own
+    chain through to ``is_stock_token`` -- never a hardcoded value -- so the
+    real short-circuit (non-"robinhood" chains never touch the registry, cf.
+    ``test_robinhood_stock_tokens.py``) actually applies end to end."""
+    from aria_core.services import robinhood_stock_tokens
+
+    seen_chains: list[str] = []
+
+    async def _recording_is_stock_token(contract, chain):
+        seen_chains.append(chain)
+        return False
+
+    monkeypatch.setattr(robinhood_stock_tokens, "is_stock_token", _recording_is_stock_token)
+
+    await me.evaluate_hard_gates(CONTRACT, "base")
+
+    assert seen_chains == ["base"]
+
+
+@pytest.mark.asyncio
 async def test_evaluate_rejects_other_pegged_assets_found_in_scan_log_sweep(monkeypatch):
     """08/05, même jour que le cas msUSD -- audit de momentum_scan_log a trouvé
     9 autres candidats au même risque (peg actuellement intact, jamais

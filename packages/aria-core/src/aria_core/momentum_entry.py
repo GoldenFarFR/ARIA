@@ -3612,6 +3612,28 @@ async def evaluate_hard_gates(
             "hold_reason": "pegged_asset_excluded",
         }
 
+    # #309, 16/08 -- same "wrong asset class for this pipeline's thesis"
+    # reasoning as the pegged-asset check right above: a Robinhood Chain
+    # Stock Token (tokenized equity/ETF, e.g. NVDA/AAPL) is a legitimate,
+    # regulated asset, not a scam -- but the golden-pocket/RSI-divergence
+    # momentum thesis this pipeline runs is built for speculative memecoin
+    # behavior and doesn't apply to a tokenized stock's price dynamics.
+    # Checked against the live official Robinhood registry (cached, see
+    # services/robinhood_stock_tokens.py's module docstring for the full
+    # verification trail) -- cheap no-op on every chain other than
+    # "robinhood", which is currently DORMANT (DEFAULT_CHAINS is Base-only,
+    # narrowed 27/07) -- wired here anyway, ANTICIPATION doctrine, so this
+    # guardrail is already armed the day Robinhood Chain re-enters
+    # discovery scope.
+    from aria_core.services.robinhood_stock_tokens import is_stock_token
+
+    if await is_stock_token(contract, chain):
+        return None, None, {
+            "action": "HOLD", "chain": chain,
+            "reasons": ["Robinhood Chain tokenized stock/ETF -- pas une thèse memecoin momentum"],
+            "hold_reason": "stock_token_excluded",
+        }
+
     from aria_core import momentum_rejection_cache
 
     # Item #228 (30/07): the liquidity tier only depends on current_regime/
