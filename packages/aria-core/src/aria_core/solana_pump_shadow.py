@@ -3,7 +3,7 @@ NEVER trades, NEVER opens even a real-simulated paper position.
 
 Empirical basis (16/08 research session: Dune backtests + a manual visual
 comparison against dozens of DexScreener charts with the operator): entering
-when a token's price rises >= 25% on a rolling 15-minute window, then exiting
+when a token's price rises >= 25% on a rolling 5-minute window, then exiting
 via a 25%-of-remaining-position ladder at every further +25% step above entry,
 a -20% trailing stop from the highest price reached since entry, and a hard
 2h max-hold, backtested at 97.6% win rate / 1.68x average multiplier on 42
@@ -12,6 +12,17 @@ sample used for calibration (classic overfitting risk), no trading costs
 included, no out-of-sample test yet -- exactly the anti-overfitting doctrine
 this codebase already applies everywhere else (cf. wick_filter_shadow.py's
 own 05/08 precedent, backtest_robustness.py's train/validation-split rule).
+
+**16/08, entry window recalibrated from 15min to 5min (same day, second
+pass)**: a dedicated Dune re-run applying the exact same corrected exit
+methodology (delay-realism, stop-check-every-candle) to the 5-minute window
+found it beats 15min on both metrics -- 95.24%/1.53x vs 80.95%/1.23x at
+0min delay, 85.71%/1.46x vs 78.57%/1.20x at 1min delay, same 42-signal
+sample. Entering sooner captures more of the real move without hurting
+reliability. The forward-measurement checkpoints below (``_HORIZON_MINUTES``)
+are a SEPARATE concept (how long to wait before checking if a signal paid
+off) and were deliberately left at 15/60/120min -- not tied to the entry
+window's own duration.
 
 **Why Solana, why shadow-only**: the operator's own framing -- the most
 honest out-of-sample validation is prospective data on tokens NEVER seen
@@ -45,7 +56,7 @@ Three-pass design, same "detect now, measure later" doctrine as
 ``v8_rsi_reversal_shadow.py``'s open/closed state machine:
 1. ``record_signals()`` -- called with already-fetched
    ``GeckoTerminalClient.get_trending_pools()`` results, logs one row per pool
-   whose ``price_change_percentage.m15 >= M15_SURGE_THRESHOLD_PCT``. Dedupes
+   whose ``price_change_percentage.m5 >= M5_SURGE_THRESHOLD_PCT``. Dedupes
    per ``(pool_address, chain)``: an already-OPEN signal for the same pool is
    never re-logged while still running (an ongoing pump would otherwise spam
    one row per cycle) -- a deliberate design choice, not an oversight.
@@ -129,7 +140,9 @@ DB_PATH = str(aria_db_path())
 
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.
-M15_SURGE_THRESHOLD_PCT = 25.0
+# Recalibrated same day from the 15min to the 5min window (second Dune pass,
+# same exit methodology, beat 15min on both winrate and avg multiplier).
+M5_SURGE_THRESHOLD_PCT = 25.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -137,7 +150,7 @@ M15_SURGE_THRESHOLD_PCT = 25.0
 _HORIZON_MINUTES: dict[str, int] = {"m15": 15, "h1": 60, "h2": 120}
 
 # The CALIBRATED exit rule itself (16/08 Dune backtest, see module
-# docstring) -- distinct from M15_SURGE_THRESHOLD_PCT (the ENTRY signal) and
+# docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and
 # from _HORIZON_MINUTES (the older 3-checkpoint proxy above).
 SCALE_OUT_STEP_PCT = 25.0  # each new rung is +25% above the PREVIOUS rung, cumulative from entry
 SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) position at each rung crossed
@@ -258,8 +271,8 @@ async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: s
 
 
 async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
-    """Logs one shadow row per pool crossing ``M15_SURGE_THRESHOLD_PCT`` on
-    its 15-minute price change -- pure read+log, see the module's bright-line
+    """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
+    its 5-minute price change -- pure read+log, see the module's bright-line
     doctrine. Best-effort: a DB failure here must never break whatever
     fetched ``pools`` in the first place. Returns the number of NEW rows
     logged (0 on failure or when nothing qualifies)."""
@@ -268,8 +281,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
-                m15 = pool.price_change_pct.get("m15")
-                if m15 is None or m15 < M15_SURGE_THRESHOLD_PCT:
+                m5 = pool.price_change_pct.get("m5")
+                if m5 is None or m5 < M5_SURGE_THRESHOLD_PCT:
                     continue
                 if pool.price_usd is None:
                     # Never fabricate an entry price -- a signal we can't
@@ -297,7 +310,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
                         datetime.now(timezone.utc).isoformat(), pool.price_usd,
-                        pool.price_change_pct.get("m5"), m15, pool.price_change_pct.get("m30"),
+                        m5, pool.price_change_pct.get("m15"), pool.price_change_pct.get("m30"),
                         pool.price_change_pct.get("h1"), pool.price_change_pct.get("h6"),
                         pool.price_change_pct.get("h24"),
                         transactions_m15.get("buyers"), transactions_m15.get("sellers"),

@@ -48,12 +48,12 @@ async def _rows():
 
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="PUMP",
-    price_usd=1.0, m15=30.0, buyers=20, sellers=5, volume_m15=5000.0, reserve=100000.0,
+    price_usd=1.0, m5=30.0, buyers=20, sellers=5, volume_m15=5000.0, reserve=100000.0,
 ) -> TrendingPool:
     return TrendingPool(
         pool_address=pool_address, token_address=token_address, symbol=symbol,
         price_usd=price_usd,
-        price_change_pct={"m5": 5.0, "m15": m15, "m30": m15 + 5, "h1": m15 + 10, "h6": m15 + 20, "h24": m15 + 30},
+        price_change_pct={"m5": m5, "m15": m5 + 5, "m30": m5 + 10, "h1": m5 + 15, "h6": m5 + 25, "h24": m5 + 35},
         transactions_m15={"buys": 40, "sells": 10, "buyers": buyers, "sellers": sellers},
         volume_usd_m15=volume_m15,
         reserve_usd=reserve,
@@ -96,13 +96,13 @@ class FakeClient:
 
 @pytest.mark.asyncio
 async def test_record_signals_logs_pool_above_threshold():
-    logged = await shadow.record_signals([_pool(m15=30.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged == 1
     rows = await _rows()
     assert len(rows) == 1
     assert rows[0]["pool_address"] == "poolA"
     assert rows[0]["status"] == "open"
-    assert rows[0]["m15_pct"] == 30.0
+    assert rows[0]["m5_pct"] == 30.0
     assert rows[0]["entry_price"] == 1.0
     assert rows[0]["buyers_m15"] == 20
     assert rows[0]["sellers_m15"] == 5
@@ -114,28 +114,28 @@ async def test_record_signals_logs_pool_above_threshold():
 
 @pytest.mark.asyncio
 async def test_record_signals_ignores_pool_below_threshold():
-    logged = await shadow.record_signals([_pool(m15=24.9)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=24.9)], chain=CHAIN)
     assert logged == 0
     assert await _rows() == []
 
 
 @pytest.mark.asyncio
 async def test_record_signals_exactly_at_threshold_counts():
-    logged = await shadow.record_signals([_pool(m15=shadow.M15_SURGE_THRESHOLD_PCT)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=shadow.M5_SURGE_THRESHOLD_PCT)], chain=CHAIN)
     assert logged == 1
 
 
 @pytest.mark.asyncio
 async def test_record_signals_never_fabricates_entry_price():
-    logged = await shadow.record_signals([_pool(m15=40.0, price_usd=None)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=40.0, price_usd=None)], chain=CHAIN)
     assert logged == 0
     assert await _rows() == []
 
 
 @pytest.mark.asyncio
 async def test_record_signals_dedupes_while_already_open():
-    await shadow.record_signals([_pool(m15=30.0, price_usd=1.0)], chain=CHAIN)
-    logged_again = await shadow.record_signals([_pool(m15=45.0, price_usd=1.4)], chain=CHAIN)
+    await shadow.record_signals([_pool(m5=30.0, price_usd=1.0)], chain=CHAIN)
+    logged_again = await shadow.record_signals([_pool(m5=45.0, price_usd=1.4)], chain=CHAIN)
     assert logged_again == 0
     rows = await _rows()
     assert len(rows) == 1
@@ -144,11 +144,11 @@ async def test_record_signals_dedupes_while_already_open():
 
 @pytest.mark.asyncio
 async def test_record_signals_relogs_after_previous_signal_closed():
-    await shadow.record_signals([_pool(m15=30.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute("UPDATE robinhood_pump_shadow_log SET status = 'closed'")
         await db.commit()
-    logged_again = await shadow.record_signals([_pool(m15=30.0)], chain=CHAIN)
+    logged_again = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged_again == 1
     rows = await _rows()
     assert len(rows) == 2
@@ -156,7 +156,7 @@ async def test_record_signals_relogs_after_previous_signal_closed():
 
 @pytest.mark.asyncio
 async def test_record_signals_multiple_pools_independent():
-    pools = [_pool(pool_address="poolA", m15=30.0), _pool(pool_address="poolB", m15=26.0)]
+    pools = [_pool(pool_address="poolA", m5=30.0), _pool(pool_address="poolB", m5=26.0)]
     logged = await shadow.record_signals(pools, chain=CHAIN)
     assert logged == 2
     assert {r["pool_address"] for r in await _rows()} == {"poolA", "poolB"}
@@ -166,7 +166,7 @@ async def test_record_signals_multiple_pools_independent():
 async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
     shadow._ensured_db_paths.clear()
-    logged = await shadow.record_signals([_pool(m15=30.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged == 0  # fails closed, never raises into the caller
 
 
@@ -182,7 +182,7 @@ async def test_record_signals_excludes_known_stock_token(monkeypatch):
 
     monkeypatch.setattr(shadow, "is_stock_token", _is_nvda_stock_token)
     logged = await shadow.record_signals(
-        [_pool(pool_address="poolNVDA", token_address="nvda_token_address", m15=30.0)], chain=CHAIN,
+        [_pool(pool_address="poolNVDA", token_address="nvda_token_address", m5=30.0)], chain=CHAIN,
     )
     assert logged == 0
     assert await _rows() == []
@@ -197,8 +197,8 @@ async def test_record_signals_stock_token_filter_does_not_block_other_pools(monk
 
     monkeypatch.setattr(shadow, "is_stock_token", _is_nvda_stock_token)
     pools = [
-        _pool(pool_address="poolNVDA", token_address="nvda_token_address", m15=30.0),
-        _pool(pool_address="poolPUMP", token_address="pump_token_address", m15=35.0),
+        _pool(pool_address="poolNVDA", token_address="nvda_token_address", m5=30.0),
+        _pool(pool_address="poolPUMP", token_address="pump_token_address", m5=35.0),
     ]
     logged = await shadow.record_signals(pools, chain=CHAIN)
     assert logged == 1
@@ -216,7 +216,7 @@ async def test_record_signals_stock_token_registry_failure_never_blocks_logging(
         raise RuntimeError("registry unavailable")
 
     monkeypatch.setattr(shadow, "is_stock_token", _raising_is_stock_token)
-    logged = await shadow.record_signals([_pool(m15=30.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged == 1
 
 
@@ -324,7 +324,7 @@ class FakeGeckoClient(FakeClient):
 
 @pytest.mark.asyncio
 async def test_run_cycle_fetches_logs_and_measures():
-    client = FakeGeckoClient([_pool(m15=30.0)], {})
+    client = FakeGeckoClient([_pool(m5=30.0)], {})
     result = await shadow.run_cycle(client, network=CHAIN)
     assert result["fetched_pools"] == 1
     assert result["signals_logged"] == 1
@@ -650,7 +650,7 @@ async def test_exit_simulation_summary_no_completed_rows_is_none_not_zero():
 
 @pytest.mark.asyncio
 async def test_run_cycle_also_advances_exit_simulation():
-    client = FakeGeckoClient([_pool(m15=30.0)], {})
+    client = FakeGeckoClient([_pool(m5=30.0)], {})
     result = await shadow.run_cycle(client, network=CHAIN)
     assert "exit_sim" in result
     assert result["exit_sim"]["checked"] == 0  # poolA has no price in FakeGeckoClient's map -> unavailable, skipped

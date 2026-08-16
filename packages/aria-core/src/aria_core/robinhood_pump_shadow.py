@@ -24,7 +24,7 @@ path here reads Robinhood Chain data outside the dormant exclusion registry
 **Mandatory RWA (tokenized-equity) exclusion, distinct from the Solana
 module**: Robinhood Chain natively hosts 200+ "Stock Tokens" (NVDA, AAPL,
 GOOG... ERC-8056 tokenized equities, see ``services/robinhood_stock_tokens.py``
-for the full detection story, #309). The calibrated "+25%/15min, scale-out
+for the full detection story, #309). The calibrated "+25%/5min, scale-out
 ladder, trailing stop" rule was backtested on memecoin pump/dump behavior --
 a tokenized equity's price action is driven by the underlying security's
 real-world market and corporate actions, not a memecoin momentum pattern, so
@@ -60,7 +60,7 @@ the one honest gap in an otherwise-enforced filter.
 Three-pass design, identical to ``solana_pump_shadow.py``:
 1. ``record_signals()`` -- called with already-fetched
    ``GeckoTerminalClient.get_trending_pools()`` results, logs one row per pool
-   whose ``price_change_percentage.m15 >= M15_SURGE_THRESHOLD_PCT``, excluding
+   whose ``price_change_percentage.m5 >= M5_SURGE_THRESHOLD_PCT``, excluding
    known Robinhood Chain Stock Tokens (see above). Dedupes per
    ``(pool_address, chain)``: an already-OPEN signal for the same pool is
    never re-logged while still running.
@@ -144,7 +144,9 @@ DB_PATH = str(aria_db_path())
 
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.
-M15_SURGE_THRESHOLD_PCT = 25.0
+# Recalibrated same day from the 15min to the 5min window (second Dune pass,
+# same exit methodology, beat 15min on both winrate and avg multiplier).
+M5_SURGE_THRESHOLD_PCT = 25.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -152,7 +154,7 @@ M15_SURGE_THRESHOLD_PCT = 25.0
 _HORIZON_MINUTES: dict[str, int] = {"m15": 15, "h1": 60, "h2": 120}
 
 # The CALIBRATED exit rule itself (16/08 Dune backtest, see module
-# docstring) -- distinct from M15_SURGE_THRESHOLD_PCT (the ENTRY signal) and
+# docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and
 # from _HORIZON_MINUTES (the older 3-checkpoint proxy above).
 SCALE_OUT_STEP_PCT = 25.0  # each new rung is +25% above the PREVIOUS rung, cumulative from entry
 SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) position at each rung crossed
@@ -274,8 +276,8 @@ async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: s
 
 
 async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood") -> int:
-    """Logs one shadow row per pool crossing ``M15_SURGE_THRESHOLD_PCT`` on
-    its 15-minute price change -- pure read+log, see the module's bright-line
+    """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
+    its 5-minute price change -- pure read+log, see the module's bright-line
     doctrine. Excludes any pool whose base token is a registered Robinhood
     Chain Stock Token (``services/robinhood_stock_tokens.is_stock_token``,
     #309) -- this shadow layer is calibrated for memecoin pump/dump behavior,
@@ -288,8 +290,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
-                m15 = pool.price_change_pct.get("m15")
-                if m15 is None or m15 < M15_SURGE_THRESHOLD_PCT:
+                m5 = pool.price_change_pct.get("m5")
+                if m5 is None or m5 < M5_SURGE_THRESHOLD_PCT:
                     continue
                 if pool.price_usd is None:
                     # Never fabricate an entry price -- a signal we can't
@@ -325,7 +327,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
                         datetime.now(timezone.utc).isoformat(), pool.price_usd,
-                        pool.price_change_pct.get("m5"), m15, pool.price_change_pct.get("m30"),
+                        m5, pool.price_change_pct.get("m15"), pool.price_change_pct.get("m30"),
                         pool.price_change_pct.get("h1"), pool.price_change_pct.get("h6"),
                         pool.price_change_pct.get("h24"),
                         transactions_m15.get("buyers"), transactions_m15.get("sellers"),
