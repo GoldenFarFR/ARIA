@@ -84,30 +84,6 @@ def curiosity_handles() -> list[str]:
     return out
 
 
-def peer_by_id(agent_id: str) -> PeerAgent | None:
-    key = agent_id.strip().lower()
-    for peer in PEER_AGENTS:
-        if peer.id == key or peer.name.lower() == key or peer.x_handle.lower() == key:
-            return peer
-    return None
-
-
-def peers_markdown(lang: str = "fr") -> str:
-    lines: list[str] = []
-    if lang == "en":
-        lines.append("ZHC peer AI entrepreneurs (study set)")
-    else:
-        lines.append("Pairs IA entrepreneurs ZHC (set d'étude)")
-    lines.append("")
-    for p in PEER_AGENTS:
-        lines.append(f"**{p.name}** (@{p.x_handle}) — {p.model}")
-        lines.append(f"- Streams: {', '.join(p.revenue_streams)}")
-        lines.append(f"- Moat: {p.moat}")
-        lines.append(f"- Lesson: {p.lesson_for_aria}")
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
 def cultivation_phases(lang: str = "fr") -> list[str]:
     """No paid product to ship -- the phases follow the real-money pact
     (docs/protocole-argent-reel.md), not a product-launch calendar."""

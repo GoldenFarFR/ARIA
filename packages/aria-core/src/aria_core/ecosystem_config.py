@@ -158,15 +158,6 @@ def propagate_operator_env(merged: dict[str, str] | None = None) -> dict[str, st
     return out
 
 
-def apply_operator_env(merged: dict[str, str] | None = None) -> dict[str, str]:
-    """Inject propagated vault into os.environ (KART session / scripts)."""
-    resolved = propagate_operator_env(merged)
-    for key, val in resolved.items():
-        if val and not os.environ.get(key):
-            os.environ[key] = val
-    return resolved
-
-
 def export_registry_json(target: Path) -> Path:
     """Export for PowerShell (prod_overlay_keys, defaults)."""
     reg = load_registry()

@@ -9,7 +9,7 @@ from typing import Any
 
 from aria_core.memory import append_memory
 from aria_core.paths import memory_dir
-from aria_core.skills.acp_cli import email_inbox, email_search, is_acp_available
+from aria_core.skills.acp_cli import email_inbox, email_search, email_thread, is_acp_available
 
 _WATCH_RE = re.compile(
     r"(?i)(?:"
@@ -96,11 +96,31 @@ def _looks_like_job_email(msg: dict[str, Any]) -> bool:
     return any(h in blob for h in _JOB_HINTS)
 
 
+def _thread_id(msg: dict[str, Any]) -> str:
+    for key in ("threadId", "thread_id"):
+        val = msg.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 def _extract_alert(msg: dict[str, Any]) -> dict[str, Any] | None:
     if not _looks_like_job_email(msg):
         return None
     blob = _message_blob(msg)
     job_ids = _JOB_ID_RE.findall(blob)
+    if not job_ids:
+        # Le snippet/preview est tronqué -- l'id job apparaît parfois seulement plus
+        # loin dans le corps complet du thread. Sans ce repli, l'opérateur devait
+        # aller le copier lui-même dans Hermès (cf. le message "id à copier depuis
+        # Hermès" plus bas) même quand l'id existait déjà dans l'email.
+        thread_id = _thread_id(msg)
+        if thread_id:
+            thread, _err = email_thread(thread_id)
+            if thread:
+                thread_messages = _unwrap_messages(thread) or [thread]
+                full_blob = " ".join(_message_blob(m) for m in thread_messages)
+                job_ids = _JOB_ID_RE.findall(full_blob)
     offering_m = _OFFERING_RE.search(blob)
     return {
         "message_id": _message_id(msg),

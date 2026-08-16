@@ -37,7 +37,9 @@ from aria_core.skills.acp_email_watcher import (
 from aria_core.skills.acp_schema import get_acp_strict_rules
 from aria_core.skills.acp_prepare_skill import (
     execute_acp_prepare,
+    execute_acp_prepare_list,
     wants_acp_prepare,
+    wants_acp_prepare_list,
 )
 from aria_core.skills.acp_provider_skill import default_events_file, run_provider_cycle
 from aria_core.skills.acp_conversational import is_conversational_acp_question
@@ -75,6 +77,8 @@ def wants_acp_marketplace(message: str) -> bool:
     if wants_acp_market_research(text):
         return True
     if wants_acp_leaderboard(text):
+        return True
+    if wants_acp_prepare_list(text):
         return True
     if wants_acp_prepare(text):
         return True
@@ -235,6 +239,9 @@ async def execute_acp_marketplace(message: str, lang: str = "en") -> tuple[str, 
 
     if _STATUS_RE.search(text) or re.search(r"^acp\s*$", text, re.I):
         return await _format_status(lang_key)
+
+    if wants_acp_prepare_list(text):
+        return execute_acp_prepare_list(lang_key)
 
     if wants_acp_prepare(text):
         return await execute_acp_prepare(text, lang_key)

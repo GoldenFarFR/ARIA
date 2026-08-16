@@ -736,3 +736,94 @@ def test_resolve_acp_command_windows(monkeypatch):
     cmd = acp_cli.resolve_acp_command()
     assert cmd[0] == "cmd.exe"
     assert "acp.cmd" in cmd[-1]
+
+
+def test_wants_acp_prepare_list():
+    from aria_core.skills.acp_prepare_skill import wants_acp_prepare, wants_acp_prepare_list
+
+    assert wants_acp_prepare_list("jobs acp préparés")
+    assert wants_acp_prepare_list("liste des jobs acp")
+    assert wants_acp_prepare_list("list prepared acp jobs")
+    assert not wants_acp_prepare_list("préparer job acp 0xabc123")
+    assert not wants_acp_prepare_list("prepare job acp 0xdead")
+    # Les deux regex restent mutuellement exclusives sur les phrases déclencheuses réelles.
+    assert not wants_acp_prepare("jobs acp préparés")
+
+
+@pytest.mark.asyncio
+async def test_acp_prepare_list_empty(monkeypatch, tmp_path):
+    from aria_core.skills import acp_prepare_skill as prep
+
+    monkeypatch.setattr(prep, "_PREPARED_DIR", tmp_path / "empty")
+    reply, data = await execute_acp_marketplace("liste des jobs acp", lang="fr")
+    assert data.get("acp") == "prepare_list"
+    assert data.get("count") == 0
+    assert "Aucun job" in reply
+
+
+@pytest.mark.asyncio
+async def test_acp_prepare_list_shows_saved_jobs(monkeypatch, tmp_path):
+    from aria_core.skills import acp_prepare_skill as prep
+
+    prepared_dir = tmp_path / "acp_prepared"
+    prepared_dir.mkdir(parents=True)
+    doc = {
+        "prepared_at": "2026-07-15T10:00:00+00:00",
+        "job_id": "0x" + "d" * 64,
+        "offering": "analyse_lite_x1",
+        "source": "manual",
+        "quality": {"ok": True, "score": 90},
+    }
+    (prepared_dir / "job1.json").write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(prep, "_PREPARED_DIR", prepared_dir)
+
+    reply, data = await execute_acp_marketplace("jobs acp préparés", lang="fr")
+    assert data.get("acp") == "prepare_list"
+    assert data.get("count") == 1
+    assert doc["job_id"] in reply
+    assert "analyse_lite_x1" in reply
+
+
+@pytest.mark.asyncio
+async def test_acp_email_watch_falls_back_to_full_thread_for_job_id(monkeypatch, tmp_path):
+    """Le snippet est tronqué (aucun job id dedans) mais le thread complet le contient --
+    _extract_alert doit récupérer email_thread() plutôt que renvoyer job_ids=[]."""
+    from aria_core.skills import acp_email_watcher as ew
+
+    job_id = "0x" + "e" * 64
+    monkeypatch.setattr(ew, "is_acp_available", lambda: True)
+    monkeypatch.setattr(ew, "_STATE_PATH", tmp_path / "acp_email_watch_state.json")
+    monkeypatch.setattr(
+        ew,
+        "email_inbox",
+        lambda **kw: (
+            {
+                "messages": [
+                    {
+                        "id": "m1",
+                        "threadId": "t1",
+                        "subject": "ACP job funded — awaiting provider",
+                        "snippet": "Job funded, see full email for details…",
+                    }
+                ]
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(ew, "email_search", lambda q: ({"messages": []}, None))
+    monkeypatch.setattr(
+        ew,
+        "email_thread",
+        lambda thread_id: (
+            {"body": f"Full job details: {job_id} for analyse_lite_x1"}
+            if thread_id == "t1"
+            else None,
+            None,
+        ),
+    )
+
+    reply, data = await execute_acp_marketplace("surveiller email acp", lang="fr")
+    assert data.get("acp") == "email_watch"
+    alerts = data["scan"]["new_alerts"]
+    assert alerts
+    assert alerts[0]["job_ids"] == [job_id]

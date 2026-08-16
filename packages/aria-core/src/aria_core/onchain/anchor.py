@@ -22,7 +22,6 @@ Live wiring (when the day comes, operator gesture):
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -70,10 +69,6 @@ class AnchorRequest:
             "function": self.function, "args": [self.root], "root": self.root,
             "recordCount": self.record_count, "requiresLocalSigning": True,
         }
-
-    def as_json(self) -> str:
-        """JSON to pipe into the local signing tool (cast/ethers)."""
-        return json.dumps(self.as_dict(), ensure_ascii=False)
 
     def as_operator_instruction(self) -> str:
         """Human-readable instruction: what the operator executes from their local wallet."""

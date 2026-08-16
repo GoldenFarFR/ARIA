@@ -21,6 +21,15 @@ _PREPARE_RE = re.compile(
     r"livrable\s+(?:job\s+)?acp"
     r")"
 )
+_PREPARE_LIST_RE = re.compile(
+    r"(?i)(?:"
+    r"jobs?\s+acp\s+pr[ée]par[ée]s?|"
+    r"liste\s+(?:des\s+)?jobs?\s+acp|"
+    r"historique\s+(?:des\s+)?jobs?\s+acp|"
+    r"prepared\s+acp\s+jobs?|"
+    r"list\s+(?:acp\s+)?prepared\s+jobs?"
+    r")"
+)
 # CodeQL py/polynomial-redos: "\s*[:#]?\s*" is two adjacent "\s*" that
 # overlap when the optional separator is absent -- fused.
 _JOB_ID_RE = re.compile(r"(?i)\b(?:job[- ]?id|job)\s*(?:[:#]\s*)?(0x[a-fA-F0-9]{8,})")
@@ -38,6 +47,10 @@ _PREPARED_DIR = memory_dir() / "acp_prepared"
 
 def wants_acp_prepare(message: str) -> bool:
     return bool(_PREPARE_RE.search((message or "").strip()))
+
+
+def wants_acp_prepare_list(message: str) -> bool:
+    return bool(_PREPARE_LIST_RE.search((message or "").strip()))
 
 
 def _parse_job_id(message: str) -> str | None:
@@ -275,3 +288,31 @@ def list_prepared_jobs() -> list[dict[str, Any]]:
         except Exception:
             continue
     return rows[:20]
+
+
+def execute_acp_prepare_list(lang: str = "fr") -> tuple[str, dict]:
+    lang_key = "fr" if lang == "fr" else "en"
+    rows = list_prepared_jobs()
+
+    if not rows:
+        body = (
+            "Aucun job ACP préparé pour l'instant."
+            if lang_key == "fr"
+            else "No prepared ACP jobs yet."
+        )
+        return body, {"acp": "prepare_list", "count": 0}
+
+    lines = [
+        "Jobs ACP préparés (les plus récents) :"
+        if lang_key == "fr"
+        else "Prepared ACP jobs (most recent):",
+        "",
+    ]
+    for row in rows[:10]:
+        quality = row.get("quality") or {}
+        mark = "✅" if quality.get("ok") else "⚠️"
+        prepared_at = str(row.get("prepared_at") or "")[:16]
+        lines.append(
+            f"{mark} {row.get('job_id', '?')} — {row.get('offering', '?')} ({prepared_at})"
+        )
+    return "\n".join(lines), {"acp": "prepare_list", "count": len(rows)}

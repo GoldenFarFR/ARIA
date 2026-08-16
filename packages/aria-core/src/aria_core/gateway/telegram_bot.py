@@ -8,9 +8,10 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aria_core.actions import execute_contact_juno, mark_published
+from aria_core.actions import execute_contact_juno, format_exchanges_list, mark_published
 from aria_core.approvals import ApprovalStatus, create_approval, get_approval, resolve_approval
 from aria_core.brain import aria_brain
+from aria_core.exchanges import get_all as get_all_exchanges
 from aria_core.exchanges import record_reply
 from aria_core.heartbeat import aria_heartbeat
 from aria_core.locale import LANG_EN
@@ -2299,6 +2300,11 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             else:
                 reply = "Rien en attente à refuser."
             await _reply(message, reply)
+        return
+
+    if lower in ("exchanges", "échanges", "echanges"):
+        exchanges = await get_all_exchanges()
+        await _reply(message, format_exchanges_list(exchanges))
         return
 
     if lower.startswith("published "):

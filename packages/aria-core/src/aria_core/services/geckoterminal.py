@@ -720,10 +720,6 @@ def price_at(ohlcv: OHLCVResult, ts: int) -> float | None:
     return max(candidates, key=lambda c: c.ts).close
 
 
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 geckoterminal_client = GeckoTerminalClient(min_interval=_resolve_min_interval())
 
 

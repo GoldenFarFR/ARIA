@@ -44,6 +44,29 @@ async def test_execute_launchpad_methodology_mode():
     assert "Volume" in reply
 
 
+@pytest.mark.asyncio
+async def test_registry_mode_shows_last_refresh_stamp(monkeypatch):
+    from datetime import datetime, timezone
+
+    from aria_core.knowledge import base_launchpads as bl
+
+    stamp = datetime(2026, 7, 15, 12, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(bl, "_LAST_REFRESH", stamp)
+    reply, data = await execute_launchpad_select("liste des launchpads", "fr")
+    assert data.get("mode") == "registry"
+    assert "2026-07-15 12:30 UTC" in reply
+
+
+@pytest.mark.asyncio
+async def test_registry_mode_omits_stamp_when_never_refreshed(monkeypatch):
+    from aria_core.knowledge import base_launchpads as bl
+
+    monkeypatch.setattr(bl, "_LAST_REFRESH", None)
+    reply, data = await execute_launchpad_select("liste des launchpads", "fr")
+    assert data.get("mode") == "registry"
+    assert "actualisation" not in reply.lower()
+
+
 def test_repertoire_filiale_not_false_contradiction():
     sample = "Ajouter une source de revenu à la filiale DEXPulse"
     conflict, _ = check_contradiction(sample, "fr")

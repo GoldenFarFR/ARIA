@@ -524,16 +524,6 @@ async def compose_feedback_reply_pair(
     return personal_reply_pair_on_feedback(original or text_en, lang="en")
 
 
-async def compose_personal_reply_to_feedback(
-    text_en: str,
-    *,
-    original: str = "",
-) -> str:
-    """Compat — first sentence of the pair."""
-    pair = await compose_feedback_reply_pair(text_en, original=original)
-    return pair.primary
-
-
 def _short_excerpt(text: str, max_len: int = 72) -> str:
     clean = re.sub(r"\s+", " ", (text or "").strip())
     if len(clean) <= max_len:

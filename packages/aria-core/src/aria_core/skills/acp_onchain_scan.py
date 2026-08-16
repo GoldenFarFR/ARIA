@@ -1345,14 +1345,3 @@ async def _resolve_burn_mechanism(ctx: "TokenScanContext", contract: str) -> Non
     ctx.burn_mechanism_signal = assessment.note if assessment.available else "unknown"
 
 
-def scan_base_token_sync(contract: str) -> TokenScanContext:
-    """Sync wrapper for provider poll (no running loop)."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(scan_base_token(contract))
-    # Called from async context — should use await scan_base_token directly
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, scan_base_token(contract)).result()

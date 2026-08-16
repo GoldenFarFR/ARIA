@@ -7,6 +7,7 @@ import re
 from aria_core.knowledge.base_launchpads import (
     LAUNCHPADS,
     compare_launchpads_markdown,
+    last_refresh,
     methodology_markdown,
     primary_pick,
     rank_launchpads,
@@ -65,6 +66,14 @@ async def execute_launchpad_select(user_message: str, lang: str = "en") -> tuple
             header = "Registre complet des launchpads BASE :\n\n"
         else:
             header = "Full BASE launchpad registry:\n\n"
+        refreshed = last_refresh()
+        if refreshed:
+            stamp = refreshed.strftime("%Y-%m-%d %H:%M UTC")
+            header += (
+                f"Dernière actualisation : {stamp}\n\n"
+                if lang == "fr"
+                else f"Last refreshed: {stamp}\n\n"
+            )
         return header + body[:3500], {"mode": "registry", "count": len(LAUNCHPADS)}
 
     if any(w in lower for w in ("compare", "compar", "vs", "versus")):

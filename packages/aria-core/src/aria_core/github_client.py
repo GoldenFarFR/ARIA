@@ -290,15 +290,6 @@ class GitHubClient:
                 "branch": branch,
             }
 
-    async def get_branch_sha(self, owner: str, repo: str, branch: str = "main") -> str:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(
-                f"{API}/repos/{owner}/{repo}/git/ref/heads/{branch}",
-                headers=self._headers,
-            )
-            r.raise_for_status()
-            return r.json()["object"]["sha"]
-
     async def create_branch(
         self, owner: str, repo: str, branch: str, *, from_sha: str,
     ) -> dict[str, Any]:
@@ -312,27 +303,6 @@ class GitHubClient:
                 return {"branch": branch, "exists": True}
             r.raise_for_status()
             return r.json()
-
-    async def list_open_issues(
-        self,
-        owner: str,
-        repo: str,
-        *,
-        per_page: int = 100,
-        labels: str | None = None,
-    ) -> list[dict[str, Any]]:
-        params: dict[str, str | int] = {"state": "open", "per_page": min(per_page, 100)}
-        if labels:
-            params["labels"] = labels
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(
-                f"{API}/repos/{owner}/{repo}/issues",
-                headers=self._headers,
-                params=params,
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data if isinstance(data, list) else []
 
     async def create_issue(
         self,

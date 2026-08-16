@@ -182,17 +182,6 @@ async def pick_gallery_avatar(avatar_id: str, *, note: str = "") -> dict[str, An
     return await _finalize_avatar_entry(entry)
 
 
-async def set_avatar_from_bytes(data: bytes, *, source: str, note: str = "") -> dict[str, Any]:
-    normalized = _normalize_jpeg(data)
-    tmp = aria_avatar_dir() / "_upload.jpg"
-    tmp.write_bytes(normalized)
-    try:
-        entry = _commit_avatar(tmp, source=source, note=note)
-        return await _finalize_avatar_entry(entry)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
 def format_avatar_sync_status(sync: dict[str, Any]) -> str:
     """Human-readable sync line for Telegram replies."""
     tg = sync.get("telegram")

@@ -309,16 +309,6 @@ async def delete_item(item_id: str) -> tuple[bool, str, RepertoireItem | None]:
     return True, f"Supprimé : {item.name}", item
 
 
-async def delete_by_name(name: str) -> tuple[bool, str, RepertoireItem | None]:
-    matches = await find_by_name(name)
-    if not matches:
-        return False, f"Aucune entrée pour « {name} ».", None
-    if len(matches) > 1:
-        names = ", ".join(m.name for m in matches)
-        return False, f"Plusieurs entrées ({names}) — précise le nom exact.", None
-    return await delete_item(matches[0].id)
-
-
 async def archive_item(item_id: str) -> tuple[bool, str, RepertoireItem | None]:
     item = await get_by_id(item_id)
     if not item:
