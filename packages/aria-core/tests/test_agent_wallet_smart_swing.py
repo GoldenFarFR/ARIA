@@ -124,6 +124,17 @@ def test_swap_only_policy_scope_and_two_rules():
     assert all(r.action == "accept" for r in pol.rules)
 
 
+def test_swap_only_policy_description_respects_the_cdp_api_constraint():
+    """CDP rejects a description that doesn't match ^[A-Za-z0-9 ,.]{1,50}$
+    (verified in the installed openapi model, see agent_wallet_cdp_policy.py's
+    documented finding) -- at creation time, not at build time, so a bad
+    description would only fail against the real API."""
+    import re
+
+    pol = sw.build_swap_only_policy(ROUTER)
+    assert re.match(r"^[A-Za-z0-9 ,.]{1,50}$", pol.description)
+
+
 def test_swap_only_policy_rule1_allowlists_the_given_router():
     pol = sw.build_swap_only_policy(ROUTER)
     swap_rule = pol.rules[0]
