@@ -12,6 +12,7 @@ import aiosqlite
 import pytest
 
 from aria_core import robinhood_pump_shadow as shadow
+from aria_core.services.dexscreener import PairSnapshot
 from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
 from aria_core.skills.ta_levels import Candle
 
@@ -168,6 +169,70 @@ async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     shadow._ensured_db_paths.clear()
     logged = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged == 0  # fails closed, never raises into the caller
+
+
+# --- _snapshot_with_fallback (16/08 API cascade) ---------------------------
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})  # would prove wrong if GeckoTerminal got used instead
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5
+    assert snapshot.reserve_usd == 10000.0
+    assert client.calls == []  # GeckoTerminal never called -- DexScreener answered first
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_falls_back_to_geckoterminal_when_dexscreener_empty(monkeypatch):
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return []
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 2.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 2.0
+    assert client.calls == ["poolA"]  # GeckoTerminal used as the real fallback
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_falls_back_on_dexscreener_exception(monkeypatch):
+    async def broken_fetch_token_pairs(contract, *, chain="robinhood"):
+        raise RuntimeError("dexscreener unreachable")
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", broken_fetch_token_pairs)
+    client = FakeClient({"poolA": 2.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 2.0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_unavailable_when_both_sources_fail(monkeypatch):
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return []
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": None})  # GeckoTerminal also has nothing
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is False  # never fabricated, both sources genuinely empty
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_skips_dexscreener_without_a_token_address(monkeypatch):
+    async def unexpected_call(contract, *, chain="robinhood"):
+        raise AssertionError("dexscreener should never be called without a token_address")
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", unexpected_call)
+    client = FakeClient({"poolA": 4.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", None, chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 4.0
 
 
 # --- record_signals: Robinhood-specific Stock Token (RWA) exclusion -------

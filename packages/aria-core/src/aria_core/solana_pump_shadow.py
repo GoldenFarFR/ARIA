@@ -125,7 +125,9 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core.momentum_entry import _best_pair
 from aria_core.paths import aria_db_path
+from aria_core.services import dexscreener
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -346,6 +348,43 @@ def _epoch_of(iso_ts: str | None) -> float | None:
         return None
 
 
+async def _snapshot_with_fallback(
+    client: GeckoTerminalClient, pool_address: str, token_address: str | None, *, chain: str,
+) -> PoolSnapshot:
+    """DexScreener FIRST for the spot price, GeckoTerminal as fallback --
+    16/08, operator-directed "API cascade" doctrine, inverted same day once
+    both real budgets were compared (``docs/api-rate-limit-calibration.md``):
+    DexScreener's confirmed real ceiling (~60/min, likely ~300/min on the
+    pairs/tokens endpoint this module uses) is far above GeckoTerminal's
+    demo-tier real ceiling (~15/min, repeatedly confirmed lower under load).
+    DexScreener has its own INDEPENDENT rate budget (``services/
+    dexscreener.py``, never shared with GeckoTerminal's adaptive throttle),
+    so putting it first frees up GeckoTerminal's scarcer budget for what it
+    alone can do -- OHLCV candles (DexScreener exposes NO real OHLCV
+    endpoint, verified in ``services/dexscreener.py``, only a synthesized
+    approximation from % variations, never real wicks). Real incident this
+    whole cascade fixes: a single pool (Robinhood SQUIRREL) 429'd on every
+    GeckoTerminal attempt across many consecutive cycles, leaving its
+    exit-sim permanently unchecked. Never a third silent fabrication: both
+    sources failing still returns ``available=False``, same "never fabricate
+    a price" doctrine as the rest of this module."""
+    if token_address:
+        try:
+            pairs = await dexscreener.fetch_token_pairs(token_address, chain=chain)
+        except Exception as exc:  # noqa: BLE001 -- the primary source must never raise into the caller
+            logger.info(
+                "solana_pump_shadow: dexscreener primary lookup failed for %s (%s)", pool_address, exc,
+            )
+            pairs = []
+        pair = _best_pair(pairs, token_address)
+        if pair is not None and pair.price_usd is not None:
+            return PoolSnapshot(
+                pool_address=pool_address, price_usd=pair.price_usd,
+                reserve_usd=pair.liquidity_usd, available=True,
+            )
+    return await client.get_pool_snapshot(pool_address, network=chain)
+
+
 async def evaluate_open_signals(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 50,
 ) -> dict[str, int]:
@@ -384,7 +423,9 @@ async def evaluate_open_signals(
                 continue
 
             try:
-                snapshot: PoolSnapshot = await client.get_pool_snapshot(row["pool_address"], network=chain)
+                snapshot: PoolSnapshot = await _snapshot_with_fallback(
+                    client, row["pool_address"], row["token_address"], chain=chain,
+                )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
                     "solana_pump_shadow: get_pool_snapshot failed for %s (%s)", row["pool_address"], exc,
@@ -553,7 +594,9 @@ async def advance_exit_simulation(
                 continue
 
             try:
-                snapshot: PoolSnapshot = await client.get_pool_snapshot(row["pool_address"], network=chain)
+                snapshot: PoolSnapshot = await _snapshot_with_fallback(
+                    client, row["pool_address"], row["token_address"], chain=chain,
+                )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
                     "solana_pump_shadow: advance_exit_simulation snapshot failed for %s (%s)",
