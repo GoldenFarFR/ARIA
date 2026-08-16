@@ -63,7 +63,19 @@ class WalletScoringWeights:
     # scans no longer block a synchronous Telegram reply. The
     # ``max_tokens`` parameter of ``score_wallets`` still allows passing a
     # different cap on a one-off basis without touching this default value.
-    max_tokens_analyzed: int = 50
+    #
+    # Lowered 50->25 (15/08, #151 diagnostic + 2-agent workflow review,
+    # GO_AVEC_RESERVE both sides). This value doubles as `coverage_target` in
+    # wallet_scan_queue.py's background catch-up loop -- live DB measurement
+    # (15/08) showed 255/274 queued wallets structurally never reach 50
+    # (real cumulative progress averages ~7 tokens/wallet, bottlenecked by
+    # the shared GeckoTerminal throttle, not by this cap). 25 keeps a wider
+    # comparison sample than the smallest tested value (20) while roughly
+    # halving the number of catch-up passes most wallets need. Does NOT
+    # weaken `sample_size_sufficient` (age/swap-count based, fully
+    # independent of this cap) or the Sortino/robust-trim floors (5/30
+    # closed trades, also independent).
+    max_tokens_analyzed: int = 25
 
     # Below this number of closed trades, the Sortino ratio is judged too
     # noisy to present as reliable (research doc #157) -- unavailable

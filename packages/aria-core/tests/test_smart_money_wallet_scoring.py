@@ -430,12 +430,14 @@ class TestSelectTokensForDeepAnalysis:
         assert len(selected) == 20
         assert skipped == 5
 
-    def test_default_cap_matches_operator_decision_n50(self):
+    def test_default_cap_matches_operator_decision_n25(self):
         # 20->50 puis ramené à 10 le 14/07, remonté à 50 le 15/07 une fois la
         # file d'attente en arrière-plan (wallet_scan_queue.py) construite --
         # un passage plus lourd est acceptable, les scans répétés ne bloquent
-        # plus une réponse Telegram synchrone.
-        assert sm.WEIGHTS.max_tokens_analyzed == 50
+        # plus une réponse Telegram synchrone. Rabaissé 50->25 le 15/08 (#151
+        # diagnostic) -- le débit réseau partagé, pas ce plafond, était le
+        # vrai goulot bloquant la couverture complète des wallets actifs.
+        assert sm.WEIGHTS.max_tokens_analyzed == 25
 
     def test_most_recent_token_selected_first(self):
         old_token = _transfer(from_addr=FUNDER, to_addr=WALLET_A, token="0xold", ts=_dt(0))

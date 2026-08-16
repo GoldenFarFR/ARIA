@@ -447,9 +447,9 @@ async def test_cycle_no_notification_below_next_milestone(monkeypatch):
     monkeypatch.setenv("ARIA_WALLET_SCAN_QUEUE_ENABLED", "1")
     monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "1")
     await wsq.enqueue_wallets([A])
-    await wsq.mark_attempt(A, next_check_at=datetime.now(timezone.utc), last_notified_milestone=50)
+    await wsq.mark_attempt(A, next_check_at=datetime.now(timezone.utc), last_notified_milestone=60)
 
-    card = _FakeCard(address=A, tokens_scanned_cumulative=60, tokens_found=200, full_coverage=False)
+    card = _FakeCard(address=A, tokens_scanned_cumulative=65, tokens_found=200, full_coverage=False)
 
     async def _fake_score_wallets(addresses, **kwargs):
         return _FakeReport(wallets=[card])
@@ -477,7 +477,7 @@ async def test_cycle_first_completion_transitions_to_monitoring_never_removed(mo
         full = wallet == A
         card = _FakeCard(
             address=wallet,
-            tokens_scanned_cumulative=200 if full else 10,
+            tokens_scanned_cumulative=200 if full else 5,
             tokens_found=200,
             full_coverage=full,
         )

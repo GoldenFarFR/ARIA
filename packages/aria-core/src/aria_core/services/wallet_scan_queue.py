@@ -42,10 +42,21 @@ DB_PATH = str(aria_db_path())
 
 # Progress notification every N cumulative covered tokens (15/07, explicit
 # operator request) -- distinct from the per-pass cap
-# (`WEIGHTS.max_tokens_analyzed`), even though the same value (50) was chosen
-# for both at the time of writing (assumed coincidence, not a hardcoded
-# coupling: the two constants live in different modules).
-PROGRESS_NOTIFY_STEP = 50
+# (`WEIGHTS.max_tokens_analyzed`), even though the same value was originally
+# chosen for both (assumed coincidence, not a hardcoded coupling: the two
+# constants live in different modules).
+#
+# Lowered 50->10 (15/08, paired with WEIGHTS.max_tokens_analyzed's own
+# 50->25 drop, #151). Real coupling found during that review, NOT a
+# coincidence: `tokens_scanned_cumulative // PROGRESS_NOTIFY_STEP` (used both
+# for the Telegram milestone notification below and, via
+# `last_notified_milestone`, as the anti-starvation ordering added 24/07
+# after incident #61) can never advance past its first bucket once the
+# coverage target itself is below the step -- at 25/50 no wallet would ever
+# cross a single milestone before reaching full_coverage, silently freezing
+# both mechanisms. 10 keeps 2 real milestones (10, 20) inside the new 25
+# target.
+PROGRESS_NOTIFY_STEP = 10
 
 # 29/07 -- LOWERED from 25 back to 4, correcting a flawed assumption made in
 # the 26/07 comment below (kept, struck through in spirit, for the historical
