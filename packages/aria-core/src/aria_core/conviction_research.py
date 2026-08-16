@@ -264,6 +264,17 @@ _MAX_TWEET_TEXT_CHARS = 200
 _MAX_TWEETS_IN_PROMPT = 5
 _MAX_EXTERNAL_CONTENT_CHARS = 2000
 
+# ReDoS surface reduction (#318, 16/08): `combined` (raw Tavily snippets +
+# answer) and `detective_texts` (raw tweet text + Tavily snippets, detective
+# mode) are fully attacker-controlled -- any project can shape its own web
+# presence/tweets -- and reached _extract_x_handle/_contract_mentioned with
+# no length bound before this fix. Clamped inside those two functions
+# (single choke point for every caller) BEFORE any regex runs on the text,
+# same doctrine as web_verify.py/telegram_channel_verify.py. Generous enough
+# that a real aggregate (bounded upstream to a handful of snippets/tweets
+# each) is never truncated in practice.
+_MAX_RAW_TEXT_CHARS = 200_000
+
 _EVM_ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 _X_HANDLE_RE = re.compile(r"(?:twitter\.com|x\.com)/(\w{1,15})", re.IGNORECASE)
 # Item #171, 28/07: a Virtuals-launched token's OWN X bio commonly declares
@@ -347,7 +358,7 @@ def _extract_website(snippets: list[tuple[str, str, str | None]]) -> str | None:
 
 
 def _extract_x_handle(text_blob: str) -> str | None:
-    m = _X_HANDLE_RE.search(text_blob or "")
+    m = _X_HANDLE_RE.search((text_blob or "")[:_MAX_RAW_TEXT_CHARS])
     if not m:
         return None
     handle = m.group(1)
@@ -360,7 +371,7 @@ def _contract_mentioned(text_blob: str, contract: str) -> bool | None:
     """True if the scanned contract explicitly appears in the collected web/X
     content, False if a DIFFERENT contract is announced (possible impersonation
     signal), None if no address is mentioned at all -- never confused with False."""
-    found = {m.lower() for m in _EVM_ADDRESS_RE.findall(text_blob or "")}
+    found = {m.lower() for m in _EVM_ADDRESS_RE.findall((text_blob or "")[:_MAX_RAW_TEXT_CHARS])}
     if not found:
         return None
     return contract.strip().lower() in found

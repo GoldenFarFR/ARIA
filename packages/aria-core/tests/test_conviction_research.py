@@ -6,6 +6,8 @@ du contenu externe avant injection LLM (mandat #192 -- même famille que les tes
 d'injection déjà existants pour _llm_confirm/_llm_security_gate)."""
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from aria_core import conviction_research as cr
@@ -207,6 +209,36 @@ def test_explorer_domain_never_extracted_as_official_website():
         ("Real project site.", "https://cobot.xyz", None),
     ]
     assert cr._extract_website(snippets) == "https://cobot.xyz"
+
+
+def test_extract_x_handle_truncates_oversized_blob_before_regex():
+    """ReDoS surface reduction (#318, 16/08): `combined` (raw Tavily
+    snippets/answer) is fully attacker-controlled -- any project can shape
+    its own web presence. A real @-handle placed past
+    _MAX_RAW_TEXT_CHARS must NOT be found (proves the clamp truncates
+    BEFORE _X_HANDLE_RE runs), and a pathologically long blob must still
+    resolve fast."""
+    oversized = ("z " * (cr._MAX_RAW_TEXT_CHARS // 2 + 1000)) + "see https://x.com/realproject for updates"
+
+    t0 = time.monotonic()
+    handle = cr._extract_x_handle(oversized)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 5.0
+    assert handle is None
+
+
+def test_contract_mentioned_truncates_oversized_blob_before_regex():
+    """Same doctrine as above for `_contract_mentioned` -- a real EVM address
+    placed past _MAX_RAW_TEXT_CHARS must not corroborate the contract."""
+    oversized = ("z " * (cr._MAX_RAW_TEXT_CHARS // 2 + 1000)) + f"official contract: {CONTRACT}"
+
+    t0 = time.monotonic()
+    result = cr._contract_mentioned(oversized, CONTRACT)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 5.0
+    assert result is None  # no address found within the clamped window
 
 
 @pytest.mark.asyncio

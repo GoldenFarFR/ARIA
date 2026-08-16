@@ -27,6 +27,15 @@ _OFF_TOPIC = (
     "wen token",
 )
 
+# ReDoS surface reduction (#318, 16/08): X mention text is entirely
+# attacker-controlled (anyone can @-mention or reply, no authentication
+# needed) -- clamp raw text BEFORE any regex runs on it (_SPAM_ONLY here,
+# contains_injection_marker in lancedb_store.py), same doctrine as
+# web_verify.py/telegram_channel_verify.py. A real X mention is at most a
+# few hundred characters; this is generous enough to never truncate one in
+# practice.
+_MAX_RAW_TEXT_CHARS = 200_000
+
 _ZHC_LEARNING_AXES = (
     "zhc",
     "holding",
@@ -73,7 +82,7 @@ class InsightAssessment:
 
 def _prefilter_junk(text: str) -> tuple[bool, str]:
     """Return (skip_groq, reason). Junk never reaches Groq."""
-    body = text.strip()
+    body = text[:_MAX_RAW_TEXT_CHARS].strip()
     if _SPAM_ONLY.match(body):
         return True, "spam"
     if len(body) < 12:
