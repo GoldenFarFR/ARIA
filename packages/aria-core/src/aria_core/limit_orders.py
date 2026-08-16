@@ -1050,7 +1050,7 @@ async def _reanalyze_dex_quality_for_watching(order: dict) -> bool:
     return ok
 
 
-async def _reanalyze_holder_concentration(order: dict) -> bool:
+async def _reanalyze_holder_concentration(order: dict) -> tuple[bool, str | None]:
     """08/02 -- real security gap found: ``momentum_entry.evaluate_hard_
     gates``'s holder-concentration check (``_check_holder_concentration``,
     top 10 EOA holders excluding pool/burn/verified contracts >= 80%) is
@@ -1096,13 +1096,23 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
     ``PairSnapshot.liquidity_unknown``'s own docstring), never blocks on its
     own -- only a CONFIRMED reading under the floor does.
 
-    Returns ``True`` (safe to proceed) or ``False`` (>= 80% concentration
-    confirmed, or liquidity confirmed under the floor -- cancel/block)."""
+    16/08 -- operator instruction ("si l'achat est refusé je veux tous le
+    temps le motif"): return value widened from a plain ``bool`` to
+    ``(ok, reason)`` so both call sites (the pending->watching transition AND
+    the final pre-buy check in ``_execute_trigger``, which previously left a
+    block from THIS guardrail completely silent -- no cancellation, no
+    notification, order just quietly stayed "watching") can surface a
+    specific, human-readable reason instead of the generic bucket string
+    ("reanalysis_failed") or, at the trigger point, nothing at all.
+
+    Returns ``(True, None)`` (safe to proceed) or ``(False, reason)`` (>= 80%
+    concentration confirmed, or liquidity confirmed under the floor --
+    cancel/block, ``reason`` always a non-empty string in this case)."""
     from aria_core import momentum_entry
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
-        return True
+        return True, None
 
     try:
         pairs = await momentum_entry.fetch_token_pairs(order["contract"], chain=order["chain"])
@@ -1111,7 +1121,7 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
             "limit_orders: holder-concentration pair lookup failed for %s (%s) -- fail-open",
             order["contract"], exc,
         )
-        return True
+        return True, None
 
     pair = momentum_entry._best_pair(pairs, order["contract"])
     pool_address = pair.pair_address if pair is not None else ""
@@ -1123,7 +1133,7 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
             "limit_orders: holder-concentration re-check cancelling %s -- %s",
             order["contract"], reason,
         )
-        return False
+        return False, f"concentration détenteurs trop élevée ({reason})"
 
     if (
         pair is not None
@@ -1134,12 +1144,15 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
             "limit_orders: liquidity re-check cancelling %s -- $%.0f < $%.0f floor",
             order["contract"], pair.liquidity_usd, _LIMIT_ORDER_MIN_LIQUIDITY_USD,
         )
-        return False
+        return False, (
+            f"liquidité effondrée (${pair.liquidity_usd:,.0f} < "
+            f"${_LIMIT_ORDER_MIN_LIQUIDITY_USD:,.0f} plancher)"
+        )
 
-    return True
+    return True, None
 
 
-async def reanalyze_for_watching(order: dict) -> bool:
+async def reanalyze_for_watching(order: dict) -> tuple[bool, str | None]:
     """Single re-analysis performed ONCE, at the ``pending`` -> ``watching``
     transition (never repeated on every tick while watching -- see module
     docstring): re-checks the honeypot guard (the only hard guardrail this
@@ -1166,11 +1179,18 @@ async def reanalyze_for_watching(order: dict) -> bool:
     guardrail first, same ordering doctrine ``evaluate_hard_gates`` already
     applies), never spent on an order that's about to be cancelled for a
     cheaper reason anyway. Bonding orders remain untouched -- routed away
-    above before reaching either branch."""
+    above before reaching either branch.
+
+    16/08 -- operator instruction ("si l'achat est refusé je veux tous le
+    temps le motif"): return value widened to ``(ok, reason)``, same doctrine
+    as ``_reanalyze_holder_concentration`` -- every branch now tags its own
+    specific reason instead of the caller falling back to a generic bucket
+    string for all of them."""
     from aria_core.bonding_entry import CHAIN_MARKER
 
     if order["chain"] == CHAIN_MARKER:
-        return await _reanalyze_bonding_for_watching(order)
+        ok = await _reanalyze_bonding_for_watching(order)
+        return ok, (None if ok else "liquidité/dev insuffisants au re-check (bonding)")
 
     # .get(..., "{}") rather than a strict [] index: real rows always carry
     # signal_json (NOT NULL), but several existing unit tests build a minimal
@@ -1178,7 +1198,7 @@ async def reanalyze_for_watching(order: dict) -> bool:
     sig = json.loads(order.get("signal_json") or "{}")
     if sig.get("limit_order_reason") == "golden_pocket_pending":
         if not await _reanalyze_dex_quality_for_watching(order):
-            return False
+            return False, "score qualité DEX dégradé au re-check"
         return await _reanalyze_holder_concentration(order)
 
     from aria_core.momentum_entry import check_honeypot
@@ -1189,9 +1209,9 @@ async def reanalyze_for_watching(order: dict) -> bool:
         logger.info(
             "limit_orders: re-analysis failed for %s (%s) -- cancelling", order["contract"], exc,
         )
-        return False
+        return False, "vérification honeypot indisponible au re-check"
     if not clear:
-        return False
+        return False, f"honeypot détecté au re-check ({_reason})" if _reason else "honeypot détecté au re-check"
     return await _reanalyze_holder_concentration(order)
 
 
@@ -1291,7 +1311,8 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
         if order["state"] == "pending":
             if not should_enter_watching(order["target_price"], price):
                 continue
-            if await reanalyze_for_watching(order):
+            reanalysis_ok, reanalysis_reason = await reanalyze_for_watching(order)
+            if reanalysis_ok:
                 await transition_to_watching(order["id"])
                 actions["entered_watching"] += 1
                 # 29/07 -- operator question ("plus le temps d'expiration est
@@ -1312,11 +1333,12 @@ async def process_active_orders(price_lookup, notifier=None, pair_lookup=None) -
                     except Exception:  # noqa: BLE001
                         pass
             else:
-                await mark_cancelled(order["id"], "reanalysis_failed")
+                reanalysis_reason = reanalysis_reason or "reanalysis_failed"
+                await mark_cancelled(order["id"], reanalysis_reason)
                 actions["cancelled"] += 1
                 if notifier:
                     try:
-                        await notifier(format_limit_order_cancelled_alert(order, "reanalysis_failed"))
+                        await notifier(format_limit_order_cancelled_alert(order, reanalysis_reason))
                     except Exception:  # noqa: BLE001
                         pass
             continue
@@ -1615,7 +1637,28 @@ async def _execute_trigger(order: dict, sig: dict, current_price: float, notifie
     # risk_state checks above already discarded for free) and after all
     # duplicate/cap/circuit-breaker guards, right before the buy itself --
     # the last, hardest-to-bypass point in this pipeline.
-    if not await _reanalyze_holder_concentration(order):
+    #
+    # 16/08 -- real gap found (LMY incident + operator instruction "si l'achat
+    # est refusé je veux tous le temps le motif"): a block from THIS guardrail
+    # used to just ``return None`` silently -- the order stayed "watching"
+    # with zero cancellation, zero notification, indistinguishable in the
+    # data from a transient portfolio-level constraint (cap/cash, see the
+    # comment at this function's return-None sites further below, which
+    # deliberately DOES stay silent/retryable -- those are transient, this
+    # guardrail confirming >=80% concentration or collapsed liquidity is not).
+    # Now cancels outright with the specific reason, visible in
+    # pending_limit_order.cancel_reason and via Telegram -- never silently
+    # retried against a token this guardrail just confirmed is bad.
+    trigger_ok, trigger_block_reason = await _reanalyze_holder_concentration(order)
+    if not trigger_ok:
+        await mark_cancelled(order["id"], trigger_block_reason or "reanalysis_failed")
+        if notifier:
+            try:
+                await notifier(
+                    format_limit_order_cancelled_alert(order, trigger_block_reason or "reanalysis_failed")
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return None
 
     pos = await paper_trader.open_position(
