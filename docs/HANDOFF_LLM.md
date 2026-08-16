@@ -17,6 +17,7 @@
 8. **Extraction du texte final : filtrer par `type == "text"`, JAMAIS par index `content[0]`.** Le raisonnement interne ("thinking") est un bloc SÉPARÉ dans le tableau `content[]`, souvent en première position — `.content[0].text` retourne silencieusement `null`. Pattern correct : `jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")'`.
 9. **Sauvegarder la réponse brute AVANT tout parsing final.** Un appel Fable 5 coûte réel — si le parsing échoue en aval, il ne faut jamais devoir repayer un appel identique.
 10. **Tester en conditions réelles avant de considérer un nouveau script "fini"** — un `bash -n` de syntaxe ne suffit jamais, il faut un vrai appel API réussi ET un texte final non vide.
+11. **Un rapport « propre » n'est jamais une preuve d'absence de bug sur du code à la frontière build/submodule/dépendance** (#313, incident Coldcard, ~116M$ volés, RNG faible — le même modèle Fable a raté ce bug lors d'une revue de code dédiée, précisément parce qu'il se cachait hors de la logique applicative revue). Tout diff touchant un pin de submodule, un script de build, une dépendance vendorée ou un lockfile mérite une relecture humaine manuelle, quel que soit le verdict du rapport.
 
 ------------------------------------------------------------
 
