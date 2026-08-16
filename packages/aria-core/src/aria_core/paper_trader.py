@@ -2239,6 +2239,14 @@ async def open_position(
         await remove_manual_candidate(contract, chain)
     except Exception as exc:  # noqa: BLE001
         logger.info("open_position: manual_candidates cleanup failed for %s (%s)", contract, exc)
+    # 16/08, v11 prep (#146) -- shadow-only, gated separately, never blocks
+    # a real position. See pocket_smart_money_correlation.py's own docstring.
+    try:
+        from aria_core.pocket_smart_money_correlation import record_entry_correlation
+
+        await record_entry_correlation(pid, wallet, contract, chain)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("open_position: smart-money correlation logging failed for %s (%s)", contract, exc)
     # 27/07 -- resolved by ROW ID, never by bare contract: once 3 pockets can
     # legally hold the SAME contract at once, ``_get_open(contract)`` alone
     # would raise (multi-pocket ambiguity guard, see its docstring) as soon as
