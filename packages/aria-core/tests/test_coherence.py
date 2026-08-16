@@ -831,6 +831,14 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_SKILL_PROJECTS_ENABLED",
     "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",
     "ARIA_SMART_SWING_ENABLED",
+    # 16/08 -- solana_pump_shadow.py's reserved gate name for a future
+    # heartbeat wiring (NOT wired, NOT read anywhere yet -- named in the
+    # module's own docstring only, as documentation of the intended
+    # convention). Explicit operator request: shadow-only out-of-sample
+    # validation of the "+25%/15min take the train" strategy on Solana,
+    # first time Solana is connected to anything in this project (even
+    # read-only) -- pure read+log, never a trigger, never real/paper capital.
+    "ARIA_SOLANA_PUMP_SHADOW_ENABLED",
     "ARIA_TAVILY_LEARNING_ENABLED",
     "ARIA_TELEGRAM_MINER_ENABLED",
     "ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED",
