@@ -134,12 +134,20 @@ ecartees et pourquoi (bref).
 PROMPT_EOF
 )
 
+# #311 (16/08): per-run cost ceiling -- real CLI flag, verified live against
+# `claude --help` (a "--max-turns" flag does not exist in this CLI;
+# --max-budget-usd is the real mechanism, "only works with --print"). Same
+# economic-denial-of-wallet guard as research-loop/run.sh's own cron. $3
+# (slightly above research-loop's $2: this pass can judge several log
+# entries, each with its own optional verification WebSearch, plus a git
+# commit) -- calibrate down once real per-pass cost is observed.
 claude -p "$PROMPT" \
   --model sonnet \
   --effort high \
   --allowedTools "Read Write Edit WebSearch WebFetch Bash(git *)" \
   --disallowedTools "Agent Task" \
   --no-session-persistence \
+  --max-budget-usd 3 \
   --add-dir /opt/aria-data/research-loop \
   -n research-log-promotion \
   >> "$RUN_LOG" 2>&1
