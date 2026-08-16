@@ -201,10 +201,13 @@ def timeframe_support(minutes: int) -> dict[str, bool]:
 _GOPLUS_CHAINS: frozenset[str] = frozenset({"base", "solana", "robinhood", "ethereum"})
 
 # Holder concentration / contract data (`CHAIN_IDS` in services/blockscout.py).
-# 13 EVM chains -- notably NOT solana, NOT robinhood.
+# 14 EVM chains -- "robinhood" added #308 (16/08, real chain_id=4663 sourced
+# from docs.robinhood.com/chain/connecting, closes the exact structural
+# guardrail gap this comment used to flag) -- notably still NOT solana (not
+# EVM, no Blockscout).
 _BLOCKSCOUT_CHAINS: frozenset[str] = frozenset({
     "base", "ethereum", "arbitrum", "optimism", "polygon", "celo", "gnosis",
-    "scroll", "zksync", "rootstock", "unichain", "soneium", "mode",
+    "scroll", "zksync", "rootstock", "unichain", "soneium", "mode", "robinhood",
 })
 
 # Chains where BOTH hard guardrails can actually run. Anywhere else, at least

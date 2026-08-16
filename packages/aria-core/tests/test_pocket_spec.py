@@ -171,24 +171,29 @@ def test_removed_providers_are_gone_from_every_table():
     assert "dexpaprika" not in ps.timeframe_support(15)
 
 
-def test_only_base_and_ethereum_have_both_hard_guardrails():
+def test_only_base_ethereum_robinhood_have_both_hard_guardrails():
     """The chain axis matters more than timeframes: a granularity mismatch
-    degrades a signal, a chain gap REMOVES a mandatory safety check."""
-    assert ps.FULLY_GUARDED_CHAINS == ("base", "ethereum")
+    degrades a signal, a chain gap REMOVES a mandatory safety check.
+    "robinhood" joined base/ethereum here #308 (16/08) once
+    services/blockscout.py::CHAIN_IDS gained real Robinhood Chain coverage
+    (chain_id=4663)."""
+    assert ps.FULLY_GUARDED_CHAINS == ("base", "ethereum", "robinhood")
 
 
-@pytest.mark.parametrize("chain", ["base", "ethereum"])
+@pytest.mark.parametrize("chain", ["base", "ethereum", "robinhood"])
 def test_fully_guarded_chains_pass(chain):
     spec = _complete_spec()
     spec.values["chains"] = chain
     assert [e for e in ps.validate(spec) if e.key == "chains"] == []
 
 
-@pytest.mark.parametrize("chain", ["solana", "robinhood"])
+@pytest.mark.parametrize("chain", ["solana"])
 def test_chains_without_holder_data_are_blocked(chain):
-    """Both pass the honeypot check but have no holder-concentration source.
-    Explicitly relevant to the standing 'disable Solana before real capital'
-    note, and to the Monad diligence that stalled on the same gap."""
+    """Passes the honeypot check but has no holder-concentration source (not
+    EVM, no Blockscout deployment possible). Explicitly relevant to the
+    standing 'disable Solana before real capital' note. "robinhood" moved
+    OUT of this parametrization #308 (16/08) -- it now has real Blockscout
+    coverage, see test_fully_guarded_chains_pass above."""
     support = ps.chain_support(chain)
     assert support["goplus_honeypot"] and not support["blockscout_holders"]
     spec = _complete_spec()

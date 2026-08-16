@@ -70,6 +70,21 @@ CHAIN_IDS: dict[str, int] = {
     "unichain": 130,
     "soneium": 1868,
     "mode": 34443,
+    # #308, 16/08: closes the structural holder-concentration guardrail gap
+    # already documented in pocket_spec.py ("Solana and Robinhood pass the
+    # honeypot check but have no holder-concentration source -- fine for
+    # paper, never for real capital"). Chain ID sourced from the OFFICIAL
+    # docs (docs.robinhood.com/chain/connecting, live-fetched 16/08, cross-
+    # checked against a second independent source) -- never guessed.
+    # `robinhoodchain.blockscout.com` confirmed as a real, live, official
+    # Blockscout instance (real GET /api/v2/stats returned live data), and
+    # `api.blockscout.com/4663/api/v2/stats` returns HTTP 402 (Payment
+    # Required, not 404) -- the chain IS registered in the Pro API
+    # aggregator, a paid key just wasn't presented by this verification
+    # call. Must also be added to pocket_spec.py's `_BLOCKSCOUT_CHAINS`
+    # (kept as a separate, manually-synced set) for the guardrail to
+    # actually recognize the new coverage -- see that file's own comment.
+    "robinhood": 4663,
 }
 
 UNAVAILABLE = "donnée on-chain indisponible"
