@@ -177,6 +177,15 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
     # doctrine as the 26/07 Ethereum bug this dict's own docstring above
     # documents.
     "solana": "solana",
+    # 16/08 -- Robinhood Chain added for robinhood_pump_shadow.py's shadow-only
+    # "take the train" observation (same doctrine as Solana above, never a
+    # discovery source). VERIFIED LIVE (GET /api/v2/networks/robinhood/
+    # trending_pools?duration=5m -> HTTP 200, real pool data e.g. "CASHCAT /
+    # WETH 0.3%", ids prefixed "robinhood_0x...") -- ARIA's own chain name
+    # already matches GeckoTerminal's real slug here too, listed explicitly
+    # anyway rather than relying on the fallback passthrough (same reasoning
+    # as the Solana entry above).
+    "robinhood": "robinhood",
 }
 
 # 21/07 -- calibrated to 90% of 30 req/min (CLAUDE.md "90% calibrated
