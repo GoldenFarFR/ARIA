@@ -760,6 +760,38 @@ async def test_discovery_social_search_failure_never_blocks_the_other_sources(mo
 
 
 @pytest.mark.asyncio
+async def test_discovery_social_search_truncates_oversized_tweet_before_regex(monkeypatch, tmp_path):
+    """Un texte de tweet demesure (au-dela de _MAX_RAW_TEXT_CHARS) doit etre
+    tronque AVANT la regex d'adresse -- place une vraie adresse EVM apres la
+    coupure et confirme qu'elle n'est PAS remontee comme candidate."""
+    _enable_all(monkeypatch)
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)
+    monkeypatch.setattr(
+        "aria_core.services.wallet_scan_queue.DB_PATH", str(tmp_path / "wallet_scan_queue_test.db")
+    )
+    from aria_core import token_holder_intel
+
+    monkeypatch.setattr(token_holder_intel, "DB_PATH", str(tmp_path / "token_holder_intel_test.db"))
+    _empty_dune_result_patch(monkeypatch)
+
+    from aria_core.services import twitterapi_io
+
+    oversized_text = ("z " * (lb._MAX_RAW_TEXT_CHARS // 2 + 1000)) + WALLET_A
+
+    async def fake_search_tweets(query, **kwargs):
+        return [{"text": oversized_text}]
+
+    monkeypatch.setattr(twitterapi_io, "search_tweets", fake_search_tweets)
+
+    result = await lb.discover_and_enqueue_candidates()
+
+    # No candidate anywhere (no Dune winners, no token_holder_intel data seeded,
+    # and the oversized tweet's real address sits past the clamp) -- proves the
+    # truncated text never reached the EVM-address regex as a match.
+    assert result["outcome"] == "no_candidate"
+
+
+@pytest.mark.asyncio
 async def test_discovery_social_search_no_results_is_a_noop_not_a_crash(monkeypatch, tmp_path):
     _enable_all(monkeypatch)
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: False)

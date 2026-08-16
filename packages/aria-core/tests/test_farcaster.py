@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services.farcaster import (
+    _MAX_URL_CHARS,
     FarcasterProfile,
     FarcasterProfileVerification,
     _parse_username,
@@ -98,6 +99,14 @@ def test_parse_username_never_matches_a_channel_url():
     outside [\\w.\\-]+, so this must yield no match rather than a wrong
     username lookup (e.g. "~" itself)."""
     assert _parse_username("https://farcaster.xyz/~/channel/degen") is None
+
+
+def test_parse_username_truncates_oversized_url_before_regex():
+    """Une URL demesuree (au-dela de _MAX_URL_CHARS) doit etre tronquee AVANT
+    la regex -- place le vrai username apres la coupure et confirme qu'il
+    n'est PAS trouve, preuve que la troncature agit."""
+    oversized = ("z" * (_MAX_URL_CHARS + 1000)) + "farcaster.xyz/realuser"
+    assert _parse_username(oversized) is None
 
 
 @pytest.mark.asyncio

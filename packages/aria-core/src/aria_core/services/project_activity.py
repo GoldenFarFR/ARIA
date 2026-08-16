@@ -24,13 +24,16 @@ _GH_RE = re.compile(r"github\.com[/:]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.g
 # with no second segment. Distinct from _GH_RE (which requires owner AND repo).
 _GH_ORG_ONLY_RE = re.compile(r"^https?://github\.com/([A-Za-z0-9_.-]+)/?(?:[?#]|$)")
 _GH_RESERVED_NAMES = {"", "sponsors", "orgs", "features", "about"}
+# URL field, never raw scraped text -- same "clamp before regex" doctrine as
+# the raw-HTML/text clamps elsewhere, calibrated to URL-sized input.
+_MAX_URL_CHARS = 2_000
 
 
 def parse_github_repo(url: str | None) -> tuple[str, str] | None:
     """(owner, repo) from a GitHub URL, or None if it isn't one."""
     if not url:
         return None
-    m = _GH_RE.search(str(url))
+    m = _GH_RE.search(str(url)[:_MAX_URL_CHARS])
     if not m:
         return None
     owner, repo = m.group(1), m.group(2)
@@ -73,7 +76,7 @@ def is_github_link(url: str | None) -> bool:
         return False
     if parse_github_repo(url) is not None:
         return True
-    return bool(_GH_ORG_ONLY_RE.match(str(url).strip()))
+    return bool(_GH_ORG_ONLY_RE.match(str(url).strip()[:_MAX_URL_CHARS]))
 
 
 # "Special" organization repos -- config/templates, never real development
@@ -118,7 +121,7 @@ async def resolve_github_repo(url: str | None, *, fetch=None) -> tuple[str, str]
     direct = parse_github_repo(url)
     if direct:
         return direct
-    m = _GH_ORG_ONLY_RE.match(str(url or "").strip())
+    m = _GH_ORG_ONLY_RE.match(str(url or "").strip()[:_MAX_URL_CHARS])
     if not m:
         return None
     org = m.group(1)

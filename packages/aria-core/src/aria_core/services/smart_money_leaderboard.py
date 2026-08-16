@@ -46,6 +46,10 @@ from aria_core.paths import aria_db_path
 logger = logging.getLogger(__name__)
 
 _EVM_ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
+# Tweet text via TwitterAPI.io, not raw scraped HTML -- same "clamp before
+# regex" doctrine as the other raw-text clamps, same 200k ceiling for
+# consistency even though a real tweet is naturally far shorter.
+_MAX_RAW_TEXT_CHARS = 200_000
 
 DB_PATH = str(aria_db_path())
 
@@ -374,7 +378,8 @@ async def discover_and_enqueue_candidates(*, min_token_count: int = 3) -> dict:
         if tweets:
             for tweet in tweets:
                 social_addresses |= {
-                    addr.lower() for addr in _EVM_ADDRESS_RE.findall(tweet.get("text", ""))
+                    addr.lower()
+                    for addr in _EVM_ADDRESS_RE.findall(tweet.get("text", "")[:_MAX_RAW_TEXT_CHARS])
                 }
     except Exception as exc:  # noqa: BLE001 -- best-effort fourth source, never blocks the other three
         logger.info("smart_money_leaderboard: twitterapi_io social source failed (%s)", exc)

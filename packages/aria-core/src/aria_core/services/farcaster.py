@@ -30,6 +30,9 @@ _USER_BY_FID_URL = "https://api.warpcast.com/v2/user"
 # match rather than a wrong username lookup; verifying a CHANNEL (not a
 # user profile) would need separate logic, not attempted here.
 _USERNAME_RE = re.compile(r"(?:warpcast\.com|farcaster\.xyz)/([\w.\-]+)", re.IGNORECASE)
+# URL field, never raw scraped text -- same "clamp before regex" doctrine as
+# the raw-HTML/text clamps elsewhere, calibrated to URL-sized input.
+_MAX_URL_CHARS = 2_000
 _TIMEOUT_S = 10.0
 
 
@@ -43,7 +46,7 @@ class FarcasterProfileVerification:
 
 
 def _parse_username(url: str) -> str | None:
-    m = _USERNAME_RE.search(url or "")
+    m = _USERNAME_RE.search((url or "")[:_MAX_URL_CHARS])
     if not m:
         return None
     username = m.group(1).strip("/")

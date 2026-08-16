@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import aria_core.thesis_journal as tj
 import pytest
 from aria_core.services.project_activity import (
+    _MAX_URL_CHARS,
     fetch_github_diligence_snapshot,
     format_github_diligence,
     github_days_since_commit,
@@ -23,6 +24,19 @@ def test_parse_github_repo_variants():
     assert parse_github_repo("http://github.com/foo/bar/tree/main") == ("foo", "bar")
     assert parse_github_repo("https://x.com/foo") is None
     assert parse_github_repo(None) is None
+
+
+def test_parse_github_repo_truncates_oversized_url_before_regex():
+    """Une URL demesuree (au-dela de _MAX_URL_CHARS) doit etre tronquee AVANT
+    la regex -- place le vrai repo apres la coupure et confirme qu'il n'est
+    PAS trouve, preuve que la troncature agit."""
+    oversized = ("z" * (_MAX_URL_CHARS + 1000)) + "github.com/real/repo"
+    assert parse_github_repo(oversized) is None
+
+
+def test_is_github_link_truncates_oversized_url_before_regex():
+    oversized = ("z" * (_MAX_URL_CHARS + 1000)) + "github.com/real/repo"
+    assert is_github_link(oversized) is False
 
 
 # ── Résolution d'organisation seule (23/07, cas réel CNX/crynux-network) ────

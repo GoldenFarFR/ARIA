@@ -48,6 +48,14 @@ async def test_enqueue_extracts_handle_from_legacy_twitter_domain():
     assert rows == [("testproject",)]
 
 
+def test_extract_x_handle_truncates_oversized_url_before_regex():
+    """Une URL demesuree (au-dela de _MAX_URL_CHARS) doit etre tronquee AVANT
+    la regex -- place le vrai handle apres la coupure et confirme qu'il n'est
+    PAS trouve, preuve que la troncature agit (pas juste presente)."""
+    oversized_url = ("z" * (scx._MAX_URL_CHARS + 1000)) + "x.com/realhandle"
+    assert scx._extract_x_handle([{"label": "X", "url": oversized_url}]) is None
+
+
 @pytest.mark.asyncio
 async def test_enqueue_ignores_non_x_links():
     await scx.enqueue_candidate(CONTRACT, "base", [{"label": "GitHub", "url": "https://github.com/test/test"}])

@@ -56,6 +56,11 @@ DB_PATH = str(aria_db_path())
 REEVALUATION_TTL_DAYS = 7.0
 
 _HANDLE_RE = re.compile(r"(?:x|twitter)\.com/(@?[\w]+)", re.IGNORECASE)
+# A URL field, never raw scraped text -- bounds regex work against a
+# malformed/oversized "url" value in an untrusted project_links entry,
+# same "clamp before regex" doctrine as the raw-HTML/text clamps elsewhere
+# (website_scraper.py etc.), just calibrated to URL-sized input, not a page.
+_MAX_URL_CHARS = 2_000
 
 _WATCHLIST_DDL = """
 CREATE TABLE IF NOT EXISTS x_signal_cascade_watchlist (
@@ -152,7 +157,7 @@ def _extract_x_handle(project_links: list[dict] | None) -> str | None:
         label = str(link.get("label") or "").strip().lower()
         if "twitter" not in label and label != "x":
             continue
-        m = _HANDLE_RE.search(str(link.get("url") or ""))
+        m = _HANDLE_RE.search(str(link.get("url") or "")[:_MAX_URL_CHARS])
         if m:
             return m.group(1).lstrip("@")
     return None
