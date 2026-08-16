@@ -167,6 +167,25 @@ GECKO_NETWORK_SLUGS: dict[str, str] = {
     "unichain": "unichain",
     "soneium": "soneium",
     "mode": "mode",
+    # 16/08 -- Solana added for solana_pump_shadow.py's shadow-only "take the
+    # train" observation (never a discovery source, momentum_entry.DEFAULT_CHAINS
+    # stays Base-only). ARIA's own vocabulary already matches GeckoTerminal's
+    # real slug here (VERIFIED LIVE, GET /api/v2/networks page 1 -- {"id":
+    # "solana","attributes":{"name":"Solana"}}), listed explicitly anyway
+    # rather than relying on the fallback ``GECKO_NETWORK_SLUGS.get(network,
+    # network)`` silent passthrough -- same "never assume a coincidence"
+    # doctrine as the 26/07 Ethereum bug this dict's own docstring above
+    # documents.
+    "solana": "solana",
+    # 16/08 -- Robinhood Chain added for robinhood_pump_shadow.py's shadow-only
+    # "take the train" observation (same doctrine as Solana above, never a
+    # discovery source). VERIFIED LIVE (GET /api/v2/networks/robinhood/
+    # trending_pools?duration=5m -> HTTP 200, real pool data e.g. "CASHCAT /
+    # WETH 0.3%", ids prefixed "robinhood_0x...") -- ARIA's own chain name
+    # already matches GeckoTerminal's real slug here too, listed explicitly
+    # anyway rather than relying on the fallback passthrough (same reasoning
+    # as the Solana entry above).
+    "robinhood": "robinhood",
 }
 
 # 21/07 -- calibrated to 90% of 30 req/min (CLAUDE.md "90% calibrated
@@ -295,6 +314,47 @@ class AthResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class TrendingPool:
+    """One pool from ``/networks/{network}/trending_pools`` -- 16/08, first
+    consumer is ``solana_pump_shadow.py`` (shadow-only, never a real trigger).
+    Every numeric field is ``None`` when the provider omitted or gave an
+    unparseable value -- never fabricated (same dome doctrine as every other
+    dataclass in this module)."""
+
+    pool_address: str
+    token_address: str | None
+    symbol: str | None
+    price_usd: float | None
+    price_change_pct: dict[str, float]  # keys among m5/m15/m30/h1/h6/h24
+    transactions_m15: dict[str, int] | None  # buys/sells/buyers/sellers
+    volume_usd_m15: float | None
+    reserve_usd: float | None
+
+
+@dataclass
+class TrendingPoolsResult:
+    pools: list[TrendingPool] = field(default_factory=list)
+    available: bool = True
+    error: str | None = None
+
+
+@dataclass
+class PoolSnapshot:
+    """A pool's CURRENT price/liquidity -- 16/08, first consumer is
+    ``solana_pump_shadow.py``'s forward-outcome measurement pass (re-checks a
+    previously-logged signal's real price N minutes/hours later). Deliberately
+    a NEW, separate dataclass rather than extending ``PoolMetadata`` (which
+    ``get_pool_created_at`` already returns and several production call sites
+    already depend on) -- avoids any risk of regressing an existing caller."""
+
+    pool_address: str
+    price_usd: float | None = None
+    reserve_usd: float | None = None
+    available: bool = True
+    error: str | None = None
+
+
 @dataclass
 class OHLCVResult:
     candles: list[Candle] = field(default_factory=list)
@@ -309,6 +369,90 @@ class OHLCVResult:
     # the next timeframe -- same "stop, don't compound" principle already
     # applied inside OHLCVClient.get_ohlcv's own 1D/4H/1H ladder (Item #121).
     network_error: bool = False
+
+
+def _as_float(value: object) -> float | None:
+    """Never fabricates -- ``None`` on missing/unparseable, same doctrine as
+    every other numeric parse in this module."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_trending_pool_item(
+    item: object, included_by_id: dict[str, dict], network: str,
+) -> TrendingPool | None:
+    """Parses one ``data[]`` entry of ``get_trending_pools`` -- returns
+    ``None`` (never raises) on a malformed row, same "skip, don't crash on one
+    bad row" doctrine as ``get_pool_trades``'s own parsing loop."""
+    if not isinstance(item, dict):
+        return None
+    attrs = item.get("attributes")
+    if not isinstance(attrs, dict):
+        return None
+    pool_address = attrs.get("address")
+    if not isinstance(pool_address, str) or not pool_address:
+        return None
+
+    price_usd = _as_float(attrs.get("base_token_price_usd"))
+
+    raw_pct = attrs.get("price_change_percentage")
+    price_change_pct: dict[str, float] = {}
+    if isinstance(raw_pct, dict):
+        for window, raw_value in raw_pct.items():
+            parsed = _as_float(raw_value)
+            if parsed is not None:
+                price_change_pct[str(window)] = parsed
+
+    transactions_m15: dict[str, int] | None = None
+    raw_tx = attrs.get("transactions")
+    if isinstance(raw_tx, dict) and isinstance(raw_tx.get("m15"), dict):
+        transactions_m15 = {}
+        for key, raw_value in raw_tx["m15"].items():
+            try:
+                transactions_m15[str(key)] = int(raw_value)
+            except (TypeError, ValueError):
+                continue
+        if not transactions_m15:
+            transactions_m15 = None
+
+    volume_usd_m15 = None
+    raw_volume = attrs.get("volume_usd")
+    if isinstance(raw_volume, dict):
+        volume_usd_m15 = _as_float(raw_volume.get("m15"))
+
+    reserve_usd = _as_float(attrs.get("reserve_in_usd"))
+
+    token_address: str | None = None
+    symbol: str | None = None
+    relationships = item.get("relationships")
+    if isinstance(relationships, dict):
+        base_token = relationships.get("base_token")
+        if isinstance(base_token, dict):
+            token_data = (base_token.get("data") or {}) if isinstance(base_token.get("data"), dict) else {}
+            token_id = token_data.get("id")
+            if isinstance(token_id, str):
+                prefix = f"{network}_"
+                token_address = token_id[len(prefix):] if token_id.startswith(prefix) else token_id
+                included = included_by_id.get(token_id)
+                if isinstance(included, dict):
+                    included_attrs = included.get("attributes")
+                    if isinstance(included_attrs, dict) and isinstance(included_attrs.get("symbol"), str):
+                        symbol = included_attrs["symbol"]
+
+    return TrendingPool(
+        pool_address=pool_address,
+        token_address=token_address,
+        symbol=symbol,
+        price_usd=price_usd,
+        price_change_pct=price_change_pct,
+        transactions_m15=transactions_m15,
+        volume_usd_m15=volume_usd_m15,
+        reserve_usd=reserve_usd,
+    )
 
 
 class GeckoTerminalClient:
@@ -447,6 +591,33 @@ class GeckoTerminalClient:
             return PoolMetadata(pool_address=pool_address, available=False, error="date de création du pool indisponible")
         return PoolMetadata(pool_address=pool_address, created_at=created_at, available=True, error=None)
 
+    async def get_pool_snapshot(self, pool_address: str, *, network: str = NETWORK) -> PoolSnapshot:
+        """Current ``base_token_price_usd``/``reserve_in_usd`` for a pool --
+        16/08, built for ``solana_pump_shadow.py``'s forward-outcome
+        measurement (was the ``+25%/15min`` signal actually followed by a real
+        gain N minutes/hours later). Same ``/networks/{network}/pools/{pool}``
+        endpoint as ``get_pool_created_at`` (CONFIRMED LIVE 16/08 to also
+        carry ``base_token_price_usd``/``reserve_in_usd`` on the SAME response
+        -- verified against a real Base pool, not assumed), but a dedicated
+        method/dataclass rather than widening ``get_pool_created_at`` itself
+        (that one is on a live production hot path -- never touch it for an
+        unrelated shadow-only need)."""
+        data, error = await self._get_json(f"/networks/{network}/pools/{pool_address}")
+        if error is not None:
+            return PoolSnapshot(pool_address=pool_address, available=False, error=error)
+        if not isinstance(data, dict):
+            return PoolSnapshot(pool_address=pool_address, available=False, error=UNAVAILABLE)
+        attrs = (data.get("data") or {}).get("attributes")
+        if not isinstance(attrs, dict):
+            return PoolSnapshot(pool_address=pool_address, available=False, error=UNAVAILABLE)
+        price_usd = _as_float(attrs.get("base_token_price_usd"))
+        if price_usd is None:
+            return PoolSnapshot(pool_address=pool_address, available=False, error="prix indisponible")
+        return PoolSnapshot(
+            pool_address=pool_address, price_usd=price_usd,
+            reserve_usd=_as_float(attrs.get("reserve_in_usd")), available=True, error=None,
+        )
+
     async def get_all_time_high(self, pool_address: str, *, network: str = NETWORK) -> AthResult:
         """The real all-time-high price, scanned from the pool's FULL daily
         OHLCV history (never a guess, never limited to whatever window a
@@ -561,6 +732,66 @@ class GeckoTerminalClient:
                 )
             )
         return PoolTradesResult(trades=trades, available=True, error=None)
+
+    async def get_trending_pools(
+        self, *, network: str = NETWORK, duration: str = "5m",
+    ) -> TrendingPoolsResult:
+        """Pools GeckoTerminal itself ranks as trending on ``network`` -- 16/08,
+        first consumer is ``solana_pump_shadow.py``'s out-of-sample "take the
+        train" validation (shadow-only, read+log, never a trigger -- see that
+        module's own docstring). Uses ``self._get_json`` like every other
+        method here, so the SAME shared adaptive throttle/dome applies (16/08
+        norm re-verified: this is the endpoint a NEW GeckoTerminal consumer
+        must always go through, never a second independent client).
+
+        ``duration`` picks which window GeckoTerminal itself sorts the
+        trending list by -- **verified live 16/08 against the real API**
+        (``GET .../base/trending_pools?duration=15m`` -> HTTP 400 `"Invalid
+        duration. Allowed values: 5m, 1h, 6h, 24h"`): only those 4 values are
+        valid, ``"15m"``/``"30m"`` are NOT (despite an earlier, unverified
+        assumption that ``15m`` had already been confirmed working -- it had
+        not; re-verifying against the real API rather than trusting that
+        claim is exactly the "verify before asserting" doctrine this project
+        already commits to). This does not limit which price-change window can
+        be READ: every returned pool's ``attributes.price_change_percentage``
+        always carries all 6 windows (m5/m15/m30/h1/h6/h24) regardless of
+        ``duration`` -- confirmed live in the same test, ``duration`` only
+        changes which pools GeckoTerminal considers "trending enough" to
+        return, not the shape of each pool's own data. Default ``"5m"`` (the
+        shortest valid value, closest to a fast-momentum use case).
+
+        Response shape (CONFIRMED LIVE 16/08, ``GET
+        /api/v2/networks/base/trending_pools?duration=5m&include=base_token``,
+        HTTP 200, 20 pools + 12 included tokens -- schema also cross-checked
+        against CoinGecko's own published Pro-API-mirror docs, which serve the
+        identical GeckoTerminal onchain data): each pool's ``attributes``
+        holds ``address`` (the POOL, not the token), ``base_token_price_usd``,
+        ``price_change_percentage``/``transactions``/``volume_usd`` (each a
+        dict keyed by window), ``reserve_in_usd``. The token's own
+        ``symbol``/``address`` are NOT inline on the pool -- they live in the
+        top-level ``included`` array (``include=base_token`` query param),
+        matched by ``relationships.base_token.data.id`` (``"<network>_<addr>"``
+        -- the network prefix is stripped using the REQUESTED network, never a
+        naive first-underscore split, since some GeckoTerminal slugs
+        themselves contain an underscore, e.g. ``polygon_pos``)."""
+        params: dict[str, object] = {"duration": duration, "include": "base_token"}
+        data, error = await self._get_json(f"/networks/{network}/trending_pools", params=params)
+        if error is not None:
+            return TrendingPoolsResult(available=False, error=error)
+        if not isinstance(data, dict):
+            return TrendingPoolsResult(available=False, error=UNAVAILABLE)
+
+        included_by_id: dict[str, dict] = {}
+        for inc in data.get("included") or []:
+            if isinstance(inc, dict) and isinstance(inc.get("id"), str):
+                included_by_id[inc["id"]] = inc
+
+        pools: list[TrendingPool] = []
+        for item in data.get("data") or []:
+            parsed = _parse_trending_pool_item(item, included_by_id, network)
+            if parsed is not None:
+                pools.append(parsed)
+        return TrendingPoolsResult(pools=pools, available=True, error=None)
 
     async def resolve_primary_pool(self, token_address: str, *, network: str = NETWORK) -> PoolMetadata:
         """Resolves a token's MAIN pool -- #157: `get_pool_created_at`/

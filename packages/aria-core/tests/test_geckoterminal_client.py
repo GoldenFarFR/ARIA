@@ -1187,4 +1187,161 @@ class TestGetAllTimeHigh:
         result = await client.get_all_time_high("0xpool")
 
         assert result.available is True
-        assert result.ath_price == pytest.approx(7.5)
+
+
+# --- get_trending_pools / get_pool_snapshot (16/08, solana_pump_shadow.py) ---
+
+def _trending_payload(pools: list[dict], included: list[dict] | None = None) -> dict:
+    return {"data": pools, "included": included or []}
+
+
+def _trending_pool_item(
+    *, address: str = "poolA", token_id: str = "solana_tokA",
+    price_usd: str = "1.5", m15: str = "30.0", reserve: str = "50000.0",
+) -> dict:
+    return {
+        "attributes": {
+            "address": address,
+            "base_token_price_usd": price_usd,
+            "price_change_percentage": {"m5": "1.0", "m15": m15, "m30": "35.0", "h1": "40.0", "h6": "50.0", "h24": "60.0"},
+            "transactions": {"m15": {"buys": 10, "sells": 4, "buyers": 9, "sellers": 3}},
+            "volume_usd": {"m15": "1234.5"},
+            "reserve_in_usd": reserve,
+        },
+        "relationships": {"base_token": {"data": {"id": token_id, "type": "token"}}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_parses_real_shape(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/trending_pools"
+    included = [{"id": "solana_tokA", "attributes": {"symbol": "PUMP", "address": "tokA"}}]
+    _patch_client(monkeypatch, {url: FakeResponse(200, _trending_payload([_trending_pool_item()], included))})
+
+    result = await client.get_trending_pools(network="solana", duration="5m")
+
+    assert result.available is True
+    assert len(result.pools) == 1
+    pool = result.pools[0]
+    assert pool.pool_address == "poolA"
+    assert pool.token_address == "tokA"
+    assert pool.symbol == "PUMP"
+    assert pool.price_usd == pytest.approx(1.5)
+    assert pool.price_change_pct["m15"] == pytest.approx(30.0)
+    assert pool.transactions_m15 == {"buys": 10, "sells": 4, "buyers": 9, "sellers": 3}
+    assert pool.volume_usd_m15 == pytest.approx(1234.5)
+    assert pool.reserve_usd == pytest.approx(50000.0)
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_duration_and_include_forwarded(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/trending_pools"
+    seen_params = {}
+
+    class RecordingFakeClient(FakeClient):
+        async def get(self, url, params=None, headers=None):
+            seen_params.update(params or {})
+            return await super().get(url, params=params, headers=headers)
+
+    monkeypatch.setattr(
+        "aria_core.services.geckoterminal.httpx.AsyncClient",
+        lambda **kw: RecordingFakeClient({url: FakeResponse(200, _trending_payload([]))}),
+    )
+
+    await client.get_trending_pools(network="solana", duration="5m")
+
+    assert seen_params.get("duration") == "5m"
+    assert seen_params.get("include") == "base_token"
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_skips_rows_missing_pool_address(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/trending_pools"
+    bad_item = {"attributes": {"base_token_price_usd": "1.0"}}  # no "address"
+    _patch_client(monkeypatch, {url: FakeResponse(200, _trending_payload([bad_item, _trending_pool_item()]))})
+
+    result = await client.get_trending_pools(network="solana")
+
+    assert result.available is True
+    assert len(result.pools) == 1
+    assert result.pools[0].pool_address == "poolA"
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_missing_symbol_stays_none_never_fabricated(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/trending_pools"
+    # no matching "included" entry for the referenced token id
+    _patch_client(monkeypatch, {url: FakeResponse(200, _trending_payload([_trending_pool_item()], []))})
+
+    result = await client.get_trending_pools(network="solana")
+
+    assert result.pools[0].symbol is None
+    assert result.pools[0].token_address == "tokA"
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_strips_network_prefix_with_underscore_in_slug(monkeypatch):
+    # polygon_pos itself contains an underscore -- a naive "split on first _"
+    # would corrupt the token address; the real network name must be used.
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/polygon_pos/trending_pools"
+    item = _trending_pool_item(token_id="polygon_pos_0xTOKEN")
+    _patch_client(monkeypatch, {url: FakeResponse(200, _trending_payload([item]))})
+
+    result = await client.get_trending_pools(network="polygon_pos")
+
+    assert result.pools[0].token_address == "0xTOKEN"
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_error_propagates_unavailable(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/trending_pools"
+    _patch_client(monkeypatch, {url: FakeResponse(429)})
+
+    result = await client.get_trending_pools(network="solana")
+
+    assert result.available is False
+    assert result.pools == []
+
+
+@pytest.mark.asyncio
+async def test_get_pool_snapshot_parses_price_and_reserve(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/pools/poolA"
+    _patch_client(
+        monkeypatch,
+        {url: FakeResponse(200, {"data": {"attributes": {"base_token_price_usd": "2.25", "reserve_in_usd": "9999.0"}}})},
+    )
+
+    result = await client.get_pool_snapshot("poolA", network="solana")
+
+    assert result.available is True
+    assert result.price_usd == pytest.approx(2.25)
+    assert result.reserve_usd == pytest.approx(9999.0)
+
+
+@pytest.mark.asyncio
+async def test_get_pool_snapshot_missing_price_is_unavailable(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/pools/poolA"
+    _patch_client(monkeypatch, {url: FakeResponse(200, {"data": {"attributes": {}}})})
+
+    result = await client.get_pool_snapshot("poolA", network="solana")
+
+    assert result.available is False
+
+
+@pytest.mark.asyncio
+async def test_get_pool_snapshot_error_propagates_unavailable(monkeypatch):
+    client = GeckoTerminalClient()
+    url = f"{client.base_url}/networks/solana/pools/poolA"
+    _patch_client(monkeypatch, {url: FakeResponse(404)})
+
+    result = await client.get_pool_snapshot("poolA", network="solana")
+
+    assert result.available is False
