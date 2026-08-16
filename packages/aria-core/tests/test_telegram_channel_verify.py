@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from aria_core.services.telegram_channel_verify import (
+    _MAX_RAW_HTML_CHARS,
     TelegramChannelVerification,
     _parse_handle,
     format_channel_verification,
@@ -86,6 +87,38 @@ async def test_verify_channel_http_error_is_unavailable(monkeypatch):
     result = await verify_channel("https://t.me/durov")
 
     assert result.available is False
+
+
+@pytest.mark.asyncio
+async def test_verify_channel_html_within_limit_still_parses(monkeypatch):
+    """A real-world channel page well past the 19/07 fuzz sample size but
+    still under the cap must parse exactly as before -- the truncation must
+    never affect the common case."""
+    padded_html = REAL_PAGE_HTML + ("x" * 100_000)
+    assert len(padded_html) < _MAX_RAW_HTML_CHARS
+    _patch_client(monkeypatch, FakeResponse(200, "https://t.me/s/durov", padded_html))
+
+    result = await verify_channel("https://t.me/durov")
+
+    assert result.subscriber_count_display == "11.6M"
+
+
+@pytest.mark.asyncio
+async def test_verify_channel_truncates_oversized_html_before_regex(monkeypatch):
+    """ReDoS surface reduction (#17/#294, 16/08): the page is third-party
+    content (any channel owner controls it, no auth needed) -- a page beyond
+    _MAX_RAW_HTML_CHARS must be truncated BEFORE the regexes run, same
+    doctrine as every other HTML scraper in this codebase. Placing the real
+    signal past the cutoff and confirming it's NOT found proves the
+    truncation actually happens (an untruncated parse would find it)."""
+    oversized_html = ("x" * (_MAX_RAW_HTML_CHARS + 1000)) + REAL_PAGE_HTML
+    _patch_client(monkeypatch, FakeResponse(200, "https://t.me/s/durov", oversized_html))
+
+    result = await verify_channel("https://t.me/durov")
+
+    assert result.available is True
+    assert result.subscriber_count_display is None
+    assert result.days_since_last_post is None
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,15 @@ _SUBSCRIBER_RE = re.compile(
 _TIME_RE = re.compile(r'<time datetime="([^"]+)"')
 _TIMEOUT_S = 10.0
 
+# ReDoS surface reduction (#17/#294, 16/08): this page's content is entirely
+# controlled by whoever runs the declared channel (any Telegram channel
+# owner, no authentication needed to be indexed at t.me/s/<handle>) -- the
+# one HTML scraper in this codebase with no length bound at all before this.
+# Same doctrine as website_scraper.py/site_snapshot.py/web_verify.py: cap raw
+# HTML before any regex runs on it. A real channel preview page is a few tens
+# of KB; this is generous enough to never truncate one in practice.
+_MAX_RAW_HTML_CHARS = 200_000
+
 
 @dataclass(frozen=True)
 class TelegramChannelVerification:
@@ -68,7 +77,7 @@ async def verify_channel(url: str) -> TelegramChannelVerification:
     if "/s/" not in str(res.url):
         return TelegramChannelVerification(available=True, exists=False)
 
-    text = res.text
+    text = res.text[:_MAX_RAW_HTML_CHARS]
     sub_match = _SUBSCRIBER_RE.search(text)
     subscriber_display = sub_match.group(1) if sub_match else None
 

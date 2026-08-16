@@ -25,6 +25,17 @@ _DDG_API = "https://api.duckduckgo.com/"
 _DDG_HTML = "https://html.duckduckgo.com/html/"
 _USER_AGENT = "Mozilla/5.0 (compatible; ARIA-ZHC/1.0)"
 
+# ReDoS surface reduction (#17/#294, 16/08): the response body is a DuckDuckGo
+# results page -- content DuckDuckGo assembles from third-party indexed pages,
+# not text ARIA controls. Same doctrine already applied to every other HTML
+# scraper in this codebase (website_scraper.py/site_snapshot.py/page_reader.py
+# each cap raw HTML before running any regex on it) -- this module was the
+# one gap with no bound at all before this. Generous enough that a real DDG
+# results page is never truncated in practice (measured pages are a few tens
+# of KB), tight enough to keep every regex below firmly in "fast regardless
+# of pattern" territory.
+_MAX_RAW_HTML_CHARS = 200_000
+
 _LIVE_INFO_STRONG_RE = re.compile(
     r"rugby|stade\s+toulousain|toulousain|top\s*14|top14|"
     r"coupe du monde|world cup|\bmatchs?\b|\bmatche[sd]?\b|fixture|football|soccer|"
@@ -481,7 +492,7 @@ async def _fetch_ddg_html(client: httpx.AsyncClient, q: str) -> list[str]:
         try:
             resp = await attempt()
             resp.raise_for_status()
-            parsed = _parse_ddg_html(resp.text)
+            parsed = _parse_ddg_html(resp.text[:_MAX_RAW_HTML_CHARS])
             if parsed:
                 return parsed
         except Exception as exc:
