@@ -317,69 +317,69 @@ Full detail (source, precise dev action) moved to **`docs/backlog-technique.md`*
 **`docs/task-backlog.md` (16/08, operator request) — persistent task tracker, distinct from this numbered research-lead list.** `TaskCreate`/`TaskList` (the Claude Code session tool) is NOT persistent across sessions on its own — a session that creates tasks there must replicate them into this file to survive past the session, and a new session should re-create the file's open tasks via `TaskCreate` at start for in-session tracking. Simple two-state format (open/done), no narrative promotion pipeline. Distinct real finding this same day: Devil's Advocate reports (`/opt/aria-data/architect-reports/archived/`) accumulate real, never-triaged findings that neither this list nor any HANDOFF tracks unless a session explicitly reads and files them — cross-check untracked reports there periodically (a report hash search across `docs/`/`CLAUDE.md`/`HANDOFF_*.md` finds what's already handled).
 Full detail (source, precise dev action) for every item below lives in `docs/backlog-technique.md` — this is a compact index only, never edited with new prose here. Each simple, externally-verified lead gets the next available `#N`; a lead needing real diligence goes to `docs/aria-learning-inbox/` instead. Edit the detail file IN PLACE.
 
-- #256 RÉSOLU Aerodrome/Velodrome merger
-- #257 RÉSOLU Robinhood Chain security coverage.
-- #260 RÉSOLU x402 V2 — CAIP-2 multi-chain already supported both sides (SDK v2.16.0); session payments (CAIP-122) not built, low priority...
+- #256 RESOLVED Aerodrome/Velodrome merger
+- #257 RESOLVED Robinhood Chain security coverage.
+- #260 RESOLVED x402 V2 — CAIP-2 multi-chain already supported both sides (SDK v2.16.0); session payments (CAIP-122) not built, low priority...
 - #261 CODE — candle_staleness_shadow.py construit (mode shadow, jamais un hard-gate tant que non calibré), câblé dans _fetch_candles.
-- #262 RÉSOLU ReasoningBomb / per-call LLM spend ceiling (audited 10/08, no gap found).
-- #263 RÉSOLU Odos aggregator — CDP swap already routes via 0x (373+ sources), no third-party aggregator needed now.
-- #264 RÉSOLU GitLost CVE — audited, no cross-repo access vector in any workflow.
-- #265 RÉSOLU shared-credential risk
-- #266 RÉSOLU Monte-Carlo/walk-forward backtest overfitting check (v8 mandate).
-- #267 RÉSOLU Sonnet 5 pricing hike 09/01
+- #262 RESOLVED ReasoningBomb / per-call LLM spend ceiling (audited 10/08, no gap found).
+- #263 RESOLVED Odos aggregator — CDP swap already routes via 0x (373+ sources), no third-party aggregator needed now.
+- #264 RESOLVED GitLost CVE — audited, no cross-repo access vector in any workflow.
+- #265 RESOLVED shared-credential risk
+- #266 RESOLVED Monte-Carlo/walk-forward backtest overfitting check (v8 mandate).
+- #267 RESOLVED Sonnet 5 pricing hike 09/01
 - #268 évalué (recherche seule, pas de code touché) — base/eip-7702-proxy vérifié comme un patron sûr, décision de migration réelle...
-- #269 RÉSOLU cadence Polymarket — était périmé sur cette ligne : burn_in_cadence.py (construit+déployé 10/08) a auto-complété le burn-in...
-- #270 RÉSOLU "Three-Layer" Bull/Bear/Risk-Manager multi-agent pattern
-- #271 RÉSOLU Base "Beryl" B20 freeze/seize coverage
-- #272 RÉSOLU CryptoJS weak-RNG incident
-- #273 RÉSOLU Base MCP official routing compared vs ARIA's real swap path
-- #274 RÉSOLU FinHarness comparison
-- #275 RÉSOLU CVE-2026-22708 PATH-poisoning
-- #276 RÉSOLU Clanker/Neynar governance re-verified
-- #277 RÉSOLU indirect prompt-injection audit
-- #278 RÉSOLU StartupHub.ai — real, free, live-tested (curl), but low value until ARIA trades a 2nd venue (Kalshi/PredictIt); not connected.
+- #269 RESOLVED cadence Polymarket — était périmé sur cette ligne : burn_in_cadence.py (construit+déployé 10/08) a auto-complété le burn-in...
+- #270 RESOLVED "Three-Layer" Bull/Bear/Risk-Manager multi-agent pattern
+- #271 RESOLVED Base "Beryl" B20 freeze/seize coverage
+- #272 RESOLVED CryptoJS weak-RNG incident
+- #273 RESOLVED Base MCP official routing compared vs ARIA's real swap path
+- #274 RESOLVED FinHarness comparison
+- #275 RESOLVED CVE-2026-22708 PATH-poisoning
+- #276 RESOLVED Clanker/Neynar governance re-verified
+- #277 RESOLVED indirect prompt-injection audit
+- #278 RESOLVED StartupHub.ai — real, free, live-tested (curl), but low value until ARIA trades a 2nd venue (Kalshi/PredictIt); not connected.
 - #279 partiellement résolu — anti-memorization clause added to v8's 3 LLM gates; literal Look-Ahead-Bench replication (P1/P2...
 - #280 LATTICE 6-criteria grid
-- #281 RÉSOLU "Comment and Control" CVSS 9.4 (Anthropic's own "Claude Code Security Review" GitHub Action)
-- #282 RÉSOLU delayed-activation honeypot technique
-- #283 RÉSOLU 428-LLM-router security study (9/428 actively malicious, 17 leaking credentials, arXiv 2604.08407) vs ARIA's real OpenRouter...
+- #281 RESOLVED "Comment and Control" CVSS 9.4 (Anthropic's own "Claude Code Security Review" GitHub Action)
+- #282 RESOLVED delayed-activation honeypot technique
+- #283 RESOLVED 428-LLM-router security study (9/428 actively malicious, 17 leaking credentials, arXiv 2604.08407) vs ARIA's real OpenRouter...
 - #284 audit needed — CVE-2026-9198 Langflow pattern (unauthenticated default endpoint chained to a code-exec sink) vs...
 - #285 check needed — contractshark.solidity-lang malicious VS Code/Cursor extension incident (real, verified) — confirm no...
 - #286 reference — `webpro255/awesome-ai-agent-attacks` (verified real, sourced/dated incident timeline) as a consult-first resource...
 - #287 reference — `trailofbits/skills` (verified real) as a candidate security-audit toolkit for a future...
 - #288 pointer — CFTC Innovation Task Force (verified real, formed 24/03, staffed 10/04/2026, crypto+AI+prediction-markets mandate)...
-- #289 précisé 15/08 (pas RÉSOLU, action dev reste ouverte) — GoPlus AI Agent Security API: tarif confirmé 9,90$/audit via x402...
+- #289 précisé 15/08 (pas RESOLVED, action dev reste ouverte) — GoPlus AI Agent Security API: tarif confirmé 9,90$/audit via x402...
 - #290 Trail of Bits Uniswap v4 hooks audit (verified real, Cork+Bunni $20M+)
-- #291 RÉSOLU DeepMind AI Agent Traps taxonomy
-- #292 RÉSOLU Bankrbot/Grok NFT+morse attack (verified real, Base, ~$174-200k)
+- #291 RESOLVED DeepMind AI Agent Traps taxonomy
+- #292 RESOLVED Bankrbot/Grok NFT+morse attack (verified real, Base, ~$174-200k)
 - #293 OHLCV intraday-signal falsification protocol (arXiv 2605.04004)
-- #294 RÉSOLU CrowdStrike fragmented-instruction-reconstruction technique
+- #294 RESOLVED CrowdStrike fragmented-instruction-reconstruction technique
 - #295 Sybil-clustering ready-to-use candidates (Sybil Defender + Bubblemaps, verified real) for `smart_money.py`'s structural limit #1.
 - #296 Base Builder Grants (retroactive, no application)
 - #297 x402 Bazaar indexing
 - #298 ACP → ERC-8183 "Agentic Commerce" migration (Virtuals + Ethereum Foundation)
 - #299 Arkham now accepts x402 pay-per-call (no subscription)
 - #300 Coinbase CLI `--dry-run` mode (verified real)
-- #301 RÉSOLU candle_history staleness fixed (fast/slow tier refresh split) — Devil's Advocate 13/08
-- #302 RÉSOLU 6 provider budget/quota guards consolidated onto resource_budget.py + /runwayapi command — Devil's Advocate 13/08
-- #303 RÉSOLU CVE-2026-48710 "BadHost" Starlette (Host-header path injection, SSRF/cache poisoning risk)
+- #301 RESOLVED candle_history staleness fixed (fast/slow tier refresh split) — Devil's Advocate 13/08
+- #302 RESOLVED 6 provider budget/quota guards consolidated onto resource_budget.py + /runwayapi command — Devil's Advocate 13/08
+- #303 RESOLVED CVE-2026-48710 "BadHost" Starlette (Host-header path injection, SSRF/cache poisoning risk)
 - #304 open verification, widened 16/08 — confirm that the Claude Code version used by ARIA sessions is indeed ≥2.0.65...
 - #305 Farcaster "Trade Webhooks" (Neynar, déjà partiellement dans le paysage via la source Farcaster du signal cascade)
 - #306 Kalshi domine 81% du volume de trading vs 19% pour Polymarket (données agrégées début 08/2026)
-- #307 RÉSOLU (Research watch promotion 16/08, audited live) npm supply-chain worm "Shai-Hulud"/CHAINDROP (Elastic Security Labs, steals...
-- #308 RÉSOLU Robinhood Chain now has real Blockscout holder-concentration coverage
-- #309 RÉSOLU Robinhood Chain launched 200+ "Stock Tokens" (tokenized US stocks/ETFs, e.g. NVDA/AAPL/GOOG, native Chainlink feed) natively...
+- #307 RESOLVED (Research watch promotion 16/08, audited live) npm supply-chain worm "Shai-Hulud"/CHAINDROP (Elastic Security Labs, steals...
+- #308 RESOLVED Robinhood Chain now has real Blockscout holder-concentration coverage
+- #309 RESOLVED Robinhood Chain launched 200+ "Stock Tokens" (tokenized US stocks/ETFs, e.g. NVDA/AAPL/GOOG, native Chainlink feed) natively...
 - #310 open verification — two distinct angles on the real CDP swap (`agent_wallet_pilot.py`/`agent_wallet_cdp_adapter.execute_swap`,...
-- #311 RÉSOLU the headless `claude -p` crons had no per-run turn/cost ceiling
-- #312 RÉSOLU (re-audited 16/08, corrects the 16/08 promotion's own premise) — Coinbase "Agentic.Market" is NOT a distinct discovery surface...
-- #313 RÉSOLU Coldcard incident (weak RNG missed by Fable at a build boundary) added to Devil's Advocate review checklist
+- #311 RESOLVED the headless `claude -p` crons had no per-run turn/cost ceiling
+- #312 RESOLVED (re-audited 16/08, corrects the 16/08 promotion's own premise) — Coinbase "Agentic.Market" is NOT a distinct discovery surface...
+- #313 RESOLVED Coldcard incident (weak RNG missed by Fable at a build boundary) added to Devil's Advocate review checklist
 - #314 CONFIRMED real gap, diagnosed 16/08 (workflow, not yet fixed — needs explicit operator go before touching the live payment...
 - #315 partially resolved 16/08 (workflow) — "Security in LLM-as-a-Judge" (arXiv 2603.29403): confirmed gap in Polymarket paper's...
-- #316 RÉSOLU (Research watch promotion 16/08, audited live) FINSABER (KDD 2026, arXiv 2505.07078) flags that LLM-driven trading strategies...
-- #317 RÉSOLU both mobile bugs (notification-tap, offline TOTP deadlock) already fixed same/next-day — Devil's Advocate 384c13e2
-- #318 RÉSOLU (16/08) — anti-ReDoS clamp (Devil's Advocate 08ac3e9a, 06/08) only neutralized polynomial backtracking on one call site...
-- #319 RÉSOLU 3 of 4 Devil's Advocate critiques already fixed (mutation-corruption, provenance ContextVar, degraded-fallback flag)
-- #320 RÉSOLU llm_usage.py::reconcile_monthly_cost added, self-corrects monthly total drift — Devil's Advocate 7aff8afe
+- #316 RESOLVED (Research watch promotion 16/08, audited live) FINSABER (KDD 2026, arXiv 2505.07078) flags that LLM-driven trading strategies...
+- #317 RESOLVED both mobile bugs (notification-tap, offline TOTP deadlock) already fixed same/next-day — Devil's Advocate 384c13e2
+- #318 RESOLVED (16/08) — anti-ReDoS clamp (Devil's Advocate 08ac3e9a, 06/08) only neutralized polynomial backtracking on one call site...
+- #319 RESOLVED 3 of 4 Devil's Advocate critiques already fixed (mutation-corruption, provenance ContextVar, degraded-fallback flag)
+- #320 RESOLVED llm_usage.py::reconcile_monthly_cost added, self-corrects monthly total drift — Devil's Advocate 7aff8afe
 
 ## Required reading (the detailed brain)
 `docs/etat-systeme-cable.md` (wired state, established facts) · `docs/architecture-extensibilite.md` (first) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **If a VPS migration (physical machine change) is in progress or being considered: read `docs/runbook-migration-vps.md` FIRST** — ordered checklist + 6 pitfalls already encountered and their precise cause (20/07), to avoid falling into them again. **If VPS SSH access breaks: `docs/runbook-ssh-depannage.md`.** **If the agent itself seems compromised/misbehaving (supply-chain worm, prompt injection, actions no longer matching requests): `docs/runbook-incident-agent.md`** — operator-facing 4-step emergency checklist (stop first, repair from a clean machine, never rotate secrets from the infected machine).
