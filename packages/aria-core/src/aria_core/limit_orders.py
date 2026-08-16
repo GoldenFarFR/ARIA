@@ -111,6 +111,20 @@ REPEAT_FAILURE_NOTIFY_SUPPRESS_THRESHOLD = 3  # 3 consecutive cancellations, sam
 # bonding limit orders accumulate outcomes.
 BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD = 20_000.0
 
+# 16/08 -- real incident found live (LMY position, swing pocket, opened via an
+# rsi_divergence_pending order): unlike the bonding floor above, a standard
+# (non-bonding) limit order's signal (momentum_entry._rsi_divergence_watch_
+# candidate) never captures liquidity_usd at all, and neither reanalyze_for_
+# watching nor _execute_trigger re-verified it before this fix -- only price
+# (still returned by DexScreener even on a near-empty pool) and honeypot
+# status were checked. The pool backing this position drained from ~$170k
+# (07/08) to ~$1 by the time it triggered, undetected. Symmetric with
+# BONDING_LIMIT_ORDER_MIN_LIQUIDITY_USD above -- see _reanalyze_holder_
+# concentration for where this is enforced (reuses the SAME fresh pair
+# already fetched there for the holder-concentration re-check, zero extra
+# network cost). Starting value, to recalibrate once outcomes accumulate.
+_LIMIT_ORDER_MIN_LIQUIDITY_USD = 20_000.0
+
 # 01/08 -- real bug found live (Workflow audit triggered by a GeckoTerminal
 # 429 rate that stayed flat, ~59-60/15min, even after 3 unrelated
 # uncoordinated-client fixes landed the same day): EVERY "watching" order
@@ -1071,8 +1085,19 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
     doctrine the rest of this module uses for honeypot/dex-quality re-checks.
     Copying the honeypot's fail-closed behavior onto this specific guardrail
     would be inventing a new, undiscussed behavior change; this function only
-    reuses ``_check_holder_concentration`` as-is. Returns ``True`` (safe to
-    proceed) or ``False`` (>= 80% confirmed, cancel/block)."""
+    reuses ``_check_holder_concentration`` as-is.
+
+    16/08 -- real incident found live (LMY position): also re-verifies
+    liquidity (``_LIMIT_ORDER_MIN_LIQUIDITY_USD``) against the SAME fresh pair
+    already fetched above for holder concentration, zero extra network call.
+    Same fail-open doctrine as the rest of this function: a pair that doesn't
+    resolve at all, or resolves with ``liquidity_unknown=True`` (DexScreener
+    hasn't indexed liquidity yet, distinct from genuinely near-zero -- see
+    ``PairSnapshot.liquidity_unknown``'s own docstring), never blocks on its
+    own -- only a CONFIRMED reading under the floor does.
+
+    Returns ``True`` (safe to proceed) or ``False`` (>= 80% concentration
+    confirmed, or liquidity confirmed under the floor -- cancel/block)."""
     from aria_core import momentum_entry
     from aria_core.bonding_entry import CHAIN_MARKER
 
@@ -1099,6 +1124,18 @@ async def _reanalyze_holder_concentration(order: dict) -> bool:
             order["contract"], reason,
         )
         return False
+
+    if (
+        pair is not None
+        and not pair.liquidity_unknown
+        and pair.liquidity_usd < _LIMIT_ORDER_MIN_LIQUIDITY_USD
+    ):
+        logger.info(
+            "limit_orders: liquidity re-check cancelling %s -- $%.0f < $%.0f floor",
+            order["contract"], pair.liquidity_usd, _LIMIT_ORDER_MIN_LIQUIDITY_USD,
+        )
+        return False
+
     return True
 
 

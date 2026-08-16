@@ -572,6 +572,62 @@ async def test_reanalyze_holder_concentration_clear_proceeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_low_liquidity_blocks(monkeypatch):
+    """16/08 -- the LMY incident itself: holder concentration clear, but the
+    fresh pair confirms liquidity fell under the floor -- must block."""
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair(liquidity_usd=1.0)]
+
+    async def _fake_concentration(contract, chain, pool_address):
+        return False, ""
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _fake_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is False
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_liquidity_unknown_fails_open(monkeypatch):
+    """A near-zero liquidity_usd reading that DexScreener itself flags as not
+    yet indexed (liquidity_unknown=True) must never block on its own --
+    matches PairSnapshot.liquidity_unknown's own fail-open doctrine."""
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair(liquidity_usd=0.0, liquidity_unknown=True)]
+
+    async def _fake_concentration(contract, chain, pool_address):
+        return False, ""
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _fake_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+
+
+@pytest.mark.asyncio
+async def test_reanalyze_holder_concentration_healthy_liquidity_proceeds(monkeypatch):
+    from aria_core import momentum_entry
+
+    async def _fake_fetch_pairs(contract, *, chain="base"):
+        return [_rsi_pair(liquidity_usd=50_000.0)]
+
+    async def _fake_concentration(contract, chain, pool_address):
+        return False, ""
+
+    monkeypatch.setattr(momentum_entry, "fetch_token_pairs", _fake_fetch_pairs)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", _fake_concentration)
+
+    order = {"contract": "0xCHECK", "chain": "base"}
+    assert await _REAL_REANALYZE_HOLDER_CONCENTRATION(order) is True
+
+
+@pytest.mark.asyncio
 async def test_reanalyze_holder_concentration_pair_lookup_failure_fails_open(monkeypatch):
     """Doctrine reused from _check_holder_concentration itself -- FAIL-OPEN,
     never the honeypot's fail-closed doctrine. A transient DexScreener
@@ -768,8 +824,14 @@ def _rsi_watch_order(**overrides):
     return base, sig
 
 
-def _rsi_pair(price_usd=1.5):
-    return PairSnapshot(pair_address="0xpool", base_address="0xcheck", price_usd=price_usd)
+def _rsi_pair(price_usd=1.5, liquidity_usd=50_000.0, liquidity_unknown=False):
+    # liquidity_usd defaults well above _LIMIT_ORDER_MIN_LIQUIDITY_USD (20k,
+    # 16/08) so every pre-existing caller of this helper (testing unrelated
+    # behavior) is unaffected by the liquidity re-check added that day.
+    return PairSnapshot(
+        pair_address="0xpool", base_address="0xcheck", price_usd=price_usd,
+        liquidity_usd=liquidity_usd, liquidity_unknown=liquidity_unknown,
+    )
 
 
 @pytest.mark.asyncio
