@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aria_core.services.blockscout import AddressInfo, TokenHolder, TokenHoldersResult
+from aria_core.services.blockscout import (
+    AddressInfo,
+    TokenHolder,
+    TokenHoldersResult,
+    TokenTransfersResult,
+)
 from aria_core.skills import acp_onchain_scan as scan
 from aria_core.skills.acp_onchain_scan import PairSnapshot, TokenScanContext
 
@@ -30,6 +35,24 @@ def _holders() -> TokenHoldersResult:
     )
 
 
+def _mock_get_token_transfers(monkeypatch) -> None:
+    """``_resolve_dev_behavior`` -> ``gather_dev_wallet_facts`` (dev_wallet.py)
+    unconditionally calls ``client.get_token_transfers(dev, limit=100)`` --
+    with no injectable ``client=`` threaded through from ``scan_base_token``,
+    this always resolved to the REAL ``blockscout_client`` singleton (16/08,
+    real hang found: this was the actual unmocked network call behind the
+    reproducible full-suite pytest hang documented in docs/task-backlog.md --
+    a real, slow/rate-limited Blockscout response on the synthetic ``DEV``
+    address, retried by the client's own dome/backoff, not an infinite hang
+    but easily 5-18+ minutes under real degraded conditions). Mocking
+    ``get_address_info``/``get_token_holders`` alone was never enough --
+    every test exercising ``gather_dev_wallet_facts`` needs this too."""
+    monkeypatch.setattr(
+        type(scan.blockscout_client), "get_token_transfers",
+        AsyncMock(return_value=TokenTransfersResult(transfers=[], available=True)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_resolve_dev_behavior_reuses_holders_no_refetch(monkeypatch):
     ctx = TokenScanContext(contract=ADDR, valid_address=True)
@@ -40,6 +63,7 @@ async def test_resolve_dev_behavior_reuses_holders_no_refetch(monkeypatch):
     )
     never_called = AsyncMock(side_effect=AssertionError("get_token_holders must not be re-fetched"))
     monkeypatch.setattr(type(scan.blockscout_client), "get_token_holders", never_called)
+    _mock_get_token_transfers(monkeypatch)
 
     await scan._resolve_dev_behavior(ctx, ADDR, _holders())
 
@@ -59,6 +83,7 @@ async def test_resolve_dev_behavior_no_holders_falls_back_to_fetch(monkeypatch):
     )
     fetch_mock = AsyncMock(return_value=_holders())
     monkeypatch.setattr(type(scan.blockscout_client), "get_token_holders", fetch_mock)
+    _mock_get_token_transfers(monkeypatch)
 
     await scan._resolve_dev_behavior(ctx, ADDR)
 
@@ -81,6 +106,7 @@ async def test_scan_base_token_dev_behavior_does_not_duplicate_holders_call(monk
         type(scan.blockscout_client), "get_address_info",
         AsyncMock(return_value=AddressInfo(address=ADDR, creator_address=DEV, available=True)),
     )
+    _mock_get_token_transfers(monkeypatch)
 
     await scan.scan_base_token(ADDR, include_dev_behavior=True)
 
