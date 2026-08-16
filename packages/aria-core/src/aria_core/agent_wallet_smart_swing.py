@@ -359,10 +359,10 @@ def build_swap_only_policy(router_address: str):
     )
     return CreatePolicyOptions(
         scope="account",
-        # CDP's own API constrains description to ^[A-Za-z0-9 ,.]{1,50}$ (see
-        # agent_wallet_cdp_policy.py's documented finding) -- a longer or
-        # punctuation-rich string is rejected at creation time, not at build
-        # time. Full rule semantics are documented in this function's docstring.
+        # CDP's own API constrains description to ^[A-Za-z0-9 ,.]{1,50}$ -- a
+        # longer or punctuation-rich string is rejected at creation time, not
+        # at build time. Full rule semantics are documented in this
+        # function's docstring.
         description="ARIA swing spender, swap plus return only.",
         rules=[allow_swap_router, allow_return_to_swing_pocket],
     )
