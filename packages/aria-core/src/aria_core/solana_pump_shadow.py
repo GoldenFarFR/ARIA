@@ -74,19 +74,35 @@ multiplier (1.68x) against genuinely unseen tokens.
 **Honest scope limit, pass 3 (the real exit rule, documented, not hidden)**:
 the Dune backtest reconstructs each candle's real high/low, so its -20%
 trailing stop fires against the true intra-candle low. ``advance_exit_
-simulation`` only has whatever spot price ``get_pool_snapshot`` returns at
-the moment it happens to run -- an irregular, POINT-SAMPLE cadence (however
-long the gap between two ``run_cycle`` calls turns out to be), never a
-continuous low. A stop that would have touched and recovered between two
-polls is invisible here, and a stop that does fire here may register at a
-worse price than a true tick-by-tick simulation would have caught it at.
-This is a real, structural divergence from the backtest -- never to be
-glossed over when reading this shadow's numbers against the 97.6%/1.68x
-calibration figures. Scale-out rung fills, by contrast, are modeled at their
-OWN threshold price (limit-sell semantics), not at the observed spot price,
-since the calibrated rule is defined per-threshold; a slow cycle that jumps
-past several rungs at once fills each one independently, at its own price
-(see ``advance_exit_simulation``'s docstring for the exact mechanics).
+simulation`` used to only have whatever spot price ``get_pool_snapshot``
+returned at the moment it happened to run -- an irregular, POINT-SAMPLE
+cadence, never a continuous low. **16/08, second pass fixed the MAGNITUDE of
+this gap (not the gap itself)**: a live position with a peak only +16% above
+entry closed at a ``final_multiplier`` of 0.016 (98% loss) instead of the
+~0.93 the -20% stop should have capped it at, because the real intra-cycle
+low was never sampled and the stop only fired once a much later, much worse
+poll happened to land. ``advance_exit_simulation`` now ALSO reads
+``GeckoTerminalClient.get_ohlcv(pool_address, network=chain,
+mode="scalping")`` (the existing 15min/30min sub-hour ladder, see
+``services/ohlcv.py``) for every candle closed since the row's own
+``last_checked_at``, and evaluates the scale-out ladder against the WINDOW
+HIGH and the trailing stop against the WINDOW LOW of that window -- a rung
+reached-then-retraced or a stop touched-then-crashed-further between two
+polls is no longer invisible. The stop itself now fills at its OWN threshold
+price (``peak_price * (1 - TRAILING_STOP_PCT/100)``, limit-order semantics,
+same doctrine already used for scale-out rungs below), not wherever the spot
+price happened to be sampled. **Still an honest, residual approximation, not
+solved**: 15-30min candles remain far coarser than the Dune backtest's true
+per-trade granularity -- a stop breached and fully recovered WITHIN a single
+candle is still indistinguishable from one that never recovered, and a
+severe crash that gaps straight through the stop level still fills at the
+stop's threshold price (a documented, deliberately optimistic modeling
+choice) rather than whatever worse price a real fill might have taken in a
+genuinely illiquid flash-crash. ``get_ohlcv`` unavailable (thin pool,
+network error) falls back to the OLD point-sample behavior for that pass,
+never blocks the row -- see ``advance_exit_simulation``'s own docstring for
+the exact mechanics and the get_pool_snapshot/get_ohlcv call-count
+reasoning.
 
 Best-effort throughout, same contract as every other shadow module in this
 codebase: a logging/measurement failure must NEVER raise into whatever calls
@@ -101,6 +117,7 @@ import aiosqlite
 from aria_core.paths import aria_db_path
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
+    OHLCVResult,
     PoolSnapshot,
     TrendingPool,
     geckoterminal_client,
@@ -145,6 +162,12 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     ("next_scale_level", "REAL"),
     ("exit_reason", "TEXT"),
     ("final_multiplier", "REAL"),
+    # 16/08, second pass -- the last moment ``advance_exit_simulation``
+    # actually verified this row (see its docstring). Drives which OHLCV
+    # candles count as "new since last time" -- NULL until the row's first
+    # exit-simulation pass, at which point ``detected_at`` is used as the
+    # implicit starting boundary instead.
+    ("last_checked_at", "TEXT"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -297,6 +320,19 @@ def _minutes_since(iso_ts: str) -> float | None:
     return (datetime.now(timezone.utc) - then).total_seconds() / 60.0
 
 
+def _epoch_of(iso_ts: str | None) -> float | None:
+    """Epoch seconds of an ISO timestamp, or ``None`` if missing/malformed --
+    used to filter OHLCV candles to "closed since this row was last checked"
+    in ``advance_exit_simulation``. A ``None`` boundary means "no known
+    starting point", handled by the caller as "treat every candle as new"."""
+    if not iso_ts:
+        return None
+    try:
+        return datetime.fromisoformat(iso_ts).timestamp()
+    except ValueError:
+        return None
+
+
 async def evaluate_open_signals(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 50,
 ) -> dict[str, int]:
@@ -384,36 +420,98 @@ async def advance_exit_simulation(
     (25%-of-remaining scale-out ladder every +25% rung above entry, -20%
     trailing stop from the running high since entry, 2h hard max-hold) --
     distinct from ``evaluate_open_signals``'s 3-fixed-horizon proxy above,
-    the two coexist (see module docstring). One ``get_pool_snapshot`` call
-    per still-simulating row per call (never more), all state needed to
-    resume lives in the row itself (``remaining_qty``/``peak_price``/
-    ``next_scale_level``) so this is safe to call on an arbitrarily
-    irregular cadence -- nothing here assumes a fixed interval between two
+    the two coexist (see module docstring). All state needed to resume lives
+    in the row itself (``remaining_qty``/``peak_price``/``next_scale_level``/
+    ``last_checked_at``) so this is safe to call on an arbitrarily irregular
+    cadence -- nothing here assumes a fixed interval between two
     ``run_cycle`` passages.
+
+    **16/08, second pass -- real gap fixed (see module docstring's "Honest
+    scope limit, pass 3")**: the scale-out/trailing-stop THRESHOLD checks
+    below no longer compare against a single point-sample spot price alone.
+    Each still-simulating row now ALSO fetches
+    ``GeckoTerminalClient.get_ohlcv(pool_address, network=chain,
+    mode="scalping")`` (the existing 15min/30min sub-hour ladder,
+    ``services/ohlcv.py``) and reads every candle CLOSED since this row's
+    ``last_checked_at`` (or ``detected_at`` on the very first pass). The
+    scale-out ladder is now walked against the WINDOW HIGH of those candles
+    (a rung reached then retraced between two polls is no longer invisible)
+    and the trailing stop is now evaluated against the WINDOW LOW (a real
+    intra-window touch of the stop level is no longer invisible either) --
+    combined with the literal current spot price (``get_pool_snapshot``) so
+    neither an already-closed candle nor a very fresh tick is ever missed.
+    This is the exact bug a live position exposed: peak only +16% above
+    entry, yet the point-sample poll landed on a much later, much worse
+    price, producing a 98% loss instead of the ~-20% the stop was supposed
+    to cap. Two calls per still-simulating row per call now (one
+    ``get_pool_snapshot``, one ``get_ohlcv`` -- twice the previous per-row
+    cost, never an unbounded multiple: a single ``get_ohlcv`` call covers
+    every candle in the window, not one call per candle). This keeps the
+    total throughput within the same order of magnitude already calibrated
+    for this shadow, on the SAME shared GeckoTerminal throttle as the rest
+    of prod -- see the 16/08 HANDOFF entry for the reasoning.
+    ``get_pool_snapshot`` stays the sole source of the literal current/spot
+    price for whatever genuinely needs it (dust-close/max-hold valuation),
+    never replaced by a candle close, per this module's "never fabricate"
+    doctrine.
+
+    **Fill price on a trailing-stop close, deliberately changed**: it used
+    to fill at the observed spot price (whatever ``get_pool_snapshot``
+    happened to return at that instant, however far the price had already
+    fallen by the time of that particular poll). It now fills at the STOP'S
+    OWN threshold price (``peak_price * (1 - TRAILING_STOP_PCT/100)``) once
+    the window low (or the current spot) confirms the level was touched --
+    the same limit-order modeling doctrine already used for scale-out rungs
+    below ("filled at that RUNG'S OWN price, not the observed spot"), now
+    applied symmetrically to the stop. This is what actually fixes the
+    observed bug's magnitude: a stop that fires now closes near
+    ``peak*0.8``, never wherever a later, worse poll happened to land.
+
+    **Still-honest residual limit (never to be glossed over)**: 15-30min
+    candles are a large reduction of the blind spot versus a single instant
+    spot sample, but still NOT continuous tick-by-tick data -- a stop that
+    touches and fully reverses WITHIN one 15min candle is indistinguishable
+    from one that never recovered (the candle's low correctly fires the
+    stop either way), and a severe crash gapping straight through the stop
+    level still fills at the stop's own threshold price (a documented,
+    deliberately optimistic choice) rather than whatever worse price a real
+    fill might take in genuine illiquidity. The Dune backtest this shadow is
+    validated against uses true per-trade granularity; this remains an
+    approximation, just a much tighter one.
+
+    **Fail-open fallback, explicit choice**: if ``get_ohlcv`` raises, returns
+    ``available=False`` (thin pool, network error, rate limit), or has no
+    candle newer than ``last_checked_at``, this row falls back to the OLD
+    point-sample behavior for this pass (window high/low both collapse to
+    the current spot price) rather than being skipped entirely -- an
+    imperfect measurement beats no measurement for a shadow whose whole
+    purpose is accumulating forward data, same "never block, never
+    fabricate" doctrine ``evaluate_open_signals`` already applies to a
+    missed snapshot.
 
     Per row, in this fixed order (matches the calibrated rule's own
     precedence -- scale-out first since it's a rising-price event, trailing
     stop next, max-hold as the final catch-all):
-    1. Update ``peak_price`` to the running high since entry.
-    2. Walk the scale-out ladder: while the CURRENT price has reached the
-       next not-yet-filled rung and more than the dust fraction remains,
-       sell 25% of the REMAINING position -- filled at that RUNG'S OWN price
+    1. Update ``peak_price`` to the running high since entry (now the
+       window/spot high, whichever is greater).
+    2. Walk the scale-out ladder against the EFFECTIVE HIGH (window high
+       folded with the current spot): while it has reached the next
+       not-yet-filled rung and more than the dust fraction remains, sell 25%
+       of the REMAINING position -- filled at that RUNG'S OWN price
        (limit-sell semantics, matching the calibrated rule's per-threshold
-       definition), not at the possibly-higher observed price. A slow cycle
-       that jumps past several rungs at once fills each one independently,
-       never collapsed into a single fill.
+       definition), not at the possibly-higher observed high itself. A slow
+       cycle that jumps past several rungs at once fills each one
+       independently, never collapsed into a single fill.
     3. If what's left has dropped under 1% of the original position, close
        it out (``scale_out_complete``) -- the ladder is asymptotic and would
        otherwise never reach a literal zero; the dust stub is valued at the
-       CURRENT observed price (the only real observation available for it),
-       never fabricated.
-    4. Otherwise, if the current price sits >=20% below the running peak,
-       close the remainder (``trailing_stop``) at the current price. **Point-
-       sample limitation, documented not hidden**: this can only see the
-       spot price observed AT this call, never a true intra-cycle low --
-       see the module docstring's "Honest scope limit, pass 3".
+       CURRENT spot price (``get_pool_snapshot``, the only real observation
+       available for it), never fabricated.
+    4. Otherwise, if the EFFECTIVE LOW (window low folded with the current
+       spot) sits >=20% below the running peak, close the remainder
+       (``trailing_stop``) at the STOP'S OWN threshold price -- see above.
     5. Otherwise, if 2h have elapsed since detection, force-close the
-       remainder (``max_hold``) at the current price.
+       remainder (``max_hold``) at the current spot price.
     ``final_multiplier`` (``realized_proceeds / entry_price``) is only ever
     written once ``remaining_qty`` reaches 0 via one of the 3 closes above --
     never estimated on a still-open row."""
@@ -454,15 +552,46 @@ async def advance_exit_simulation(
             counts["checked"] += 1
             current_price = snapshot.price_usd
 
+            # Window high/low of every candle CLOSED since the last verified
+            # moment -- see docstring's 16/08 second-pass note. Defaults to
+            # the point-sample spot price (old behavior) when OHLCV is
+            # unavailable, fails, or has nothing new since last time.
+            window_high = current_price
+            window_low = current_price
+            try:
+                ohlcv: OHLCVResult = await client.get_ohlcv(
+                    row["pool_address"], network=chain, mode="scalping",
+                )
+            except Exception as exc:  # noqa: BLE001 -- OHLCV is an enhancement, never a hard requirement
+                logger.info(
+                    "solana_pump_shadow: advance_exit_simulation get_ohlcv failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
+                ohlcv = None
+            if ohlcv is not None and ohlcv.available and ohlcv.candles:
+                boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
+                new_candles = [
+                    c for c in ohlcv.candles if boundary_epoch is None or c.ts > boundary_epoch
+                ]
+                if new_candles:
+                    window_high = max(c.high for c in new_candles)
+                    window_low = min(c.low for c in new_candles)
+
+            # Fold the window with the literal current spot -- covers both a
+            # closed candle the ladder hasn't reached yet AND a fresh tick
+            # that hasn't formed a closed candle yet.
+            effective_high = max(window_high, current_price)
+            effective_low = min(window_low, current_price)
+
             peak_price = row["peak_price"] or entry_price
             next_scale_level = row["next_scale_level"] or (entry_price * (1 + SCALE_OUT_STEP_PCT / 100.0))
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
 
-            peak_price = max(peak_price, current_price)
+            peak_price = max(peak_price, effective_high)
 
             fills_this_cycle = 0
-            while remaining_qty > _SCALE_OUT_DUST_FRACTION and current_price >= next_scale_level:
+            while remaining_qty > _SCALE_OUT_DUST_FRACTION and effective_high >= next_scale_level:
                 sell_fraction = remaining_qty * SCALE_OUT_SELL_FRACTION
                 realized_proceeds += sell_fraction * next_scale_level
                 remaining_qty -= sell_fraction
@@ -475,8 +604,9 @@ async def advance_exit_simulation(
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
                 exit_reason = "scale_out_complete"
-            elif current_price <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
-                realized_proceeds += remaining_qty * current_price
+            elif effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
+                stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+                realized_proceeds += remaining_qty * stop_price
                 remaining_qty = 0.0
                 exit_reason = "trailing_stop"
             elif age_minutes >= MAX_HOLD_MINUTES:
@@ -491,12 +621,14 @@ async def advance_exit_simulation(
                     """
                     UPDATE solana_pump_shadow_log SET
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
-                        realized_proceeds = ?, exit_reason = ?, final_multiplier = ?
+                        realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
+                        last_checked_at = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, next_scale_level, remaining_qty,
-                        realized_proceeds, exit_reason, final_multiplier, row["id"],
+                        realized_proceeds, exit_reason, final_multiplier,
+                        datetime.now(timezone.utc).isoformat(), row["id"],
                     ),
                 )
                 await db.commit()

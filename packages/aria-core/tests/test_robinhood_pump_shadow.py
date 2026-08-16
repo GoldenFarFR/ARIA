@@ -12,7 +12,8 @@ import aiosqlite
 import pytest
 
 from aria_core import robinhood_pump_shadow as shadow
-from aria_core.services.geckoterminal import PoolSnapshot, TrendingPool
+from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
+from aria_core.skills.ta_levels import Candle
 
 CHAIN = "robinhood"
 
@@ -60,12 +61,21 @@ def _pool(
 
 
 class FakeClient:
-    """Injected in place of GeckoTerminalClient -- only get_pool_snapshot is
-    exercised by evaluate_open_signals, exactly what these tests need."""
+    """Injected in place of GeckoTerminalClient -- get_pool_snapshot is
+    exercised by evaluate_open_signals/advance_exit_simulation, get_ohlcv
+    by advance_exit_simulation's 16/08 window-based threshold check (see
+    that function's docstring). ``ohlcv_by_pool`` defaults to nothing
+    configured -> ``available=False`` for every pool, exercising the
+    documented fall-back-to-point-sample path unless a test opts in."""
 
-    def __init__(self, price_by_pool: dict[str, float | None]):
+    def __init__(
+        self, price_by_pool: dict[str, float | None],
+        ohlcv_by_pool: dict[str, OHLCVResult] | None = None,
+    ):
         self._prices = price_by_pool
+        self._ohlcv = dict(ohlcv_by_pool or {})
         self.calls: list[str] = []
+        self.ohlcv_calls: list[str] = []
 
     async def get_pool_snapshot(self, pool_address, *, network="robinhood"):
         self.calls.append(pool_address)
@@ -73,6 +83,13 @@ class FakeClient:
         if price is None:
             return PoolSnapshot(pool_address=pool_address, available=False, error="unavailable")
         return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=1000.0, available=True)
+
+    async def get_ohlcv(self, pool_address, *, network="robinhood", mode="standard", **_kwargs):
+        self.ohlcv_calls.append(pool_address)
+        result = self._ohlcv.get(pool_address)
+        if result is None:
+            return OHLCVResult(candles=[], available=False, error="unavailable")
+        return result
 
 
 # --- record_signals ------------------------------------------------------
@@ -472,6 +489,121 @@ async def test_advance_exit_never_raises_on_db_failure(monkeypatch):
     client = FakeClient({})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["checked"] == 0
+
+
+def _candle(ts: float, *, open_: float, high: float, low: float, close: float) -> Candle:
+    return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=0.0)
+
+
+# --- advance_exit_simulation: 16/08 OHLCV-window fix (real bug repro) ----
+
+@pytest.mark.asyncio
+async def test_advance_exit_window_low_catches_stop_missed_by_point_sample():
+    """Reproduces the real live bug: a peak only +16% above entry, then a
+    crash whose true low (0.02) is only visible inside a closed 15min
+    candle -- the point-sample spot price polled afterward (0.03) is even
+    worse than the stop threshold. The OLD code would have closed at
+    whatever the spot happened to be (~0.03, a ~97% loss); the fix must
+    close at the STOP'S OWN threshold price (peak*0.8 = 0.928), the
+    calibrated -20% floor, not the crash extreme."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+
+    # Cycle 1: price rises to +16% -- sets the peak, no rung reached (first
+    # rung is +25%), no stop breached. OHLCV unavailable this cycle (not
+    # needed to establish the peak) -- pure point-sample fallback.
+    client1 = FakeClient({"poolA": 1.16})
+    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.16)
+    assert rows[0]["exit_reason"] is None
+    last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
+    assert last_checked_epoch is not None
+
+    # Cycle 2: two candles closed since last_checked_at reconstruct the real
+    # crash (low 0.02) the point-sample spot (0.03) never directly touched
+    # itself but landed well past.
+    candles = [
+        _candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=0.02, close=0.05),
+        _candle(last_checked_epoch + 120, open_=0.05, high=0.06, low=0.03, close=0.03),
+    ]
+    client2 = FakeClient(
+        {"poolA": 0.03}, {"poolA": OHLCVResult(candles=candles, available=True, error=None)},
+    )
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    assert client2.ohlcv_calls == ["poolA"]  # exactly one get_ohlcv call for this position
+
+    rows = await _rows()
+    stop_price = 1.16 * (1 - shadow.TRAILING_STOP_PCT / 100.0)
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert rows[0]["final_multiplier"] == pytest.approx(stop_price)  # ~0.928
+    assert rows[0]["final_multiplier"] > 0.9  # nowhere near the 0.02-0.03 crash extreme
+    assert rows[0]["remaining_qty"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_window_high_catches_rung_retraced_before_poll():
+    """Symmetric case: a scale-out rung is reached and retraced INSIDE the
+    candle window, invisible to a point-sample spot price polled after the
+    retracement -- the window high must still register the fill."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    detected_epoch = shadow._epoch_of((await _rows())[0]["detected_at"])
+
+    # First rung is at 1.25 (entry * 1.25). A single closed candle spikes to
+    # 1.30 (crossing it) then retraces to 1.05 by its close -- low kept at
+    # 1.05 (above the NEW peak's -20% stop, 1.30*0.8=1.04) so only the
+    # scale-out fill is exercised in isolation, not the trailing stop too.
+    # The spot price polled now (1.05) never itself reaches the rung.
+    candles = [_candle(detected_epoch + 60, open_=1.0, high=1.30, low=1.05, close=1.05)]
+    client = FakeClient(
+        {"poolA": 1.05}, {"poolA": OHLCVResult(candles=candles, available=True, error=None)},
+    )
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["scale_out_fills"] == 1
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.30)  # window high, not the spot 1.05
+    assert rows[0]["remaining_qty"] == pytest.approx(0.75)
+    assert rows[0]["realized_proceeds"] == pytest.approx(0.25 * 1.25)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_falls_back_to_point_sample_when_ohlcv_unavailable():
+    """Explicit fallback contract: get_ohlcv returning available=False must
+    reproduce the OLD pure-spot-price math exactly, never block the row."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    unavailable = OHLCVResult(candles=[], available=False, error="unavailable")
+
+    client1 = FakeClient({"poolA": 1.3}, {"poolA": unavailable})
+    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.3)  # collapsed to the spot alone
+
+    client2 = FakeClient({"poolA": 1.04}, {"poolA": unavailable})
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    rows = await _rows()
+    # Same figure the pure point-sample math would have produced (peak 1.3,
+    # stop exactly at the polled spot 1.04) -- the fallback changes nothing
+    # observable versus the pre-16/08 behavior.
+    assert rows[0]["final_multiplier"] == pytest.approx(1.0925)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_ohlcv_exception_falls_back_and_never_raises():
+    """get_ohlcv raising must never break the row -- same best-effort
+    doctrine already applied to get_pool_snapshot failures."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+
+    class RaisingOhlcvClient(FakeClient):
+        async def get_ohlcv(self, pool_address, *, network="robinhood", mode="standard", **_kwargs):
+            raise RuntimeError("boom")
+
+    client = RaisingOhlcvClient({"poolA": 1.1})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 1
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.1)  # fell back to the spot price alone
+    assert rows[0]["exit_reason"] is None
 
 
 # --- exit_simulation_summary ---------------------------------------------
