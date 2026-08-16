@@ -86,6 +86,7 @@ from dataclasses import dataclass
 
 from aria_core.llm import chat_with_context
 from aria_core.llm_economy import LlmDepth, anthropic_depth_override
+from aria_core.sanitize import sanitize_untrusted_text
 from aria_core.services.polymarket import PolymarketCandidateMarket, compute_probability_velocity, polymarket_client
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,18 @@ async def _recent_velocity(market: PolymarketCandidateMarket) -> float | None:
     return compute_probability_velocity(history)
 
 
+# Devil's Advocate / #315 workflow audit (16/08): this Tavily context used to
+# reach all VOTE_COUNT independent votes verbatim, unsanitized -- unlike
+# every sibling judgment module (conviction_research.py, momentum_entry.py,
+# vc_analysis.py) which all run external content through this same choke
+# point before it reaches an LLM prompt. Doesn't fully close the "shared
+# unvetted content could steer all votes toward the same wrong answer"
+# concern (that needs per-vote re-sourcing, a larger change) -- but it does
+# close the plain injection vector (a hostile snippet forging fake
+# instructions/tags) that every other module already guards against.
+_MAX_RESEARCH_CONTEXT_CHARS = 2000
+
+
 async def _research_context(question: str) -> str | None:
     """Best-effort factual context via Tavily -- same client/budget as the
     rest of the codebase (`tavily_budget.py`), never a duplicated client.
@@ -298,7 +311,9 @@ async def _research_context(question: str) -> str | None:
     for text, url, published in result.snippets[:4]:
         date_part = f" ({published})" if published else ""
         lines.append(f"- {text}{date_part}")
-    return "\n".join(lines) if lines else None
+    if not lines:
+        return None
+    return sanitize_untrusted_text("\n".join(lines), _MAX_RESEARCH_CONTEXT_CHARS)
 
 
 async def _single_probability_vote(
