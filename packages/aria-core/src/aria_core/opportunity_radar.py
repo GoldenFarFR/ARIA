@@ -49,6 +49,14 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…\n])\s+")
 _MIN_LEN = 20
 _DEFAULT_THRESHOLD = 3.0
 
+# ReDoS surface reduction (#318, 16/08): incoming text is arbitrary X post/
+# comment content, fully attacker-controlled -- a segment with no sentence
+# delimiter at all (`_SENTENCE_SPLIT` finds nothing) reaches `_OPP_RE`/
+# `_HOOK_RE` as one single unbounded blob. Clamp raw text BEFORE `_segments`
+# runs any regex on it, same doctrine as web_verify.py/telegram_channel_verify.py.
+# Generous enough that a real post/thread is never truncated in practice.
+_MAX_RAW_TEXT_CHARS = 200_000
+
 
 @dataclass
 class OpportunityCandidate:
@@ -78,7 +86,7 @@ def extract_opportunities(
 ) -> list[OpportunityCandidate]:
     """Extracts opportunity-carrying segments from a text (post OR comment)."""
     out: list[OpportunityCandidate] = []
-    for seg in _segments(text):
+    for seg in _segments((text or "")[:_MAX_RAW_TEXT_CHARS]):
         if len(seg) < _MIN_LEN:
             continue
         signals = sorted({m.group(0).lower() for m in _OPP_RE.finditer(seg)})

@@ -1,5 +1,8 @@
 """Radar d'opportunités — la détection d'idées à fusionner doit être fiable (FR + EN)."""
+import time
+
 from aria_core.opportunity_radar import (
+    _MAX_RAW_TEXT_CHARS,
     extract_opportunities,
     format_operator_digest,
     mine_curiosity_items,
@@ -94,3 +97,21 @@ def test_mine_curiosity_items_handle_matching_ignores_case_and_at():
     cands = mine_curiosity_items(items, ["whale_ai_net"])
     assert cands
     assert cands[0].source == "x:@whale_ai_net"
+
+
+def test_extract_opportunities_truncates_oversized_text_before_regex():
+    """ReDoS surface reduction (#318, 16/08): a post/comment with NO sentence
+    delimiter at all (`_SENTENCE_SPLIT` finds nothing) reaches _OPP_RE/
+    _HOOK_RE as one single unbounded blob -- fully attacker-controlled (any
+    X post/comment). Placing the real opportunity language past
+    _MAX_RAW_TEXT_CHARS and confirming it's NOT detected proves the
+    truncation happens BEFORE the regex runs (an untruncated scan would find
+    it); a pathologically long input must also resolve fast."""
+    oversized = ("z" * (_MAX_RAW_TEXT_CHARS + 1000)) + " someone should build an onchain x402 agent"
+
+    t0 = time.monotonic()
+    cands = extract_opportunities(oversized, source="manual")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 5.0  # catastrophic backtracking would hang far longer
+    assert cands == []
