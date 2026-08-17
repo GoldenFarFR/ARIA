@@ -1304,22 +1304,34 @@ async def test_liquidity_collapse_takes_priority_over_age_limit():
 
 
 @pytest.mark.asyncio
-async def test_entry_already_spiked_past_the_cap_is_observed_but_not_funded():
+async def test_entry_cap_when_armed_observes_but_does_not_fund(monkeypatch):
     """Operator's own idea, confirmed on the real sample: an entry that has
     already run far in 5 minutes is buying the top of a launch spike, and
     those are the pools that drain. Worth ~nothing alone, strong combined
-    with the liquidity floor (stranded rate 35% -> 25%)."""
-    await shadow.record_signals(
-        [_pool(m5=shadow.M5_ENTRY_CAP_PCT + 1, reserve=100_000.0)], chain=CHAIN)
+    with the liquidity floor (stranded rate 35% -> 25%). Currently DISABLED
+    (None) for the age-window run, so the test arms it explicitly rather
+    than asserting against whatever the live setting happens to be."""
+    monkeypatch.setattr(shadow, "M5_ENTRY_CAP_PCT", 60.0)
+    await shadow.record_signals([_pool(m5=61.0, reserve=100_000.0)], chain=CHAIN)
     rows = await _rows()
     assert rows[0]["realistic_entry_price"] is None  # observed, never bought
-    assert rows[0]["m5_pct"] == shadow.M5_ENTRY_CAP_PCT + 1  # still fully logged
+    assert rows[0]["m5_pct"] == 61.0  # still fully logged
 
 
 @pytest.mark.asyncio
-async def test_entry_below_the_cap_with_enough_liquidity_is_funded():
-    await shadow.record_signals(
-        [_pool(m5=shadow.M5_ENTRY_CAP_PCT - 1, reserve=100_000.0)], chain=CHAIN)
+async def test_entry_below_the_cap_with_enough_liquidity_is_funded(monkeypatch):
+    monkeypatch.setattr(shadow, "M5_ENTRY_CAP_PCT", 60.0)
+    await shadow.record_signals([_pool(m5=59.0, reserve=100_000.0)], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is not None
+
+
+@pytest.mark.asyncio
+async def test_no_cap_funds_even_a_large_spike(monkeypatch):
+    """The disabled state must genuinely disable -- not silently fall back to
+    some default that would keep filtering the age-window run."""
+    monkeypatch.setattr(shadow, "M5_ENTRY_CAP_PCT", None)
+    await shadow.record_signals([_pool(m5=500.0, reserve=100_000.0)], chain=CHAIN)
     rows = await _rows()
     assert rows[0]["realistic_entry_price"] is not None
 

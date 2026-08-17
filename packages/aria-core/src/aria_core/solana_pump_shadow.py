@@ -256,7 +256,13 @@ LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0  # exit if reserve falls >=50% below its entr
 #    so `m15_pct` is NULL on all 278 archived rows. GeckoTerminal DOES expose
 #    m15 (verified live 17/08) -- switching discovery, or enriching it, is the
 #    prerequisite for ever testing the 15min variant.
-M5_ENTRY_CAP_PCT = 60.0
+#    **17/08, DISABLED for the age-window run (operator decision).** Testing
+#    the age window and the momentum cap at the same time would make the
+#    result unattributable -- and the cap was rejecting a large share of the
+#    flow (observed live: +75.7%, +63.9%, +49.6% all refused), starving a
+#    test that already needs 150 closures. ``None`` = no cap; restore a float
+#    to re-arm it once the age tranches have been read.
+M5_ENTRY_CAP_PCT: float | None = None
 
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
@@ -559,7 +565,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     realistic_entry_price = None
                 # Same "observe but never fund" treatment for an entry that
                 # has already spiked past the cap -- see M5_ENTRY_CAP_PCT.
-                elif m5 >= M5_ENTRY_CAP_PCT:
+                elif M5_ENTRY_CAP_PCT is not None and m5 >= M5_ENTRY_CAP_PCT:
                     realistic_entry_price = None
                 await db.execute(
                     """
