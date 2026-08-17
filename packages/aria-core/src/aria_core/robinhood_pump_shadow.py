@@ -803,6 +803,20 @@ async def advance_exit_simulation(
                 and pool_age_minutes >= MAX_POOL_AGE_MINUTES
                 and current_price <= entry_price
             )
+            # 17/08 -- real bug found live (SOLCATANA closed at -48.3% via
+            # age_limit while TRAILING_STOP_PCT is a hard -20% floor):
+            # age_limit was checked FIRST and unconditionally sold at
+            # current_price, so a position whose period LOW had already
+            # crossed the trailing-stop threshold never got to use it --
+            # chronologically the stop would have fired first. This does
+            # NOT add a floor to age_limit (that would fabricate a price no
+            # real seller could have gotten on a genuine rug-pull collapse,
+            # dishonest for a module whose whole point is measuring real
+            # tradeable edge) -- it only lets the trailing stop win the race
+            # when the period's REAL low proves it would have triggered.
+            trailing_stop_already_crossed = effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+            if age_limit_exceeded and trailing_stop_already_crossed:
+                age_limit_exceeded = False
 
             fills_this_cycle = 0
             exit_reason: str | None = None

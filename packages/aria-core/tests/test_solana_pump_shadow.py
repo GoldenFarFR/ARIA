@@ -581,6 +581,31 @@ async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
 
 
 @pytest.mark.asyncio
+async def test_advance_exit_age_limit_defers_to_trailing_stop_when_already_crossed():
+    """Real bug found live (17/08, SOLCATANA closed at -48.3% via age_limit,
+    below TRAILING_STOP_PCT's -20% floor): age_limit was checked FIRST and
+    sold unconditionally at the point-sample price, so a position whose
+    period LOW had already crossed the trailing-stop threshold never got the
+    chance to use it. Fix must close at the stop's OWN threshold price
+    (peak*0.8 = 0.72, on a peak of 0.9), never the worse point-sample spot,
+    and report `trailing_stop` -- not `age_limit`."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+
+    # No prior cycle -> peak_price defaults to entry_price (1.0). A single
+    # point-sample crash to 0.10 (well past the -20% stop line at 0.8) --
+    # the price the old code would have sold at unconditionally.
+    client = FakeClient({"poolA": 0.10})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert counts["closed_age_limit"] == 0
+    assert counts["closed_trailing_stop"] == 1
+    # Closed at the calibrated stop threshold (1.0 * 0.8 = 0.8), never the
+    # crash extreme (0.10) that age_limit would have used.
+    assert rows[0]["final_multiplier"] == pytest.approx(1.0 * (1 - shadow.TRAILING_STOP_PCT / 100.0))
+
+
+@pytest.mark.asyncio
 async def test_advance_exit_age_limit_ignored_when_age_unknown():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)  # pool_age_minutes=None
     client = FakeClient({"poolA": 0.95})  # losing, but age is unknown -- never force-closed on that basis alone
