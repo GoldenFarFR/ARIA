@@ -207,13 +207,30 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             range_high = max(c.high for c in last_n)
             if not range_low:
                 continue
-            distance_from_support_pct = (pool.price_usd / range_low - 1) * 100.0
-            # 17/08, real bug caught live by the operator: a NEGATIVE distance
-            # means price is BELOW the 10-candle low -- the pool breaking down
-            # through its own recent support, not bouncing off it. The
-            # original check only rejected "too far above the low", letting
-            # breakdowns through as if they were bounces. Now requires price
-            # to sit AT or ABOVE the low, within tolerance -- never below it.
+
+            # 17/08, real bug caught live by the operator (Niles: distance
+            # -21.6%, contradicted by the actual chart showing a recovery,
+            # not a breakdown). Root cause traced from the real DB row:
+            # `pool.price_usd` is a snapshot from the SINGLE broad
+            # get_trending_pools() call made once at the top of the
+            # discovery cycle, but under real DexPaprika contention each
+            # candidate's own candle fetch can lag that snapshot by MINUTES
+            # (confirmed: Niles was detected ~3min after this cycle's
+            # discovery call). If price moves meaningfully in that gap, the
+            # STALE scan-time price gets compared against a FRESH candle
+            # range -- exactly what produced the artifact distance. Fixed by
+            # using the last candle's close (the freshest price this
+            # function has actually just fetched) as the reference for both
+            # the support-distance check AND the simulated entry, instead of
+            # the stale scan-time snapshot.
+            current_price = last_n[-1].close or pool.price_usd
+            distance_from_support_pct = (current_price / range_low - 1) * 100.0
+            # A NEGATIVE distance means price is BELOW the 10-candle low --
+            # the pool breaking down through its own recent support, not
+            # bouncing off it. The original check only rejected "too far
+            # above the low", letting breakdowns through as if they were
+            # bounces. Now requires price to sit AT or ABOVE the low, within
+            # tolerance -- never below it.
             if distance_from_support_pct > SUPPORT_TOLERANCE_PCT or distance_from_support_pct < 0:
                 continue
 
@@ -236,15 +253,15 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     )
 
             realistic_entry_price = _apply_price_impact_and_fee(
-                pool.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
+                current_price, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
                 reserve_usd=pool.reserve_usd, side="buy",
             )
 
             rows_to_insert.append((
                 pool.pool_address, pool.token_address, chain, pool.symbol,
-                datetime.now(timezone.utc).isoformat(), pool.price_usd,
+                datetime.now(timezone.utc).isoformat(), current_price,
                 h1, pool.reserve_usd, range_low, range_high, distance_from_support_pct,
-                pool.price_usd,
+                current_price,
                 pool.pool_created_at.isoformat(),
                 rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
                 realistic_entry_price,

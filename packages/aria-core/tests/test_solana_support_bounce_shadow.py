@@ -134,6 +134,29 @@ async def test_price_beyond_20pct_of_support_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_uses_fresh_candle_close_not_stale_scan_price(monkeypatch):
+    # 17/08, real bug caught live by the operator (Niles) -- pool.price_usd
+    # is a STALE snapshot from the broad discovery scan; under real
+    # DexPaprika contention the candle fetch for a given candidate can lag
+    # that snapshot by minutes. Here pool.price_usd=0.5 is deliberately
+    # stale/low (would give distance -44.4% vs range_low=0.9 -> wrongly
+    # rejected), but the last candle's FRESH close=0.95 sits right at
+    # support (distance +5.6% <= 20%) -- the fresh price must win.
+    stale_price = 0.5
+    fresh_close = 0.95
+    candles = [
+        Candle(ts=i, open=1.0, high=1.0, low=0.9, close=1.0, volume=100.0)
+        for i in range(9)
+    ] + [Candle(ts=9, open=0.92, high=0.96, low=0.9, close=fresh_close, volume=100.0)]
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=stale_price)], chain=CHAIN)
+    assert logged == 1
+    rows = await _rows()
+    assert rows[0]["entry_price"] == pytest.approx(fresh_close)
+    assert rows[0]["distance_from_support_pct"] == pytest.approx((fresh_close / 0.9 - 1) * 100, rel=1e-6)
+
+
+@pytest.mark.asyncio
 async def test_price_below_support_low_rejected(monkeypatch):
     # entry price 1.0, range low 1.2 (all 10 candles) -> price is BELOW the
     # 10-candle low (distance = -16.7%, negative): a breakdown, not a
