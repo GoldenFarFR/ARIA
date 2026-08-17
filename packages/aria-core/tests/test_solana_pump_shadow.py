@@ -390,6 +390,37 @@ async def test_evaluate_one_pool_failure_never_blocks_others():
 
 
 @pytest.mark.asyncio
+async def test_evaluate_old_row_awaiting_h2_never_starves_a_younger_rows_m15():
+    """Reproduces the real live bug (17/08): the query used to select the
+    `limit` OLDEST open rows unconditionally, even when they had nothing due
+    (e.g. m15+h1 already measured, just waiting on the 120min h2
+    checkpoint). Those rows never leave status='open' until h2 lands, so
+    with a small limit they kept re-winning ORDER BY detected_at ASC every
+    passage and starved every younger row behind them -- confirmed live: a
+    batch of positions stuck with forward_pct_m15 still NULL well past their
+    due age, purely because this query never reached them, not because
+    their snapshot failed. poolOld (70min old, m15+h1 already measured,
+    just waiting on h2 at 120min) must never block poolYoung (20min old,
+    m15 genuinely due) even with limit=1."""
+    await _insert_open_row(pool_address="poolOld", minutes_ago=70.0)
+    await _insert_open_row(pool_address="poolYoung", minutes_ago=20.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "UPDATE solana_pump_shadow_log SET forward_price_m15 = 1.1, forward_pct_m15 = 10.0, "
+            "forward_price_h1 = 1.2, forward_pct_h1 = 20.0 WHERE pool_address = 'poolOld'"
+        )
+        await db.commit()
+
+    client = FakeClient({"poolOld": 1.3, "poolYoung": 2.0})
+    counts = await shadow.evaluate_open_signals(client, chain=CHAIN, limit=1)
+    assert counts["measured_m15"] == 1  # poolYoung's due m15, not wasted on poolOld
+    assert client.calls == ["poolYoung"]
+    rows = {r["pool_address"]: r for r in await _rows()}
+    assert rows["poolYoung"]["forward_pct_m15"] == pytest.approx(100.0)
+    assert rows["poolOld"]["forward_price_h1"] == pytest.approx(1.2)  # untouched, not yet due for h2
+
+
+@pytest.mark.asyncio
 async def test_evaluate_never_raises_on_db_failure(monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
     shadow._ensured_db_paths.clear()
@@ -640,8 +671,8 @@ async def test_advance_exit_never_raises_on_db_failure(monkeypatch):
     assert counts["checked"] == 0
 
 
-def _candle(ts: float, *, open_: float, high: float, low: float, close: float) -> Candle:
-    return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=0.0)
+def _candle(ts: float, *, open_: float, high: float, low: float, close: float, volume: float = 0.0) -> Candle:
+    return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=volume)
 
 
 # --- advance_exit_simulation: 16/08 OHLCV-window fix (real bug repro) ----
@@ -713,6 +744,42 @@ async def test_advance_exit_window_high_catches_rung_retraced_before_poll():
     assert rows[0]["peak_price"] == pytest.approx(1.30)  # window high, not the spot 1.05
     assert rows[0]["remaining_qty"] == pytest.approx(0.75)
     assert rows[0]["realized_proceeds"] == pytest.approx(0.25 * 1.25)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_accumulates_window_volume_across_passages():
+    """17/08, operator-requested -- window_volume_usd must be a RUNNING
+    total across the row's whole life, not just the latest passage's
+    window (which would be overwritten and lost by the time the row
+    closes, useless for a post-hoc analysis)."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    detected_epoch = shadow._epoch_of((await _rows())[0]["detected_at"])
+
+    candles1 = [_candle(detected_epoch + 60, open_=1.0, high=1.05, low=0.98, close=1.0, volume=100.0)]
+    client1 = FakeClient(
+        {"poolA": 1.0}, {"poolA": OHLCVResult(candles=candles1, available=True, error=None)},
+    )
+    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["window_volume_usd"] == pytest.approx(100.0)
+    last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
+
+    candles2 = [_candle(last_checked_epoch + 60, open_=1.0, high=1.05, low=0.98, close=1.0, volume=250.0)]
+    client2 = FakeClient(
+        {"poolA": 1.0}, {"poolA": OHLCVResult(candles=candles2, available=True, error=None)},
+    )
+    await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["window_volume_usd"] == pytest.approx(350.0)  # 100 + 250, never overwritten
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_window_volume_stays_none_when_ohlcv_unavailable():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": 1.0})  # no OHLCV configured -> unavailable
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["window_volume_usd"] is None  # never fabricated as 0
 
 
 @pytest.mark.asyncio

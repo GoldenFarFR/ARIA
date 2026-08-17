@@ -284,6 +284,21 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     ("realistic_entry_price", "REAL"),
     ("realistic_realized_proceeds", "REAL NOT NULL DEFAULT 0.0"),
     ("realistic_final_multiplier", "REAL"),
+    # 17/08, operator-requested ("recupere aussi les volume de chaque
+    # bougie, tous se qui pourrai servir a creer des donner") -- the
+    # window-high/low candles read every passage (see
+    # advance_exit_simulation's ``new_candles``) already carry a
+    # ``volume`` field (Candle.volume) that was read for high/low only and
+    # discarded. RUNNING total across the row's whole life (accumulated
+    # passage over passage, not just the latest window) -- a per-passage
+    # value would be overwritten and lost by the time the row closes,
+    # useless for a post-hoc analysis. Banked for a future analysis (e.g.
+    # does a trailing stop firing on real sell volume behave differently
+    # from one firing on a thin/illiquid wick) -- never used to filter/gate
+    # anything yet, same "log now, judge later" doctrine as rugcheck_score.
+    # NULL means no candle with volume data has been observed yet -- never
+    # fabricated as 0.
+    ("window_volume_usd", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -548,10 +563,31 @@ async def evaluate_open_signals(
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
             db.row_factory = aiosqlite.Row
+            # 17/08 -- real bug found live: the previous query selected the
+            # `limit` OLDEST open rows unconditionally, even when they had
+            # nothing due (e.g. already measured m15+h1, just waiting on the
+            # 120min h2 checkpoint). Those rows never leave `status='open'`
+            # until h2 lands, so they kept re-winning the ORDER BY every
+            # single passage and starved every younger row behind them --
+            # confirmed live: exactly `limit` rows older than a batch of 9
+            # rows stuck with forward_pct_m15/h1 still NULL past their due
+            # age, even though a direct snapshot call for one of them
+            # succeeded instantly (never a snapshot failure, purely this
+            # query never reaching them). Now filters to rows that actually
+            # have a horizon due -- thresholds passed as params from
+            # _HORIZON_MINUTES so this can never drift out of sync with the
+            # per-row due_horizon logic below.
             cur = await db.execute(
-                "SELECT * FROM solana_pump_shadow_log WHERE chain = ? AND status = 'open' "
-                "ORDER BY detected_at ASC LIMIT ?",
-                (chain, limit),
+                """
+                SELECT * FROM solana_pump_shadow_log WHERE chain = ? AND status = 'open'
+                  AND (
+                    (forward_price_m15 IS NULL AND (julianday('now') - julianday(detected_at)) * 1440 >= ?)
+                    OR (forward_price_h1 IS NULL AND (julianday('now') - julianday(detected_at)) * 1440 >= ?)
+                    OR (forward_price_h2 IS NULL AND (julianday('now') - julianday(detected_at)) * 1440 >= ?)
+                  )
+                ORDER BY detected_at ASC LIMIT ?
+                """,
+                (chain, _HORIZON_MINUTES["m15"], _HORIZON_MINUTES["h1"], _HORIZON_MINUTES["h2"], limit),
             )
             rows = [dict(r) for r in await cur.fetchall()]
 
@@ -778,6 +814,7 @@ async def advance_exit_simulation(
                     row["pool_address"], exc,
                 )
                 ohlcv = None
+            window_volume_usd = row.get("window_volume_usd")
             if ohlcv is not None and ohlcv.available and ohlcv.candles:
                 boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
                 new_candles = [
@@ -786,6 +823,7 @@ async def advance_exit_simulation(
                 if new_candles:
                     window_high = max(c.high for c in new_candles)
                     window_low = min(c.low for c in new_candles)
+                    window_volume_usd = (window_volume_usd or 0.0) + sum(c.volume for c in new_candles)
 
             # Fold the window with the literal current spot -- covers both a
             # closed candle the ladder hasn't reached yet AND a fresh tick
@@ -914,14 +952,16 @@ async def advance_exit_simulation(
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         last_checked_at = ?, last_price = ?,
-                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?
+                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
+                        window_volume_usd = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, next_scale_level, remaining_qty,
                         realized_proceeds, exit_reason, final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
-                        realistic_realized_proceeds, realistic_final_multiplier, row["id"],
+                        realistic_realized_proceeds, realistic_final_multiplier,
+                        window_volume_usd, row["id"],
                     ),
                 )
                 await db.commit()
