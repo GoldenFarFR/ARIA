@@ -30,8 +30,11 @@ mainnet code path here at all yet. Mainnet (4663) is a deliberate future
 step, gated behind its own explicit operator validation and its own CLAUDE.md
 paragraph, exactly like the CDP pilot before it.
 
-NOT built yet, in order: (1) AllowanceModule ABI + web3.py wiring to read a
-live allowance state, (2) Safe creation + module activation on testnet via
+STEP 1 DONE (17/08): AllowanceModule ABI + web3.py wiring to read a live
+allowance state -- see ``_ALLOWANCE_MODULE_VIEW_ABI`` and the ``read_*``
+functions below. Still zero signing, zero private key.
+
+NOT built yet, in order: (2) Safe creation + module activation on testnet via
 ``safe-eth-py``, (3) EIP-712 allowance-transfer signing/execution by the
 agent key, (4) real end-to-end testnet cycle (owner sets an allowance, agent
 key spends within it, an over-limit spend is rejected on-chain), (5) only
@@ -53,10 +56,92 @@ SAFE_SINGLETON_V141_ADDRESS = "0x41675C099F32341bf84BFc5382aF534df5C7461a"
 # AllowanceModule v0.1.1 — same CREATE2 address across 52 networks including
 # Robinhood Chain mainnet (4663) and testnet (46630). Re-verified live 17/08:
 # real bytecode present at this address on the testnet RPC above (14908
-# bytes). NOTE (diligence finding, unresolved): the only audit report found
-# covers v0.1.0 (Oct 2020) — no report identified yet for v0.1.1, the version
-# actually deployed at this address. Flag this again before any mainnet use.
+# bytes). The version is no longer an assumption: a real ``eth_call`` to
+# ``VERSION()`` on the testnet returned "0.1.1" and ``NAME()`` returned
+# "Allowance Module" (17/08, step-1 wiring session).
+# NOTE (diligence finding, still unresolved): the only audit report found
+# covers v0.1.0 (Oct 2020) — no report identified yet for the 0.1.1 now
+# confirmed on-chain here. Flag this again before any mainnet use.
 ALLOWANCE_MODULE_ADDRESS = "0xAA46724893dedD72658219405185Fb0Fc91e091C"
+
+# Read-only slice of the real AllowanceModule ABI, fetched 17/08 from the
+# contract's VERIFIED source on Blockscout (Robinhood Chain mainnet exposes
+# the same CREATE2 address, `is_verified: true`, compiler v0.7.6+commit.
+# 7338295f) and then cross-checked a second way: each 4-byte selector below
+# was recomputed from its signature and confirmed PRESENT in the bytecode
+# actually deployed on the testnet (a deliberately fake signature was
+# confirmed ABSENT in the same pass, proving the check discriminates).
+#
+# Deliberately contains ONLY `view` functions -- this is a structural
+# guardrail, not a convention: with no state-changing entry in the ABI,
+# web3.py physically cannot build a `setAllowance`/`executeAllowanceTransfer`
+# call from this contract object, so no future edit to this module can
+# accidentally turn a read path into a spend path. Locked by
+# ``test_allowance_module_abi_is_read_only``. Adding a write function here
+# must be a deliberate, separately-reviewed decision (step 3+ of the plan in
+# the module docstring), never a drive-by addition.
+_ALLOWANCE_MODULE_VIEW_ABI = [
+    {
+        "name": "getTokenAllowance", "type": "function", "stateMutability": "view",
+        "inputs": [
+            {"name": "safe", "type": "address"},
+            {"name": "delegate", "type": "address"},
+            {"name": "token", "type": "address"},
+        ],
+        "outputs": [{"name": "", "type": "uint256[5]"}],
+    },
+    {
+        "name": "getTokens", "type": "function", "stateMutability": "view",
+        "inputs": [
+            {"name": "safe", "type": "address"},
+            {"name": "delegate", "type": "address"},
+        ],
+        "outputs": [{"name": "", "type": "address[]"}],
+    },
+    {
+        "name": "getDelegates", "type": "function", "stateMutability": "view",
+        "inputs": [
+            {"name": "safe", "type": "address"},
+            {"name": "start", "type": "uint48"},
+            {"name": "pageSize", "type": "uint8"},
+        ],
+        "outputs": [
+            {"name": "results", "type": "address[]"},
+            {"name": "next", "type": "uint48"},
+        ],
+    },
+    {"name": "NAME", "type": "function", "stateMutability": "view",
+     "inputs": [], "outputs": [{"name": "", "type": "string"}]},
+    {"name": "VERSION", "type": "function", "stateMutability": "view",
+     "inputs": [], "outputs": [{"name": "", "type": "string"}]},
+]
+
+# Index of the uint256[5] returned by `getTokenAllowance`, mirroring the
+# contract's own `struct Allowance` field order.
+#
+# PROVEN EXPERIMENTALLY, not just read from the source (17/08): reading the
+# source and seeing zeros come back from a live call proves nothing about
+# field ORDER (zero == zero in any order -- a real trap caught mid-session).
+# The decisive check used `eth_call` + `stateDiff` to inject a packed slot
+# with five DISTINCT values (the struct packs to exactly one slot: 96+96+16+
+# 32+16 = 256 bits, and `allowances` is the first non-constant variable, so
+# slot 0 -> keccak(token ++ keccak(delegate ++ keccak(safe ++ 0)))). All five
+# came back in exactly this order. Zero on-chain writes -- `stateDiff` is a
+# simulation-only override.
+#
+# The same technique also PROVED the read-time reset documented in
+# `read_allowance`: injecting spent=250 with a stale `lastResetMin` returns
+# spent=0 (and a realigned `lastResetMin`), confirming `remaining` is
+# trustworthy rather than stale. Re-run that probe before ever doubting
+# these two facts again.
+_ALLOWANCE_FIELDS = ("amount", "spent", "reset_time_min", "last_reset_min", "nonce")
+
+# `getDelegates` is paginated; this bounds the walk so a malformed/hostile
+# `next` pointer can never spin this loop forever (the contract is trusted
+# here, but a read helper that can hang on-chain data is a real availability
+# bug -- same fail-safe doctrine as the rest of this module).
+_MAX_DELEGATE_PAGES = 20
+_DELEGATE_PAGE_SIZE = 50
 
 
 def _rpc_url() -> str:
@@ -94,3 +179,175 @@ def verify_contracts_deployed(*, w3=None) -> dict:
             result[label] = {"address": address, "error": str(exc), "deployed": None}
 
     return result
+
+
+def _allowance_module(w3=None):
+    """Builds the read-only contract handle. Returns ``(contract, w3)``."""
+    from web3 import Web3
+
+    if w3 is None:
+        w3 = Web3(Web3.HTTPProvider(_rpc_url(), request_kwargs={"timeout": 15}))
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(ALLOWANCE_MODULE_ADDRESS),
+        abi=_ALLOWANCE_MODULE_VIEW_ABI,
+    )
+    return contract, w3
+
+
+def read_module_identity(*, w3=None) -> dict:
+    """Read-only: asks the deployed contract what it actually IS (``NAME()``
+    / ``VERSION()``), rather than trusting this module's own constants.
+
+    Worth its own call because the address is a CREATE2 constant reused
+    across chains: if a future network ever hosted a DIFFERENT contract at
+    the same address, ``verify_contracts_deployed`` would still report
+    "bytecode present" and look green. This is the check that would catch it.
+
+    Also reports the RPC's real ``chain_id``. KNOWN RESIDUAL, stated rather
+    than hidden: the ``read_*`` helpers below do NOT re-verify the network on
+    every call (that would double the RPC cost of every read), so a
+    misconfigured ``ARIA_SAFE_ROBINHOOD_TESTNET_RPC_URL`` pointing at mainnet
+    would be read without complaint. Harmless while everything here is
+    read-only (no funds can move), but it MUST become a hard pre-flight check
+    before step 3 (signing) -- noted in the module docstring's plan. Call this
+    function first when a session wants certainty about which chain it reads.
+
+    Fail-safe: returns ``error`` instead of raising."""
+    try:
+        contract, resolved_w3 = _allowance_module(w3)
+        name = contract.functions.NAME().call()
+        version = contract.functions.VERSION().call()
+    except Exception as exc:  # noqa: BLE001 -- network/ABI failure, never fabricate
+        return {"error": f"module identity unreadable ({exc})", "name": None, "version": None}
+
+    # Secondary, best-effort: a chain-id read must never turn a successful
+    # identity check into a failure -- reported as None if unavailable.
+    try:
+        chain_id = int(resolved_w3.eth.chain_id)
+    except Exception:  # noqa: BLE001
+        chain_id = None
+
+    return {
+        "error": None,
+        "name": name,
+        "version": version,
+        "chain_id": chain_id,
+        "on_expected_testnet": chain_id == ROBINHOOD_TESTNET_CHAIN_ID if chain_id else None,
+        # Confirmed live on the testnet 17/08 -- a mismatch here means the
+        # contract at this address changed and every assumption below is stale.
+        "matches_expected": name == "Allowance Module" and version == "0.1.1",
+    }
+
+
+def read_allowance(safe: str, delegate: str, token: str, *, w3=None) -> dict:
+    """Read-only: the live on-chain spending allowance granted by ``safe`` to
+    ``delegate`` for ``token``. THE core read of this whole architecture --
+    it answers "how much can the agent key still spend right now", which is
+    the bound the operator ultimately relies on.
+
+    ``remaining`` is safe to trust, and that is NOT obvious -- it was
+    verified in the contract's real source before being exposed here:
+    ``getAllowance`` (private, called by ``getTokenAllowance``) applies the
+    periodic reset AT READ TIME (`if resetTimeMin > 0 && lastResetMin <=
+    currentMin - resetTimeMin { spent = 0 }`), so the ``spent`` returned is
+    already reset-corrected -- a naive ``amount - spent`` does NOT
+    under-report an allowance whose period has rolled over. The contract also
+    enforces ``newSpent <= amount`` on every transfer, so ``remaining`` can
+    never come back negative. Both facts read from the verified source, not
+    assumed.
+
+    Amounts are RAW token units (the module is token-decimals agnostic) --
+    deliberately not converted here, since converting would require trusting
+    a separate `decimals()` call; the caller that knows the token converts.
+
+    ⚠ NEVER treat ``remaining`` as authorisation to spend. It is a SNAPSHOT
+    at read time: between this read and any later transfer, another delegate
+    (or the same key racing itself across two cycles) can consume the same
+    allowance, and a period rollover can change it too. The only authority
+    that actually bounds a spend is the contract itself, which re-checks
+    ``newSpent <= amount`` atomically at execution and reverts otherwise.
+    This function is for OBSERVING and reporting -- treating its output as a
+    green light would reintroduce, off-chain, exactly the check-then-act race
+    the on-chain module exists to eliminate."""
+    from web3 import Web3
+
+    try:
+        contract, _ = _allowance_module(w3)
+        raw = contract.functions.getTokenAllowance(
+            Web3.to_checksum_address(safe),
+            Web3.to_checksum_address(delegate),
+            Web3.to_checksum_address(token),
+        ).call()
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"allowance unreadable ({exc})", "amount": None, "remaining": None}
+
+    values = {field: int(raw[i]) for i, field in enumerate(_ALLOWANCE_FIELDS)}
+    return {
+        "error": None,
+        "safe": safe,
+        "delegate": delegate,
+        "token": token,
+        **values,
+        "remaining": values["amount"] - values["spent"],
+        # A never-configured allowance reads as all-zeros, which is NOT the
+        # same as a configured allowance that is fully spent -- surfaced
+        # explicitly so a caller never mistakes "no allowance exists" for
+        # "allowance exhausted" (opposite operator actions).
+        "configured": values["amount"] > 0 or values["reset_time_min"] > 0,
+        # TWO REGIMES, both valid, and the distinction matters for step 2's
+        # design decision: `reset_time_min == 0` is a ONE-SHOT allowance that
+        # never renews (the contract's read-time reset is gated on
+        # `resetTimeMin > 0`, so `spent` accumulates forever); anything else
+        # renews every N minutes. v0.1.1's `require(resetTimeMin > 0)` only
+        # fires when `resetBaseMin > 0`, so a one-shot allowance IS still
+        # reachable -- verified in the deployed source, not assumed. A
+        # trading agent almost certainly wants the PERIODIC regime (a daily
+        # cap that refills) rather than a one-shot budget that silently dries
+        # up; that choice is the operator's, at step 2.
+        "renews": values["reset_time_min"] > 0,
+    }
+
+
+def read_allowance_tokens(safe: str, delegate: str, *, w3=None) -> dict:
+    """Read-only: which tokens ``delegate`` holds an allowance for on
+    ``safe``. Fail-safe, same contract as the other readers."""
+    from web3 import Web3
+
+    try:
+        contract, _ = _allowance_module(w3)
+        tokens = contract.functions.getTokens(
+            Web3.to_checksum_address(safe),
+            Web3.to_checksum_address(delegate),
+        ).call()
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"token list unreadable ({exc})", "tokens": None}
+
+    return {"error": None, "tokens": [str(t) for t in tokens]}
+
+
+def read_delegates(safe: str, *, w3=None) -> dict:
+    """Read-only: every delegate (agent key) currently authorised on ``safe``.
+
+    Walks the contract's linked-list pagination. Bounded by
+    ``_MAX_DELEGATE_PAGES``: if the walk is cut short, ``truncated`` is True
+    -- never silently returns a partial list as if it were complete (a
+    partial delegate list would badly mislead a security review)."""
+    from web3 import Web3
+
+    delegates: list[str] = []
+    start = 0
+    try:
+        contract, _ = _allowance_module(w3)
+        safe_addr = Web3.to_checksum_address(safe)
+        for _ in range(_MAX_DELEGATE_PAGES):
+            page, next_start = contract.functions.getDelegates(
+                safe_addr, start, _DELEGATE_PAGE_SIZE
+            ).call()
+            delegates.extend(str(d) for d in page)
+            if not next_start:
+                return {"error": None, "delegates": delegates, "truncated": False}
+            start = next_start
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"delegates unreadable ({exc})", "delegates": None, "truncated": None}
+
+    return {"error": None, "delegates": delegates, "truncated": True}
