@@ -226,6 +226,11 @@ plan, x402/Bazaar, Pollak→Cobie leadership) moved on 24/07:
 Launchpad diligence for a future ARIA tokenization (Clanker recommended, no
 action taken) : `docs/base-blockchain-launchpads.md` (living sheet, to revisit
 periodically).
+**Cross-chain bridge candidate for the agent wallet (Base<->Solana), banked
+17/08, nothing built**: Chainlink CCIP retained over LayerZero/Wormhole
+(both had real recent exploits, CCIP has none; official Coinbase+Chainlink
+Base<->Solana bridge already live since 12/2025) -- full diligence
+`docs/aria-learning-inbox/2026-08-17-diligence-chainlink-ccip-cross-chain-bridge.md`.
 
 ## Mid-July momentum plan — fully executed (archived)
 The battle plan set on 15/07 to launch the momentum pipeline (#194 pivot,
