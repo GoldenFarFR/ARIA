@@ -307,6 +307,9 @@ async def _resolve_base_token(
 
 async def get_trending_pools(
     network: str, *, limit: int = 20, min_price_change_5m: float | None = None,
+    order_by: str = "price_change_percentage_5m", min_order_value: float | None = None,
+    min_liquidity_usd: float | None = None, min_price_change_1h: float | None = None,
+    max_pool_age_minutes: float | None = None, min_pool_age_minutes: float | None = None,
 ) -> TrendingPoolsResult:
     """Independent discovery source (16/08) -- a SEPARATE provider from
     GeckoTerminal's own ``get_trending_pools``, deliberately used to avoid
@@ -339,10 +342,46 @@ async def get_trending_pools(
     ``0``/very small on several genuinely-new Robinhood Chain pools during
     live verification, a known DexPaprika data-quality gap already
     documented for Uniswap V4 elsewhere in this module -- passed through
-    as-is, never patched over)."""
+    as-is, never patched over).
+
+    17/08 -- ``order_by``/``min_order_value`` generalize the sort/pre-filter
+    beyond m5 (added for a support-bounce pocket that needs h1-sorted
+    candidates, e.g. ``order_by="price_change_percentage_1h"``). Defaults
+    preserve the exact original m5-sorted behavior for every existing
+    caller -- ``min_price_change_5m`` still gates on m5 SPECIFICALLY
+    regardless of ``order_by`` (a caller sorting by h1 can still also want an
+    m5 floor), while ``min_order_value`` gates on whichever field
+    ``order_by`` names, same resolve-skipping cost-control doctrine as
+    ``min_price_change_5m`` already documented above.
+
+    17/08, later same day -- REAL server-side filters, verified live against
+    the documented ``/pools/search`` params (``liquidity_usd_min``,
+    ``price_change_percentage_1h_min``, ``created_before``/``created_after``,
+    confirmed via ``docs.dexpaprika.com/tutorials/pool-filtering`` and a live
+    curl test). Operator's own instinct was right ("paprika arrive a nous
+    renvoyer... sur un plateau") -- earlier that day this function only
+    filtered CLIENT-side after fetching, wasting a ``_resolve_base_token``
+    call on candidates that could have been excluded by the API itself.
+    ``min_liquidity_usd``/``min_price_change_1h`` map straight to their real
+    param names; ``min_pool_age_minutes``/``max_pool_age_minutes`` compute
+    the UNIX-timestamp ``created_before``/``created_after`` cutoffs from
+    "now" (a pool at least X minutes old was created before now-X; a pool at
+    most Y minutes old was created after now-Y) -- the API does the age math
+    itself, no per-candidate age check needed downstream anymore for callers
+    that use this. All four default to ``None`` (omitted from the request),
+    so every pre-existing caller's exact behavior is unchanged."""
     params: dict[str, object] = {
-        "limit": limit, "order_by": "price_change_percentage_5m", "sort": "desc",
+        "limit": limit, "order_by": order_by, "sort": "desc",
     }
+    if min_liquidity_usd is not None:
+        params["liquidity_usd_min"] = min_liquidity_usd
+    if min_price_change_1h is not None:
+        params["price_change_percentage_1h_min"] = min_price_change_1h
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if min_pool_age_minutes is not None:
+        params["created_before"] = now_ts - int(min_pool_age_minutes * 60)
+    if max_pool_age_minutes is not None:
+        params["created_after"] = now_ts - int(max_pool_age_minutes * 60)
     data, error = await _get_json(f"/networks/{network}/pools/search", params=params)
     if error is not None:
         return TrendingPoolsResult(available=False, error=error)
@@ -359,6 +398,10 @@ async def get_trending_pools(
         m5 = item.get("price_change_percentage_5m")
         m5 = m5 if isinstance(m5, (int, float)) else None
         if min_price_change_5m is not None and (m5 is None or m5 < min_price_change_5m):
+            continue
+        order_value = item.get(order_by)
+        order_value = order_value if isinstance(order_value, (int, float)) else None
+        if min_order_value is not None and (order_value is None or order_value < min_order_value):
             continue
 
         base = await _resolve_base_token(network, pool_address)
