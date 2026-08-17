@@ -213,6 +213,31 @@ MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibra
 MIN_RESERVE_USD_AT_ENTRY = 10000.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0  # exit if reserve falls >=50% below its entry level
 
+# 3. M5_ENTRY_CAP_PCT -- operator's own idea ("si une bougie a deja fait +25%
+#    on entre pas"), measured on the same sample and confirmed, with one
+#    important nuance: the cap is nearly WORTHLESS on its own (m5<60% alone
+#    gives -43.3% vs -47.4% unfiltered) but strong in COMBINATION with the
+#    liquidity floor, where it cuts the stranded rate by almost 3x:
+#      reserve>=10k, no cap  -> 50 rows, -21.4%, 35% stranded
+#      reserve>=10k, m5<60%  -> 29 rows,  -8.6%, 25% stranded
+#      reserve>=10k, m5<40%  -> 12 rows,  +0.0%, 20% stranded
+#    Reading: an entry that has ALREADY run hundreds of percent in 5 minutes
+#    is buying the top of a launch spike, and those are precisely the pools
+#    that drain. The raw sample contains m5 values up to +80917% (7 rows past
+#    +1000%), i.e. tokens whose price started at essentially zero.
+#    Set to 60 rather than the best-scoring 40 on purpose: 40 leaves only 12
+#    rows out of 156 (~8%), far too thin to reach a 150-closure out-of-sample
+#    test in reasonable time. 60 keeps ~19% of the flow while capturing most
+#    of the effect -- a deliberate volume/selectivity tradeoff, not a tuned
+#    optimum (tuning it on this sample is exactly the overfitting trap).
+#    NOTE the operator asked for this cap on the 15-MINUTE window; that is
+#    currently impossible to test: discovery runs on DexPaprika, whose search
+#    endpoint has no m15/m30 field at all (documented in services/dexpaprika.py),
+#    so `m15_pct` is NULL on all 278 archived rows. GeckoTerminal DOES expose
+#    m15 (verified live 17/08) -- switching discovery, or enriching it, is the
+#    prerequisite for ever testing the 15min variant.
+M5_ENTRY_CAP_PCT = 60.0
+
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
@@ -337,6 +362,14 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # NULL means no candle with volume data has been observed yet -- never
     # fabricated as 0.
     ("window_volume_usd", "REAL"),
+    # 17/08 -- the pool's reserve as of the LAST exit-simulation pass, next to
+    # the entry-time ``reserve_usd``. Purely observational for now, but it is
+    # the only way to measure how FAST a pool actually drains (the operator's
+    # own question: "on peut calculer quand la liquidite s'effondre pour vite
+    # cloturer ?"). LIQUIDITY_COLLAPSE_EXIT_PCT is currently a single static
+    # threshold picked without any data on drain SPEED; this column is what
+    # will let a future pass calibrate it on evidence instead.
+    ("last_reserve_usd", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -503,6 +536,10 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 # Unknown reserve is treated as too risky (fail-CLOSED), same
                 # doctrine as MAX_POOL_AGE_MINUTES' unknown-age handling.
                 if (pool.reserve_usd or 0.0) < MIN_RESERVE_USD_AT_ENTRY:
+                    realistic_entry_price = None
+                # Same "observe but never fund" treatment for an entry that
+                # has already spiked past the cap -- see M5_ENTRY_CAP_PCT.
+                elif m5 >= M5_ENTRY_CAP_PCT:
                     realistic_entry_price = None
                 await db.execute(
                     """
@@ -1028,7 +1065,7 @@ async def advance_exit_simulation(
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         last_checked_at = ?, last_price = ?,
                         realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
-                        window_volume_usd = ?
+                        window_volume_usd = ?, last_reserve_usd = ?
                     WHERE id = ?
                     """,
                     (
@@ -1036,7 +1073,7 @@ async def advance_exit_simulation(
                         realized_proceeds, exit_reason, final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
                         realistic_realized_proceeds, realistic_final_multiplier,
-                        window_volume_usd, row["id"],
+                        window_volume_usd, snapshot.reserve_usd, row["id"],
                     ),
                 )
                 await db.commit()

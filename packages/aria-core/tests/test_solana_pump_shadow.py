@@ -1294,3 +1294,36 @@ async def test_liquidity_collapse_takes_priority_over_age_limit():
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_liquidity_collapse"] == 1
     assert counts["closed_age_limit"] == 0
+
+
+@pytest.mark.asyncio
+async def test_entry_already_spiked_past_the_cap_is_observed_but_not_funded():
+    """Operator's own idea, confirmed on the real sample: an entry that has
+    already run far in 5 minutes is buying the top of a launch spike, and
+    those are the pools that drain. Worth ~nothing alone, strong combined
+    with the liquidity floor (stranded rate 35% -> 25%)."""
+    await shadow.record_signals(
+        [_pool(m5=shadow.M5_ENTRY_CAP_PCT + 1, reserve=100_000.0)], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is None  # observed, never bought
+    assert rows[0]["m5_pct"] == shadow.M5_ENTRY_CAP_PCT + 1  # still fully logged
+
+
+@pytest.mark.asyncio
+async def test_entry_below_the_cap_with_enough_liquidity_is_funded():
+    await shadow.record_signals(
+        [_pool(m5=shadow.M5_ENTRY_CAP_PCT - 1, reserve=100_000.0)], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is not None
+
+
+@pytest.mark.asyncio
+async def test_current_reserve_is_traced_on_every_pass():
+    """Needed to ever calibrate the collapse threshold on evidence: today it
+    is a static guess with no data on how fast pools really drain."""
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    client = _ReserveClient({"poolA": 1.02}, reserve_now=88_000.0)
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["last_reserve_usd"] == pytest.approx(88_000.0)
+    assert rows[0]["reserve_usd"] == pytest.approx(100_000.0)  # entry value untouched
