@@ -54,9 +54,9 @@ async def test_real_success_disarms_immediately_and_resets_backoff():
 
 @pytest.mark.asyncio
 async def test_post_expiry_probe_failure_doubles_the_backoff():
-    """Le blocage persiste au-delà de la première fenêtre -- la fenêtre
-    suivante doit être PLUS LONGUE (jamais retenter à chaque appel un blocage
-    qui peut rester actif des heures)."""
+    """The block persists past the first window -- the next window must be
+    LONGER (never re-probe on every single call against a block that can
+    stay active for hours)."""
     import aiosqlite
 
     for _ in range(gts._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
@@ -70,7 +70,7 @@ async def test_post_expiry_probe_failure_doubles_the_backoff():
         ).fetchone()
     assert row[0] == gts._INITIAL_SUSPEND_SECONDS
 
-    # Simule l'expiration de la première fenêtre.
+    # Simulates the first window's expiry.
     past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
     async with aiosqlite.connect(gts.DB_PATH) as db:
         await db.execute(
@@ -79,7 +79,7 @@ async def test_post_expiry_probe_failure_doubles_the_backoff():
         await db.commit()
     assert await gts.is_suspended() is False
 
-    # La sonde post-expiration échoue de nouveau -- backoff doublé.
+    # The post-expiry probe fails again -- backoff doubled.
     just_armed = await gts.record_rate_limit_failure()
     assert just_armed is False  # déjà armé une fois depuis le dernier succès
     assert await gts.is_suspended() is True
@@ -95,13 +95,13 @@ async def test_post_expiry_probe_failure_doubles_the_backoff():
 
 @pytest.mark.asyncio
 async def test_backoff_never_exceeds_the_cap():
-    """Le doublement doit s'arrêter au plafond, jamais grandir indéfiniment."""
+    """Doubling must stop at the cap, never grow unbounded."""
     import aiosqlite
 
     for _ in range(gts._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
         await gts.record_rate_limit_failure()
 
-    # Force plusieurs cycles expiration -> échec pour dépasser le plafond.
+    # Force several expiry -> failure cycles to exceed the cap.
     for _ in range(8):
         past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         async with aiosqlite.connect(gts.DB_PATH) as db:
