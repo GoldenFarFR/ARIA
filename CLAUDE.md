@@ -226,10 +226,14 @@ plan, x402/Bazaar, Pollak→Cobie leadership) moved on 24/07:
 Launchpad diligence for a future ARIA tokenization (Clanker recommended, no
 action taken) : `docs/base-blockchain-launchpads.md` (living sheet, to revisit
 periodically).
-**Cross-chain bridge candidate for the agent wallet (Base<->Solana), banked
-17/08, nothing built**: Chainlink CCIP retained over LayerZero/Wormhole
-(both had real recent exploits, CCIP has none; official Coinbase+Chainlink
-Base<->Solana bridge already live since 12/2025) -- full diligence
+**Target plan, real capital (explicit operator decision, 17/08, nothing built
+yet)**: dormant capital sits on Base as the primary chain; redistribution to
+Robinhood Chain/Solana happens on demand, bridged via Chainlink CCIP
+(retained over LayerZero/Wormhole -- both had real recent exploits, CCIP has
+none; official Coinbase+Chainlink Base<->Solana bridge already live since
+12/2025). Standing constraint this plan does NOT override: Solana stays
+disabled for real capital until the operator actually funds a real Solana
+wallet (see 1M$ paper-trading section above) -- full diligence
 `docs/aria-learning-inbox/2026-08-17-diligence-chainlink-ccip-cross-chain-bridge.md`.
 
 ## Mid-July momentum plan — fully executed (archived)

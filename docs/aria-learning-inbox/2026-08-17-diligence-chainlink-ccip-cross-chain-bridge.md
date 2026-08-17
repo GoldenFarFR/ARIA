@@ -9,6 +9,16 @@ whenever a real cross-chain transfer need appears. Depth calibrated to the
 "touches a future architecture/security decision" tier (CLAUDE.md
 "Anticipation" doctrine), not a quick lookup.
 
+**17/08, same day, promoted to TARGET PLAN (explicit operator decision --
+"oui pose le comme plan cible si c'est le ceux qui nous fait sur chainlink")**:
+real capital sits dormant on Base as the primary chain; redistribution to
+Robinhood Chain/Solana happens on demand, bridged via Chainlink CCIP. Still
+nothing built -- this is a decided DIRECTION, not a deployed mechanism.
+Standing constraint that this plan does NOT override (CLAUDE.md, 1M$
+paper-trading section): Solana stays disabled for real capital until the
+operator actually funds a real Solana wallet -- the CCIP leg to Solana is
+part of the target plan but not actionable before that happens.
+
 ## Verdict
 
 **Chainlink CCIP is the candidate**, for the bridging leg specifically (a
