@@ -208,7 +208,13 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             if not range_low:
                 continue
             distance_from_support_pct = (pool.price_usd / range_low - 1) * 100.0
-            if distance_from_support_pct > SUPPORT_TOLERANCE_PCT:
+            # 17/08, real bug caught live by the operator: a NEGATIVE distance
+            # means price is BELOW the 10-candle low -- the pool breaking down
+            # through its own recent support, not bouncing off it. The
+            # original check only rejected "too far above the low", letting
+            # breakdowns through as if they were bounces. Now requires price
+            # to sit AT or ABOVE the low, within tolerance -- never below it.
+            if distance_from_support_pct > SUPPORT_TOLERANCE_PCT or distance_from_support_pct < 0:
                 continue
 
             rugcheck_score: int | None = None

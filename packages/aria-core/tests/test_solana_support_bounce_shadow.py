@@ -134,6 +134,16 @@ async def test_price_beyond_20pct_of_support_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_price_below_support_low_rejected(monkeypatch):
+    # entry price 1.0, range low 1.2 (all 10 candles) -> price is BELOW the
+    # 10-candle low (distance = -16.7%, negative): a breakdown, not a
+    # bounce -- must be rejected even though |distance| <= 20%.
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([1.2] * 10)))
+    logged = await shadow.record_signals([_pool(price_usd=1.0)], chain=CHAIN)
+    assert logged == 0
+
+
+@pytest.mark.asyncio
 async def test_fewer_than_10_candles_rejected(monkeypatch):
     short = _candles([0.9])[:9]
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=short))
