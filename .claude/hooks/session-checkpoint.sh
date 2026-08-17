@@ -45,12 +45,20 @@ Ne laisse pas ce rappel remplacer la réponse à sa demande.
 EOF
 fi
 
-# ── Rappel de DÉPLOIEMENT VPS (déclenché par la taille du delta non déployé) ──────────
-# Mesure les lignes changées (ajoutées + supprimées) sur `main` depuis le dernier
-# déploiement (marqueur .claude/last-deployed-ref, SUIVI par git). Au-delà du seuil, on
-# rappelle de déployer manuellement. Throttle : un rappel par nouvel état de main (pas à
-# chaque message). L'écriture .undeployed-lines alimente la barre de statut.
-DEPLOY_THRESHOLD=4000
+# ── PUSH AUTO (déclenché par la taille du delta non poussé) ───────────────────────────
+# 17/08 -- seuil abaisse 4000->500 et comportement change d'un simple RAPPEL a une
+# INSTRUCTION D'ACTION (decision operateur explicite) : scripts/devils-advocate-review.sh
+# gere deja mecaniquement le cumul reel depuis le 07/08 (LAST_REVIEWED_MARKER n'avance
+# que sur un vrai appel paye Fable5, jamais sur un push sous son propre seuil de 8000
+# lignes) -- pousser souvent, meme par petits lots, ne coute jamais plus cher que
+# d'attendre un gros batch. Concerne UNIQUEMENT `git push` (jamais deploy.sh -- le
+# deploiement reel sur le VPS reste une decision explicite de l'operateur, impact plus
+# large sur le service prod). Mesure les lignes changees (ajoutees + supprimees) sur
+# `main` depuis le dernier deploiement (marqueur .claude/last-deployed-ref, SUIVI par
+# git) -- reutilise le meme marqueur que l'ancien rappel deploiement, la seule mesure
+# de delta non-pousse/non-deploye deja disponible. Throttle : une instruction par
+# nouvel etat de main. L'ecriture .undeployed-lines alimente toujours la barre de statut.
+DEPLOY_THRESHOLD=500
 REF_FILE="$ROOT/.claude/last-deployed-ref"
 REMINDED="$ROOT/.claude/.deploy-reminded-ref"
 UNDEPLOYED="$ROOT/.claude/.undeployed-lines"
@@ -75,11 +83,10 @@ if command -v git >/dev/null 2>&1 && [ -f "$REF_FILE" ]; then
       printf '%s\n' "$target" > "$REMINDED" 2>/dev/null || true
       shortref=$(git rev-parse --short=12 "$ref" 2>/dev/null || printf '%s' "$ref")
       cat <<EOF
-🚀 RAPPEL DÉPLOIEMENT VPS — $total lignes accumulées depuis le dernier déploiement ($shortref) ; seuil $DEPLOY_THRESHOLD atteint.
-Affiche à l'opérateur UNE SEULE LIGNE de rappel, style : « 🚀 Déploiement VPS conseillé — quota 4000 lignes atteint ».
-Puis CONTINUE normalement (dépasser le seuil ne bloque rien ; ne t'arrête pas, ne colle PAS les commandes sauf s'il les demande).
-Les commandes de déploiement restent disponibles sur demande ("go" / "les commandes").
-Quand il CONFIRME un déploiement : mets .claude/last-deployed-ref = commit déployé (git rev-parse main), puis commit + push (remise à zéro).
+🚀 PUSH AUTO -- $total lignes accumulees depuis le dernier deploiement ($shortref) ; seuil $DEPLOY_THRESHOLD atteint.
+Decision operateur explicite (17/08) : des que ce seuil est atteint, POUSSE main directement (git push origin main) SANS demander confirmation -- le cout reel est deja gere par le hook Avocat du Diable (gratuit sous son propre seuil de 8000 lignes cumulees depuis le dernier vrai appel paye). Verifie juste que les tests pertinents passent avant de pousser.
+Le DEPLOIEMENT (deploy.sh) reste une decision separee de l'operateur -- ne jamais le lancer automatiquement sur ce seul signal.
+Apres le push : affiche a l'operateur UNE SEULE LIGNE, style : « 🚀 Poussé automatiquement -- N lignes ». Puis CONTINUE normalement.
 EOF
     fi
   )
