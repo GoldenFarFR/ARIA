@@ -219,6 +219,23 @@ async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_fallback_unknown_liquidity_becomes_none_not_zero(monkeypatch):
+    """17/08, same real bug as the Solana twin: DexScreener's
+    liquidity_unknown=True must become None, not the default 0.0, or
+    advance_exit_simulation's liquidity_collapse check reads it as a real
+    drain."""
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5
+    assert snapshot.reserve_usd is None
+
+
+@pytest.mark.asyncio
 async def test_snapshot_fallback_falls_back_to_geckoterminal_when_dexscreener_empty(monkeypatch):
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return []

@@ -508,9 +508,16 @@ async def _snapshot_with_fallback(
             pairs = []
         pair = _best_pair(pairs, token_address)
         if pair is not None and pair.price_usd is not None:
+            # 17/08, same real bug as solana_pump_shadow.py's twin function
+            # (found live via a false liquidity_collapse close): DexScreener's
+            # liquidity_unknown flag was ignored, so an unindexed/bonding-
+            # curve pool's default 0.0 read as "genuinely drained". None is
+            # the correct "unknown" sentinel -- advance_exit_simulation
+            # already guards on `reserve_usd is not None`.
+            reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
-                reserve_usd=pair.liquidity_usd, available=True,
+                reserve_usd=reserve_usd, available=True,
             )
     return await client.get_pool_snapshot(pool_address, network=chain)
 

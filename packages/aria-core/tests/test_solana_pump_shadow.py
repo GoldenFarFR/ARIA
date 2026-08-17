@@ -256,6 +256,28 @@ async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_fallback_unknown_liquidity_becomes_none_not_zero(monkeypatch):
+    """17/08, real bug: DexScreener's liquidity_unknown=True (pump.fun
+    bonding-curve pools and freshly-indexed pairs report no traditional
+    reserve) was silently taken as liquidity_usd's default 0.0, which
+    advance_exit_simulation's liquidity_collapse check then read as
+    "genuinely drained" -- confirmed live (TESTIBULL: entry reserve 5534$,
+    closed liquidity_collapse 39s later while price had barely moved -0.9%).
+    None must reach the caller, not 0.0, so the `reserve_usd is not None`
+    guard already in both advance_exit_simulation implementations suppresses
+    the false positive."""
+    async def fake_fetch_token_pairs(contract, *, chain="solana"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5
+    assert snapshot.reserve_usd is None
+
+
+@pytest.mark.asyncio
 async def test_snapshot_fallback_falls_back_to_geckoterminal_when_dexscreener_empty(monkeypatch):
     async def fake_fetch_token_pairs(contract, *, chain="solana"):
         return []

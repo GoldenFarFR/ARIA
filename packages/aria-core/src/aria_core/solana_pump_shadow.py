@@ -662,9 +662,22 @@ async def _snapshot_with_fallback(
             pairs = []
         pair = _best_pair(pairs, token_address)
         if pair is not None and pair.price_usd is not None:
+            # 17/08, real bug found live via a false liquidity_collapse close
+            # (TESTIBULL, entry reserve 5534$ -> "0.0" 39s later while price
+            # barely moved -0.9%): DexScreener's own liquidity_unknown flag
+            # (pump.fun bonding-curve pools and freshly-indexed pairs have no
+            # traditional reserve number DexScreener reports) was being
+            # ignored -- pair.liquidity_usd defaults to 0.0 in that case,
+            # which every liquidity_collapse check below reads as "genuinely
+            # drained" rather than "we don't know". None (not 0.0) is the
+            # correct "unknown" sentinel here -- both advance_exit_simulation
+            # implementations already guard on `snapshot.reserve_usd is not
+            # None` before comparing, so this alone suppresses the false
+            # positive without any other change.
+            reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
-                reserve_usd=pair.liquidity_usd, available=True,
+                reserve_usd=reserve_usd, available=True,
             )
     return await client.get_pool_snapshot(pool_address, network=chain)
 
