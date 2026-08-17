@@ -41,11 +41,20 @@ async def _rows():
 
 
 def _candles(lows: list[float], base_price: float = 1.0) -> list[Candle]:
-    """10 candles whose low values are exactly `lows` (padded/truncated to
-    10), high/open/close held near base_price so only the low varies."""
-    lows = (lows + [base_price] * 10)[:10]
+    """10 candles (oldest first); `lows` are placed as the MOST RECENT
+    candles (padded with `base_price` on the OLDER side, then truncated to
+    the last 10) so the given values land where they matter: the support
+    math (17/08, position-in-range formula) reads `current_price` from the
+    LAST candle's close. Each candle's own high/close track its own low
+    (high=low*1.1, close=low*1.01, so entry_price for a generic call is
+    predictably `low*1.01`) -- by default this makes the freshest candle
+    sit close to whatever low it was given (position ~9%), which is what
+    "qualifies" under the new formula without callers needing to think
+    about the exact math -- tests asserting exact distance values use the
+    dedicated `_range_candles` helper instead."""
+    lows = ([base_price] * 10 + lows)[-10:]
     return [
-        Candle(ts=i, open=base_price, high=base_price * 1.01, low=low, close=base_price, volume=100.0)
+        Candle(ts=i, open=low, high=low * 1.1, low=low, close=low * 1.01, volume=100.0)
         for i, low in enumerate(lows)
     ]
 
@@ -115,21 +124,51 @@ async def test_no_upper_age_ceiling(monkeypatch):
 
 
 @pytest.mark.asyncio
+def _range_candles(*, low: float, high: float, last_close: float) -> list[Candle]:
+    """9 filler candles spanning [low, high] plus a LAST candle whose close
+    is exactly `last_close` -- lets support-position tests pin down
+    range_low/range_high/current_price precisely (17/08, position-in-range
+    formula: distance_from_support_pct = (close-low)/(high-low)*100)."""
+    filler = [
+        Candle(ts=i, open=low, high=high, low=low, close=(low + high) / 2, volume=100.0)
+        for i in range(9)
+    ]
+    return filler + [Candle(ts=9, open=last_close, high=high, low=low, close=last_close, volume=100.0)]
+
+
+@pytest.mark.asyncio
 async def test_price_within_20pct_of_support_qualifies(monkeypatch):
-    # entry price 1.0, range low 0.85 -> distance = (1.0/0.85 - 1)*100 = 17.6% <= 20%
-    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.85])))
-    logged = await shadow.record_signals([_pool(price_usd=1.0)], chain=CHAIN)
+    # range [0.85, 1.0], close 0.87 -> position = (0.87-0.85)/(1.0-0.85)*100 = 13.3% <= 20%
+    candles = _range_candles(low=0.85, high=1.0, last_close=0.87)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.87)], chain=CHAIN)
     assert logged == 1
     rows = await _rows()
     assert rows[0]["range_low_10c"] == 0.85
-    assert rows[0]["distance_from_support_pct"] == pytest.approx((1.0 / 0.85 - 1) * 100, rel=1e-6)
+    assert rows[0]["entry_price"] == pytest.approx(0.87)
+    assert rows[0]["distance_from_support_pct"] == pytest.approx((0.87 - 0.85) / (1.0 - 0.85) * 100, rel=1e-6)
 
 
 @pytest.mark.asyncio
 async def test_price_beyond_20pct_of_support_rejected(monkeypatch):
-    # entry price 1.0, range low 0.7 -> distance = 42.9% > 20%
-    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.7])))
-    logged = await shadow.record_signals([_pool(price_usd=1.0)], chain=CHAIN)
+    # range [0.7, 1.0], close 0.85 -> position = (0.85-0.7)/(1.0-0.7)*100 = 50% > 20%
+    candles = _range_candles(low=0.7, high=1.0, last_close=0.85)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.85)], chain=CHAIN)
+    assert logged == 0
+
+
+@pytest.mark.asyncio
+async def test_price_at_range_high_rejected(monkeypatch):
+    # 17/08, real bug caught live by the operator (Redbull: entry_price
+    # landed EXACTLY equal to range_high after a smooth uninterrupted
+    # climb -- the OLD formula, distance-from-low-in-absolute-percent, was
+    # trivially satisfied whenever the whole range was narrow, even at its
+    # very top). New formula: position = (high-low)/(high-low)*100 = 100%,
+    # correctly rejected regardless of how narrow the range is.
+    candles = _range_candles(low=0.469501, high=0.561006, last_close=0.561006)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.561006)], chain=CHAIN)
     assert logged == 0
 
 
@@ -138,31 +177,29 @@ async def test_uses_fresh_candle_close_not_stale_scan_price(monkeypatch):
     # 17/08, real bug caught live by the operator (Niles) -- pool.price_usd
     # is a STALE snapshot from the broad discovery scan; under real
     # DexPaprika contention the candle fetch for a given candidate can lag
-    # that snapshot by minutes. Here pool.price_usd=0.5 is deliberately
-    # stale/low (would give distance -44.4% vs range_low=0.9 -> wrongly
-    # rejected), but the last candle's FRESH close=0.95 sits right at
-    # support (distance +5.6% <= 20%) -- the fresh price must win.
-    stale_price = 0.5
-    fresh_close = 0.95
-    candles = [
-        Candle(ts=i, open=1.0, high=1.0, low=0.9, close=1.0, volume=100.0)
-        for i in range(9)
-    ] + [Candle(ts=9, open=0.92, high=0.96, low=0.9, close=fresh_close, volume=100.0)]
+    # that snapshot by minutes. Range [0.9, 1.0]: stale_price=0.99 sits near
+    # the HIGH (position 90%, would be wrongly rejected if used), but the
+    # last candle's FRESH close=0.91 sits near the LOW (position 10%,
+    # qualifies) -- the fresh price must win.
+    stale_price = 0.99
+    fresh_close = 0.91
+    candles = _range_candles(low=0.9, high=1.0, last_close=fresh_close)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
     logged = await shadow.record_signals([_pool(price_usd=stale_price)], chain=CHAIN)
     assert logged == 1
     rows = await _rows()
     assert rows[0]["entry_price"] == pytest.approx(fresh_close)
-    assert rows[0]["distance_from_support_pct"] == pytest.approx((fresh_close / 0.9 - 1) * 100, rel=1e-6)
+    assert rows[0]["distance_from_support_pct"] == pytest.approx((fresh_close - 0.9) / (1.0 - 0.9) * 100, rel=1e-6)
 
 
 @pytest.mark.asyncio
 async def test_price_below_support_low_rejected(monkeypatch):
-    # entry price 1.0, range low 1.2 (all 10 candles) -> price is BELOW the
-    # 10-candle low (distance = -16.7%, negative): a breakdown, not a
-    # bounce -- must be rejected even though |distance| <= 20%.
-    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([1.2] * 10)))
-    logged = await shadow.record_signals([_pool(price_usd=1.0)], chain=CHAIN)
+    # range [1.0, 1.1], close 0.95 -> price is BELOW the 10-candle low
+    # (position = -50%, negative): a breakdown, not a bounce -- must be
+    # rejected even though it would be "close" in absolute percent terms.
+    candles = _range_candles(low=1.0, high=1.1, last_close=0.95)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.95)], chain=CHAIN)
     assert logged == 0
 
 
@@ -210,8 +247,10 @@ async def test_stops_logging_once_target_reached(monkeypatch):
 async def test_trailing_stop_closes_full_position_no_partial(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
     await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
-    # peak never rises (first check IS the peak at 1.0), price crashes -15% -> past -10% stop
-    client = FakeClient({"poolA": 0.85}, reserve_by_pool={"poolA": 8000.0})
+    # entry_price = 0.9*1.01 = 0.909 (see _candles); peak never rises (first
+    # check IS the peak), price crashes to 0.75 (-17.5% from entry) -> past
+    # the -10% stop
+    client = FakeClient({"poolA": 0.75}, reserve_by_pool={"poolA": 8000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_trailing_stop"] == 1
     rows = await _rows()

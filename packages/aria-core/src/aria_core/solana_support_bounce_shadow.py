@@ -205,8 +205,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             last_n = candles[-SUPPORT_CANDLE_COUNT:]
             range_low = min(c.low for c in last_n)
             range_high = max(c.high for c in last_n)
-            if not range_low:
-                continue
+            if not range_low or range_high <= range_low:
+                continue  # a degenerate/flat range has no meaningful "position within it"
 
             # 17/08, real bug caught live by the operator (Niles: distance
             # -21.6%, contradicted by the actual chart showing a recovery,
@@ -224,13 +224,24 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             # the support-distance check AND the simulated entry, instead of
             # the stale scan-time snapshot.
             current_price = last_n[-1].close or pool.price_usd
-            distance_from_support_pct = (current_price / range_low - 1) * 100.0
-            # A NEGATIVE distance means price is BELOW the 10-candle low --
-            # the pool breaking down through its own recent support, not
-            # bouncing off it. The original check only rejected "too far
-            # above the low", letting breakdowns through as if they were
-            # bounces. Now requires price to sit AT or ABOVE the low, within
-            # tolerance -- never below it.
+
+            # 17/08, second real bug caught live by the operator (Redbull:
+            # entry_price landed EXACTLY equal to range_high, the top of its
+            # own 10-candle range, not the bottom). Root cause: the original
+            # formula measured distance from the low in absolute percentage
+            # terms -- (price/range_low - 1)*100 -- which is trivially small
+            # whenever the WHOLE range is narrow (a smooth, uninterrupted
+            # climb with no real pullback), even when price sits at the very
+            # top of that narrow range. Fixed by measuring where price sits
+            # WITHIN the range instead: 0% = at the low, 100% = at the high,
+            # regardless of how wide or narrow the range itself is -- the
+            # column keeps its name (distance_from_support_pct) but now
+            # means "position within the range", a strictly more correct
+            # reading of "how close to support".
+            distance_from_support_pct = (current_price - range_low) / (range_high - range_low) * 100.0
+            # A NEGATIVE value means price is BELOW the 10-candle low -- the
+            # pool breaking down through its own recent support, not
+            # bouncing off it. Never accept it, same doctrine either way.
             if distance_from_support_pct > SUPPORT_TOLERANCE_PCT or distance_from_support_pct < 0:
                 continue
 
