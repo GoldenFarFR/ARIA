@@ -94,17 +94,37 @@ def _patch_geckoterminal_dead_mobula_alive(monkeypatch, *, mobula_candles=None):
     last one, landing exactly on ``_signal_series()``'s default n=60 (same
     padding convention as ``_patch_cycle_io`` above -- a bare 60 here caused a
     real, order-dependent ``IndexError`` found while writing the traceability
-    tests below: candles[59] out of range once trimmed to 59)."""
+    tests below: candles[59] out of range once trimmed to 59).
+
+    17/08 -- real live bug found via pre-push-regression-check.sh: this
+    module's own docstring promises "Offline, no real network call", but this
+    helper never mocked ``_check_holder_concentration``, so every test using
+    it fell through to the real gate, which fell through to a REAL outbound
+    Blockscout call (base.blockscout.com). Invisible for months because
+    Blockscout usually answers fine; surfaced only once it returned real
+    HTTP 500s and a mechanical pre-push test gate existed to catch it
+    (previously nothing ran pytest before a push at all). Mocked at the SAME
+    level ``_patch_cycle_io`` already uses (``_check_holder_concentration``
+    itself, not the Blockscout client underneath) -- confirmed via
+    ``test_holder_concentration_unverifiable_is_also_fail_closed`` that
+    scalping_v9 fails CLOSED on unverifiable holder data (unlike walletscore's
+    fail-open-on-unknown doctrine), so a lower-level "unavailable" mock would
+    have correctly blocked every buy in these fallback-OHLCV tests -- not what
+    they're meant to exercise."""
     from aria_core import momentum_entry
     from aria_core.services import geckoterminal, mobula
 
     async def dead_gecko(pool, *, network="base", mode="standard", **kw):
         return _FakeOhlcv([])
 
+    async def clear_holder_concentration(contract, chain, pool_address):
+        return False, ""
+
     monkeypatch.setattr(geckoterminal.geckoterminal_client, "get_ohlcv", dead_gecko)
     monkeypatch.setattr(momentum_entry, "_provider_in_cooldown", lambda provider: False)
     monkeypatch.setattr(momentum_entry, "_record_provider_outcome", lambda *a, **kw: None)
     monkeypatch.setattr(mobula, "mobula_configured", lambda: True)
+    monkeypatch.setattr(momentum_entry, "_check_holder_concentration", clear_holder_concentration)
 
     candles = mobula_candles if mobula_candles is not None else _flat_candles(61)
 
