@@ -1365,3 +1365,19 @@ async def test_age_filter_is_a_window_not_just_a_ceiling():
     inside = datetime.now(timezone.utc) - timedelta(minutes=shadow.MIN_POOL_AGE_MINUTES + 1)
     assert await shadow.record_signals(
         [_pool(m5=40.0, pool_address="poolOk", pool_created_at=inside)], chain=CHAIN) == 1
+
+
+@pytest.mark.asyncio
+async def test_funded_rows_are_tracked_before_unfunded_ones():
+    """17/08 -- since the entry filters landed most observed signals are never
+    bought (11 tracked for 3 funded when this was added), yet each still costs
+    a real API call against an already-strained shared throttle, crowding out
+    the only positions the test measures. Funded rows must win the limited
+    budget; unfunded ones are still tracked, just after."""
+    await _insert_open_row(pool_address="poolUnfunded", minutes_ago=90.0,
+                           realistic_entry_price=None)
+    await _insert_open_row(pool_address="poolFunded", minutes_ago=20.0)  # younger!
+
+    client = FakeClient({"poolFunded": 2.0, "poolUnfunded": 2.0})
+    await shadow.evaluate_open_signals(client, chain=CHAIN, limit=1)
+    assert client.calls == ["poolFunded"], "une ligne non financee a vole le budget"

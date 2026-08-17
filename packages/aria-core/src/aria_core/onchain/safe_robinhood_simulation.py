@@ -467,3 +467,114 @@ def simulate_transfer_with_signature(
         "requested": amount, "cap": cap, "already_spent": already_spent,
         "revert_message": message or None, "error": None,
     }
+
+
+# Proven experimentally 17/08, the same way as every other layout constant
+# here: injected at each candidate slot and read back through the contract's
+# own ``isModuleEnabled()`` getter -- only slot 1 answered True.
+_SAFE_MODULES_SLOT = 1
+_SAFE_OWNER_COUNT_SLOT = 3
+_SENTINEL_ADDRESS = "0x0000000000000000000000000000000000000001"
+
+# Runtime that returns a single non-zero word for any call -- i.e. an ERC20
+# whose ``transfer`` always reports success. Used ONLY as an override target
+# so the Safe's own token call resolves; it is not a token, and nothing is
+# deployed. Without it the cycle would fail on a missing token rather than on
+# anything meaningful about the guardrail under test.
+_ALWAYS_TRUE_RUNTIME = "0x600160005260206000f3"
+
+
+def _mapping_slot(key: str, slot: int) -> str:
+    return "0x" + Web3.keccak(
+        abi_encode(["address", "uint256"], [Web3.to_checksum_address(key), slot])
+    ).hex()
+
+
+def simulate_full_cycle(
+    *, signature_for: "callable", safe: str, delegate: str, token: str, to: str,
+    amounts: list[int], cap: int, reset_time_min: int = 0, w3=None,
+) -> dict:
+    """End-to-end proof: a Safe that EXISTS with the AllowanceModule ENABLED,
+    a configured allowance, a registered delegate, and a real signed transfer
+    that runs all the way through to the Safe's own token call.
+
+    This is what the earlier partial simulations could not show. Checking the
+    cap in isolation only ever proved "the module rejects too much"; it never
+    proved the permitted path actually WORKS, and a guardrail that blocks
+    everything is indistinguishable from one that works if only the blocked
+    case is tested. Here both are exercised against the same injected state:
+    amounts within the cap must complete, amounts past it must revert on the
+    module's own cap require.
+
+    ``signature_for`` is a callable ``(digest: bytes) -> bytes`` supplied by
+    the caller. This module deliberately never signs (see the module
+    docstring): it verifies what a signature DOES, it never creates one.
+
+    Everything is injected via ``eth_call`` state overrides and discarded when
+    the call returns -- no deployment, no gas, no on-chain write."""
+    w3 = _w3(w3)
+    _require_testnet(w3)
+    module = Web3.to_checksum_address(ALLOWANCE_MODULE_ADDRESS)
+    safe = Web3.to_checksum_address(safe)
+    token = Web3.to_checksum_address(token)
+
+    safe_runtime = w3.eth.get_code(Web3.to_checksum_address(SAFE_L2_SINGLETON_V141)).hex()
+    if not safe_runtime.startswith("0x"):
+        safe_runtime = "0x" + safe_runtime
+    if len(safe_runtime) <= 2:
+        raise RuntimeError("refus: singleton Safe sans bytecode sur cette chaine")
+
+    overrides = {
+        safe: {"code": safe_runtime, "stateDiff": {
+            # modules is a linked list: modules[module]=SENTINEL and
+            # modules[SENTINEL]=module is what isModuleEnabled() reads.
+            _mapping_slot(module, _SAFE_MODULES_SLOT): "0x" + format(int(_SENTINEL_ADDRESS, 16), "064x"),
+            _mapping_slot(_SENTINEL_ADDRESS, _SAFE_MODULES_SLOT): "0x" + format(int(module, 16), "064x"),
+            "0x" + format(_SAFE_OWNER_COUNT_SLOT, "064x"): "0x" + format(1, "064x"),
+            "0x" + format(_SAFE_THRESHOLD_SLOT, "064x"): "0x" + format(1, "064x"),
+        }},
+        module: {"stateDiff": {
+            _allowance_storage_slot(safe, delegate, token):
+                "0x" + format(pack_allowance(cap, reset_time_min=reset_time_min), "064x"),
+            _delegate_storage_slot(safe, delegate):
+                "0x" + format(int(Web3.to_checksum_address(delegate), 16), "064x"),
+        }},
+        token: {"code": _ALWAYS_TRUE_RUNTIME},
+    }
+
+    contract = w3.eth.contract(address=module, abi=_ALLOWANCE_TRANSFER_ABI)
+    results = []
+    for amount in amounts:
+        digest = compute_transfer_digest(
+            safe=safe, token=token, to=to, amount=amount, nonce=0,
+            chain_id=w3.eth.chain_id, module_address=module,
+        )
+        data = contract.encode_abi("executeAllowanceTransfer", args=[
+            safe, token, Web3.to_checksum_address(to), amount, ZERO_ADDRESS, 0,
+            Web3.to_checksum_address(delegate), signature_for(digest),
+        ])
+        response = w3.provider.make_request("eth_call", [
+            {"to": module, "from": Web3.to_checksum_address(delegate), "data": data},
+            "latest", overrides,
+        ])
+        message = (response.get("error") or {}).get("message", "")
+        if _CAP_REVERT_MARKER in message:
+            outcome = "rejected_by_cap"
+        elif _SIGNATURE_REVERT_MARKER in message:
+            outcome = "rejected_by_signature"
+        elif "error" in response:
+            outcome = "failed"
+        else:
+            outcome = "completed"
+        results.append({
+            "requested": amount, "outcome": outcome,
+            "over_cap": amount > cap, "revert_message": message or None,
+        })
+
+    # The proof only holds if BOTH halves behave: everything within the cap
+    # completed AND everything past it was rejected by the cap itself.
+    coherent = all(
+        (r["outcome"] == "rejected_by_cap") if r["over_cap"] else (r["outcome"] == "completed")
+        for r in results
+    )
+    return {"cap": cap, "results": results, "cycle_proven": coherent, "error": None}

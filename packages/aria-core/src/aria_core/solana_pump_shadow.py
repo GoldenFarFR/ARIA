@@ -697,7 +697,15 @@ async def evaluate_open_signals(
                     OR (forward_price_h1 IS NULL AND (julianday('now') - julianday(detected_at)) * 1440 >= ?)
                     OR (forward_price_h2 IS NULL AND (julianday('now') - julianday(detected_at)) * 1440 >= ?)
                   )
-                ORDER BY detected_at ASC LIMIT ?
+                -- 17/08: FUNDED rows first. Since the entry filters landed,
+                -- most observed signals are never bought (11 tracked for 3
+                -- funded when this was added), yet each one still costs a
+                -- real API call against an already-strained shared throttle
+                -- -- so unfunded rows were crowding out the only positions
+                -- the test actually measures. They are still tracked (the
+                -- "what did we pass over" data stays available), just after
+                -- the ones that carry capital, using whatever budget is left.
+                ORDER BY (realistic_entry_price IS NULL) ASC, detected_at ASC LIMIT ?
                 """,
                 (chain, _HORIZON_MINUTES["m15"], _HORIZON_MINUTES["h1"], _HORIZON_MINUTES["h2"], limit),
             )
