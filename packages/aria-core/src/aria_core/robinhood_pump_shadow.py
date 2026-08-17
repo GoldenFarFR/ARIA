@@ -128,7 +128,6 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from aria_core import candle_granularity_shadow
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import aria_db_path
 from aria_core.services import dexscreener
@@ -606,8 +605,9 @@ async def advance_exit_simulation(
     below no longer compare against a single point-sample spot price alone.
     Each still-simulating row now ALSO fetches
     ``GeckoTerminalClient.get_ohlcv(pool_address, network=chain,
-    mode="scalping")`` (the existing 15min/30min sub-hour ladder,
-    ``services/ohlcv.py``) and reads every candle CLOSED since this row's
+    mode="scalping_5m")`` (5min candles, promoted from the 15min/30min
+    ladder 17/08 -- explicit operator decision, ``services/ohlcv.py``) and
+    reads every candle CLOSED since this row's
     ``last_checked_at`` (or ``detected_at`` on the very first pass). The
     scale-out ladder is now walked against the WINDOW HIGH of those candles
     (a rung reached then retraced between two polls is no longer invisible)
@@ -736,8 +736,15 @@ async def advance_exit_simulation(
             window_high = current_price
             window_low = current_price
             try:
+                # 17/08, later same day -- explicit operator decision: the
+                # real exit decision now reads 5min candles instead of
+                # 15min/30min. Made after the age_limit fix (a real crash was
+                # partly missed between checks) and a shadow comparison
+                # (candle_granularity_shadow.py) confirmed the finer window
+                # would have caught more breaches -- promoted directly rather
+                # than waiting out a longer observation period.
                 ohlcv: OHLCVResult = await client.get_ohlcv(
-                    row["pool_address"], network=chain, mode="scalping",
+                    row["pool_address"], network=chain, mode="scalping_5m",
                 )
             except Exception as exc:  # noqa: BLE001 -- OHLCV is an enhancement, never a hard requirement
                 logger.info(
@@ -787,32 +794,6 @@ async def advance_exit_simulation(
                 realistic_realized_proceeds += qty_fraction * impacted
 
             peak_price = max(peak_price, effective_high)
-
-            # 17/08 -- SHADOW ONLY, never feeds the real decision below. See
-            # solana_pump_shadow.py's own copy for the full rationale
-            # (operator question after the age_limit fix: would 5min candles
-            # have caught this cycle's stop-breach earlier than 15min).
-            try:
-                ohlcv_5m: OHLCVResult = await client.get_ohlcv(
-                    row["pool_address"], network=chain, mode="scalping_5m",
-                )
-                window_low_5m = None
-                if ohlcv_5m is not None and ohlcv_5m.available and ohlcv_5m.candles:
-                    boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
-                    new_5m = [c for c in ohlcv_5m.candles if boundary_epoch is None or c.ts > boundary_epoch]
-                    if new_5m:
-                        window_low_5m = min(min(c.low for c in new_5m), current_price)
-                await candle_granularity_shadow.record_comparison(
-                    row["pool_address"], chain, symbol=row.get("symbol"),
-                    window_low_15m=effective_low,
-                    window_low_5m=window_low_5m,
-                    stop_threshold=peak_price * (1 - TRAILING_STOP_PCT / 100.0),
-                )
-            except Exception as exc:  # noqa: BLE001 -- shadow probe, never a hard requirement
-                logger.info(
-                    "robinhood_pump_shadow: candle_granularity_shadow probe failed for %s (%s)",
-                    row["pool_address"], exc,
-                )
 
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
             # BEFORE the scale-out ladder. **16/08, second pass, operator

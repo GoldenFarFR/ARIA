@@ -680,7 +680,7 @@ async def test_advance_exit_window_low_catches_stop_missed_by_point_sample():
     )
     counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
     assert counts["closed_trailing_stop"] == 1
-    assert client2.ohlcv_calls == ["poolA", "poolA"]  # 17/08: the real 15m check + the candle_granularity_shadow 5m probe
+    assert client2.ohlcv_calls == ["poolA"]  # exactly one get_ohlcv call for this position (5min mode, 17/08)
 
     rows = await _rows()
     stop_price = 1.16 * (1 - shadow.TRAILING_STOP_PCT / 100.0)
