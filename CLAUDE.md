@@ -380,6 +380,9 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #318 RESOLVED (16/08) — anti-ReDoS clamp (Devil's Advocate 08ac3e9a, 06/08) only neutralized polynomial backtracking on one call site...
 - #319 RESOLVED 3 of 4 Devil's Advocate critiques already fixed (mutation-corruption, provenance ContextVar, degraded-fallback flag)
 - #320 RESOLVED llm_usage.py::reconcile_monthly_cost added, self-corrects monthly total drift — Devil's Advocate 7aff8afe
+- #322 GoPlus "AgentGuard" — real-time hook before each risky agent action, candidate to harden the 10-25$ swap pilot, pricing/Base coverage to verify
+- #323 Parallax/ClawSafety adversarial methodologies — ARIA's wallet_guard/agent_wallet_pilot decision/execution split never tested under a compromised-agent scenario
+- #324 RESOLVED LiteLLM PyPI worm (TeamPCP) — aria-core has zero litellm dependency, verified via grep, no exposure
 
 ## Required reading (the detailed brain)
 `docs/etat-systeme-cable.md` (wired state, established facts) · `docs/architecture-extensibilite.md` (first) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **If a VPS migration (physical machine change) is in progress or being considered: read `docs/runbook-migration-vps.md` FIRST** — ordered checklist + 6 pitfalls already encountered and their precise cause (20/07), to avoid falling into them again. **If VPS SSH access breaks: `docs/runbook-ssh-depannage.md`.** **If the agent itself seems compromised/misbehaving (supply-chain worm, prompt injection, actions no longer matching requests): `docs/runbook-incident-agent.md`** — operator-facing 4-step emergency checklist (stop first, repair from a clean machine, never rotate secrets from the infected machine).
