@@ -769,3 +769,70 @@ async def test_run_cycle_also_advances_exit_simulation():
     result = await shadow.run_cycle(client, network=CHAIN)
     assert "exit_sim" in result
     assert result["exit_sim"]["checked"] == 0  # poolA has no price in FakeGeckoClient's map -> unavailable, skipped
+
+
+# --- chain_pnl_summary (17/08, Telegram notification cumulative PnL) -----
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_sums_closed_rows_final_multiplier():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, exit_reason, final_multiplier) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 'trailing_stop', 1.5)",
+            ("poolA", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, exit_reason, final_multiplier) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 'max_hold', 0.8)",
+            ("poolB", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary(CHAIN)
+    assert result["closed"] == 2
+    assert result["total_pnl_units"] == pytest.approx((1.5 - 1.0) + (0.8 - 1.0))
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_includes_open_row_with_known_last_price():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, remaining_qty, realized_proceeds, last_price) "
+            "VALUES (?, ?, 'open', ?, 1.0, 0.5, 0.6, 2.0)",
+            ("poolA", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary(CHAIN)
+    assert result["open_valued"] == 1
+    assert result["pending_price"] == 0
+    # (realized 0.6 + remaining 0.5 * last_price 2.0) / entry 1.0 - 1.0
+    assert result["total_pnl_units"] == pytest.approx((0.6 + 0.5 * 2.0) / 1.0 - 1.0)
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_open_row_without_last_price_is_pending_not_counted():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO solana_pump_shadow_log (pool_address, chain, status, detected_at, entry_price) "
+            "VALUES (?, ?, 'open', ?, 1.0)",
+            ("poolA", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary(CHAIN)
+    assert result["pending_price"] == 1
+    assert result["open_valued"] == 0
+    assert result["total_pnl_units"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_empty_table_is_zero_not_error():
+    result = await shadow.chain_pnl_summary(CHAIN)
+    assert result["total_pnl_units"] == pytest.approx(0.0)
+    assert result["closed"] == 0
+    assert result["open_valued"] == 0
+    assert result["pending_price"] == 0

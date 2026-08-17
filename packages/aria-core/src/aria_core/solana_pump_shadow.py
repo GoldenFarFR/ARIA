@@ -217,6 +217,13 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # yet) -- the deployer wallet, so signals can later be aggregated per
     # creator across multiple launches.
     ("rugcheck_creator", "TEXT"),
+    # 17/08, operator-requested Telegram PnL notifications -- the last real
+    # price observed for this row (updated every advance_exit_simulation
+    # pass, same ``current_price`` already fetched for the ladder/stop
+    # checks -- zero extra network cost). Lets chain_pnl_summary() compute
+    # each OPEN position's unrealized PnL without a fresh network call at
+    # notification time. NULL until this row's first exit-simulation pass.
+    ("last_price", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -779,13 +786,13 @@ async def advance_exit_simulation(
                     UPDATE solana_pump_shadow_log SET
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
-                        last_checked_at = ?
+                        last_checked_at = ?, last_price = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, next_scale_level, remaining_qty,
                         realized_proceeds, exit_reason, final_multiplier,
-                        datetime.now(timezone.utc).isoformat(), row["id"],
+                        datetime.now(timezone.utc).isoformat(), current_price, row["id"],
                     ),
                 )
                 await db.commit()
@@ -884,4 +891,59 @@ async def exit_simulation_summary(chain: str = "solana") -> dict:
         "win_rate": (wins / len(rows)) if rows else None,
         "avg_multiplier": (sum(r["final_multiplier"] for r in rows) / len(rows)) if rows else None,
         "by_exit_reason": by_exit_reason,
+    }
+
+
+async def chain_pnl_summary(chain: str = "solana") -> dict:
+    """17/08, operator-requested Telegram notifications -- the single
+    number that answers "is the capital growing or shrinking": cumulative
+    PnL across EVERY signal ever logged on this chain, in units where 1.0 =
+    one position's original stake (same normalized-unit convention used
+    throughout this module's own scale-out math).
+
+    Closed rows: fully realized, ``final_multiplier - 1.0``.
+    Open rows: ``realized_proceeds`` already banked by scale-out fills PLUS
+    the still-held ``remaining_qty`` valued at ``last_price`` (the last real
+    price observed by ``advance_exit_simulation`` -- NEVER a fresh network
+    call at notification time, and NEVER assumed flat at entry_price if
+    unknown: a row with no ``last_price`` yet is simply excluded from the
+    open-position component, counted in ``pending_price`` instead, since
+    fabricating "flat" would understate a real move that just hasn't been
+    observed yet)."""
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT entry_price, remaining_qty, realized_proceeds, final_multiplier, "
+            "last_price, exit_reason FROM solana_pump_shadow_log WHERE chain = ?",
+            (chain,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    total_pnl_units = 0.0
+    closed = 0
+    open_valued = 0
+    pending_price = 0
+    for r in rows:
+        entry = r["entry_price"]
+        if not entry:
+            continue
+        if r["exit_reason"] is not None and r["final_multiplier"] is not None:
+            closed += 1
+            total_pnl_units += r["final_multiplier"] - 1.0
+        elif r["exit_reason"] is None:
+            if r["last_price"] is None:
+                pending_price += 1
+                continue
+            open_valued += 1
+            remaining = r["remaining_qty"] if r["remaining_qty"] is not None else 1.0
+            realized = r["realized_proceeds"] or 0.0
+            current_value = realized + remaining * r["last_price"]
+            total_pnl_units += current_value / entry - 1.0
+
+    return {
+        "total_pnl_units": total_pnl_units,
+        "closed": closed,
+        "open_valued": open_valued,
+        "pending_price": pending_price,
     }
