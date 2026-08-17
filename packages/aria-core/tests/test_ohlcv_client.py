@@ -482,3 +482,36 @@ async def test_skip_daily_no_fine_granularity_available_degrades_honestly(monkey
     assert res.candles == []
     assert res.timeframe is None
     assert res.error  # explicit message, never a daily candle silently reintroduced
+
+
+# ── shared circuit breaker (17/08 -- real bug found live: this client kept
+# hammering GeckoTerminal with real HTTP calls while the shared
+# geckoterminal_outage_suspension breaker was already armed from failures
+# seen through the OTHER client, services/geckoterminal.py) ───────────────
+
+@pytest.mark.asyncio
+async def test_short_circuits_when_shared_breaker_is_armed(monkeypatch, tmp_path):
+    from aria_core import geckoterminal_outage_suspension as gts
+
+    monkeypatch.setattr(gts, "DB_PATH", str(tmp_path / "gts_test.db"))
+    for _ in range(gts._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
+        await gts.record_rate_limit_failure()
+    assert await gts.is_suspended() is True
+
+    class _ExplodingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            raise AssertionError("must short-circuit before any real HTTP call")
+
+    monkeypatch.setattr("aria_core.services.ohlcv.httpx.AsyncClient", lambda **kw: _ExplodingClient())
+
+    client = OHLCVClient(base_url="https://gt.test", min_interval=0.0)
+    res = await client.get_ohlcv(POOL)
+    assert res.available is False
+    assert res.candles == []
+    assert "suspension automatique" in res.error

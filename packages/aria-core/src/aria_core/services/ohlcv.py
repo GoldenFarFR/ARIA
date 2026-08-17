@@ -225,7 +225,23 @@ class OHLCVClient:
         (~30 req/min) its shared throttle (`use_shared_throttle=True`) was
         already calibrated for -- explains a real, sustained gap between the
         throttle's intent and the actual server-side allowance. Header sent
-        whenever the key is configured, never invented if absent."""
+        whenever the key is configured, never invented if absent.
+
+        17/08 -- real bug found live (shadow exit-tracking still eating raw
+        429s on Solana while the shared circuit breaker was armed): this
+        client's own throttle can opt into `wait_for_shared_rate_limit`
+        (`use_shared_throttle=True`), but that only coordinates PACING --
+        it never checked `geckoterminal_outage_suspension.is_suspended()`,
+        unlike `services/geckoterminal.py`'s own `_get_json` (since 10/08).
+        So once the breaker armed from failures seen through THAT module,
+        this one kept hammering the real API instead of short-circuiting
+        like every other GeckoTerminal call site already does."""
+        from aria_core import geckoterminal_outage_suspension
+
+        if await geckoterminal_outage_suspension.is_suspended():
+            self._record_failure("suspension automatique GeckoTerminal (rate-limit sustained)")
+            return None, f"{UNAVAILABLE} (suspension automatique GeckoTerminal, rate-limit sustained)"
+
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
