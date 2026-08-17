@@ -358,6 +358,17 @@ class PoolSnapshot:
     reserve_usd: float | None = None
     available: bool = True
     error: str | None = None
+    # 17/08 -- the SAME response already carries per-window price changes,
+    # transaction counts and volumes; they were simply parsed away. Captured
+    # here at ZERO extra network cost (this endpoint is already called every
+    # exit-tracking cycle) because a data audit found 5 signals never
+    # collected at all -- m15/m30 price change, buyers/sellers, volume --
+    # purely because discovery runs on DexPaprika, whose search endpoint
+    # exposes none of them. Optional with None defaults so no existing
+    # caller is affected.
+    price_change_pct: dict[str, float] = field(default_factory=dict)
+    transactions: dict[str, dict] = field(default_factory=dict)
+    volume_usd: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -634,9 +645,26 @@ class GeckoTerminalClient:
         price_usd = _as_float(attrs.get("base_token_price_usd"))
         if price_usd is None:
             return PoolSnapshot(pool_address=pool_address, available=False, error="prix indisponible")
+        raw_change = attrs.get("price_change_percentage")
+        raw_tx = attrs.get("transactions")
+        raw_vol = attrs.get("volume_usd")
         return PoolSnapshot(
             pool_address=pool_address, price_usd=price_usd,
             reserve_usd=_as_float(attrs.get("reserve_in_usd")), available=True, error=None,
+            price_change_pct={
+                k: v for k, v in (
+                    (k, _as_float(raw_change.get(k))) for k in ("m5", "m15", "m30", "h1", "h6", "h24")
+                ) if v is not None
+            } if isinstance(raw_change, dict) else {},
+            transactions=(
+                {k: v for k, v in raw_tx.items() if isinstance(v, dict)}
+                if isinstance(raw_tx, dict) else {}
+            ),
+            volume_usd={
+                k: v for k, v in (
+                    (k, _as_float(raw_vol.get(k))) for k in ("m5", "m15", "m30", "h1", "h6", "h24")
+                ) if v is not None
+            } if isinstance(raw_vol, dict) else {},
         )
 
     async def get_all_time_high(self, pool_address: str, *, network: str = NETWORK) -> AthResult:

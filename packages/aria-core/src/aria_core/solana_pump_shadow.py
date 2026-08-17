@@ -1004,6 +1004,35 @@ async def advance_exit_simulation(
             # up stranded at a total loss. Fail-OPEN on unknown data (either
             # reserve missing): never force a close on an unverifiable
             # signal, same doctrine as everywhere else in this module.
+            # 17/08 -- backfill the 5 signals a data audit found NEVER
+            # collected (m15/m30 price change, buyers/sellers, m15 volume):
+            # discovery runs on DexPaprika, whose search endpoint exposes none
+            # of them, but the GeckoTerminal pool endpoint already called on
+            # THIS very pass carries all of them. Zero extra network cost.
+            # Written once, on the first pass that finds them missing, so the
+            # value stays close to entry time rather than drifting. Purely
+            # observational -- no decision reads these yet; they exist so the
+            # operator's own m15-window cap idea and a buy/sell-pressure
+            # filter become testable at all on the next sample.
+            if row.get("m15_pct") is None and snapshot.price_change_pct:
+                tx15 = (snapshot.transactions or {}).get("m15") or {}
+                try:
+                    async with aiosqlite.connect(_db_path()) as db:
+                        await db.execute(
+                            "UPDATE solana_pump_shadow_log SET m15_pct = ?, m30_pct = ?, "
+                            "buyers_m15 = ?, sellers_m15 = ?, volume_usd_m15 = ? WHERE id = ?",
+                            (
+                                snapshot.price_change_pct.get("m15"),
+                                snapshot.price_change_pct.get("m30"),
+                                tx15.get("buyers"), tx15.get("sellers"),
+                                (snapshot.volume_usd or {}).get("m15"),
+                                row["id"],
+                            ),
+                        )
+                        await db.commit()
+                except Exception as exc:  # noqa: BLE001 -- enrichment must never break the pass
+                    logger.info("solana_pump_shadow: signal backfill failed (%s)", exc)
+
             entry_reserve = row.get("reserve_usd")
             liquidity_collapsed = (
                 entry_reserve is not None and entry_reserve > 0
