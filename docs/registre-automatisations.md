@@ -40,6 +40,7 @@ comme pour `hooks-changelog.md`.
 | `gate-status-injector.sh` | SessionStart | 🟢 actif | 04/08 | injecte l'état réel des gates ARIA (`docker inspect`) en début de session |
 | `signal-cascade-queue-reminder.sh` | SessionStart | 🟢 actif | 09/08 | injecte la file de triage de la cascade de signaux |
 | `system-issues-reminder.sh` | SessionStart | 🟢 actif | 11/08 | surface les issues ouvertes du registre `system_issues` |
+| `system-issues-live-alert.sh` | UserPromptSubmit | 🟢 actif | 17/08 | remonte les anomalies system_issues EN COURS de session (warning/critical), l'opérateur redémarrant très rarement |
 | `session-checkpoint.sh` | UserPromptSubmit | 🟢 actif | 07/08 | rappel MAJ résumés (150 msg) + rappel déploiement VPS (4000 lignes) |
 | `french-reasoning-reminder.sh` | UserPromptSubmit | 🟢 actif | 22/07 | rappel de rester en français, raisonnement visible inclus |
 | `block-secret-display.sh` | -- (retiré de settings.json) | 🔴 désactivé | créé 24/07, retiré (date exacte non tracée) | bloquait des déploiements légitimes -- **ne jamais restaurer** (décision opérateur actée) |

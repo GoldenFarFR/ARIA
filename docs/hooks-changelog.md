@@ -107,6 +107,32 @@ de session, asynchrone sur web (barre de statut "🔧 env NN%").
 - **2026-07-08** création (x2 commits le même jour : garde-fou de cohérence
   CI + passage en mode asynchrone avec progression %).
 
+### system-issues-live-alert.sh — `UserPromptSubmit`
+Remonte les anomalies `system_issues` **pendant** une session, sans attendre
+un redémarrage. Créé après une remarque opérateur qui a invalidé la
+conception de la veille : `system-issues-reminder.sh` est un hook
+`SessionStart`, or l'opérateur redémarre très rarement ("je redémarre une
+nouvelle session très rarement tu risques d'en rater beaucoup") et les
+sessions durent des heures. Câbler les watchdogs vers `system_issues`
+(17/08) ne suffisait donc pas : une anomalie détectée en milieu de session
+n'aurait été vue qu'à la session suivante — on avait seulement déplacé le
+problème qu'on croyait résoudre (dépendre de l'opérateur pour relayer une
+alerte Telegram).
+Anti-bruit indispensable, en deux couches : (1) chaque id n'est signalé
+qu'une fois par session (`.claude/.system-issues-alerted`, même patron que
+`.architect-pending-reminded-state`) ; (2) filtré à `warning`/`critical`/
+`error` — le niveau `info` (file-staleness-watch, docs à relire) produisait
+8 lignes de bruit au premier test réel, exactement ce qui rend un mécanisme
+d'alerte inutilisable ; les `info` restent listées au démarrage par
+`system-issues-reminder.sh`. Lecture seule (`-readonly`), ne peut jamais
+écrire dans la base de prod, et utilise `.timeout` et non `PRAGMA
+busy_timeout` (le PRAGMA écho sa valeur sur stdout en mode `-cmd` et
+polluerait le contexte injecté — vrai bug rencontré le même jour sur
+`log-health-watch/run.sh`).
+- **2026-08-17** création. Vérifié en direct : alerte au 1er passage sur une
+  issue `critical` de test, silencieux au 2e (anti-doublon), silencieux sur
+  les 8 `info` réellement ouvertes.
+
 ### session-checkpoint.sh — `UserPromptSubmit`
 Deux mécanismes dans le même fichier : (1) rappel périodique de mise à jour
 des résumés (HANDOFF/CLAUDE.md/etat-systeme-cable), (2) rappel de déploiement
