@@ -160,7 +160,27 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # module's usual "never fabricate, fail-open" doctrine for pure
 # observations): this is a protective filter, not a reported metric, so an
 # unknown age is treated as "too risky to trade", never "assume it's fine".
-MAX_POOL_AGE_MINUTES = 25.0
+MAX_POOL_AGE_MINUTES = 120.0
+# 17/08, operator-directed age-window test ("faisons un test tranche par
+# tranche met 20 a 120 minutes"). Rationale, and it is HIS hypothesis
+# confirmed by the archive rather than a guess: the stranded rate falls
+# sharply with pool age at entry -- 0-5min -> 73% stranded (-70.4%),
+# 5-10min -> 61% (-59.4%), 10-15min -> 31% (-29.1%), 20-26min -> 0% (+5.1%,
+# only 4 rows). Reading: in the first minutes you are buying mid-launch,
+# while the deployer can still drain the pool; a pool that has SURVIVED a
+# while has already had time to rug and did not.
+#
+# The old MAX_POOL_AGE_MINUTES=25 was therefore cutting on exactly the wrong
+# side -- it FORCED entries into the most dangerous window and made anything
+# past 25min unobservable (median observed age was 7.8min). Now inverted
+# into a real window: a MINIMUM age to skip the launch chaos, a MAXIMUM
+# raised to 120min so the 20-120 range can finally be measured tranche by
+# tranche. Both remain fail-CLOSED on unknown age.
+#
+# Explicitly a MEASUREMENT window, not a validated setting: the 20-26min
+# tranche that motivated it holds only 4 rows, and NOTHING is known past
+# 25min because the old cap hid it. This run exists to produce that data.
+MIN_POOL_AGE_MINUTES = 20.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -486,8 +506,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 pool_age_minutes = (
                     datetime.now(timezone.utc) - pool.pool_created_at
                 ).total_seconds() / 60.0
-                if pool_age_minutes >= MAX_POOL_AGE_MINUTES:
-                    continue  # already past the protection window at detection time
+                if not (MIN_POOL_AGE_MINUTES <= pool_age_minutes < MAX_POOL_AGE_MINUTES):
+                    continue  # outside the measured age window (see the constants)
                 if await _has_open_signal(db, pool.pool_address, chain):
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
 

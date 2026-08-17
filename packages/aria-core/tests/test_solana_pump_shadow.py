@@ -62,7 +62,14 @@ def _pool(
         # 16/08 MAX_POOL_AGE_MINUTES fail-CLOSED protection -- defaults to
         # "just created" so existing tests keep passing a signal through
         # unless they explicitly opt into testing the age filter itself.
-        pool_created_at=pool_created_at if pool_created_at is not None else datetime.now(timezone.utc),
+        # 17/08 -- the age filter became a WINDOW (MIN..MAX), so a pool
+        # created "now" is no longer valid by default: it sits below the
+        # minimum. Default to the middle of the window so every test that
+        # does not care about age keeps exercising a funded signal.
+        pool_created_at=pool_created_at if pool_created_at is not None else (
+            datetime.now(timezone.utc)
+            - timedelta(minutes=(shadow.MIN_POOL_AGE_MINUTES + shadow.MAX_POOL_AGE_MINUTES) / 2)
+        ),
     )
 
 
@@ -590,7 +597,7 @@ async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
 
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_force_closes_a_losing_position():
-    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=shadow.MAX_POOL_AGE_MINUTES + 5)
     client = FakeClient({"poolA": 0.95})  # below entry -- losing, no rung/stop/max-hold triggered on its own
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_age_limit"] == 1
@@ -602,7 +609,7 @@ async def test_advance_exit_age_limit_force_closes_a_losing_position():
 
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
-    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=shadow.MAX_POOL_AGE_MINUTES + 5)
     client = FakeClient({"poolA": 1.1})  # above entry -- winning, kept open despite the age
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_age_limit"] == 0
@@ -620,7 +627,7 @@ async def test_advance_exit_age_limit_defers_to_trailing_stop_when_already_cross
     chance to use it. Fix must close at the stop's OWN threshold price
     (peak*0.8 = 0.72, on a peak of 0.9), never the worse point-sample spot,
     and report `trailing_stop` -- not `age_limit`."""
-    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=shadow.MAX_POOL_AGE_MINUTES + 5)
 
     # No prior cycle -> peak_price defaults to entry_price (1.0). A single
     # point-sample crash to 0.10 (well past the -20% stop line at 0.8) --
@@ -1327,3 +1334,22 @@ async def test_current_reserve_is_traced_on_every_pass():
     rows = await _rows()
     assert rows[0]["last_reserve_usd"] == pytest.approx(88_000.0)
     assert rows[0]["reserve_usd"] == pytest.approx(100_000.0)  # entry value untouched
+
+
+@pytest.mark.asyncio
+async def test_age_filter_is_a_window_not_just_a_ceiling():
+    """17/08 -- the age filter was inverted after the archive showed the
+    stranded rate falls sharply with pool age (0-5min -> 73% stranded,
+    10-15min -> 31%). A cap alone FORCED entries into the most dangerous
+    window; a minimum skips the launch chaos."""
+    too_young = datetime.now(timezone.utc) - timedelta(minutes=shadow.MIN_POOL_AGE_MINUTES - 1)
+    assert await shadow.record_signals(
+        [_pool(m5=40.0, pool_created_at=too_young)], chain=CHAIN) == 0
+
+    too_old = datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES + 1)
+    assert await shadow.record_signals(
+        [_pool(m5=40.0, pool_address="poolOld", pool_created_at=too_old)], chain=CHAIN) == 0
+
+    inside = datetime.now(timezone.utc) - timedelta(minutes=shadow.MIN_POOL_AGE_MINUTES + 1)
+    assert await shadow.record_signals(
+        [_pool(m5=40.0, pool_address="poolOk", pool_created_at=inside)], chain=CHAIN) == 1
