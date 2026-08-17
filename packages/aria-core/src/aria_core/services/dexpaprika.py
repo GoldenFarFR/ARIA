@@ -100,10 +100,25 @@ def _compute_start(interval: str, limit: int) -> str:
     happened earlier in the requested span -- always built via ``datetime``,
     NEVER string concatenation (the one thing that must never regress, see
     module docstring: a malformed date is never rejected by the API, it just
-    silently serves the wrong window)."""
+    silently serves the wrong window).
+
+    17/08 -- real bug found live (a Solana pool with confirmed, active
+    recent trading -- verified against GeckoTerminal already tracking it --
+    returned ZERO candles through this function while the raw endpoint
+    returned real ones with real wicks): the DATE-ONLY format below
+    (``%Y-%m-%d``, midnight, no time-of-day) introduced up to ~24h of slack
+    on top of the intended lookback window. Combined with the safety
+    factor, the computed ``[start, start+window]`` range could land
+    entirely in the past without ever reaching "now" -- silently missing
+    all recent activity depending on what hour of the day the call
+    happened to run at. Isolated by testing date-only vs full-ISO at the
+    SAME lookback distance: only the date-only form failed. Fixed by
+    keeping full second-level precision -- the exact anti-regression this
+    function's own docstring already asked for, just not carried all the
+    way through to the return value."""
     seconds = _INTERVAL_SECONDS.get(interval, 3600) * limit * _WINDOW_SAFETY_FACTOR
     start_dt = datetime.now(timezone.utc) - timedelta(seconds=seconds)
-    return start_dt.strftime("%Y-%m-%d")
+    return start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _key_marked_invalid = False

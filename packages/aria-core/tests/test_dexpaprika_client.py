@@ -74,13 +74,30 @@ def _reset_circuit_breaker():
 #    a malformed start date is never rejected by DexPaprika, it silently
 #    serves the wrong window) ────────────────────────────────────────────────
 
-def test_compute_start_returns_a_valid_iso_date():
+def test_compute_start_returns_a_valid_iso_datetime():
     start = dp._compute_start("1h", 120)
-    # must parse as a real date -- this is the whole point of the guardrail
+    # must parse as a real datetime -- this is the whole point of the guardrail
     from datetime import datetime
 
-    parsed = datetime.strptime(start, "%Y-%m-%d")
+    parsed = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
     assert parsed.year >= 2020
+
+
+def test_compute_start_carries_full_second_precision():
+    """17/08 -- real bug found live: a date-ONLY start (midnight, no time-
+    of-day) introduced up to ~24h of slack that could push the computed
+    [start, start+window] range entirely into the past without ever
+    reaching "now", silently missing all recent activity depending on what
+    hour of day the call happened to run at (isolated by comparing date-only
+    vs full-ISO at the identical lookback distance against the real API --
+    only the date-only form returned zero candles for an actively-traded
+    pool). The guardrail: never regress back to a bare date."""
+    start = dp._compute_start("5m", 240)
+    assert "T" in start and start.endswith("Z")
+    from datetime import datetime
+
+    parsed = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+    assert (parsed.hour, parsed.minute, parsed.second) != (0, 0, 0)
 
 
 def test_compute_start_goes_further_back_for_coarser_intervals():
