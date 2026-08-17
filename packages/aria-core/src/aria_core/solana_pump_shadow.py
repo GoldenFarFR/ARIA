@@ -175,6 +175,44 @@ SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) posit
 TRAILING_STOP_PCT = 20.0  # close the rest if price falls 20% below the running high since entry
 MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibrated rule's own max-hold
 
+# --- 17/08, LIQUIDITY-FIRST REVISION (operator-directed) ------------------
+# Root cause found by splitting the real 156-position sample by outcome after
+# the survivorship-bias fix: positions that managed to EXIT cleanly were
+# collectively PROFITABLE (+0.37$ over 64 rows), while positions that became
+# unsellable mid-flight lost -7.91$ over 80 rows -- i.e. 96% of the total
+# loss came from being STUCK, not from bad entries or a bad stop. The exit
+# rule was never the problem; not getting out was.
+#
+# Two levers, in the order they matter:
+#
+# 1. MIN_RESERVE_USD_AT_ENTRY -- the stranded rate is strongly monotone in
+#    entry liquidity, measured on the same sample: <2k$ -> 65-72% stranded,
+#    2-5k$ -> 74%, 5-10k$ -> 42%, 10-25k$ -> 34%, >25k$ -> 36%. Entering
+#    below ~10k$ is close to a coin flip on whether the position can ever be
+#    closed at all. NOTE this is a real behavioural change to the shadow: it
+#    no longer FUNDS every signal it sees. Sourcing itself stays unfiltered
+#    (every candidate is still logged, per this module's own doctrine) --
+#    what changes is that a too-thin pool is recorded with
+#    ``realistic_entry_price`` left NULL, i.e. observed but never bought,
+#    exactly like a pool already too shallow to fill the trade size.
+# 2. LIQUIDITY_COLLAPSE_EXIT_PCT -- the entry filter alone is NOT enough
+#    (35% of >=10k$ positions still ended stranded, still -26% overall),
+#    because what traps a position is liquidity draining WHILE it is held,
+#    not its depth at entry. The pool's current reserve is already fetched
+#    every single cycle for the price-impact maths and was simply never
+#    compared against the entry value. Now it is: a reserve that has fallen
+#    past this fraction of its entry level closes the position IMMEDIATELY
+#    at the current price, without waiting for the price stop -- the whole
+#    point being to sell while a buyer still exists.
+#
+# Both are deliberately EXPRESSED AS CONSTANTS rather than hardcoded, and
+# both are UNVALIDATED out-of-sample: they were derived from the very sample
+# that revealed them (textbook overfitting risk, cf. this project's own
+# anti-overfitting doctrine). The 17/08 shadow reset exists precisely to
+# test them on independent data before anything is promoted further.
+MIN_RESERVE_USD_AT_ENTRY = 10000.0
+LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0  # exit if reserve falls >=50% below its entry level
+
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
@@ -455,6 +493,17 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     pool.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
                     reserve_usd=pool.reserve_usd, side="buy",
                 )
+                # 17/08 liquidity-first revision (see MIN_RESERVE_USD_AT_ENTRY
+                # above): a pool this thin is still LOGGED as an observation --
+                # sourcing stays unfiltered per this module's doctrine -- but
+                # it is never funded, so it can never contribute a stranded
+                # loss. Leaving realistic_entry_price NULL is exactly how an
+                # already-unfillable pool is represented, so every downstream
+                # aggregate treats it correctly with no further change.
+                # Unknown reserve is treated as too risky (fail-CLOSED), same
+                # doctrine as MAX_POOL_AGE_MINUTES' unknown-age handling.
+                if (pool.reserve_usd or 0.0) < MIN_RESERVE_USD_AT_ENTRY:
+                    realistic_entry_price = None
                 await db.execute(
                     """
                     INSERT INTO solana_pump_shadow_log (
@@ -756,6 +805,7 @@ async def advance_exit_simulation(
     counts = {
         "checked": 0, "scale_out_fills": 0, "closed_scale_out_complete": 0,
         "closed_trailing_stop": 0, "closed_max_hold": 0, "closed_age_limit": 0,
+        "closed_liquidity_collapse": 0,
     }
     try:
         await _ensure_table()
@@ -904,9 +954,34 @@ async def advance_exit_simulation(
             if age_limit_exceeded and trailing_stop_already_crossed:
                 age_limit_exceeded = False
 
+            # 17/08 LIQUIDITY-FIRST REVISION -- the highest-priority exit, on
+            # purpose. Measured on the real 156-position sample: positions
+            # that exited cleanly were collectively PROFITABLE, while
+            # positions that became unsellable accounted for 96% of the total
+            # loss. What traps a position is the pool draining WHILE it is
+            # held; ``snapshot.reserve_usd`` was already fetched every cycle
+            # for the price-impact maths and simply never compared against
+            # the entry level. Checked BEFORE age_limit and before the ladder
+            # because the entire point is to sell while a buyer still exists
+            # -- waiting for the price stop is precisely how a position ends
+            # up stranded at a total loss. Fail-OPEN on unknown data (either
+            # reserve missing): never force a close on an unverifiable
+            # signal, same doctrine as everywhere else in this module.
+            entry_reserve = row.get("reserve_usd")
+            liquidity_collapsed = (
+                entry_reserve is not None and entry_reserve > 0
+                and snapshot.reserve_usd is not None
+                and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
+            )
+
             fills_this_cycle = 0
             exit_reason: str | None = None
-            if age_limit_exceeded:
+            if liquidity_collapsed:
+                _realistic_sell(remaining_qty, current_price)
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "liquidity_collapse"
+            elif age_limit_exceeded:
                 _realistic_sell(remaining_qty, current_price)
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
@@ -974,6 +1049,8 @@ async def advance_exit_simulation(
                 counts["closed_max_hold"] += 1
             elif exit_reason == "age_limit":
                 counts["closed_age_limit"] += 1
+            elif exit_reason == "liquidity_collapse":
+                counts["closed_liquidity_collapse"] += 1
     except Exception as exc:  # noqa: BLE001 -- shadow simulation must never raise into a caller
         logger.info("solana_pump_shadow: advance_exit_simulation failed (%s)", exc)
     return counts

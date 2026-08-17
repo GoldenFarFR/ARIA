@@ -1184,3 +1184,113 @@ async def test_dollar_figures_are_reported_against_capital_actually_deployed():
     assert summary["capital_deployed_usd"] == pytest.approx(2 * size)
     assert summary["total_pnl_usd"] == pytest.approx(0.0)      # +1.0 and -1.0 net out
     assert summary["return_on_deployed_pct"] == pytest.approx(0.0)
+
+
+# --- 17/08 liquidity-first revision --------------------------------------
+
+class _ReserveClient(FakeClient):
+    """FakeClient whose snapshot reports a CONTROLLED current reserve, so the
+    liquidity-collapse exit can be exercised against a known entry level."""
+
+    def __init__(self, price_by_pool, reserve_now, ohlcv_by_pool=None):
+        super().__init__(price_by_pool, ohlcv_by_pool)
+        self._reserve_now = reserve_now
+
+    async def get_pool_snapshot(self, pool_address, *, network="solana"):
+        self.calls.append(pool_address)
+        price = self._prices.get(pool_address)
+        if price is None:
+            return PoolSnapshot(pool_address=pool_address, available=False, error="unavailable")
+        return PoolSnapshot(
+            pool_address=pool_address, price_usd=price,
+            reserve_usd=self._reserve_now, available=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pool_below_min_reserve_is_observed_but_never_funded():
+    """17/08 root-cause finding: entry liquidity predicts whether a position
+    can EVER be closed (<2k$ -> ~70% stranded). Such a pool is still logged
+    (sourcing stays unfiltered, per this module's doctrine) but must not be
+    funded, so it can never produce a stranded loss."""
+    logged = await shadow.record_signals(
+        [_pool(m5=40.0, reserve=shadow.MIN_RESERVE_USD_AT_ENTRY - 1)], chain=CHAIN)
+    assert logged == 1  # observed
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is None  # never bought
+    assert rows[0]["reserve_usd"] == shadow.MIN_RESERVE_USD_AT_ENTRY - 1
+
+
+@pytest.mark.asyncio
+async def test_pool_at_or_above_min_reserve_is_funded():
+    await shadow.record_signals(
+        [_pool(m5=40.0, reserve=shadow.MIN_RESERVE_USD_AT_ENTRY)], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is not None
+
+
+@pytest.mark.asyncio
+async def test_unknown_reserve_is_never_funded():
+    """Fail-CLOSED on unknown depth, same doctrine as the unknown-pool-age
+    protection -- an unverifiable pool is 'too risky', never 'assume fine'."""
+    pool = dataclasses.replace(_pool(m5=40.0), reserve_usd=None)
+    await shadow.record_signals([pool], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is None
+
+
+@pytest.mark.asyncio
+async def test_liquidity_collapse_closes_the_position_immediately():
+    """THE fix for the 96%-of-losses finding: a draining pool is exited at
+    once, without waiting for the price stop -- the point is to sell while a
+    buyer still exists."""
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    collapsed = 100_000.0 * (1 - shadow.LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0) - 1
+    client = _ReserveClient({"poolA": 1.05}, reserve_now=collapsed)  # price still FINE
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "liquidity_collapse"
+    assert rows[0]["remaining_qty"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_stable_liquidity_never_triggers_the_collapse_exit():
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    client = _ReserveClient({"poolA": 1.05}, reserve_now=95_000.0)
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_current_reserve_never_forces_a_close():
+    """Fail-OPEN here, deliberately asymmetric with the entry filter: closing
+    a position on missing data would fabricate an exit that no real signal
+    justified."""
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    client = _ReserveClient({"poolA": 1.05}, reserve_now=None)
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 0
+
+
+@pytest.mark.asyncio
+async def test_liquidity_collapse_takes_priority_over_age_limit():
+    """Both would fire; the liquidity exit must win, since it is the one that
+    protects against the stranded-total-loss case."""
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    # A pool already past MAX_POOL_AGE_MINUTES is refused at sourcing, so the
+    # age limit can only ever apply to a pool that aged WHILE held -- reproduce
+    # that by ageing the stored row rather than the incoming signal.
+    old = (datetime.now(timezone.utc)
+           - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES + 5)).isoformat()
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "UPDATE solana_pump_shadow_log SET pool_created_at = ?", (old,))
+        await db.commit()
+
+    client = _ReserveClient({"poolA": 0.9}, reserve_now=1_000.0)  # losing AND drained
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 1
+    assert counts["closed_age_limit"] == 0
