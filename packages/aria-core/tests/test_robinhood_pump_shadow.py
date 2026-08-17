@@ -18,6 +18,7 @@ from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, Trending
 from aria_core.skills.ta_levels import Candle
 
 CHAIN = "robinhood"
+_SENTINEL_USE_ENTRY_PRICE = object()
 
 
 @pytest.fixture(autouse=True)
@@ -319,20 +320,28 @@ async def test_record_signals_stock_token_registry_failure_never_blocks_logging(
 
 async def _insert_open_row(
     *, pool_address="poolA", entry_price=1.0, minutes_ago=20.0, pool_age_minutes=None,
+    realistic_entry_price=_SENTINEL_USE_ENTRY_PRICE,
 ):
     detected_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     pool_created_at = (
         (datetime.now(timezone.utc) - timedelta(minutes=pool_age_minutes)).isoformat()
         if pool_age_minutes is not None else None
     )
+    if realistic_entry_price is _SENTINEL_USE_ENTRY_PRICE:
+        # Default: no simulated entry impact (matches entry_price exactly)
+        # so pre-existing tests that never asked about realistic_* keep
+        # getting a non-NULL realistic_final_multiplier out of the box --
+        # pass an explicit value (or None) to test that column directly.
+        realistic_entry_price = entry_price
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(
             """
             INSERT INTO robinhood_pump_shadow_log
-                (pool_address, chain, status, detected_at, entry_price, pool_created_at)
-            VALUES (?, ?, 'open', ?, ?, ?)
+                (pool_address, chain, status, detected_at, entry_price, pool_created_at,
+                 realistic_entry_price)
+            VALUES (?, ?, 'open', ?, ?, ?, ?)
             """,
-            (pool_address, CHAIN, detected_at, entry_price, pool_created_at),
+            (pool_address, CHAIN, detected_at, entry_price, pool_created_at, realistic_entry_price),
         )
         await db.commit()
 
@@ -855,3 +864,146 @@ async def test_chain_pnl_summary_empty_table_is_zero_not_error():
     assert result["closed"] == 0
     assert result["open_valued"] == 0
     assert result["pending_price"] == 0
+
+
+# --- realistic execution simulation (17/08, price impact + fees) --------
+
+def test_apply_price_impact_and_fee_none_when_pool_too_shallow():
+    # Reproduces the real X17690 case: reserve_usd essentially zero.
+    result = shadow._apply_price_impact_and_fee(
+        1.0994857292802e-05, trade_size_usd=shadow.SIMULATED_TRADE_SIZE_USD,
+        reserve_usd=2.11169582131643e-07, side="buy",
+    )
+    assert result is None
+
+
+def test_apply_price_impact_and_fee_none_when_reserve_missing():
+    assert shadow._apply_price_impact_and_fee(
+        1.0, trade_size_usd=20.0, reserve_usd=None, side="sell",
+    ) is None
+    assert shadow._apply_price_impact_and_fee(
+        1.0, trade_size_usd=20.0, reserve_usd=0.0, side="sell",
+    ) is None
+
+
+def test_apply_price_impact_and_fee_buy_raises_price_sell_lowers_it():
+    buy_price = shadow._apply_price_impact_and_fee(
+        1.0, trade_size_usd=20.0, reserve_usd=6000.0, side="buy",
+    )
+    sell_price = shadow._apply_price_impact_and_fee(
+        1.0, trade_size_usd=20.0, reserve_usd=6000.0, side="sell",
+    )
+    assert buy_price > 1.0  # pay more than spot
+    assert sell_price < 1.0  # receive less than spot
+
+
+@pytest.mark.asyncio
+async def test_record_signals_stores_realistic_entry_price_on_a_deep_pool():
+    pool = _pool(reserve=100000.0, price_usd=1.0)
+    await shadow.record_signals([pool], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is not None
+    assert rows[0]["realistic_entry_price"] > rows[0]["entry_price"]  # buy impact raises the paid price
+
+
+@pytest.mark.asyncio
+async def test_record_signals_realistic_entry_price_null_on_a_dust_pool():
+    pool = _pool(reserve=0.0000002, price_usd=1.0994857292802e-05)
+    await shadow.record_signals([pool], chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["realistic_entry_price"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_realistic_multiplier_lower_than_ideal_on_a_normal_pool():
+    # FakeClient's snapshot carries reserve_usd=1000.0 -- deep enough to
+    # absorb SIMULATED_TRADE_SIZE_USD without going unreachable.
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert rows[0]["realistic_final_multiplier"] is not None
+    # Impact + fee always eat into proceeds relative to the zero-friction ideal.
+    assert rows[0]["realistic_final_multiplier"] < rows[0]["final_multiplier"]
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_realistic_multiplier_null_when_entry_already_unreachable():
+    # realistic_entry_price=None at insert -- the simulated buy itself was
+    # already too shallow to execute, so the whole realistic column stays
+    # NULL through to close, even though the ideal final_multiplier resolves.
+    await _insert_open_row(
+        pool_address="poolA", entry_price=1.0, minutes_ago=10.0, realistic_entry_price=None,
+    )
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
+    counts = await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    rows = await _rows()
+    assert rows[0]["final_multiplier"] is not None
+    assert rows[0]["realistic_final_multiplier"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_realistic_multiplier_stays_open_row_null_until_close():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.1}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["realistic_final_multiplier"] is None
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_realistic_sums_closed_rows():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO robinhood_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, realistic_entry_price, "
+            "exit_reason, final_multiplier, realistic_final_multiplier) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'trailing_stop', 1.5, 1.4)",
+            ("poolA", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert result["closed"] == 1
+    assert result["total_pnl_units"] == pytest.approx(0.4)
+    assert result["unreachable_liquidity"] == 0
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_realistic_excludes_unreachable_entry():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO robinhood_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, realistic_entry_price, "
+            "exit_reason, final_multiplier) "
+            "VALUES (?, ?, 'closed', ?, 1.0, NULL, 'trailing_stop', 12.5)",
+            ("dustpool", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert result["closed"] == 0
+    assert result["unreachable_liquidity"] == 1
+    assert result["total_pnl_units"] == pytest.approx(0.0)
+    ideal = await shadow.chain_pnl_summary(CHAIN)
+    assert ideal["total_pnl_units"] == pytest.approx(11.5)
+
+
+@pytest.mark.asyncio
+async def test_chain_pnl_summary_realistic_excludes_row_that_turned_unreachable_mid_exit():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "INSERT INTO robinhood_pump_shadow_log "
+            "(pool_address, chain, status, detected_at, entry_price, realistic_entry_price, "
+            "exit_reason, final_multiplier, realistic_final_multiplier) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'max_hold', 1.1, NULL)",
+            ("poolB", CHAIN, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    result = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert result["closed"] == 0
+    assert result["unreachable_liquidity"] == 1
+    assert result["total_pnl_units"] == pytest.approx(0.0)

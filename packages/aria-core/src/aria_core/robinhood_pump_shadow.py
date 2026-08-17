@@ -187,6 +187,47 @@ MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibra
 # price, the only real observation available for it.
 _SCALE_OUT_DUST_FRACTION = 0.01
 
+# 17/08, operator-requested realistic execution simulation (price impact +
+# fees) -- mirrors solana_pump_shadow.py's own addition, same session, same
+# real trigger (X17690 on Solana: reserve_usd essentially zero at detection,
+# final_multiplier=341.68x on the naive calc that assumes perfect execution
+# at the displayed spot price). NEVER replaces final_multiplier (kept as the
+# "ideal, zero-friction" reference for comparison) -- feeds a separate
+# realistic_final_multiplier column instead.
+SIMULATED_TRADE_SIZE_USD = 20.0  # within the existing pilot's 10-25$ range
+# Robinhood Chain memecoin launchpads: Uniswap's own pools.trade charges
+# 0.25% (Uniswap v4 base fee), Robinpad charges 1% (Uniswap v3 LP fee) --
+# 1.0% used as the conservative middle-to-higher estimate across the real
+# launchpads observed on this chain. Sourced 17/08 (crypto.news/coinreporter
+# pools.trade launch coverage, robinpad.app docs), never assumed from memory.
+DEX_FEE_PCT = 1.0
+
+
+def _apply_price_impact_and_fee(
+    price: float, *, trade_size_usd: float, reserve_usd: float | None, side: str,
+) -> float | None:
+    """Constant-product AMM approximation of the price a REAL trade of
+    ``trade_size_usd`` would achieve against a pool with ``reserve_usd``
+    total liquidity (both sides combined -- ``depth = reserve_usd / 2``
+    approximates one side's depth for a roughly-balanced pool, a documented
+    simplification since this module has no per-token-side reserve data).
+    Returns ``None`` -- never a fabricated number -- if the pool is too
+    shallow to realistically absorb this trade size at all (``depth <=
+    trade_size_usd``, the trade would move the price towards infinity).
+    ``side="buy"`` raises the effective price paid; ``side="sell"`` lowers
+    the effective price received. The DEX fee is applied on top, same
+    direction in both cases (a buyer pays more, a seller receives less)."""
+    if reserve_usd is None or reserve_usd <= 0:
+        return None
+    depth = reserve_usd / 2.0
+    if depth <= trade_size_usd:
+        return None
+    if side == "buy":
+        impacted = price * (depth + trade_size_usd) / depth
+        return impacted * (1 + DEX_FEE_PCT / 100.0)
+    impacted = price * depth / (depth + trade_size_usd)
+    return impacted * (1 - DEX_FEE_PCT / 100.0)
+
 # Columns added after the table's first version -- PRAGMA-guarded ALTER
 # TABLE so an already-existing prod DB migrates in place, same pattern as
 # limit_orders.py/rsi_divergence_log.py/screened_pool.py/
@@ -216,6 +257,15 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # each OPEN position's unrealized PnL without a fresh network call at
     # notification time. NULL until this row's first exit-simulation pass.
     ("last_price", "REAL"),
+    # 17/08, realistic execution simulation (price impact + DEX fee) -- see
+    # SIMULATED_TRADE_SIZE_USD/_apply_price_impact_and_fee docstrings above.
+    # NULL ``realistic_entry_price`` means the pool was already too shallow
+    # to realistically buy into at detection time (never fabricated) --
+    # ``realistic_final_multiplier`` then stays NULL too. Rows logged before
+    # this column existed have NULL here -- honest gap, not a bug.
+    ("realistic_entry_price", "REAL"),
+    ("realistic_realized_proceeds", "REAL NOT NULL DEFAULT 0.0"),
+    ("realistic_final_multiplier", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -354,6 +404,12 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                 # peak starts at entry (no higher price observed yet), first
                 # rung is the calibrated ladder's own first step above entry.
                 first_scale_level = pool.price_usd * (1 + SCALE_OUT_STEP_PCT / 100.0)
+                # 17/08 -- realistic entry price under a real SIMULATED_TRADE_SIZE_USD
+                # buy, never fabricated when the pool is too shallow to absorb it.
+                realistic_entry_price = _apply_price_impact_and_fee(
+                    pool.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
+                    reserve_usd=pool.reserve_usd, side="buy",
+                )
                 await db.execute(
                     """
                     INSERT INTO robinhood_pump_shadow_log (
@@ -362,8 +418,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                         m5_pct, m15_pct, m30_pct, h1_pct, h6_pct, h24_pct,
                         buyers_m15, sellers_m15, volume_usd_m15, reserve_usd,
                         remaining_qty, realized_proceeds, peak_price, next_scale_level,
-                        pool_created_at
-                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?)
+                        pool_created_at, realistic_entry_price
+                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?)
                     """,
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
@@ -374,7 +430,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                         transactions_m15.get("buyers"), transactions_m15.get("sellers"),
                         pool.volume_usd_m15, pool.reserve_usd,
                         pool.price_usd, first_scale_level,
-                        pool.pool_created_at.isoformat(),
+                        pool.pool_created_at.isoformat(), realistic_entry_price,
                     ),
                 )
                 logged += 1
@@ -701,6 +757,27 @@ async def advance_exit_simulation(
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
 
+            # 17/08 -- realistic execution simulation, tracked in parallel
+            # through the exact same fills below (see module-level
+            # _apply_price_impact_and_fee docstring). See
+            # solana_pump_shadow.py's own copy for the full rationale.
+            realistic_entry_price = row.get("realistic_entry_price")
+            realistic_realized_proceeds = row.get("realistic_realized_proceeds") or 0.0
+            realistic_unreachable = realistic_entry_price is None
+
+            def _realistic_sell(qty_fraction: float, ideal_price: float) -> None:
+                nonlocal realistic_realized_proceeds, realistic_unreachable
+                if realistic_unreachable:
+                    return
+                impacted = _apply_price_impact_and_fee(
+                    ideal_price, trade_size_usd=qty_fraction * SIMULATED_TRADE_SIZE_USD,
+                    reserve_usd=snapshot.reserve_usd, side="sell",
+                )
+                if impacted is None:
+                    realistic_unreachable = True
+                    return
+                realistic_realized_proceeds += qty_fraction * impacted
+
             peak_price = max(peak_price, effective_high)
 
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
@@ -730,12 +807,14 @@ async def advance_exit_simulation(
             fills_this_cycle = 0
             exit_reason: str | None = None
             if age_limit_exceeded:
+                _realistic_sell(remaining_qty, current_price)
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
                 exit_reason = "age_limit"
             else:
                 while remaining_qty > _SCALE_OUT_DUST_FRACTION and effective_high >= next_scale_level:
                     sell_fraction = remaining_qty * SCALE_OUT_SELL_FRACTION
+                    _realistic_sell(sell_fraction, next_scale_level)
                     realized_proceeds += sell_fraction * next_scale_level
                     remaining_qty -= sell_fraction
                     next_scale_level *= (1 + SCALE_OUT_STEP_PCT / 100.0)
@@ -743,20 +822,28 @@ async def advance_exit_simulation(
                 counts["scale_out_fills"] += fills_this_cycle
 
                 if remaining_qty <= _SCALE_OUT_DUST_FRACTION and fills_this_cycle:
+                    _realistic_sell(remaining_qty, current_price)
                     realized_proceeds += remaining_qty * current_price
                     remaining_qty = 0.0
                     exit_reason = "scale_out_complete"
                 elif effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
                     stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+                    _realistic_sell(remaining_qty, stop_price)
                     realized_proceeds += remaining_qty * stop_price
                     remaining_qty = 0.0
                     exit_reason = "trailing_stop"
                 elif age_minutes >= MAX_HOLD_MINUTES:
+                    _realistic_sell(remaining_qty, current_price)
                     realized_proceeds += remaining_qty * current_price
                     remaining_qty = 0.0
                     exit_reason = "max_hold"
 
             final_multiplier = (realized_proceeds / entry_price) if exit_reason else None
+            realistic_final_multiplier = (
+                realistic_realized_proceeds / realistic_entry_price
+                if exit_reason and not realistic_unreachable and realistic_entry_price
+                else None
+            )
 
             async with aiosqlite.connect(_db_path()) as db:
                 await db.execute(
@@ -764,12 +851,14 @@ async def advance_exit_simulation(
                     UPDATE robinhood_pump_shadow_log SET
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
+                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
                         last_checked_at = ?, last_price = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, next_scale_level, remaining_qty,
                         realized_proceeds, exit_reason, final_multiplier,
+                        realistic_realized_proceeds, realistic_final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price, row["id"],
                     ),
                 )
@@ -924,4 +1013,64 @@ async def chain_pnl_summary(chain: str = "robinhood") -> dict:
         "closed": closed,
         "open_valued": open_valued,
         "pending_price": pending_price,
+    }
+
+
+async def chain_pnl_summary_realistic(chain: str = "robinhood") -> dict:
+    """17/08, answers "vérifier la liquidité minimum avant de trader" without
+    adding a hard reject at sourcing time (which would silently throw away
+    observations -- against this module's own shadow-only doctrine). Same
+    aggregate as ``chain_pnl_summary`` above but built from the
+    liquidity-aware ``realistic_*`` columns: a row whose
+    ``realistic_entry_price`` is NULL means the entry itself was already too
+    shallow to fill a ``SIMULATED_TRADE_SIZE_USD`` trade (see
+    ``_apply_price_impact_and_fee``), and a row that only turns unreachable
+    mid-exit (a later scale-out/stop sell lands on a pool too thin to absorb
+    it) is caught the same way -- both counted explicitly in
+    ``unreachable_liquidity``, NEVER silently dropped or treated as a 0%
+    return. This is the number that reflects real tradeable edge; the
+    zero-friction ``chain_pnl_summary`` above stays useful only to see how
+    much of the ideal PnL is an illiquidity artifact."""
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT realistic_entry_price, remaining_qty, realistic_realized_proceeds, "
+            "realistic_final_multiplier, last_price, exit_reason FROM robinhood_pump_shadow_log WHERE chain = ?",
+            (chain,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    total_pnl_units = 0.0
+    closed = 0
+    open_valued = 0
+    pending_price = 0
+    unreachable_liquidity = 0
+    for r in rows:
+        entry = r["realistic_entry_price"]
+        if entry is None:
+            unreachable_liquidity += 1
+            continue
+        if r["exit_reason"] is not None:
+            if r["realistic_final_multiplier"] is not None:
+                closed += 1
+                total_pnl_units += r["realistic_final_multiplier"] - 1.0
+            else:
+                unreachable_liquidity += 1  # became unreachable mid-exit
+            continue
+        if r["last_price"] is None:
+            pending_price += 1
+            continue
+        open_valued += 1
+        remaining = r["remaining_qty"] if r["remaining_qty"] is not None else 1.0
+        realized = r["realistic_realized_proceeds"] or 0.0
+        current_value = realized + remaining * r["last_price"]
+        total_pnl_units += current_value / entry - 1.0
+
+    return {
+        "total_pnl_units": total_pnl_units,
+        "closed": closed,
+        "open_valued": open_valued,
+        "pending_price": pending_price,
+        "unreachable_liquidity": unreachable_liquidity,
     }
