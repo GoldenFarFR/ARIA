@@ -125,6 +125,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import candle_granularity_shadow
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import aria_db_path
 from aria_core.services import dexscreener, rugcheck
@@ -779,9 +780,40 @@ async def advance_exit_simulation(
             effective_low = min(window_low, current_price)
 
             peak_price = row["peak_price"] or entry_price
+            peak_price = max(peak_price, effective_high)
             next_scale_level = row["next_scale_level"] or (entry_price * (1 + SCALE_OUT_STEP_PCT / 100.0))
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
+
+            # 17/08 -- SHADOW ONLY, never feeds the real decision below.
+            # candle_granularity_shadow.py answers whether a finer 5min
+            # window would have caught THIS cycle's stop-breach earlier than
+            # the 15min ladder above. Best-effort: a failure here must never
+            # touch the real exit path (mirrors the OHLCV try/except above).
+            # Runs AFTER peak_price is finalized (folded with effective_high)
+            # so stop_threshold matches what the real trailing-stop check
+            # below actually compares against.
+            try:
+                ohlcv_5m: OHLCVResult = await client.get_ohlcv(
+                    row["pool_address"], network=chain, mode="scalping_5m",
+                )
+                window_low_5m = None
+                if ohlcv_5m is not None and ohlcv_5m.available and ohlcv_5m.candles:
+                    boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
+                    new_5m = [c for c in ohlcv_5m.candles if boundary_epoch is None or c.ts > boundary_epoch]
+                    if new_5m:
+                        window_low_5m = min(min(c.low for c in new_5m), current_price)
+                await candle_granularity_shadow.record_comparison(
+                    row["pool_address"], chain, symbol=row.get("symbol"),
+                    window_low_15m=effective_low,
+                    window_low_5m=window_low_5m,
+                    stop_threshold=peak_price * (1 - TRAILING_STOP_PCT / 100.0),
+                )
+            except Exception as exc:  # noqa: BLE001 -- shadow probe, never a hard requirement
+                logger.info(
+                    "solana_pump_shadow: candle_granularity_shadow probe failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
 
             # 17/08 -- realistic execution simulation, tracked in parallel
             # through the exact same fills below (see module-level
@@ -810,8 +842,6 @@ async def advance_exit_simulation(
                     realistic_unreachable = True
                     return
                 realistic_realized_proceeds += qty_fraction * impacted
-
-            peak_price = max(peak_price, effective_high)
 
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
             # BEFORE the scale-out ladder. **16/08, second pass, operator

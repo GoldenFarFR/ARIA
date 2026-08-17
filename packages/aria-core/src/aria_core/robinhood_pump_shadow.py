@@ -128,6 +128,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import candle_granularity_shadow
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import aria_db_path
 from aria_core.services import dexscreener
@@ -779,6 +780,32 @@ async def advance_exit_simulation(
                 realistic_realized_proceeds += qty_fraction * impacted
 
             peak_price = max(peak_price, effective_high)
+
+            # 17/08 -- SHADOW ONLY, never feeds the real decision below. See
+            # solana_pump_shadow.py's own copy for the full rationale
+            # (operator question after the age_limit fix: would 5min candles
+            # have caught this cycle's stop-breach earlier than 15min).
+            try:
+                ohlcv_5m: OHLCVResult = await client.get_ohlcv(
+                    row["pool_address"], network=chain, mode="scalping_5m",
+                )
+                window_low_5m = None
+                if ohlcv_5m is not None and ohlcv_5m.available and ohlcv_5m.candles:
+                    boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
+                    new_5m = [c for c in ohlcv_5m.candles if boundary_epoch is None or c.ts > boundary_epoch]
+                    if new_5m:
+                        window_low_5m = min(min(c.low for c in new_5m), current_price)
+                await candle_granularity_shadow.record_comparison(
+                    row["pool_address"], chain, symbol=row.get("symbol"),
+                    window_low_15m=effective_low,
+                    window_low_5m=window_low_5m,
+                    stop_threshold=peak_price * (1 - TRAILING_STOP_PCT / 100.0),
+                )
+            except Exception as exc:  # noqa: BLE001 -- shadow probe, never a hard requirement
+                logger.info(
+                    "robinhood_pump_shadow: candle_granularity_shadow probe failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
 
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
             # BEFORE the scale-out ladder. **16/08, second pass, operator
