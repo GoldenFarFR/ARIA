@@ -75,6 +75,12 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
     installation_id: str | None = Field(default=None, max_length=128)
     device_label: str | None = Field(default=None, max_length=64)
+    # 17/08 -- the operator's read-only dashboard asks for this; the phone app
+    # (which needs /chat and the kill-switch) simply omits it and keeps a full
+    # session, so no existing client changes. Opt-IN rather than opt-out on
+    # purpose: a client that forgets the flag gets the status quo, never a
+    # silently downgraded session that would break the kill-switch.
+    read_only: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -177,6 +183,32 @@ async def require_operator_or_session(request: Request) -> dict:
     if sessions.needs_totp_reverify(session):
         raise HTTPException(status_code=403, detail="totp_reverify_required")
     return {"mode": "mobile", **session}
+
+
+async def require_full_session(request: Request) -> dict:
+    """Same as ``require_operator_or_session``, but REFUSES a read-only
+    session token. Put this on every route that CHANGES something.
+
+    17/08 -- operator decision ("le dashboard devrait n'etre qu'une lecture"),
+    from an explicit threat model: a worm on his PC. Marking the dashboard's
+    own routes read-only would have been theatre -- they were already
+    GET-only. The real hole was that the dashboard shares this session with
+    the ACTION routes, so a token lifted off that machine could drive them.
+    `/stop` and `/resume` were already covered by a fresh-TOTP requirement
+    (a stolen token alone cannot fire them); `/chat` and `/push-token` had no
+    second proof at all -- `/chat` being the dangerous one, since it is
+    open-ended natural language to an agent with real capabilities.
+
+    The legacy X-Admin-Secret path stays full by design: it is a
+    server-to-server header, never a token sitting on the operator's desktop.
+
+    Honest bound, so nobody mistakes this for more than it is: this protects
+    against a stolen TOKEN, not against stolen CREDENTIALS. An attacker with
+    the password AND a TOTP code can still mint a full session at /login."""
+    auth = await require_operator_or_session(request)
+    if auth.get("mode") == "mobile" and sessions.is_read_only(auth):
+        raise HTTPException(status_code=403, detail="read_only_session")
+    return auth
 
 
 # Same message for a wrong code and for a replayed one: an attacker replaying a
@@ -355,6 +387,7 @@ async def login(body: LoginRequest, request: Request):
         user_agent=request.headers.get("User-Agent"),
         ip=ip,
         device_label=body.device_label,
+        scope=sessions.SCOPE_READ_ONLY if body.read_only else sessions.SCOPE_FULL,
     )
     return LoginResponse(token=token)
 
@@ -500,7 +533,7 @@ async def chat(body: ChatBody, request: Request):
     """Dedicated route, distinct from /aria/chat -- never touches that route's
     own public rate-limit/scope filtering. Rate-limited per caller so a stolen
     token (or a leaked legacy secret) can't spam AriaBrain.process() for free."""
-    auth = await require_operator_or_session(request)
+    auth = await require_full_session(request)
     rate_key = auth.get("session_id") or f"legacy:{client_ip(request) or 'unknown'}"
 
     idempotency_cache_key = f"{rate_key}:{body.idempotency_key}" if body.idempotency_key else None
@@ -554,7 +587,7 @@ async def stop(request: Request, body: KillSwitchBody | None = None):
     control the operator reaches for in a hurry. No incident is recorded when
     nothing actually changed, so retries don't pollute the audit history.
     """
-    auth = await require_operator_or_session(request)
+    auth = await require_full_session(request)
     body = body or KillSwitchBody()
     await _require_fresh_totp(auth, body.totp_code)
 
@@ -587,7 +620,7 @@ async def resume_route(request: Request, body: KillSwitchBody | None = None):
     would leave the operator with no way to unfreeze the money from this channel.
     Writing a clean state repairs it, and that IS a real state change -- logged.
     """
-    auth = await require_operator_or_session(request)
+    auth = await require_full_session(request)
     body = body or KillSwitchBody()
     await _require_fresh_totp(auth, body.totp_code)
 
@@ -631,7 +664,7 @@ async def register_push_token(body: PushTokenBody, request: Request):
     every app launch (idempotent upsert, see push_tokens.py), not just first
     install -- a reinstalled app gets a fresh Expo token that must replace
     the stale one."""
-    await require_operator_or_session(request)
+    await require_full_session(request)
     from aria_core.push_tokens import register_push_token as _register_token
     await _register_token(body.token, body.installation_id)
     return {"ok": True}

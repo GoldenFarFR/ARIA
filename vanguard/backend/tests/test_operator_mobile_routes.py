@@ -1009,3 +1009,83 @@ async def test_totp_reverify_rejects_wrong_code(client, totp_secret):
 async def test_totp_reverify_requires_session(client):
     res = await client.post("/api/aria/ops/totp-reverify", json={"totp_code": "123456"})
     assert res.status_code == 403
+
+
+# ── Read-only session scope (17/08) ───────────────────────────────────────
+# Operator decision from an explicit threat model (a worm on his PC). The
+# dashboard's own routes were ALREADY GET-only, so restricting them would
+# have been theatre: the real hole was that the dashboard's session token
+# also unlocked the action routes. These tests lock that shut end to end.
+
+@pytest.mark.asyncio
+async def test_read_only_login_cannot_reach_chat_and_brain_is_never_called(
+    client, totp_secret, monkeypatch,
+):
+    """/chat is the dangerous one: open-ended natural language to an agent
+    with real capabilities, and (unlike /stop) it had no second factor."""
+    called = {"brain": False}
+
+    async def _fake_process(message, *, lang, visitor_id, public_mode):
+        called["brain"] = True
+        return {"response": "should never happen"}
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+
+    login = await client.post(
+        "/api/aria/ops/login", json={**_login_body(totp_secret), "read_only": True},
+    )
+    token = login.json()["token"]
+
+    res = await client.post(
+        "/api/aria/ops/chat", json={"message": "vends tout"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403
+    assert res.json()["detail"] == "read_only_session"
+    assert called["brain"] is False
+
+
+@pytest.mark.asyncio
+async def test_read_only_session_still_reads_status_and_history(client, totp_secret):
+    """The whole point: the dashboard must keep working. A read-only token
+    that could not read would be a broken feature, not a secure one."""
+    login = await client.post(
+        "/api/aria/ops/login", json={**_login_body(totp_secret), "read_only": True},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+    assert (await client.get("/api/aria/ops/status", headers=headers)).status_code == 200
+    assert (await client.get("/api/aria/ops/history", headers=headers)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_read_only_session_cannot_arm_the_kill_switch(client, totp_secret):
+    """Defence in depth: /stop already required a fresh TOTP, so a stolen
+    token alone never fired it. The scope check must reject it EARLIER --
+    before the TOTP prompt -- so a read-only token is refused outright."""
+    login = await client.post(
+        "/api/aria/ops/login", json={**_login_body(totp_secret), "read_only": True},
+    )
+    res = await client.post(
+        "/api/aria/ops/stop", json={"reason": "test"},
+        headers={"Authorization": f"Bearer {login.json()['token']}"},
+    )
+    assert res.status_code == 403
+    assert res.json()["detail"] == "read_only_session"
+
+
+@pytest.mark.asyncio
+async def test_normal_login_is_unchanged_and_keeps_full_access(client, totp_secret, monkeypatch):
+    """No existing client sends `read_only`, so the phone app must be
+    completely unaffected by this change -- including the kill-switch."""
+    async def _fake_process(message, *, lang, visitor_id, public_mode):
+        return {"response": "ok"}
+
+    monkeypatch.setattr(operator_mobile.aria_brain, "process", _fake_process)
+
+    login = await client.post("/api/aria/ops/login", json=_login_body(totp_secret))
+    res = await client.post(
+        "/api/aria/ops/chat", json={"message": "statut ?"},
+        headers={"Authorization": f"Bearer {login.json()['token']}"},
+    )
+    assert res.status_code == 200

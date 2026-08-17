@@ -79,7 +79,31 @@ async def _ensure_table() -> None:
             await db.execute(
                 "ALTER TABLE operator_sessions ADD COLUMN last_totp_reverify_at TEXT"
             )
+        # 17/08 -- operator decision ("le dashboard devrait n'etre qu'une
+        # lecture"): a session can now be minted READ-ONLY, so a token stolen
+        # off the operator's PC (his stated threat: a worm on that machine)
+        # cannot drive the action routes. Same additive-migration pattern as
+        # the column above -- prod rows already exist.
+        if "scope" not in cols:
+            await db.execute("ALTER TABLE operator_sessions ADD COLUMN scope TEXT")
         await db.commit()
+
+
+# Session scopes. A NULL scope (every session minted before 17/08) means
+# FULL -- this migration must never silently downgrade the operator's live
+# phone session. Any UNRECOGNISED value, however, fails CLOSED to read-only:
+# a corrupted or tampered column should cost read access, never grant write.
+SCOPE_FULL = "full"
+SCOPE_READ_ONLY = "read_only"
+
+
+def is_read_only(session: dict) -> bool:
+    """Pure function over an already-fetched session row (same style as
+    ``needs_totp_reverify`` -- never a second DB round trip)."""
+    scope = session.get("scope")
+    if scope is None or scope == SCOPE_FULL:
+        return False
+    return True
 
 
 def _hash_secret(secret: str) -> str:
@@ -102,9 +126,17 @@ async def create_operator_session(
     user_agent: str | None = None,
     ip: str | None = None,
     device_label: str | None = None,
+    scope: str = SCOPE_FULL,
 ) -> str:
     """Returns the full Bearer token (`session_id.secret`) -- the ONLY time the
-    raw secret exists; only its hash is persisted."""
+    raw secret exists; only its hash is persisted.
+
+    ``scope=SCOPE_READ_ONLY`` mints a token that the action routes refuse
+    (see ``require_full_session`` in operator_mobile). Anything other than the
+    two known scopes is stored as read-only rather than trusted -- a caller
+    passing a typo'd scope must not accidentally get write access."""
+    if scope not in (SCOPE_FULL, SCOPE_READ_ONLY):
+        scope = SCOPE_READ_ONLY
     await _ensure_table()
     session_id = str(uuid.uuid4())
     secret = secrets.token_urlsafe(32)
@@ -117,8 +149,8 @@ async def create_operator_session(
             INSERT INTO operator_sessions
                 (session_id, account_id, secret_hash, created_at, expires_at,
                  last_seen_at, created_ip, last_seen_ip, device_label, user_agent, installation_id,
-                 last_totp_reverify_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_totp_reverify_at, scope)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, account_id, _hash_secret(secret), now.isoformat(), expires.isoformat(),
@@ -129,6 +161,7 @@ async def create_operator_session(
                 # None/never (which would demand a redundant TOTP prompt on
                 # the very next launch).
                 now.isoformat(),
+                scope,
             ),
         )
         await db.commit()

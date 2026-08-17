@@ -169,3 +169,56 @@ async def test_purge_expired_removes_only_expired_rows():
     assert removed == 1
     assert await osess.verify_operator_session(live_token) is not None
     assert await osess.verify_operator_session(dead_token) is None
+
+
+# ── Session scope (17/08): read-only tokens for the operator's dashboard ──
+# Operator decision, from an explicit threat model (a worm on his PC): a token
+# lifted off that machine must not be able to drive the action routes.
+
+@pytest.mark.asyncio
+async def test_session_is_full_scope_by_default():
+    token = await osess.create_operator_session(account_id=1)
+    session = await osess.verify_operator_session(token)
+    assert osess.is_read_only(session) is False
+
+
+@pytest.mark.asyncio
+async def test_read_only_scope_round_trips():
+    token = await osess.create_operator_session(account_id=1, scope=osess.SCOPE_READ_ONLY)
+    session = await osess.verify_operator_session(token)
+    assert osess.is_read_only(session) is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_without_scope_stays_full():
+    """Every session minted before this migration has scope NULL. Treating
+    those as read-only would silently break the operator's live phone session
+    -- including the kill-switch."""
+    assert osess.is_read_only({"scope": None}) is False
+    assert osess.is_read_only({}) is False
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_scope_fails_closed_to_read_only():
+    """A tampered or corrupted column must cost read access, never grant
+    write access."""
+    assert osess.is_read_only({"scope": "administrator"}) is True
+    assert osess.is_read_only({"scope": ""}) is True
+
+
+@pytest.mark.asyncio
+async def test_typo_scope_at_creation_is_stored_read_only():
+    """A caller passing a bogus scope must not accidentally get write access."""
+    token = await osess.create_operator_session(account_id=1, scope="ful")
+    session = await osess.verify_operator_session(token)
+    assert osess.is_read_only(session) is True
+
+
+@pytest.mark.asyncio
+async def test_read_only_scope_cannot_be_elevated_by_reverify():
+    """The TOTP reverify path clears a time-based flag -- it must never widen
+    a session's scope as a side effect."""
+    token = await osess.create_operator_session(account_id=1, scope=osess.SCOPE_READ_ONLY)
+    session = await osess.verify_operator_session(token)
+    await osess.mark_totp_reverified(session["session_id"])
+    assert osess.is_read_only(await osess.verify_operator_session(token)) is True
