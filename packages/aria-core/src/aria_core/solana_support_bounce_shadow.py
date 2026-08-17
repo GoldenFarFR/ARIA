@@ -64,6 +64,15 @@ MIN_POOL_AGE_MINUTES = 70.0  # no upper bound, deliberately
 SUPPORT_TOLERANCE_PCT = 20.0  # first guess, see module docstring -- to recalibrate
 SUPPORT_CANDLE_COUNT = 10
 SUPPORT_CANDLE_INTERVAL = "5m"
+# 17/08, real bug caught live by the operator (BULLSHIT: range_high_10c was
+# 7386x range_low_10c -- a near-total collapse within the 50min lookback,
+# not a real consolidation. entry_price landed exactly at range_low,
+# "distance 0%" was technically true but this was catching a falling knife
+# after a crash, not a support bounce). No sane bound previously existed on
+# how WIDE the 10-candle range itself could be. Claude's own pick (operator
+# had no preference -- "je sais pas"), first guess like SUPPORT_TOLERANCE_PCT,
+# to recalibrate once enough real outcomes accumulate.
+MAX_RANGE_RATIO = 3.0
 
 # Exit mechanics (operator-specified: "stop loss suiveur -10%", "aucun palier")
 TRAILING_STOP_PCT = 10.0
@@ -207,6 +216,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             range_high = max(c.high for c in last_n)
             if not range_low or range_high <= range_low:
                 continue  # a degenerate/flat range has no meaningful "position within it"
+            if range_high / range_low > MAX_RANGE_RATIO:
+                continue  # a near-total collapse within the lookback, not a real consolidation
 
             # 17/08, real bug caught live by the operator (Niles: distance
             # -21.6%, contradicted by the actual chart showing a recovery,

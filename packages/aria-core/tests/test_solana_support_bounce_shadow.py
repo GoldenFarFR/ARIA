@@ -204,6 +204,29 @@ async def test_price_below_support_low_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_extreme_range_ratio_rejected(monkeypatch):
+    # 17/08, real bug caught live by the operator (BULLSHIT: range_high was
+    # 7386x range_low -- a near-total collapse within the 50min lookback,
+    # not a real consolidation). Position-in-range math alone can't catch
+    # this: close=low means position=0% (technically "at support"), but the
+    # range itself is a falling-knife crash, not a bounce.
+    candles = _range_candles(low=0.000001, high=0.01, last_close=0.000001)  # ratio 10000x
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.000001)], chain=CHAIN)
+    assert logged == 0
+
+
+@pytest.mark.asyncio
+async def test_range_ratio_within_cap_still_qualifies(monkeypatch):
+    # range [1.0, 2.9] -> ratio 2.9x, under MAX_RANGE_RATIO=3.0; close=1.05
+    # -> position = (1.05-1.0)/(2.9-1.0)*100 = 2.6%, well within tolerance.
+    candles = _range_candles(low=1.0, high=2.9, last_close=1.05)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=1.05)], chain=CHAIN)
+    assert logged == 1
+
+
+@pytest.mark.asyncio
 async def test_fewer_than_10_candles_rejected(monkeypatch):
     short = _candles([0.9])[:9]
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=short))
