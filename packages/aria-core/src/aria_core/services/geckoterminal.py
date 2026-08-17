@@ -538,6 +538,11 @@ class GeckoTerminalClient:
         succeeds (the service is still busy) while still spending a real
         request against an already-exhausted quota -- pure amplification.
         Gives up on the FIRST 429 instead of the previous 3 attempts."""
+        from aria_core import geckoterminal_outage_suspension
+
+        if await geckoterminal_outage_suspension.is_suspended():
+            return None, f"{UNAVAILABLE} (suspension automatique GeckoTerminal, rate-limit sustained)"
+
         url = f"{self.base_url}{path}"
         attempt_429 = 0
         timeout_retried = False
@@ -564,6 +569,7 @@ class GeckoTerminalClient:
                 attempt_429 += 1
                 logger.warning("geckoterminal: HTTP 429 on %s after %s attempt(s)", url, attempt_429)
                 self._record_rate_limit()
+                await geckoterminal_outage_suspension.record_rate_limit_failure()
                 return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
 
             if response.status_code >= 500:
@@ -583,6 +589,7 @@ class GeckoTerminalClient:
                 return None, f"{UNAVAILABLE} ({exc})"
 
             self._record_success()
+            await geckoterminal_outage_suspension.record_success()
             return response.json(), None
 
     async def get_pool_created_at(self, pool_address: str, *, network: str = NETWORK) -> PoolMetadata:
