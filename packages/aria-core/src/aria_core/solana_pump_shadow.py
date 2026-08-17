@@ -193,7 +193,14 @@ _SCALE_OUT_DUST_FRACTION = 0.01
 # constant-product AMM approximation. NEVER replaces final_multiplier (kept
 # as the "ideal, zero-friction" reference for comparison) -- this feeds a
 # separate realistic_final_multiplier column instead.
-SIMULATED_TRADE_SIZE_USD = 20.0  # within the existing pilot's 10-25$ range
+# 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$,
+# explicit operator decision after seeing the real reconstruction: at 20$,
+# most Solana signals were unreachable (too large for a thin pump.fun pool's
+# liquidity, price-impact function returns None), so the "ideal" PnL badly
+# overstated what a real wallet could have captured. At 0.1$ far more of the
+# real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at
+# 20$, verified by replaying every closed row through this exact function).
+SIMULATED_TRADE_SIZE_USD = 0.1
 # Pump.fun bonding-curve fee (1.25% = 0.30% creator + 0.95% protocol), the
 # conservative/higher rate applicable to the very young tokens this shadow
 # overwhelmingly captures -- graduated PumpSwap pools fall to 0.25-0.30%.

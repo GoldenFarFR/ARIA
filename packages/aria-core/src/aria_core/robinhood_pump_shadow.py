@@ -195,7 +195,14 @@ _SCALE_OUT_DUST_FRACTION = 0.01
 # at the displayed spot price). NEVER replaces final_multiplier (kept as the
 # "ideal, zero-friction" reference for comparison) -- feeds a separate
 # realistic_final_multiplier column instead.
-SIMULATED_TRADE_SIZE_USD = 20.0  # within the existing pilot's 10-25$ range
+# 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$,
+# explicit operator decision after seeing the real reconstruction: at 20$,
+# most Solana signals were unreachable (too large for a thin pump.fun pool's
+# liquidity, price-impact function returns None), so the "ideal" PnL badly
+# overstated what a real wallet could have captured. At 0.1$ far more of the
+# real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at
+# 20$, verified by replaying every closed row through this exact function).
+SIMULATED_TRADE_SIZE_USD = 0.1
 # Robinhood Chain memecoin launchpads: Uniswap's own pools.trade charges
 # 0.25% (Uniswap v4 base fee), Robinpad charges 1% (Uniswap v3 LP fee) --
 # 1.0% used as the conservative middle-to-higher estimate across the real
