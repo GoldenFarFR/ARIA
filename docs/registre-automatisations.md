@@ -28,6 +28,7 @@ comme pour `hooks-changelog.md`.
 | `guardrail-file-alert.sh` | pre-commit | 🟢 actif, alerte seule | 07/08 | tripwire si un fichier garde-fou (wallet_guard/regles-uniques/config.toml) est touché |
 | `english-content-check.sh` | pre-commit | 🟢 actif, alerte seule | 11/08 | détecteur heuristique de contenu repo resté en français (règle 23/07) |
 | `commit-msg-coauthor-check.sh` | commit-msg | 🟢 actif | 07/08 | auto-ajoute le co-auteur GoldenFarFR si Claude est déjà présent |
+| `pre-push-regression-check.sh` | pre-push (chaîné AVANT devils-advocate-review.sh) | 🟢 actif, bloquant | 17/08 | pytest ciblé sur le cumul depuis le dernier déploiement VPS, bloque le push si un test échoue |
 | `devils-advocate-review.sh` | pre-push | 🟢 actif | 18/07 | critique architecturale post-push (Claude Fable 5), batché à 8000 lignes cumulées |
 
 ### Hooks Claude Code (session, `.claude/hooks/*.sh` wirés dans `.claude/settings.json`)

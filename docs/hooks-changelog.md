@@ -42,6 +42,27 @@ touché.
   Stub chained after `guardrail-file-alert.sh`, still before the
   secret-scan gate.
 
+### pre-push → `scripts/pre-push-regression-check.sh` (chaîné AVANT devils-advocate-review.sh)
+Garde-fou mécanique manquant (17/08, opérateur : "un truc qui vérifie ce que tu
+fais ici en direct par rapport à toutes les lignes cumulées avant déploiement
+vers github ?") — ni l'instruction textuelle de `session-checkpoint.sh` ("vérifie
+que les tests passent avant de pousser") ni la revue Fable 5 de
+`devils-advocate-review.sh` ne lançaient réellement `pytest` : la première est
+une consigne à l'agent (oubliable), la seconde une revue architecturale, jamais
+un test fonctionnel. **Bloquant** (contrairement à `devils-advocate-review.sh`,
+toujours async) : `exit 1` empêche le push si un test cible échoue.
+Périmètre : cumul depuis `.claude/last-deployed-ref` (même marqueur que le
+compteur 500 lignes de `session-checkpoint.sh`), pas seulement le diff de ce
+push — une régression introduite plusieurs pushs plus tôt mais jamais encore
+testée ensemble est quand même attrapée. Chaque module source modifié est
+mappé à ses tests par `grep` (jamais un simple `test_<module>.py`, la
+convention réelle du repo n'est pas uniforme, ex. `dexpaprika.py` →
+`test_dexpaprika_client.py`) + `test_coherence.py` toujours inclus. Chaîné
+AVANT `devils-advocate-review.sh` dans le stub `.git/hooks/pre-push` — un test
+cassé bloque le push avant qu'un appel Fable 5 payant ne soit envisagé.
+- **2026-08-17** création. Vérifié en direct : 968 tests ciblés en 65s
+  (contre 577s pour la suite complète).
+
 ### pre-push → `scripts/devils-advocate-review.sh` (+ `scripts/devils-advocate-lib.sh`)
 Critique architecturale post-push par Claude Fable 5 (async, jamais bloquant),
 rapport écrit dans `/opt/aria-data/architect-reports/pending/<sha>.md`.
