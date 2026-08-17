@@ -231,9 +231,26 @@ def _parse_candles(data: object) -> list[Candle]:
 
 async def _fetch_one_interval(pool_address: str, network: str, interval: str) -> list[Candle]:
     start = _compute_start(interval, _CANDLES_TO_REQUEST)
+    # 17/08, real bug caught live by the operator on solana_support_bounce_
+    # shadow (a token's support-distance math used candles ending ~10h in
+    # the past on an actively-traded pool). Root cause verified live via
+    # curl: `start` is computed _WINDOW_SAFETY_FACTOR times further back
+    # than `_CANDLES_TO_REQUEST` candles actually need (by design, to
+    # tolerate gaps on illiquid pools -- see _WINDOW_SAFETY_FACTOR's own
+    # comment) but the `limit` sent to the API was never widened to match.
+    # On a DENSE pool (near-zero gaps, exactly the kind of active token this
+    # project cares about), the API fills the requested `limit` starting
+    # from `start` and simply stops there -- confirmed live: limit=120
+    # returned candles ending 03:35->13:30 UTC (10h short of "now", 23:34
+    # UTC); limit=240 (== _CANDLES_TO_REQUEST * _WINDOW_SAFETY_FACTOR)
+    # returned candles reaching 23:30 UTC, 4min of "now" (the normal
+    # candle-closing lag). Requesting the full safety-widened count closes
+    # this for every interval, not just 5m -- the same ratio mismatch
+    # applies structurally regardless of interval.
+    request_limit = int(_CANDLES_TO_REQUEST * _WINDOW_SAFETY_FACTOR)
     data, error = await _get_json(
         f"/networks/{network}/pools/{pool_address}/ohlcv",
-        params={"start": start, "interval": interval, "limit": _CANDLES_TO_REQUEST},
+        params={"start": start, "interval": interval, "limit": request_limit},
     )
     if error is not None:
         logger.info("dexpaprika: %s/%s (%s) failed -- %s", network, pool_address[:10], interval, error)

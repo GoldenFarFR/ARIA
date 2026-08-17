@@ -309,3 +309,42 @@ class TestInvalidKeyFallback:
 
         assert dp._key_marked_invalid is True
         assert dp._auth_headers() == {}
+
+
+class _CapturingClient:
+    """17/08, real bug caught live by the operator on a dense (actively-
+    traded) pool: `_fetch_one_interval` sent `limit=_CANDLES_TO_REQUEST` to
+    the API while `start` was computed `_WINDOW_SAFETY_FACTOR` times
+    further back than that limit covers -- on a pool with near-continuous
+    candles, the API filled the limit starting from `start` and never
+    reached "now", silently returning candles up to ~10h stale. Verified
+    live via curl (limit=120 stopped 10h short; limit=240 reached "now").
+    This client records the `limit` actually sent so the fix (requesting
+    `_CANDLES_TO_REQUEST * _WINDOW_SAFETY_FACTOR`) can be asserted directly,
+    not just inferred from behavior."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.captured_params: dict | None = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, params=None, **kwargs):
+        self.captured_params = params
+        return FakeResponse(200, self.payload)
+
+
+@pytest.mark.asyncio
+async def test_fetch_one_interval_requests_safety_widened_limit(monkeypatch):
+    client = _CapturingClient(_rows(5))
+    monkeypatch.setattr("aria_core.services.dexpaprika.httpx.AsyncClient", lambda **kw: client)
+
+    await dp._fetch_one_interval(POOL, "solana", "5m")
+
+    expected_limit = int(dp._CANDLES_TO_REQUEST * dp._WINDOW_SAFETY_FACTOR)
+    assert client.captured_params["limit"] == expected_limit
+    assert expected_limit > dp._CANDLES_TO_REQUEST  # the whole point of the fix
