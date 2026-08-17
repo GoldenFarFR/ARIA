@@ -1221,9 +1221,10 @@ class _ReserveClient(FakeClient):
     """FakeClient whose snapshot reports a CONTROLLED current reserve, so the
     liquidity-collapse exit can be exercised against a known entry level."""
 
-    def __init__(self, price_by_pool, reserve_now, ohlcv_by_pool=None):
+    def __init__(self, price_by_pool, reserve_now, ohlcv_by_pool=None, dex_id=None):
         super().__init__(price_by_pool, ohlcv_by_pool)
         self._reserve_now = reserve_now
+        self._dex_id = dex_id
 
     async def get_pool_snapshot(self, pool_address, *, network="solana"):
         self.calls.append(pool_address)
@@ -1232,7 +1233,7 @@ class _ReserveClient(FakeClient):
             return PoolSnapshot(pool_address=pool_address, available=False, error="unavailable")
         return PoolSnapshot(
             pool_address=pool_address, price_usd=price,
-            reserve_usd=self._reserve_now, available=True,
+            reserve_usd=self._reserve_now, available=True, dex_id=self._dex_id,
         )
 
 
@@ -1302,6 +1303,20 @@ async def test_unknown_current_reserve_never_forces_a_close():
     client = _ReserveClient({"poolA": 1.05}, reserve_now=None)
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_liquidity_collapse"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pumpswap_pool_never_triggers_liquidity_collapse():
+    """17/08, real bug found live (EYE, PumpSwap dex_id): both DexScreener
+    and GeckoTerminal report near-zero reserve for graduated pump.fun pools
+    regardless of real liquidity -- the check is disabled entirely for this
+    pool type rather than firing false closures."""
+    await shadow.record_signals([_pool(m5=40.0, reserve=100_000.0, price_usd=1.0)], chain=CHAIN)
+    client = _ReserveClient({"poolA": 1.05}, reserve_now=0.0, dex_id="pumpswap")
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
 
 
 @pytest.mark.asyncio

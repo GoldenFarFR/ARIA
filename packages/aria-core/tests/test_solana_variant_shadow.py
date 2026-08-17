@@ -64,9 +64,13 @@ def _pool(
 
 
 class FakeClient:
-    def __init__(self, price_by_pool: dict[str, float | None], reserve_by_pool: dict[str, float] | None = None):
+    def __init__(
+        self, price_by_pool: dict[str, float | None], reserve_by_pool: dict[str, float] | None = None,
+        dex_id_by_pool: dict[str, str] | None = None,
+    ):
         self._prices = price_by_pool
         self._reserves = dict(reserve_by_pool or {})
+        self._dex_ids = dict(dex_id_by_pool or {})
         self.calls: list[str] = []
 
     async def get_pool_snapshot(self, pool_address, *, network="solana"):
@@ -75,7 +79,8 @@ class FakeClient:
         if price is None:
             return PoolSnapshot(pool_address=pool_address, available=False, error="unavailable")
         reserve = self._reserves.get(pool_address, 1000.0)
-        return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=reserve, available=True)
+        dex_id = self._dex_ids.get(pool_address)
+        return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=reserve, available=True, dex_id=dex_id)
 
 
 # --- record_signals: multi-variant classification -------------------------
@@ -188,6 +193,18 @@ async def test_scale_out_fills_and_completes():
     rows = await _rows()
     for r in rows:
         assert r["remaining_qty"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_pumpswap_pool_never_triggers_liquidity_collapse():
+    """17/08, same real bug as the base module: PumpSwap pools report
+    near-zero reserve regardless of real liquidity."""
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=20.0, reserve=8000.0)], chain=CHAIN)
+    client = FakeClient({"poolA": 0.98}, reserve_by_pool={"poolA": 0.0}, dex_id_by_pool={"poolA": "pumpswap"})
+    result = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert result["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert all(r["exit_reason"] is None for r in rows)
 
 
 @pytest.mark.asyncio

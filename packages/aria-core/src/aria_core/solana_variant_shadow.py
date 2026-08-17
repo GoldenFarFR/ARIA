@@ -327,8 +327,15 @@ async def advance_exit_simulation(
                 realistic_realized_proceeds += qty_fraction * impacted
 
             entry_reserve = row.get("reserve_usd")
+            # 17/08, real bug found live (EYE): PumpSwap pools report
+            # near-zero reserve from both DexScreener and GeckoTerminal
+            # regardless of real liquidity -- see solana_pump_shadow.py's
+            # identical guard for the full root-cause writeup. Disabled here
+            # too, not just an edge case for this pool type.
+            is_pumpswap = snapshot.dex_id == "pumpswap"
             liquidity_collapsed = (
-                entry_reserve is not None and entry_reserve > 0
+                not is_pumpswap
+                and entry_reserve is not None and entry_reserve > 0
                 and snapshot.reserve_usd is not None
                 and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
             )

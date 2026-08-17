@@ -677,7 +677,7 @@ async def _snapshot_with_fallback(
             reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
-                reserve_usd=reserve_usd, available=True,
+                reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,
             )
     return await client.get_pool_snapshot(pool_address, network=chain)
 
@@ -1084,8 +1084,22 @@ async def advance_exit_simulation(
             tx15 = (snapshot.transactions or {}).get("m15") or {} if backfill_needed else {}
 
             entry_reserve = row.get("reserve_usd")
+            # 17/08, real bug found live: PumpSwap pools (pump.fun's native
+            # graduated-pool AMM) report near-zero reserve from BOTH
+            # DexScreener and GeckoTerminal regardless of real liquidity
+            # (confirmed live, EYE pool: $837k real 24h volume, both readings
+            # <$0.01) -- neither indexer implements PumpSwap's real depth
+            # formula (`pool_quote_token_account.amount +
+            # Pool.virtual_quote_reserves`, per pump.fun's own public docs).
+            # The check is unreliable for this pool type, not just an edge
+            # case -- disabled here rather than left to fire false closures.
+            # Real long-term fix (banked, not built): a direct Solana RPC
+            # read of the Pool account, ground truth, no third-party mapping
+            # gap -- first Solana RPC integration this project would ever do.
+            is_pumpswap = snapshot.dex_id == "pumpswap"
             liquidity_collapsed = (
-                entry_reserve is not None and entry_reserve > 0
+                not is_pumpswap
+                and entry_reserve is not None and entry_reserve > 0
                 and snapshot.reserve_usd is not None
                 and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
             )

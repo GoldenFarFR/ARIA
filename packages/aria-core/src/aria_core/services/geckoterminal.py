@@ -369,6 +369,17 @@ class PoolSnapshot:
     price_change_pct: dict[str, float] = field(default_factory=dict)
     transactions: dict[str, dict] = field(default_factory=dict)
     volume_usd: dict[str, float] = field(default_factory=dict)
+    # 17/08 -- lets a caller recognize a PumpSwap pool (pump.fun's native
+    # graduated-pool AMM): both DexScreener and GeckoTerminal report its
+    # reserve as near-zero regardless of real liquidity (confirmed live,
+    # EYE pool: $837k real 24h volume, both providers read <$0.01 reserve).
+    # Root cause per pump.fun's own public docs (pump-fun/pump-public-docs):
+    # a PumpSwap pool's real tradable depth is
+    # `pool_quote_token_account.amount + Pool.virtual_quote_reserves`, a
+    # formula neither indexer implements for this pool type -- not a parsing
+    # bug on our side, a genuine upstream gap. None when the source (e.g. the
+    # GeckoTerminal fallback path) doesn't report a dex id at all.
+    dex_id: str | None = None
 
 
 @dataclass

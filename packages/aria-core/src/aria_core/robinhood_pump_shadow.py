@@ -517,7 +517,7 @@ async def _snapshot_with_fallback(
             reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
-                reserve_usd=reserve_usd, available=True,
+                reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,
             )
     return await client.get_pool_snapshot(pool_address, network=chain)
 
