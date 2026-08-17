@@ -6,6 +6,7 @@ test_geckoterminal_client.py), plus a dedicated RWA-exclusion test suite for
 the Robinhood-specific Stock Token filter that has no Solana equivalent."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -50,6 +51,7 @@ async def _rows():
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="PUMP",
     price_usd=1.0, m5=30.0, buyers=20, sellers=5, volume_m15=5000.0, reserve=100000.0,
+    pool_created_at=None,
 ) -> TrendingPool:
     return TrendingPool(
         pool_address=pool_address, token_address=token_address, symbol=symbol,
@@ -58,6 +60,10 @@ def _pool(
         transactions_m15={"buys": 40, "sells": 10, "buyers": buyers, "sellers": sellers},
         volume_usd_m15=volume_m15,
         reserve_usd=reserve,
+        # 16/08 MAX_POOL_AGE_MINUTES fail-CLOSED protection -- defaults to
+        # "just created" so existing tests keep passing a signal through
+        # unless they explicitly opt into testing the age filter itself.
+        pool_created_at=pool_created_at if pool_created_at is not None else datetime.now(timezone.utc),
     )
 
 
@@ -130,6 +136,30 @@ async def test_record_signals_exactly_at_threshold_counts():
 async def test_record_signals_never_fabricates_entry_price():
     logged = await shadow.record_signals([_pool(m5=40.0, price_usd=None)], chain=CHAIN)
     assert logged == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_record_signals_rejects_pool_older_than_max_age():
+    old = datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES + 1)
+    logged = await shadow.record_signals([_pool(m5=40.0, pool_created_at=old)], chain=CHAIN)
+    assert logged == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_record_signals_accepts_pool_within_max_age():
+    fresh = datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES - 1)
+    logged = await shadow.record_signals([_pool(m5=40.0, pool_created_at=fresh)], chain=CHAIN)
+    assert logged == 1
+
+
+@pytest.mark.asyncio
+async def test_record_signals_rejects_pool_with_unknown_age():
+    pool = _pool(m5=40.0)
+    pool = dataclasses.replace(pool, pool_created_at=None)
+    logged = await shadow.record_signals([pool], chain=CHAIN)
+    assert logged == 0  # fail-CLOSED: an unknown age is never assumed safe
     assert await _rows() == []
 
 
@@ -287,15 +317,22 @@ async def test_record_signals_stock_token_registry_failure_never_blocks_logging(
 
 # --- evaluate_open_signals -------------------------------------------------
 
-async def _insert_open_row(*, pool_address="poolA", entry_price=1.0, minutes_ago=20.0):
+async def _insert_open_row(
+    *, pool_address="poolA", entry_price=1.0, minutes_ago=20.0, pool_age_minutes=None,
+):
     detected_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    pool_created_at = (
+        (datetime.now(timezone.utc) - timedelta(minutes=pool_age_minutes)).isoformat()
+        if pool_age_minutes is not None else None
+    )
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(
             """
-            INSERT INTO robinhood_pump_shadow_log (pool_address, chain, status, detected_at, entry_price)
-            VALUES (?, ?, 'open', ?, ?)
+            INSERT INTO robinhood_pump_shadow_log
+                (pool_address, chain, status, detected_at, entry_price, pool_created_at)
+            VALUES (?, ?, 'open', ?, ?, ?)
             """,
-            (pool_address, CHAIN, detected_at, entry_price),
+            (pool_address, CHAIN, detected_at, entry_price, pool_created_at),
         )
         await db.commit()
 
@@ -529,6 +566,39 @@ async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
     assert rows[0]["remaining_qty"] == 1.0  # untouched, left for the next passage to retry
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_force_closes_a_losing_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    client = FakeClient({"poolA": 0.95})  # below entry -- losing, no rung/stop/max-hold triggered on its own
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "age_limit"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["final_multiplier"] == pytest.approx(0.95)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    client = FakeClient({"poolA": 1.1})  # above entry -- winning, kept open despite the age
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["remaining_qty"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_ignored_when_age_unknown():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)  # pool_age_minutes=None
+    client = FakeClient({"poolA": 0.95})  # losing, but age is unknown -- never force-closed on that basis alone
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
 
 
 @pytest.mark.asyncio

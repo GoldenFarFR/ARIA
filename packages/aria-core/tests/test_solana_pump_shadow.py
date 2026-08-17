@@ -4,7 +4,9 @@ machine test pattern; the GeckoTerminal client is always injected/mocked,
 never a real network call (same doctrine as test_geckoterminal_client.py)."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -12,6 +14,7 @@ import pytest
 from aria_core import solana_pump_shadow as shadow
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
+from aria_core.services.rugcheck import RugCheckReport
 from aria_core.skills.ta_levels import Candle
 
 CHAIN = "solana"
@@ -22,6 +25,16 @@ async def _tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", str(tmp_path / "shadow.db"))
     shadow._ensured_db_paths.clear()
     await shadow._ensure_table()
+    # 16/08 -- RugCheck enrichment is shadow-only/best-effort (see
+    # services/rugcheck.py), but a real network call has no place in a unit
+    # test (same doctrine that closed the real pytest-hang bug this
+    # session). Default: unavailable, matching the "best-effort, never
+    # blocking" contract -- individual tests override this when they need to
+    # assert on a specific rugcheck_* column.
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=RugCheckReport(available=False, error="test default")),
+    )
     yield
     shadow._ensured_db_paths.clear()
 
@@ -36,6 +49,7 @@ async def _rows():
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="PUMP",
     price_usd=1.0, m5=30.0, buyers=20, sellers=5, volume_m15=5000.0, reserve=100000.0,
+    pool_created_at=None,
 ) -> TrendingPool:
     return TrendingPool(
         pool_address=pool_address, token_address=token_address, symbol=symbol,
@@ -44,6 +58,10 @@ def _pool(
         transactions_m15={"buys": 40, "sells": 10, "buyers": buyers, "sellers": sellers},
         volume_usd_m15=volume_m15,
         reserve_usd=reserve,
+        # 16/08 MAX_POOL_AGE_MINUTES fail-CLOSED protection -- defaults to
+        # "just created" so existing tests keep passing a signal through
+        # unless they explicitly opt into testing the age filter itself.
+        pool_created_at=pool_created_at if pool_created_at is not None else datetime.now(timezone.utc),
     )
 
 
@@ -116,6 +134,63 @@ async def test_record_signals_never_fabricates_entry_price():
     logged = await shadow.record_signals([_pool(m5=40.0, price_usd=None)], chain=CHAIN)
     assert logged == 0
     assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_record_signals_rejects_pool_older_than_max_age():
+    old = datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES + 1)
+    logged = await shadow.record_signals([_pool(m5=40.0, pool_created_at=old)], chain=CHAIN)
+    assert logged == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_record_signals_accepts_pool_within_max_age():
+    fresh = datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES - 1)
+    logged = await shadow.record_signals([_pool(m5=40.0, pool_created_at=fresh)], chain=CHAIN)
+    assert logged == 1
+
+
+@pytest.mark.asyncio
+async def test_record_signals_rejects_pool_with_unknown_age():
+    pool = _pool(m5=40.0)
+    pool = dataclasses.replace(pool, pool_created_at=None)
+    logged = await shadow.record_signals([pool], chain=CHAIN)
+    assert logged == 0  # fail-CLOSED: an unknown age is never assumed safe
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_record_signals_stores_rugcheck_enrichment(monkeypatch):
+    from aria_core.services.rugcheck import RugCheckReport
+
+    async def _fake_report(mint):
+        assert mint == "tokA"
+        return RugCheckReport(
+            score_normalised=46, risks=["Low Liquidity", "High holder concentration"],
+            top_holder_pct=32.9, creator="DevWallet111", available=True, error=None,
+        )
+
+    monkeypatch.setattr(shadow.rugcheck, "get_token_report", _fake_report)
+    logged = await shadow.record_signals([_pool(m5=40.0)], chain=CHAIN)
+    assert logged == 1
+    rows = await _rows()
+    assert rows[0]["rugcheck_score"] == 46
+    assert rows[0]["rugcheck_risks"] == "Low Liquidity,High holder concentration"
+    assert rows[0]["rugcheck_top_holder_pct"] == pytest.approx(32.9)
+    assert rows[0]["rugcheck_creator"] == "DevWallet111"
+
+
+@pytest.mark.asyncio
+async def test_record_signals_rugcheck_failure_never_blocks_logging(monkeypatch):
+    async def _raising_report(mint):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(shadow.rugcheck, "get_token_report", _raising_report)
+    logged = await shadow.record_signals([_pool(m5=40.0)], chain=CHAIN)
+    assert logged == 1  # RugCheck is shadow-only enrichment, never a hard requirement
+    rows = await _rows()
+    assert rows[0]["rugcheck_score"] is None
 
 
 @pytest.mark.asyncio
@@ -222,15 +297,22 @@ async def test_snapshot_fallback_skips_dexscreener_without_a_token_address(monke
 
 # --- evaluate_open_signals -------------------------------------------------
 
-async def _insert_open_row(*, pool_address="poolA", entry_price=1.0, minutes_ago=20.0):
+async def _insert_open_row(
+    *, pool_address="poolA", entry_price=1.0, minutes_ago=20.0, pool_age_minutes=None,
+):
     detected_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    pool_created_at = (
+        (datetime.now(timezone.utc) - timedelta(minutes=pool_age_minutes)).isoformat()
+        if pool_age_minutes is not None else None
+    )
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(
             """
-            INSERT INTO solana_pump_shadow_log (pool_address, chain, status, detected_at, entry_price)
-            VALUES (?, ?, 'open', ?, ?)
+            INSERT INTO solana_pump_shadow_log
+                (pool_address, chain, status, detected_at, entry_price, pool_created_at)
+            VALUES (?, ?, 'open', ?, ?, ?)
             """,
-            (pool_address, CHAIN, detected_at, entry_price),
+            (pool_address, CHAIN, detected_at, entry_price, pool_created_at),
         )
         await db.commit()
 
@@ -464,6 +546,39 @@ async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
     assert rows[0]["remaining_qty"] == 1.0  # untouched, left for the next passage to retry
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_force_closes_a_losing_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    client = FakeClient({"poolA": 0.95})  # below entry -- losing, no rung/stop/max-hold triggered on its own
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "age_limit"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["final_multiplier"] == pytest.approx(0.95)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    client = FakeClient({"poolA": 1.1})  # above entry -- winning, kept open despite the age
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["remaining_qty"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_age_limit_ignored_when_age_unknown():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)  # pool_age_minutes=None
+    client = FakeClient({"poolA": 0.95})  # losing, but age is unknown -- never force-closed on that basis alone
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_age_limit"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
 
 
 @pytest.mark.asyncio

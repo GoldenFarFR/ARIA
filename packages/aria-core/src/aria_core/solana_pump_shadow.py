@@ -127,7 +127,7 @@ import aiosqlite
 
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import aria_db_path
-from aria_core.services import dexscreener
+from aria_core.services import dexscreener, rugcheck
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -145,6 +145,22 @@ DB_PATH = str(aria_db_path())
 # Recalibrated same day from the 15min to the 5min window (second Dune pass,
 # same exit methodology, beat 15min on both winrate and avg multiplier).
 M5_SURGE_THRESHOLD_PCT = 25.0
+
+# 16/08, operator-requested protection against a token whose liquidity gets
+# pulled shortly after launch (real case observed live this session: a
+# ~35min-old pool's LP fully removed, price down -38.6% in 5min). A pool
+# older than this at DETECTION time is never logged as a new signal. An
+# already-open, currently-LOSING position (current price <= entry) is
+# force-closed the moment its real age crosses this line -- see the
+# priority-1 check at the top of ``advance_exit_simulation``'s per-row loop.
+# A still-WINNING position keeps being tracked normally instead (16/08,
+# second pass, operator decision: a real 1000% run shouldn't be cut short
+# just because 25min passed -- the scale-out ladder already banks gains
+# progressively either way). Fail-CLOSED on missing data (unlike this
+# module's usual "never fabricate, fail-open" doctrine for pure
+# observations): this is a protective filter, not a reported metric, so an
+# unknown age is treated as "too risky to trade", never "assume it's fine".
+MAX_POOL_AGE_MINUTES = 25.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -183,6 +199,24 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # exit-simulation pass, at which point ``detected_at`` is used as the
     # implicit starting boundary instead.
     ("last_checked_at", "TEXT"),
+    # 16/08, MAX_POOL_AGE_MINUTES protection -- the pool's real creation
+    # timestamp (never the same as ``detected_at``, which only marks when
+    # THIS shadow first saw it). NULL for any row logged before this column
+    # existed (pre-migration rows, never backfilled -- honest gap, not a bug).
+    ("pool_created_at", "TEXT"),
+    # 16/08, RugCheck SHADOW-ONLY risk snapshot at detection time -- see
+    # services/rugcheck.py's module docstring for why this is logged but
+    # NEVER used to filter/block a signal (operator-requested: "let it trade
+    # freely, we'll check hours later whether losses correlate with a flagged
+    # score"). NULL means either the call failed/timed out or this row
+    # predates the column -- never fabricated either way.
+    ("rugcheck_score", "INTEGER"),
+    ("rugcheck_risks", "TEXT"),
+    ("rugcheck_top_holder_pct", "REAL"),
+    # 16/08, operator-requested (banked for a future analysis, not built
+    # yet) -- the deployer wallet, so signals can later be aggregated per
+    # creator across multiple launches.
+    ("rugcheck_creator", "TEXT"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -291,8 +325,42 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     # price at detection time can't be forward-measured
                     # either, skip it honestly rather than log a bad row.
                     continue
+                if pool.pool_created_at is None:
+                    # MAX_POOL_AGE_MINUTES protection -- fail-CLOSED (see the
+                    # constant's own docstring): an unknown age is never
+                    # assumed safe.
+                    continue
+                pool_age_minutes = (
+                    datetime.now(timezone.utc) - pool.pool_created_at
+                ).total_seconds() / 60.0
+                if pool_age_minutes >= MAX_POOL_AGE_MINUTES:
+                    continue  # already past the protection window at detection time
                 if await _has_open_signal(db, pool.pool_address, chain):
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
+
+                # 16/08, RugCheck SHADOW-ONLY snapshot -- SEE services/
+                # rugcheck.py's module docstring: logged for later
+                # correlation analysis, NEVER used to filter/skip this
+                # signal (operator-explicit: the entry stays free either
+                # way). A failed/unavailable call never blocks logging the
+                # signal itself -- best-effort enrichment only.
+                rugcheck_score: int | None = None
+                rugcheck_risks: str | None = None
+                rugcheck_top_holder_pct: float | None = None
+                rugcheck_creator: str | None = None
+                if pool.token_address:
+                    try:
+                        report = await rugcheck.get_token_report(pool.token_address)
+                        if report.available:
+                            rugcheck_score = report.score_normalised
+                            rugcheck_risks = ",".join(report.risks) if report.risks else None
+                            rugcheck_top_holder_pct = report.top_holder_pct
+                            rugcheck_creator = report.creator
+                    except Exception as exc:  # noqa: BLE001 -- shadow enrichment must never break the log pass
+                        logger.info(
+                            "solana_pump_shadow: rugcheck lookup failed for %s (%s)",
+                            pool.token_address, exc,
+                        )
 
                 transactions_m15 = pool.transactions_m15 or {}
                 # Exit-simulation state initialized right here at detection --
@@ -306,8 +374,10 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                         detected_at, entry_price,
                         m5_pct, m15_pct, m30_pct, h1_pct, h6_pct, h24_pct,
                         buyers_m15, sellers_m15, volume_usd_m15, reserve_usd,
-                        remaining_qty, realized_proceeds, peak_price, next_scale_level
-                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?)
+                        remaining_qty, realized_proceeds, peak_price, next_scale_level,
+                        pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
+                        rugcheck_creator
+                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
@@ -318,6 +388,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                         transactions_m15.get("buyers"), transactions_m15.get("sellers"),
                         pool.volume_usd_m15, pool.reserve_usd,
                         pool.price_usd, first_scale_level,
+                        pool.pool_created_at.isoformat(),
+                        rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
                     ),
                 )
                 logged += 1
@@ -572,7 +644,7 @@ async def advance_exit_simulation(
     client = client or geckoterminal_client
     counts = {
         "checked": 0, "scale_out_fills": 0, "closed_scale_out_complete": 0,
-        "closed_trailing_stop": 0, "closed_max_hold": 0,
+        "closed_trailing_stop": 0, "closed_max_hold": 0, "closed_age_limit": 0,
     }
     try:
         await _ensure_table()
@@ -646,29 +718,58 @@ async def advance_exit_simulation(
 
             peak_price = max(peak_price, effective_high)
 
-            fills_this_cycle = 0
-            while remaining_qty > _SCALE_OUT_DUST_FRACTION and effective_high >= next_scale_level:
-                sell_fraction = remaining_qty * SCALE_OUT_SELL_FRACTION
-                realized_proceeds += sell_fraction * next_scale_level
-                remaining_qty -= sell_fraction
-                next_scale_level *= (1 + SCALE_OUT_STEP_PCT / 100.0)
-                fills_this_cycle += 1
-            counts["scale_out_fills"] += fills_this_cycle
+            # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
+            # BEFORE the scale-out ladder. **16/08, second pass, operator
+            # decision**: only force-closes a position that is NOT currently
+            # winning (``current_price <= entry_price``) once the pool
+            # crosses this age -- a still-winning position (e.g. a real
+            # 1000% run that could offset several losing trades) keeps being
+            # tracked normally by the scale-out ladder/trailing stop instead
+            # of being cut short. The scale-out ladder itself already banks
+            # 25% of whatever remains at every +25% rung, so a winning
+            # position past the age line is never fully unprotected -- this
+            # is deliberately NOT a second, separate profit-lock mechanism.
+            # A row logged before this column existed has ``pool_created_at``
+            # NULL -- never force-closed on unknown age (would silently close
+            # every pre-migration open row at once); only a KNOWN age that
+            # has crossed the line AND a currently-losing position triggers
+            # this.
+            pool_created_at_raw = row.get("pool_created_at")
+            pool_age_minutes = _minutes_since(pool_created_at_raw) if pool_created_at_raw else None
+            age_limit_exceeded = (
+                pool_age_minutes is not None
+                and pool_age_minutes >= MAX_POOL_AGE_MINUTES
+                and current_price <= entry_price
+            )
 
+            fills_this_cycle = 0
             exit_reason: str | None = None
-            if remaining_qty <= _SCALE_OUT_DUST_FRACTION and fills_this_cycle:
+            if age_limit_exceeded:
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
-                exit_reason = "scale_out_complete"
-            elif effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
-                stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
-                realized_proceeds += remaining_qty * stop_price
-                remaining_qty = 0.0
-                exit_reason = "trailing_stop"
-            elif age_minutes >= MAX_HOLD_MINUTES:
-                realized_proceeds += remaining_qty * current_price
-                remaining_qty = 0.0
-                exit_reason = "max_hold"
+                exit_reason = "age_limit"
+            else:
+                while remaining_qty > _SCALE_OUT_DUST_FRACTION and effective_high >= next_scale_level:
+                    sell_fraction = remaining_qty * SCALE_OUT_SELL_FRACTION
+                    realized_proceeds += sell_fraction * next_scale_level
+                    remaining_qty -= sell_fraction
+                    next_scale_level *= (1 + SCALE_OUT_STEP_PCT / 100.0)
+                    fills_this_cycle += 1
+                counts["scale_out_fills"] += fills_this_cycle
+
+                if remaining_qty <= _SCALE_OUT_DUST_FRACTION and fills_this_cycle:
+                    realized_proceeds += remaining_qty * current_price
+                    remaining_qty = 0.0
+                    exit_reason = "scale_out_complete"
+                elif effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
+                    stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+                    realized_proceeds += remaining_qty * stop_price
+                    remaining_qty = 0.0
+                    exit_reason = "trailing_stop"
+                elif age_minutes >= MAX_HOLD_MINUTES:
+                    realized_proceeds += remaining_qty * current_price
+                    remaining_qty = 0.0
+                    exit_reason = "max_hold"
 
             final_multiplier = (realized_proceeds / entry_price) if exit_reason else None
 
@@ -695,6 +796,8 @@ async def advance_exit_simulation(
                 counts["closed_trailing_stop"] += 1
             elif exit_reason == "max_hold":
                 counts["closed_max_hold"] += 1
+            elif exit_reason == "age_limit":
+                counts["closed_age_limit"] += 1
     except Exception as exc:  # noqa: BLE001 -- shadow simulation must never raise into a caller
         logger.info("solana_pump_shadow: advance_exit_simulation failed (%s)", exc)
     return counts

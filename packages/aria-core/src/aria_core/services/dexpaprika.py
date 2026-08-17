@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from aria_core.services.geckoterminal import OHLCVResult
+from aria_core.services.geckoterminal import OHLCVResult, TrendingPool, TrendingPoolsResult
 from aria_core.skills.ta_levels import Candle
 
 logger = logging.getLogger(__name__)
@@ -254,3 +254,125 @@ async def get_ohlcv(pool_address: str, *, network: str = "base", mode: str = "st
     if best:
         return OHLCVResult(candles=best, available=True, error=None)
     return OHLCVResult(candles=[], available=False, error=f"{UNAVAILABLE} (aucune bougie)")
+
+
+async def _resolve_base_token(
+    network: str, pool_address: str,
+) -> tuple[str, str | None, datetime | None] | None:
+    """One extra call to the single-pool detail endpoint -- the ONLY place
+    DexPaprika exposes an explicit ``base_token_id``/``quote_token_id`` split
+    (verified live 16/08: ``/pools/search`` returns an unordered ``tokens``
+    list with no base/quote marker at all, picking either side blindly would
+    silently mislabel the wrong leg of the pair as the tracked token). Same
+    call also carries ``created_at`` (pool creation timestamp, verified live
+    16/08) -- resolved here at zero extra cost rather than a 3rd call.
+    Returns ``None`` (never a guess) if the detail call fails or the response
+    doesn't carry a usable ``base_token_id``."""
+    data, error = await _get_json(f"/networks/{network}/pools/{pool_address}", params={})
+    if error is not None or not isinstance(data, dict):
+        return None
+    base_id = data.get("base_token_id")
+    if not isinstance(base_id, str):
+        return None
+    symbol = None
+    for tok in data.get("tokens") or []:
+        if isinstance(tok, dict) and tok.get("id") == base_id:
+            raw_symbol = tok.get("symbol")
+            symbol = raw_symbol if isinstance(raw_symbol, str) and raw_symbol else None
+            break
+    created_at = None
+    raw_created = data.get("created_at")
+    if isinstance(raw_created, str) and raw_created:
+        try:
+            created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
+        except ValueError:
+            created_at = None  # never fabricate -- an unparseable date stays None
+    return base_id, symbol, created_at
+
+
+async def get_trending_pools(
+    network: str, *, limit: int = 20, min_price_change_5m: float | None = None,
+) -> TrendingPoolsResult:
+    """Independent discovery source (16/08) -- a SEPARATE provider from
+    GeckoTerminal's own ``get_trending_pools``, deliberately used to avoid
+    two chains competing for the SAME shared adaptive throttle (16/08 real
+    incident: Robinhood Chain discovery was starved of GeckoTerminal's shared
+    budget by Solana's own calls in the same loop iteration, not a genuine
+    per-chain support gap -- both networks answered fine in isolation).
+    DexPaprika's own module-level throttle (``_MIN_INTERVAL``) is completely
+    separate, so this never competes with GeckoTerminal callers for budget.
+
+    ``/networks/{network}/pools/search?order_by=price_change_percentage_5m``
+    (verified live 16/08 against the real API, including confirming
+    ``"robinhood"`` IS a supported network id) is sorted DESCENDING by the
+    same 5-minute surge signal the shadow's own ``M5_SURGE_THRESHOLD_PCT``
+    gates on -- passing ``min_price_change_5m`` here lets the caller stop
+    this function from resolving (via ``_resolve_base_token``, one extra
+    network call each) every candidate that would be filtered out anyway by
+    the caller's own threshold, keeping the real API cost proportional to
+    the pools that actually qualify as a signal, not the full ``limit``
+    fetched. ``None`` (default) resolves every fetched pool, unfiltered --
+    the generic behavior for a caller with no threshold of its own.
+
+    Only ``m5``/``h1``/``h6``/``h24`` are populated in the returned
+    ``TrendingPool.price_change_pct`` (DexPaprika's search response has no
+    ``m15``/``m30`` window at all, unlike GeckoTerminal) -- never fabricated,
+    simply absent from the dict, same as any other missing-data case in this
+    dome. Likewise ``transactions_m15``/``volume_usd_m15`` stay ``None``
+    (this endpoint only reports 24h/7d/30d volume, no m15 buy/sell
+    breakdown) -- ``reserve_usd`` maps from ``liquidity_usd`` (observed
+    ``0``/very small on several genuinely-new Robinhood Chain pools during
+    live verification, a known DexPaprika data-quality gap already
+    documented for Uniswap V4 elsewhere in this module -- passed through
+    as-is, never patched over)."""
+    params: dict[str, object] = {
+        "limit": limit, "order_by": "price_change_percentage_5m", "sort": "desc",
+    }
+    data, error = await _get_json(f"/networks/{network}/pools/search", params=params)
+    if error is not None:
+        return TrendingPoolsResult(available=False, error=error)
+    if not isinstance(data, dict):
+        return TrendingPoolsResult(available=False, error=UNAVAILABLE)
+
+    pools: list[TrendingPool] = []
+    for item in data.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        pool_address = item.get("id")
+        if not isinstance(pool_address, str):
+            continue
+        m5 = item.get("price_change_percentage_5m")
+        m5 = m5 if isinstance(m5, (int, float)) else None
+        if min_price_change_5m is not None and (m5 is None or m5 < min_price_change_5m):
+            continue
+
+        base = await _resolve_base_token(network, pool_address)
+        if base is None:
+            continue  # never fabricate a token_address -- skip honestly
+        token_address, symbol, pool_created_at = base
+
+        price_usd = item.get("price_usd")
+        liquidity_usd = item.get("liquidity_usd")
+        price_change_pct: dict[str, float] = {}
+        for key, field_name in (
+            ("m5", "price_change_percentage_5m"),
+            ("h1", "price_change_percentage_1h"),
+            ("h6", "price_change_percentage_6h"),
+            ("h24", "price_change_percentage_24h"),
+        ):
+            value = item.get(field_name)
+            if isinstance(value, (int, float)):
+                price_change_pct[key] = float(value)
+
+        pools.append(TrendingPool(
+            pool_address=pool_address,
+            token_address=token_address,
+            symbol=symbol,
+            price_usd=float(price_usd) if isinstance(price_usd, (int, float)) else None,
+            price_change_pct=price_change_pct,
+            transactions_m15=None,
+            volume_usd_m15=None,
+            reserve_usd=float(liquidity_usd) if isinstance(liquidity_usd, (int, float)) else None,
+            pool_created_at=pool_created_at,
+        ))
+    return TrendingPoolsResult(pools=pools, available=True, error=None)

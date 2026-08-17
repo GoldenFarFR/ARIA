@@ -1,5 +1,6 @@
 """Read-only RugCheck.xyz client -- second security opinion for Solana tokens
-that GoPlus doesn't yet cover (#207, 07/18).
+that GoPlus doesn't yet cover (#207, 07/18), PLUS a richer shadow-only risk
+snapshot for solana_pump_shadow.py (16/08, see ``get_token_report`` below).
 
 Context verified live (real curl, not a guess): the momentum pipeline
 (`momentum_entry._check_honeypot`) cautiously rejects (fail-closed) any token
@@ -29,7 +30,25 @@ fail-closed rejection stays unchanged (opens up coverage, never relaxes the guar
 
 Rate limit observed live (`x-rate-limit-limit`/`-remaining` headers, 07/18):
 15 requests, undocumented window -- cautiously treated as 1 minute, throttle
-set to ~4.5s/request to stay well under this cap.
+set to ~4.5s/request to stay well under this cap. Re-confirmed live 16/08
+(same header, same undocumented window) -- ``get_token_report`` below reuses
+this SAME shared throttle rather than a second independent one, same "one
+coordination point per provider" doctrine already applied elsewhere in this
+codebase (see geckoterminal.py's shared adaptive throttle).
+
+**16/08 addition -- shadow-only risk snapshot (``get_token_report``)**:
+solana_pump_shadow.py logs (never blocks on) a richer per-signal snapshot
+(score, named risks, top-holder %, creator wallet) via the fuller
+``/tokens/{mint}/report`` endpoint -- distinct from ``get_report_summary``'s
+lightweight ``/report/summary`` (sufficient for the real pipeline's simple
+boolean gate, but missing topHolders/creator). Explicit operator decision
+after 2-3 live comparison tests against the shadow's own already-closed
+positions: RugCheck correctly flagged the one confirmed real LP-pull case
+this session (top holder 33%, score 46, "High holder concentration") but ALSO
+flagged two genuinely profitable positions (score 31, "Low Liquidity",
+top holder ~80% -- likely the pool itself counted as a holder on a freshly
+launched token, never confirmed either way) -- SHADOW MODE ONLY, never used
+to filter/block a signal, logged purely for later correlation analysis.
 """
 from __future__ import annotations
 
@@ -68,6 +87,25 @@ class RugCheckResult:
         "danger"-level risk -- never inferred from missing data (RugCheck
         unavailable => available=False => confirmed_clean=False, fail-closed)."""
         return self.available and self.rugged is False and not self.danger_risks
+
+
+@dataclass
+class RugCheckReport:
+    """16/08 -- shadow-only risk snapshot, see module docstring. Distinct
+    from ``RugCheckResult`` (the real pipeline's simple pass/fail gate):
+    this carries the raw score/risks/top-holder/creator for logging and
+    later correlation analysis, never a boolean verdict."""
+
+    score_normalised: int | None = None
+    risks: list[str] = field(default_factory=list)
+    top_holder_pct: float | None = None
+    # The deployer wallet -- neither GeckoTerminal nor DexPaprika expose this
+    # field (verified live 16/08), RugCheck is the only one of the three
+    # that does. Banked for a future per-creator behavior analysis, not
+    # built yet.
+    creator: str | None = None
+    available: bool = True
+    error: str | None = None
 
 
 async def _throttle() -> None:
@@ -162,4 +200,45 @@ async def get_report_summary(mint: str) -> RugCheckResult:
         rugged=bool(rugged) if isinstance(rugged, bool) else None,
         score_normalised=float(score) if isinstance(score, (int, float)) else None,
         danger_risks=danger_risks,
+    )
+
+
+async def get_token_report(mint_address: str) -> RugCheckReport:
+    """16/08 -- shadow-only richer risk snapshot for solana_pump_shadow.py,
+    see module docstring. Uses the SAME shared throttle as
+    ``get_report_summary`` (``_get_json`` above) -- never a second
+    independent rate limiter for the same provider. Never raises."""
+    addr = (mint_address or "").strip()
+    if not addr:
+        return RugCheckReport(available=False, error="adresse vide")
+
+    data, error = await _get_json(f"{BASE_URL}/tokens/{addr}/report")
+    if error is not None:
+        return RugCheckReport(available=False, error=error)
+    if not isinstance(data, dict):
+        return RugCheckReport(available=False, error=UNAVAILABLE)
+
+    score_normalised = data.get("score_normalised")
+    score_normalised = int(score_normalised) if isinstance(score_normalised, (int, float)) else None
+
+    risks: list[str] = []
+    raw_risks = data.get("risks")
+    if isinstance(raw_risks, list):
+        for r in raw_risks:
+            if isinstance(r, dict) and isinstance(r.get("name"), str):
+                risks.append(r["name"])
+
+    top_holder_pct: float | None = None
+    raw_holders = data.get("topHolders")
+    if isinstance(raw_holders, list) and raw_holders:
+        first = raw_holders[0]
+        if isinstance(first, dict) and isinstance(first.get("pct"), (int, float)):
+            top_holder_pct = float(first["pct"])
+
+    raw_creator = data.get("creator")
+    creator = raw_creator if isinstance(raw_creator, str) and raw_creator else None
+
+    return RugCheckReport(
+        score_normalised=score_normalised, risks=risks,
+        top_holder_pct=top_holder_pct, creator=creator, available=True, error=None,
     )

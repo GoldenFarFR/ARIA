@@ -330,6 +330,11 @@ class TrendingPool:
     transactions_m15: dict[str, int] | None  # buys/sells/buyers/sellers
     volume_usd_m15: float | None
     reserve_usd: float | None
+    # 16/08, second pass -- already present in the raw response (`attributes.
+    # pool_created_at`), no extra call needed. First consumer: the shadow's
+    # MAX_POOL_AGE_MINUTES protection against a pool that already rug-pulled
+    # its liquidity well before the shadow ever saw it.
+    pool_created_at: datetime | None = None
 
 
 @dataclass
@@ -426,6 +431,14 @@ def _parse_trending_pool_item(
 
     reserve_usd = _as_float(attrs.get("reserve_in_usd"))
 
+    pool_created_at: datetime | None = None
+    raw_created = attrs.get("pool_created_at")
+    if isinstance(raw_created, str) and raw_created:
+        try:
+            pool_created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
+        except ValueError:
+            pool_created_at = None  # never fabricate -- an unparseable date stays None
+
     token_address: str | None = None
     symbol: str | None = None
     relationships = item.get("relationships")
@@ -452,6 +465,7 @@ def _parse_trending_pool_item(
         transactions_m15=transactions_m15,
         volume_usd_m15=volume_usd_m15,
         reserve_usd=reserve_usd,
+        pool_created_at=pool_created_at,
     )
 
 
