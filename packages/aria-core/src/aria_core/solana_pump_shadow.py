@@ -1048,24 +1048,16 @@ async def advance_exit_simulation(
             # observational -- no decision reads these yet; they exist so the
             # operator's own m15-window cap idea and a buy/sell-pressure
             # filter become testable at all on the next sample.
-            if row.get("m15_pct") is None and snapshot.price_change_pct:
-                tx15 = (snapshot.transactions or {}).get("m15") or {}
-                try:
-                    async with aiosqlite.connect(_db_path()) as db:
-                        await db.execute(
-                            "UPDATE solana_pump_shadow_log SET m15_pct = ?, m30_pct = ?, "
-                            "buyers_m15 = ?, sellers_m15 = ?, volume_usd_m15 = ? WHERE id = ?",
-                            (
-                                snapshot.price_change_pct.get("m15"),
-                                snapshot.price_change_pct.get("m30"),
-                                tx15.get("buyers"), tx15.get("sellers"),
-                                (snapshot.volume_usd or {}).get("m15"),
-                                row["id"],
-                            ),
-                        )
-                        await db.commit()
-                except Exception as exc:  # noqa: BLE001 -- enrichment must never break the pass
-                    logger.info("solana_pump_shadow: signal backfill failed (%s)", exc)
+            # 17/08, SECOND pass on this backfill -- the first version opened
+            # its OWN connection and committed per row, i.e. a whole extra
+            # write immediately before the main UPDATE below. On a database
+            # shared with the production container that promptly produced
+            # real "database is locked" failures in prod (heartbeat tasks,
+            # wallet_copy_shadow) -- a regression introduced by this very
+            # enrichment. The values are now folded into the single UPDATE at
+            # the end of the pass: same data, no extra write, no extra lock.
+            backfill_needed = row.get("m15_pct") is None and bool(snapshot.price_change_pct)
+            tx15 = (snapshot.transactions or {}).get("m15") or {} if backfill_needed else {}
 
             entry_reserve = row.get("reserve_usd")
             liquidity_collapsed = (
@@ -1128,7 +1120,11 @@ async def advance_exit_simulation(
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         last_checked_at = ?, last_price = ?,
                         realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
-                        window_volume_usd = ?, last_reserve_usd = ?
+                        window_volume_usd = ?, last_reserve_usd = ?,
+                        m15_pct = COALESCE(?, m15_pct), m30_pct = COALESCE(?, m30_pct),
+                        buyers_m15 = COALESCE(?, buyers_m15),
+                        sellers_m15 = COALESCE(?, sellers_m15),
+                        volume_usd_m15 = COALESCE(?, volume_usd_m15)
                     WHERE id = ?
                     """,
                     (
@@ -1136,7 +1132,13 @@ async def advance_exit_simulation(
                         realized_proceeds, exit_reason, final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
                         realistic_realized_proceeds, realistic_final_multiplier,
-                        window_volume_usd, snapshot.reserve_usd, row["id"],
+                        window_volume_usd, snapshot.reserve_usd,
+                        snapshot.price_change_pct.get("m15") if backfill_needed else None,
+                        snapshot.price_change_pct.get("m30") if backfill_needed else None,
+                        tx15.get("buyers") if backfill_needed else None,
+                        tx15.get("sellers") if backfill_needed else None,
+                        (snapshot.volume_usd or {}).get("m15") if backfill_needed else None,
+                        row["id"],
                     ),
                 )
                 await db.commit()
