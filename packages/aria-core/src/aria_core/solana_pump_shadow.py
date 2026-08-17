@@ -160,9 +160,15 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # module's usual "never fabricate, fail-open" doctrine for pure
 # observations): this is a protective filter, not a reported metric, so an
 # unknown age is treated as "too risky to trade", never "assume it's fine".
-MAX_POOL_AGE_MINUTES = 120.0
+MAX_POOL_AGE_MINUTES = 240.0
 # 17/08, operator-directed age-window test ("faisons un test tranche par
-# tranche met 20 a 120 minutes"). Rationale, and it is HIS hypothesis
+# tranche met 20 a 120 minutes"), upper bound widened same day 120->240
+# (operator: "agrandi la fenetre 20-120 a 20-240 sur solana") to keep
+# measuring further into the 120-240min range instead of cutting it off --
+# nothing in the archived sample yet says where the stranded-rate curve
+# flattens past 120min, so the window stays open until it does. Robinhood is
+# untouched (paused, its own separate calibration -- see ENABLED_CHAINS
+# below). Rationale, and it is HIS hypothesis
 # confirmed by the archive rather than a guess: the stranded rate falls
 # sharply with pool age at entry -- 0-5min -> 73% stranded (-70.4%),
 # 5-10min -> 61% (-59.4%), 10-15min -> 31% (-29.1%), 20-26min -> 0% (+5.1%,
