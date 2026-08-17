@@ -129,7 +129,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from aria_core.momentum_entry import _best_pair
-from aria_core.paths import aria_db_path
+from aria_core.paths import shadow_db_path
 from aria_core.services import dexscreener
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
@@ -142,7 +142,9 @@ from aria_core.services.robinhood_stock_tokens import is_stock_token
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = str(aria_db_path())
+# 17/08 -- see solana_pump_shadow.py's own DB_PATH comment (same incident,
+# same fix): dedicated file, no longer shared with the prod container.
+DB_PATH = str(shadow_db_path())
 
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.

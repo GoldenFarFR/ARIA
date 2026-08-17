@@ -28,7 +28,19 @@ days on a wrong guess). A single real success at any point immediately
 resets the backoff to its floor and disarms.
 
 SQL plumbing shared via ``single_row_state.SingleRowStore`` -- see that
-module's own docstring."""
+module's own docstring.
+
+**17/08, ``db_path`` made overridable (real incident)**: this module used to
+hard-code ``aria_db_path()``, so the standalone shadow process (its own
+``GeckoTerminalClient`` instance, running outside Docker) shared the exact
+same suspension state as the prod container -- a 429 streak seen ONLY by the
+shadow could arm a suspension that then silently blocked prod's own
+GeckoTerminal calls too, on top of the separate ``database is locked`` issue
+this same incident surfaced (see ``paths.shadow_db_path``). Every function
+now takes an optional ``db_path`` (default ``None`` -- resolves to
+``aria_db_path()``, i.e. every existing call site keeps its exact prior
+behavior unchanged); only ``shadow_persistent.py``'s dedicated client passes
+``shadow_db_path()`` instead, giving it its own independent circuit breaker."""
 from __future__ import annotations
 
 import logging
@@ -59,19 +71,19 @@ _COLUMNS = [
 ]
 
 
-def _store() -> SingleRowStore:
-    return SingleRowStore(DB_PATH, _TABLE, _COLUMNS)
+def _store(db_path: str | None = None) -> SingleRowStore:
+    return SingleRowStore(db_path or DB_PATH, _TABLE, _COLUMNS)
 
 
-async def is_suspended() -> bool:
+async def is_suspended(db_path: str | None = None) -> bool:
     """Checked FIRST, before even attempting a network call -- fail-closed,
     never a wasted request against an account already known to be blocked."""
-    row = await _store().read("suspended_until")
+    row = await _store(db_path).read("suspended_until")
     until = parse_iso(row[0]) if row else None
     return until is not None and datetime.now(timezone.utc) < until
 
 
-async def record_rate_limit_failure() -> bool:
+async def record_rate_limit_failure(db_path: str | None = None) -> bool:
     """Called only on a REAL HTTP 429 -- never a generic timeout/5xx, which
     stays governed by the client's own existing retry logic, zero coupling
     to it. Returns True only on the call that ARMS the suspension for the
@@ -100,21 +112,28 @@ async def record_rate_limit_failure() -> bool:
         }
         return values, (just_armed, suspended_until_value)
 
-    just_armed, suspended_until_value = await _store().mutate(
+    just_armed, suspended_until_value = await _store(db_path).mutate(
         ("consecutive_rate_limit_failures", "current_backoff_seconds"), _apply
     )
     if just_armed:
-        await _notify_armed(suspended_until_value)
+        # 17/08 -- labels the source so a shadow-armed suspension is never
+        # mistaken for a prod-affecting one in the Telegram notification
+        # (the two now have fully independent state, see module docstring).
+        await _notify_armed(suspended_until_value, source="shadow" if db_path else "prod")
     return just_armed
 
 
-async def _notify_armed(suspended_until_iso: str | None) -> None:
+async def _notify_armed(suspended_until_iso: str | None, *, source: str = "prod") -> None:
     from aria_core.gateway.telegram_bot import send_message
 
     until_dt = parse_iso(suspended_until_iso)
     until_str = until_dt.strftime("%Y-%m-%d %H:%M UTC") if until_dt else "?"
+    scope = (
+        "-- n'affecte QUE le shadow paper-only, jamais le pipeline de trading reel"
+        if source == "shadow" else ""
+    )
     await send_message(
-        "🛡️ Suspension automatique GeckoTerminal activée -- "
+        f"🛡️ Suspension automatique GeckoTerminal activée ({source}) {scope}-- "
         f"{_ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES} rate-limits consécutifs malgré le throttle "
         "adaptatif deja au maximum. Cause reelle (quota mensuel vs blocage IP temporaire) pas "
         f"confirmee -- backoff exponentiel auto-calibrant. Prochaine tentative apres {until_str} "
@@ -123,10 +142,10 @@ async def _notify_armed(suspended_until_iso: str | None) -> None:
     )
 
 
-async def record_success() -> None:
+async def record_success(db_path: str | None = None) -> None:
     """A real call succeeded -- reset the streak AND the backoff to their
     floor, disarm immediately (never wait for the window to expire)."""
-    await _store().write(
+    await _store(db_path).write(
         {
             "consecutive_rate_limit_failures": 0,
             "suspended_until": None,

@@ -26,6 +26,21 @@ def aria_db_path() -> Path:
     return data_dir() / "aria.db"
 
 
+def shadow_db_path() -> Path:
+    """Dedicated SQLite file for the standalone shadow process
+    (solana_pump_shadow/robinhood_pump_shadow/shadow_position_peak), which
+    runs OUTSIDE Docker as its own long-lived Python process. 17/08 --
+    real incident: these modules used to share ``aria_db_path()`` with the
+    prod container, and two independent long-running processes writing to
+    the same SQLite file (even in WAL mode) produced sustained ``database is
+    locked`` failures on unrelated prod heartbeat tasks (wallet_scan_queue_cycle,
+    candle_history_watchlist_cycle). A separate file removes the write
+    contention entirely -- the shadow was always meant to be fully isolated
+    from prod (never wired to the heartbeat, own throttle), this closes the
+    one gap where it still shared state with it."""
+    return data_dir() / "shadow.db"
+
+
 def memory_dir() -> Path:
     path = data_dir() / "memory"
     path.mkdir(parents=True, exist_ok=True)

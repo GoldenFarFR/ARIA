@@ -15,10 +15,14 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from aria_core.paths import aria_db_path
+from aria_core.paths import shadow_db_path
 from aria_core.single_row_state import SingleRowStore
 
-DB_PATH = str(aria_db_path())
+# 17/08 -- see solana_pump_shadow.py's own DB_PATH comment (same incident,
+# same fix): dedicated file, no longer shared with the prod container. Reads
+# the SAME solana_pump_shadow_log/robinhood_pump_shadow_log tables below, so
+# it must live in the same DB as those modules now do.
+DB_PATH = str(shadow_db_path())
 
 _OPEN_TABLE = {
     "solana": "solana_pump_shadow_log",

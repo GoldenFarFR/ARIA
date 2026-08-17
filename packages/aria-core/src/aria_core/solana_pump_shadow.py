@@ -126,7 +126,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from aria_core.momentum_entry import _best_pair
-from aria_core.paths import aria_db_path
+from aria_core.paths import shadow_db_path
 from aria_core.services import dexscreener, rugcheck
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
@@ -138,7 +138,12 @@ from aria_core.services.geckoterminal import (
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = str(aria_db_path())
+# 17/08, real incident: this used to be aria_db_path() (shared with prod) --
+# two independent long-running processes writing to the same SQLite file
+# caused sustained "database is locked" failures on unrelated prod heartbeat
+# tasks. A dedicated file (see paths.shadow_db_path's own docstring) removes
+# the contention entirely.
+DB_PATH = str(shadow_db_path())
 
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.

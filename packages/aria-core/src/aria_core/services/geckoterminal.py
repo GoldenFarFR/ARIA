@@ -488,9 +488,19 @@ class GeckoTerminalClient:
     the live pace, tightened fast on a real 429, eased back slowly on
     sustained success."""
 
-    def __init__(self, base_url: str = BASE_URL, *, min_interval: float = _MIN_INTERVAL) -> None:
+    def __init__(
+        self, base_url: str = BASE_URL, *, min_interval: float = _MIN_INTERVAL,
+        outage_suspension_db_path: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
+        # 17/08, real incident -- default None keeps every existing call site's
+        # exact prior behavior (shared prod suspension state). Only the
+        # standalone shadow process's dedicated client passes its own
+        # shadow_db_path() here so a shadow-only 429 streak can never arm a
+        # suspension that also blocks prod's GeckoTerminal calls -- see
+        # geckoterminal_outage_suspension.py's module docstring.
+        self._outage_suspension_db_path = outage_suspension_db_path
         self._current_interval = min_interval
         self._consecutive_successes = 0
         self._lock = asyncio.Lock()
@@ -551,7 +561,7 @@ class GeckoTerminalClient:
         Gives up on the FIRST 429 instead of the previous 3 attempts."""
         from aria_core import geckoterminal_outage_suspension
 
-        if await geckoterminal_outage_suspension.is_suspended():
+        if await geckoterminal_outage_suspension.is_suspended(self._outage_suspension_db_path):
             return None, f"{UNAVAILABLE} (suspension automatique GeckoTerminal, rate-limit sustained)"
 
         url = f"{self.base_url}{path}"
@@ -580,7 +590,7 @@ class GeckoTerminalClient:
                 attempt_429 += 1
                 logger.warning("geckoterminal: HTTP 429 on %s after %s attempt(s)", url, attempt_429)
                 self._record_rate_limit()
-                await geckoterminal_outage_suspension.record_rate_limit_failure()
+                await geckoterminal_outage_suspension.record_rate_limit_failure(self._outage_suspension_db_path)
                 return None, f"{UNAVAILABLE} (rate limit GeckoTerminal)"
 
             if response.status_code >= 500:
@@ -600,7 +610,7 @@ class GeckoTerminalClient:
                 return None, f"{UNAVAILABLE} ({exc})"
 
             self._record_success()
-            await geckoterminal_outage_suspension.record_success()
+            await geckoterminal_outage_suspension.record_success(self._outage_suspension_db_path)
             return response.json(), None
 
     async def get_pool_created_at(self, pool_address: str, *, network: str = NETWORK) -> PoolMetadata:
