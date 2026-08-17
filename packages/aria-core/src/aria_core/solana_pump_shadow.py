@@ -1148,6 +1148,7 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
     open_valued = 0
     pending_price = 0
     unreachable_liquidity = 0
+    stranded = 0
     for r in rows:
         entry = r["realistic_entry_price"]
         if entry is None:
@@ -1158,7 +1159,24 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
                 closed += 1
                 total_pnl_units += r["realistic_final_multiplier"] - 1.0
             else:
-                unreachable_liquidity += 1  # became unreachable mid-exit
+                # 17/08 -- REAL MEASUREMENT BUG, found by the operator reading a
+                # "+663%" notification while the position set was actually
+                # LOSING money. A row that reaches here was genuinely BOUGHT
+                # (realistic_entry_price is not None) but its exit turned
+                # unsellable mid-flight (pool drained). The old code counted it
+                # as "unreachable_liquidity" and dropped it from the total --
+                # so the aggregate silently kept only the positions that
+                # managed to exit cleanly, i.e. survivorship bias in its purest
+                # form: every rug-pull disappeared from the P&L instead of
+                # showing up as the loss it is. Bought-then-stranded capital is
+                # a LOSS, never an unmeasurable event: whatever the scale-out
+                # ladder banked before the pool dried up is real
+                # (``realistic_realized_proceeds``, often 0.0), and the
+                # unsold remainder is worth nothing to a seller who cannot
+                # sell. Counted here as exactly that.
+                stranded += 1
+                salvaged = r["realistic_realized_proceeds"] or 0.0
+                total_pnl_units += salvaged / entry - 1.0
             continue
         if r["last_price"] is None:
             pending_price += 1
@@ -1169,9 +1187,24 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
         current_value = realized + remaining * r["last_price"]
         total_pnl_units += current_value / entry - 1.0
 
+    # Every position that was really bought consumed real capital -- the
+    # denominator that turns a sum of percentages into an honest return.
+    positions_funded = closed + stranded + open_valued + pending_price
+    capital_deployed_usd = positions_funded * SIMULATED_TRADE_SIZE_USD
+    total_pnl_usd = total_pnl_units * SIMULATED_TRADE_SIZE_USD
     return {
         "total_pnl_units": total_pnl_units,
+        # 17/08, operator request ("je veux voir les pnl en $ gagné ou perdu"):
+        # the percentage alone is a SUM across positions and reads like a
+        # portfolio return without being one -- a +663% sum sat on top of a
+        # real loss. These two fields are what make the number honest.
+        "total_pnl_usd": total_pnl_usd,
+        "capital_deployed_usd": capital_deployed_usd,
+        "return_on_deployed_pct": (
+            total_pnl_usd / capital_deployed_usd * 100.0 if capital_deployed_usd else 0.0
+        ),
         "closed": closed,
+        "stranded": stranded,
         "open_valued": open_valued,
         "pending_price": pending_price,
         "unreachable_liquidity": unreachable_liquidity,

@@ -1050,18 +1050,24 @@ async def test_chain_pnl_summary_realistic_excludes_unreachable_entry():
 
 
 @pytest.mark.asyncio
-async def test_chain_pnl_summary_realistic_excludes_row_that_turned_unreachable_mid_exit():
+async def test_chain_pnl_summary_realistic_counts_row_that_turned_unreachable_mid_exit_as_a_loss():
+    """INVARIANT DELIBERATELY CHANGED 17/08 -- same real bug and same fix as
+    solana_pump_shadow.py's twin test: a position genuinely BOUGHT whose exit
+    became impossible used to vanish from the P&L instead of counting as the
+    loss it is (survivorship bias)."""
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(
             "INSERT INTO robinhood_pump_shadow_log "
             "(pool_address, chain, status, detected_at, entry_price, realistic_entry_price, "
-            "exit_reason, final_multiplier, realistic_final_multiplier) "
-            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'max_hold', 1.1, NULL)",
+            "exit_reason, final_multiplier, realistic_final_multiplier, realistic_realized_proceeds) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'max_hold', 1.1, NULL, 0.0)",
             ("poolB", CHAIN, datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
 
     result = await shadow.chain_pnl_summary_realistic(CHAIN)
     assert result["closed"] == 0
-    assert result["unreachable_liquidity"] == 1
-    assert result["total_pnl_units"] == pytest.approx(0.0)
+    assert result["stranded"] == 1
+    assert result["unreachable_liquidity"] == 0  # it WAS bought
+    assert result["total_pnl_units"] == pytest.approx(-1.0)
+    assert result["total_pnl_usd"] == pytest.approx(-shadow.SIMULATED_TRADE_SIZE_USD)

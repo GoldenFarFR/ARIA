@@ -82,6 +82,28 @@ _SAFE_THRESHOLD_SLOT = 4
 # into exactly one slot in this field order -- both proven experimentally in
 # step 1 (see safe_robinhood_wallet.py's own docstring for that proof).
 _ALLOWANCES_BASE_SLOT = 0
+
+# ``delegates`` is slot 3 -- PROVEN experimentally on 17/08 by injecting a
+# delegate at each candidate slot 0..5 and reading it back through the
+# contract's own public ``delegates(address,uint48)`` getter; only slot 3
+# returned the injected address. Worth stressing: reading the declaration
+# order naively would have said slot 1, which is WRONG -- exactly the class
+# of silent error that would make a signature check look broken (or, worse,
+# look satisfied) for the wrong reason.
+_DELEGATES_BASE_SLOT = 3
+
+# The Delegate struct packs into one slot: address(160) | prev(48) | next(48).
+_DELEGATE_ADDRESS_BIT_OFFSET = 0
+
+# EIP-712 typehashes of AllowanceModule v0.1.1. Both cross-checked live on
+# 17/08: a digest recomputed from these locally matched the contract's own
+# ``generateTransferHash`` byte for byte, which is what proves this structure
+# is the real one rather than a plausible-looking reconstruction.
+_DOMAIN_TYPEHASH_TEXT = "EIP712Domain(uint256 chainId,address verifyingContract)"
+_TRANSFER_TYPEHASH_TEXT = (
+    "AllowanceTransfer(address safe,address token,address to,uint96 amount,"
+    "address paymentToken,uint96 payment,uint16 nonce)"
+)
 _AMOUNT_BIT_OFFSET = 0
 _SPENT_BIT_OFFSET = 96
 _RESET_TIME_MIN_BIT_OFFSET = 192
@@ -124,10 +146,23 @@ _ALLOWANCE_TRANSFER_ABI = [{
     ],
 }]
 
-# The module's own revert string when the cap is exceeded (v0.1.1 source).
-# Matching on it -- rather than on "did it revert at all" -- is what proves
-# the CAP rejected the transfer, not some unrelated failure.
+_GENERATE_TRANSFER_HASH_ABI = [{
+    "name": "generateTransferHash", "type": "function", "stateMutability": "view",
+    "inputs": [
+        {"type": "address", "name": "safe"}, {"type": "address", "name": "token"},
+        {"type": "address", "name": "to"}, {"type": "uint96", "name": "amount"},
+        {"type": "address", "name": "paymentToken"}, {"type": "uint96", "name": "payment"},
+        {"type": "uint16", "name": "nonce"},
+    ],
+    "outputs": [{"type": "bytes32"}],
+}]
+
+# The module's own revert strings. Matching on WHICH one came back -- rather
+# than on "did it revert at all" -- is what tells a cap rejection apart from
+# a signature rejection apart from an unrelated failure. Without this
+# distinction every guardrail would look like it works.
 _CAP_REVERT_MARKER = "newSpent"
+_SIGNATURE_REVERT_MARKER = "expectedDelegate"
 
 
 def _w3(w3=None):
@@ -298,4 +333,137 @@ def simulate_allowance_cap(
         "cap": cap, "already_spent": already_spent, "reset_time_min": reset_time_min,
         "one_shot": reset_time_min == 0, "results": results,
         "cap_enforced_consistently": consistent, "error": None,
+    }
+
+
+def _delegate_storage_slot(safe: str, delegate: str) -> str:
+    """Storage key of ``delegates[safe][uint48(delegate)]``. The inner key is
+    the delegate's LOW 48 bits, matching the contract's own ``uint48(signer)``
+    cast -- not the full address."""
+    outer = Web3.keccak(abi_encode(
+        ["address", "uint256"], [Web3.to_checksum_address(safe), _DELEGATES_BASE_SLOT],
+    ))
+    key = int(Web3.to_checksum_address(delegate), 16) & ((1 << 48) - 1)
+    return "0x" + Web3.keccak(abi_encode(["uint256", "bytes32"], [key, outer])).hex()
+
+
+def compute_transfer_digest(
+    *, safe: str, token: str, to: str, amount: int, nonce: int,
+    payment_token: str = ZERO_ADDRESS, payment: int = 0, chain_id: int | None = None,
+    module_address: str | None = None,
+) -> bytes:
+    """Recomputes, locally and from first principles, the exact EIP-712 digest
+    the delegate must sign. Kept as an independent implementation on purpose:
+    ``assert_digest_matches_contract`` below compares it against the
+    contract's own ``generateTransferHash``, and a match is what proves this
+    reconstruction is the real structure rather than a plausible-looking
+    guess. Blindly trusting the on-chain getter would prove nothing about
+    whether we understand what is being signed."""
+    module = Web3.to_checksum_address(module_address or ALLOWANCE_MODULE_ADDRESS)
+    domain_separator = Web3.keccak(abi_encode(
+        ["bytes32", "uint256", "address"],
+        [Web3.keccak(text=_DOMAIN_TYPEHASH_TEXT),
+         chain_id if chain_id is not None else ROBINHOOD_TESTNET_CHAIN_ID, module],
+    ))
+    transfer_hash = Web3.keccak(abi_encode(
+        ["bytes32", "address", "address", "address", "uint96", "address", "uint96", "uint16"],
+        [Web3.keccak(text=_TRANSFER_TYPEHASH_TEXT),
+         Web3.to_checksum_address(safe), Web3.to_checksum_address(token),
+         Web3.to_checksum_address(to), amount,
+         Web3.to_checksum_address(payment_token), payment, nonce],
+    ))
+    return Web3.keccak(b"\x19\x01" + domain_separator + transfer_hash)
+
+
+def assert_digest_matches_contract(
+    *, safe: str, token: str, to: str, amount: int, nonce: int,
+    payment_token: str = ZERO_ADDRESS, payment: int = 0, w3=None,
+) -> dict:
+    """Cross-check: our locally recomputed digest vs the one the deployed
+    contract produces. Verified live 17/08 -- identical."""
+    w3 = _w3(w3)
+    _require_testnet(w3)
+    module = Web3.to_checksum_address(ALLOWANCE_MODULE_ADDRESS)
+    onchain = w3.eth.contract(
+        address=module, abi=_GENERATE_TRANSFER_HASH_ABI,
+    ).functions.generateTransferHash(
+        Web3.to_checksum_address(safe), Web3.to_checksum_address(token),
+        Web3.to_checksum_address(to), amount,
+        Web3.to_checksum_address(payment_token), payment, nonce,
+    ).call()
+    local = compute_transfer_digest(
+        safe=safe, token=token, to=to, amount=amount, nonce=nonce,
+        payment_token=payment_token, payment=payment,
+        chain_id=w3.eth.chain_id, module_address=module,
+    )
+    return {
+        "onchain_digest": "0x" + bytes(onchain).hex(),
+        "local_digest": "0x" + local.hex(),
+        "matches": bytes(onchain) == local,
+        "error": None,
+    }
+
+
+def simulate_transfer_with_signature(
+    *, signature: bytes, safe: str, delegate: str, token: str, to: str,
+    amount: int, cap: int, already_spent: int = 0, reset_time_min: int = 0,
+    payment_token: str = ZERO_ADDRESS, payment: int = 0,
+    register_delegate: bool = True, w3=None,
+) -> dict:
+    """Simulates a transfer carrying a REAL signature, against the real
+    deployed module, with the allowance AND the delegate registration both
+    injected as state overrides.
+
+    This module never signs anything: the caller produces ``signature``
+    elsewhere and passes the bytes in. That is what keeps this file provably
+    incapable of holding or using key material (locked by
+    ``test_simulation_module_reads_no_private_key_from_the_environment``) --
+    it can verify a signature's effect, never create one.
+
+    ``register_delegate=False`` injects the allowance but NOT the delegate
+    registration, which is how the "unregistered signer is refused" case is
+    exercised.
+
+    Outcomes: ``rejected_by_cap`` / ``rejected_by_signature`` /
+    ``signature_accepted`` (cleared both guardrails and stopped further
+    downstream -- expected here, since no real Safe exists to receive the
+    call) / ``fully_executed`` (never reachable without a real Safe)."""
+    w3 = _w3(w3)
+    _require_testnet(w3)
+    module = Web3.to_checksum_address(ALLOWANCE_MODULE_ADDRESS)
+
+    state = {
+        _allowance_storage_slot(safe, delegate, token):
+            "0x" + format(pack_allowance(cap, spent=already_spent,
+                                         reset_time_min=reset_time_min), "064x"),
+    }
+    if register_delegate:
+        state[_delegate_storage_slot(safe, delegate)] = "0x" + format(
+            int(Web3.to_checksum_address(delegate), 16) << _DELEGATE_ADDRESS_BIT_OFFSET, "064x")
+    overrides = {module: {"stateDiff": state}}
+
+    data = w3.eth.contract(address=module, abi=_ALLOWANCE_TRANSFER_ABI).encode_abi(
+        "executeAllowanceTransfer",
+        args=[Web3.to_checksum_address(safe), Web3.to_checksum_address(token),
+              Web3.to_checksum_address(to), amount,
+              Web3.to_checksum_address(payment_token), payment,
+              Web3.to_checksum_address(delegate), signature],
+    )
+    response = w3.provider.make_request("eth_call", [
+        {"to": module, "from": Web3.to_checksum_address(delegate), "data": data},
+        "latest", overrides,
+    ])
+    message = (response.get("error") or {}).get("message", "")
+    if _CAP_REVERT_MARKER in message:
+        outcome = "rejected_by_cap"
+    elif _SIGNATURE_REVERT_MARKER in message:
+        outcome = "rejected_by_signature"
+    elif "error" in response:
+        outcome = "signature_accepted"
+    else:
+        outcome = "fully_executed"
+    return {
+        "outcome": outcome, "delegate_registered": register_delegate,
+        "requested": amount, "cap": cap, "already_spent": already_spent,
+        "revert_message": message or None, "error": None,
     }

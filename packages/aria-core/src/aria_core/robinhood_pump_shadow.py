@@ -1101,6 +1101,7 @@ async def chain_pnl_summary_realistic(chain: str = "robinhood") -> dict:
     open_valued = 0
     pending_price = 0
     unreachable_liquidity = 0
+    stranded = 0
     for r in rows:
         entry = r["realistic_entry_price"]
         if entry is None:
@@ -1111,7 +1112,20 @@ async def chain_pnl_summary_realistic(chain: str = "robinhood") -> dict:
                 closed += 1
                 total_pnl_units += r["realistic_final_multiplier"] - 1.0
             else:
-                unreachable_liquidity += 1  # became unreachable mid-exit
+                # 17/08 -- same real measurement bug fixed in
+                # solana_pump_shadow.py's twin function (see its comment for
+                # the full reasoning): a row reaching here was genuinely
+                # BOUGHT but its exit turned unsellable (pool drained).
+                # Counting it as "unreachable" dropped it from the total,
+                # keeping only the positions that exited cleanly -- textbook
+                # survivorship bias, which made a losing set of positions
+                # report a large positive percentage. Stranded capital is a
+                # LOSS: whatever was banked before the pool dried up is real,
+                # the unsold remainder is worth nothing to a seller who
+                # cannot sell.
+                stranded += 1
+                salvaged = r["realistic_realized_proceeds"] or 0.0
+                total_pnl_units += salvaged / entry - 1.0
             continue
         if r["last_price"] is None:
             pending_price += 1
@@ -1122,9 +1136,20 @@ async def chain_pnl_summary_realistic(chain: str = "robinhood") -> dict:
         current_value = realized + remaining * r["last_price"]
         total_pnl_units += current_value / entry - 1.0
 
+    positions_funded = closed + stranded + open_valued + pending_price
+    capital_deployed_usd = positions_funded * SIMULATED_TRADE_SIZE_USD
+    total_pnl_usd = total_pnl_units * SIMULATED_TRADE_SIZE_USD
     return {
         "total_pnl_units": total_pnl_units,
+        # 17/08, operator request: the percentage alone is a SUM across
+        # positions and reads like a portfolio return without being one.
+        "total_pnl_usd": total_pnl_usd,
+        "capital_deployed_usd": capital_deployed_usd,
+        "return_on_deployed_pct": (
+            total_pnl_usd / capital_deployed_usd * 100.0 if capital_deployed_usd else 0.0
+        ),
         "closed": closed,
+        "stranded": stranded,
         "open_valued": open_valued,
         "pending_price": pending_price,
         "unreachable_liquidity": unreachable_liquidity,

@@ -275,3 +275,94 @@ def test_only_eth_call_is_ever_issued_as_a_raw_rpc_method():
     used = _identifiers_used(sim)
     rpc_methods = {s for s in used if s.startswith("eth_")}
     assert rpc_methods == {"eth_call"}, f"methodes RPC inattendues: {rpc_methods}"
+
+
+# --- step 3: EIP-712 signature path ---------------------------------------
+
+def test_transfer_digest_is_deterministic_and_field_sensitive():
+    """Every signed field must change the digest -- otherwise a signature for
+    one transfer would be replayable on a different one."""
+    base = dict(safe=SAFE, token=TOKEN, to="0x00000000000000000000000000000000000000F1",
+                amount=50, nonce=0)
+    d = sim.compute_transfer_digest(**base)
+    assert d == sim.compute_transfer_digest(**base)
+    assert len(d) == 32
+    for field, changed in (
+        ("amount", 51), ("nonce", 1),
+        ("to", "0x00000000000000000000000000000000000000F2"),
+        ("token", "0x00000000000000000000000000000000000000C2"),
+        ("safe", "0x00000000000000000000000000000000000000B2"),
+    ):
+        assert sim.compute_transfer_digest(**{**base, field: changed}) != d, field
+
+
+def test_transfer_digest_is_bound_to_the_chain_and_the_module():
+    """EIP-712 domain separation: the same transfer on another chain, or
+    against another verifying contract, must NOT produce a reusable
+    signature."""
+    base = dict(safe=SAFE, token=TOKEN, to="0x00000000000000000000000000000000000000F1",
+                amount=50, nonce=0)
+    d = sim.compute_transfer_digest(**base)
+    assert sim.compute_transfer_digest(**base, chain_id=1) != d
+    assert sim.compute_transfer_digest(
+        **base, module_address="0x00000000000000000000000000000000000000AA") != d
+
+
+def test_delegate_slot_uses_the_low_48_bits_of_the_address():
+    """The contract keys delegates by ``uint48(signer)``, not the full
+    address -- two addresses sharing their low 48 bits collide by design, and
+    the derivation must reproduce that rather than 'fix' it."""
+    # 40 hex chars each; the last 12 (= 48 bits) are identical on a and b.
+    a = "0x" + "11" * 14 + "000000000001"
+    b = "0x" + "22" * 14 + "000000000001"
+    assert sim._delegate_storage_slot(SAFE, a) == sim._delegate_storage_slot(SAFE, b)
+    c = "0x" + "11" * 14 + "000000000002"
+    assert sim._delegate_storage_slot(SAFE, a) != sim._delegate_storage_slot(SAFE, c)
+
+
+def _sig_bytes():
+    return b"\x11" * 65
+
+
+def test_signature_outcomes_are_told_apart_not_lumped_into_reverted():
+    """The whole value of this step: a cap rejection, a signature rejection
+    and a cleared-both-guardrails call must be distinguishable. Collapsing
+    them into 'it reverted' would make a broken guardrail look like a
+    working one."""
+    cap = _FakeW3(responses=[_cap_revert()])
+    assert sim.simulate_transfer_with_signature(
+        signature=_sig_bytes(), safe=SAFE, delegate=DELEGATE, token=TOKEN,
+        to=TOKEN, amount=150, cap=100, w3=cap)["outcome"] == "rejected_by_cap"
+
+    bad_sig = _FakeW3(responses=[_signature_revert()])
+    assert sim.simulate_transfer_with_signature(
+        signature=_sig_bytes(), safe=SAFE, delegate=DELEGATE, token=TOKEN,
+        to=TOKEN, amount=50, cap=100, w3=bad_sig)["outcome"] == "rejected_by_signature"
+
+    downstream = _FakeW3(responses=[{"error": {"message": "execution reverted"}}])
+    assert sim.simulate_transfer_with_signature(
+        signature=_sig_bytes(), safe=SAFE, delegate=DELEGATE, token=TOKEN,
+        to=TOKEN, amount=50, cap=100, w3=downstream)["outcome"] == "signature_accepted"
+
+
+def test_unregistered_delegate_injects_no_delegate_state():
+    """``register_delegate=False`` must genuinely omit the registration, so
+    the 'valid key but unregistered signer' case is really exercised rather
+    than silently registered anyway."""
+    w3 = _FakeW3(responses=[_signature_revert()])
+    result = sim.simulate_transfer_with_signature(
+        signature=_sig_bytes(), safe=SAFE, delegate=DELEGATE, token=TOKEN,
+        to=TOKEN, amount=50, cap=100, register_delegate=False, w3=w3)
+    _, params = w3.provider.calls[0]
+    injected = params[2][Web3.to_checksum_address(sim.ALLOWANCE_MODULE_ADDRESS)]["stateDiff"]
+    assert sim._delegate_storage_slot(SAFE, DELEGATE) not in injected
+    assert sim._allowance_storage_slot(SAFE, DELEGATE, TOKEN) in injected
+    assert result["delegate_registered"] is False
+
+
+def test_signature_path_still_refuses_a_non_testnet_chain():
+    w3 = _FakeW3(chain_id=4663)
+    with pytest.raises(RuntimeError, match="refus"):
+        sim.simulate_transfer_with_signature(
+            signature=_sig_bytes(), safe=SAFE, delegate=DELEGATE, token=TOKEN,
+            to=TOKEN, amount=50, cap=100, w3=w3)

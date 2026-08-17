@@ -1068,22 +1068,119 @@ async def test_chain_pnl_summary_realistic_excludes_unreachable_entry():
 
 
 @pytest.mark.asyncio
-async def test_chain_pnl_summary_realistic_excludes_row_that_turned_unreachable_mid_exit():
-    # Entry was reachable but a later sell (scale-out/stop) hit a pool too
-    # thin to absorb it -- realistic_final_multiplier stays NULL despite
-    # exit_reason being set. Must still land in unreachable_liquidity, not
-    # be silently skipped from every bucket.
+async def test_chain_pnl_summary_realistic_counts_row_that_turned_unreachable_mid_exit_as_a_loss():
+    """INVARIANT DELIBERATELY CHANGED 17/08 (this test previously asserted the
+    opposite, and in doing so locked in a real bug). Entry was reachable but a
+    later sell hit a pool too thin to absorb it, so
+    ``realistic_final_multiplier`` stays NULL despite ``exit_reason`` being
+    set. The old contract filed that under ``unreachable_liquidity`` and
+    contributed 0.0 to the total -- meaning capital genuinely spent on a
+    position that could never be sold vanished from the P&L instead of
+    appearing as a loss. On the real data that dropped 77 of 148 closed
+    positions and turned a -30% result into a headline "+663%", which the
+    operator caught. A bought-then-stranded position is a LOSS of whatever
+    was not salvaged."""
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(
             "INSERT INTO solana_pump_shadow_log "
             "(pool_address, chain, status, detected_at, entry_price, realistic_entry_price, "
-            "exit_reason, final_multiplier, realistic_final_multiplier) "
-            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'max_hold', 1.1, NULL)",
+            "exit_reason, final_multiplier, realistic_final_multiplier, realistic_realized_proceeds) "
+            "VALUES (?, ?, 'closed', ?, 1.0, 1.02, 'max_hold', 1.1, NULL, 0.0)",
             ("poolB", CHAIN, datetime.now(timezone.utc).isoformat()),
         )
         await db.commit()
 
     result = await shadow.chain_pnl_summary_realistic(CHAIN)
     assert result["closed"] == 0
-    assert result["unreachable_liquidity"] == 1
-    assert result["total_pnl_units"] == pytest.approx(0.0)
+    assert result["stranded"] == 1
+    assert result["unreachable_liquidity"] == 0  # it WAS bought -- never "unreachable"
+    assert result["total_pnl_units"] == pytest.approx(-1.0)  # nothing salvaged
+    assert result["total_pnl_usd"] == pytest.approx(-shadow.SIMULATED_TRADE_SIZE_USD)
+
+
+# --- 17/08: survivorship-bias bug in the realistic P&L aggregate ----------
+
+async def _insert_row_for_pnl(
+    *, pool_address, realistic_entry_price, exit_reason=None,
+    realistic_final_multiplier=None, realistic_realized_proceeds=0.0,
+    last_price=None, remaining_qty=1.0,
+):
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            """
+            INSERT INTO solana_pump_shadow_log
+                (pool_address, chain, status, detected_at, entry_price,
+                 realistic_entry_price, exit_reason, realistic_final_multiplier,
+                 realistic_realized_proceeds, last_price, remaining_qty)
+            VALUES (?, ?, 'open', ?, 1.0, ?, ?, ?, ?, ?, ?)
+            """,
+            (pool_address, CHAIN, datetime.now(timezone.utc).isoformat(),
+             realistic_entry_price, exit_reason, realistic_final_multiplier,
+             realistic_realized_proceeds, last_price, remaining_qty),
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_stranded_position_counts_as_a_loss_not_as_unmeasurable():
+    """THE bug the operator caught live (17/08): a position genuinely BOUGHT
+    whose exit later became impossible (pool drained) used to be filed under
+    ``unreachable_liquidity`` and dropped from the total -- so the aggregate
+    kept only positions that exited cleanly. Textbook survivorship bias: on
+    the real data it reported a large POSITIVE percentage while the position
+    set was actually down 30%. Stranded capital is a loss."""
+    await _insert_row_for_pnl(
+        pool_address="poolStranded", realistic_entry_price=1.0,
+        exit_reason="trailing_stop", realistic_final_multiplier=None,
+        realistic_realized_proceeds=0.0,  # nothing salvaged before it dried up
+    )
+    summary = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert summary["stranded"] == 1
+    assert summary["total_pnl_units"] == pytest.approx(-1.0)  # total loss
+    assert summary["total_pnl_usd"] == pytest.approx(-shadow.SIMULATED_TRADE_SIZE_USD)
+
+
+@pytest.mark.asyncio
+async def test_partially_salvaged_stranded_position_keeps_what_it_banked():
+    """A ladder that banked some proceeds before the pool dried up is not a
+    total loss -- the real figure must reflect what was actually sold."""
+    await _insert_row_for_pnl(
+        pool_address="poolPartial", realistic_entry_price=1.0,
+        exit_reason="trailing_stop", realistic_final_multiplier=None,
+        realistic_realized_proceeds=0.4,
+    )
+    summary = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert summary["total_pnl_units"] == pytest.approx(-0.6)
+
+
+@pytest.mark.asyncio
+async def test_never_bought_position_is_excluded_not_counted_as_a_loss():
+    """The symmetric error would be as bad: a pool too thin to ever enter was
+    never funded, so it must NOT drag the return down."""
+    await _insert_row_for_pnl(pool_address="poolNeverBought", realistic_entry_price=None)
+    summary = await shadow.chain_pnl_summary_realistic(CHAIN)
+    assert summary["unreachable_liquidity"] == 1
+    assert summary["stranded"] == 0
+    assert summary["total_pnl_units"] == pytest.approx(0.0)
+    assert summary["capital_deployed_usd"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_dollar_figures_are_reported_against_capital_actually_deployed():
+    """Operator request 17/08: the percentage alone reads like a portfolio
+    return without being one. One winner at +100% and one total loss must
+    report a NET result on the capital really deployed, not a headline sum."""
+    await _insert_row_for_pnl(
+        pool_address="poolWin", realistic_entry_price=1.0,
+        exit_reason="scale_out_complete", realistic_final_multiplier=2.0,
+    )
+    await _insert_row_for_pnl(
+        pool_address="poolLoss", realistic_entry_price=1.0,
+        exit_reason="trailing_stop", realistic_final_multiplier=None,
+        realistic_realized_proceeds=0.0,
+    )
+    summary = await shadow.chain_pnl_summary_realistic(CHAIN)
+    size = shadow.SIMULATED_TRADE_SIZE_USD
+    assert summary["capital_deployed_usd"] == pytest.approx(2 * size)
+    assert summary["total_pnl_usd"] == pytest.approx(0.0)      # +1.0 and -1.0 net out
+    assert summary["return_on_deployed_pct"] == pytest.approx(0.0)
