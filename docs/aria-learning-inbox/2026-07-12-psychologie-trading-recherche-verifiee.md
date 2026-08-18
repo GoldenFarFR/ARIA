@@ -149,3 +149,16 @@ prompt — cohérent avec la contrainte posée par l'opérateur en amont.
 - [Dangers of Full Kelly Criterion](https://medium.com/@tmapendembe_28659/the-dangers-of-full-kelly-criterion-why-most-traders-should-use-fractional-kelly-criterion-instead-0338e3bcc705)
 - [Do Professional Traders Exhibit Myopic Loss Aversion? (Haigh & List)](https://www.researchgate.net/publication/4769445_Do_Professional_Traders_Exhibit_Myopic_Loss_Aversion_An_Experimental_Analysis)
 - Code ARIA vérifié : `paper_trader.py` (`TRAIL_STOP_PCT`), `skills/vc_judge.py` (`judge_analysis`, `_validate_judge_output`), `investment_memory.py` (cycle thèse), `onchain/sepolia_autonomous.py` (`kelly_fraction`, `KELLY_SAFETY_FACTOR`)
+
+## Freshness check (2026-08-18)
+
+Trait 3's "vrai gap" (no mechanism re-verifies an open thesis against new
+data) has since been closed: `weekly_training.py::run_thesis_review()` +
+the `vc_thesis_review` heartbeat task (`heartbeat.py`) now re-check every
+open position's price/activity and surface alerts (stagnant/invalidated
+thesis) without ever auto-closing a thesis -- matching exactly the
+alert-only mechanism this note proposed. Traits 1/2/4 constants re-verified
+unchanged: `TRAIL_STOP_PCT = 0.15` (`paper_trader.py`),
+`close_thesis`/`list_open_theses` open/closed states
+(`investment_memory.py`), `KELLY_SAFETY_FACTOR = 0.5`
+(`onchain/sepolia_autonomous.py`).
