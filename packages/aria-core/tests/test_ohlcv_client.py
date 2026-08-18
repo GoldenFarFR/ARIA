@@ -515,3 +515,54 @@ async def test_short_circuits_when_shared_breaker_is_armed(monkeypatch, tmp_path
     assert res.available is False
     assert res.candles == []
     assert "suspension automatique" in res.error
+
+
+@pytest.mark.asyncio
+async def test_dedicated_db_path_stays_independent_of_shared_breaker(monkeypatch, tmp_path):
+    # 18/08, real bug found live: a client with its own `outage_suspension_
+    # db_path` (the standalone shadow process's dedicated client) must never
+    # be blocked by a breaker armed through the SHARED/default state -- and
+    # vice versa. Two completely separate DBs, each armed independently.
+    from aria_core import geckoterminal_outage_suspension as gts
+
+    monkeypatch.setattr(gts, "DB_PATH", str(tmp_path / "shared.db"))
+    dedicated_db = str(tmp_path / "shadow.db")
+
+    for _ in range(gts._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
+        await gts.record_rate_limit_failure()  # arms the SHARED state only
+    assert await gts.is_suspended() is True
+    assert await gts.is_suspended(dedicated_db) is False
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"attributes": {"ohlcv_list": []}}}
+
+        def raise_for_status(self):
+            return None
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return _FakeResponse()
+
+    monkeypatch.setattr("aria_core.services.ohlcv.httpx.AsyncClient", lambda **kw: _FakeClient())
+
+    dedicated_client = OHLCVClient(base_url="https://gt.test", min_interval=0.0, outage_suspension_db_path=dedicated_db)
+    res = await dedicated_client.get_ohlcv(POOL)
+    # Never short-circuited by the shared breaker -- reaches the (faked) HTTP
+    # layer instead of returning the "suspension automatique" error.
+    assert res.error is None or "suspension automatique" not in res.error
+
+    # Arming the DEDICATED state specifically must now short-circuit it too.
+    for _ in range(gts._ARM_AFTER_CONSECUTIVE_RATE_LIMIT_FAILURES):
+        await gts.record_rate_limit_failure(dedicated_db)
+    res2 = await dedicated_client.get_ohlcv(POOL)
+    assert res2.available is False
+    assert "suspension automatique" in res2.error

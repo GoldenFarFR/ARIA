@@ -160,12 +160,37 @@ class OHLCVClient:
 
     def __init__(
         self, base_url: str = BASE_URL, *, min_interval: float = 2.2, use_shared_throttle: bool = False,
+        outage_suspension_db_path: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
         self._last_request = 0.0
         self._consecutive_failures = 0
+        # 18/08, real bug found live: GeckoTerminalClient.get_ohlcv (services/
+        # geckoterminal.py) always delegated to the MODULE-LEVEL singleton
+        # below (`ohlcv_client`), completely bypassing whatever
+        # `outage_suspension_db_path` the CALLING GeckoTerminalClient instance
+        # was configured with (e.g. shadow_persistent.py's dedicated instance,
+        # see its own 17/08 comment) -- so a shadow module's exit-tracking
+        # candle fetch always read/wrote the CONTAINER's shared suspension
+        # state, not its own isolated one, even though get_pool_snapshot on
+        # the SAME client instance correctly stayed isolated. Confirmed live:
+        # shadow.log kept logging "suspension automatique GeckoTerminal" from
+        # get_ohlcv while the shadow's own dedicated suspension table showed
+        # clear. None (default) preserves the exact original shared-state
+        # behavior for the container's own singleton and every other existing
+        # caller/test.
+        #
+        # Known, separate, pre-existing asymmetry (not introduced by this
+        # fix, not addressed here): this client only ever READS the
+        # suspension state via `is_suspended()`, it never calls
+        # `record_rate_limit_failure()`/`record_success()` on a real 429 --
+        # only `GeckoTerminalClient._get_json` (services/geckoterminal.py)
+        # arms/disarms the breaker. A dedicated-db_path instance therefore
+        # still relies on that SAME client's OTHER calls (get_pool_snapshot)
+        # to ever arm its own suspension table.
+        self._outage_suspension_db_path = outage_suspension_db_path
         # 07/24 -- throughput audit found this client's OWN independent lock
         # never coordinated with geckoterminal.py's (both pace calls to the
         # SAME external GeckoTerminal account -- smart_money.py's per-token
@@ -238,7 +263,7 @@ class OHLCVClient:
         like every other GeckoTerminal call site already does."""
         from aria_core import geckoterminal_outage_suspension
 
-        if await geckoterminal_outage_suspension.is_suspended():
+        if await geckoterminal_outage_suspension.is_suspended(self._outage_suspension_db_path):
             self._record_failure("suspension automatique GeckoTerminal (rate-limit sustained)")
             return None, f"{UNAVAILABLE} (suspension automatique GeckoTerminal, rate-limit sustained)"
 

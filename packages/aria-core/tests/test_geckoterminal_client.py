@@ -295,6 +295,52 @@ async def test_get_ohlcv_unavailable_when_wide_client_has_nothing(monkeypatch):
     assert result.candles == []
 
 
+@pytest.mark.asyncio
+async def test_get_ohlcv_with_dedicated_db_path_uses_a_cached_instance_client(monkeypatch):
+    # 18/08, real bug found live: get_ohlcv used to ALWAYS delegate to the
+    # module-level `ohlcv.ohlcv_client` singleton, ignoring whatever
+    # `outage_suspension_db_path` this GeckoTerminalClient instance was
+    # configured with -- a shadow module's exit-tracking candle fetch always
+    # read/wrote the CONTAINER's shared suspension state. Now it must route
+    # through a PER-INSTANCE dedicated OHLCVClient carrying that db_path,
+    # created once and reused across calls.
+    from aria_core.services import ohlcv as ohlcv_module
+
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=True)
+
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient(outage_suspension_db_path="/tmp/shadow_test.db")
+    assert client._dedicated_ohlcv_client is None  # lazy, not built at construction time
+
+    await client.get_ohlcv("0xpool")
+    dedicated = client._dedicated_ohlcv_client
+    assert dedicated is not None
+    assert dedicated is not ohlcv_module.ohlcv_client  # never the shared singleton
+    assert dedicated._outage_suspension_db_path == "/tmp/shadow_test.db"
+
+    await client.get_ohlcv("0xpool2")
+    assert client._dedicated_ohlcv_client is dedicated  # cached, never rebuilt per call
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_default_client_keeps_using_the_shared_singleton(monkeypatch):
+    # The container's own default GeckoTerminalClient() (no override) must
+    # keep its exact prior behavior -- zero change for every existing caller.
+    from aria_core.services import ohlcv as ohlcv_module
+
+    async def _fake_wide_get_ohlcv(_self, pool_address, *, network="base", **_kwargs):
+        return ohlcv_module.OHLCVResult(pool_address=pool_address, network=network, candles=[], available=True)
+
+    monkeypatch.setattr(type(ohlcv_module.ohlcv_client), "get_ohlcv", _fake_wide_get_ohlcv)
+
+    client = GeckoTerminalClient()
+    await client.get_ohlcv("0xpool")
+
+    assert client._dedicated_ohlcv_client is None  # never built when there's no override
+
+
 class TestResolvePrimaryPool:
     """#157, correction 14/07 : `get_pool_created_at`/`get_ohlcv` attendent une
     adresse de POOL, pas un contrat de TOKEN -- `resolve_primary_pool` corrige un

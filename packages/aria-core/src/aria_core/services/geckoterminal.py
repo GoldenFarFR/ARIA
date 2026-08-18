@@ -528,6 +528,9 @@ class GeckoTerminalClient:
         self._consecutive_successes = 0
         self._lock = asyncio.Lock()
         self._last_request = 0.0
+        # 18/08 -- lazily created only when `outage_suspension_db_path` is
+        # set (see `get_ohlcv`'s own docstring for the real bug this fixes).
+        self._dedicated_ohlcv_client = None
 
     async def _throttle(self) -> None:
         async with self._lock:
@@ -1008,8 +1011,31 @@ class GeckoTerminalClient:
         ``/api/v2/networks``) -- without this translation, every Ethereum
         OHLCV lookup would have hit a nonexistent network path and silently
         starved every candidate on ``ohlcv_unavailable``. Applied HERE (the
-        one place every caller funnels through), never at each call site."""
-        from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
+        one place every caller funnels through), never at each call site.
+
+        18/08, real bug found live: this method always delegated to the
+        MODULE-LEVEL singleton ``ohlcv.ohlcv_client``, completely ignoring
+        whatever ``outage_suspension_db_path`` THIS instance was configured
+        with (e.g. the standalone shadow process's dedicated client, 17/08).
+        A shadow module's exit-tracking candle fetch therefore always read/
+        wrote the CONTAINER's shared suspension state, not its own isolated
+        one, even though ``get_pool_snapshot`` on the same instance stayed
+        correctly isolated. When ``self._outage_suspension_db_path`` is set,
+        route through a PER-INSTANCE dedicated ``OHLCVClient`` instead
+        (created once, cached) -- the container's own default instance
+        (``outage_suspension_db_path=None``) keeps using the exact original
+        shared singleton, zero behavior change there."""
+        if self._outage_suspension_db_path is not None:
+            if self._dedicated_ohlcv_client is None:
+                from aria_core.services.ohlcv import OHLCVClient
+
+                self._dedicated_ohlcv_client = OHLCVClient(
+                    use_shared_throttle=True,
+                    outage_suspension_db_path=self._outage_suspension_db_path,
+                )
+            _wide_ohlcv_client = self._dedicated_ohlcv_client
+        else:
+            from aria_core.services.ohlcv import ohlcv_client as _wide_ohlcv_client
 
         extra: dict[str, object] = {}
         if min_useful_candles is not None:
