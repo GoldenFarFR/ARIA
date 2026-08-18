@@ -39,7 +39,12 @@ jobs:
       - name: Installer aria-core + dépendances de test
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # 18/08 -- agent_wallet ajouté (cdp-sdk) : les 28 fichiers de test
+          # real-money-adjacent câblés le même jour importent aria_core.
+          # agent_wallet_smart_swing_grant/tangem_bridge, qui importent
+          # cdp.network_config au niveau module -- absent de [dev] seul,
+          # jamais exercé avant que ces fichiers entrent dans l'allowlist CI.
+          pip install -e ".[dev,agent_wallet]"
 
       - name: Suite VC (mockée, hors-ligne)
         run: |
