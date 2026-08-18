@@ -3,7 +3,8 @@ strategy, replacing the 3-variant m5-threshold experiment: buy an
 ESTABLISHED pool (age >= 70min, no upper bound -- deliberately testing
 older pools after the HAROLD/EYE observation that age alone doesn't
 separate outcomes, but age combined with low holder concentration might)
-that is net UP over the last hour (h1 > 0%) but has pulled back close to
+that is at worst mildly down over the last hour (h1 > -5%, widened 18/08 --
+see ``MIN_H1_PCT``) but has pulled back close to
 the LOW of its own recent 10-candle (5min each, 50min lookback) range --
 a mean-reversion / "buy the dip within an uptrend" entry, deliberately
 the opposite of the m5-surge momentum entries used everywhere else in this
@@ -58,7 +59,14 @@ DB_PATH = str(shadow_db_path())
 TABLE = "solana_support_bounce_shadow_log"
 
 # Entry criteria (operator-specified 17/08)
-MIN_H1_PCT = 0.0
+# 18/08, operator decision: raised from 0.0 (required h1 strictly positive)
+# to -5.0 after observing the discovery funnel live -- get_trending_pools
+# sorts by strongest 1h gainer, so most fetched candidates sit near the TOP
+# of their own 10-candle range (still actively pumping), not the bottom,
+# which structurally starves the support-distance filter downstream. Letting
+# in mildly-cooling candidates (down to -5% over 1h, not just still-positive
+# ones) gives more candidates a real chance of sitting near their recent low.
+MIN_H1_PCT = -5.0
 MIN_LIQUIDITY_USD = 5000.0
 MIN_POOL_AGE_MINUTES = 70.0  # no upper bound, deliberately
 SUPPORT_TOLERANCE_PCT = 20.0  # first guess, see module docstring -- to recalibrate
@@ -152,7 +160,7 @@ async def closures_so_far() -> int:
 
 
 async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
-    """Each candidate must pass, in order: h1 > 0% (should already be true --
+    """Each candidate must pass, in order: h1 > -5% (should already be true --
     the caller is expected to have used ``dexpaprika.get_trending_pools``
     with ``order_by="price_change_percentage_1h"``, this is a defensive
     re-check, never trusted blindly), liquidity floor, age floor (no

@@ -1,4 +1,4 @@
-"""Support-bounce Solana shadow (17/08) -- h1>0% + established pool (age
+"""Support-bounce Solana shadow (17/08) -- h1>-5% (widened 18/08) + established pool (age
 >=70min, no ceiling) + price near the low of its own last-10x5min-candle
 range. Exit: -10% trailing stop only, no scale-out ladder. Same isolated-
 tmp-db + injected-client pattern as the other shadow test files."""
@@ -94,12 +94,21 @@ class FakeClient:
 # --- record_signals: entry criteria -----------------------------------------
 
 @pytest.mark.asyncio
-async def test_h1_at_zero_or_below_rejected(monkeypatch):
+async def test_h1_at_or_below_minus_5pct_rejected(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    logged = await shadow.record_signals([_pool(h1=0.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(h1=-5.0)], chain=CHAIN)
     assert logged == 0
-    logged = await shadow.record_signals([_pool(pool_address="poolB", h1=-5.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(pool_address="poolB", h1=-10.0)], chain=CHAIN)
     assert logged == 0
+
+
+@pytest.mark.asyncio
+async def test_h1_mildly_negative_now_qualifies(monkeypatch):
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    logged = await shadow.record_signals([_pool(h1=-4.9)], chain=CHAIN)
+    assert logged == 1
+    logged = await shadow.record_signals([_pool(pool_address="poolB", h1=0.0)], chain=CHAIN)
+    assert logged == 1
 
 
 @pytest.mark.asyncio
