@@ -12,7 +12,7 @@ import pytest
 
 from aria_core import solana_support_bounce_shadow as shadow
 from aria_core.services.dexpaprika import Candle
-from aria_core.services.geckoterminal import PoolSnapshot, TrendingPool
+from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
 from aria_core.services.rugcheck import RugCheckReport
 
 CHAIN = "solana"
@@ -59,6 +59,13 @@ def _candles(lows: list[float], base_price: float = 1.0) -> list[Candle]:
     ]
 
 
+def _candle(ts: float, *, open_: float, high: float, low: float, close: float, volume: float = 0.0) -> Candle:
+    """A single exit-side OHLCV candle (GeckoTerminal's `get_ohlcv`, 18/08
+    window-detection fix) -- distinct from `_candles` above, which builds the
+    entry-side 10-candle support window (DexPaprika)."""
+    return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=volume)
+
+
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="BOUNCE",
     price_usd=1.0, h1=10.0, reserve=8000.0, age_minutes=90.0,
@@ -75,11 +82,18 @@ def _pool(
 
 
 class FakeClient:
-    def __init__(self, price_by_pool, reserve_by_pool=None, dex_id_by_pool=None):
+    """``ohlcv_by_pool`` defaults to nothing configured -> ``available=False``
+    for every pool, exercising the documented fall-back-to-point-sample path
+    (18/08 window-detection fix) unless a test opts in -- same pattern as
+    solana_pump_shadow.py's own FakeClient."""
+
+    def __init__(self, price_by_pool, reserve_by_pool=None, dex_id_by_pool=None, ohlcv_by_pool=None):
         self._prices = price_by_pool
         self._reserves = dict(reserve_by_pool or {})
         self._dex_ids = dict(dex_id_by_pool or {})
+        self._ohlcv = dict(ohlcv_by_pool or {})
         self.calls = []
+        self.ohlcv_calls = []
 
     async def get_pool_snapshot(self, pool_address, *, network="solana"):
         self.calls.append(pool_address)
@@ -89,6 +103,13 @@ class FakeClient:
         reserve = self._reserves.get(pool_address, 1000.0)
         dex_id = self._dex_ids.get(pool_address)
         return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=reserve, available=True, dex_id=dex_id)
+
+    async def get_ohlcv(self, pool_address, *, network="solana", mode="standard", **_kwargs):
+        self.ohlcv_calls.append(pool_address)
+        result = self._ohlcv.get(pool_address)
+        if result is None:
+            return OHLCVResult(candles=[], available=False, error="unavailable")
+        return result
 
 
 # --- record_signals: entry criteria -----------------------------------------
@@ -303,6 +324,47 @@ async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
     assert counts2["closed_trailing_stop"] == 1
     rows = await _rows()
     assert rows[0]["final_multiplier"] > 1.0  # stopped out above entry thanks to the earlier peak
+
+
+@pytest.mark.asyncio
+async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypatch):
+    """18/08 -- this module was point-sample-only, exposed to the same
+    detection gap already fixed in solana_pump_shadow.py/robinhood_pump_
+    shadow.py on 16/08-17/08 (2 real live bugs there). A stop crossed then
+    PARTIALLY RECOVERED between two ~75s polls would be invisible to a
+    point-sample-only check (the recovered spot sits back above the
+    threshold) -- the window low must still catch it. Fill price stays the
+    theoretical threshold, never the crash extreme nor the recovered spot."""
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    # Cycle 1: sets the peak at 1.16, no OHLCV configured (falls back to
+    # point-sample, unaffected).
+    client1 = FakeClient({"poolA": 1.16}, reserve_by_pool={"poolA": 8000.0})
+    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.16)
+    assert rows[0]["exit_reason"] is None
+    last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
+    assert last_checked_epoch is not None
+
+    # Cycle 2: a closed candle reveals a real low of 0.90 -- past the -10%
+    # stop line from peak 1.16 (threshold 1.044) -- but the point-sample spot
+    # polled afterward has already recovered to 1.10, ABOVE the threshold.
+    # Point-sample alone would miss this entirely.
+    candles = [_candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=0.90, close=1.10)]
+    client2 = FakeClient(
+        {"poolA": 1.10}, reserve_by_pool={"poolA": 8000.0},
+        ohlcv_by_pool={"poolA": OHLCVResult(candles=candles, available=True, error=None)},
+    )
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    assert client2.ohlcv_calls == ["poolA"]
+
+    rows = await _rows()
+    stop_price = 1.16 * (1 - shadow.TRAILING_STOP_PCT / 100.0)
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert rows[0]["final_multiplier"] == pytest.approx(stop_price / (0.9 * 1.01))
+    assert rows[0]["remaining_qty"] == 0.0
 
 
 @pytest.mark.asyncio

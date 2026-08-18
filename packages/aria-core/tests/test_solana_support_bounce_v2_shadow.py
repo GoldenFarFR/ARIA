@@ -16,7 +16,7 @@ import pytest
 
 from aria_core import solana_support_bounce_v2_shadow as shadow
 from aria_core.services.dexpaprika import Candle
-from aria_core.services.geckoterminal import PoolSnapshot, TrendingPool
+from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
 from aria_core.services.rugcheck import RugCheckReport
 
 CHAIN = "solana"
@@ -60,6 +60,12 @@ def _range_candles(*, low: float, high: float, last_close: float) -> list[Candle
     return filler + [Candle(ts=9, open=last_close, high=high, low=low, close=last_close, volume=100.0)]
 
 
+def _candle(ts: float, *, open_: float, high: float, low: float, close: float, volume: float = 0.0) -> Candle:
+    """Exit-side OHLCV candle (18/08 window-detection fix) -- distinct from
+    the entry-side 10-candle support window built above."""
+    return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=volume)
+
+
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="BOUNCE",
     price_usd=1.0, h1=10.0, reserve=8000.0, age_minutes=90.0,
@@ -76,11 +82,13 @@ def _pool(
 
 
 class FakeClient:
-    def __init__(self, price_by_pool, reserve_by_pool=None, dex_id_by_pool=None):
+    def __init__(self, price_by_pool, reserve_by_pool=None, dex_id_by_pool=None, ohlcv_by_pool=None):
         self._prices = price_by_pool
         self._reserves = dict(reserve_by_pool or {})
         self._dex_ids = dict(dex_id_by_pool or {})
+        self._ohlcv = dict(ohlcv_by_pool or {})
         self.calls = []
+        self.ohlcv_calls = []
 
     async def get_pool_snapshot(self, pool_address, *, network="solana"):
         self.calls.append(pool_address)
@@ -90,6 +98,13 @@ class FakeClient:
         reserve = self._reserves.get(pool_address, 1000.0)
         dex_id = self._dex_ids.get(pool_address)
         return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=reserve, available=True, dex_id=dex_id)
+
+    async def get_ohlcv(self, pool_address, *, network="solana", mode="standard", **_kwargs):
+        self.ohlcv_calls.append(pool_address)
+        result = self._ohlcv.get(pool_address)
+        if result is None:
+            return OHLCVResult(candles=[], available=False, error="unavailable")
+        return result
 
 
 # --- record_signals: entry criteria -----------------------------------------
@@ -303,6 +318,41 @@ async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
     assert counts2["closed_trailing_stop"] == 1
     rows = await _rows()
     assert rows[0]["final_multiplier"] > 1.0  # stopped out above entry thanks to the earlier peak
+
+
+@pytest.mark.asyncio
+async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypatch):
+    """Same 18/08 window-detection fix as the original module, adapted for
+    v2's tighter -5% stop. See the original's own test for the full
+    rationale (2 real live-bug precedents this closes)."""
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    client1 = FakeClient({"poolA": 1.16}, reserve_by_pool={"poolA": 8000.0})
+    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.16)
+    assert rows[0]["exit_reason"] is None
+    last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
+    assert last_checked_epoch is not None
+
+    # Real low 1.05 -- past the -5% stop line from peak 1.16 (threshold
+    # 1.102) -- but the point-sample spot polled afterward has already
+    # recovered to 1.12, ABOVE the threshold. Point-sample alone would miss
+    # this entirely.
+    candles = [_candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=1.05, close=1.12)]
+    client2 = FakeClient(
+        {"poolA": 1.12}, reserve_by_pool={"poolA": 8000.0},
+        ohlcv_by_pool={"poolA": OHLCVResult(candles=candles, available=True, error=None)},
+    )
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    assert counts["closed_trailing_stop"] == 1
+    assert client2.ohlcv_calls == ["poolA"]
+
+    rows = await _rows()
+    stop_price = 1.16 * (1 - shadow.TRAILING_STOP_PCT / 100.0)
+    assert rows[0]["exit_reason"] == "trailing_stop"
+    assert rows[0]["final_multiplier"] == pytest.approx(stop_price / (0.9 * 1.01))
+    assert rows[0]["remaining_qty"] == 0.0
 
 
 @pytest.mark.asyncio

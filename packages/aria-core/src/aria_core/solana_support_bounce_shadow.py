@@ -32,6 +32,24 @@ paper capital, never wired to the heartbeat, pure observation. Reuses
 solana_pump_shadow.py's price-impact/fee simulation and DexScreener-primary
 snapshot fallback rather than re-deriving them.
 
+**Stop detection reads the OHLCV window, fill price stays the theoretical
+threshold (18/08, MANDATORY convention for every shadow module in this
+codebase)**: ``advance_exit_simulation`` also reads GeckoTerminal 5min
+candles closed since the row's own ``last_checked_at`` and checks the stop
+against ``effective_low = min(window_low, current_price)``, not the raw
+point-sample alone -- a stop crossed then partially recovered between two
+~75s polls is no longer invisible (same fix already live in
+solana_pump_shadow.py/robinhood_pump_shadow.py since 16/08-17/08, propagated
+here 18/08). The FILL price is a separate question and stays the stop's own
+theoretical threshold (``peak_price * (1 - TRAILING_STOP_PCT/100)``) even
+when the observed low is worse -- a real live incident (POE/Momota, 18/08)
+prompted re-examining this, but the theoretical-fill convention is the
+correct, deliberate, twice-tested one (2 real prior bugs -- a -20%-capped
+stop realizing a 98% loss, SOLCATANA closing at -48.3% instead of its -20%
+floor -- both from trusting the crash extreme instead of the calibrated
+threshold). Never change the fill price to the observed extreme; only the
+DETECTION should read the window.
+
 Target: 50 closures before drawing any conclusion, same anti-overfitting
 posture as every other shadow module here."""
 from __future__ import annotations
@@ -43,11 +61,18 @@ import aiosqlite
 
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
-from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, TrendingPool, geckoterminal_client
+from aria_core.services.geckoterminal import (
+    GeckoTerminalClient,
+    OHLCVResult,
+    PoolSnapshot,
+    TrendingPool,
+    geckoterminal_client,
+)
 from aria_core.solana_pump_shadow import (
     DEX_FEE_PCT,
     SIMULATED_TRADE_SIZE_USD,
     _apply_price_impact_and_fee,
+    _epoch_of,
     _minutes_since,
     _snapshot_with_fallback,
 )
@@ -368,8 +393,45 @@ async def advance_exit_simulation(
             counts["checked"] += 1
             current_price = snapshot.price_usd
 
+            # 18/08 -- same window-detection fix already live in
+            # solana_pump_shadow.py/robinhood_pump_shadow.py since 16/08-17/08
+            # (2 real live bugs there: a -20%-capped stop realizing a 98%
+            # loss, SOLCATANA closing at -48.3% instead of its -20% floor --
+            # both caused by a point-sample-only poll MISSING a stop that had
+            # already been crossed-then-crashed-further between two checks).
+            # This module was still point-sample-only, exposed to the same
+            # detection gap. Reads candles closed since this row's own
+            # `last_checked_at` and folds the window low with the current
+            # spot -- a stop crossed and not yet re-polled is no longer
+            # invisible. The FILL price is UNCHANGED (still the stop's own
+            # theoretical threshold, never the crash extreme -- that
+            # limit-order-style fill is the deliberate, already-tested
+            # convention this codebase settled on, not a bug).
+            window_high = current_price
+            window_low = current_price
+            try:
+                ohlcv: OHLCVResult = await client.get_ohlcv(
+                    row["pool_address"], network=chain, mode="scalping_5m",
+                )
+            except Exception as exc:  # noqa: BLE001 -- OHLCV is an enhancement, never a hard requirement
+                logger.info(
+                    "solana_support_bounce_shadow: advance_exit_simulation get_ohlcv failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
+                ohlcv = None
+            if ohlcv is not None and ohlcv.available and ohlcv.candles:
+                boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
+                new_candles = [
+                    c for c in ohlcv.candles if boundary_epoch is None or c.ts > boundary_epoch
+                ]
+                if new_candles:
+                    window_high = max(c.high for c in new_candles)
+                    window_low = min(c.low for c in new_candles)
+            effective_high = max(window_high, current_price)
+            effective_low = min(window_low, current_price)
+
             peak_price = row["peak_price"] or entry_price
-            peak_price = max(peak_price, current_price)
+            peak_price = max(peak_price, effective_high)
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
 
@@ -398,7 +460,7 @@ async def advance_exit_simulation(
                 and snapshot.reserve_usd is not None
                 and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
             )
-            trailing_stop_hit = current_price <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+            trailing_stop_hit = effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
 
             exit_reason: str | None = None
             if liquidity_collapsed:

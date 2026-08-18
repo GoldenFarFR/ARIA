@@ -35,7 +35,9 @@ See ``solana_support_bounce_shadow.py`` for the full design rationale on
 everything not called out here (support-tolerance doctrine, exit mechanics,
 PumpSwap dex_id guard, realistic price-impact simulation, the 18/08
 liquidity-unknown-vs-genuinely-dry backfill fix -- inherited for free via
-the shared ``solana_pump_shadow`` imports, never duplicated)."""
+the shared ``solana_pump_shadow`` imports, never duplicated; the 18/08
+OHLCV-window stop-detection fix -- own copy here, same as the original,
+fill price still the theoretical threshold, never the crash extreme)."""
 from __future__ import annotations
 
 import logging
@@ -45,11 +47,18 @@ import aiosqlite
 
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
-from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, TrendingPool, geckoterminal_client
+from aria_core.services.geckoterminal import (
+    GeckoTerminalClient,
+    OHLCVResult,
+    PoolSnapshot,
+    TrendingPool,
+    geckoterminal_client,
+)
 from aria_core.solana_pump_shadow import (
     DEX_FEE_PCT,
     SIMULATED_TRADE_SIZE_USD,
     _apply_price_impact_and_fee,
+    _epoch_of,
     _minutes_since,
     _snapshot_with_fallback,
 )
@@ -299,8 +308,34 @@ async def advance_exit_simulation(
             counts["checked"] += 1
             current_price = snapshot.price_usd
 
+            # 18/08 -- same window-detection fix as the original module (see
+            # its own docstring for the 2 real live-bug precedents this
+            # closes). Fill price stays the theoretical threshold, unchanged.
+            window_high = current_price
+            window_low = current_price
+            try:
+                ohlcv: OHLCVResult = await client.get_ohlcv(
+                    row["pool_address"], network=chain, mode="scalping_5m",
+                )
+            except Exception as exc:  # noqa: BLE001 -- OHLCV is an enhancement, never a hard requirement
+                logger.info(
+                    "solana_support_bounce_v2_shadow: advance_exit_simulation get_ohlcv failed for %s (%s)",
+                    row["pool_address"], exc,
+                )
+                ohlcv = None
+            if ohlcv is not None and ohlcv.available and ohlcv.candles:
+                boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
+                new_candles = [
+                    c for c in ohlcv.candles if boundary_epoch is None or c.ts > boundary_epoch
+                ]
+                if new_candles:
+                    window_high = max(c.high for c in new_candles)
+                    window_low = min(c.low for c in new_candles)
+            effective_high = max(window_high, current_price)
+            effective_low = min(window_low, current_price)
+
             peak_price = row["peak_price"] or entry_price
-            peak_price = max(peak_price, current_price)
+            peak_price = max(peak_price, effective_high)
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
 
@@ -329,7 +364,7 @@ async def advance_exit_simulation(
                 and snapshot.reserve_usd is not None
                 and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
             )
-            trailing_stop_hit = current_price <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+            trailing_stop_hit = effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
 
             exit_reason: str | None = None
             if liquidity_collapsed:
