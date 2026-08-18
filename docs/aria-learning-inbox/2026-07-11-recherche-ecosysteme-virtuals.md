@@ -50,3 +50,13 @@ construire un vrai client.
 Recherche web généraliste (pas d'accès on-chain direct depuis cet outil pour
 ce passage), aucun fait vérifié en direct sur un contrat réel. À recouper
 avant intégration, comme toute note de cet inbox.
+
+## Freshness check (2026-08-18)
+
+Verified against current code: `knowledge/launchpads.yaml` today lists only
+`bankr` among the three launchpads named above, at `confidence: medium` (not
+`unverified` as stated when this note was written) -- `ape.store` and
+`mint.club` are not present as entries in that file at all. ACP status claim
+still holds unchanged: conversational routing stays intent-gated OFF by
+default (`_acp_intent_enabled()`, `ARIA_ACP_ENABLED`, `brain.py`), code and
+tests intact.
