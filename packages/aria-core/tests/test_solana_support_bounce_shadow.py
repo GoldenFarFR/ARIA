@@ -11,6 +11,7 @@ import aiosqlite
 import pytest
 
 from aria_core import shadow_candle_archive as archive
+from aria_core import shadow_snapshot_archive as snapshot_archive
 from aria_core import solana_support_bounce_shadow as shadow
 from aria_core.services.dexpaprika import Candle
 from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
@@ -26,6 +27,8 @@ async def _tmp_db(tmp_path, monkeypatch):
     await shadow._ensure_table()
     monkeypatch.setattr(archive, "DB_PATH", str(tmp_path / "shadow.db"))
     archive._ensured_db_paths.clear()
+    monkeypatch.setattr(snapshot_archive, "DB_PATH", str(tmp_path / "shadow.db"))
+    snapshot_archive._ensured_db_paths.clear()
     monkeypatch.setattr(
         shadow.rugcheck, "get_token_report",
         AsyncMock(return_value=RugCheckReport(available=False, error="test default")),
@@ -533,4 +536,76 @@ async def test_advance_exit_simulation_archives_the_after_candles(monkeypatch):
     archived_again = await archive.get_candles(
         module="solana_support_bounce", position_id=position_id, phase="after",
     )
+    assert len(archived_again) == 2
+
+
+# --- 18/08 exhaustive-capture pass -------------------------------------------
+
+@pytest.mark.asyncio
+async def test_multi_window_distance_persisted_alongside_official_10c(monkeypatch):
+    # `_range_candles` returns exactly 10 candles, all fillers sharing the
+    # SAME low/high -- so the 5-candle window reads an identical range to
+    # the official 10-candle one (must match exactly), while 15/20/30 have
+    # fewer candles available than requested and must stay NULL, never
+    # fabricated.
+    candles = _range_candles(low=0.85, high=1.0, last_close=0.87)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.87)], chain=CHAIN)
+    assert logged == 1
+    rows = await _rows()
+    row = rows[0]
+    assert row["distance_from_support_pct_5"] == pytest.approx(row["distance_from_support_pct"], rel=1e-6)
+    assert row["distance_from_support_pct_15"] is None
+    assert row["distance_from_support_pct_20"] is None
+    assert row["distance_from_support_pct_30"] is None
+
+
+@pytest.mark.asyncio
+async def test_extra_dexpaprika_fields_persisted(monkeypatch):
+    # m5/h6/h24 were already fetched from DexPaprika alongside h1 but
+    # discarded before the 18/08 exhaustive-capture pass; dex_id/
+    # volume_usd_24h/transactions_24h likewise. All zero-extra-cost.
+    pool = TrendingPool(
+        pool_address="poolA", token_address="tokA", symbol="BOUNCE",
+        price_usd=0.87,
+        price_change_pct={"h1": 10.0, "m5": 1.5, "h6": 8.0, "h24": 25.0},
+        transactions_m15=None, volume_usd_m15=None,
+        reserve_usd=8000.0,
+        pool_created_at=datetime.now(timezone.utc) - timedelta(minutes=90),
+        dex_id="raydium", dex_name="Raydium", volume_usd_24h=54321.0, transactions_24h=777,
+    )
+    candles = _range_candles(low=0.85, high=1.0, last_close=0.87)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([pool], chain=CHAIN)
+    assert logged == 1
+    rows = await _rows()
+    row = rows[0]
+    assert row["m5_pct"] == pytest.approx(1.5)
+    assert row["h6_pct"] == pytest.approx(8.0)
+    assert row["h24_pct"] == pytest.approx(25.0)
+    assert row["dex_id"] == "raydium"
+    assert row["volume_usd_24h"] == pytest.approx(54321.0)
+    assert row["transactions_24h"] == 777
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_simulation_archives_a_full_snapshot(monkeypatch):
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    rows = await _rows()
+    position_id = rows[0]["id"]
+
+    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 8000.0}, dex_id_by_pool={"poolA": "raydium"})
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+
+    archived = await snapshot_archive.get_snapshots(module="solana_support_bounce", position_id=position_id)
+    assert len(archived) == 1
+    assert archived[0]["price_usd"] == pytest.approx(1.05)
+    assert archived[0]["reserve_usd"] == pytest.approx(8000.0)
+    assert archived[0]["dex_id"] == "raydium"
+
+    # A second check must append a SECOND row, never overwrite the first --
+    # this is the whole point (a real time series, not just the latest read).
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    archived_again = await snapshot_archive.get_snapshots(module="solana_support_bounce", position_id=position_id)
     assert len(archived_again) == 2

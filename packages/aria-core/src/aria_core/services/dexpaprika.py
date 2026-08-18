@@ -573,6 +573,19 @@ async def get_trending_pools(
             if isinstance(value, (int, float)):
                 price_change_pct[key] = float(value)
 
+        # 18/08, operator-directed exhaustive-capture pass -- confirmed live
+        # via curl that ``/pools/search`` also returns dex_id/dex_name/
+        # volume_usd_24h/transactions_24h on the same response, previously
+        # parsed away entirely. dex_id matters concretely: this dome already
+        # has a documented PumpSwap reserve-misreport gap (see
+        # solana_pump_shadow.py), so knowing the DEX at signal time (not
+        # just at exit-check time, where GeckoTerminal's snapshot already
+        # supplies it) lets a future analysis pass correlate outcomes by DEX.
+        dex_id = item.get("dex_id")
+        dex_name = item.get("dex_name")
+        volume_usd_24h = item.get("volume_usd_24h")
+        transactions_24h = item.get("transactions_24h")
+
         pools.append(TrendingPool(
             pool_address=pool_address,
             token_address=token_address,
@@ -583,5 +596,9 @@ async def get_trending_pools(
             volume_usd_m15=None,
             reserve_usd=float(liquidity_usd) if isinstance(liquidity_usd, (int, float)) else None,
             pool_created_at=pool_created_at,
+            dex_id=dex_id if isinstance(dex_id, str) else None,
+            dex_name=dex_name if isinstance(dex_name, str) else None,
+            volume_usd_24h=float(volume_usd_24h) if isinstance(volume_usd_24h, (int, float)) else None,
+            transactions_24h=int(transactions_24h) if isinstance(transactions_24h, (int, float)) else None,
         ))
     return TrendingPoolsResult(pools=pools, available=True, error=None)

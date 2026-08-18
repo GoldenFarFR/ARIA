@@ -88,6 +88,23 @@ LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
 TARGET_CLOSURES = 150
 
+# 18/08, operator-directed exhaustive-capture pass (same as
+# solana_support_bounce_shadow.py -- see its own comment for the full
+# reasoning): PRAGMA-guarded ALTER TABLE so the already-existing prod DB
+# migrates in place.
+_ADDED_COLUMNS: list[tuple[str, str]] = [
+    ("m5_pct", "REAL"),
+    ("h6_pct", "REAL"),
+    ("h24_pct", "REAL"),
+    ("volume_usd_24h", "REAL"),
+    ("transactions_24h", "INTEGER"),
+    ("dex_id", "TEXT"),
+    ("distance_from_support_pct_5", "REAL"),
+    ("distance_from_support_pct_15", "REAL"),
+    ("distance_from_support_pct_20", "REAL"),
+    ("distance_from_support_pct_30", "REAL"),
+]
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -134,6 +151,12 @@ async def _ensure_table() -> None:
             )
             """
         )
+        existing = {
+            row[1] for row in await (await db.execute(f"PRAGMA table_info({TABLE})")).fetchall()
+        }
+        for name, ddl in _ADDED_COLUMNS:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {name} {ddl}")
         await db.execute(
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_lookup ON {TABLE} (pool_address, chain, exit_reason)"
         )
@@ -216,6 +239,24 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
             if distance_from_support_pct > SUPPORT_TOLERANCE_PCT or distance_from_support_pct < 0:
                 continue
 
+            # 18/08, operator-directed exhaustive-capture pass (see
+            # solana_support_bounce_shadow.py's own comment for the full
+            # reasoning) -- additional readings at other window sizes,
+            # computed for FREE from the same `candles` list, never used to
+            # gate entry.
+            distance_from_support_pct_by_n: dict[int, float | None] = {}
+            for alt_n in (5, 15, 20, 30):
+                if len(candles) < alt_n:
+                    distance_from_support_pct_by_n[alt_n] = None
+                    continue
+                alt_window = candles[-alt_n:]
+                alt_low = min(c.low for c in alt_window)
+                alt_high = max(c.high for c in alt_window)
+                if not alt_low or alt_high <= alt_low:
+                    distance_from_support_pct_by_n[alt_n] = None
+                else:
+                    distance_from_support_pct_by_n[alt_n] = (current_price - alt_low) / (alt_high - alt_low) * 100.0
+
             rugcheck_score: int | None = None
             rugcheck_risks: str | None = None
             rugcheck_top_holder_pct: float | None = None
@@ -247,6 +288,10 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 pool.pool_created_at.isoformat(),
                 rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
                 realistic_entry_price,
+                pool.price_change_pct.get("m5"), pool.price_change_pct.get("h6"), pool.price_change_pct.get("h24"),
+                pool.volume_usd_24h, pool.transactions_24h, pool.dex_id,
+                distance_from_support_pct_by_n[5], distance_from_support_pct_by_n[15],
+                distance_from_support_pct_by_n[20], distance_from_support_pct_by_n[30],
             ))
             candles_by_row.append(candles)
 
@@ -265,8 +310,14 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                             h1_pct, reserve_usd, range_low_10c, range_high_10c, distance_from_support_pct,
                             remaining_qty, realized_proceeds, peak_price,
                             pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
-                            rugcheck_creator, realistic_entry_price
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
+                            rugcheck_creator, realistic_entry_price,
+                            m5_pct, h6_pct, h24_pct, volume_usd_24h, transactions_24h, dex_id,
+                            distance_from_support_pct_5, distance_from_support_pct_15,
+                            distance_from_support_pct_20, distance_from_support_pct_30
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         """,
                         row,
                     )
@@ -320,6 +371,19 @@ async def advance_exit_simulation(
                 continue
             counts["checked"] += 1
             current_price = snapshot.price_usd
+
+            # 18/08, operator-directed exhaustive-capture pass (see
+            # solana_support_bounce_shadow.py's own comment for the full
+            # reasoning, including the DexScreener-primary-path caveat).
+            from aria_core import shadow_snapshot_archive
+
+            await shadow_snapshot_archive.store_snapshot(
+                module="solana_support_bounce_v2", position_id=row["id"],
+                pool_address=row["pool_address"], chain=chain,
+                price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+                dex_id=snapshot.dex_id, price_change_pct=snapshot.price_change_pct,
+                transactions=snapshot.transactions, volume_usd=snapshot.volume_usd,
+            )
 
             # 18/08 -- same window-detection fix as the original module (see
             # its own docstring for the 2 real live-bug precedents this

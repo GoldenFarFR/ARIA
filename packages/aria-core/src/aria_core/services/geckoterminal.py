@@ -335,6 +335,18 @@ class TrendingPool:
     # MAX_POOL_AGE_MINUTES protection against a pool that already rug-pulled
     # its liquidity well before the shadow ever saw it.
     pool_created_at: datetime | None = None
+    # 18/08, operator-directed exhaustive-capture pass (future trades should
+    # carry no analysis blind spots): these 4 fields are already present in
+    # DexPaprika's ``/pools/search`` response item (confirmed live via a
+    # real curl test 18/08) but were being parsed away before this change --
+    # zero extra network cost, purely additive.
+    # ``None`` for GeckoTerminal's own ``trending_pools`` endpoint (this
+    # dataclass is shared between both providers; only DexPaprika's parser
+    # populates these for now).
+    dex_id: str | None = None
+    dex_name: str | None = None
+    volume_usd_24h: float | None = None
+    transactions_24h: int | None = None
 
 
 @dataclass
