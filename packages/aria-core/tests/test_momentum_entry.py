@@ -8675,6 +8675,12 @@ async def test_golden_pocket_watch_candidate_created_when_score_confirmed_high(m
     # pilot).
     assert watch["align_score"] is not None
     assert isinstance(watch["align_score"], int)
+    # system_issues #125 (18/08, real bug found live): this dict never carried
+    # the pool's liquidity_usd before, so a position opened from this limit
+    # order silently skipped risk_guard's price-impact discount (fail-open by
+    # design when liquidity is genuinely unknown -- here it was known all
+    # along, the same PairSnapshot the outright-BUY path already reads it from).
+    assert watch["liquidity_usd"] == pytest.approx(150_000.0)
 
 
 @pytest.mark.asyncio
@@ -8882,6 +8888,11 @@ async def test_rsi_divergence_watch_candidate_created_when_in_gp_without_diverge
     # (scalping never goes through golden-pocket-watch, #182 excludes it).
     assert watch["align_score"] is not None
     assert isinstance(watch["align_score"], int)
+    # system_issues #125 (18/08) -- same fix as the golden-pocket watch above:
+    # this is scalping's ONLY limit-order mechanism (100% of scalping
+    # positions are sourced through it), so this was the real path behind the
+    # NULL entry_liquidity_usd rows.
+    assert watch["liquidity_usd"] == pytest.approx(150_000.0)
 
 
 @pytest.mark.asyncio

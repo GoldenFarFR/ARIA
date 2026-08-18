@@ -4670,6 +4670,20 @@ async def evaluate_momentum_entry(
                 watch = None
             if watch:
                 watch["align_score"] = watch_align_score
+                # system_issues #125 (18/08, real bug found live): unlike the
+                # outright-BUY dict returned by evaluate_momentum_entry itself
+                # (which has carried "liquidity_usd" since 19/07, precisely so
+                # risk_guard.cap_alloc_to_price_impact/simulated_fill_price can
+                # discount a thin pool), neither watch-candidate builder ever
+                # set this field on its own returned dict -- a position later
+                # opened from THIS limit order therefore stored a NULL
+                # entry_liquidity_usd and got the price-impact discount
+                # silently skipped (fail-open by design when liquidity is
+                # unknown, but here it was actually KNOWN -- ``best`` is the
+                # same PairSnapshot the outright-BUY path reads its own
+                # liquidity_usd from). Injected here, same pattern as
+                # align_score/entry_security_json just above.
+                watch["liquidity_usd"] = best.liquidity_usd
                 # Item #234 (30/07) -- same fix as the outright-BUY path below:
                 # a position later opened by THIS limit order must carry an
                 # entry snapshot too, or rescan_open_position stays a no-op for
@@ -4707,6 +4721,12 @@ async def evaluate_momentum_entry(
                 watch = None
             if watch:
                 watch["align_score"] = watch_align_score
+                # system_issues #125 (18/08) -- same gap, same fix as the
+                # golden-pocket watch branch above: `best` is already the
+                # PairSnapshot this scalping limit order's fill will be priced
+                # off of, but nothing ever forwarded its liquidity_usd into
+                # the watch dict that becomes pending_limit_order.signal_json.
+                watch["liquidity_usd"] = best.liquidity_usd
                 # 08/02 -- real bug found live (100% of positions had a NULL
                 # entry_security_json, diagnostic workflow): Item #234 (30/07)
                 # added this snapshot to the outright-BUY path and to the
