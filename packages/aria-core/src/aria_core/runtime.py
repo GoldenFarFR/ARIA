@@ -9,6 +9,20 @@ _settings: Any = None
 def configure(settings: Any) -> None:
     global _settings
     _settings = settings
+    # Real bug found live 18/08: `_SettingsProxy.__setattr__`'s fallback (see
+    # its own docstring) stashes a read-only-property override (e.g.
+    # `admin_ids`) directly on the proxy's own `__dict__` -- once written,
+    # `__getattr__` is never consulted again for that name, so the shadow
+    # outlives whatever settings object was active when it was written. A
+    # test (`test_telegram_scan_command.py`) monkeypatching `admin_ids`
+    # directly silently broke an unrelated, much later test
+    # (`test_agent_wallet_monitor.py`) that only ever touched the real field
+    # (`telegram_admin_ids`) -- the proxy kept returning the stale shadowed
+    # value instead of recomputing the property against the fresh settings
+    # object this very call is swapping in. Clearing here scopes every
+    # shadow to "since the last configure()" instead of "for the whole
+    # process," matching what a fresh settings object is supposed to mean.
+    globals()["settings"].__dict__.clear()
 
 
 def get_settings() -> Any:
@@ -34,6 +48,12 @@ class _SettingsProxy:
     `monkeypatch.setattr(settings, "admin_ids", ...)`, the only practical way to control a
     pydantic property without a setter. This fallback reproduces the pre-existing behavior
     (so no regression) for this specific subset, never for a real field.
+
+    This local shadow used to outlive the test that wrote it (18/08 real bug,
+    see `configure()`'s own comment) -- `configure()` now clears this proxy's
+    `__dict__` on every call, which the test suite's autouse fixture already
+    does before every test, so the shadow's lifetime is bounded to "since the
+    last configure()" rather than the whole process.
     """
 
     def __getattr__(self, name: str) -> Any:
