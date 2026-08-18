@@ -171,3 +171,22 @@ d'autonomie" — question ouverte pour #13, pas une conclusion tranchée ici.
   directement la piste #26 de la passe 8 (account abstraction pour
   `sepolia_wallet.py`). Pas creusé plus ici pour rester dans le cadre de la
   demande, signalé pour lien croisé.
+
+## Freshness check (2026-08-18)
+
+Important drift found in the positioning claim. On 12/07, "l'exécution reste
+toujours validée par un humain" (the doctrine cited against AIXBT and
+Manfred) was accurate without exception. It no longer is: since 18/07, the
+agent-wallet pilot (`agent_wallet_pilot_cycle`, gate
+`ARIA_AGENT_WALLET_PILOT_ENABLED`, wired in `heartbeat.py`) decides AND
+executes real USDC->token swaps on a dedicated ~10-25$ CDP wallet with no
+Telegram click per transaction -- a named, hard-bounded exception (real
+balance checked before each attempt, slippage forced <=10%, `/stop`
+kill-switch checked every attempt, structurally separated from
+`wallet_guard`). The AIXBT/ai16z/Manfred comparison should now read "human
+validation is the default for every financial action, with one named,
+heavily-guarded 10-25$ exception" rather than an absolute "never". The
+Merkle-anchor differentiator (`onchain/anchor.py`,
+`ARIA_ONCHAIN_ANCHOR_ENABLED`) is unchanged, re-verified still gated OFF by
+default. See CLAUDE.md, "Mécanismes de trading automatique actifs", for the
+current state.
