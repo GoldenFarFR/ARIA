@@ -2098,97 +2098,6 @@ async def _dispatch_nl_action(action_key: str) -> str:
     raise ValueError(f"clé d'action NL inconnue : {action_key!r}")
 
 
-# ── Natural-language routing -> v9 command TEMPLATES (06/08, operator request) ─
-#
-# Distinct from the read-only router above: /v9add, /v9set, /v9remove all
-# WRITE (the read-only router's own docstring explicitly excludes exactly
-# this case -- "never a command that writes... nor one that takes a
-# free-form address parameter... a misunderstood rephrasing must never
-# misinterpret a contract"). This router never executes anything: on a
-# detected v9 intent it replies with the REAL command, pre-filled with the
-# REAL current values read live from the DB -- the operator edits only the
-# numbers that changed and sends it back themselves. Same safety property as
-# before (the LLM never picks a contract from free text), while still
-# answering the operator's live-caught gap ("modifier le signal sur v9" fell
-# through to an unrelated skill match, screenshot 06/08): a "v9" mention now
-# gets a template, never silence or a random topic.
-_NL_V9_MENTION_RE = re.compile(r"\bv\s*9\b", re.IGNORECASE)
-_NL_V9_ADD_RE = re.compile(r"ajout|add|nouveau\s+(token|contrat)", re.IGNORECASE)
-_NL_V9_REMOVE_RE = re.compile(r"retir|supprim|enlev|remove|vire", re.IGNORECASE)
-_NL_V9_MODIFY_RE = re.compile(
-    r"modif|régl|regl|chang|ajust|affine|signal|seuil|rsi|mfi|trail|timeframe|\btf\b",
-    re.IGNORECASE,
-)
-_NL_V9_LIST_RE = re.compile(r"liste|watchlist|quels?\s+(token|contrat)", re.IGNORECASE)
-
-
-def _format_v9_watchlist(tokens: list[dict]) -> str:
-    """Shared by /v9list and the NL template router below -- single source
-    of formatting for what a v9 watchlist entry looks like."""
-    lines = [f"Watchlist scalping_v9 ({len(tokens)} token(s), cycle 5 min) :", ""]
-    for t in tokens:
-        lines.append(
-            f"• {t['symbol']} ({t['chain']}) — bougies {t['timeframe_min']} min, "
-            f"RSI({t['rsi_period']})<{t['rsi_lower']:g} "
-            f"+ MFI({t['mfi_period']})<{t['mfi_lower']:g}, trail -{t['trail_pct'] * 100:g}%\n"
-            f"  {t['contract']}"
-        )
-    return "\n".join(lines)
-
-
-def _v9_set_template(t: dict) -> str:
-    """Ready-to-edit /v9set line, pre-filled with THIS token's real current
-    values -- operator request (06/08): "juste le champ texte paramétrique
-    [...] juste les valeurs numériques sont à changer"."""
-    return (
-        f"{t['symbol']} :\n"
-        f"/v9set {t['contract']} rsi={t['rsi_period']}/{t['rsi_lower']:g} "
-        f"mfi={t['mfi_period']}/{t['mfi_lower']:g} "
-        f"trail={t['trail_pct'] * 100:g} tf={t['timeframe_min']}"
-    )
-
-
-async def _try_nl_v9_command(text: str) -> str | None:
-    if not _NL_V9_MENTION_RE.search(text):
-        return None
-    from aria_core import scalping_v9
-    from aria_core.dossier import ADDR_RE
-
-    lower = text.lower()
-
-    if _NL_V9_ADD_RE.search(lower):
-        return (
-            "Pour ajouter un token à v9, édite l'adresse puis envoie :\n"
-            "/v9add <adresse> [chaîne optionnelle — sinon détection auto]"
-        )
-
-    tokens = await scalping_v9.get_watchlist()
-    if not tokens:
-        return "Watchlist v9 vide — ajoute d'abord un token : /v9add <adresse>."
-
-    # Unlike dossier.extract_contract() (deliberately strict -- "message is
-    # essentially just an address"), a v9 command sentence has real words
-    # around the address ("modifie le rsi de 0x... sur v9") -- any address
-    # mentioned anywhere narrows the reply, no "almost nothing else" bar.
-    mentioned = {m.lower() for m in ADDR_RE.findall(text)}
-    matched = [t for t in tokens if t["contract"].lower() in mentioned] or tokens
-
-    if _NL_V9_REMOVE_RE.search(lower):
-        lines = ["Pour retirer, édite si besoin puis envoie :", ""]
-        lines.extend(f"/v9remove {t['contract']}   ({t['symbol']})" for t in matched)
-        return "\n".join(lines)
-
-    if _NL_V9_MODIFY_RE.search(lower):
-        lines = ["Pour modifier, édite seulement les chiffres puis renvoie :", ""]
-        lines.extend(_v9_set_template(t) for t in matched)
-        return "\n".join(lines)
-
-    if _NL_V9_LIST_RE.search(lower):
-        return _format_v9_watchlist(tokens)
-
-    return None
-
-
 async def _try_nl_readonly_command(text: str) -> str | None:
     """Detects a natural-language question (or a bare keyword) that matches
     one of the read-only commands above, and returns the REAL reply
@@ -2239,11 +2148,6 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     nl_reply = await _try_nl_readonly_command(text)
     if nl_reply is not None:
         await _reply(message, nl_reply)
-        return
-
-    v9_reply = await _try_nl_v9_command(text)
-    if v9_reply is not None:
-        await _reply(message, v9_reply)
         return
 
     if re.match(r"^@claude\b", text, re.IGNORECASE):
@@ -2686,11 +2590,6 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
-    ("v9add", "Ajoute un contrat à la watchlist scalping_v9 (RSI+MFI 5min)"),
-    ("v9indics", "Liste les 52 indicateurs utilisables dans /v9set signals="),
-    ("v9list", "Watchlist scalping_v9 active (avec réglages par token)"),
-    ("v9remove", "Retire un contrat de la watchlist scalping_v9"),
-    ("v9set", "Règle indicateurs/seuils/trail/timeframe d'un token v9 en temps réel"),
     ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
     ("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
     ("watchlist", "Top candidats du pool screené"),
@@ -2870,188 +2769,6 @@ async def _reply_manual_candidates_queued(message, addresses: list[str], chain: 
     )
 
 
-async def _handle_v9add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/v9add <contract> [chain] -- 06/08, explicit operator request ("je
-    pourrai ajouter les contrats moi-même directement dans v9") : adds a
-    token to the scalping_v9 fixed watchlist, effective on the next 5-min
-    cycle, zero redeploy. Chain auto-detected (most liquid DexScreener pool
-    across base/ethereum; non-0x address tried as Solana) unless given."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    args = context.args or []
-    if not args:
-        await _reply(
-            message,
-            "Usage : /v9add <adresse> [chaîne]\n"
-            "Chaîne optionnelle (base/ethereum/solana) — sinon détection "
-            "automatique sur le pool le plus liquide.",
-        )
-        return
-    from aria_core import scalping_v9
-
-    contract = args[0].strip()
-    chain = args[1].strip().lower() if len(args) > 1 else None
-    entry, error = await scalping_v9.add_watchlist_token(contract, chain)
-    if entry is None:
-        await _reply(message, f"❌ Ajout refusé : {error}")
-        return
-    await _reply(
-        message,
-        f"✅ {entry['symbol']} ajouté à la watchlist v9 ({entry['chain']}, "
-        f"liquidité {entry['liquidity_usd']:,.0f} $, prix {entry['price_usd']:.6g} $).\n"
-        f"Effectif au prochain cycle 5 min — entrée : RSI(18)<21 ET MFI(10)<20 "
-        f"sur la même bougie.",
-    )
-
-
-async def _handle_v9indics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/v9indics -- every indicator ``signals=`` accepts, with its bounds.
-
-    Generated from ``signal_conditions.INDICATORS`` itself (07/08), never a
-    hand-written list: the catalogue and this help can therefore not drift
-    apart the way a duplicated list always eventually does."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    from aria_core import signal_conditions
-
-    rows = signal_conditions.as_template_indicators()
-    lines = [f"{len(rows)} indicateurs utilisables dans /v9set signals=…", ""]
-    for row in rows:
-        period = f"({row['default_period']})" if row["has_period"] else ""
-        threshold = f"{row['default_threshold']:g}"
-        lines.append(
-            f"{row['key']}{period}{row['default_operator']}{threshold} — {row['label']}"
-        )
-        # An indicator whose scale differs from a charting platform must say
-        # so HERE: a threshold copied off a TradingView chart would otherwise
-        # behave differently with no visible reason.
-        if row.get("scale_note"):
-            lines.append(f"   ⚠ {row['scale_note']}")
-    lines.append("")
-    lines.append("Toutes les conditions doivent être vraies sur la MÊME bougie close.")
-    lines.append(
-        "⚠ = échelle différente de TradingView : ne pas recopier un seuil lu sur un graphique."
-    )
-    lines.append("Exemple : /v9set 0x… signals=rsi(18)<21,adx(14)>25,rvol(20)>2")
-    # Telegram caps a message at 4096 chars -- 52 lines fit, but split
-    # defensively rather than have the API silently truncate the tail.
-    chunk: list[str] = []
-    for line in lines:
-        chunk.append(line)
-        if sum(len(x) + 1 for x in chunk) > 3500:
-            await _reply(message, "\n".join(chunk))
-            chunk = []
-    if chunk:
-        await _reply(message, "\n".join(chunk))
-
-
-async def _handle_v9list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/v9list -- active scalping_v9 watchlist (see /v9add)."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    from aria_core import scalping_v9
-
-    tokens = await scalping_v9.get_watchlist()
-    if not tokens:
-        await _reply(message, "Watchlist v9 vide — ajoute un contrat avec /v9add <adresse>.")
-        return
-    text_out = _format_v9_watchlist(tokens) + "\n\nAffiner : /v9set <adresse> rsi=18/21 mfi=10/20 trail=5 tf=5"
-    await _reply(message, text_out)
-
-
-_V9SET_USAGE = (
-    "Usage : /v9set <adresse> [rsi=période/seuil] [mfi=période/seuil] [trail=%] [tf=minutes] [signals=…]\n"
-    "Exemples :\n"
-    "  /v9set 0x50dA… rsi=16/25 — RSI période 16, seuil 25\n"
-    "  /v9set 0x50dA… mfi=10/18 trail=4 — seuil MFI 18 + stop suiveur -4%\n"
-    "  /v9set 0x50dA… tf=15 — bougies 15 min (choix : 5/15/30/60)\n"
-    "  /v9set 0x50dA… signals=stoch(14)<15,wick>0.3 — change les indicateurs eux-mêmes\n"
-    "52 indicateurs disponibles — /v9indics pour la liste complète.\n"
-    "Toutes les conditions doivent être vraies sur la MÊME bougie close.\n"
-    "Seuls les réglages passés changent, effet au prochain cycle 5 min."
-)
-
-
-def _parse_v9set_args(args: list[str]) -> tuple[dict, str]:
-    """``rsi=18/21 mfi=10/20 trail=5`` -> settings dict for
-    scalping_v9.set_watchlist_settings. Returns ``(settings, error)``."""
-    settings: dict = {}
-    for raw in args:
-        key, _, value = raw.lower().partition("=")
-        if not value:
-            return {}, f"réglage illisible : {raw}"
-        try:
-            if key == "signals":
-                # 07/08 -- configurable indicator combination. Validated HERE
-                # (parse returns a readable reason) so a typo is refused on
-                # the spot rather than silently holding forever at cycle time.
-                from aria_core import signal_conditions
-
-                conditions, spec_error = signal_conditions.parse(value)
-                if spec_error:
-                    return {}, spec_error
-                settings["signals"] = signal_conditions.format_spec(conditions)
-            elif key in ("rsi", "mfi"):
-                period_s, _, lower_s = value.partition("/")
-                if lower_s:
-                    settings[f"{key}_period"] = int(period_s)
-                    settings[f"{key}_lower"] = float(lower_s)
-                else:
-                    settings[f"{key}_lower"] = float(period_s)
-            elif key == "trail":
-                settings["trail_pct"] = float(value.rstrip("%")) / 100.0
-            elif key in ("tf", "timeframe"):
-                settings["timeframe_min"] = int(value.rstrip("m"))
-            else:
-                return {}, f"réglage inconnu : {key} (attendu rsi/mfi/trail/tf/signals)"
-        except ValueError:
-            return {}, f"valeur illisible : {raw}"
-    return settings, ""
-
-
-async def _handle_v9set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/v9set <contract> rsi=18/21 mfi=10/20 trail=5 -- 06/08 operator
-    request ("go réglages... modifier le réglage en temps réel pour
-    l'affiner"): per-token indicator/trailing tuning, persisted in the
-    v9_watchlist row, effective on the next 5-min cycle, zero redeploy."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    args = context.args or []
-    if len(args) < 2:
-        await _reply(message, _V9SET_USAGE)
-        return
-    from aria_core import scalping_v9
-
-    settings, parse_error = _parse_v9set_args(args[1:])
-    if parse_error:
-        await _reply(message, f"❌ {parse_error}\n\n{_V9SET_USAGE}")
-        return
-    entry, error = await scalping_v9.set_watchlist_settings(args[0].strip(), **settings)
-    if entry is None:
-        await _reply(message, f"❌ Réglage refusé : {error}")
-        return
-    await _reply(
-        message,
-        f"✅ {entry['symbol']} réglé : bougies {entry['timeframe_min']} min, "
-        f"RSI({entry['rsi_period']})<{entry['rsi_lower']:g} "
-        f"+ MFI({entry['mfi_period']})<{entry['mfi_lower']:g}, "
-        f"trail -{entry['trail_pct'] * 100:g}%.\n"
-        f"Effectif au prochain cycle 5 min.",
-    )
-
-
 async def _handle_llmspend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/llmspend -- 06/08, operator request: on-demand cost breakdown
     (Haiku/Sonnet, USD, by call site) so an anomaly ("dépense louche") can
@@ -3092,32 +2809,6 @@ async def _handle_llmspend(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if any_unpriced:
         lines.append("\n(prix inconnu = jamais deviné, exclu du total ci-dessus)")
     await _reply(message, "\n".join(lines))
-
-
-async def _handle_v9remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/v9remove <contract> -- deactivates a v9 watchlist token. Open
-    positions on it keep being managed to natural close (the management
-    pass iterates positions, not the watchlist)."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-    args = context.args or []
-    if not args:
-        await _reply(message, "Usage : /v9remove <adresse>")
-        return
-    from aria_core import scalping_v9
-
-    removed = await scalping_v9.remove_watchlist_token(args[0].strip())
-    if removed:
-        await _reply(
-            message,
-            "✅ Retiré de la watchlist v9. Les positions ouvertes dessus restent "
-            "gérées jusqu'à clôture naturelle (stop suiveur -5%).",
-        )
-    else:
-        await _reply(message, "Rien à retirer — ce contrat n'est pas dans la watchlist active (/v9list).")
 
 
 async def _handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4034,11 +3725,6 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))
     app.add_handler(CommandHandler("order", _handle_order))
-    app.add_handler(CommandHandler("v9add", _handle_v9add))
-    app.add_handler(CommandHandler("v9list", _handle_v9list))
-    app.add_handler(CommandHandler("v9remove", _handle_v9remove))
-    app.add_handler(CommandHandler("v9indics", _handle_v9indics))
-    app.add_handler(CommandHandler("v9set", _handle_v9set))
     app.add_handler(CommandHandler("llmspend", _handle_llmspend))
     app.add_handler(CommandHandler("track", _handle_track))
     app.add_handler(CommandHandler("watchlist", _handle_watchlist))

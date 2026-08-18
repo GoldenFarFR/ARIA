@@ -170,40 +170,8 @@ when preparing real scaling beyond this pilot, explicitly re-evaluate with the
 real exposure figures in hand (asymmetry to keep in mind: going private is always
 still possible later, the reverse — an already-public git history — never is).
 
-## Active state — pocket lineup (06/08, explicit operator decision)
-**Scalping v1-v7 RETIRED on 06/08** ("supprimer toutes les poches scalping sauf v8") — sourcing code removed, DB history intact, `ARIA_SCALPING_VARIANTS_ENABLED` is now v8's kill-switch (OFF = no scalping sourcing). Active trio: **scalping_v8 + swing + vc** (vc unpaused the same day). **"megacap" pocket fully removed on 15/08** (operator confirmed it never opened a single position across its lifetime) — code, tests, and docs all cleaned in the same pass, `fixed_watchlist.py` deleted entirely, see `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.15 entry). **v9 pocket (operator-spec'd, 06/08)**: fixed-watchlist SPX-style engine — RSI(18)<21 AND MFI(10)<20 on the same closed 5-min candle → immediate buy, 1 buy per synchronized episode, 3% of remaining capital per buy, -5% trailing stop as the only exit, ±1.3% simulated fees both ways, dedicated $1M weekly-reset wallet, watchlist extensible (operator will add ~4 more contracts). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.06 entry).
-
-## Active state — scalping_v8, Claude's own agent (05/08, operator carte blanche)
-**`scalping_v8` is Claude Code's OWN pocket — explicit operator mandate (05/08): build
-and modify it on my own initiative ("je veux que tu construise et modifie ton agent v8
-toi meme quand tu le souhaites et comme tu le souhaites"), code+commit+deploy without
-asking, including future 8.1/8.2 variant pockets. Reinforced same day: the operator
-NEVER wants to be pulled in on v8/8.x ("si tu bloqué tu te débrouilles") — a blocked
-v8 thread is resolved autonomously (backtests on our own data, new indicators, own
-WebSearch/internal workflows), never escalated. The paid Fable 5 consult stays under
-its own 03/08 rule (real cost, not explicitly lifted).** Bounds unchanged: paper only, never
-guardrail files, never real capital, never the OTHER pockets without operator
-validation, push/deploy still gated by the 8000-raw-line batch rule (see Devil's
-Advocate entry under "Automations in place"). Design + empirical basis
-(wick gate 60% vs 25.6% WR p=0.026, no fixed TP, 1.5h stagnation, bootstrap mode =
-free 8.1 experiment): `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.05 entry). Monitoring
-meant for SESSIONS (read it when resuming the v8 thread): `/opt/aria-data/v8-watch/
-v8-log.md` (cron 30min accelerated — verified against the real crontab 07/08, the
-"2h" this line claimed was already stale; nominal 6h to restore — backlog #1); bootstrap exit
-criteria — backlog #2. Wick shadow filter on v6/v7: `wick_filter_shadow_log` table.
-RSI-reversal shadow (08/08, backtest-driven, 60min RSI14/RSI21 oversold/overbought
-round trip): `v8_rsi_reversal_shadow` table, same v8-watch log. Design + backtest basis:
-`docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.08 entry). **Wick-gate PAUSED (0/43 live
-winners, statistically confirmed as not a real edge — `backtest_robustness.py`, 10/08
-entry) — methodology rule for any future v8/8.x filter candidate: before promoting ANY
-new empirically-derived threshold to a hard gate, (1) split the sample train/validation
-BEFORE looking for a pattern, never mine one batch until something looks significant,
-(2) run it through `backtest_robustness.py` (Bonferroni-correct for every filter family
-actually tried on that sample, not just the winning one; permutation-test any two-group
-win-rate claim) — a p-value from a single un-split batch is not sufficient evidence
-anymore, (3) if the validation sample is too small for a real split, log the candidate
-in SHADOW mode first (cf. `wick_filter_shadow.py`'s own pattern) and accumulate live
-observations before ever hard-gating on it.**
+## Active state — pocket lineup (18/08, explicit operator decision)
+**Scalping v1-v9 all RETIRED on 18/08** ("supprime toutes les poches v8 et v9 on sen servira plus cest les poche bouncy qui font office de test") — v8 (Claude's own scalping agent, 05/08-18/08) and v9 (operator-spec'd fixed-watchlist SPX engine, 06/08-18/08) both fully deleted (code, tests, heartbeat wiring, Telegram commands), their 12/43 open paper positions force-closed at real market price first. Active sourcing pockets: **swing + vc** only. The **support-bounce shadow pockets (v1/v2)** now serve as the reference test instead. **"megacap" pocket fully removed on 15/08** (operator confirmed it never opened a single position across its lifetime) — code, tests, and docs all cleaned in the same pass, `fixed_watchlist.py` deleted entirely. Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 entry).
 
 ## Permanent mandate — strengths/weaknesses of a trading AI (15/07, continuous loop)
 Until the operator judges ARIA ready: (1) verify that the real strengths of an

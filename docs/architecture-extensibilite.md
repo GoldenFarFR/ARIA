@@ -245,3 +245,34 @@ le jour venu ; sinon, non.
 ingérable en code maison (et non un simple problème de charge). On réévaluera
 alors avec le critère ci-dessus — en privilégiant un loop maison gardé ou un
 graphe explicite avant l'autonomie large.
+
+---
+
+## 8. Trading pockets (`paper_trader.py` wallets) — the wiring checklist
+
+Different axis from sections 1-4 above (those cover plugging in an EXTERNAL
+tool/data source). A pocket is an INTERNAL engine concept — a wallet name
+string recognized in ~9 separate places, no single `Pocket` registry exists
+yet (tracked, deferred refactor: CLAUDE.md backlog #329). Until that refactor
+happens, adding or retiring a pocket means touching every point below by
+hand — miss one and it silently drifts (lived twice: v9 invisible in
+`aria_brain`'s LLM context until `pocket_state_text()` was added 06/08; the
+WebSocket drain and the periodic heartbeat loop diverging on a sourcing gate
+08/02). Work through this list top to bottom, every time:
+
+1. `all_pocket_wallets()` — the single source of truth for which wallets are active.
+2. `POCKET_LABELS` — display name (own dedicated test, checked independently).
+3. `is_scalping_pocket()` / `_RETIRED_SCALPING_WALLETS` — retirement + exit-discipline recognition (a retired pocket must stay hidden from operator surfaces yet still close correctly).
+4. `sourcing_paused()` / `SOURCING_PAUSED_WALLETS` — pause mechanism.
+5. Per-wallet override dicts (stagnation timeout, max hold hours) only if the pocket needs bespoke exit discipline.
+6. The multi-pocket loop tuple in `_run_paper_cycle_locked` (periodic heartbeat) AND its mirror in `momentum_websocket.py::_drain_multi_pocket` (WebSocket drain) — two call sites, must never diverge.
+7. `heartbeat.py` — only if the pocket needs its own dedicated cycle; otherwise it rides the shared `paper_trade_cycle`.
+8. `gateway/telegram_bot.py` — NL router/commands, only if the pocket needs operator-facing controls.
+9. `test_coherence.py::_KNOWN_ENABLED_GATES` — if a new gate env var is introduced.
+
+**Retiring a pocket**: same list in reverse, plus one non-negotiable first
+step — close every real open position in that pocket (`close_position()` at a
+real looked-up price, never fabricated) BEFORE deleting its management code.
+Deleting the code first orphans any open capital permanently.
+
+Full story of the last full pocket retirement (v8/v9, 18/08): `docs/HANDOFF_PIPELINE_MOMENTUM.md`.

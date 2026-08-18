@@ -635,17 +635,6 @@ class MomentumWebsocketListener:
                     pass
                 return
 
-            # 08/01 -- real bug found live: this used to hardcode its OWN
-            # single "scalping" pocket entry here, never updated when
-            # scalping_v1..v5 were introduced the same day -- kept feeding
-            # the legacy pocket through this 30s drain, invisible to and
-            # duplicate of the periodic heartbeat's own (correct) multi-
-            # pocket construction. Now the SAME shared function, so this
-            # drain and the heartbeat can never silently diverge again -- see
-            # paper_trader.build_scalping_pocket_entries's own docstring.
-            scalping_entries = paper_trader.build_scalping_pocket_entries(
-                candidates, chain_by_contract, current_regime=current_regime,
-            )
             swing_analyzer = paper_trader._default_momentum_analyzer(
                 chain_by_contract, current_regime=current_regime, mode="standard",
             )
@@ -653,16 +642,16 @@ class MomentumWebsocketListener:
             closed_this_cycle: set[str] = set()
             funnel: dict[str, int] = {}
 
+            # 18/08 -- the scalping-variant slot (v1-v8) is retired; only
+            # swing/vc remain (see docs/HANDOFF_PIPELINE_MOMENTUM.md).
             for pocket_wallet, pocket_candidates, pocket_analyzer, pocket_mode, pocket_cap in (
-                *scalping_entries,
                 ("swing", candidates, swing_analyzer, "standard", paper_trader.MAX_POSITIONS_SWING),
                 ("vc", vc_candidates, paper_trader._default_analyzer, "standard", paper_trader.MAX_POSITIONS_VC),
             ):
                 # 08/05 -- operator focus decision: paused pockets never
                 # source here either (same filter as the heartbeat loop,
                 # paper_trader.SOURCING_PAUSED_WALLETS -- the two loops must
-                # never diverge on this, same doctrine as the shared
-                # build_scalping_pocket_entries itself).
+                # never diverge on this).
                 if paper_trader.sourcing_paused(pocket_wallet):
                     continue
                 try:
@@ -689,20 +678,6 @@ class MomentumWebsocketListener:
                         except Exception:  # noqa: BLE001
                             pass
                     if pocket_risk_state.blocked:
-                        continue
-
-                    # 08/02 -- real bug found live (audit + adversarial
-                    # verify workflow, operator go-ahead to fix): the
-                    # periodic heartbeat loop (paper_trader._run_paper_cycle_
-                    # locked) has always respected scalping_only_sourcing_
-                    # enabled() (see its own docstring), but this 30s
-                    # WebSocket drain never did -- confirmed on real prod
-                    # data with the gate ON: 50 swing limit orders actively
-                    # "watching" (most recent created 18min before the
-                    # audit), ~1500 LLM-confirmation scan_log rows on swing
-                    # over 24h, directly contradicting the operator's 08/01
-                    # intent to concentrate sourcing on scalping alone.
-                    if not pocket_wallet.startswith("scalping") and paper_trader.scalping_only_sourcing_enabled():
                         continue
 
                     # 08/02 -- see paper_trader.vc_pocket_sourcing_enabled()'s

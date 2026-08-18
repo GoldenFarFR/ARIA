@@ -972,8 +972,7 @@ def paper_risk_circuit_breakers_disabled() -> bool:
     file) so a future deploy that forgets to set this env var gets the safe
     behavior (breakers active) -- flip ON explicitly, same doctrine as every
     other "temporarily loosen a guardrail for observation" gate already in
-    this codebase (see paper_trader.scalping_only_sourcing_enabled's own
-    comment for the same idiom). MUST be revisited before any real-capital
+    this codebase. MUST be revisited before any real-capital
     transition -- the day capital becomes real, CLAUDE.md's absolute rule
     on human validation applies in full, unconditionally, and this flag
     (scoped to fictional paper capital only) has no bearing on that."""

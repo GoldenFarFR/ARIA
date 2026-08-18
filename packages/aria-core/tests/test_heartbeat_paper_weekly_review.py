@@ -93,13 +93,12 @@ async def test_paper_weekly_review_cycle_skips_wallet_not_due(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_paper_weekly_review_cycle_covers_v8_when_gate_on(monkeypatch):
+async def test_paper_weekly_review_cycle_covers_active_pockets(monkeypatch):
     """The exact regression this fix targets: the weekly loop must follow
-    all_pocket_wallets() (scalping_v8 + swing since the 06/08 v1-v7
-    retirement), never keep looking for a "scalping" row that no longer
-    exists."""
+    all_pocket_wallets() (swing since the 18/08 v8/v9 retirement, vc
+    deliberately excluded -- it never resets weekly by design), never keep
+    looking for a retired "scalping" row."""
     monkeypatch.setenv("ARIA_MULTI_POCKET_SOURCING_ENABLED", "true")
-    monkeypatch.setenv("ARIA_SCALPING_VARIANTS_ENABLED", "true")
     due_calls: list[str] = []
 
     async def fake_due(wallet: str = "swing") -> bool:
@@ -118,6 +117,6 @@ async def test_paper_weekly_review_cycle_covers_v8_when_gate_on(monkeypatch):
 
     await heartbeat.aria_heartbeat._run_task("paper_weekly_review_cycle")
 
-    assert set(due_calls) == {"scalping_v8", "swing"}
+    assert set(due_calls) == {"swing"}
     assert "scalping" not in due_calls
     assert "vc" not in due_calls

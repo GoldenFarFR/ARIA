@@ -783,7 +783,6 @@ _KNOWN_ENABLED_GATES = {
     # 08/09 -- signal_cascade_farcaster.py stage 2 refresh cycle. Same
     # doctrine as its GitHub sibling below. OFF by default.
     "ARIA_FARCASTER_SIGNAL_CASCADE_ENABLED",
-    "ARIA_FIXED_WATCHLIST_POCKET_ENABLED",
     # 08/08 -- signal_cascade_github.py stage 2 refresh cycle. Never a
     # trigger, never blocks the momentum pipeline. OFF by default.
     "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED",
@@ -803,12 +802,6 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_OTTO_AI_ENABLED",
     "ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED",
     "ARIA_PAPER_TRADING_ENABLED",
-    # 16/08 -- pocket_smart_money_correlation.py: shadow log of whether a
-    # known smart-money wallet (leaderboard/wallet_copy_shadow) already held
-    # a token before scalping_v8/v9 entered it -- pure observation, never a
-    # trigger, real trades unaffected. Data collection seam for a future
-    # wallet-intelligence pocket (v11, #146). OFF by default.
-    "ARIA_POCKET_SMART_MONEY_CORRELATION_ENABLED",
     "ARIA_POLYMARKET_PAPER_ENABLED",
     # 08/03 -- dedicated, separate gate for services/polymarket_execution.py
     # (real-order execution adapter, diligence only). Never set in any
@@ -826,8 +819,6 @@ _KNOWN_ENABLED_GATES = {
     # of the "+25%/15min take the train" strategy, excluding known Stock
     # Tokens (#309), pure read+log, never a trigger, never real/paper capital.
     "ARIA_ROBINHOOD_PUMP_SHADOW_ENABLED",
-    "ARIA_SCALPING_ONLY_SOURCING_ENABLED",
-    "ARIA_SCALPING_VARIANTS_ENABLED",
     "ARIA_SEPOLIA_AUTONOMOUS_ENABLED",
     "ARIA_SEPOLIA_SWAP_ENABLED",
     "ARIA_SEPOLIA_WALLET_ENABLED",
