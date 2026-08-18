@@ -2597,33 +2597,16 @@ async def _scalping_fallbacks(
                     break
             _record_provider_outcome("mobula", ok=False)
 
-    # 26/07 -- DexPaprika, formerly the last scalping tier (Item #130):
-    # verified live (3-agent due-diligence workflow) to support real 15m/30m
-    # candles on Base -- never primary, only tried after GeckoTerminal/Mobula
-    # both come up empty. 04/08 caveat, measured live: this provider serves
-    # NO candles at all (any timeframe) below an internal, undocumented
-    # activity floor (empty somewhere between $21k and $257k of 24h volume)
-    # -- exactly the small-cap profile scalping candidates usually have,
-    # hence the Codex tier right below.
-    if not _provider_in_cooldown("dexpaprika"):
-        from aria_core.services import dexpaprika
-
-        try:
-            dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain, mode="scalping")
-        except Exception as exc:  # noqa: BLE001
-            logger.info("_fetch_candles: DexPaprika scalping fallback %s/%s failed (%s)", chain, pool_address[:10], exc)
-            dp_result = None
-        if dp_result is not None and dp_result.available and dp_result.candles:
-            _record_provider_outcome("dexpaprika", ok=True)
-            # DexPaprika's own internal 15m/30m ladder isn't exposed here --
-            # never claim a precise served timeframe we don't actually know.
-            _set_candle_provenance(
-                provider="dexpaprika", timeframe_served="15m_ou_30m_indetermine", degraded=True,
-            )
-            logger.info("_fetch_candles: DexPaprika scalping fallback (real candles) %s/%s", chain, pool_address[:10])
-            return dp_result.candles
-        if dp_result is None or not dp_result.available:
-            _record_provider_outcome("dexpaprika", ok=False)
+    # 18/08 -- DexPaprika removed from this cascade (v8/v9 retirement, same
+    # commit): "scalping" mode is no longer reachable by any live pocket
+    # (the only callers were paper_trader.py's mode=="scalping" position
+    # exit check and the scalping sourcing path, both retired) -- this whole
+    # function is now unreachable in practice, kept only so a future
+    # scalping pocket has somewhere to land. DexPaprika itself is also the
+    # other half of the cross-process doubling with shadow_persistent.py
+    # (operator decision: cut the link from the swing/vc side instead of
+    # juggling a shared throughput budget). Codex.io right below is
+    # untouched -- still a real fallback if this cascade is ever reactivated.
 
     # 04/08 -- Codex.io as the LAST scalping tier (operator "go" after a live
     # coverage test): the only provider in this cascade that served real 15m
@@ -2700,26 +2683,17 @@ async def _standard_fallbacks(
             if mobula_result is None or not mobula_result.available:
                 _record_provider_outcome("mobula", ok=False)
 
-    # 26/07 -- DexPaprika (Item #130), inserted before the degraded DexScreener
-    # synthesis: real candles beat 5 synthetic price points, but this stays
-    # the LAST tier tried before that degradation (never primary), per the
-    # due-diligence workflow's explicit recommendation -- the free tier's
-    # documented limits are self-contradictory across DexPaprika's own pages,
-    # and the sub-product is young (launched 2025-03-31).
-    if not _provider_in_cooldown("dexpaprika"):
-        from aria_core.services import dexpaprika
-
-        try:
-            dp_result = await dexpaprika.get_ohlcv(pool_address, network=chain)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("_fetch_candles: DexPaprika %s/%s failed (%s)", chain, pool_address[:10], exc)
-            dp_result = None
-        if dp_result is not None and dp_result.available and dp_result.candles:
-            _record_provider_outcome("dexpaprika", ok=True)
-            logger.info("_fetch_candles: DexPaprika fallback (real candles) %s/%s", chain, pool_address[:10])
-            return dp_result.candles
-        if dp_result is None or not dp_result.available:
-            _record_provider_outcome("dexpaprika", ok=False)
+    # 18/08 -- DexPaprika removed from this cascade (operator decision): this
+    # standard cascade is the swing/vc pipeline's real path, and DexPaprika
+    # is a single module-level-throttled client shared with the standalone
+    # shadow_persistent.py VPS process -- two uncoordinated processes each
+    # budgeting independently caused a real 429 incident tonight (19:57-58
+    # UTC, see services/dexpaprika.py's own _MIN_INTERVAL comment). Cutting
+    # this side of the link removes the doubling at its source rather than
+    # splitting a shared throughput budget between two processes that can't
+    # see each other's state. Codex.io right below remains a real fallback;
+    # DexScreener synthesis and Dune remain after that -- no loss of
+    # resilience, one fewer intermediate tier.
 
     # 29/07 -- Codex.io (Item #185), inserted after DexPaprika and before the
     # degraded DexScreener synthesis: real candles beat 5 synthetic price

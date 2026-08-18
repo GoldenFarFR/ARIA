@@ -62,7 +62,7 @@ BASE_URL = "https://api.dexpaprika.com"
 # 18/08, tightened 1.2 -> 2.4 (50/min -> 25/min per process), operator-
 # directed real-time mitigation: this throttle is PER-PROCESS (module-level
 # state, like GeckoTerminal's own throttle before its 21/07 fix), and TWO
-# independent processes now call this client -- the aria-api container
+# independent processes were calling this client -- the aria-api container
 # (momentum_entry.py's last-resort OHLCV fallback tier) and the standalone
 # shadow_persistent.py (VPS, outside Docker, its own pool-discovery
 # pagination + per-candidate candle confirmation for both support-bounce
@@ -71,12 +71,20 @@ BASE_URL = "https://api.dexpaprika.com"
 # networks/solana/.../ohlcv at 19:57:xx UTC) -- the empirically-safe ~53
 # req/min combined ceiling (see above) was being approached/exceeded by the
 # SUM of both processes' independent 50/min budgets, not by either alone.
-# Halving each process's rate keeps the combined worst case (~50/min if both
-# are simultaneously maxed) at the safe ceiling instead of double it. This is
-# a stopgap, not the real fix -- true cross-process coordination (the same
-# DB-backed pattern GeckoTerminal's throttle already has) is NOT built here;
-# see backlog #329 / docs/HANDOFF_PIPELINE_MOMENTUM.md for the standing gap.
-_MIN_INTERVAL = 2.4
+#
+# 18/08, same evening -- container side removed from this cascade entirely
+# (operator decision: cut the link instead of splitting a shared budget
+# between two processes that can't see each other's state, see
+# momentum_entry.py's _standard_fallbacks/_scalping_fallbacks comments).
+# shadow_persistent.py is now the ONLY real caller of this client, so the
+# whole ~53 req/min empirically-safe ceiling is its alone -- raised
+# 25 -> 37/min (operator-set, comfortably under the ceiling with margin for
+# the container's now-dead _scalping_fallbacks path if ever reactivated).
+# True cross-process coordination (the same DB-backed pattern GeckoTerminal's
+# throttle already has) is still not built -- see backlog #329 /
+# docs/HANDOFF_PIPELINE_MOMENTUM.md for the standing gap, revisit if a
+# second real caller ever returns.
+_MIN_INTERVAL = 60.0 / 37.0
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 

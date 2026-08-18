@@ -3502,75 +3502,6 @@ async def test_fetch_candles_scalping_never_falls_back_to_coinmarketcap_or_dexsc
     assert result == []  # jamais la synthèse DexScreener dégradée non plus
 
 
-# ── #130, 26/07 : étage DexPaprika (dernier maillon avant la synthèse dégradée en
-#    mode standard ; dernier maillon avant [] en mode scalping) ─────────────────────
-
-@pytest.mark.asyncio
-async def test_fetch_candles_falls_back_to_dexpaprika_standard(monkeypatch):
-    from aria_core.services import geckoterminal as gt
-    from aria_core.services import coinmarketcap as cmc
-    from aria_core.services import dexpaprika as dp
-
-    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
-        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
-
-    dp_candles = _plain_candles(30)
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        assert pool_address == "0xpool"
-        assert network == "base"
-        assert mode == "standard"
-        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
-
-    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
-    monkeypatch.delenv("MOBULA_API_KEY", raising=False)  # étage Mobula sauté (non configuré)
-
-    result = await me._fetch_candles("0xpool", "base")
-    assert result == dp_candles
-
-
-@pytest.mark.asyncio
-async def test_fetch_candles_dexpaprika_not_tried_when_mobula_succeeds(monkeypatch):
-    """Ordre de cascade respecté -- DexPaprika n'est jamais appelé si un étage
-    plus rapide/moins cher a déjà réussi."""
-    from aria_core.services import geckoterminal as gt
-    from aria_core.services import coinmarketcap as cmc
-    from aria_core.services import mobula
-    from aria_core.services import dexpaprika as dp
-
-    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
-        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
-
-    mobula_candles = _plain_candles(6)
-
-    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
-        return gt.OHLCVResult(candles=mobula_candles, available=True, error=None)
-
-    called = {"dexpaprika": False}
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        called["dexpaprika"] = True
-        return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
-
-    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
-    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
-    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
-
-    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT)
-    assert result == mobula_candles
-    assert called["dexpaprika"] is False
-
-
 # ── _fetch_candles : Codex.io fallback (Item #185, 29/07) ──────────────────
 
 @pytest.mark.asyncio
@@ -3608,50 +3539,11 @@ async def test_fetch_candles_falls_back_to_codex_standard(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fetch_candles_codex_not_tried_when_dexpaprika_succeeds(monkeypatch):
-    """Ordre de cascade respecté -- Codex (budget mensuel le plus rare)
-    n'est jamais appelé si DexPaprika a déjà réussi."""
-    from aria_core.services import geckoterminal as gt
-    from aria_core.services import coinmarketcap as cmc
-    from aria_core.services import dexpaprika as dp
-    from aria_core.services import codex
-
-    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
-        return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
-
-    dp_candles = _plain_candles(30)
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
-
-    called = {"codex": False}
-
-    async def fake_codex_ohlcv(pool_address, *, network="base"):
-        called["codex"] = True
-        return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
-
-    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
-    monkeypatch.setattr(codex, "codex_configured", lambda: True)
-    monkeypatch.setattr(codex, "get_ohlcv", fake_codex_ohlcv)
-    monkeypatch.delenv("MOBULA_API_KEY", raising=False)
-
-    result = await me._fetch_candles("0xpool", "base")
-    assert result == dp_candles
-    assert called["codex"] is False
-
-
-@pytest.mark.asyncio
 async def test_fetch_candles_skips_codex_when_not_configured(monkeypatch):
     """Sans CODEX_IO_API_KEY, la cascade dégrade directement vers la synthèse
     DexScreener -- jamais un appel réseau tenté sans clé."""
     from aria_core.services import geckoterminal as gt
     from aria_core.services import coinmarketcap as cmc
-    from aria_core.services import dexpaprika as dp
     from aria_core.services import codex
     from aria_core.services.dexscreener import PairSnapshot
 
@@ -3661,9 +3553,6 @@ async def test_fetch_candles_skips_codex_when_not_configured(monkeypatch):
     async def fake_cmc_ohlcv(pool_address, *, network_slug="base"):
         return cmc.OHLCVResult(candles=[], available=False, error="HTTP 500")
 
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
     called = {"codex": False}
 
     async def fake_codex_ohlcv(pool_address, *, network="base"):
@@ -3672,7 +3561,6 @@ async def test_fetch_candles_skips_codex_when_not_configured(monkeypatch):
 
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
     monkeypatch.setattr(cmc, "get_ohlcv", fake_cmc_ohlcv)
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setattr(codex, "codex_configured", lambda: False)
     monkeypatch.setattr(codex, "get_ohlcv", fake_codex_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)
@@ -3690,16 +3578,13 @@ async def test_fetch_candles_skips_codex_when_not_configured(monkeypatch):
 async def test_fetch_candles_scalping_falls_back_to_codex_last(monkeypatch):
     """04/08 (operator "go", replaces the former never-tries-codex
     invariant): Codex IS the last scalping tier now -- tried only once
-    GeckoTerminal/Mobula/DexPaprika all came up empty, called with
-    mode="scalping" so its own monthly sub-budget applies."""
+    GeckoTerminal/Mobula all came up empty, called with mode="scalping" so
+    its own monthly sub-budget applies. 18/08: DexPaprika removed from this
+    (already-unreachable) cascade, Codex remains the last tier tried."""
     from aria_core.services import geckoterminal as gt
-    from aria_core.services import dexpaprika as dp
     from aria_core.services import codex
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
         return gt.OHLCVResult(candles=[], available=False, error="rate limit")
 
     codex_candles = _plain_candles(40)
@@ -3710,7 +3595,6 @@ async def test_fetch_candles_scalping_falls_back_to_codex_last(monkeypatch):
         return gt.OHLCVResult(candles=codex_candles, available=True, error=None)
 
     monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
     monkeypatch.setattr(codex, "codex_configured", lambda: True)
     monkeypatch.setattr(codex, "get_ohlcv", fake_codex_ohlcv)
     monkeypatch.delenv("MOBULA_API_KEY", raising=False)
@@ -3718,67 +3602,6 @@ async def test_fetch_candles_scalping_falls_back_to_codex_last(monkeypatch):
     result = await me._fetch_candles("0xpool", "base", mode="scalping")
     assert result == codex_candles
     assert seen["mode"] == "scalping"
-
-
-@pytest.mark.asyncio
-async def test_fetch_candles_scalping_codex_not_tried_when_dexpaprika_succeeds(monkeypatch):
-    """Codex's budget is the scarcest of the cascade -- a cheaper tier
-    serving real candles must always short-circuit before it, in scalping
-    mode exactly like in standard mode."""
-    from aria_core.services import geckoterminal as gt
-    from aria_core.services import dexpaprika as dp
-    from aria_core.services import codex
-
-    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    dp_candles = _plain_candles(120)
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
-
-    called = {"codex": False}
-
-    async def fake_codex_ohlcv(pool_address, *, network="base", mode="standard"):
-        called["codex"] = True
-        return gt.OHLCVResult(candles=[], available=False, error="ne devrait jamais être appelé")
-
-    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
-    monkeypatch.setattr(codex, "codex_configured", lambda: True)
-    monkeypatch.setattr(codex, "get_ohlcv", fake_codex_ohlcv)
-    monkeypatch.delenv("MOBULA_API_KEY", raising=False)
-
-    result = await me._fetch_candles("0xpool", "base", mode="scalping")
-    assert result == dp_candles
-    assert called["codex"] is False
-
-
-@pytest.mark.asyncio
-async def test_fetch_candles_scalping_falls_back_to_dexpaprika(monkeypatch):
-    from aria_core.services import geckoterminal as gt
-    from aria_core.services import mobula
-    from aria_core.services import dexpaprika as dp
-
-    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
-        return gt.OHLCVResult(candles=[], available=False, error="rate limit")
-
-    async def fake_mobula_ohlcv(contract, *, blockchain="base", period="1d", amount=60):
-        return gt.OHLCVResult(candles=[], available=False, error="HTTP 500")
-
-    dp_candles = _plain_candles(120)
-
-    async def fake_dp_ohlcv(pool_address, *, network="base", mode="standard"):
-        assert mode == "scalping"
-        return gt.OHLCVResult(candles=dp_candles, available=True, error=None)
-
-    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
-    monkeypatch.setattr(mobula, "get_ohlcv", fake_mobula_ohlcv)
-    monkeypatch.setattr(dp, "get_ohlcv", fake_dp_ohlcv)
-    monkeypatch.setenv("MOBULA_API_KEY", "test-key")
-
-    result = await me._fetch_candles("0xpool", "base", contract=CONTRACT, mode="scalping")
-    assert result == dp_candles
 
 
 # ── _fetch_candles : cache court-terme partagé entre poches (04/08) ────────────────
