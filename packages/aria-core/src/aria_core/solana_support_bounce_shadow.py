@@ -87,7 +87,13 @@ TRAILING_STOP_PCT = 10.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
-TARGET_CLOSURES = 50
+# 18/08, operator decision: raised 50 -> 150 once the first 50-target batch
+# (91 real closures once the in-flight backlog wound down, both entry fixes
+# and pagination already live before the last one opened) came back net
+# positive (winrate 45%, PnL +9.7%) -- a bigger sample before the next real
+# calibration pass (e.g. TRAILING_STOP_PCT, backtested as a strong -5%
+# candidate on this same batch, still too small to promote on its own).
+TARGET_CLOSURES = 150
 
 _ensured_db_paths: set[str] = set()
 
