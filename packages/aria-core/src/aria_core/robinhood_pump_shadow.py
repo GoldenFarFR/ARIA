@@ -515,6 +515,25 @@ async def _snapshot_with_fallback(
             # the correct "unknown" sentinel -- advance_exit_simulation
             # already guards on `reserve_usd is not None`.
             reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
+            if reserve_usd is None:
+                # 18/08, same real bug as solana_pump_shadow.py's twin
+                # function (Krackpot, a $123K/24h-volume pump.fun pool
+                # DexScreener reports as liquidity_unknown -- downstream,
+                # _apply_price_impact_and_fee conflates "unknown" with
+                # "genuinely dry", falsely marking an active pool as
+                # unsellable/stranded). One extra lightweight GeckoTerminal
+                # call, ONLY when DexScreener itself came back unknown, to
+                # backfill a real reserve figure before conceding to None --
+                # DexScreener's own price stays authoritative regardless.
+                try:
+                    gecko_snapshot = await client.get_pool_snapshot(pool_address, network=chain)
+                    if gecko_snapshot.available and gecko_snapshot.reserve_usd:
+                        reserve_usd = gecko_snapshot.reserve_usd
+                except Exception as exc:  # noqa: BLE001 -- best-effort backfill, never blocks the primary snapshot
+                    logger.info(
+                        "robinhood_pump_shadow: GeckoTerminal reserve backfill failed for %s (%s)",
+                        pool_address, exc,
+                    )
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
                 reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,

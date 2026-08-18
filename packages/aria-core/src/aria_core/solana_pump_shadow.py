@@ -675,6 +675,31 @@ async def _snapshot_with_fallback(
             # None` before comparing, so this alone suppresses the false
             # positive without any other change.
             reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
+            if reserve_usd is None:
+                # 18/08, real bug found live (Krackpot, a pump.fun bonding-
+                # curve pool with $123K/24h volume and 3000+ real trades, yet
+                # DexScreener reports liquidity_unknown) -- downstream,
+                # _apply_price_impact_and_fee conflates "unknown" with
+                # "genuinely dry" (both hit its `reserve_usd is None or <= 0`
+                # branch), marking an actively-traded pool as unsellable/
+                # stranded in the realistic PnL -- a real measurement error,
+                # not a real loss. GeckoTerminal has repeatedly reported a
+                # real reserve figure ($15-27K) for pools DexScreener calls
+                # unknown THE SAME NIGHT (牛币/牛来, unrelated PumpSwap case) --
+                # one extra lightweight call, ONLY when DexScreener itself
+                # came back unknown, to backfill a real number before
+                # conceding to None. DexScreener's own price stays
+                # authoritative regardless (never overwritten here, only the
+                # reserve figure is backfilled).
+                try:
+                    gecko_snapshot = await client.get_pool_snapshot(pool_address, network=chain)
+                    if gecko_snapshot.available and gecko_snapshot.reserve_usd:
+                        reserve_usd = gecko_snapshot.reserve_usd
+                except Exception as exc:  # noqa: BLE001 -- best-effort backfill, never blocks the primary snapshot
+                    logger.info(
+                        "solana_pump_shadow: GeckoTerminal reserve backfill failed for %s (%s)",
+                        pool_address, exc,
+                    )
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
                 reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,

@@ -219,16 +219,38 @@ async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_fallback_unknown_liquidity_becomes_none_not_zero(monkeypatch):
+async def test_snapshot_fallback_unknown_liquidity_backfilled_from_geckoterminal(monkeypatch):
     """17/08, same real bug as the Solana twin: DexScreener's
     liquidity_unknown=True must become None, not the default 0.0, or
     advance_exit_simulation's liquidity_collapse check reads it as a real
-    drain."""
+    drain.
+
+    18/08, same follow-up bug as the Solana twin: a bare None fixed the
+    false liquidity_collapse, but `_apply_price_impact_and_fee` treats it
+    identically to a genuine 0, falsely marking an actively-traded pool as
+    unsellable/stranded. Now backfills from GeckoTerminal when DexScreener
+    came back unknown -- DexScreener's own price is never overwritten."""
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": 99.0})
+    client = FakeClient({"poolA": 99.0})  # FakeClient.get_pool_snapshot reports reserve_usd=1000.0
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5  # DexScreener's price, never overwritten by the backfill call
+    assert snapshot.reserve_usd == 1000.0  # backfilled from GeckoTerminal, not left None
+    assert client.calls == ["poolA"]  # the backfill call really happened
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_unknown_liquidity_stays_none_when_geckoterminal_also_empty(monkeypatch):
+    """The backfill is best-effort, never a fabrication -- if GeckoTerminal
+    ALSO has nothing for this pool, reserve_usd must stay None."""
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": None})  # GeckoTerminal also has nothing for this pool
     snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
     assert snapshot.available is True
     assert snapshot.price_usd == 3.5
