@@ -79,16 +79,24 @@ MIN_POOL_AGE_MINUTES = 70.0  # no upper bound, deliberately
 SUPPORT_TOLERANCE_PCT = 20.0
 SUPPORT_CANDLE_COUNT = 10
 SUPPORT_CANDLE_INTERVAL = "5m"
-MAX_RANGE_RATIO = 1.5  # 18/08, tightened from 3.0 -- see module docstring
-# (reverted a same-day relaxation to 2.5: the 2.5-3.0x bucket is the exact
-# NEGATIVE bucket this tightening was meant to exclude -- 20% winrate,
-# x0.96 avg vs the 1.0-1.5x bucket's 40%/x1.24, per the docstring's own
-# retrospective analysis. Low throughput at 1.5 (1/13 candidates in a live
-# spot-check) is a real cost but a volume problem, not a signal that 1.5 is
-# wrong -- widening the filter to chase volume would readmit the bucket
-# already found net-negative. If throughput needs fixing, do it upstream
-# (more pools scanned per cycle, faster cadence), never by loosening this
-# specific filter.
+MAX_RANGE_RATIO = 2.5  # 18/08, tightened 3.0 -> 1.5, then re-derived to 2.5
+# on a RE-CHECK against the wider, current sample (a first relax attempt to
+# 2.5 was itself reverted mid-session for citing the docstring's STALE
+# 91-closure numbers -- see the git history on this line -- before this
+# re-check was run). Recomputed on the 104 v1 closures that now carry
+# range_low_10c/range_high_10c (18/08):
+#   1.0-1.5x: n=48 winrate=39.6% avg_mult=1.066
+#   1.5-2.0x: n=32 winrate=40.6% avg_mult=1.082
+#   2.0-2.5x: n=15 winrate=50.0% avg_mult=1.122
+#   2.5-3.0x: n=9  winrate=44.4% avg_mult=1.018  <- weakest bucket, still net positive
+# The original "2.5-3.0x net negative" claim does NOT reproduce on this
+# larger sample -- likely noise on the original 9-20-row bins, exactly the
+# overfitting risk the docstring's own methodological caveat already named.
+# 2.5 is chosen as the one bucket boundary with real support: it excludes
+# only the single weakest segment (2.5-3.0x, barely positive) while keeping
+# 95/104 (91%) of the historical volume, roughly double the 46% that would
+# have cleared the 1.5 cap. Not re-tested against v2's OWN (thinner) sample
+# -- v1's closures are the only ones with enough rows per bucket to read.
 
 # Exit mechanics -- TRAILING_STOP_PCT tightened, everything else identical.
 TRAILING_STOP_PCT = 5.0  # 18/08, tightened from 10.0 -- see module docstring

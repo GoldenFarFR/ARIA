@@ -176,7 +176,7 @@ async def test_no_upper_age_ceiling(monkeypatch):
 @pytest.mark.asyncio
 async def test_price_within_20pct_of_support_qualifies(monkeypatch):
     # range [0.85, 1.0], close 0.87 -> position = (0.87-0.85)/(1.0-0.85)*100 = 13.3% <= 20%
-    # ratio 1.0/0.85 = 1.176x, under v2's tightened MAX_RANGE_RATIO=1.5
+    # ratio 1.0/0.85 = 1.176x, under v2's tightened MAX_RANGE_RATIO=2.5
     candles = _range_candles(low=0.85, high=1.0, last_close=0.87)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
     logged = await shadow.record_signals([_pool(price_usd=0.87)], chain=CHAIN)
@@ -236,11 +236,11 @@ async def test_extreme_range_ratio_rejected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_range_ratio_within_new_tighter_cap_still_qualifies(monkeypatch):
-    # range [1.0, 1.4] -> ratio 1.4x, under v2's MAX_RANGE_RATIO=1.5;
-    # close=1.02 -> position = (1.02-1.0)/(1.4-1.0)*100 = 5%, within tolerance.
-    candles = _range_candles(low=1.0, high=1.4, last_close=1.02)
+    # range [1.0, 2.4] -> ratio 2.4x, under v2's MAX_RANGE_RATIO=2.5;
+    # close=1.12 -> position = (1.12-1.0)/(2.4-1.0)*100 = 8.6%, within tolerance.
+    candles = _range_candles(low=1.0, high=2.4, last_close=1.12)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
-    logged = await shadow.record_signals([_pool(price_usd=1.02)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(price_usd=1.12)], chain=CHAIN)
     assert logged == 1
 
 
@@ -248,12 +248,13 @@ async def test_range_ratio_within_new_tighter_cap_still_qualifies(monkeypatch):
 async def test_range_ratio_above_new_tighter_cap_rejected(monkeypatch):
     """18/08 -- the real point of v2's change: a ratio that WOULD have
     qualified under the original's MAX_RANGE_RATIO=3.0 must now be rejected
-    under v2's tightened 1.5. Range [1.0, 2.0] -> ratio 2.0x (above 1.5,
-    below the original's 3.0); close=1.05 -> position = 5%, well within
-    the distance tolerance on its own -- the ratio is what must reject it."""
-    candles = _range_candles(low=1.0, high=2.0, last_close=1.05)
+    under v2's re-derived 2.5 (the single weakest real bucket, 2.5-3.0x --
+    see module docstring). Range [1.0, 3.0] -> ratio 3.0x (above 2.5, at the
+    original's own 3.0); close=1.15 -> position = 7.5%, well within the
+    distance tolerance on its own -- the ratio is what must reject it."""
+    candles = _range_candles(low=1.0, high=3.0, last_close=1.15)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
-    logged = await shadow.record_signals([_pool(price_usd=1.05)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(price_usd=1.15)], chain=CHAIN)
     assert logged == 0
 
 
