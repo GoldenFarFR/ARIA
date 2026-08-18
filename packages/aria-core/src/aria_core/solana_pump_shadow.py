@@ -127,7 +127,7 @@ import aiosqlite
 
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
-from aria_core.services import dexscreener, rugcheck
+from aria_core.services import dexpaprika, dexscreener, rugcheck
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -700,6 +700,22 @@ async def _snapshot_with_fallback(
                         "solana_pump_shadow: GeckoTerminal reserve backfill failed for %s (%s)",
                         pool_address, exc,
                     )
+                if reserve_usd is None:
+                    # 18/08, real case (SadDog): GeckoTerminal itself was
+                    # 429'ing at the exact moment this exact row's exit-check
+                    # ran, so the backfill above failed too, and the position
+                    # was mis-classified PIEGEE/stranded despite $13K/24h of
+                    # real, live trading. DexPaprika is a THIRD source on a
+                    # rate-limit budget independent of both DexScreener and
+                    # GeckoTerminal -- one extra call, only reached when both
+                    # of the above already came back empty.
+                    try:
+                        reserve_usd = await dexpaprika.get_pool_reserve_usd(pool_address, network=chain)
+                    except Exception as exc:  # noqa: BLE001 -- best-effort backfill, never blocks the primary snapshot
+                        logger.info(
+                            "solana_pump_shadow: DexPaprika reserve backfill failed for %s (%s)",
+                            pool_address, exc,
+                        )
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
                 reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,

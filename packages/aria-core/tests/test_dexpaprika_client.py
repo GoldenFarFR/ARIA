@@ -462,3 +462,48 @@ async def test_get_trending_pools_partial_pages_kept_on_later_page_error(monkeyp
 
     assert result.available  # partial success, never a total failure
     assert {p.pool_address for p in result.pools} == {"poolA"}
+
+
+# --- get_pool_reserve_usd: 18/08, 3rd-tier backfill for the shadow modules --
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_returns_real_liquidity(monkeypatch):
+    responses = {
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": FakeResponse(200, {"liquidity_usd": 2062.55846966809}),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    reserve = await dp.get_pool_reserve_usd("poolA", network="solana")
+
+    assert reserve == pytest.approx(2062.55846966809)
+
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_none_on_missing_field(monkeypatch):
+    responses = {
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": FakeResponse(200, {"dex_id": "pumpfun"}),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    reserve = await dp.get_pool_reserve_usd("poolA", network="solana")
+
+    assert reserve is None  # never fabricate -- a missing field stays None
+
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_none_on_error(monkeypatch):
+    responses = {
+        # 2 queued 500s -- _get_json retries once before giving up.
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": [
+            FakeResponse(500, {"error": "server error"}),
+            FakeResponse(500, {"error": "server error"}),
+        ],
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    reserve = await dp.get_pool_reserve_usd("poolA", network="solana")
+
+    assert reserve is None

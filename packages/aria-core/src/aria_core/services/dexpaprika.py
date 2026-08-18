@@ -322,6 +322,27 @@ async def _resolve_base_token(
     return base_id, symbol, created_at
 
 
+async def get_pool_reserve_usd(pool_address: str, *, network: str = "solana") -> float | None:
+    """18/08, real-liquidity backfill for the shadow modules' realistic-exit
+    simulation: a THIRD independent reserve source (after DexScreener's own
+    figure and a GeckoTerminal backfill), on a rate-limit budget entirely
+    separate from both -- confirmed live to matter (SadDog, real GeckoTerminal
+    429s at the exact moment its shadow exit-check ran caused a false
+    ``PIEGEE``/stranded classification despite $13K/24h real volume). Same
+    single-pool detail endpoint ``_resolve_base_token`` already calls
+    (``/networks/{network}/pools/{pool_address}``), which carries its own
+    ``liquidity_usd`` field (verified live 18/08) -- a second, standalone call
+    rather than threading the value through ``_resolve_base_token`` (called
+    from a different, earlier point in the pipeline, and this is deliberately
+    a RARE fallback path, not a hot one). Returns ``None`` -- never a
+    fabricated number -- on any failure or a missing/non-numeric field."""
+    data, error = await _get_json(f"/networks/{network}/pools/{pool_address}", params={})
+    if error is not None or not isinstance(data, dict):
+        return None
+    liquidity_usd = data.get("liquidity_usd")
+    return float(liquidity_usd) if isinstance(liquidity_usd, (int, float)) else None
+
+
 async def get_trending_pools(
     network: str, *, limit: int = 20, min_price_change_5m: float | None = None,
     order_by: str = "price_change_percentage_5m", min_order_value: float | None = None,

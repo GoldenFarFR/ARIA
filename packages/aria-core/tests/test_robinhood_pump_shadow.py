@@ -243,13 +243,38 @@ async def test_snapshot_fallback_unknown_liquidity_backfilled_from_geckoterminal
 
 
 @pytest.mark.asyncio
-async def test_snapshot_fallback_unknown_liquidity_stays_none_when_geckoterminal_also_empty(monkeypatch):
-    """The backfill is best-effort, never a fabrication -- if GeckoTerminal
-    ALSO has nothing for this pool, reserve_usd must stay None."""
+async def test_snapshot_fallback_unknown_liquidity_backfilled_from_dexpaprika_when_gecko_empty(monkeypatch):
+    """18/08, same real bug as the Solana twin (SadDog): a THIRD backfill
+    source (DexPaprika, independent rate-limit budget) is reached only when
+    both DexScreener AND GeckoTerminal already came back empty."""
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
 
+    async def fake_get_pool_reserve_usd(pool_address, *, network="robinhood"):
+        return 2062.5
+
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    monkeypatch.setattr(shadow.dexpaprika, "get_pool_reserve_usd", fake_get_pool_reserve_usd)
+    client = FakeClient({"poolA": None})  # GeckoTerminal has nothing for this pool
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5
+    assert snapshot.reserve_usd == 2062.5  # backfilled from DexPaprika, not left None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_unknown_liquidity_stays_none_when_all_three_sources_empty(monkeypatch):
+    """The backfill is best-effort, never a fabrication -- if DexScreener,
+    GeckoTerminal, AND DexPaprika all have nothing, reserve_usd must stay
+    None."""
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
+
+    async def fake_get_pool_reserve_usd(pool_address, *, network="robinhood"):
+        return None
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    monkeypatch.setattr(shadow.dexpaprika, "get_pool_reserve_usd", fake_get_pool_reserve_usd)
     client = FakeClient({"poolA": None})  # GeckoTerminal also has nothing for this pool
     snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
     assert snapshot.available is True
