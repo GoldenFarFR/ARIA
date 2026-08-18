@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import aiosqlite
 import pytest
 
+from aria_core import shadow_candle_archive as archive
 from aria_core import solana_support_bounce_shadow as shadow
 from aria_core.services.dexpaprika import Candle
 from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
@@ -23,6 +24,8 @@ async def _tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", str(tmp_path / "shadow.db"))
     shadow._ensured_db_paths.clear()
     await shadow._ensure_table()
+    monkeypatch.setattr(archive, "DB_PATH", str(tmp_path / "shadow.db"))
+    archive._ensured_db_paths.clear()
     monkeypatch.setattr(
         shadow.rugcheck, "get_token_report",
         AsyncMock(return_value=RugCheckReport(available=False, error="test default")),
@@ -485,3 +488,49 @@ async def test_pnl_realistic_stranded_position_counted_as_loss_not_dropped():
     pnl = await shadow.chain_pnl_summary_realistic(CHAIN)
     assert pnl["stranded"] == 1
     assert pnl["total_pnl_units"] == pytest.approx(-1.0)  # total loss, never dropped from the aggregate
+
+
+# --- candle archiving (18/08, operator-directed) -----------------------------
+
+@pytest.mark.asyncio
+async def test_record_signals_archives_the_before_candles(monkeypatch):
+    candles = _range_candles(low=0.85, high=1.0, last_close=0.87)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
+    logged = await shadow.record_signals([_pool(price_usd=0.87)], chain=CHAIN)
+    assert logged == 1
+    rows = await _rows()
+    archived = await archive.get_candles(
+        module="solana_support_bounce", position_id=rows[0]["id"], phase="before",
+    )
+    assert len(archived) == len(candles)
+    assert {c["candle_ts"] for c in archived} == {c.ts for c in candles}
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_simulation_archives_the_after_candles(monkeypatch):
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    rows = await _rows()
+    position_id = rows[0]["id"]
+    detected_epoch = shadow._epoch_of(rows[0]["detected_at"])
+
+    ohlcv_candles = [
+        _candle(detected_epoch + 60, open_=1.0, high=1.05, low=0.98, close=1.02),
+        _candle(detected_epoch + 120, open_=1.02, high=1.08, low=1.0, close=1.05),
+    ]
+    client = FakeClient(
+        {"poolA": 1.05}, reserve_by_pool={"poolA": 8000.0},
+        ohlcv_by_pool={"poolA": OHLCVResult(candles=ohlcv_candles, available=True, error=None)},
+    )
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+
+    archived = await archive.get_candles(module="solana_support_bounce", position_id=position_id, phase="after")
+    assert len(archived) == 2
+    assert {c["candle_ts"] for c in archived} == {c.ts for c in ohlcv_candles}
+
+    # A second check overlapping the same window must never duplicate rows.
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    archived_again = await archive.get_candles(
+        module="solana_support_bounce", position_id=position_id, phase="after",
+    )
+    assert len(archived_again) == 2

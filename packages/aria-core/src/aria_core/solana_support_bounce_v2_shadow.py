@@ -187,6 +187,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 candidates.append(pool)
 
         rows_to_insert: list[tuple] = []
+        candles_by_row: list[list] = []
         for pool in candidates:
             h1 = pool.price_change_pct.get("h1")
             try:
@@ -247,22 +248,34 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
                 realistic_entry_price,
             ))
+            candles_by_row.append(candles)
 
         if rows_to_insert:
+            # 18/08, operator-directed, same pattern as the original module:
+            # archive the "before" candles this entry decision was based on
+            # -- per-row INSERT (not executemany) to get a real lastrowid.
+            from aria_core import shadow_candle_archive
+
             async with aiosqlite.connect(_db_path()) as db:
-                await db.executemany(
-                    f"""
-                    INSERT INTO {TABLE} (
-                        pool_address, token_address, chain, symbol, detected_at, entry_price,
-                        h1_pct, reserve_usd, range_low_10c, range_high_10c, distance_from_support_pct,
-                        remaining_qty, realized_proceeds, peak_price,
-                        pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
-                        rugcheck_creator, realistic_entry_price
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows_to_insert,
-                )
-                await db.commit()
+                for row, candles in zip(rows_to_insert, candles_by_row):
+                    cur = await db.execute(
+                        f"""
+                        INSERT INTO {TABLE} (
+                            pool_address, token_address, chain, symbol, detected_at, entry_price,
+                            h1_pct, reserve_usd, range_low_10c, range_high_10c, distance_from_support_pct,
+                            remaining_qty, realized_proceeds, peak_price,
+                            pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
+                            rugcheck_creator, realistic_entry_price
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                    new_id = cur.lastrowid
+                    await db.commit()
+                    await shadow_candle_archive.store_candles(
+                        module="solana_support_bounce_v2", position_id=new_id,
+                        pool_address=row[0], chain=chain, phase="before", candles=candles,
+                    )
             logged = len(rows_to_insert)
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never break the caller
         logger.info("solana_support_bounce_v2_shadow: record_signals failed (%s)", exc)
@@ -331,6 +344,13 @@ async def advance_exit_simulation(
                 if new_candles:
                     window_high = max(c.high for c in new_candles)
                     window_low = min(c.low for c in new_candles)
+                    from aria_core import shadow_candle_archive
+
+                    await shadow_candle_archive.store_candles(
+                        module="solana_support_bounce_v2", position_id=row["id"],
+                        pool_address=row["pool_address"], chain=chain, phase="after",
+                        candles=new_candles,
+                    )
             effective_high = max(window_high, current_price)
             effective_low = min(window_low, current_price)
 

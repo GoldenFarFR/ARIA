@@ -107,18 +107,25 @@ SUPPORT_CANDLE_INTERVAL = "5m"
 # to recalibrate once enough real outcomes accumulate.
 MAX_RANGE_RATIO = 3.0
 
-# Exit mechanics (operator-specified: "stop loss suiveur -10%", "aucun palier")
-TRAILING_STOP_PCT = 10.0
+# Exit mechanics (operator-specified originally: "stop loss suiveur -10%",
+# "aucun palier"). 18/08, second change: tightened 10.0 -> 5.0, operator-
+# directed, ISOLATED single-variable test -- unlike v2 (which bundles this
+# same stop change with 2 other recalibrations, MAX_RANGE_RATIO and a new
+# MAX_H1_PCT ceiling), every other constant here is untouched, so a
+# comparison against v2's own results can attribute any difference here
+# purely to the stop width. The 160-closure 10% batch (winrate 43.1%, PnL
+# +4.9% realistic) is archived, not discarded -- see the reset note on
+# TARGET_CLOSURES below.
+TRAILING_STOP_PCT = 5.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
-# 18/08, operator decision: raised 50 -> 150 once the first 50-target batch
-# (91 real closures once the in-flight backlog wound down, both entry fixes
-# and pagination already live before the last one opened) came back net
-# positive (winrate 45%, PnL +9.7%) -- a bigger sample before the next real
-# calibration pass (e.g. TRAILING_STOP_PCT, backtested as a strong -5%
-# candidate on this same batch, still too small to promote on its own).
-TARGET_CLOSURES = 150
+# 18/08, lowered back 150 -> 50, operator-directed, paired with the
+# TRAILING_STOP_PCT change above -- same size as the very first batch this
+# module ever ran (which came back net positive, winrate 45%, PnL +9.7%,
+# before being raised to 150 the same day). A fresh, smaller, faster read
+# on the new stop width before committing to another 150-closure run.
+TARGET_CLOSURES = 50
 
 _ensured_db_paths: set[str] = set()
 
@@ -236,6 +243,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 candidates.append(pool)
 
         rows_to_insert: list[tuple] = []
+        candles_by_row: list[list] = []
         for pool in candidates:
             h1 = pool.price_change_pct.get("h1")
             try:
@@ -327,22 +335,37 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
                 realistic_entry_price,
             ))
+            candles_by_row.append(candles)
 
         if rows_to_insert:
+            # 18/08, operator-directed: archive the "before" candles this
+            # entry decision was actually based on -- needs the real row id
+            # from lastrowid, so per-row INSERT instead of the previous
+            # executemany batch (candidate lists here are always small,
+            # a handful per cycle, never the large batch the 17/08
+            # connection-hold-time bug was about).
+            from aria_core import shadow_candle_archive
+
             async with aiosqlite.connect(_db_path()) as db:
-                await db.executemany(
-                    f"""
-                    INSERT INTO {TABLE} (
-                        pool_address, token_address, chain, symbol, detected_at, entry_price,
-                        h1_pct, reserve_usd, range_low_10c, range_high_10c, distance_from_support_pct,
-                        remaining_qty, realized_proceeds, peak_price,
-                        pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
-                        rugcheck_creator, realistic_entry_price
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows_to_insert,
-                )
-                await db.commit()
+                for row, candles in zip(rows_to_insert, candles_by_row):
+                    cur = await db.execute(
+                        f"""
+                        INSERT INTO {TABLE} (
+                            pool_address, token_address, chain, symbol, detected_at, entry_price,
+                            h1_pct, reserve_usd, range_low_10c, range_high_10c, distance_from_support_pct,
+                            remaining_qty, realized_proceeds, peak_price,
+                            pool_created_at, rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct,
+                            rugcheck_creator, realistic_entry_price
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                    new_id = cur.lastrowid
+                    await db.commit()
+                    await shadow_candle_archive.store_candles(
+                        module="solana_support_bounce", position_id=new_id,
+                        pool_address=row[0], chain=chain, phase="before", candles=candles,
+                    )
             logged = len(rows_to_insert)
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never break the caller
         logger.info("solana_support_bounce_shadow: record_signals failed (%s)", exc)
@@ -427,6 +450,13 @@ async def advance_exit_simulation(
                 if new_candles:
                     window_high = max(c.high for c in new_candles)
                     window_low = min(c.low for c in new_candles)
+                    from aria_core import shadow_candle_archive
+
+                    await shadow_candle_archive.store_candles(
+                        module="solana_support_bounce", position_id=row["id"],
+                        pool_address=row["pool_address"], chain=chain, phase="after",
+                        candles=new_candles,
+                    )
             effective_high = max(window_high, current_price)
             effective_low = min(window_low, current_price)
 
