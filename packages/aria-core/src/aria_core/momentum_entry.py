@@ -2813,6 +2813,28 @@ _CANDLE_PRICE_CONSISTENCY_RATIO = 1000.0
 # that's already correct would just inject float noise for no gain.
 _CANDLE_RESCALE_MIN_RATIO = 2.0
 
+# system_issues #125b (18/08, multi-agent pipeline audit, "medium" finding):
+# the only guard on candle FRESHNESS was candle_staleness_shadow.py -- shadow
+# mode only, by deliberate design (10/08, same anti-overfitting doctrine as
+# the v8 wick-gate methodology, docs/HANDOFF_PIPELINE_MOMENTUM.md 2026.08.10):
+# no real calibration data existed yet, so its own 5.0x candidate multiplier
+# was never meant to block a real decision until validated. That doctrine is
+# NOT overridden here -- this is a SEPARATE, much wider, "catastrophic only"
+# hard reject, same relationship to the shadow's 5.0x candidate as
+# _CANDLE_PRICE_CONSISTENCY_RATIO's 1000x has to normal cross-provider price
+# noise: deliberately far outside any plausible legitimate reading (the
+# coarsest real rung any ladder in this cascade ever serves is a 1D candle,
+# 86400s -- 20x that is ~24 days, an interval-relative multiple is used
+# rather than a fixed wall-clock number so it scales correctly across every
+# ladder rung from 5m scalping to 1D standard), so it never needs the shadow's
+# own careful calibration to be trusted: a provider stuck re-serving the same
+# candle series 20+ intervals past its own median cadence is frozen, not
+# merely quiet. Independent of the scalping-only trading-SILENCE continuity
+# gate elsewhere (that one measures the gap BETWEEN candles; this measures
+# the gap between the LAST candle and wall-clock now, catches a provider
+# stuck re-serving old data with perfectly regular internal spacing).
+_CANDLE_STALENESS_HARD_REJECT_MULTIPLIER = 20.0
+
 
 def _candle_price_scale_factor(candles: list[Candle], pair: PairSnapshot | None) -> float | None:
     """Returns the multiplicative factor to rescale ``candles`` onto
@@ -2924,7 +2946,7 @@ def _get_cached_candles(
 async def _fetch_candles(
     pool_address: str, chain: str, *, contract: str = "", pair: PairSnapshot | None = None,
     mode: str = "standard", gecko_client=None, min_useful_candles: int | None = None,
-    skip_daily: bool = False,
+    skip_daily: bool = False, check_staleness: bool = True,
 ) -> list[Candle]:
     """Thin wrapper around ``_fetch_candles_impl`` (the real 6-stage cascade,
     docstring there) -- adds the ``_candles_price_consistent`` sanity check
@@ -2937,6 +2959,19 @@ async def _fetch_candles(
     shows is a rare, single-provider, single-pool incident) -- a real
     tradeoff, but always the SAFE side of it: an extra HOLD is never worse
     than a signal built on a nonsensical price scale.
+
+    ``check_staleness`` (18/08, system_issues #125b): the catastrophic-
+    staleness hard reject below (age vs wall-clock NOW) is meaningful ONLY
+    for a caller making a REAL-TIME entry/exit decision on THIS candle series
+    -- it assumes the cascade's own live behavior (always returns the MOST
+    RECENT window). ``smart_money.py``'s wallet-scoring path calls this same
+    function to price a wallet's OWN past transaction, deliberately reading
+    whatever OHLCV window covers THAT historical date -- staleness relative
+    to today is not a meaningful concept there (the candle's age is expected
+    to match the transaction's own age, by design, not a sign anything is
+    wrong). Default ``True`` preserves the fix for every real-time consumer
+    (the momentum cascade, scalping_v9, shadow modules); the ONE historical-
+    pricing caller passes ``False`` explicitly.
 
     ``skip_daily`` (#157, revived 08/02) is forwarded as-is to
     ``_fetch_candles_impl`` -- this wrapper's own price-consistency check
@@ -2997,6 +3032,18 @@ async def _fetch_candles(
             )
         except Exception as exc:  # noqa: BLE001 -- shadow observation must never block a real fetch
             logger.info("_fetch_candles: staleness shadow observation failed (%s)", exc)
+        if (
+            check_staleness and median_interval and median_interval > 0
+            and age_seconds > median_interval * _CANDLE_STALENESS_HARD_REJECT_MULTIPLIER
+        ):
+            logger.warning(
+                "_fetch_candles: rejecting catastrophically stale candles for %s/%s -- last candle "
+                "%.0fs old, %.1fx its own %.0fs median interval (>= %.0fx hard-reject threshold) -- "
+                "provider likely stuck re-serving an old series, treating as OHLCV unavailable",
+                chain, pool_address[:10], age_seconds, age_seconds / median_interval,
+                median_interval, _CANDLE_STALENESS_HARD_REJECT_MULTIPLIER,
+            )
+            return []
         # 11/08 -- passive candle_history hook (see that module's own
         # docstring for the full design trail): records whatever this real
         # fetch already returned, zero extra network call, independent

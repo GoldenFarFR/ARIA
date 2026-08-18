@@ -61,6 +61,26 @@ CONCENTRATION_CAP_PCT = 0.40
 # open a dust position that clutters the portfolio for a negligible amount.
 MIN_CONCENTRATION_ALLOC_FRACTION = 0.2
 
+# ── Low-liquidity floor, in-holding (system_issues #125b, 18/08) ───────────────────────
+# multi-agent pipeline audit, "elevated" finding: rescan_open_position (below)
+# only ever flagged liquidity that got too HIGH relative to volume (wash-
+# trading, see the volume_to_liq check below) -- never liquidity collapsing to
+# genuinely thin, the exact risk paper_trader.py's own BONDING_LIQUIDITY_
+# FLOOR_USD/BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT already guard against, but
+# ONLY on the dormant vc_thesis branch. This active momentum pocket had no
+# equivalent at all. Deliberately independent from momentum_entry._MIN_
+# LIQUIDITY_USD (the entry gate) rather than importing that private constant
+# directly -- same doctrine as BONDING_LIQUIDITY_FLOOR_USD's own comment in
+# paper_trader.py: keeps momentum_entry.py's constants private to its own
+# gating logic. Scoped to an absolute floor + cumulative drop since entry
+# only -- no "sudden drop between two cycles" tier like vc_thesis's 3rd volet,
+# which needs a live liquidity watermark write wired into the general
+# position loop (not built for this pocket); a floor + cumulative check
+# already closes the real gap the audit flagged (NO low-liquidity check at
+# all, not "an incomplete one").
+LOW_LIQUIDITY_FLOOR_USD = 25_000.0
+LOW_LIQUIDITY_DROP_CUMULATIVE_PCT = 0.5
+
 
 def derive_category(launchpad: str | None, *, bonding_phase: bool = False) -> str:
     base = (launchpad or "unknown").strip() or "unknown"
@@ -249,6 +269,48 @@ async def rescan_open_position(position: dict, *, pair=None) -> dict | None:
                 f"ratio volume 24h/liquidité extrême détecté en cours de détention "
                 f"({volume_to_liq:.0f}x > {MAX_VOLUME_TO_LIQUIDITY_RATIO:.0f}x) -- "
                 f"signal de wash-trading, absent ou non détecté à l'entrée"
+            )
+
+        # system_issues #125b real bug found live (18/08, full repo-wide test
+        # run surfaced it): vc_thesis and bonding-curve positions already have
+        # their OWN, more precise 3-tier liquidity floor further down the
+        # cycle loop (paper_trader.py's BONDING_LIQUIDITY_FLOOR_USD/_DROP_
+        # CUMULATIVE_PCT/_SUDDEN_DROP_PCT, with their own "stop bonding
+        # (liquidité)" reason) -- this rescan runs FIRST in the cycle and
+        # unconditionally closes on any flag, so without this exclusion the
+        # new, cruder check below fired first and silently preempted the
+        # more specific one with a generic "sécurité re-scan" reason,
+        # confirmed live by 7 real test failures (wrong close_reason, and a
+        # regular non-bonding position closing on a floor meant only for
+        # bonding). Duplicated `_BONDING_CHAIN_MARKER` literal (same doctrine
+        # as paper_trader.py's own -- avoids a paper_trader<->bonding_entry
+        # import cycle, both already import each other's neighbors).
+        _BONDING_CHAIN_MARKER = "virtuals-bonding"
+        # "vc_hold" (08/15) has its OWN dedicated floor too (VC_MIN_LIQUIDITY_
+        # FLOOR_USD, same 3-tier shape as vc_thesis/bonding) -- same exclusion
+        # reasoning.
+        has_dedicated_liquidity_floor = (
+            (position.get("strategy") or "momentum") in ("vc_thesis", "vc_hold")
+            or (position.get("chain") or "").strip().lower() == _BONDING_CHAIN_MARKER
+        )
+
+        current_liq = pair.liquidity_usd
+        entry_liq = position.get("entry_liquidity_usd")
+        if has_dedicated_liquidity_floor:
+            pass
+        elif current_liq < LOW_LIQUIDITY_FLOOR_USD:
+            reasons.append(
+                f"liquidité tombée sous le plancher absolu en cours de détention "
+                f"({current_liq:,.0f}$ < {LOW_LIQUIDITY_FLOOR_USD:,.0f}$)"
+            )
+        elif (
+            entry_liq and entry_liq > 0
+            and current_liq < entry_liq * (1 - LOW_LIQUIDITY_DROP_CUMULATIVE_PCT)
+        ):
+            drop_pct = (1 - current_liq / entry_liq) * 100.0
+            reasons.append(
+                f"liquidité en chute de {drop_pct:.0f}% depuis l'entrée en cours de détention "
+                f"({entry_liq:,.0f}$ -> {current_liq:,.0f}$)"
             )
 
     if snapshot is None:

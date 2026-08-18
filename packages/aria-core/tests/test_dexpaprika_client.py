@@ -64,10 +64,17 @@ def _rows(n: int) -> list[dict]:
 def _reset_circuit_breaker():
     """Same trap as every other dome client's tests -- module-level throttle
     timer shared across tests in this file (harmless here since ``_MIN_INTERVAL``
-    is only a proactive delay, never a hard state to reset)."""
+    is only a proactive delay, never a hard state to reset). 18/08, system_issues
+    #125b: the module-level consecutive-failure circuit breaker IS real state
+    now (unlike the throttle timer) -- must reset every test or failure counts
+    leak across tests in this file and order-dependently trip the breaker."""
     dp._key_marked_invalid = False
+    dp._circuit_fail_count = 0
+    dp._circuit_cooldown_until = 0.0
     yield
     dp._key_marked_invalid = False
+    dp._circuit_fail_count = 0
+    dp._circuit_cooldown_until = 0.0
 
 
 # ── _compute_start -- the ONE thing that must never regress (26/07 diligence:
@@ -507,3 +514,89 @@ async def test_get_pool_reserve_usd_none_on_error(monkeypatch):
     reserve = await dp.get_pool_reserve_usd("poolA", network="solana")
 
     assert reserve is None
+
+
+# ── consecutive-outage circuit breaker (system_issues #125b, 18/08) ────────────────
+# Unlike GeckoTerminal/GoPlus/Blockscout/DexScreener, this client only had per-call
+# 429/5xx retry (tested above), no memory ACROSS calls of a sustained outage.
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_threshold_consecutive_failures(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = f"{dp.BASE_URL}/path"
+    # 2 x 500 per call (the dome retries once internally before giving up) --
+    # enough queued for _CIRCUIT_FAIL_THRESHOLD full calls.
+    responses = {url: [FakeResponse(500)] * (2 * dp._CIRCUIT_FAIL_THRESHOLD)}
+    _patch_client(monkeypatch, responses)
+
+    for _ in range(dp._CIRCUIT_FAIL_THRESHOLD):
+        data, err = await dp._get_json("/path", params={})
+        assert data is None
+
+    assert dp._circuit_open()
+
+    class _NeverCalledClient:
+        def __call__(self, **kw):
+            raise AssertionError("network must never be touched, circuit is open")
+
+    monkeypatch.setattr("aria_core.services.dexpaprika.httpx.AsyncClient", _NeverCalledClient())
+
+    data, err = await dp._get_json("/path", params={})
+    assert data is None
+    assert "coupe-circuit" in err
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_resets_fail_count_on_success(monkeypatch):
+    _patch_no_sleep(monkeypatch)
+    url = f"{dp.BASE_URL}/path"
+    responses = {
+        url: [
+            FakeResponse(500), FakeResponse(500),  # failure 1 (2 pops, internal retry exhausted)
+            FakeResponse(500), FakeResponse(500),  # failure 2 -- still under the threshold (3)
+            FakeResponse(200, []),                  # success -- must reset the counter to 0
+        ],
+    }
+    _patch_client(monkeypatch, responses)
+
+    await dp._get_json("/path", params={})
+    await dp._get_json("/path", params={})
+    assert dp._circuit_fail_count == 2
+
+    await dp._get_json("/path", params={})
+    assert dp._circuit_fail_count == 0
+    assert not dp._circuit_open()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_short_circuits_without_network_call(monkeypatch):
+    import time as _time
+
+    dp._circuit_fail_count = dp._CIRCUIT_FAIL_THRESHOLD
+    dp._circuit_cooldown_until = _time.monotonic() + 100
+
+    class _NeverCalledClient:
+        def __call__(self, **kw):
+            raise AssertionError("network must never be touched, circuit is open")
+
+    monkeypatch.setattr("aria_core.services.dexpaprika.httpx.AsyncClient", _NeverCalledClient())
+
+    data, err = await dp._get_json("/path", params={})
+    assert data is None
+    assert "coupe-circuit" in err
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_never_opens_on_4xx_other_than_429(monkeypatch):
+    """A 400 (malformed request) is never a health signal for the provider --
+    same doctrine as momentum_entry.py's own circuit breaker (#95)."""
+    _patch_no_sleep(monkeypatch)
+    url = f"{dp.BASE_URL}/path"
+    responses = {url: [FakeResponse(400)] * dp._CIRCUIT_FAIL_THRESHOLD}
+    _patch_client(monkeypatch, responses)
+
+    for _ in range(dp._CIRCUIT_FAIL_THRESHOLD):
+        data, err = await dp._get_json("/path", params={})
+        assert data is None
+
+    assert not dp._circuit_open()

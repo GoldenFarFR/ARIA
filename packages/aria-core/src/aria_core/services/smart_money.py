@@ -1783,6 +1783,12 @@ async def _analyze_wallet_multi_token(
             _candles = await fetch_candles(
                 pool_meta.pool_address, chain, contract=token_addr, gecko_client=gecko, min_useful_candles=1,
                 skip_daily=needs_intraday,
+                # system_issues #125b (18/08): this prices a wallet's OWN past
+                # transaction -- the candle series' age relative to TODAY is
+                # not a meaningful staleness signal here (it's expected to
+                # match the transaction's own age), unlike a real-time
+                # entry/exit decision. See _fetch_candles' own docstring.
+                check_staleness=False,
             )
             ohlcv = (
                 OHLCVResult(candles=_candles, available=True, error=None)

@@ -1145,6 +1145,87 @@ async def test_trailing_stop_tightens_then_closes_remainder(tmp_db):
     assert "2.5" in act3["closed"][0]["close_notes"]
 
 
+# ── system_issues #125b (18/08) -- stop wick probe (point-sample miss) ─────────────
+
+def _wick_probe_pair_lookup(*, price):
+    async def fake_pair_lookup(contract, *, chain="base"):
+        from aria_core.services.dexscreener import PairSnapshot
+
+        return PairSnapshot(
+            pair_address="0xpool", price_usd=price, liquidity_usd=200_000.0,
+            volume_24h_usd=10_000.0, base_symbol="DDD",
+        )
+
+    return fake_pair_lookup
+
+
+def _wick_probe_candles(*lows):
+    from aria_core.skills.ta_levels import Candle
+
+    return [Candle(ts=i, open=v, high=v + 0.01, low=v, close=v, volume=1_000.0) for i, v in enumerate(lows)]
+
+
+@pytest.mark.asyncio
+async def test_trailing_stop_wick_probe_closes_on_a_recovered_wick(tmp_db, monkeypatch):
+    """Point-sample price recovered to 0.92 (above the 0.9 stop) but a recent
+    candle dipped to 0.85 below the stop between two cycles -- must still
+    close, and AT the stop level (0.9), never at the recovered point-sample
+    price (0.92, too favorable)."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
+    monkeypatch.setattr(pt, "_default_pair_lookup", _wick_probe_pair_lookup(price=0.92))
+
+    async def fake_fetch_candles(*args, **kwargs):
+        return _wick_probe_candles(0.95, 0.90, 0.85)
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    act = await pt.run_paper_cycle(candidates=[])
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] == "invalidation"
+    assert act["closed"][0]["exit_price"] == pytest.approx(0.9)
+    assert not await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_trailing_stop_wick_probe_stays_open_when_no_candle_crossed_the_stop(tmp_db, monkeypatch):
+    """Same point-sample price zone (close to the stop) but no recent candle
+    actually touched the stop -- the probe must never close on a false alarm."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
+    monkeypatch.setattr(pt, "_default_pair_lookup", _wick_probe_pair_lookup(price=0.92))
+
+    async def fake_fetch_candles(*args, **kwargs):
+        return _wick_probe_candles(0.95, 0.93, 0.92)
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert await pt.has_open(D)
+
+
+@pytest.mark.asyncio
+async def test_trailing_stop_wick_probe_never_fetched_when_price_far_from_stop(tmp_db, monkeypatch):
+    """Cost stays bounded: outside the buffer zone (5% above the stop), no
+    candle call is triggered -- a healthy position costs nothing extra."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(D, "DDD", 1.0, invalidation_price=0.9, alloc_usd=90_000, wallet="swing")
+    monkeypatch.setattr(pt, "_default_pair_lookup", _wick_probe_pair_lookup(price=1.2))
+
+    calls = []
+
+    async def fake_fetch_candles(*args, **kwargs):
+        calls.append(1)
+        return _wick_probe_candles(0.1)  # extreme low -- must never even be consulted
+
+    monkeypatch.setattr("aria_core.momentum_entry._fetch_candles", fake_fetch_candles)
+
+    act = await pt.run_paper_cycle(candidates=[])
+    assert act["closed"] == []
+    assert calls == []
+
+
 # ── timeout de stagnation scalping (08/01, bug réel trouvé en direct : 19/21 ────────
 # positions scalping ouvertes gelées à 0% de mouvement depuis l'entrée, certaines
 # depuis 19h+, rien ne les fermait jamais -- le capital restait bloqué sur des setups
@@ -2457,6 +2538,89 @@ async def test_close_position_includes_prior_partial_pnl(tmp_db):
     s = await pt.portfolio_summary()
     assert round(s["equity"]) == round(1_000_000 + 75_000)
     assert round(s["realized_pnl"]) == 75_000
+
+
+# ── system_issues #125b (18/08) -- price-impact discount now applied at the
+# ACTUAL execution (close_position/reduce_position), not just the displayed
+# equity (portfolio_summary, already covered elsewhere). Before this fix, an
+# exit_price passed to close_position() was credited as-is, regardless of the
+# known liquidity.
+
+@pytest.mark.asyncio
+async def test_close_position_discounts_exit_price_when_liquidity_known(tmp_db):
+    """entry_liquidity_usd is also read by the BUY side (simulated_fill_price
+    + cap_alloc_to_pool_share) -- the actually-obtained qty results from that,
+    not a plain alloc_usd/entry_price. We re-read the position's REAL state
+    after opening rather than guessing the qty by hand, to isolate what's
+    actually under test here: the discount applied on EXIT."""
+    from aria_core.risk_guard import simulated_exit_price
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        C, "CCC", 1.0, alloc_usd=1_000, wallet="swing", pool_liquidity_usd=1_000_000.0,
+    )
+    pos = await pt._get_open(C)
+    assert pos["entry_liquidity_usd"] == pytest.approx(1_000_000.0)
+    expected_exit = simulated_exit_price(2.0, pos["qty"] * 2.0, 1_000_000.0)
+    assert expected_exit < 2.0  # the discount must be real on this scenario, not zero
+
+    closed = await pt.close_position(C, 2.0, reason="cible")
+    assert closed["exit_price"] == pytest.approx(expected_exit)
+    assert closed["pnl_usd"] == pytest.approx(pos["qty"] * expected_exit - pos["cost_usd"])
+
+
+@pytest.mark.asyncio
+async def test_close_position_no_discount_when_liquidity_unknown(tmp_db):
+    """Historical behavior preserved (fail-open) when no liquidity is known --
+    same doctrine as simulated_exit_price everywhere else."""
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(C, "CCC", 1.0, alloc_usd=10_000, wallet="swing")  # no liquidity known
+
+    closed = await pt.close_position(C, 2.0, reason="cible")
+    assert closed["exit_price"] == pytest.approx(2.0)
+    assert closed["pnl_usd"] == pytest.approx(10_000.0)
+
+
+@pytest.mark.asyncio
+async def test_close_position_prefers_last_liquidity_over_entry_liquidity(tmp_db):
+    """last_liquidity_usd (live rescan, kept fresh by the pockets that update
+    it) takes priority over entry_liquidity_usd (frozen at entry) -- same
+    preference order already established by portfolio_summary()."""
+    from aria_core.risk_guard import simulated_exit_price
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        C, "CCC", 1.0, alloc_usd=1_000, wallet="swing", pool_liquidity_usd=1_000_000.0,
+    )
+    pos = await pt._get_open(C)
+    # last_liquidity_usd far below entry_liquidity_usd -- if the wrong field
+    # were still being read, the impact would be negligible instead of large.
+    await pt._update_vc_liquidity_watermark(pos["id"], 5_000.0)
+
+    expected_exit = simulated_exit_price(2.0, pos["qty"] * 2.0, 5_000.0)
+    closed = await pt.close_position(C, 2.0, reason="cible")
+    assert closed["exit_price"] == pytest.approx(expected_exit)
+    assert closed["exit_price"] < expected_exit + 1e-9 and expected_exit < 2.0
+
+
+@pytest.mark.asyncio
+async def test_reduce_position_discounts_the_sold_legs_own_value(tmp_db):
+    """Impact sizing uses the value of the sold LEG itself (sell_qty *
+    exit_price), never the whole remaining position."""
+    from aria_core.risk_guard import simulated_exit_price
+
+    await pt.reset_portfolio(1_000_000.0)
+    await pt.open_position(
+        C, "CCC", 1.0, alloc_usd=1_000, wallet="swing", pool_liquidity_usd=1_000_000.0,
+    )
+    pos = await pt._get_open(C)
+    sell_qty = pos["qty"] / 3.0
+
+    expected_exit = simulated_exit_price(1.5, sell_qty * 1.5, 1_000_000.0)
+    partial = await pt.reduce_position(C, 1.5, sell_qty, stage=1, reason="palier 1/3")
+    assert partial["exit_price"] == pytest.approx(expected_exit)
+    sold_cost = pos["cost_usd"] * (sell_qty / pos["qty"])
+    assert partial["pnl_usd"] == pytest.approx(sell_qty * expected_exit - sold_cost)
 
 
 # ── multi-position-per-contract prerequisite (27/07, multi-pocket plan) ──────
@@ -4992,9 +5156,22 @@ async def test_vc_thesis_take_seed_recovers_exactly_initial_cost(tmp_db, monkeyp
     assert len(act["partial"]) == 1
     partial = act["partial"][0]
     assert partial["close_reason"] == "take seed 2x"
-    # Recouvre exactement la mise initiale (50 000$) au prix de vente (2.0) -> 25 000 qty.
+    # The QUANTITY sold by the take-seed formula itself stays unaffected
+    # (computed off the theoretical 2x price, independent of the discount
+    # applied at execution) -- exactly half the position (50,000$ / 1.0$ / 2
+    # = 25,000).
     assert partial["sold_qty"] == pytest.approx(25_000.0)
-    assert partial["pnl_usd"] == pytest.approx(25_000.0)  # vendu 50k$, coût 25k$ sur cette tranche
+    # system_issues #125b (18/08) -- before this fix, reduce_position() never
+    # discounted the real execution price, giving a fictitious PnL of 25,000$
+    # (as if 25,000$ out of this 200,000$-liquidity pool could sell with no
+    # impact). Selling 25% of a pool in one shot IS a real, significant price
+    # impact (PRICE_IMPACT_RATIO=2.0 -> 50% here) -- the real execution price
+    # (1.0) lands exactly at this leg's own cost basis (1.0/qty), so the real
+    # net profit of this partial take is 0, not 25,000. The "take seed"
+    # strategy itself (sized to recover the initial stake) is NOT corrected
+    # here to account for the impact -- out of scope for this fix (display
+    # vs. real-execution consistency, not a sizing redesign).
+    assert partial["pnl_usd"] == pytest.approx(0.0, abs=0.01)
     assert await pt.has_open(A)
 
 
@@ -7030,8 +7207,13 @@ async def test_bonding_position_survives_a_minor_liquidity_dip(tmp_db, monkeypat
 @pytest.mark.asyncio
 async def test_non_bonding_position_never_touched_by_bonding_volet23(tmp_db, monkeypatch):
     """Regression guard: a regular (non-bonding) momentum position must never
-    be affected by the volet-3 liquidity floor, even at a liquidity profile
-    that WOULD trigger it on a bonding position (BONDING_LIQUIDITY_FLOOR_USD).
+    be closed via the bonding-SPECIFIC volet-3 mechanism/reason
+    (BONDING_LIQUIDITY_FLOOR_USD, close_reason "stop bonding (liquidité)").
+    system_issues #125b (18/08) added a SEPARATE, generic low-liquidity floor
+    (paper_trader_risk.LOW_LIQUIDITY_FLOOR_USD) that DOES now legitimately
+    close a plain momentum position on the same collapsed-liquidity profile
+    -- this test locks in that the two mechanisms stay distinct: the generic
+    one may fire, the bonding-specific one never does on a non-bonding chain.
     Price held constant across cycles so the (unrelated) generic ATR trailing
     stop never fires and confounds the assertion."""
     await pt.reset_portfolio(1_000_000.0)
@@ -7043,8 +7225,8 @@ async def test_non_bonding_position_never_touched_by_bonding_volet23(tmp_db, mon
     await pt.run_paper_cycle(candidates=[])
     monkeypatch.setattr(pt, "_default_pair_lookup", _vc_position_pair_lookup(price=1.0, liquidity_usd=3_000.0))
     act = await pt.run_paper_cycle(candidates=[])
-    assert act["closed"] == []
-    assert await pt.has_open(A)
+    assert len(act["closed"]) == 1
+    assert act["closed"][0]["close_reason"] != "stop bonding (liquidité)"
 
 
 @pytest.mark.asyncio

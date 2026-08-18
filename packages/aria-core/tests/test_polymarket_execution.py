@@ -59,6 +59,14 @@ def _fake_sdk(monkeypatch):
         sys.modules.pop(mod, None)
 
 
+async def _ample_balance():
+    return 1_000_000.0
+
+
+async def _never_called_balance():
+    raise AssertionError("balance_fn must not be called -- an earlier guardrail should have blocked first")
+
+
 @pytest.mark.asyncio
 async def test_build_signed_order_never_posts(monkeypatch):
     from aria_core.services import polymarket_execution as pe
@@ -81,7 +89,7 @@ async def test_post_signed_order_refused_when_gate_disabled(monkeypatch):
         token_id="tok-123", side="BUY", price=0.42, size=10.0, private_key="0xfakekey",
     )
 
-    result = await pe.post_signed_order(order, private_key="0xfakekey")
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_never_called_balance)
 
     assert result == {"status": "blocked", "reason": "gate_disabled"}
 
@@ -97,7 +105,7 @@ async def test_post_signed_order_refused_by_kill_switch_even_with_gate_on(monkey
         token_id="tok-123", side="BUY", price=0.42, size=10.0, private_key="0xfakekey",
     )
 
-    result = await pe.post_signed_order(order, private_key="0xfakekey")
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_never_called_balance)
 
     assert result == {"status": "blocked", "reason": "kill_switch_active"}
 
@@ -117,7 +125,7 @@ async def test_post_signed_order_refused_by_custody_pause_even_with_gate_on(monk
         token_id="tok-123", side="BUY", price=0.42, size=10.0, private_key="0xfakekey",
     )
 
-    result = await pe.post_signed_order(order, private_key="0xfakekey")
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_never_called_balance)
 
     assert result == {"status": "blocked", "reason": "custody_pause_active"}
     assert FakeClobClient.last_instance.posted == []
@@ -135,10 +143,63 @@ async def test_post_signed_order_refused_over_hard_cap(monkeypatch):
         token_id="tok-123", side="BUY", price=0.9, size=100.0, private_key="0xfakekey",  # notional=90$
     )
 
-    result = await pe.post_signed_order(order, private_key="0xfakekey")
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_never_called_balance)
 
     assert result == {"status": "blocked", "reason": "over_hard_cap"}
     assert FakeClobClient.last_instance.posted == []
+
+
+@pytest.mark.asyncio
+async def test_post_signed_order_refused_over_real_balance(monkeypatch):
+    """system_issues #125b (18/08) -- closes the 2nd of the module's own
+    documented 'known gaps' (08/03): a notional under MAX_BET_USD but over the
+    wallet's REAL balance must still be refused, same doctrine as
+    agent_wallet_pilot.attempt_swap."""
+    from aria_core.services import polymarket_execution as pe
+    from aria_core import custody_pause, outgoing_pause
+
+    monkeypatch.setenv("ARIA_POLYMARKET_REAL_TRADING_ENABLED", "true")
+    monkeypatch.setattr(outgoing_pause, "is_paused", lambda strict=True: False)
+    monkeypatch.setattr(custody_pause, "is_paused", lambda: False)
+    order = await pe.build_signed_order(
+        token_id="tok-123", side="BUY", price=0.5, size=10.0, private_key="0xfakekey",  # notional=5$
+    )
+
+    async def _thin_balance():
+        return 2.0  # sous le notional (5$), au-dessus du hard cap (10$) n'entre pas en jeu
+
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_thin_balance)
+
+    assert result == {"status": "blocked", "reason": "insufficient_balance"}
+    assert FakeClobClient.last_instance.posted == []
+
+
+@pytest.mark.asyncio
+async def test_post_signed_order_fails_closed_when_balance_unavailable(monkeypatch):
+    """Either an exception OR a None returned by balance_fn must block --
+    never assume a sufficient balance for lack of a better answer."""
+    from aria_core.services import polymarket_execution as pe
+    from aria_core import custody_pause, outgoing_pause
+
+    monkeypatch.setenv("ARIA_POLYMARKET_REAL_TRADING_ENABLED", "true")
+    monkeypatch.setattr(outgoing_pause, "is_paused", lambda strict=True: False)
+    monkeypatch.setattr(custody_pause, "is_paused", lambda: False)
+    order = await pe.build_signed_order(
+        token_id="tok-123", side="BUY", price=0.5, size=10.0, private_key="0xfakekey",
+    )
+
+    async def _raising_balance():
+        raise RuntimeError("RPC indisponible")
+
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_raising_balance)
+    assert result == {"status": "blocked", "reason": "balance_unavailable"}
+    assert FakeClobClient.last_instance.posted == []
+
+    async def _none_balance():
+        return None
+
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_none_balance)
+    assert result == {"status": "blocked", "reason": "balance_unavailable"}
 
 
 @pytest.mark.asyncio
@@ -153,7 +214,7 @@ async def test_post_signed_order_succeeds_when_all_gates_pass(monkeypatch):
         token_id="tok-123", side="BUY", price=0.5, size=10.0, private_key="0xfakekey",  # notional=5$
     )
 
-    result = await pe.post_signed_order(order, private_key="0xfakekey")
+    result = await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_ample_balance)
 
     assert result["status"] == "posted"
     assert result["result"]["orderID"] == "fake-order-id"
@@ -184,7 +245,7 @@ async def test_post_signed_order_reraises_on_post_error_without_swallowing(monke
 
     with caplog.at_level(logging.CRITICAL):
         with pytest.raises(RuntimeError, match="exchange timeout"):
-            await pe.post_signed_order(order, private_key="0xfakekey")
+            await pe.post_signed_order(order, private_key="0xfakekey", balance_fn=_ample_balance)
 
     assert any("STATUS UNKNOWN" in rec.message for rec in caplog.records)
 
@@ -208,7 +269,7 @@ async def test_private_key_never_appears_in_any_log_line(monkeypatch, caplog):
         order = await pe.build_signed_order(
             token_id="tok-123", side="BUY", price=0.5, size=10.0, private_key=secret_key,
         )
-        await pe.post_signed_order(order, private_key=secret_key)
+        await pe.post_signed_order(order, private_key=secret_key, balance_fn=_ample_balance)
 
     for record in caplog.records:
         assert secret_key not in record.getMessage()

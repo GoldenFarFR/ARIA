@@ -346,6 +346,96 @@ async def test_rescan_ratio_flag_survives_even_without_entry_baseline(monkeypatc
     assert any("wash-trading" in r for r in result["reasons"])
 
 
+# ── low-liquidity floor while a position is held (system_issues #125b, 18/08) ──────
+
+@pytest.mark.asyncio
+async def test_rescan_flags_liquidity_below_absolute_floor(monkeypatch):
+    """Blind spot found by the 18/08 multi-agent audit: this rescan only ever
+    flagged liquidity that got too HIGH relative to volume (wash-trading, just
+    above) -- never liquidity collapsing to genuinely thin, even though this
+    guardrail already exists on the vc_thesis side (paper_trader.py)."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=10_000.0, volume_24h_usd=5_000.0)  # healthy ratio, but below the floor
+    result = await risk.rescan_open_position(_position(), pair=pair)
+    assert result is not None
+    assert any("plancher absolu" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_rescan_flags_cumulative_liquidity_drop_since_entry(monkeypatch):
+    """Above the absolute floor but a sharp cumulative drop since entry (>= 50%)
+    remains a real signal -- same doctrine as vc_thesis's own tier 2."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=30_000.0, volume_24h_usd=10_000.0)  # -70% since entry
+    result = await risk.rescan_open_position(_position(entry_liquidity_usd=100_000.0), pair=pair)
+    assert result is not None
+    assert any("chute de" in r and "70" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_rescan_ignores_moderate_liquidity_drop(monkeypatch):
+    """A moderate drop (< 50% since entry, above the absolute floor) is still
+    normal market movement, not a signal."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=80_000.0, volume_24h_usd=10_000.0)  # -20% since entry
+    result = await risk.rescan_open_position(_position(entry_liquidity_usd=100_000.0), pair=pair)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_never_flags_low_liquidity_on_scalping_position(monkeypatch):
+    """Same scalping exclusion as the wash-trading check right above -- one
+    shared condition, never a separate exclusion that could drift apart."""
+    _patch_clients(monkeypatch)
+    pair = _pair(liquidity_usd=1_000.0, volume_24h_usd=500.0)  # well below the floor
+    result = await risk.rescan_open_position(_position(mode="scalping"), pair=pair)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_low_liquidity_flag_survives_even_without_entry_baseline(monkeypatch):
+    """Even without entry_security_json, the ABSOLUTE floor stays checkable (it
+    doesn't depend on a comparison against entry) -- don't lose this signal for
+    lack of a reference."""
+    pair = _pair(liquidity_usd=5_000.0, volume_24h_usd=500.0)
+    result = await risk.rescan_open_position({"contract": CONTRACT}, pair=pair)
+    assert result is not None
+    assert any("plancher absolu" in r for r in result["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_rescan_never_flags_low_liquidity_on_vc_thesis_position(monkeypatch):
+    """Regression #125b (18/08): vc_thesis already has its own dedicated 3-tier
+    floor (BONDING_LIQUIDITY_FLOOR_USD, paper_trader.py) -- this generic rescan
+    must never preempt it with a generic "sécurité re-scan" reason."""
+    pair = _pair(liquidity_usd=1_000.0, volume_24h_usd=100.0)  # well below the generic floor
+    position = {"contract": CONTRACT, "strategy": "vc_thesis", "entry_liquidity_usd": 100_000.0}
+    result = await risk.rescan_open_position(position, pair=pair)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_never_flags_low_liquidity_on_vc_hold_position(monkeypatch):
+    """Same exclusion for vc_hold, which has its own VC_MIN_LIQUIDITY_FLOOR_USD
+    (paper_trader.py) -- regression #125b."""
+    pair = _pair(liquidity_usd=1_000.0, volume_24h_usd=100.0)
+    position = {"contract": CONTRACT, "strategy": "vc_hold", "entry_liquidity_usd": 100_000.0}
+    result = await risk.rescan_open_position(position, pair=pair)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rescan_never_flags_low_liquidity_on_bonding_position(monkeypatch):
+    """Same exclusion for a bonding position (chain == _BONDING_CHAIN_MARKER),
+    which has its own dedicated floor -- regression #125b."""
+    pair = _pair(liquidity_usd=1_000.0, volume_24h_usd=100.0)
+    position = {
+        "contract": CONTRACT, "chain": "virtuals-bonding", "entry_liquidity_usd": 100_000.0,
+    }
+    result = await risk.rescan_open_position(position, pair=pair)
+    assert result is None
+
+
 @pytest.mark.asyncio
 async def test_rescan_tolerates_goplus_failure(monkeypatch):
     from aria_core.services import goplus as gp

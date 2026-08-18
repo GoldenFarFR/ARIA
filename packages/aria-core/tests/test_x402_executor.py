@@ -30,6 +30,15 @@ def _not_paused(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _not_custody_paused(monkeypatch):
+    """18/08, system_issues #125b -- same doctrine as ``_not_paused`` above:
+    default OFF so every existing test keeps exercising the normal path,
+    with a dedicated test below overriding it to True."""
+    monkeypatch.setattr("aria_core.custody_pause.is_paused", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_journal(tmp_path, monkeypatch):
     # 10/08 -- x402_attempt_journal writes to data_dir() -- isolated the same
     # way _isolated_db isolates aria_db_path() above, same reasoning.
@@ -99,6 +108,27 @@ async def test_initial_request_failure_returns_failed_without_logging():
 @pytest.mark.asyncio
 async def test_killswitch_blocks_before_reading_payment_requirement(monkeypatch):
     monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda **kw: True)
+
+    async def fake_fetch(url, *, method="GET", headers=None):
+        return HttpResult(status_code=402, body=b"not even valid json -- never parsed")
+
+    result = await executor.fetch_paid_resource(
+        "https://example.com/data", resource="test", balance_fn=_never_called_balance,
+        pay_fn=_never_called_pay, http_fetch_fn=fake_fetch,
+    )
+    assert result.status == "blocked"
+    spends = await budget.list_spends()
+    assert len(spends) == 1
+    assert spends[0]["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_custody_pause_blocks_before_reading_payment_requirement(monkeypatch):
+    """system_issues #125b (18/08) -- the auto-armed anomaly kill-switch, distinct
+    from the manual /stop above, must ALSO block this same real-money path (this
+    wallet's own agent_wallet_pilot.py/wallet_guard.py/polymarket_execution.py
+    already check both)."""
+    monkeypatch.setattr("aria_core.custody_pause.is_paused", lambda: True)
 
     async def fake_fetch(url, *, method="GET", headers=None):
         return HttpResult(status_code=402, body=b"not even valid json -- never parsed")

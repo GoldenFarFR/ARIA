@@ -46,12 +46,15 @@ future real activation is even considered, not before this commit:**
     (``order.signed_order``) -- not exploitable via the one legitimate caller
     today (``build_signed_order`` builds both coherently), but the type
     doesn't itself guarantee it.
-  - No check against the wallet's REAL balance (`agent_wallet_pilot.py`'s own
-    doctrine: "hard cap checked against the wallet's REAL balance before
-    every attempt, fail-closed if unavailable") -- only the fixed
-    ``MAX_BET_USD`` is enforced here.
   - No persistent, queryable ledger (``agent_wallet_log.record_transaction``'s
     equivalent) -- traceability is `logging`-only today.
+
+**18/08, system_issues #125b (multi-agent pipeline audit) -- the real-balance
+gap above is CLOSED**: ``post_signed_order`` now takes a required, injected
+``balance_fn`` (same doctrine as ``agent_wallet_pilot.attempt_swap``'s own)
+and fails closed if the notional exceeds the wallet's real balance, or if the
+balance can't be resolved at all. The 2 gaps still above remain genuinely
+open.
 """
 from __future__ import annotations
 
@@ -159,7 +162,7 @@ async def build_signed_order(
     return SignedOrderResult(token_id=token_id, side=side, price=price, size=size, signed_order=signed)
 
 
-async def post_signed_order(order: SignedOrderResult, *, private_key: str) -> dict:
+async def post_signed_order(order: SignedOrderResult, *, private_key: str, balance_fn) -> dict:
     """Posts a previously-built signed order to the real Polymarket exchange
     -- REAL CAPITAL. Fails closed, unconditionally, unless
     ``polymarket_real_trading_enabled()`` is true -- which today requires an
@@ -167,7 +170,19 @@ async def post_signed_order(order: SignedOrderResult, *, private_key: str) -> di
     docstring for the two external preconditions). Same doctrine as
     ``agent_wallet_pilot.attempt_swap``: dedicated gate checked FIRST, before
     the kill-switch, before the hard cap -- the narrowest, most critical
-    gate goes first."""
+    gate goes first.
+
+    ``balance_fn`` (18/08, system_issues #125b -- closes the LAST of the 3
+    "known gaps" this module's own docstring flagged 08/03): an injected
+    async callable returning the wallet's REAL current balance in USD, same
+    dependency-injection doctrine as ``agent_wallet_pilot.attempt_swap``'s own
+    ``balance_fn`` -- never a network call baked into this function, always
+    testable offline. Required (not optional): this module still has zero
+    production caller today, so there is no legacy call site to preserve, and
+    a real-money order function must never be callable without this check by
+    omission. Fails closed on ANY balance-resolution problem (exception or
+    ``None``), same doctrine as every other real-capital path in this
+    project -- never assumes a balance it couldn't actually observe."""
     if not polymarket_real_trading_enabled():
         logger.critical(
             "%s: post_signed_order refused -- ARIA_POLYMARKET_REAL_TRADING_ENABLED not set",
@@ -198,6 +213,28 @@ async def post_signed_order(order: SignedOrderResult, *, private_key: str) -> di
             _REAL_MONEY_LOG_PREFIX, notional_usd, MAX_BET_USD,
         )
         return {"status": "blocked", "reason": "over_hard_cap"}
+
+    try:
+        balance_usd = await balance_fn()
+    except Exception as exc:  # noqa: BLE001 -- fail-closed, never assume a balance
+        logger.warning(
+            "%s: post_signed_order refused -- real balance unavailable (fail-closed): %s",
+            _REAL_MONEY_LOG_PREFIX, exc,
+        )
+        return {"status": "blocked", "reason": "balance_unavailable"}
+    if balance_usd is None:
+        logger.warning(
+            "%s: post_signed_order refused -- real balance unavailable (fail-closed): "
+            "balance_fn returned None",
+            _REAL_MONEY_LOG_PREFIX,
+        )
+        return {"status": "blocked", "reason": "balance_unavailable"}
+    if notional_usd > balance_usd:
+        logger.warning(
+            "%s: post_signed_order refused -- notional %.2f$ > real balance %.2f$",
+            _REAL_MONEY_LOG_PREFIX, notional_usd, balance_usd,
+        )
+        return {"status": "blocked", "reason": "insufficient_balance"}
 
     ClobClient = _require_sdk()
     client = ClobClient(host="https://clob.polymarket.com", chain_id=137, key=private_key)

@@ -21,7 +21,11 @@ Strict order of each attempt (fail-closed at every step):
   2. If 402: ``/stop`` kill-switch (``outgoing_pause.is_paused(strict=True)``)
      -- same doctrine as ``agent_wallet_pilot.py``. Checked FIRST, before
      even knowing how much the resource costs -- it's the widest gate, it
-     doesn't depend on any data already read.
+     doesn't depend on any data already read. Then ``custody_pause.is_paused()``
+     (18/08, system_issues #125b) -- the auto-armed anomaly kill-switch every
+     other real-money path on this SAME CDP wallet already checks; a manual
+     ``/stop`` and an auto-armed custody freeze are two independent triggers,
+     both must gate this same spend.
   3. 402 body parsed defensively (x402 v1 schema, cf. ``services/x402.py``)
      -- non-USDC asset or unreadable amount -> blocked (the ``x402_budget``
      cap is denominated in dollars, it means nothing for another asset).
@@ -54,7 +58,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from aria_core import outgoing_pause, x402_attempt_journal, x402_budget
+from aria_core import custody_pause, outgoing_pause, x402_attempt_journal, x402_budget
 from aria_core.agent_wallet_cdp_adapter import USDC_BASE_ADDRESS
 
 logger = logging.getLogger(__name__)
@@ -365,6 +369,20 @@ async def fetch_paid_resource(
         return await _blocked(
             resource, provider, 0.0,
             reason=outgoing_pause.blocked_notice("Ce paiement x402"),
+            contract=contract, token_symbol=token_symbol,
+        )
+    # system_issues #125b (18/08, multi-agent pipeline audit, "elevated"
+    # finding): this spends from the SAME CDP wallet (aria-wallet-X402-EVM)
+    # that agent_wallet_monitor.py's auto-arm anomaly detector protects via
+    # custody_pause (agent_wallet_pilot.py/agent_wallet_smart_swing.py/
+    # wallet_guard.py/polymarket_execution.py all check it already) -- this
+    # was the ONE real-money path on that wallet checking only the manual
+    # /stop, never the auto-armed one. A compromised-key/anomaly signal would
+    # have auto-frozen every other path on this wallet while x402 kept paying.
+    if custody_pause.is_paused():
+        return await _blocked(
+            resource, provider, 0.0,
+            reason=custody_pause.blocked_notice("Ce paiement x402"),
             contract=contract, token_symbol=token_symbol,
         )
 

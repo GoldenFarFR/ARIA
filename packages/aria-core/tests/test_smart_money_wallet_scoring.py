@@ -71,8 +71,28 @@ FUNDER = "0x" + "f" * 40
 ROUTER = "0x" + "9" * 40  # infra DEX partagée entre plusieurs tokens
 
 
+# system_issues #125b (18/08) -- the fixed base (2026-01-01) is what
+# TestRecentWindowMetrics's own comment already flagged as a "temporal bias"
+# (15/07, ChatGPT review) for anything measured against real NOW; that class
+# works around it by bypassing _dt() entirely. _fetch_candles now hard-rejects
+# catastrophically stale candles (age vs wall-clock NOW), and several tests
+# here build mocked OHLCV candles via _dt() -- anchoring near real now (rather
+# than a fixed 2026 date, increasingly far in the past as real time moves on)
+# fixes both at once, without touching any test's own relative-offset math
+# (every assertion in this file depends on the DELTA between two _dt() calls,
+# never the absolute value -- confirmed via grep, no test asserts a literal
+# 2026-01-01-derived string). MODULE-LEVEL constant, evaluated ONCE at import
+# -- a real bug found live while building this fix: computing this inside
+# _dt()'s own body (`datetime.now()` re-evaluated on every call) made two
+# calls to `_dt(0)` within the SAME test return microseconds-apart values,
+# silently breaking every dict keyed by a `_dt(...)` timestamp (TestFifoMatch's
+# own `prices = {_dt(0): 1.0, ...}` pattern) -- a real correctness bug, not
+# just a staleness false-positive.
+_DT_DEFAULT_BASE = datetime.now(timezone.utc) - timedelta(days=2)
+
+
 def _dt(offset_days: float = 0.0, base: datetime | None = None) -> datetime:
-    base = base or datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = base or _DT_DEFAULT_BASE
     return base + timedelta(days=offset_days)
 
 

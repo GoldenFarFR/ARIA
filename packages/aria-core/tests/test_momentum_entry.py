@@ -2624,7 +2624,19 @@ async def test_early_legitimacy_shadow_cycle_respects_batch_size(monkeypatch):
 # ── _fetch_candles (cascade OHLCV : GeckoTerminal → CoinMarketCap → Mobula → DexScreener → Dune) ──
 
 def _plain_candles(n: int = 5) -> list[Candle]:
-    return [Candle(ts=i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0) for i in range(n)]
+    # system_issues #125b (18/08) -- ts must be near real wall-clock time, not
+    # epoch-zero-relative: _fetch_candles now hard-rejects catastrophically
+    # stale candles (age vs wall-clock NOW, see _CANDLE_STALENESS_HARD_REJECT_
+    # MULTIPLIER), and every caller of this shared helper implicitly expects a
+    # FRESH, currently-usable series. 300s spacing (a plausible real candle
+    # interval), ending exactly at "now" so age_seconds stays ~0 regardless
+    # of n.
+    now = int(time.time())
+    interval = 300
+    return [
+        Candle(ts=now - (n - 1 - i) * interval, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0)
+        for i in range(n)
+    ]
 
 
 @pytest.mark.asyncio
@@ -2706,6 +2718,103 @@ async def test_fetch_candles_rejects_price_inconsistent_candles(monkeypatch):
     assert result == []
 
 
+@pytest.mark.asyncio
+async def test_fetch_candles_rejects_catastrophically_stale_candles(monkeypatch):
+    """system_issues #125b (18/08, multi-agent pipeline audit, "medium"
+    finding): a provider stuck re-serving the same old candle series (regular
+    internal spacing, but the LAST candle never advances toward wall-clock
+    now) must be rejected -- distinct from candle_staleness_shadow.py's own
+    5.0x SHADOW-ONLY candidate (not yet calibrated, never blocks): this is a
+    much wider, "catastrophic only" hard reject (20x), same relationship to
+    the shadow candidate as the 1000x price-consistency check has to normal
+    cross-provider noise."""
+    from aria_core.services import geckoterminal as gt
+
+    # 300s median interval, last candle 3 hours (36x the median) stale --
+    # comfortably past the 20x hard-reject threshold, nowhere near a real
+    # daily/hourly ladder rung's own legitimate worst case.
+    stale_end = int(time.time()) - 10_800
+    stale_candles = [
+        Candle(ts=stale_end - 300 * i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0)
+        for i in range(4, -1, -1)
+    ]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=stale_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_accepts_moderately_stale_candles_below_hard_reject(monkeypatch):
+    """Below the 20x hard-reject threshold (normal fetch/processing lag,
+    or a legitimately quiet period) must NOT be rejected -- this hard gate
+    is catastrophic-only, it must never encroach on the shadow observer's
+    own still-uncalibrated territory."""
+    from aria_core.services import geckoterminal as gt
+
+    # 300s median interval, last candle ~10x stale (well under the 20x cap).
+    moderately_stale_end = int(time.time()) - 3_000
+    candles = [
+        Candle(ts=moderately_stale_end - 300 * i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0)
+        for i in range(4, -1, -1)
+    ]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == candles
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_staleness_hard_reject_never_fires_on_a_single_candle(monkeypatch):
+    """No median interval computable (< 2 candles) -- fail-open, never
+    fabricate a staleness verdict from insufficient data."""
+    from aria_core.services import geckoterminal as gt
+
+    ancient_single = [Candle(ts=0, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0)]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=ancient_single, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    result = await me._fetch_candles("0xpool", "base")
+    assert result == ancient_single
+
+
+@pytest.mark.asyncio
+async def test_fetch_candles_check_staleness_false_lets_a_stale_series_through(monkeypatch):
+    """system_issues #125b (18/08) -- smart_money.py's own historical-pricing
+    caller sets check_staleness=False: a genuinely old candle series (a real
+    provider outage, or a deliberately historical query) must NOT be rejected
+    when the caller doesn't care about real-time freshness. Same catastrophic
+    scenario as test_fetch_candles_rejects_catastrophically_stale_candles,
+    proving the opt-out actually disables the reject rather than just
+    widening the threshold."""
+    from aria_core.services import geckoterminal as gt
+
+    stale_end = int(time.time()) - 10_800
+    stale_candles = [
+        Candle(ts=stale_end - 300 * i, open=1.0, high=1.0, low=1.0, close=1.0, volume=0.0)
+        for i in range(4, -1, -1)
+    ]
+
+    async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
+        return gt.OHLCVResult(candles=stale_candles, available=True, error=None)
+
+    monkeypatch.setattr(type(gt.geckoterminal_client), "get_ohlcv", staticmethod(fake_gt_ohlcv))
+
+    result = await me._fetch_candles("0xpool", "base", check_staleness=False)
+    assert result == stale_candles
+
+
 def test_candle_price_scale_factor_none_within_normal_noise():
     """Below the rescale threshold (normal cross-provider timing noise between
     the pair snapshot and the candles' own timestamps) nothing should change
@@ -2761,9 +2870,14 @@ async def test_fetch_candles_rescales_moderate_price_mismatch_instead_of_rejecti
     trusting a wrong unit or discarding a real one."""
     from aria_core.services import geckoterminal as gt
 
+    # system_issues #125b (18/08) -- ts must be near wall-clock now (see
+    # _plain_candles' own comment above), not epoch-zero-relative, so this
+    # fresh series isn't hard-rejected as catastrophically stale.
+    now = int(time.time())
+    ts0, ts1 = now - 3600, now
     gt_candles = [
-        Candle(ts=0, open=0.0114, high=0.0116, low=0.0113, close=0.0115, volume=100.0),
-        Candle(ts=3600, open=0.0115, high=0.0117, low=0.0114, close=0.0116, volume=200.0),
+        Candle(ts=ts0, open=0.0114, high=0.0116, low=0.0113, close=0.0115, volume=100.0),
+        Candle(ts=ts1, open=0.0115, high=0.0117, low=0.0114, close=0.0116, volume=200.0),
     ]
 
     async def fake_gt_ohlcv(pool_address, *, network, **_kwargs):
@@ -2782,7 +2896,7 @@ async def test_fetch_candles_rescales_moderate_price_mismatch_instead_of_rejecti
     assert result[0].high == pytest.approx(0.0116 * factor)
     assert result[0].low == pytest.approx(0.0113 * factor)
     assert result[0].volume == 100.0  # volume is not a price -- untouched
-    assert result[0].ts == 0  # timestamps untouched
+    assert result[0].ts == ts0  # timestamps untouched
 
 
 @pytest.mark.asyncio

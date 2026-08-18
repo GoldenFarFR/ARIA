@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -75,6 +76,55 @@ _INTERVAL_SECONDS: dict[str, int] = {
 # pocket reads with day-scale candles).
 _STANDARD_LADDER: tuple[str, ...] = ("24h", "6h", "1h")
 _SCALPING_LADDER: tuple[str, ...] = ("15m", "30m")
+
+# system_issues #125b (18/08, multi-agent pipeline audit, "low" finding):
+# unlike GeckoTerminal/GoPlus/Blockscout/DexScreener, this client had per-call
+# 429/5xx retry (the dome, above) but no memory ACROSS calls of a sustained
+# outage -- every caller kept paying the full retry latency on every single
+# request even during a confirmed multi-minute provider outage. Built here,
+# at the ONE choke point every public function in this module funnels
+# through (``_get_json``), rather than in momentum_entry.py's own private
+# per-cascade ``_provider_in_cooldown`` (#95, 19/07) -- that one already
+# protects the OHLCV cascade's own use of this provider, but shadow modules
+# and the watchlist collector call this module's functions directly,
+# bypassing that cascade-local mechanism entirely. Same threshold/duration as
+# the proven #95 pattern (3 consecutive failures -> 180s cooldown), process-
+# local state (best-effort latency optimization, never a correctness
+# concern -- losing it on a restart just means retrying a provider that may
+# have had time to recover).
+_CIRCUIT_COOLDOWN_SECONDS = 180.0
+_CIRCUIT_FAIL_THRESHOLD = 3
+_circuit_fail_count = 0
+_circuit_cooldown_until = 0.0
+
+
+def _circuit_open() -> bool:
+    return time.monotonic() < _circuit_cooldown_until
+
+
+def _record_circuit_outcome(*, ok: bool) -> None:
+    global _circuit_fail_count, _circuit_cooldown_until
+    if ok:
+        was_open = _circuit_fail_count >= _CIRCUIT_FAIL_THRESHOLD
+        _circuit_fail_count = 0
+        _circuit_cooldown_until = 0.0
+        if was_open:
+            from aria_core import circuit_breaker_log
+
+            circuit_breaker_log.record_transition_nowait(
+                "ohlcv_dexpaprika", "closed", consecutive_failures=0, cooldown_seconds=0.0,
+            )
+        return
+    _circuit_fail_count += 1
+    if _circuit_fail_count >= _CIRCUIT_FAIL_THRESHOLD:
+        _circuit_cooldown_until = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+        from aria_core import circuit_breaker_log
+
+        circuit_breaker_log.record_transition_nowait(
+            "ohlcv_dexpaprika", "open",
+            consecutive_failures=_circuit_fail_count, cooldown_seconds=_CIRCUIT_COOLDOWN_SECONDS,
+        )
+
 
 _MIN_USEFUL_CANDLES = 20
 # Safety margin on the fetch window: request candles going back further than
@@ -143,8 +193,14 @@ def _auth_headers() -> dict[str, str]:
 
 
 async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | None]:
-    """GET with retry on 429/5xx/timeout -- same policy as the rest of the dome."""
+    """GET with retry on 429/5xx/timeout -- same policy as the rest of the dome.
+    Wrapped by the module-level circuit breaker (see its own comment above):
+    a confirmed sustained outage short-circuits immediately, before even the
+    proactive throttle, rather than paying the full retry latency again."""
     global _key_marked_invalid
+    if _circuit_open():
+        return None, f"{UNAVAILABLE} (coupe-circuit ouvert, pannes consécutives récentes)"
+
     url = f"{BASE_URL}{path}"
     attempt_429 = 0
     timeout_retried = False
@@ -162,6 +218,7 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 await asyncio.sleep(5.0)
                 continue
             logger.warning("dexpaprika: timeout on %s -> %s", url, exc)
+            _record_circuit_outcome(ok=False)
             return None, f"{UNAVAILABLE} (timeout, {exc})"
 
         if response.status_code == 401 and headers and not key_fallback_tried:
@@ -184,6 +241,7 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
             attempt_429 += 1
             if attempt_429 >= 3:
                 logger.warning("dexpaprika: HTTP 429 on %s after %s attempts", url, attempt_429)
+                _record_circuit_outcome(ok=False)
                 return None, f"{UNAVAILABLE} (rate limit)"
             await asyncio.sleep(0.5 * (2**attempt_429))
             continue
@@ -194,14 +252,20 @@ async def _get_json(path: str, *, params: dict) -> tuple[object | None, str | No
                 await asyncio.sleep(5.0)
                 continue
             logger.warning("dexpaprika: HTTP %s on %s", response.status_code, url)
+            _record_circuit_outcome(ok=False)
             return None, f"{UNAVAILABLE} (erreur serveur {response.status_code})"
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.warning("dexpaprika: %s", exc)
+            # 4xx other than 401/429 (malformed request, not found...) is
+            # never a provider-health signal -- same doctrine as momentum_
+            # entry.py's own circuit breaker (only an outage/rate-limit/
+            # network failure counts as a "failure").
             return None, f"{UNAVAILABLE} ({exc})"
 
+        _record_circuit_outcome(ok=True)
         return response.json(), None
 
 

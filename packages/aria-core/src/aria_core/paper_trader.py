@@ -272,6 +272,33 @@ BONDING_LIQUIDITY_FLOOR_USD = 5_000.0
 BONDING_LIQUIDITY_DROP_CUMULATIVE_PCT = 0.5
 BONDING_LIQUIDITY_SUDDEN_DROP_PCT = 0.3
 
+# system_issues #125b (18/08, multi-agent pipeline audit, "critical" finding):
+# the generic trailing-stop/invalidation check below only ever compared ONE
+# point-sample spot price (fetched once per 15min heartbeat cycle) against
+# active_stop -- a real wick that touches the stop and recovers between two
+# cycles is invisible to that single sample, the same class of "point-sample
+# miss" already fixed on the shadow modules this session. A FULL fix (fetch a
+# candle window covering the whole gap since the last check, EVERY cycle, for
+# every open position) would meaningfully multiply network load across the
+# shared GeckoTerminal/DexScreener throttle at real concurrent-position scale
+# (100+ open positions observed) -- disproportionate given the SAME audit's
+# own finding #9: the only LIVE real-capital loop (the 10-25$ agent-wallet
+# pilot) has NO automatic exit wired at all yet, so this is a latent defect
+# in code earmarked for a FUTURE real-capital exit path, not a live risk
+# today. Scoped instead to a cheap, targeted re-check: only when the
+# point-sample price sits within this buffer ABOVE active_stop (the "close
+# call" zone, where a real wick actually matters) is a short recent candle
+# window fetched -- exactly the same momentum_entry._fetch_candles/shared-
+# throttle reuse already established for scalping's own per-cycle exit
+# candle fetch (Item #105, just below). A wick that fully round-trips far
+# from any near-stop moment between two checks remains structurally
+# undetectable by ANY periodic-polling design without a full per-cycle fetch
+# -- documented residual limitation, not silently claimed fixed; a genuinely
+# complete fix (or native on-chain limit orders) is a prerequisite before
+# this exit path ever manages real capital.
+_STOP_WICK_PROBE_BUFFER_PCT = 0.05
+_STOP_WICK_PROBE_CANDLES = 3
+
 # 07/19 -- volatility-adaptive trailing stop (Gemini cross-review, confirmed "100%
 # yes" by the operator): replaces the fixed percentage (TRAIL_STOP_PCT) with a width
 # calibrated on each token's REAL volatility (ATR, ``entry_atr_pct`` computed once at
@@ -2285,15 +2312,30 @@ async def close_position(
     pos = await _get_open(contract, position_id=position_id)
     if not pos or not exit_price or exit_price <= 0:
         return None
-    # Item #101 (26/07): real DEX swap fee on the sell leg -- read from the
-    # position's OWN persisted mode (set at open_position time), never a
-    # parameter every caller of close_position must remember to pass. Scoped
-    # to scalping-mode positions only, same doctrine as the buy-side fee in
-    # open_position (see risk_guard.DEX_SWAP_FEE_PCT's comment).
-    if pos.get("mode") == "scalping":
-        from aria_core.risk_guard import DEX_SWAP_FEE_PCT
+    # system_issues #125b (18/08, multi-agent pipeline audit, "critical"
+    # finding): the realized P&L was recorded at the raw point-sample exit
+    # price, with NO price-impact discount -- risk_guard.simulated_exit_price
+    # (the function that models it) was only ever called for the UNREALIZED
+    # equity snapshot in portfolio_summary(), never at the actual close call
+    # site. A position could therefore show a discounted (honest) unrealized
+    # PnL while open, then realize a fictitiously better PnL the moment it
+    # actually closed -- the exact "x50 on a thin pool" illusion Item #18
+    # (07/22) already fixed for the DISPLAY path, silently still open here.
+    # Item #101's scalping DEX_SWAP_FEE_PCT is now folded into this SAME call
+    # (``apply_swap_fee``) instead of a separate manual multiplication right
+    # before it -- one source of truth, same doctrine already used on the
+    # BUY side (open_position -> simulated_fill_price(..., apply_swap_fee=)).
+    # ``liq`` mirrors portfolio_summary()'s own preference order exactly
+    # (live last_liquidity_usd if a rescan has updated it, else the entry
+    # snapshot) -- fail-open (unchanged price, fee still applied) when
+    # neither is known, same doctrine as every other price-impact call site.
+    from aria_core.risk_guard import simulated_exit_price
 
-        exit_price = exit_price * (1.0 - DEX_SWAP_FEE_PCT)
+    liq = pos.get("last_liquidity_usd") or pos.get("entry_liquidity_usd")
+    position_value_at_exit = pos["qty"] * exit_price
+    exit_price = simulated_exit_price(
+        exit_price, position_value_at_exit, liq, apply_swap_fee=(pos.get("mode") == "scalping"),
+    )
     proceeds = pos["qty"] * exit_price
     final_leg_pnl = proceeds - pos["cost_usd"]
     pnl_usd = final_leg_pnl + (pos.get("realized_pnl_partial") or 0.0)
@@ -2334,13 +2376,18 @@ async def reduce_position(
     pos = await _get_open(contract, position_id=position_id)
     if not pos or not exit_price or exit_price <= 0 or sell_qty <= 0:
         return None
-    # Item #101 (26/07): same real DEX swap fee as close_position, applied to
-    # this partial sell leg too -- see its comment.
-    if pos.get("mode") == "scalping":
-        from aria_core.risk_guard import DEX_SWAP_FEE_PCT
-
-        exit_price = exit_price * (1.0 - DEX_SWAP_FEE_PCT)
+    # system_issues #125b (18/08) -- same fix, same reasoning as
+    # close_position's own comment: a partial profit-take leg is a real sale
+    # too, discounted by the SAME price-impact model (sized on THIS leg's own
+    # value, sell_qty * exit_price, not the whole remaining position -- only
+    # what's actually being sold right now pushes the price).
     sell_qty = min(sell_qty, pos["qty"])
+    from aria_core.risk_guard import simulated_exit_price
+
+    liq = pos.get("last_liquidity_usd") or pos.get("entry_liquidity_usd")
+    exit_price = simulated_exit_price(
+        exit_price, sell_qty * exit_price, liq, apply_swap_fee=(pos.get("mode") == "scalping"),
+    )
     frac = sell_qty / pos["qty"] if pos["qty"] else 0.0
     sold_cost = pos["cost_usd"] * frac
     proceeds = sell_qty * exit_price
@@ -6030,7 +6077,41 @@ async def _run_paper_cycle_locked(
                 breakeven_locked=breakeven_locked, mode=p.get("mode"),
             )
 
-            if active_stop and price <= active_stop:
+            # system_issues #125b -- see _STOP_WICK_PROBE_BUFFER_PCT's own
+            # comment above: the point-sample price recovered above the stop
+            # by the time of THIS check doesn't prove the stop was never
+            # crossed since the last one. Only probed in the close-call zone
+            # (cheap: most open positions sit well away from their stop most
+            # of the time, by the trailing-stop's own design intent).
+            stop_wick_low = None
+            if (
+                active_stop and price > active_stop
+                and price <= active_stop * (1 + _STOP_WICK_PROBE_BUFFER_PCT)
+                and pair is not None and pair.pair_address
+            ):
+                try:
+                    from aria_core import momentum_entry
+
+                    probe_candles = await momentum_entry._fetch_candles(
+                        pair.pair_address, p.get("chain") or "base",
+                        contract=p["contract"], pair=pair, mode=p.get("mode") or "standard",
+                    )
+                except Exception:  # noqa: BLE001 -- never blocks position management
+                    probe_candles = []
+                if probe_candles:
+                    window = probe_candles[-_STOP_WICK_PROBE_CANDLES:]
+                    lows = [c.low for c in window if c.low is not None]
+                    if lows:
+                        stop_wick_low = min(lows)
+
+            stop_triggered = bool(active_stop) and (price <= active_stop or (stop_wick_low is not None and stop_wick_low <= active_stop))
+            if stop_triggered:
+                # A wick-only trigger (spot price already recovered) fills at
+                # the stop level itself, never at the recovered spot price --
+                # a real stop-loss order would have executed near the stop
+                # when it was actually crossed, not at whatever price the
+                # NEXT poll happens to observe.
+                price = min(price, active_stop) if stop_wick_low is not None else price
                 exit_gain_pct = (price / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0
                 if stop_source == "stop suiveur":
                     peak_gain_pct = (high_water / p["entry_price"] - 1.0) * 100.0 if p["entry_price"] else 0.0

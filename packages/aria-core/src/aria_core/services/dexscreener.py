@@ -589,6 +589,19 @@ def synthesize_candles_from_pair(pair: PairSnapshot) -> list[Candle]:
         return []
 
     now_price = pair.price_usd
+    # system_issues #125b (18/08, real bug found while building an unrelated
+    # staleness hard-reject in momentum_entry.py's candle cascade): ts used to
+    # be relative to a symbolic "0 = now" rather than real wall-clock epoch
+    # time -- every OTHER real candle source in this cascade uses absolute
+    # epoch ts, so any consumer computing an age (``time.time() - ts``) read
+    # this series as ~55 YEARS stale. Confirmed this had already been silently
+    # corrupting candle_staleness_shadow.py's own shadow observations for
+    # every DexScreener-synthesis fallback since that observer was wired
+    # (10/08) -- not a new bug introduced today, a pre-existing one this
+    # session's own unrelated work happened to surface. Only the absolute
+    # VALUES change here; relative ordering/spacing (the only things RSI/
+    # golden-pocket/median-interval math actually reads) are unchanged.
+    now_ts = int(time.time())
     windows = (
         ("h24", pair.price_change_24h),
         ("h6", pair.price_change_h6),
@@ -604,9 +617,9 @@ def synthesize_candles_from_pair(pair: PairSnapshot) -> list[Candle]:
             continue
         if past_price <= 0:
             continue
-        points.append((-offset_seconds, past_price))
+        points.append((now_ts - offset_seconds, past_price))
 
-    points.append((0, now_price))
+    points.append((now_ts, now_price))
     points.sort(key=lambda p: p[0])
 
     return [

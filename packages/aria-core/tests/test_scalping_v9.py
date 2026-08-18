@@ -5,6 +5,7 @@ signal/episode/sizing/trailing logic in isolation."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -49,8 +50,15 @@ def _reset_candles_cache():
 
 
 def _flat_candles(n=60, price=1.0, volume=1000.0):
+    # system_issues #125b (18/08) -- ts must be near real wall-clock time, not
+    # epoch-zero-relative: _fetch_candles now hard-rejects catastrophically
+    # stale candles (age vs wall-clock NOW). 300s spacing (v9's real 5m mode),
+    # ending exactly at "now" so age_seconds stays ~0 regardless of n -- same
+    # fix, same reasoning as test_momentum_entry.py's own _plain_candles.
+    now = int(time.time())
+    interval = 300
     return [
-        Candle(ts=float(i), open=price, high=price * 1.01, low=price * 0.99,
+        Candle(ts=now - (n - 1 - i) * interval, open=price, high=price * 1.01, low=price * 0.99,
                close=price, volume=volume)
         for i in range(n)
     ]
