@@ -148,6 +148,20 @@ concentrée récemment), puis **repasser par le pipeline DexScreener/GoPlus
 existant** (`acp_onchain_scan.py`, `safety_screen.py`) pour la sécurité —
 GeckoTerminal sert à la découverte, pas au scoring de sécurité.
 
+## Freshness check (2026-08-18)
+
+This note's recommendation was actioned: `discover_top_pools()`
+(`base_crawler.py`, not `services/ohlcv.py` as suggested) queries
+GeckoTerminal's `/networks/base/pools` sorted by volume -- exactly the
+endpoint identified above as missing from DexScreener. Since 14/08
+(operator decision) it is no longer the VC pocket's main discovery path --
+superseded by `discover_from_watchlist()`, sourcing instead from the shared
+`goplus_watchlist` (a volume-sorted top-pools query was found to miss real
+candidates that met every other criterion). `discover_top_pools()` still
+exists as a standalone utility (`simulate_lifecycle.py` still calls it
+directly). The DexScreener-vs-GeckoTerminal capability comparison itself
+(external API facts, verified 12/07) is unaffected and still accurate.
+
 ## Sources
 
 - [DexScreener API reference](https://docs.dexscreener.com/api/reference)
