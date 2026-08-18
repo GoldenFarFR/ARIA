@@ -348,3 +348,117 @@ async def test_fetch_one_interval_requests_safety_widened_limit(monkeypatch):
     expected_limit = int(dp._CANDLES_TO_REQUEST * dp._WINDOW_SAFETY_FACTOR)
     assert client.captured_params["limit"] == expected_limit
     assert expected_limit > dp._CANDLES_TO_REQUEST  # the whole point of the fix
+
+
+# ── get_trending_pools -- cursor pagination (18/08, real bug: a single call
+#    silently missed every matching pool beyond the first `limit`) ──────────
+
+SEARCH_URL = f"{dp.BASE_URL}/networks/solana/pools/search"
+
+
+def _search_page(pool_ids: list[str], *, next_cursor: str | None = None, has_next: bool = False) -> FakeResponse:
+    return FakeResponse(200, {
+        "results": [
+            {
+                "id": pid, "price_change_percentage_5m": 10.0, "price_change_percentage_1h": 10.0,
+                "price_change_percentage_6h": 10.0, "price_change_percentage_24h": 10.0,
+                "price_usd": 1.0, "liquidity_usd": 10000.0,
+            }
+            for pid in pool_ids
+        ],
+        "next_cursor": next_cursor,
+        "has_next_page": has_next,
+    })
+
+
+def _pool_detail_response(pool_id: str) -> FakeResponse:
+    return FakeResponse(200, {
+        "base_token_id": f"base_{pool_id}",
+        "tokens": [{"id": f"base_{pool_id}", "symbol": pool_id.upper()}],
+        "created_at": "2026-08-01T00:00:00Z",
+    })
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_default_max_pages_one_page_only(monkeypatch):
+    """Default behavior (every pre-existing caller) must stay exactly a
+    single call, even when the API says more pages exist."""
+    responses = {
+        SEARCH_URL: [_search_page(["poolA"], next_cursor="cursor2", has_next=True)],
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": _pool_detail_response("poolA"),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    result = await dp.get_trending_pools("solana", order_by="price_change_percentage_1h")
+
+    assert result.available
+    assert len(result.pools) == 1
+    assert responses[SEARCH_URL] == []  # exactly one page consumed, never a second
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_paginates_up_to_max_pages(monkeypatch):
+    responses = {
+        SEARCH_URL: [
+            _search_page(["poolA"], next_cursor="c2", has_next=True),
+            _search_page(["poolB"], next_cursor="c3", has_next=True),
+            _search_page(["poolC"], next_cursor=None, has_next=True),  # 3rd page: max_pages stops us here
+        ],
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": _pool_detail_response("poolA"),
+        f"{dp.BASE_URL}/networks/solana/pools/poolB": _pool_detail_response("poolB"),
+        f"{dp.BASE_URL}/networks/solana/pools/poolC": _pool_detail_response("poolC"),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    result = await dp.get_trending_pools("solana", order_by="price_change_percentage_1h", max_pages=3)
+
+    assert result.available
+    assert {p.pool_address for p in result.pools} == {"poolA", "poolB", "poolC"}
+    assert responses[SEARCH_URL] == []  # exactly 3 pages consumed, never a 4th
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_stops_early_when_no_next_page(monkeypatch):
+    """max_pages=5 requested, but the API says has_next_page=False after
+    page 2 -- must stop there, never keep calling past what's available."""
+    responses = {
+        SEARCH_URL: [
+            _search_page(["poolA"], next_cursor="c2", has_next=True),
+            _search_page(["poolB"], next_cursor=None, has_next=False),
+        ],
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": _pool_detail_response("poolA"),
+        f"{dp.BASE_URL}/networks/solana/pools/poolB": _pool_detail_response("poolB"),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    result = await dp.get_trending_pools("solana", order_by="price_change_percentage_1h", max_pages=5)
+
+    assert result.available
+    assert {p.pool_address for p in result.pools} == {"poolA", "poolB"}
+    assert responses[SEARCH_URL] == []  # stopped at 2 real pages, never padded to 5
+
+
+@pytest.mark.asyncio
+async def test_get_trending_pools_partial_pages_kept_on_later_page_error(monkeypatch):
+    """A failure on page 2 must not discard the pools already fetched from
+    page 1 -- best-effort, same dome doctrine as the rest of this module."""
+    responses = {
+        # 500 on page 2 is retried once by `_get_json` before giving up --
+        # two queued 500s here mirror the two real HTTP attempts.
+        SEARCH_URL: [
+            _search_page(["poolA"], next_cursor="c2", has_next=True),
+            FakeResponse(500, {"error": "server error"}),
+            FakeResponse(500, {"error": "server error"}),
+        ],
+        f"{dp.BASE_URL}/networks/solana/pools/poolA": _pool_detail_response("poolA"),
+    }
+    _patch_client(monkeypatch, responses)
+    _patch_no_sleep(monkeypatch)
+
+    result = await dp.get_trending_pools("solana", order_by="price_change_percentage_1h", max_pages=3)
+
+    assert result.available  # partial success, never a total failure
+    assert {p.pool_address for p in result.pools} == {"poolA"}

@@ -327,6 +327,7 @@ async def get_trending_pools(
     order_by: str = "price_change_percentage_5m", min_order_value: float | None = None,
     min_liquidity_usd: float | None = None, min_price_change_1h: float | None = None,
     max_pool_age_minutes: float | None = None, min_pool_age_minutes: float | None = None,
+    max_pages: int = 1,
 ) -> TrendingPoolsResult:
     """Independent discovery source (16/08) -- a SEPARATE provider from
     GeckoTerminal's own ``get_trending_pools``, deliberately used to avoid
@@ -386,7 +387,24 @@ async def get_trending_pools(
     most Y minutes old was created after now-Y) -- the API does the age math
     itself, no per-candidate age check needed downstream anymore for callers
     that use this. All four default to ``None`` (omitted from the request),
-    so every pre-existing caller's exact behavior is unchanged."""
+    so every pre-existing caller's exact behavior is unchanged.
+
+    ``max_pages`` (18/08, operator-directed): the real API supports cursor
+    pagination (``next_cursor``/``has_next_page``, confirmed live against
+    ``docs.dexpaprika.com/tutorials/pool-filtering`` -- the old
+    ``page``/``offset`` params are gone, cursor-only now) -- a single call
+    only ever returned the first ``limit`` results, silently missing every
+    pool beyond that even when it also matched the filters. Confirmed live
+    18/08 on Solana with the support-bounce pocket's own filters (liquidity
+    >=5000$, h1>-5%, age>=70min): still ``has_next_page=True`` after 7
+    consecutive pages (350+ matching pools, likely far more), nowhere near
+    exhausted. Default ``max_pages=1`` preserves the EXACT original
+    single-page behavior for every pre-existing caller (Base/Robinhood
+    momentum pipeline) -- opt-in only. Each pool costs one extra
+    ``_resolve_base_token`` call regardless of which page it came from, so
+    raising this multiplies real API load linearly -- deliberately left to
+    the caller to size against DexPaprika's real (already fragile some
+    nights) throughput, never a large default here."""
     params: dict[str, object] = {
         "limit": limit, "order_by": order_by, "sort": "desc",
     }
@@ -399,16 +417,29 @@ async def get_trending_pools(
         params["created_before"] = now_ts - int(min_pool_age_minutes * 60)
     if max_pool_age_minutes is not None:
         params["created_after"] = now_ts - int(max_pool_age_minutes * 60)
-    data, error = await _get_json(f"/networks/{network}/pools/search", params=params)
-    if error is not None:
-        return TrendingPoolsResult(available=False, error=error)
-    if not isinstance(data, dict):
-        return TrendingPoolsResult(available=False, error=UNAVAILABLE)
+
+    raw_items: list[dict] = []
+    cursor: str | None = None
+    for _page in range(max(1, max_pages)):
+        page_params = dict(params)
+        if cursor:
+            page_params["cursor"] = cursor
+        data, error = await _get_json(f"/networks/{network}/pools/search", params=page_params)
+        if error is not None:
+            if raw_items:
+                break  # keep whatever earlier pages already yielded
+            return TrendingPoolsResult(available=False, error=error)
+        if not isinstance(data, dict):
+            if raw_items:
+                break
+            return TrendingPoolsResult(available=False, error=UNAVAILABLE)
+        raw_items.extend(item for item in (data.get("results") or []) if isinstance(item, dict))
+        cursor = data.get("next_cursor")
+        if not data.get("has_next_page") or not isinstance(cursor, str):
+            break
 
     pools: list[TrendingPool] = []
-    for item in data.get("results") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in raw_items:
         pool_address = item.get("id")
         if not isinstance(pool_address, str):
             continue
