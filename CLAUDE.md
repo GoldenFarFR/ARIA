@@ -354,8 +354,8 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #281 RESOLVED "Comment and Control" CVSS 9.4 (Anthropic's own "Claude Code Security Review" GitHub Action)
 - #282 RESOLVED delayed-activation honeypot technique
 - #283 RESOLVED 428-LLM-router security study (9/428 actively malicious, 17 leaking credentials, arXiv 2604.08407) vs ARIA's real OpenRouter...
-- #284 audit needed — CVE-2026-9198 Langflow pattern (unauthenticated default endpoint chained to a code-exec sink) vs...
-- #285 check needed — contractshark.solidity-lang malicious VS Code/Cursor extension incident (real, verified) — confirm no...
+- #284 RESOLVED (audited 13/08) CVE-2026-9198 Langflow pattern (unauthenticated default endpoint chained to a code-exec sink) -- does not apply, no exec()/eval() sink exists in vanguard/backend
+- #285 RESOLVED (verified 13/08) contractshark.solidity-lang malicious VS Code/Cursor extension incident -- neither VPS nor operator's real extension list is exposed
 - #286 reference — `webpro255/awesome-ai-agent-attacks` (verified real, sourced/dated incident timeline) as a consult-first resource...
 - #287 reference — `trailofbits/skills` (verified real) as a candidate security-audit toolkit for a future...
 - #288 pointer — CFTC Innovation Task Force (verified real, formed 24/03, staffed 10/04/2026, crypto+AI+prediction-markets mandate)...
@@ -363,7 +363,7 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #290 Trail of Bits Uniswap v4 hooks audit (verified real, Cork+Bunni $20M+)
 - #291 RESOLVED DeepMind AI Agent Traps taxonomy
 - #292 RESOLVED Bankrbot/Grok NFT+morse attack (verified real, Base, ~$174-200k)
-- #293 OHLCV intraday-signal falsification protocol (arXiv 2605.04004)
+- #293 CODE COMPLETE (merged into backtest_robustness.py 13/08), standing action still open -- OHLCV intraday-signal falsification protocol (arXiv 2605.04004) must be actually RUN before any future v8/8.x filter candidate is promoted, mechanism alone isn't self-enforcing
 - #294 RESOLVED CrowdStrike fragmented-instruction-reconstruction technique
 - #295 Sybil-clustering ready-to-use candidates (Sybil Defender + Bubblemaps, verified real) for `smart_money.py`'s structural limit #1.
 - #296 Base Builder Grants (retroactive, no application)
