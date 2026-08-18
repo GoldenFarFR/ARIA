@@ -87,3 +87,16 @@ existants (par visiteur + par IP) et sont exemptés de ce plafond générique.
 Ce filet reste utile même une fois Cloudflare en place : il protège contre un bot qui
 contournerait l'edge (IP source légitime réutilisée, faille de config edge, panne
 Cloudflare) — défense en profondeur, pas un doublon.
+
+## Freshness check (2026-08-18)
+
+Main claim re-verified live (DNS lookup): `ariavanguardzhc.com` and
+`api.ariavanguardzhc.com` still resolve directly to the VPS IP, not to a
+Cloudflare-range address -- Cloudflare proxying has still not been set up,
+the edge volet of #22 remains open exactly as described above. Note: the
+specific IP quoted at the top of this doc (`31.70.114.74`) is stale -- the
+VPS was migrated to a different physical machine on 20/07 (see
+`docs/runbook-migration-vps.md`); the current IP is deliberately not
+repeated here (operator infra detail, kept out of public docs). The
+applicative net is still wired: `PublicRateLimitMiddleware` is present and
+registered in `vanguard/backend/app/main.py`.
