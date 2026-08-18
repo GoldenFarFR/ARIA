@@ -34,6 +34,14 @@ vector = ["lancedb>=0.34.0", "fastembed>=0.8.0", "pyarrow>=25.0.0"]
 agent_wallet = ["cdp-sdk>=1.0.0"]
 x402 = ["cdp-sdk>=1.0.0", "x402[evm,fastapi,extensions]>=2.16.0"]
 polymarket_execution = ["py_clob_client_v2>=1.1.0"]
+# 18/08 -- homemade agent wallet, Solana leg (squads_solana_wallet.py). No
+# official Squads v4 Python SDK exists; anchorpy is the chosen IDL/program
+# client (smoke-tested live against the real devnet IDL before adding this).
+# solders/solana-py already flow in transitively via `agent_wallet`'s
+# cdp-sdk (CDP's own SDK supports Solana internally) -- NOT re-declared here
+# to avoid a second pin drifting out of sync with cdp-sdk's own version;
+# this group only adds what cdp-sdk does not already bring in.
+agent_wallet_solana = ["anchorpy>=0.21.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -50,3 +58,11 @@ aria_core = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 18/08 -- anchorpy (agent_wallet_solana extra) registers its own pytest
+# plugin via a setuptools entry point, which hard-requires pytest_xprocess
+# (a package this project has no other use for -- anchorpy's plugin exists
+# to spin up a local validator for ITS OWN test suite, not something ARIA
+# needs). Left enabled, it breaks pytest COLLECTION project-wide with
+# ModuleNotFoundError the moment anchorpy is installed. Disabled explicitly
+# rather than adding an unused dependency just to satisfy it.
+addopts = "-p no:anchorpy"

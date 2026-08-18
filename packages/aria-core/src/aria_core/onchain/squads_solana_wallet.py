@@ -21,19 +21,32 @@ standard upgradeable BPF loader, never taken on the agent's word alone.
 Re-run ``verify_program_deployed()`` before trusting this again later.
 
 No official Python SDK exists for Squads v4 (diligence finding) -- the
-planned integration path is ``anchorpy`` + ``solana-py`` against the public
-IDL, NOT a Node.js sidecar (same "everything in Python" doctrine as the
+integration path is ``anchorpy`` + ``solana-py`` against the public IDL,
+NOT a Node.js sidecar (same "everything in Python" doctrine as the
 Robinhood Chain leg, for the same reasons: smaller attack surface, no second
-runtime to patch/monitor on the VPS). Flagged risk to verify before
-committing further: ``anchorpy``'s official PyPI releases look stale (last
-tagged 0.21.0, March 2025) -- a community fork exists; must be smoke-tested
-against Squads v4's actual Anchor 0.29.0 IDL on devnet before relying on it
-for anything beyond this read-only check.
+runtime to patch/monitor on the VPS).
 
-NOT built yet, in order: (1) anchorpy IDL client wired against the public
-Squads v4 IDL, (2) multisig + SpendingLimit creation on devnet, (3) an agent
-key spend within the limit + an over-limit spend rejected on-chain, (4) only
-after (3) is proven and reviewed: a mainnet proposal.
+**18/08 -- anchorpy smoke-tested and confirmed viable, now wired as a real
+dependency (``agent_wallet_solana`` extra).** The stale-PyPI risk flagged
+above turned out not to matter: ``Program.fetch_raw_idl(program_id,
+provider)`` genuinely returns Squads v4's real on-chain IDL (verified live,
+``squads_multisig_program`` v2.1.0, Anchor's own IDL-account convention --
+no community fork needed). Installing it DOWNGRADED the already-present
+``solana``/``solders`` (transitive via ``cdp-sdk``, the real-capital pilot's
+own dependency) to satisfy anchorpy's pin -- verified safe: `pip check`
+clean, and the full CDP/agent-wallet test suite (480 tests) re-run green
+after the downgrade, not just assumed compatible. Separately, anchorpy
+registers its own pytest plugin via a setuptools entry point that hard-
+requires ``pytest_xprocess`` (unrelated to anything this project needs) --
+breaks pytest COLLECTION project-wide the moment anchorpy is installed;
+disabled via ``addopts = "-p no:anchorpy"`` in ``pyproject.toml`` rather
+than adding an unused dependency to satisfy it.
+
+Built, in order: (1) anchorpy IDL client wired against the public Squads v4
+IDL -- ``fetch_program_idl()`` below. NOT built yet: (2) multisig +
+SpendingLimit creation on devnet, (3) an agent key spend within the limit +
+an over-limit spend rejected on-chain, (4) only after (3) is proven and
+reviewed: a mainnet proposal.
 """
 from __future__ import annotations
 
@@ -91,4 +104,59 @@ def verify_program_deployed(*, client=None) -> dict:
         "program_id": program_id,
         "executable": value.get("executable"),
         "owner": value.get("owner"),
+    }
+
+
+async def fetch_program_idl(*, fetch_fn=None) -> dict:
+    """Read-only: fetches Squads v4's REAL on-chain IDL via anchorpy against
+    the configured (devnet-only) RPC -- the first concrete building block
+    toward a typed program client (multisig/SpendingLimit account parsing,
+    instruction building). Never signs, never sends a transaction -- this
+    function cannot even reach a write path (``Program.fetch_raw_idl`` is
+    itself read-only, no ``Wallet``/signer is ever constructed here).
+
+    ``fetch_fn``, if given, replaces the real anchorpy call entirely (an
+    injectable async callable returning the raw IDL JSON string) -- same
+    dependency-injection pattern as ``verify_program_deployed``'s ``client``
+    parameter, so tests never touch the network. Returns a dict, never
+    raises -- mirrors every other read-only helper in this module; a caller
+    must check ``error`` explicitly rather than assume success."""
+    from solders.pubkey import Pubkey  # type: ignore[import]
+
+    program_id = Pubkey.from_string(SQUADS_V4_PROGRAM_ID)
+
+    try:
+        if fetch_fn is not None:
+            raw_idl = await fetch_fn()
+        else:
+            from anchorpy import Program  # type: ignore[import]
+            from anchorpy.provider import Provider  # type: ignore[import]
+            from solana.rpc.async_api import AsyncClient  # type: ignore[import]
+
+            client = AsyncClient(_rpc_url())
+            try:
+                provider = Provider(client, None)
+                raw_idl = await Program.fetch_raw_idl(program_id, provider)
+            finally:
+                await client.close()
+    except Exception as exc:  # noqa: BLE001 -- network/parse failure, never fabricate a result
+        return {"error": f"IDL fetch failed ({exc})", "idl": None}
+
+    if raw_idl is None:
+        return {"error": None, "idl": None, "program_id": str(program_id)}
+
+    import json
+
+    try:
+        parsed = json.loads(raw_idl)
+    except (TypeError, ValueError) as exc:
+        return {"error": f"IDL response was not valid JSON ({exc})", "idl": None}
+
+    return {
+        "error": None,
+        "idl": parsed,
+        "program_id": str(program_id),
+        "idl_name": parsed.get("name"),
+        "idl_version": parsed.get("version"),
+        "instruction_count": len(parsed.get("instructions") or []),
     }
