@@ -148,3 +148,15 @@ Virtuals plutôt que sur du travail de code côté ARIA. Le batch API,
 sujet neuf de cette note, est écarté honnêtement — solide comme technique,
 mais l'architecture actuelle d'ARIA (100 % synchrone) n'a pas de point
 d'ancrage pour en tirer parti sans un chantier plus lourd que le gain.
+
+## Freshness check (2026-08-18)
+
+The "exactly 2 files, 2 lines" claim for `depth="develop"` call sites is now
+stale: currently 4 files / 5 call sites (`unified_entry.py:309`,
+`skills/thesis_quality.py:158`, `skills/polymarket_thesis.py:337`,
+`skills/vc_analysis.py:1628`, `skills/vc_judge.py:522`) -- all still VC/
+judge/thesis-quality reasoning, so the underlying conclusion ("develop stays
+reserved for the tasks the operator asked to protect, no bad routing") still
+holds; only the specific file/line count grew as the codebase did. The
+proposed `ARIA_LLM_CASCADE_ENABLED` cascade was never built (verified, zero
+occurrence in the codebase) -- still an open, undispatched proposal.
