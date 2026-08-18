@@ -43,10 +43,26 @@ disabled via ``addopts = "-p no:anchorpy"`` in ``pyproject.toml`` rather
 than adding an unused dependency to satisfy it.
 
 Built, in order: (1) anchorpy IDL client wired against the public Squads v4
-IDL -- ``fetch_program_idl()`` below. NOT built yet: (2) multisig +
-SpendingLimit creation on devnet, (3) an agent key spend within the limit +
-an over-limit spend rejected on-chain, (4) only after (3) is proven and
-reviewed: a mainnet proposal.
+IDL -- ``fetch_program_idl()`` below.
+
+**18/08, same day -- (2) and (3) BOTH proven for real on devnet**, via a
+one-off script (NOT committed here, same doctrine as this file's own
+read-only guardrail -- this module stays read-only-only, no ``Wallet``/
+signer ever constructed in committed code). Real "controlled" multisig
+(``config_authority = Some(owner)``, threshold 1/1) created, a
+``SpendingLimit`` added directly by the owner (no propose/vote/execute
+needed in controlled mode), the vault funded, and the delegate's OWN
+signature (never the owner's) proven live: an under-cap spend SUCCEEDED,
+an over-cap spend REJECTED on-chain with the program's real
+``6026: Spending limit exceeded`` error. Full detail, real tx hashes, and
+2 genuine anchorpy 0.21 bugs found and worked around (a Pubkey-pickling
+crash on nested Borsh args, and this IDL predating Anchor's `isOptional`
+account metadata) in ``docs/HANDOFF_AGENT_WALLET.md``. This leg is now at
+PARITY with the EVM (Robinhood Chain) leg's own real-execution milestone.
+
+NOT built yet: (4) only after operator review: a mainnet proposal; a real
+signing module promoted into this repo (mirrors the EVM leg's own still-
+open decision -- both legs stay one-off-script-only for now).
 """
 from __future__ import annotations
 
