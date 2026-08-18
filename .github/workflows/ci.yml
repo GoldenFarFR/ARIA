@@ -107,4 +107,32 @@ jobs:
             tests/test_heartbeat_gate_resilience.py \
             tests/test_grounding_smalltalk_fuzz.py \
             tests/test_github_delete_negation.py \
+            tests/test_agent_wallet_cdp_adapter.py \
+            tests/test_agent_wallet_cdp_policy.py \
+            tests/test_agent_wallet_log.py \
+            tests/test_agent_wallet_monitor.py \
+            tests/test_agent_wallet_pilot.py \
+            tests/test_agent_wallet_pilot_cycle.py \
+            tests/test_agent_wallet_positions.py \
+            tests/test_agent_wallet_sizing.py \
+            tests/test_agent_wallet_smart_swing.py \
+            tests/test_agent_wallet_smart_swing_cdp_adapter.py \
+            tests/test_agent_wallet_smart_swing_grant.py \
+            tests/test_wallet_guard_escalation.py \
+            tests/test_wallet_guard_sepolia_action.py \
+            tests/test_outgoing_pause.py \
+            tests/test_custody_pause.py \
+            tests/test_paper_pause.py \
+            tests/test_coinmarketcap_quota_guard.py \
+            tests/test_polymarket_risk_guard.py \
+            tests/test_risk_guard.py \
+            tests/test_circuit_breaker_log.py \
+            tests/test_circuit_breaker_status.py \
+            tests/test_llm_circuit_breaker.py \
+            tests/test_mint_authority.py \
+            tests/test_dev_wallet.py \
+            tests/test_liquidity_depth.py \
+            tests/test_safety_screen.py \
+            tests/test_polymarket_execution.py \
+            tests/test_x402_executor.py \
             tests/test_coherence.py
