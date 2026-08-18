@@ -392,6 +392,10 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #322 GoPlus "AgentGuard" — real-time hook before each risky agent action, candidate to harden the 10-25$ swap pilot, pricing/Base coverage to verify
 - #323 Parallax/ClawSafety adversarial methodologies — ARIA's wallet_guard/agent_wallet_pilot decision/execution split never tested under a compromised-agent scenario
 - #324 RESOLVED LiteLLM PyPI worm (TeamPCP) — aria-core has zero litellm dependency, verified via grep, no exposure
+- #325 Ghostjacking (log-poisoning DEFCON 34) — health-log.md/architect-review.log read by future Claude Code sessions, verify no externally-influenced text is ever treated as trusted instruction
+- #326 Agent Data Injection (ADI, arXiv 2607.05120) — tested successfully against Claude Code itself, add to mandate #192's vigilance checklist
+- #327 Dune "A-A Wash Trading Detection" — free candidate cross-check for the legitimacy engine (liquidity_depth.py never verifies pool volume authenticity), Base coverage to verify
+- #328 FARMA/GhostWriter memory-poisoning specifics — 2 concrete test criteria (reasoning-trace corruption, delayed activation) to add to any future aria-brain/LanceDB hardening checklist before reactivation
 
 ## Required reading (the detailed brain)
 `docs/etat-systeme-cable.md` (wired state, established facts) · `docs/architecture-extensibilite.md` (first) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **If a VPS migration (physical machine change) is in progress or being considered: read `docs/runbook-migration-vps.md` FIRST** — ordered checklist + 6 pitfalls already encountered and their precise cause (20/07), to avoid falling into them again. **If VPS SSH access breaks: `docs/runbook-ssh-depannage.md`.** **If the agent itself seems compromised/misbehaving (supply-chain worm, prompt injection, actions no longer matching requests): `docs/runbook-incident-agent.md`** — operator-facing 4-step emergency checklist (stop first, repair from a clean machine, never rotate secrets from the infected machine).
