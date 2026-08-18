@@ -123,6 +123,11 @@ jobs:
             tests/test_agent_wallet_smart_swing.py \
             tests/test_agent_wallet_smart_swing_cdp_adapter.py \
             tests/test_agent_wallet_smart_swing_grant.py \
+            tests/test_safe_robinhood_wallet.py \
+            tests/test_safe_robinhood_simulation.py \
+            tests/test_safe_robinhood_signer.py \
+            tests/test_squads_solana_wallet.py \
+            tests/test_homemade_agent_wallet.py \
             tests/test_wallet_guard_escalation.py \
             tests/test_wallet_guard_sepolia_action.py \
             tests/test_outgoing_pause.py \

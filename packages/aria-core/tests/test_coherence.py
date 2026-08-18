@@ -787,6 +787,11 @@ _KNOWN_ENABLED_GATES = {
     # trigger, never blocks the momentum pipeline. OFF by default.
     "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED",
     "ARIA_GOPLUS_WATCHLIST_ENABLED",
+    # 18/08 -- homemade_agent_wallet.py's guardrail wrapper (Safe+
+    # AllowanceModule/Squads v4, testnet/devnet only). OFF by default, no
+    # production/heartbeat caller anywhere -- distinct from
+    # ARIA_AGENT_WALLET_PILOT_ENABLED (the Coinbase CDP pilot).
+    "ARIA_HOMEMADE_AGENT_WALLET_ENABLED",
     "ARIA_KNOWLEDGE_INBOX_ENABLED",
     "ARIA_LLM_ANTHROPIC_ROUTING_ENABLED",
     "ARIA_LLM_ENABLED",
