@@ -80,6 +80,15 @@ SUPPORT_TOLERANCE_PCT = 20.0
 SUPPORT_CANDLE_COUNT = 10
 SUPPORT_CANDLE_INTERVAL = "5m"
 MAX_RANGE_RATIO = 1.5  # 18/08, tightened from 3.0 -- see module docstring
+# (reverted a same-day relaxation to 2.5: the 2.5-3.0x bucket is the exact
+# NEGATIVE bucket this tightening was meant to exclude -- 20% winrate,
+# x0.96 avg vs the 1.0-1.5x bucket's 40%/x1.24, per the docstring's own
+# retrospective analysis. Low throughput at 1.5 (1/13 candidates in a live
+# spot-check) is a real cost but a volume problem, not a signal that 1.5 is
+# wrong -- widening the filter to chase volume would readmit the bucket
+# already found net-negative. If throughput needs fixing, do it upstream
+# (more pools scanned per cycle, faster cadence), never by loosening this
+# specific filter.
 
 # Exit mechanics -- TRAILING_STOP_PCT tightened, everything else identical.
 TRAILING_STOP_PCT = 5.0  # 18/08, tightened from 10.0 -- see module docstring
