@@ -58,7 +58,25 @@ BASE_URL = "https://api.dexpaprika.com"
 # of the tested rate) trades a little throughput for near-100% success in
 # sustained production use rather than accepting the ~4% failure rate seen
 # in the one-shot test.
-_MIN_INTERVAL = 1.2
+#
+# 18/08, tightened 1.2 -> 2.4 (50/min -> 25/min per process), operator-
+# directed real-time mitigation: this throttle is PER-PROCESS (module-level
+# state, like GeckoTerminal's own throttle before its 21/07 fix), and TWO
+# independent processes now call this client -- the aria-api container
+# (momentum_entry.py's last-resort OHLCV fallback tier) and the standalone
+# shadow_persistent.py (VPS, outside Docker, its own pool-discovery
+# pagination + per-candidate candle confirmation for both support-bounce
+# pockets). Confirmed live tonight: both hit real HTTP 429s within the same
+# minute (container: networks/base/.../ohlcv at 19:58:00 UTC; shadow:
+# networks/solana/.../ohlcv at 19:57:xx UTC) -- the empirically-safe ~53
+# req/min combined ceiling (see above) was being approached/exceeded by the
+# SUM of both processes' independent 50/min budgets, not by either alone.
+# Halving each process's rate keeps the combined worst case (~50/min if both
+# are simultaneously maxed) at the safe ceiling instead of double it. This is
+# a stopgap, not the real fix -- true cross-process coordination (the same
+# DB-backed pattern GeckoTerminal's throttle already has) is NOT built here;
+# see backlog #329 / docs/HANDOFF_PIPELINE_MOMENTUM.md for the standing gap.
+_MIN_INTERVAL = 2.4
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 

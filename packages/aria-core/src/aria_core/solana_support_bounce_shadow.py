@@ -125,7 +125,22 @@ LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 # module ever ran (which came back net positive, winrate 45%, PnL +9.7%,
 # before being raised to 150 the same day). A fresh, smaller, faster read
 # on the new stop width before committing to another 150-closure run.
-TARGET_CLOSURES = 50
+#
+# 18/08, same day -- raised 50 -> 100, operator-directed: the first 50-batch
+# read (74 closures logged before this cap fired, since record_signals only
+# checks the cap BEFORE sourcing new candidates, not mid-cycle) surfaced a
+# real signal worth confirming on a larger, still-fresh sample before
+# touching the entry filter -- entries 10-15% into the support range
+# (distance_from_support_pct) outperformed the naive "closest to support"
+# 0-5% band on BOTH v1 and v2 independently, but each bucket's n (13-50) was
+# too thin to trust. Never sourcing new candidates once the cap is hit means
+# this run does NOT reset -- it just keeps accumulating past 74 toward 100
+# on the exact same -5% stop / distance filter, so the comparison stays
+# apples-to-apples. Once at 100: split train/validation, re-check the
+# distance-bucket signal on each half independently before ever narrowing
+# the entry filter based on it -- same anti-overfitting doctrine as the v8
+# wick-gate incident (never promote a pattern mined on one un-split batch).
+TARGET_CLOSURES = 100
 
 _ensured_db_paths: set[str] = set()
 
