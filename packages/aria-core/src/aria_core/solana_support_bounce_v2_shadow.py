@@ -189,8 +189,9 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
     logged = 0
     try:
         await _ensure_table()
-        if (await closures_so_far()) >= TARGET_CLOSURES:
-            return 0
+        # 18/08 -- operator decision, same as v1: TARGET_CLOSURES was a
+        # statistical sample-size target, never a real capital constraint --
+        # no longer caps sourcing (kept only for progress reporting).
 
         candidates: list[TrendingPool] = []
         async with aiosqlite.connect(_db_path()) as db:

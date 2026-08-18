@@ -273,8 +273,14 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
     logged = 0
     try:
         await _ensure_table()
-        if (await closures_so_far()) >= TARGET_CLOSURES:
-            return 0
+        # 18/08 -- operator decision: TARGET_CLOSURES was a statistical
+        # sample-size target for the initial calibration runs (150->50->100
+        # above), never a real capital constraint (same doctrine as the
+        # shadow's own unlimited sourcing -- a "100$ capital" style figure is
+        # a reading, not a hard reject). Now that v1 has cleared it (103/100)
+        # the operator asked to stop capping sourcing on it -- the constant
+        # stays only for progress reporting (Telegram, closures_so_far()
+        # comparisons), it no longer blocks new candidates.
 
         candidates: list[TrendingPool] = []
         async with aiosqlite.connect(_db_path()) as db:

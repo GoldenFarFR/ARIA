@@ -284,15 +284,19 @@ async def test_dedupe_per_pool(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stops_logging_once_target_reached(monkeypatch):
+async def test_keeps_logging_past_target_closures(monkeypatch):
+    """18/08, operator decision (same as v1): TARGET_CLOSURES no longer caps
+    sourcing -- closures_so_far() still counts correctly, it just no longer
+    blocks new candidates once the target is cleared."""
     monkeypatch.setattr(shadow, "TARGET_CLOSURES", 1)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
     await shadow.record_signals([_pool(pool_address="poolA")], chain=CHAIN)
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(f"UPDATE {shadow.TABLE} SET exit_reason = 'trailing_stop'")
         await db.commit()
+    assert await shadow.closures_so_far() >= shadow.TARGET_CLOSURES
     logged = await shadow.record_signals([_pool(pool_address="poolB")], chain=CHAIN)
-    assert logged == 0
+    assert logged == 1
 
 
 # --- advance_exit_simulation: -5% trailing stop (tightened), no ladder -----
