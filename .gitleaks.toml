@@ -44,6 +44,14 @@ paths = [
   # entropy alone, same class already allowlisted above for
   # test_flaunch_client.py/test_virtuals_client.py.
   '''packages/aria-core/tests/test_squads_solana_signer\.py''',
+  # Same false-positive class (19/08, PumpPortal fast-discovery chantier): a
+  # real pump.fun bonding-curve account address used as a fixture to test
+  # parsing of a real `subscribeNewToken` websocket message -- a
+  # `bondingCurveKey` is an on-chain PUBLIC account address (equivalent to a
+  # pool address), never a private key, never a secret. Flagged by the
+  # generic-api-key detector on entropy alone, same class as every other
+  # entry above.
+  '''packages/aria-core/tests/test_pumpportal_ws\.py''',
 ]
 regexes = [
   # The Python constant name `_MAX_TOP10_HOLDER_PCT` alone trips the generic
