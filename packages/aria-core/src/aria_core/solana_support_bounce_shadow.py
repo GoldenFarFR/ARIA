@@ -215,6 +215,19 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     ("distance_from_support_pct_15", "REAL"),
     ("distance_from_support_pct_20", "REAL"),
     ("distance_from_support_pct_30", "REAL"),
+    # 19/08, real gap found live by the operator ("ta penser a renitiaiser le
+    # compteur de cloture ?") after TRAILING_STOP_PCT was changed twice in
+    # one evening (5.0 -> 10.0 -> 15.0) with no archive-then-wipe between
+    # changes -- unlike v2's own MIN_LIQUIDITY_USD/MAX_TOP_HOLDER_PCT reset
+    # (an ENTRY filter, cleanly binary), TRAILING_STOP_PCT governs EXIT and
+    # is re-read live on every check, so a position opened under one regime
+    # can close under a LATER one -- archiving would also force-close every
+    # still-open position early, losing real in-flight data. Recorded here
+    # instead: the value actually in effect at each check (written on every
+    # advance_exit_simulation update, not just at close), so any future
+    # aggregate can filter/group by regime without ever discarding a row or
+    # cutting a position short.
+    ("trailing_stop_pct_used", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -733,13 +746,15 @@ async def advance_exit_simulation(
                     UPDATE {TABLE} SET
                         peak_price = ?, remaining_qty = ?, realized_proceeds = ?, exit_reason = ?,
                         final_multiplier = ?, last_checked_at = ?, last_price = ?,
-                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?
+                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?,
+                        trailing_stop_pct_used = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, remaining_qty, realized_proceeds, exit_reason, final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
                         realistic_realized_proceeds, realistic_final_multiplier, snapshot.reserve_usd,
+                        TRAILING_STOP_PCT,
                         row["id"],
                     ),
                 )

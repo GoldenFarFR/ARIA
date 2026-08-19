@@ -121,6 +121,8 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     ("distance_from_support_pct_15", "REAL"),
     ("distance_from_support_pct_20", "REAL"),
     ("distance_from_support_pct_30", "REAL"),
+    # 19/08, same real gap as the original pocket -- see its own comment.
+    ("trailing_stop_pct_used", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -544,13 +546,15 @@ async def advance_exit_simulation(
                     UPDATE {TABLE} SET
                         peak_price = ?, remaining_qty = ?, realized_proceeds = ?, exit_reason = ?,
                         final_multiplier = ?, last_checked_at = ?, last_price = ?,
-                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?
+                        realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?,
+                        trailing_stop_pct_used = ?
                     WHERE id = ?
                     """,
                     (
                         peak_price, remaining_qty, realized_proceeds, exit_reason, final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
                         realistic_realized_proceeds, realistic_final_multiplier, snapshot.reserve_usd,
+                        TRAILING_STOP_PCT,
                         row["id"],
                     ),
                 )
