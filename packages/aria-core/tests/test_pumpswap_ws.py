@@ -207,11 +207,10 @@ def test_get_snapshot_unavailable_before_first_notification():
 
 
 def test_get_snapshot_stale_past_max_staleness():
+    import time
     feed = pumpswap_ws.PumpSwapWebSocketFeed(max_staleness_seconds=5.0)
     feed._pools["poolA"] = _accounts()
     feed._sol_usd = 150.0
-    feed._updated_at["poolA"] = asyncio.get_event_loop().time() - 999999  # ancient (wall-clock-independent enough)
-    import time
     feed._updated_at["poolA"] = time.time() - 999.0
     snap = feed.get_snapshot("poolA")
     assert snap.available is False

@@ -56,7 +56,7 @@ import logging
 import os
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import base58
 import httpx

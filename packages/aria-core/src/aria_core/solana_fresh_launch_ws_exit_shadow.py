@@ -10,8 +10,9 @@ NOT gated by any ``ARIA_*`` flag, silently available only.
     IMPORTED from that module (never redefined here), so a future
     recalibration of the entry criterion in the original automatically
     applies here too, keeping the A/B pairing valid forever. No entry filter
-    beyond age<=5min + liquidity>=3000$, same as the original (see that
-    module's own docstring for the empirical basis).
+    beyond age<=``MAX_POOL_AGE_MINUTES``min + liquidity>=``MIN_LIQUIDITY_USD``$
+    (values live-imported, never hardcoded here -- see that module's own
+    docstring for the empirical basis and its current numbers).
   - EXIT mechanism: DIFFERENT by design. No scale-out ladder -- the position
     is held 100% until ONE of trailing_stop / liquidity_collapse / max_hold
     fires, then closed in a single shot. ``TRAILING_STOP_PCT``/
