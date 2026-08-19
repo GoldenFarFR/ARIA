@@ -474,6 +474,23 @@ async def get_checkpoints() -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def _stamp_last_checked_only(row_id: int) -> None:
+    """Marks a row as attempted this cycle even when the snapshot fetch
+    failed or came back unavailable -- without this, a row whose price
+    source keeps failing never advances past the round-robin queue's
+    COALESCE(last_checked_at, detected_at) sort key and starves every
+    younger position behind it forever (real bug found live 19/08)."""
+    try:
+        async with aiosqlite.connect(_db_path()) as db:
+            await db.execute(
+                f"UPDATE {TABLE} SET last_checked_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), row_id),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocks the batch
+        logger.info("solana_fresh_launch_shadow: _stamp_last_checked_only failed for id=%s (%s)", row_id, exc)
+
+
 async def advance_exit_simulation(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 30,
 ) -> dict[str, int]:
@@ -503,8 +520,20 @@ async def advance_exit_simulation(
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
             db.row_factory = aiosqlite.Row
+            # 19/08, real starvation bug found live: sorting by detected_at
+            # alone means the same oldest-by-purchase rows are re-selected
+            # EVERY cycle forever (a row that keeps being checked never moves
+            # down the list) -- with more open positions than `limit`, rows
+            # past the cutoff (rank > limit by purchase age) are NEVER
+            # checked again once >=limit older positions stay open, so their
+            # stop-loss/liquidity_collapse/max_hold guards never fire.
+            # COALESCE(last_checked_at, detected_at) gives real round-robin:
+            # a row just checked (successfully or not, see the two `continue`
+            # branches below which now also stamp last_checked_at) drops to
+            # the back of the queue for the next cycle.
             cur = await db.execute(
-                f"SELECT * FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL ORDER BY detected_at ASC LIMIT ?",
+                f"SELECT * FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL "
+                f"ORDER BY COALESCE(last_checked_at, detected_at) ASC LIMIT ?",
                 (chain, limit),
             )
             rows = [dict(r) for r in await cur.fetchall()]
@@ -525,8 +554,10 @@ async def advance_exit_simulation(
                 logger.info(
                     "solana_fresh_launch_shadow: snapshot failed for %s (%s)", row["pool_address"], exc,
                 )
+                await _stamp_last_checked_only(row["id"])
                 continue
             if not snapshot.available or snapshot.price_usd is None:
+                await _stamp_last_checked_only(row["id"])
                 continue
             counts["checked"] += 1
             current_price = snapshot.price_usd

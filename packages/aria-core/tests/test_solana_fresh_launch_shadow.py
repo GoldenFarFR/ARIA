@@ -634,3 +634,58 @@ async def test_summary_computes_winrate_and_multiplier():
     assert s["win_rate"] == 0.5
     assert s["avg_multiplier"] == pytest.approx(1.05)
     assert s["by_exit_reason"] == {"trailing_stop": 1, "max_hold": 1}
+
+
+# --- exit-tracking round-robin queue (19/08 real starvation bug) ------------
+# Found live: with more open positions than `limit`, ORDER BY detected_at
+# ASC alone re-selects the same oldest-by-purchase rows every cycle forever
+# -- a position past the purchase-age cutoff never gets its stop-loss/
+# liquidity_collapse/max_hold guard checked at all while >=limit older
+# positions stay open. Fix: COALESCE(last_checked_at, detected_at) ASC,
+# plus stamping last_checked_at even on a failed/unavailable snapshot.
+
+@pytest.mark.asyncio
+async def test_round_robin_lets_younger_position_get_checked_past_limit():
+    older = await _insert_open_row(pool_address="older", entry_price=1.0, minutes_ago=30.0)
+    middle = await _insert_open_row(pool_address="middle", entry_price=1.0, minutes_ago=20.0)
+    younger = await _insert_open_row(pool_address="younger", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient(
+        price_by_pool={"older": 1.0, "middle": 1.0, "younger": 1.0},
+        reserve_by_pool={"older": 8000.0, "middle": 8000.0, "younger": 8000.0},
+    )
+
+    first = await shadow.advance_exit_simulation(client, chain=CHAIN, limit=2)
+    assert first["checked"] == 2
+    assert sorted(client.calls) == ["middle", "older"]
+
+    client.calls.clear()
+    second = await shadow.advance_exit_simulation(client, chain=CHAIN, limit=2)
+    assert second["checked"] == 2
+    # without the fix, "older"/"middle" would be re-selected forever and
+    # "younger" would never be checked while both stay open.
+    assert "younger" in client.calls
+
+
+@pytest.mark.asyncio
+async def test_failed_snapshot_still_advances_queue_past_it():
+    stuck = await _insert_open_row(pool_address="stuck", entry_price=1.0, minutes_ago=30.0)
+    behind = await _insert_open_row(pool_address="behind", entry_price=1.0, minutes_ago=20.0)
+    # "stuck" has no price in the fake client -> get_pool_snapshot returns available=False forever.
+    client = FakeClient(
+        price_by_pool={"behind": 1.0},
+        reserve_by_pool={"behind": 8000.0},
+    )
+
+    await shadow.advance_exit_simulation(client, chain=CHAIN, limit=1)
+    rows_by_pool = {r["pool_address"]: r for r in await _rows()}
+    # "stuck" was attempted (still first by detected_at) but its snapshot
+    # failed -- last_checked_at must still be stamped so it doesn't
+    # permanently occupy the front of the queue.
+    assert rows_by_pool["stuck"]["last_checked_at"] is not None
+    assert rows_by_pool["stuck"]["exit_reason"] is None
+
+    client.calls.clear()
+    await shadow.advance_exit_simulation(client, chain=CHAIN, limit=1)
+    # "behind" must now get its turn -- without the fix, "stuck" would keep
+    # winning the ORDER BY every single cycle since it never advances.
+    assert "behind" in client.calls
