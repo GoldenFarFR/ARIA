@@ -128,6 +128,24 @@ TRAILING_STOP_PCT = 5.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
+# 19/08, real bug found live by the operator asking for a PnL point: two
+# positions (Jotchua, WW) had `peak_price` set to a manifestly corrupted
+# upstream price (7.38 and 2.5 respectively) -- ~5000x/4700x above their own
+# entry AND above their own range_high_10c measured just minutes earlier at
+# entry (0.00151/0.000539). `advance_exit_simulation` took whatever
+# snapshot.price_usd/OHLCV high it received at face value with zero
+# plausibility check, so a single bad upstream read (known DexPaprika/
+# GeckoTerminal data-quality gap, documented elsewhere in this dome) got
+# baked PERMANENTLY into peak_price (never decreases) and then into the
+# trailing-stop fill price -- a multiplier of x5651/x4669 on just 3-4
+# positions out of 220+ was enough to swing the WHOLE pocket's aggregate PnL
+# from a real +2.1%/position to a fabricated +8802% return_on_deployed_pct.
+# 50x the entry-time range_high_10c is deliberately generous (no real
+# candidate observed anywhere near that in this pocket's whole history so
+# far) -- high enough to never reject a genuine pump, low enough to catch
+# this exact class of corrupted-price artifact.
+PEAK_PRICE_SANITY_MULTIPLE = 50.0
+
 # 18/08, lowered back 150 -> 50, operator-directed, paired with the
 # TRAILING_STOP_PCT change above -- same size as the very first batch this
 # module ever ran (which came back net positive, winrate 45%, PnL +9.7%,
@@ -616,6 +634,23 @@ async def advance_exit_simulation(
             effective_high = max(window_high, current_price)
             effective_low = min(window_low, current_price)
 
+            # 19/08, real bug fix -- see PEAK_PRICE_SANITY_MULTIPLE's own
+            # comment for the full incident (Jotchua/WW, x5651/x4669
+            # multipliers from a corrupted upstream price). A reading
+            # implausibly far above this position's own entry-time range is
+            # treated the same as an unavailable snapshot -- skip this
+            # cycle, retry next poll, rather than baking a corrupted price
+            # into peak_price/the trailing-stop fill.
+            range_high_10c = row.get("range_high_10c")
+            if range_high_10c and effective_high > range_high_10c * PEAK_PRICE_SANITY_MULTIPLE:
+                logger.info(
+                    "solana_support_bounce_shadow: implausible price for %s "
+                    "(effective_high=%.10g, entry range_high_10c=%.10g) -- "
+                    "skipping this cycle, treated as unavailable",
+                    row["pool_address"], effective_high, range_high_10c,
+                )
+                continue
+
             peak_price = row["peak_price"] or entry_price
             peak_price = max(peak_price, effective_high)
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
@@ -712,13 +747,22 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
     ported here since this table carries the same realistic_* columns
     (liquidity-aware: a row whose realistic_entry_price is NULL means the
     entry itself was already too shallow to fill a SIMULATED_TRADE_SIZE_USD
-    trade -- counted in unreachable_liquidity, never silently dropped)."""
+    trade -- counted in unreachable_liquidity, never silently dropped).
+
+    19/08, real bug fix: `PEAK_PRICE_SANITY_MULTIPLE`'s own comment covers
+    the live incident (Jotchua/WW corrupted-price positions) and the fix in
+    `advance_exit_simulation` that stops it from recurring -- this function
+    ALSO excludes any already-closed row whose implied exit price still
+    clears that same implausibility bar (rows written before the fix landed
+    stay in the table verbatim, never rewritten/deleted, just excluded from
+    this aggregate) into a dedicated `outlier_excluded` count rather than
+    silently dropped or left to distort `total_pnl_usd`/`return_on_deployed_pct`."""
     await _ensure_table()
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             f"SELECT realistic_entry_price, remaining_qty, realistic_realized_proceeds, "
-            f"realistic_final_multiplier, last_price, exit_reason FROM {TABLE} WHERE chain = ?",
+            f"realistic_final_multiplier, last_price, exit_reason, range_high_10c FROM {TABLE} WHERE chain = ?",
             (chain,),
         )
         rows = [dict(r) for r in await cur.fetchall()]
@@ -729,6 +773,7 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
     pending_price = 0
     unreachable_liquidity = 0
     stranded = 0
+    outlier_excluded = 0
     for r in rows:
         entry = r["realistic_entry_price"]
         if entry is None:
@@ -736,6 +781,11 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
             continue
         if r["exit_reason"] is not None:
             if r["realistic_final_multiplier"] is not None:
+                range_high_10c = r.get("range_high_10c")
+                implied_exit_price = r["realistic_final_multiplier"] * entry
+                if range_high_10c and implied_exit_price > range_high_10c * PEAK_PRICE_SANITY_MULTIPLE:
+                    outlier_excluded += 1
+                    continue
                 closed += 1
                 total_pnl_units += r["realistic_final_multiplier"] - 1.0
             else:
@@ -749,6 +799,16 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
             continue
         if r["last_price"] is None:
             pending_price += 1
+            continue
+        # 19/08, same guard as the closed branch above: a still-open
+        # position's `last_price` can carry the same corrupted-upstream-read
+        # artifact (real case: OnlyMarms, last_price=4.33 vs its own
+        # range_high_10c=0.0011) written before advance_exit_simulation's
+        # own fix landed -- exclude it here too rather than let it distort
+        # the aggregate the same way the closed-row case did.
+        range_high_10c = r.get("range_high_10c")
+        if range_high_10c and r["last_price"] > range_high_10c * PEAK_PRICE_SANITY_MULTIPLE:
+            outlier_excluded += 1
             continue
         open_valued += 1
         remaining = r["remaining_qty"] if r["remaining_qty"] is not None else 1.0
@@ -771,6 +831,7 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
         "open_valued": open_valued,
         "pending_price": pending_price,
         "unreachable_liquidity": unreachable_liquidity,
+        "outlier_excluded": outlier_excluded,
     }
 
 
