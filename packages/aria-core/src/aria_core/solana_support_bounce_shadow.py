@@ -256,8 +256,24 @@ async def closures_so_far() -> int:
     return count
 
 
-async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
-    """Each candidate must pass, in order: h1 > -5% (should already be true --
+async def record_signals(
+    pools: list[TrendingPool], *, chain: str = "solana",
+    candle_cache: dict[str, list] | None = None,
+) -> int:
+    """``candle_cache`` (19/08, operator-directed): an optional
+    ``{pool_address: candles}`` dict the CALLER owns and passes to both v1
+    and v2 within the same discovery cycle -- v1/v2 share identical
+    ``MIN_H1_PCT``/``MIN_POOL_AGE_MINUTES``/``SUPPORT_CANDLE_INTERVAL``/
+    ``SUPPORT_CANDLE_COUNT`` (only ``MIN_LIQUIDITY_USD`` differs, v2 strictly
+    higher), so v2's candidate set is a strict subset of v1's -- every pool
+    v2 would fetch candles for, v1 already fetched. Only successful fetches
+    are cached (a failure isn't memoized, so the other pocket just retries
+    it once, same behavior as before). Purely a dedup of the real DexPaprika
+    call -- never changes which candidates pass, so it doesn't touch the
+    test-isolation principle already established for this pocket pair.
+    ``None`` (default) preserves the exact original always-fetch behavior.
+
+    Each candidate must pass, in order: h1 > -5% (should already be true --
     the caller is expected to have used ``dexpaprika.get_trending_pools``
     with ``order_by="price_change_percentage_1h"``, this is a defensive
     re-check, never trusted blindly), liquidity floor, age floor (no
@@ -311,16 +327,20 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
         candles_by_row: list[list] = []
         for pool in candidates:
             h1 = pool.price_change_pct.get("h1")
-            try:
-                candles = await dexpaprika._fetch_one_interval(
-                    pool.pool_address, chain, SUPPORT_CANDLE_INTERVAL,
-                )
-            except Exception as exc:  # noqa: BLE001 -- one candidate's failure never blocks the batch
-                logger.info(
-                    "solana_support_bounce_shadow: candle fetch failed for %s (%s)",
-                    pool.pool_address, exc,
-                )
-                continue
+            candles = candle_cache.get(pool.pool_address) if candle_cache is not None else None
+            if candles is None:
+                try:
+                    candles = await dexpaprika._fetch_one_interval(
+                        pool.pool_address, chain, SUPPORT_CANDLE_INTERVAL,
+                    )
+                except Exception as exc:  # noqa: BLE001 -- one candidate's failure never blocks the batch
+                    logger.info(
+                        "solana_support_bounce_shadow: candle fetch failed for %s (%s)",
+                        pool.pool_address, exc,
+                    )
+                    continue
+                if candle_cache is not None:
+                    candle_cache[pool.pool_address] = candles
             if len(candles) < SUPPORT_CANDLE_COUNT:
                 continue
             last_n = candles[-SUPPORT_CANDLE_COUNT:]

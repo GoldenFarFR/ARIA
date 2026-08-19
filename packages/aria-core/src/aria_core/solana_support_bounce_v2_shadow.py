@@ -186,12 +186,21 @@ async def closures_so_far() -> int:
     return count
 
 
-async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
+async def record_signals(
+    pools: list[TrendingPool], *, chain: str = "solana",
+    candle_cache: dict[str, list] | None = None,
+) -> int:
     """Same 3-pass connection-scoping discipline as the original (see its own
     docstring for the 17/08 ``database is locked`` root-cause writeup) --
     identical logic except the raised ``MIN_LIQUIDITY_USD`` and the new
     ``MAX_TOP_HOLDER_PCT`` check (applied later, once rugcheck data is
-    fetched -- see below)."""
+    fetched -- see below).
+
+    ``candle_cache`` (19/08): see ``solana_support_bounce_shadow.record_signals``'s
+    own docstring for the full reasoning -- v2's candidate set is a strict
+    subset of v1's (same h1/age/interval/count, only liquidity is stricter
+    here), so the caller passes the SAME dict to both, populated by
+    whichever pocket runs first in the cycle (v1, in ``shadow_persistent.py``)."""
     logged = 0
     try:
         await _ensure_table()
@@ -220,16 +229,20 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
         candles_by_row: list[list] = []
         for pool in candidates:
             h1 = pool.price_change_pct.get("h1")
-            try:
-                candles = await dexpaprika._fetch_one_interval(
-                    pool.pool_address, chain, SUPPORT_CANDLE_INTERVAL,
-                )
-            except Exception as exc:  # noqa: BLE001 -- one candidate's failure never blocks the batch
-                logger.info(
-                    "solana_support_bounce_v2_shadow: candle fetch failed for %s (%s)",
-                    pool.pool_address, exc,
-                )
-                continue
+            candles = candle_cache.get(pool.pool_address) if candle_cache is not None else None
+            if candles is None:
+                try:
+                    candles = await dexpaprika._fetch_one_interval(
+                        pool.pool_address, chain, SUPPORT_CANDLE_INTERVAL,
+                    )
+                except Exception as exc:  # noqa: BLE001 -- one candidate's failure never blocks the batch
+                    logger.info(
+                        "solana_support_bounce_v2_shadow: candle fetch failed for %s (%s)",
+                        pool.pool_address, exc,
+                    )
+                    continue
+                if candle_cache is not None:
+                    candle_cache[pool.pool_address] = candles
             if len(candles) < SUPPORT_CANDLE_COUNT:
                 continue
             last_n = candles[-SUPPORT_CANDLE_COUNT:]
