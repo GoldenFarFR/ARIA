@@ -1,5 +1,19 @@
 [VPS Research]
 
+> **Relu et vérifié le 19/08** (fichier volumineux, 8 passes/~25 pistes —
+> vérification ciblée sur les points prioritaires/à échéance, pas une
+> revalidation exhaustive ligne par ligne). Constats : #13 (SCA pip-audit/
+> osv-scanner) fait (`.github/workflows/sca-scan.yml`, osv-scanner actif).
+> #20-22 (extension `human_voice_rules_for_llm` au-delà de X) partiellement
+> faite — importé dans `community_feedback.py`/`tweet_compose_workflow.py`,
+> mais toujours absent de `vc_analysis.py` (le gap précis identifié à
+> l'origine), à vérifier si volontaire ou oublié. **Point le plus important
+> trouvé, non tranché** : #24 (C2PA/EU AI Act Article 50, disclosure "contenu
+> généré par IA") — l'échéance citée (2026-08-02) est dépassée depuis 17
+> jours, `narrative.py::x_bio()` ne mentionne toujours aucune divulgation IA,
+> et la question de fond (exposition juridictionnelle UE réelle) n'a jamais
+> été tranchée par l'opérateur. Signalé explicitement en fin de session.
+
 # Scan large spectre — pistes pour ARIA (2026-07-11)
 
 Mission continue (recadrée par l'opérateur le 2026-07-11) : scanner large, toute

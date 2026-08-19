@@ -1,5 +1,15 @@
 [VPS Research]
 
+> **Relu et vérifié le 19/08** : la recommandation prioritaire (2 —
+> calibration bayésienne Beta-Binomial) a été implémentée fidèlement dans
+> `skills/real_money_readiness.py` (fichier déplacé depuis la racine
+> `aria_core/`) — prior de Jeffreys Beta(0.5, 0.5), fonction beta incomplète
+> régularisée calculée à la main (zéro dépendance scipy/numpy, conforme à la
+> recommandation "aucune nouvelle dépendance externe"). Le backtesting
+> historique (piste 1, avec sa mise en garde anti-mémorisation) et
+> DeepEval/Promptfoo (piste 3) n'ont pas été vérifiés en détail dans cette
+> relecture — non prioritaires selon le verdict d'origine.
+
 # Calibrer le juge ARIA sans attendre le volume — recherche redirigée (2026-07-11)
 
 Contexte : redirection opérateur sur la piste "calibration du juge" (voir

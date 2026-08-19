@@ -1,5 +1,15 @@
 [VPS Research]
 
+> **Relu et vérifié le 19/08** : aucune des sources recommandées ici (Alpha
+> Vantage, Twelve Data, GoldAPI.io...) n'a été câblée depuis — le manque
+> reste assumé tel quel, aucune dérive. Point à noter, apparu APRÈS ce
+> rapport (18/08) : `services/robinhood_stock_tokens.py` donne maintenant
+> accès à des expositions actions tokenisées (NVDA/AAPL/GOOG...) directement
+> on-chain via Robinhood Chain (backlog #309, prix via le pipeline momentum
+> existant, pas un client actions traditionnel) — une voie alternative que
+> ce rapport n'envisageait pas, à garder en tête si le besoin d'un vrai flux
+> actions/ETF/matières premières redevient prioritaire.
+
 # Sources de données réelles manquantes — actions, ETF, matières premières
 
 ## Contexte et doctrine de référence

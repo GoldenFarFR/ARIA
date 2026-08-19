@@ -1,5 +1,16 @@
 [VPS Research]
 
+> **Relu et vérifié le 19/08** : ce design a été fidèlement implémenté depuis
+> (`packages/aria-core/src/aria_core/memory/consolidation.py`, item #128) — le
+> module cite explicitement ce fichier comme sa source de design et reprend
+> tous les points clés (périmètre verrouillé, archive-then-rewrite, un seul
+> appel LLM par catégorie en `depth="brief"`, seuil de volume `_MIN_NEW_ENTRIES=3`).
+> Câblé au heartbeat (`memory_consolidation`), gate `ARIA_MEMORY_CONSOLIDATION_ENABLED`
+> toujours OFF en prod (vérifié en direct, absent des variables du conteneur) —
+> conforme au design d'origine ("gated OFF par défaut"). Le contenu ci-dessous
+> reste la référence de design valide, seul le statut "prêt à dispatcher" est
+> périmé (déjà dispatché et codé).
+
 # Design "prêt à construire" — `memory/consolidation.py` (approfondissement de #28)
 
 Suite de la passe 9 (#28, gap "sleep-time compute" identifié). Objectif de

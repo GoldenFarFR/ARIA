@@ -1,3 +1,12 @@
+> **Relu et vérifié le 19/08** : le prérequis bloquant cité (#154, rollback
+> automatique post-déploiement) a bien été livré (13/07, blue-green via
+> alternance de port, documenté dans CLAUDE.md). Mais aucune décision de
+> palier de confiance n'a été prise depuis — le canal `/canal` (#82, cité en
+> contexte ici) reste à scope hard-codé minimal (repo_hygiene/docs/backlog
+> uniquement) et gate `ARIA_DIRECTIVE_CHANNEL_ENABLED` toujours OFF, jamais
+> élargi. La question ouverte de cette note reste donc entièrement ouverte,
+> pas de dérive.
+
 # [VPS Research] Gouvernance de l'auto-modification pour un agent IA autonome — précédents réels et confiance graduée
 
 ## Contexte et périmètre

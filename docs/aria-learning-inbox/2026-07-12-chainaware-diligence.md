@@ -1,5 +1,10 @@
 [VPS Research]
 
+> **Relu et vérifié le 19/08** : jamais suivi d'action depuis (pas de
+> `services/chainaware.py`, pas de test manuel gratuit lancé) — la diligence
+> reste valide mais dormante. Banqué au backlog technique (#335) pour ne pas
+> rester invisible.
+
 # Diligence complète — ChainAware.ai (repéré passe 9 + veille #79, jamais approfondi)
 
 ## 1. Mécanisme de détection réel
