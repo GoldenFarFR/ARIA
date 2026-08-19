@@ -328,8 +328,8 @@ async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
     client = FakeClient({"poolA": 1.50}, reserve_by_pool={"poolA": 25_000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)  # peak now 1.50, no stop yet
     assert counts["closed_trailing_stop"] == 0
-    # price falls to 1.40 -- -6.7% from peak 1.50, past the -5% stop
-    client2 = FakeClient({"poolA": 1.40}, reserve_by_pool={"poolA": 25_000.0})
+    # price falls to 1.34 -- -10.7% from peak 1.50, past the -10% stop
+    client2 = FakeClient({"poolA": 1.34}, reserve_by_pool={"poolA": 25_000.0})
     counts2 = await shadow.advance_exit_simulation(client2, chain=CHAIN)
     assert counts2["closed_trailing_stop"] == 1
     rows = await _rows()
@@ -338,9 +338,10 @@ async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypatch):
-    """Same 18/08 window-detection fix as the original module, adapted for
-    v2's tighter -5% stop. See the original's own test for the full
-    rationale (2 real live-bug precedents this closes)."""
+    """Same 18/08 window-detection fix as the original module -- v2's stop
+    is no longer distinctive (aligned back to -10% on 19/08), see the
+    original's own test for the full rationale (2 real live-bug precedents
+    this closes)."""
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
     await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     client1 = FakeClient({"poolA": 1.16}, reserve_by_pool={"poolA": 25_000.0})
@@ -351,13 +352,13 @@ async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypat
     last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
     assert last_checked_epoch is not None
 
-    # Real low 1.05 -- past the -5% stop line from peak 1.16 (threshold
-    # 1.102) -- but the point-sample spot polled afterward has already
-    # recovered to 1.12, ABOVE the threshold. Point-sample alone would miss
+    # Real low 0.90 -- past the -10% stop line from peak 1.16 (threshold
+    # 1.044) -- but the point-sample spot polled afterward has already
+    # recovered to 1.10, ABOVE the threshold. Point-sample alone would miss
     # this entirely.
-    candles = [_candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=1.05, close=1.12)]
+    candles = [_candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=0.90, close=1.10)]
     client2 = FakeClient(
-        {"poolA": 1.12}, reserve_by_pool={"poolA": 25_000.0},
+        {"poolA": 1.10}, reserve_by_pool={"poolA": 25_000.0},
         ohlcv_by_pool={"poolA": OHLCVResult(candles=candles, available=True, error=None)},
     )
     counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)

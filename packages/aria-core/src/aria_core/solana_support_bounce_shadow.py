@@ -117,14 +117,25 @@ MAX_RANGE_RATIO = 5.0
 
 # Exit mechanics (operator-specified originally: "stop loss suiveur -10%",
 # "aucun palier"). 18/08, second change: tightened 10.0 -> 5.0, operator-
-# directed, ISOLATED single-variable test -- unlike v2 (which bundles this
-# same stop change with 2 other recalibrations, MAX_RANGE_RATIO and a new
-# MAX_H1_PCT ceiling), every other constant here is untouched, so a
-# comparison against v2's own results can attribute any difference here
-# purely to the stop width. The 160-closure 10% batch (winrate 43.1%, PnL
-# +4.9% realistic) is archived, not discarded -- see the reset note on
+# directed, ISOLATED single-variable test to see whether a tighter stop
+# would do BETTER. The 160-closure 10% batch (archived, PnL +4.9% realistic
+# at the time) is preserved, not discarded -- see the reset note on
 # TARGET_CLOSURES below.
-TRAILING_STOP_PCT = 5.0
+#
+# 19/08, reverted 5.0 -> 10.0 -- the experiment's own answer came back
+# negative. Same-day operator observation ("les donnees etaient meilleures
+# quand on prenait plus de risque") verified against real numbers, both
+# batches re-cleaned through the SAME PEAK_PRICE_SANITY_MULTIPLE filter
+# (the earlier same-day naive comparison, made BEFORE that filter existed,
+# was flagged inconclusive -- this redo is the clean version): archived
+# 10%-stop batch, n=153 closed (0 outliers found), return +4.87% -- vs the
+# live 5%-stop batch, n=213 closed (4 outliers excluded), return -0.57%. A
+# ~5.4-point gap on comparable sample sizes, both cleaned the same way --
+# more solid than the MAX_RANGE_RATIO=1.5 signal that turned out to be
+# noise on a small sample. Still NOT a true replayed-backtest (two
+# different time periods, not the same positions re-run under both widths)
+# -- flagged for a real candle-replay redo if this needs firmer proof later.
+TRAILING_STOP_PCT = 10.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 

@@ -27,8 +27,8 @@ day) -- v2 exists to test it prospectively, out-of-sample, rather than
 trust the retrospective read on its own.
 
 Every other constant is now IDENTICAL to the original (including
-MAX_RANGE_RATIO=5.0 and TRAILING_STOP_PCT=5.0, both no longer test
-variables here) -- only ``MIN_LIQUIDITY_USD`` (5000 -> 20000) and the new
+MAX_RANGE_RATIO=5.0 and TRAILING_STOP_PCT=10.0 as of 19/08, both no longer
+test variables here) -- only ``MIN_LIQUIDITY_USD`` (5000 -> 20000) and the new
 ``MAX_TOP_HOLDER_PCT`` (15.0, new check) differ. The top-holder check is
 FAIL-OPEN on missing data (rugcheck unavailable/lookup failed never blocks
 entry, same dome-wide doctrine as every other best-effort enrichment here)
@@ -86,8 +86,12 @@ SUPPORT_CANDLE_INTERVAL = "5m"
 MAX_RANGE_RATIO = 5.0  # 18/08 -- no longer a v2-distinctive test variable,
 # aligned with the original (see that module's own comment on this line).
 
-# Exit mechanics -- TRAILING_STOP_PCT tightened, everything else identical.
-TRAILING_STOP_PCT = 5.0  # 18/08, tightened from 10.0 -- see module docstring
+# Exit mechanics -- identical to the original, no longer a v2-distinctive
+# test variable. 19/08, reverted 5.0 -> 10.0 alongside the original -- see
+# that module's own TRAILING_STOP_PCT comment for the real-data reasoning
+# (archived 10%-stop batch +4.87% vs live 5%-stop batch -0.57%, both cleaned
+# through PEAK_PRICE_SANITY_MULTIPLE).
+TRAILING_STOP_PCT = 10.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
