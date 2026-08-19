@@ -1,5 +1,7 @@
 """Solana fresh-launch shadow (19/08) -- replaces the retired support-bounce
-v1/v2 pockets. No entry filter beyond age<=5min + liquidity>=3000$ (a live
+v1/v2 pockets. No entry filter beyond age<=5min + liquidity>=2000$ (lowered
+from 3000$ same day, operator-requested live test -- real data on the first
+~180 closures showed 3000-6000$ as the worst liquidity band; a live
 test found a distance-from-support filter counterproductive on a small
 sample), real exit mechanics ported from solana_pump_shadow.py (scale-out
 ladder + trailing stop), PumpSwap-aware liquidity-collapse guard, corrupted-
@@ -140,14 +142,14 @@ async def test_age_beyond_ceiling_rejected(monkeypatch):
 @pytest.mark.asyncio
 async def test_liquidity_below_floor_rejected(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
-    result = await shadow.record_signals([_pool(reserve=2999.0)], chain=CHAIN)
+    result = await shadow.record_signals([_pool(reserve=1999.0)], chain=CHAIN)
     assert result["logged"] == 0
 
 
 @pytest.mark.asyncio
 async def test_liquidity_at_floor_accepted(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
-    result = await shadow.record_signals([_pool(reserve=3000.0)], chain=CHAIN)
+    result = await shadow.record_signals([_pool(reserve=2000.0)], chain=CHAIN)
     assert result["logged"] == 1
 
 

@@ -106,7 +106,16 @@ CHECKPOINT_TABLE = "solana_fresh_launch_checkpoint_log"
 # Entry criteria (operator-specified 19/08, real live test confirmed both
 # server-side DexPaprika filters -- liquidity_usd_min/created_after -- work
 # independently of order_by, so nothing is lost sourcing this way).
-MIN_LIQUIDITY_USD = 3000.0
+# 19/08, lowered 3000->2000 (operator-requested live test): real data on the
+# first ~180 closures showed 3000-6000$ as the WORST liquidity band (net
+# loss, up to 54% liquidity_collapse rate) vs 6000-10000$+ being net
+# positive -- the operator's own hypothesis going in was that few real pools
+# even exist below 3000$ at the moment they'd pass the other entry criteria,
+# so this mostly tests whether lowering the floor changes anything in
+# practice rather than expecting an improvement. Compare closures before/
+# after this change using last_checked_at, same method as the 19/08
+# starvation-fix before/after split.
+MIN_LIQUIDITY_USD = 2000.0
 MAX_POOL_AGE_MINUTES = 5.0
 
 # Informational-only support-distance reading, see module docstring -- NEVER
