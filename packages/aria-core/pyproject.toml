@@ -26,6 +26,7 @@ dependencies = [
     "web3>=7.15.0",
     "playwright>=1.48.0",
     "websockets>=14.0",  # #196 -- client WS DexScreener (momentum_websocket.py), lecture seule
+    "base58>=2.1.0",  # 19/08 -- decode PumpSwap account pubkeys (services/pumpswap_ws.py); was only a transitive dep of cdp-sdk before
 ]
 
 [project.optional-dependencies]
