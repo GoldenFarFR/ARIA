@@ -33,6 +33,17 @@ paths = [
   # payload into a fixture (test_parse_virtual_bonding_entry_native_fields)
   # -- an on-chain address, public by nature, never a secret.
   '''packages/aria-core/tests/test_virtuals_client\.py''',
+  # Same false-positive class (19/08, Solana signer promotion): real devnet
+  # multisig/spending-limit CREATE-KEY base58 pubkeys, pinned as fixed
+  # expected values for PDA-derivation regression tests
+  # (test_derive_*_pda_matches_real_devnet_account) -- these are PUBLIC
+  # addresses used only as seeds to DERIVE a Program Derived Address
+  # (Squads v4's own `multisigCreateV2`/`multisigAddSpendingLimit`
+  # convention), never private key material -- no private key for either
+  # ever appears in this repo. The generic-api-key detector flags them on
+  # entropy alone, same class already allowlisted above for
+  # test_flaunch_client.py/test_virtuals_client.py.
+  '''packages/aria-core/tests/test_squads_solana_signer\.py''',
 ]
 regexes = [
   # The Python constant name `_MAX_TOP10_HOLDER_PCT` alone trips the generic
