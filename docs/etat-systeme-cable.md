@@ -449,6 +449,15 @@ entrée `("zhc-violet", "ARIA — futur violet", (124, 58, 237), ...)` — un sy
 où une option violette parmi 3 est un choix de variété légitime, pas la même dérive. Laissé
 tel quel.
 
+## Homemade agent wallet (Safe+AllowanceModule EVM / Squads v4 Solana) — jambe EVM CODÉE, gate ÉTEINT (18/08)
+Module de signature réelle promu au repo (`onchain/safe_robinhood_signer.py` + wrapper garde-fous
+`homemade_agent_wallet.py`, gate `ARIA_HOMEMADE_AGENT_WALLET_ENABLED` OFF par défaut, jamais câblé
+au heartbeat). Vérifié avec 2 vraies transactions testnet (chain 46630). Plafond applicatif encore
+au même ordre de grandeur que prouvé on-chain (`MAX_TRANSACTION_NATIVE_UNITS`), pas la cible 200$
+opérateur — franchissement distinct à décider séparément. Jambe Solana (Squads v4) reste
+one-off-script-only, jamais committée (pas de SDK Python officiel). Détail complet, historique,
+et gap d'audit AllowanceModule v0.1.1 encore ouvert : `docs/HANDOFF_AGENT_WALLET.md`.
+
 ## Showcase PR — relai humain (08/07 ; préservé de CLAUDE.md le 24/07)
 `skills/showcase_pr_watcher.py` répond en auto SEULEMENT sur un feu vert net (merge/LGTM sans
 négation/question/technique) ; sinon poste un court relai public taguant l'opérateur
