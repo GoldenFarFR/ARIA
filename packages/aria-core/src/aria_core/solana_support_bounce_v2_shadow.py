@@ -90,8 +90,10 @@ MAX_RANGE_RATIO = 5.0  # 18/08 -- no longer a v2-distinctive test variable,
 # test variable. 19/08, reverted 5.0 -> 10.0 alongside the original -- see
 # that module's own TRAILING_STOP_PCT comment for the real-data reasoning
 # (archived 10%-stop batch +4.87% vs live 5%-stop batch -0.57%, both cleaned
-# through PEAK_PRICE_SANITY_MULTIPLE).
-TRAILING_STOP_PCT = 10.0
+# through PEAK_PRICE_SANITY_MULTIPLE). Same day, widened again 10.0 -> 15.0,
+# operator-directed exploratory test -- NOT yet backed by real 15%-stop
+# data, see the original module's own comment.
+TRAILING_STOP_PCT = 15.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 

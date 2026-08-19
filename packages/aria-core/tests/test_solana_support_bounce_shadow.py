@@ -330,8 +330,8 @@ async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
     client = FakeClient({"poolA": 1.50}, reserve_by_pool={"poolA": 8000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)  # peak now 1.50, no stop yet
     assert counts["closed_trailing_stop"] == 0
-    # price falls to 1.30 -- only -13.3% from peak 1.50, still above -10%... adjust: use exactly the boundary
-    client2 = FakeClient({"poolA": 1.34}, reserve_by_pool={"poolA": 8000.0})  # -10.7% from 1.50 peak
+    # price falls to 1.20 -- -20% from peak 1.50, past the -15% stop
+    client2 = FakeClient({"poolA": 1.20}, reserve_by_pool={"poolA": 8000.0})
     counts2 = await shadow.advance_exit_simulation(client2, chain=CHAIN)
     assert counts2["closed_trailing_stop"] == 1
     rows = await _rows()

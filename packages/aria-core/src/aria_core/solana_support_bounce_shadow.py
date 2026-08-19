@@ -135,7 +135,15 @@ MAX_RANGE_RATIO = 5.0
 # noise on a small sample. Still NOT a true replayed-backtest (two
 # different time periods, not the same positions re-run under both widths)
 # -- flagged for a real candle-replay redo if this needs firmer proof later.
-TRAILING_STOP_PCT = 10.0
+#
+# 19/08, same day, widened again 10.0 -> 15.0 -- operator-directed
+# exploratory test ("test 15 plutot de stop loss"), extrapolating the same
+# "more risk did better" direction one step further. UNLIKE the 5.0 -> 10.0
+# revert above, this is NOT yet backed by any real closed-position data at
+# 15% (no batch exists to compare) -- purely a new hypothesis to test
+# prospectively, same doctrine as every other untested first guess in this
+# module. Recalibrate once enough real 15%-stop outcomes accumulate.
+TRAILING_STOP_PCT = 15.0
 MAX_HOLD_MINUTES = 120.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
