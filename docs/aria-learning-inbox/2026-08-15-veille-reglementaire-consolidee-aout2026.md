@@ -71,10 +71,33 @@ juridique proposée ici.
    décision d'investissement elle-même. Précédent institutionnel nommé et
    daté qui formalise publiquement le même partage de rôles qu'ARIA
    revendique en interne.
+8. **Mise à jour 19/08/2026 — la CFTC a engagé une action légale directe
+   contre plusieurs États pour les empêcher de réguler les marchés de
+   prédiction, invoquant la préemption fédérale (le produit est listé sur
+   un marché à terme désigné DCM régulé CFTC, donc hors autorité étatique).**
+   Vérifié WebSearch ce passage (sources CFTC.gov, CNBC, ESPN, Forbes,
+   Norton Rose Fulbright) : poursuites confirmées contre l'Arizona, le
+   Connecticut et l'Illinois (02/04/2026, CFTC+DOJ, gouverneurs visés ès
+   qualité) plus une poursuite séparée contre l'État de New York — soit 4
+   États directement confirmés par des poursuites CFTC nommées, pas les 9
+   États cités par l'entrée brute du journal de veille (Nouveau-Mexique,
+   Minnesota, Rhode Island, Wisconsin, Kentucky non retrouvés dans cette
+   recherche — à revérifier avant de citer ce chiffre de 9 dans le dossier
+   avocat). Résultats mitigés confirmés : la CFTC a obtenu un blocage
+   judiciaire fédéral en faveur des plateformes en Arizona (injonction), et
+   la Cour d'appel du 3e circuit a confirmé (6/04/2026, 2-1) une injonction
+   préliminaire bloquant le New Jersey au nom de la préemption fédérale
+   (contrats Kalshi qualifiés de "swaps" relevant de la compétence
+   exclusive CFTC) — précise et étend le jugement fédéral du Michigan déjà
+   catalogué au point 3 ci-dessus (qui allait dans le sens INVERSE, rejet
+   de la préemption). Le dossier de fond reste donc un rapport de force
+   NON tranché entre les deux doctrines juridiques opposées, pas un
+   basculement net vers l'une ou l'autre — nuance à préserver dans le
+   dossier avocat.
 
 ## Potentiel concret pour ARIA
 
-Sept précédents chiffrés/datés supplémentaires à verser au dossier avocat
+Huit précédents chiffrés/datés supplémentaires à verser au dossier avocat
 (`docs/conformite-dossier-avocat.md`) avant toute validation. Deux lectures
 utiles pour la doctrine ARIA déjà en place : (a) le front ai16z est un
 CONTRE-exemple direct — sanctionné précisément pour avoir revendiqué une
@@ -108,3 +131,7 @@ dossier avocat par une session dédiée à sa mise à jour.
 - Lettre Foster/Sherman à la SEC, 23/06/2026.
 - Doe v. Walters (Burwick Law), effondrement ai16z/ElizaOS, 04-05/08/2026.
 - Lancement opérationnel Lumenai Innovation Fund, ~06/2026.
+- Poursuites CFTC/DOJ contre l'Arizona, le Connecticut, l'Illinois (02/04/2026)
+  et l'État de New York (séparément), arrêt du 3e circuit sur le New Jersey
+  (06/04/2026) — cftc.gov (PressReleases/9206-26, 9208-26, 9218-26), CNBC,
+  ESPN, Forbes, Norton Rose Fulbright (vérifié WebSearch 19/08/2026).
