@@ -1,36 +1,39 @@
 """Support-bounce v2 Solana shadow (18/08, operator-directed) -- a parallel
 variant of ``solana_support_bounce_shadow.py``, running SIDE BY SIDE on the
 SAME discovery feed (never a second discovery call) into its OWN table,
-never touching the original's ongoing 150-closure sample. Built to test 3
-real, data-backed recalibration candidates found by analyzing the original's
-first 91 real closures, WITHOUT committing to them on the original pocket
-before a real out-of-sample comparison exists:
+never touching the original's ongoing sample.
 
-1. ``MAX_RANGE_RATIO`` 3.0 -> 1.5 -- the 1.0-1.5x bucket clearly outperformed
-   (40% winrate, x1.24 avg) versus the 2.5-3.0x bucket right at the old cap
-   (20% winrate, x0.96 avg, net negative).
-2. ``TRAILING_STOP_PCT`` 10.0 -> 5.0 -- a real candle-replay backtest (52/63
-   trailing_stop-closed positions, real 5m OHLCV, not a guess) found -5%
-   outperforming -10% on BOTH winrate (42.3% vs 28.8%) and avg multiplier
-   (x1.005 vs x0.991), -15% worse on both.
-3. New ``MAX_H1_PCT`` ceiling (20.0, doesn't exist on the original) -- the
-   20-60% h1 bucket underperformed sharply (17% winrate, x0.97 avg, net
-   NEGATIVE) versus the 0-20% bucket (46% winrate, x1.30 avg). The 60%+
-   bucket looked fine again but on only 7 rows, too thin to trust -- the
-   ceiling is set at the clean edge of the good bucket, not chasing that
-   noisy reopening signal.
+**Reset 18/08, same day -- v2's test subject changed.** The original 3-way
+bundle (MAX_RANGE_RATIO 3.0->1.5, TRAILING_STOP_PCT 10.0->5.0, a new
+MAX_H1_PCT 20.0 ceiling) is RETIRED: MAX_RANGE_RATIO's own justification
+(a "2.5-3.0x net negative" bucket) did not reproduce on a wider sample and
+was reverted upstream on the original pocket too (see that module's own
+MAX_RANGE_RATIO comment); TRAILING_STOP_PCT=5.0 is no longer v2-distinctive,
+the original pocket adopted it directly. The operator asked for a clean,
+ISOLATED single-variable test instead of stacking a 4th change onto an
+already 3-deep bundle (the original's own docstring already names bundling
+as a real cost -- it stops any result from being attributable to one cause).
 
-**Honest methodological caveat, carried over from the original's own
-analysis**: these bins only ever measured what happens WITHIN the range the
-original's filters already accept -- they say tightening the accepted range
-helps, never that a rejected candidate would have failed too. This v2 exists
-specifically to test that with real, prospective, out-of-sample data rather
-than trusting the retrospective bins on their own (same "shadow-first,
-never promote off one un-split batch" doctrine already established this
-session for TRAILING_STOP_PCT and v8's own filter-candidate methodology).
+v2 now tests ONE new candidate, found by filtering the original's own closed
+positions retrospectively: ``reserve_usd >= 20_000`` AND
+``rugcheck_top_holder_pct <= 15`` together produced +15.81% realistic PnL,
+50% winrate, n=28 -- the best combined result found so far on this pocket's
+data. Same honest caveat as every retrospective bin analysis in this
+project: this only measured what happens WITHIN already-accepted
+candidates, never whether a rejected one would have failed too, and n=28 is
+thin enough that this could still be noise (exactly the class of finding
+that turned out NOT to reproduce for MAX_RANGE_RATIO earlier the same
+day) -- v2 exists to test it prospectively, out-of-sample, rather than
+trust the retrospective read on its own.
 
-Every other constant, and every function's logic, is IDENTICAL to the
-original -- only the 3 values above differ, plus the new h1 ceiling check.
+Every other constant is now IDENTICAL to the original (including
+MAX_RANGE_RATIO=5.0 and TRAILING_STOP_PCT=5.0, both no longer test
+variables here) -- only ``MIN_LIQUIDITY_USD`` (5000 -> 20000) and the new
+``MAX_TOP_HOLDER_PCT`` (15.0, new check) differ. The top-holder check is
+FAIL-OPEN on missing data (rugcheck unavailable/lookup failed never blocks
+entry, same dome-wide doctrine as every other best-effort enrichment here)
+and FAIL-CLOSED only on a CONFIRMED reading above the ceiling.
+
 See ``solana_support_bounce_shadow.py`` for the full design rationale on
 everything not called out here (support-tolerance doctrine, exit mechanics,
 PumpSwap dex_id guard, realistic price-impact simulation, the 18/08
@@ -69,34 +72,19 @@ DB_PATH = str(shadow_db_path())
 
 TABLE = "solana_support_bounce_v2_shadow_log"
 
-# Entry criteria -- identical to the original except MAX_RANGE_RATIO and the
-# new MAX_H1_PCT ceiling, see module docstring for the real-data basis of
-# each change.
+# Entry criteria -- identical to the original except MIN_LIQUIDITY_USD and
+# the new MAX_TOP_HOLDER_PCT check, see module docstring for the real-data
+# basis of the change.
 MIN_H1_PCT = -5.0
-MAX_H1_PCT = 20.0  # NEW (18/08) -- the original has no ceiling at all
-MIN_LIQUIDITY_USD = 5000.0
+MIN_LIQUIDITY_USD = 20_000.0  # 18/08, raised from 5000 -- see module docstring
+MAX_TOP_HOLDER_PCT = 15.0  # 18/08, NEW -- see module docstring; fail-open on
+# missing rugcheck data, fail-closed only on a confirmed reading above this.
 MIN_POOL_AGE_MINUTES = 70.0  # no upper bound, deliberately
 SUPPORT_TOLERANCE_PCT = 20.0
 SUPPORT_CANDLE_COUNT = 10
 SUPPORT_CANDLE_INTERVAL = "5m"
-MAX_RANGE_RATIO = 2.5  # 18/08, tightened 3.0 -> 1.5, then re-derived to 2.5
-# on a RE-CHECK against the wider, current sample (a first relax attempt to
-# 2.5 was itself reverted mid-session for citing the docstring's STALE
-# 91-closure numbers -- see the git history on this line -- before this
-# re-check was run). Recomputed on the 104 v1 closures that now carry
-# range_low_10c/range_high_10c (18/08):
-#   1.0-1.5x: n=48 winrate=39.6% avg_mult=1.066
-#   1.5-2.0x: n=32 winrate=40.6% avg_mult=1.082
-#   2.0-2.5x: n=15 winrate=50.0% avg_mult=1.122
-#   2.5-3.0x: n=9  winrate=44.4% avg_mult=1.018  <- weakest bucket, still net positive
-# The original "2.5-3.0x net negative" claim does NOT reproduce on this
-# larger sample -- likely noise on the original 9-20-row bins, exactly the
-# overfitting risk the docstring's own methodological caveat already named.
-# 2.5 is chosen as the one bucket boundary with real support: it excludes
-# only the single weakest segment (2.5-3.0x, barely positive) while keeping
-# 95/104 (91%) of the historical volume, roughly double the 46% that would
-# have cleared the 1.5 cap. Not re-tested against v2's OWN (thinner) sample
-# -- v1's closures are the only ones with enough rows per bucket to read.
+MAX_RANGE_RATIO = 5.0  # 18/08 -- no longer a v2-distinctive test variable,
+# aligned with the original (see that module's own comment on this line).
 
 # Exit mechanics -- TRAILING_STOP_PCT tightened, everything else identical.
 TRAILING_STOP_PCT = 5.0  # 18/08, tightened from 10.0 -- see module docstring
@@ -201,8 +189,9 @@ async def closures_so_far() -> int:
 async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
     """Same 3-pass connection-scoping discipline as the original (see its own
     docstring for the 17/08 ``database is locked`` root-cause writeup) --
-    identical logic except the new ``MAX_H1_PCT`` ceiling and the tightened
-    ``MAX_RANGE_RATIO``."""
+    identical logic except the raised ``MIN_LIQUIDITY_USD`` and the new
+    ``MAX_TOP_HOLDER_PCT`` check (applied later, once rugcheck data is
+    fetched -- see below)."""
     logged = 0
     try:
         await _ensure_table()
@@ -214,7 +203,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
                 h1 = pool.price_change_pct.get("h1")
-                if h1 is None or h1 <= MIN_H1_PCT or h1 > MAX_H1_PCT:
+                if h1 is None or h1 <= MIN_H1_PCT:
                     continue
                 if (pool.reserve_usd or 0.0) < MIN_LIQUIDITY_USD:
                     continue
@@ -292,6 +281,14 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                         "solana_support_bounce_v2_shadow: rugcheck lookup failed for %s (%s)",
                         pool.token_address, exc,
                     )
+
+            # 18/08, v2's own new candidate (see module docstring): FAIL-OPEN
+            # on missing data (rugcheck unavailable/lookup failed never
+            # blocks entry, same dome-wide best-effort doctrine as every
+            # other enrichment here) -- FAIL-CLOSED only on a CONFIRMED
+            # reading above the ceiling.
+            if rugcheck_top_holder_pct is not None and rugcheck_top_holder_pct > MAX_TOP_HOLDER_PCT:
+                continue
 
             realistic_entry_price = _apply_price_impact_and_fee(
                 current_price, trade_size_usd=SIMULATED_TRADE_SIZE_USD,

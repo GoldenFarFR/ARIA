@@ -105,7 +105,15 @@ SUPPORT_CANDLE_INTERVAL = "5m"
 # how WIDE the 10-candle range itself could be. Claude's own pick (operator
 # had no preference -- "je sais pas"), first guess like SUPPORT_TOLERANCE_PCT,
 # to recalibrate once enough real outcomes accumulate.
-MAX_RANGE_RATIO = 3.0
+#
+# 18/08 -- widened 3.0 -> 5.0, operator-directed: the 3.0 cap meant this
+# module could NEVER accumulate any real outcome data past 3.0x (structural
+# zero, not "untested" -- a query against the 104 real closures confirmed
+# n=0 above 3.0). Pure data-gathering move, not a claim that 5.0 is a good
+# threshold -- exactly the "recalibrate once enough real outcomes
+# accumulate" the original comment already asked for, now extended to the
+# 3.0-5.0x range specifically so it stops being permanently invisible.
+MAX_RANGE_RATIO = 5.0
 
 # Exit mechanics (operator-specified originally: "stop loss suiveur -10%",
 # "aucun palier"). 18/08, second change: tightened 10.0 -> 5.0, operator-

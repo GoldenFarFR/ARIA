@@ -1,11 +1,11 @@
 """Support-bounce v2 Solana shadow (18/08) -- parallel variant of
-test_solana_support_bounce_shadow.py, adapted for the 3 recalibrated
-constants (MAX_RANGE_RATIO 3.0->1.5, TRAILING_STOP_PCT 10.0->5.0, new
-MAX_H1_PCT=20.0 ceiling). See solana_support_bounce_v2_shadow.py's own
-module docstring for the real-data basis of each change. Every test not
-touching one of these 3 differs from the original test file follows the
-SAME logic/intent, only the numeric fixtures differ where the tightened
-constant changes what should pass/fail."""
+test_solana_support_bounce_shadow.py. Reset same day: v2 now tests ONE
+candidate (MIN_LIQUIDITY_USD 5000->20000 + new MAX_TOP_HOLDER_PCT=15.0
+check), MAX_RANGE_RATIO/TRAILING_STOP_PCT no longer v2-distinctive. See
+solana_support_bounce_v2_shadow.py's own module docstring for the real-data
+basis. Every test not touching the 2 differing constants follows the SAME
+logic/intent as the original test file, only the numeric fixtures differ
+where the raised liquidity floor changes what should pass/fail."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -74,7 +74,7 @@ def _candle(ts: float, *, open_: float, high: float, low: float, close: float, v
 
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="BOUNCE",
-    price_usd=1.0, h1=10.0, reserve=8000.0, age_minutes=90.0,
+    price_usd=1.0, h1=10.0, reserve=25_000.0, age_minutes=90.0,
 ) -> TrendingPool:
     return TrendingPool(
         pool_address=pool_address, token_address=token_address, symbol=symbol,
@@ -134,28 +134,46 @@ async def test_h1_mildly_negative_still_qualifies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_h1_at_20pct_ceiling_still_qualifies(monkeypatch):
-    """18/08, new v2-only ceiling -- boundary is inclusive (`h1 > MAX_H1_PCT`
-    rejects, so exactly 20.0 must still pass)."""
+async def test_top_holder_at_ceiling_still_qualifies(monkeypatch):
+    """18/08, v2's new candidate -- boundary is inclusive (only a CONFIRMED
+    reading ABOVE MAX_TOP_HOLDER_PCT rejects, so exactly 15.0 must pass)."""
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    logged = await shadow.record_signals([_pool(h1=shadow.MAX_H1_PCT)], chain=CHAIN)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=RugCheckReport(available=True, top_holder_pct=shadow.MAX_TOP_HOLDER_PCT)),
+    )
+    logged = await shadow.record_signals([_pool()], chain=CHAIN)
     assert logged == 1
 
 
 @pytest.mark.asyncio
-async def test_h1_above_20pct_ceiling_rejected(monkeypatch):
-    """18/08, new v2-only ceiling -- real data showed the 20-60% h1 bucket
-    net-underperforming (17% winrate, x0.97 avg) on the original pocket's
-    first 91 closures. The original has no such ceiling at all; this is the
-    one entry criterion unique to v2, not just a tightened original value."""
-    logged = await shadow.record_signals([_pool(h1=shadow.MAX_H1_PCT + 0.1)], chain=CHAIN)
+async def test_top_holder_above_ceiling_rejected(monkeypatch):
+    """18/08, v2's new candidate -- real data (liquidity>=20k + top_holder<=15
+    combined) found +15.81% realistic PnL / 50% winrate on n=28, the best
+    retrospective read found so far -- see module docstring for the honest
+    small-sample caveat this v2 exists to test prospectively."""
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=RugCheckReport(available=True, top_holder_pct=shadow.MAX_TOP_HOLDER_PCT + 0.1)),
+    )
+    logged = await shadow.record_signals([_pool()], chain=CHAIN)
     assert logged == 0
+
+
+@pytest.mark.asyncio
+async def test_top_holder_unavailable_fails_open(monkeypatch):
+    """FAIL-OPEN doctrine: rugcheck unavailable/lookup failed must never
+    block entry -- same as the fixture's own default (available=False)."""
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    logged = await shadow.record_signals([_pool()], chain=CHAIN)
+    assert logged == 1
 
 
 @pytest.mark.asyncio
 async def test_liquidity_below_floor_rejected(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    logged = await shadow.record_signals([_pool(reserve=4999.0)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(reserve=19_999.0)], chain=CHAIN)
     assert logged == 0
 
 
@@ -235,27 +253,14 @@ async def test_extreme_range_ratio_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_range_ratio_within_new_tighter_cap_still_qualifies(monkeypatch):
-    # range [1.0, 2.4] -> ratio 2.4x, under v2's MAX_RANGE_RATIO=2.5;
-    # close=1.12 -> position = (1.12-1.0)/(2.4-1.0)*100 = 8.6%, within tolerance.
-    candles = _range_candles(low=1.0, high=2.4, last_close=1.12)
+async def test_range_ratio_within_cap_still_qualifies(monkeypatch):
+    # range [1.0, 4.9] -> ratio 4.9x, under MAX_RANGE_RATIO=5.0 (no longer
+    # v2-distinctive, aligned with the original -- see module docstring).
+    # close=1.20 -> position = (1.20-1.0)/(4.9-1.0)*100 = 5.1%, within tolerance.
+    candles = _range_candles(low=1.0, high=4.9, last_close=1.20)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
-    logged = await shadow.record_signals([_pool(price_usd=1.12)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(price_usd=1.20)], chain=CHAIN)
     assert logged == 1
-
-
-@pytest.mark.asyncio
-async def test_range_ratio_above_new_tighter_cap_rejected(monkeypatch):
-    """18/08 -- the real point of v2's change: a ratio that WOULD have
-    qualified under the original's MAX_RANGE_RATIO=3.0 must now be rejected
-    under v2's re-derived 2.5 (the single weakest real bucket, 2.5-3.0x --
-    see module docstring). Range [1.0, 3.0] -> ratio 3.0x (above 2.5, at the
-    original's own 3.0); close=1.15 -> position = 7.5%, well within the
-    distance tolerance on its own -- the ratio is what must reject it."""
-    candles = _range_candles(low=1.0, high=3.0, last_close=1.15)
-    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
-    logged = await shadow.record_signals([_pool(price_usd=1.15)], chain=CHAIN)
-    assert logged == 0
 
 
 @pytest.mark.asyncio
@@ -305,10 +310,10 @@ async def test_keeps_logging_past_target_closures(monkeypatch):
 @pytest.mark.asyncio
 async def test_trailing_stop_closes_full_position_no_partial(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     # entry_price = 0.9*1.01 = 0.909; peak never rises (first check IS the
     # peak), price crashes to 0.75 (-17.5% from entry) -> past the -5% stop
-    client = FakeClient({"poolA": 0.75}, reserve_by_pool={"poolA": 8000.0})
+    client = FakeClient({"poolA": 0.75}, reserve_by_pool={"poolA": 25_000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_trailing_stop"] == 1
     rows = await _rows()
@@ -319,12 +324,12 @@ async def test_trailing_stop_closes_full_position_no_partial(monkeypatch):
 @pytest.mark.asyncio
 async def test_trailing_stop_fires_from_peak_not_entry(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.50}, reserve_by_pool={"poolA": 8000.0})
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
+    client = FakeClient({"poolA": 1.50}, reserve_by_pool={"poolA": 25_000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)  # peak now 1.50, no stop yet
     assert counts["closed_trailing_stop"] == 0
     # price falls to 1.40 -- -6.7% from peak 1.50, past the -5% stop
-    client2 = FakeClient({"poolA": 1.40}, reserve_by_pool={"poolA": 8000.0})
+    client2 = FakeClient({"poolA": 1.40}, reserve_by_pool={"poolA": 25_000.0})
     counts2 = await shadow.advance_exit_simulation(client2, chain=CHAIN)
     assert counts2["closed_trailing_stop"] == 1
     rows = await _rows()
@@ -337,8 +342,8 @@ async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypat
     v2's tighter -5% stop. See the original's own test for the full
     rationale (2 real live-bug precedents this closes)."""
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
-    client1 = FakeClient({"poolA": 1.16}, reserve_by_pool={"poolA": 8000.0})
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
+    client1 = FakeClient({"poolA": 1.16}, reserve_by_pool={"poolA": 25_000.0})
     await shadow.advance_exit_simulation(client1, chain=CHAIN)
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.16)
@@ -352,7 +357,7 @@ async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypat
     # this entirely.
     candles = [_candle(last_checked_epoch + 60, open_=1.16, high=1.16, low=1.05, close=1.12)]
     client2 = FakeClient(
-        {"poolA": 1.12}, reserve_by_pool={"poolA": 8000.0},
+        {"poolA": 1.12}, reserve_by_pool={"poolA": 25_000.0},
         ohlcv_by_pool={"poolA": OHLCVResult(candles=candles, available=True, error=None)},
     )
     counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
@@ -369,8 +374,8 @@ async def test_window_low_catches_stop_missed_by_point_sample_recovery(monkeypat
 @pytest.mark.asyncio
 async def test_never_produces_a_scale_out_exit_reason(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 5.0}, reserve_by_pool={"poolA": 8000.0})  # +400%, no ladder to fill
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
+    client = FakeClient({"poolA": 5.0}, reserve_by_pool={"poolA": 25_000.0})  # +400%, no ladder to fill
     await shadow.advance_exit_simulation(client, chain=CHAIN)
     rows = await _rows()
     assert rows[0]["exit_reason"] is None  # still open, no rung logic exists to fire
@@ -380,7 +385,7 @@ async def test_never_produces_a_scale_out_exit_reason(monkeypatch):
 @pytest.mark.asyncio
 async def test_pumpswap_pool_never_triggers_liquidity_collapse(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     client = FakeClient({"poolA": 0.98}, reserve_by_pool={"poolA": 0.0}, dex_id_by_pool={"poolA": "pumpswap"})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_liquidity_collapse"] == 0
@@ -389,8 +394,8 @@ async def test_pumpswap_pool_never_triggers_liquidity_collapse(monkeypatch):
 @pytest.mark.asyncio
 async def test_liquidity_collapse_closes_immediately(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 0.98}, reserve_by_pool={"poolA": 3000.0})  # < 50% of 8000
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
+    client = FakeClient({"poolA": 0.98}, reserve_by_pool={"poolA": 3000.0})  # < 50% of 25000
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_liquidity_collapse"] == 1
 
@@ -398,7 +403,7 @@ async def test_liquidity_collapse_closes_immediately(monkeypatch):
 @pytest.mark.asyncio
 async def test_max_hold_closes_after_2h_with_no_stop_or_liquidity_trigger(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     stale = (datetime.now(timezone.utc) - timedelta(minutes=shadow.MAX_HOLD_MINUTES + 1)).isoformat()
     async with aiosqlite.connect(shadow._db_path()) as db:
         await db.execute(f"UPDATE {shadow.TABLE} SET detected_at = ?", (stale,))
@@ -406,7 +411,7 @@ async def test_max_hold_closes_after_2h_with_no_stop_or_liquidity_trigger(monkey
     # peak is set to current on this SAME check (peak was None -> entry,
     # then max(entry, 0.95)=0.95), so trailing stop can never fire here
     # regardless of TRAILING_STOP_PCT -- same property as the original.
-    client = FakeClient({"poolA": 0.95}, reserve_by_pool={"poolA": 8000.0})
+    client = FakeClient({"poolA": 0.95}, reserve_by_pool={"poolA": 25_000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_max_hold"] == 1
 
@@ -506,7 +511,7 @@ async def test_record_signals_archives_the_before_candles(monkeypatch):
 @pytest.mark.asyncio
 async def test_advance_exit_simulation_archives_the_after_candles(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     rows = await _rows()
     position_id = rows[0]["id"]
     detected_epoch = shadow._epoch_of(rows[0]["detected_at"])
@@ -516,7 +521,7 @@ async def test_advance_exit_simulation_archives_the_after_candles(monkeypatch):
         _candle(detected_epoch + 120, open_=1.02, high=1.08, low=1.0, close=1.05),
     ]
     client = FakeClient(
-        {"poolA": 1.05}, reserve_by_pool={"poolA": 8000.0},
+        {"poolA": 1.05}, reserve_by_pool={"poolA": 25_000.0},
         ohlcv_by_pool={"poolA": OHLCVResult(candles=ohlcv_candles, available=True, error=None)},
     )
     await shadow.advance_exit_simulation(client, chain=CHAIN)
@@ -549,7 +554,7 @@ async def test_extra_dexpaprika_fields_persisted(monkeypatch):
         price_usd=0.87,
         price_change_pct={"h1": 10.0, "m5": 1.5, "h6": 8.0, "h24": 25.0},
         transactions_m15=None, volume_usd_m15=None,
-        reserve_usd=8000.0,
+        reserve_usd=25_000.0,
         pool_created_at=datetime.now(timezone.utc) - timedelta(minutes=90),
         dex_id="raydium", dex_name="Raydium", volume_usd_24h=54321.0, transactions_24h=777,
     )
@@ -570,17 +575,17 @@ async def test_extra_dexpaprika_fields_persisted(monkeypatch):
 @pytest.mark.asyncio
 async def test_advance_exit_simulation_archives_a_full_snapshot(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
-    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=8000.0)], chain=CHAIN)
+    await shadow.record_signals([_pool(pool_address="poolA", price_usd=1.0, reserve=25_000.0)], chain=CHAIN)
     rows = await _rows()
     position_id = rows[0]["id"]
 
-    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 8000.0}, dex_id_by_pool={"poolA": "raydium"})
+    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 25_000.0}, dex_id_by_pool={"poolA": "raydium"})
     await shadow.advance_exit_simulation(client, chain=CHAIN)
 
     archived = await snapshot_archive.get_snapshots(module="solana_support_bounce_v2", position_id=position_id)
     assert len(archived) == 1
     assert archived[0]["price_usd"] == pytest.approx(1.05)
-    assert archived[0]["reserve_usd"] == pytest.approx(8000.0)
+    assert archived[0]["reserve_usd"] == pytest.approx(25_000.0)
     assert archived[0]["dex_id"] == "raydium"
 
     await shadow.advance_exit_simulation(client, chain=CHAIN)

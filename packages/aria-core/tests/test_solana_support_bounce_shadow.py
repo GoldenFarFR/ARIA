@@ -254,7 +254,7 @@ async def test_extreme_range_ratio_rejected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_range_ratio_within_cap_still_qualifies(monkeypatch):
-    # range [1.0, 2.9] -> ratio 2.9x, under MAX_RANGE_RATIO=3.0; close=1.05
+    # range [1.0, 2.9] -> ratio 2.9x, well under MAX_RANGE_RATIO=5.0; close=1.05
     # -> position = (1.05-1.0)/(2.9-1.0)*100 = 2.6%, well within tolerance.
     candles = _range_candles(low=1.0, high=2.9, last_close=1.05)
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=candles))
