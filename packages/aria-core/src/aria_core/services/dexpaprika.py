@@ -78,13 +78,14 @@ BASE_URL = "https://api.dexpaprika.com"
 # momentum_entry.py's _standard_fallbacks/_scalping_fallbacks comments).
 # shadow_persistent.py is now the ONLY real caller of this client, so the
 # whole ~53 req/min empirically-safe ceiling is its alone -- raised
-# 25 -> 37/min (operator-set, comfortably under the ceiling with margin for
-# the container's now-dead _scalping_fallbacks path if ever reactivated).
+# 25 -> 37/min, then lowered 37 -> 35 (operator-set, 18-19/08, extra margin
+# after real sustained 429s were still observed at 37/min the same evening
+# even after the discovery-side max_pages/cadence fixes).
 # True cross-process coordination (the same DB-backed pattern GeckoTerminal's
 # throttle already has) is still not built -- see backlog #329 /
 # docs/HANDOFF_PIPELINE_MOMENTUM.md for the standing gap, revisit if a
 # second real caller ever returns.
-_MIN_INTERVAL = 60.0 / 37.0
+_MIN_INTERVAL = 60.0 / 35.0
 _last_call_at = 0.0
 _throttle_lock = asyncio.Lock()
 
