@@ -77,7 +77,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from aria_core.paths import shadow_db_path
-from aria_core.services import dexpaprika
+from aria_core.services import dexpaprika, rugcheck
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -175,16 +175,42 @@ async def _ensure_table() -> None:
                 realistic_entry_price REAL,
                 realistic_realized_proceeds REAL NOT NULL DEFAULT 0.0,
                 realistic_final_multiplier REAL,
-                trailing_stop_pct_used REAL
+                trailing_stop_pct_used REAL,
+                h1_pct REAL,
+                m5_pct REAL,
+                h6_pct REAL,
+                h24_pct REAL,
+                volume_usd_24h REAL,
+                transactions_24h INTEGER,
+                dex_id TEXT,
+                rugcheck_score INTEGER,
+                rugcheck_risks TEXT,
+                rugcheck_top_holder_pct REAL,
+                rugcheck_creator TEXT
             )
             """
         )
-        # Scaffold kept ready, same PRAGMA-guarded-migration convention as
-        # every other shadow module in this dome -- empty for now since every
-        # field needed at launch is already in the CREATE TABLE above
-        # (operator-directed: capture the schema in full at creation, not via
-        # a migration afterward).
-        added_columns: list[tuple[str, str]] = []
+        # 19/08, real regression caught by the operator vs the retired v1/v2
+        # pockets' own schema: this module launched WITHOUT the market-context
+        # fields (m5/h1/h6/h24/volume/transactions/dex_id, already present on
+        # every fetched TrendingPool for free) or the rugcheck fields (one
+        # extra network call at entry, same as v1/v2) -- both restored here,
+        # via ALTER TABLE since the live table already has real rows. New
+        # columns default NULL on every pre-existing row (honest: that
+        # context was never captured for them, never backfilled/fabricated).
+        added_columns: list[tuple[str, str]] = [
+            ("h1_pct", "REAL"),
+            ("m5_pct", "REAL"),
+            ("h6_pct", "REAL"),
+            ("h24_pct", "REAL"),
+            ("volume_usd_24h", "REAL"),
+            ("transactions_24h", "INTEGER"),
+            ("dex_id", "TEXT"),
+            ("rugcheck_score", "INTEGER"),
+            ("rugcheck_risks", "TEXT"),
+            ("rugcheck_top_holder_pct", "REAL"),
+            ("rugcheck_creator", "TEXT"),
+        ]
         existing = {
             row[1] for row in await (await db.execute(f"PRAGMA table_info({TABLE})")).fetchall()
         }
@@ -309,14 +335,50 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 # else: degenerate/flat range (or a single candle, where
                 # low==high trivially) -- NULL, never fabricated.
 
-            if current_price is None:
-                continue  # never fabricate an entry price
+            if current_price is None or current_price <= 0:
+                # 19/08, real bug caught live minutes after first deployment
+                # (row observed with entry_price=0.0): a genuinely brand-new
+                # pool can report price_usd=0.0 (a real reading, not a
+                # missing/None value) when no candle was available to
+                # override it. `advance_exit_simulation`'s own
+                # `if not entry_price: continue` guard already prevents this
+                # from being PROCESSED (0.0 is falsy), but the row would
+                # still sit forever as a permanently-stuck open position,
+                # never resolved, silently inflating `pending_price` in
+                # `chain_pnl_summary_realistic()` (its `realistic_entry_price`
+                # comes out 0.0 too via `_apply_price_impact_and_fee`, not
+                # None, so it isn't even caught by the unreachable_liquidity
+                # branch). Cleaner to never log a position that can never be
+                # priced at all than to carry a permanent phantom row.
+                continue
 
             realistic_entry_price = _apply_price_impact_and_fee(
                 current_price, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
                 reserve_usd=pool.reserve_usd, side="buy",
             )
             first_scale_level = current_price * (1 + SCALE_OUT_STEP_PCT / 100.0)
+
+            # 19/08, restored (regression vs v1/v2's own schema): one extra
+            # network call per candidate, same as v1/v2, best-effort -- a
+            # failed/unavailable lookup leaves every rugcheck_* field NULL,
+            # never blocks logging the position itself.
+            rugcheck_score: int | None = None
+            rugcheck_risks: str | None = None
+            rugcheck_top_holder_pct: float | None = None
+            rugcheck_creator: str | None = None
+            if pool.token_address:
+                try:
+                    report = await rugcheck.get_token_report(pool.token_address)
+                    if report.available:
+                        rugcheck_score = report.score_normalised
+                        rugcheck_risks = ",".join(report.risks) if report.risks else None
+                        rugcheck_top_holder_pct = report.top_holder_pct
+                        rugcheck_creator = report.creator
+                except Exception as exc:  # noqa: BLE001 -- enrichment must never break the log pass
+                    logger.info(
+                        "solana_fresh_launch_shadow: rugcheck lookup failed for %s (%s)",
+                        pool.token_address, exc,
+                    )
 
             rows_to_insert.append((
                 pool.pool_address, pool.token_address, chain, pool.symbol,
@@ -325,6 +387,10 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                 distance_from_support_pct, support_range_low, support_range_high, support_candle_count,
                 current_price, first_scale_level,
                 realistic_entry_price,
+                pool.price_change_pct.get("h1"), pool.price_change_pct.get("m5"),
+                pool.price_change_pct.get("h6"), pool.price_change_pct.get("h24"),
+                pool.volume_usd_24h, pool.transactions_24h, pool.dex_id,
+                rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator,
             ))
             candles_by_row.append(candles)
 
@@ -340,9 +406,12 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                             reserve_usd, pool_created_at,
                             distance_from_support_pct, support_range_low, support_range_high, support_candle_count,
                             remaining_qty, realized_proceeds, peak_price, next_scale_level,
-                            realistic_entry_price
+                            realistic_entry_price,
+                            h1_pct, m5_pct, h6_pct, h24_pct, volume_usd_24h, transactions_24h, dex_id,
+                            rugcheck_score, rugcheck_risks, rugcheck_top_holder_pct, rugcheck_creator
                         ) VALUES (
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                         )
                         """,
                         row,
@@ -461,6 +530,20 @@ async def advance_exit_simulation(
                 continue
             counts["checked"] += 1
             current_price = snapshot.price_usd
+
+            # 19/08, restored (regression vs v1/v2's own schema): archive the
+            # FULL snapshot this check just fetched anyway (zero extra
+            # network cost) as a real time series, not just the price_usd/
+            # reserve_usd this function reads for its own exit logic.
+            from aria_core import shadow_snapshot_archive
+
+            await shadow_snapshot_archive.store_snapshot(
+                module="solana_fresh_launch", position_id=row["id"],
+                pool_address=row["pool_address"], chain=chain,
+                price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+                dex_id=snapshot.dex_id, price_change_pct=snapshot.price_change_pct,
+                transactions=snapshot.transactions, volume_usd=snapshot.volume_usd,
+            )
 
             window_high = current_price
             window_low = current_price

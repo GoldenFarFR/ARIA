@@ -162,6 +162,20 @@ async def test_no_momentum_filter_pool_with_no_price_change_data_still_qualifies
 
 
 @pytest.mark.asyncio
+async def test_zero_price_candidate_never_logged(monkeypatch):
+    """19/08, real bug caught live minutes after first deployment: a
+    genuinely brand-new pool can report price_usd=0.0 (a real reading, not
+    a missing/None value) when no candle overrides it. A zero entry_price
+    can never be traded/priced -- must never be logged, else it becomes a
+    permanently-stuck phantom position (advance_exit_simulation's own
+    falsy-entry_price guard would silently skip it forever)."""
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=[]))
+    result = await shadow.record_signals([_pool(price_usd=0.0)], chain=CHAIN)
+    assert result["logged"] == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
 async def test_dedup_per_pool(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
     await shadow.record_signals([_pool()], chain=CHAIN)
