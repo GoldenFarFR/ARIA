@@ -256,22 +256,56 @@ async def closures_so_far() -> int:
     return count
 
 
+async def get_sync_filtered_candidates(pools: list[TrendingPool], *, chain: str = "solana") -> list[TrendingPool]:
+    """The cheap, no-network pre-filter (h1/liquidity/age/dedup) extracted
+    from ``record_signals`` (19/08) so ``shadow_persistent.py`` can compute
+    the UNION of v1+v2 candidates and pre-fetch each pool's candles exactly
+    once, at the SAME instant for both pockets -- see ``record_signals``'s
+    own ``candle_cache`` docstring for the full reasoning. Calling this twice
+    in the same event-loop tick (once here, once again inside
+    ``record_signals`` for the same pools) is deliberate and safe: no network
+    call happens between the two passes, so the DB-backed dedup check
+    (``_has_open_signal``) can't observe a different state."""
+    candidates: list[TrendingPool] = []
+    async with aiosqlite.connect(_db_path()) as db:
+        for pool in pools:
+            h1 = pool.price_change_pct.get("h1")
+            if h1 is None or h1 <= MIN_H1_PCT:
+                continue
+            if (pool.reserve_usd or 0.0) < MIN_LIQUIDITY_USD:
+                continue
+            if pool.pool_created_at is None or pool.price_usd is None:
+                continue
+            age_minutes = (datetime.now(timezone.utc) - pool.pool_created_at).total_seconds() / 60.0
+            if age_minutes < MIN_POOL_AGE_MINUTES:
+                continue
+            if await _has_open_signal(db, pool.pool_address, chain):
+                continue
+            candidates.append(pool)
+    return candidates
+
+
 async def record_signals(
     pools: list[TrendingPool], *, chain: str = "solana",
     candle_cache: dict[str, list] | None = None,
 ) -> int:
     """``candle_cache`` (19/08, operator-directed): an optional
     ``{pool_address: candles}`` dict the CALLER owns and passes to both v1
-    and v2 within the same discovery cycle -- v1/v2 share identical
-    ``MIN_H1_PCT``/``MIN_POOL_AGE_MINUTES``/``SUPPORT_CANDLE_INTERVAL``/
-    ``SUPPORT_CANDLE_COUNT`` (only ``MIN_LIQUIDITY_USD`` differs, v2 strictly
-    higher), so v2's candidate set is a strict subset of v1's -- every pool
-    v2 would fetch candles for, v1 already fetched. Only successful fetches
-    are cached (a failure isn't memoized, so the other pocket just retries
-    it once, same behavior as before). Purely a dedup of the real DexPaprika
-    call -- never changes which candidates pass, so it doesn't touch the
-    test-isolation principle already established for this pocket pair.
-    ``None`` (default) preserves the exact original always-fetch behavior.
+    and v2 within the same discovery cycle. First version had v1 (which runs
+    first in ``shadow_persistent.py``) populate this and v2 reuse it --
+    correctly deduped the API call, but the operator caught a real remaining
+    issue: v2's candles were then systematically staler than before (v1's own
+    fetch time, up to ~1-2min older by the time v2's loop got to the same
+    pool). Fixed same day: the caller now pre-fetches the UNION of v1+v2
+    candidates in one combined pass BEFORE either pocket runs (see
+    ``get_sync_filtered_candidates`` below and ``shadow_persistent.py``'s own
+    comment) -- both pockets now read the exact same candle for the exact
+    same pool, fetched at the exact same instant, not just deduped. Only
+    successful fetches are cached (a failure isn't memoized, so a pocket that
+    still needs it just retries once, same behavior as before). Never changes
+    which candidates pass, so it doesn't touch the test-isolation principle
+    already established for this pocket pair. ``None`` (default) preserves
+    the exact original always-fetch behavior.
 
     Each candidate must pass, in order: h1 > -5% (should already be true --
     the caller is expected to have used ``dexpaprika.get_trending_pools``
@@ -306,22 +340,7 @@ async def record_signals(
         # stays only for progress reporting (Telegram, closures_so_far()
         # comparisons), it no longer blocks new candidates.
 
-        candidates: list[TrendingPool] = []
-        async with aiosqlite.connect(_db_path()) as db:
-            for pool in pools:
-                h1 = pool.price_change_pct.get("h1")
-                if h1 is None or h1 <= MIN_H1_PCT:
-                    continue
-                if (pool.reserve_usd or 0.0) < MIN_LIQUIDITY_USD:
-                    continue
-                if pool.pool_created_at is None or pool.price_usd is None:
-                    continue
-                age_minutes = (datetime.now(timezone.utc) - pool.pool_created_at).total_seconds() / 60.0
-                if age_minutes < MIN_POOL_AGE_MINUTES:
-                    continue
-                if await _has_open_signal(db, pool.pool_address, chain):
-                    continue
-                candidates.append(pool)
+        candidates = await get_sync_filtered_candidates(pools, chain=chain)
 
         rows_to_insert: list[tuple] = []
         candles_by_row: list[list] = []

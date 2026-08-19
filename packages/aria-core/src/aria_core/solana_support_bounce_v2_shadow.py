@@ -186,6 +186,30 @@ async def closures_so_far() -> int:
     return count
 
 
+async def get_sync_filtered_candidates(pools: list[TrendingPool], *, chain: str = "solana") -> list[TrendingPool]:
+    """Same extraction as ``solana_support_bounce_shadow.get_sync_filtered_candidates``
+    (19/08) -- identical filter logic (only ``MIN_LIQUIDITY_USD`` differs, see
+    the module docstring), see that function's own docstring for why
+    ``shadow_persistent.py`` calls this directly."""
+    candidates: list[TrendingPool] = []
+    async with aiosqlite.connect(_db_path()) as db:
+        for pool in pools:
+            h1 = pool.price_change_pct.get("h1")
+            if h1 is None or h1 <= MIN_H1_PCT:
+                continue
+            if (pool.reserve_usd or 0.0) < MIN_LIQUIDITY_USD:
+                continue
+            if pool.pool_created_at is None or pool.price_usd is None:
+                continue
+            age_minutes = (datetime.now(timezone.utc) - pool.pool_created_at).total_seconds() / 60.0
+            if age_minutes < MIN_POOL_AGE_MINUTES:
+                continue
+            if await _has_open_signal(db, pool.pool_address, chain):
+                continue
+            candidates.append(pool)
+    return candidates
+
+
 async def record_signals(
     pools: list[TrendingPool], *, chain: str = "solana",
     candle_cache: dict[str, list] | None = None,
@@ -197,10 +221,10 @@ async def record_signals(
     fetched -- see below).
 
     ``candle_cache`` (19/08): see ``solana_support_bounce_shadow.record_signals``'s
-    own docstring for the full reasoning -- v2's candidate set is a strict
-    subset of v1's (same h1/age/interval/count, only liquidity is stricter
-    here), so the caller passes the SAME dict to both, populated by
-    whichever pocket runs first in the cycle (v1, in ``shadow_persistent.py``)."""
+    own docstring for the full reasoning -- the caller pre-fetches the union
+    of v1+v2 candidates in one pass BEFORE either pocket runs, so both read
+    the same candle for the same pool at the same instant, no freshness gap
+    between the two pockets."""
     logged = 0
     try:
         await _ensure_table()
@@ -208,22 +232,7 @@ async def record_signals(
         # statistical sample-size target, never a real capital constraint --
         # no longer caps sourcing (kept only for progress reporting).
 
-        candidates: list[TrendingPool] = []
-        async with aiosqlite.connect(_db_path()) as db:
-            for pool in pools:
-                h1 = pool.price_change_pct.get("h1")
-                if h1 is None or h1 <= MIN_H1_PCT:
-                    continue
-                if (pool.reserve_usd or 0.0) < MIN_LIQUIDITY_USD:
-                    continue
-                if pool.pool_created_at is None or pool.price_usd is None:
-                    continue
-                age_minutes = (datetime.now(timezone.utc) - pool.pool_created_at).total_seconds() / 60.0
-                if age_minutes < MIN_POOL_AGE_MINUTES:
-                    continue
-                if await _has_open_signal(db, pool.pool_address, chain):
-                    continue
-                candidates.append(pool)
+        candidates = await get_sync_filtered_candidates(pools, chain=chain)
 
         rows_to_insert: list[tuple] = []
         candles_by_row: list[list] = []
