@@ -46,6 +46,16 @@ TABLE = "fresh_launch_pretrade_gate_log"
 # quietly credit the filter with a later collapse it never avoided.
 TRACKING_WINDOW_MINUTES = 180.0
 
+# 20/08, security/robustness pass -- this table grows on EVERY gate decision
+# (accepted ones included), not just on entries, so at the measured rate it
+# adds thousands of rows a day and nothing ever removed them: an unbounded
+# table on a VPS whose disk also holds the real trading DB. Rows past this
+# horizon are purged, and only ONCE their counterfactual has been resolved
+# (`tracking_status` no longer 'tracking') -- never a blind age-based delete
+# that could drop a still-open measurement. 30 days is far beyond the 180-min
+# tracking window, so a purged row has always long finished being useful.
+RETENTION_DAYS = 30
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -245,7 +255,31 @@ async def advance_avoided_tracking_cycle(*, max_rows: int = 40, db_path: str | N
             return (None, None)
         return (snapshot.price_usd, snapshot.reserve_usd)
 
-    return await advance_avoided_tracking(resolve_price_fn=_resolve, max_rows=max_rows, db_path=db_path)
+    stats = await advance_avoided_tracking(resolve_price_fn=_resolve, max_rows=max_rows, db_path=db_path)
+    # Housekeeping rides this cycle rather than getting its own loop.
+    purged = await purge_expired(db_path=db_path)
+    if purged:
+        stats["purged"] = purged
+    return stats
+
+
+async def purge_expired(*, db_path: str | None = None) -> int:
+    """Removes decisions older than ``RETENTION_DAYS`` whose counterfactual is
+    already resolved. Returns how many rows went. Best-effort: a purge failure
+    must never disturb the loop that calls it."""
+    try:
+        path = db_path or _db_path()
+        await _ensure_table(path)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).isoformat()
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                f"DELETE FROM {TABLE} WHERE decided_at < ? AND tracking_status != 'tracking'",
+                (cutoff,),
+            )
+            await db.commit()
+            return cur.rowcount or 0
+    except Exception:  # noqa: BLE001 -- housekeeping never breaks the caller
+        return 0
 
 
 async def _set_status(path: str, row_id: int, status: str) -> None:

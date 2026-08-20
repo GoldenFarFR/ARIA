@@ -256,3 +256,36 @@ async def test_an_unavailable_snapshot_is_not_read_as_a_price_of_zero(db, monkey
 
     assert stats["updated"] == 0
     assert (await _rows(db))[0]["avoided_multiplier"] is None
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_resolved_rows_past_the_retention_horizon(db):
+    await log.record_decision(_decision(), db_path=db)
+    old = (datetime.now(timezone.utc) - timedelta(days=log.RETENTION_DAYS + 1)).isoformat()
+    async with aiosqlite.connect(db) as c:
+        await c.execute(f"UPDATE {log.TABLE} SET decided_at = ?, tracking_status = 'closed'", (old,))
+        await c.commit()
+
+    assert await log.purge_expired(db_path=db) == 1
+    assert await _rows(db) == []
+
+
+@pytest.mark.asyncio
+async def test_purge_never_drops_a_measurement_still_being_tracked(db):
+    """A blind age-based delete could drop an open counterfactual -- the row
+    must survive until its tracking has actually resolved."""
+    await log.record_decision(_decision(), db_path=db)
+    old = (datetime.now(timezone.utc) - timedelta(days=log.RETENTION_DAYS + 1)).isoformat()
+    async with aiosqlite.connect(db) as c:
+        await c.execute(f"UPDATE {log.TABLE} SET decided_at = ?", (old,))  # stays 'tracking'
+        await c.commit()
+
+    assert await log.purge_expired(db_path=db) == 0
+    assert len(await _rows(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_recent_rows_are_never_purged(db):
+    await log.record_decision(_decision(blocked=False, reason=None), db_path=db)
+    assert await log.purge_expired(db_path=db) == 0
+    assert len(await _rows(db)) == 1

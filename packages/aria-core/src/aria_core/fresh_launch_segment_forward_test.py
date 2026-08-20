@@ -149,7 +149,12 @@ async def build_report(
     segment and its same-window control group. Never writes anything."""
     table = POCKET_TABLES.get(pocket)
     if table is None:
-        raise ValueError(f"unknown pocket {pocket!r} -- expected one of {sorted(POCKET_TABLES)}")
+        # The raw value is deliberately NOT echoed back: this reaches an HTTP
+        # endpoint whose `pocket` query parameter is caller-controlled, and
+        # reflecting arbitrary caller input into an error message that is
+        # returned AND logged is how a reflection/log-injection issue starts.
+        # The allowlist itself is safe to name -- it is three fixed constants.
+        raise ValueError(f"unknown pocket -- expected one of {sorted(POCKET_TABLES)}")
 
     path = db_path or str(shadow_db_path())
     groups: dict[bool, list[float]] = {True: [], False: []}
