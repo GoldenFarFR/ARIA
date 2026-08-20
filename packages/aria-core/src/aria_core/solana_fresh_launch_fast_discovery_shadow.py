@@ -161,6 +161,24 @@ FAST_DISCOVERY_POLL_INTERVAL_SECONDS = 1.0
 # fire-and-forget design exists to avoid (see that function's own docstring).
 HOLDER_CONCENTRATION_REJECT_PCT = 92.0
 
+# 20/08, entry-time traction filter (operator-directed performance
+# investigation, point 2, 1418-closure sample -- 100% market_cap_sol_at_
+# creation coverage, better than m5_pct's coverage anywhere else in this
+# dome). Bucketed by the token's own market cap AT THE PUMPPORTAL CREATION
+# EVENT (before this bot does anything): <30 SOL is the best band (18.1%
+# winrate, n=281), 30-50 SOL is a confirmed dead zone (3.5-7.9% winrate
+# across two sub-bands, n=1024 combined -- by far the largest, most robust
+# sample in this cross-tab). 50-70/70+ show interesting extremes (23.4%/
+# 4.3%) but n=47/23 is too thin to act on either direction. Working theory:
+# a token that already has a MODERATE market cap the instant it's created
+# (not tiny, not huge) suggests a bot/insider already bought a set chunk at
+# mint -- neither organically undiscovered (the <30 SOL case) nor an
+# outright genuine buy-frenzy. Rejects immediately in _track_candidate,
+# before add_pools() -- never wastes a websocket subscription on a
+# candidate already in the confirmed dead zone.
+MARKET_CAP_SOL_AT_CREATION_REJECT_MIN = 30.0
+MARKET_CAP_SOL_AT_CREATION_REJECT_MAX = 50.0
+
 # 20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD
 # (operator-directed performance investigation, 1261-closure sample). 500$-
 # wide buckets: the 2000-2499$ bucket alone holds 775/1099 closures (70% of
@@ -372,6 +390,8 @@ async def _track_candidate(
     bonding_ws_feed=None,
     min_liquidity_usd: float = MIN_LIQUIDITY_USD,
     max_pool_age_minutes: float = MAX_POOL_AGE_MINUTES,
+    market_cap_sol_at_creation_reject_min: float = MARKET_CAP_SOL_AT_CREATION_REJECT_MIN,
+    market_cap_sol_at_creation_reject_max: float = MARKET_CAP_SOL_AT_CREATION_REJECT_MAX,
     poll_interval_seconds: float = FAST_DISCOVERY_POLL_INTERVAL_SECONDS,
     resolve_fn=None,
     sleep_fn=asyncio.sleep,
@@ -391,6 +411,15 @@ async def _track_candidate(
     pool_address = event.bonding_curve_key
     if not pool_address:
         return None  # no pool to track at all -- never guessed
+
+    if (
+        event.market_cap_sol is not None
+        and market_cap_sol_at_creation_reject_min <= event.market_cap_sol < market_cap_sol_at_creation_reject_max
+    ):
+        # 20/08 -- see MARKET_CAP_SOL_AT_CREATION_REJECT_MIN/MAX's own
+        # docstring: confirmed dead zone, rejected before add_pools() so a
+        # doomed candidate never costs a websocket subscription either.
+        return None
 
     if bonding_ws_feed is not None:
         try:

@@ -43,7 +43,7 @@ def _no_real_rugcheck(monkeypatch):
 
 def _event(
     *, mint="mintAAA", bonding_curve_key="curveAAA", symbol="FRESH", name="Fresh Coin",
-    detected_at=None, market_cap_sol=40.0, v_sol_in_bonding_curve=35.0,
+    detected_at=None, market_cap_sol=20.0, v_sol_in_bonding_curve=35.0,
 ) -> PumpPortalNewTokenEvent:
     return PumpPortalNewTokenEvent(
         mint=mint, symbol=symbol, name=name, pool="pump", bonding_curve_key=bonding_curve_key,
@@ -279,6 +279,39 @@ async def test_candidate_without_bonding_curve_key_is_never_tracked():
     event = _event(bonding_curve_key=None)
     row = await shadow._track_candidate(event, chain=CHAIN, resolve_fn=AsyncMock())
     assert row is None
+
+
+@pytest.mark.asyncio
+async def test_candidate_in_market_cap_dead_zone_rejected_before_add_pools():
+    """20/08 -- see MARKET_CAP_SOL_AT_CREATION_REJECT_MIN/MAX's own docstring:
+    30-50 SOL at creation is a confirmed dead zone (n=1024, 3.5-7.9% winrate).
+    Rejected immediately, never even reaches add_pools()."""
+    event = _event(market_cap_sol=40.0)  # inside [30, 50)
+
+    class _FakeFeed:
+        def __init__(self):
+            self.added = []
+
+        async def add_pools(self, pairs):
+            self.added.extend(pairs)
+            return len(pairs)
+
+    bonding_feed = _FakeFeed()
+    row = await shadow._track_candidate(
+        event, chain=CHAIN, bonding_ws_feed=bonding_feed, resolve_fn=AsyncMock(),
+    )
+    assert row is None
+    assert bonding_feed.added == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_at_market_cap_dead_zone_boundaries_accepted():
+    """Boundaries are exclusive/inclusive as documented: 30.0 rejects (band
+    floor, inclusive), 50.0 does not (band ceiling, exclusive)."""
+    event_at_ceiling = _event(market_cap_sol=50.0)
+    resolve_fn = AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD, None, "rest_dexpaprika"))
+    row = await shadow._track_candidate(event_at_ceiling, chain=CHAIN, resolve_fn=resolve_fn)
+    assert row is not None
 
 
 @pytest.mark.asyncio
