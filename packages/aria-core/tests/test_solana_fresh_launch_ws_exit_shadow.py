@@ -1145,3 +1145,100 @@ async def test_round_robin_still_holds_among_already_checked_positions():
         order = [r["id"] for r in await cur.fetchall()]
 
     assert order == [b_id, a_id]  # 300s-stale before 5s-fresh
+
+
+# --- 20/08, coverage gap closed: run_forever_pumpportal ------------------
+# The discovery loop that RUNS THIS POCKET IN PRODUCTION had zero direct test
+# coverage -- found by auditing which functions carry no test at all while a
+# fix was accumulating data. Everything it does (dedup, in_flight, stats,
+# insertion) was only ever exercised one layer down.
+
+class _FakeQueueFeed:
+    """Drains a fixed list of events then returns None, like the real feed's
+    `next_event(timeout=...)` does when its queue is empty."""
+
+    def __init__(self, events):
+        self._events = list(events)
+        self.started = False
+
+    async def start(self):
+        self.started = True
+
+    async def next_event(self, timeout=None):
+        return self._events.pop(0) if self._events else None
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_confirms_and_inserts_a_real_candidate(monkeypatch):
+    feed = _FakeQueueFeed([_pp_event(mint="mintA", bonding_curve_key="curveA")])
+    monkeypatch.setattr(
+        shadow, "_track_candidate_pumpportal",
+        AsyncMock(return_value={
+            "pool_address": "curveA", "token_address": "mintA", "chain": CHAIN, "symbol": "FRESH",
+            "detected_at": datetime.now(timezone.utc).isoformat(), "entry_price": 1.0,
+            "reserve_usd": 4000.0, "pool_created_at": None, "peak_price": 1.0,
+            "realistic_entry_price": 0.99, "dex_id": "rest", "market_cap_sol_at_creation": None,
+        }),
+    )
+    monkeypatch.setattr(shadow, "_enrich_with_rugcheck_pumpportal", AsyncMock())
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=1)
+
+    assert feed.started is True
+    assert stats["confirmed"] == 1
+    rows = await _rows()
+    assert len(rows) == 1 and rows[0]["pool_address"] == "curveA"
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_dedups_the_same_key_within_one_run(monkeypatch):
+    """The in_flight guard, exercised through the real loop rather than one
+    layer down: the same key broadcast twice must only be tracked once."""
+    event = _pp_event(mint="mintA", bonding_curve_key="curveDup")
+    feed = _FakeQueueFeed([event, event])
+    started = asyncio.Event()
+
+    async def _slow_track(*_a, **_kw):
+        started.set()
+        await asyncio.sleep(0.05)  # still in flight when the duplicate arrives
+        return None
+
+    monkeypatch.setattr(shadow, "_track_candidate_pumpportal", _slow_track)
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=2)
+
+    assert stats.get("deduped_in_flight") == 1
+    assert stats.get("abandoned") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_counts_an_abandoned_candidate_without_inserting(monkeypatch):
+    feed = _FakeQueueFeed([_pp_event(bonding_curve_key="curveX")])
+    monkeypatch.setattr(shadow, "_track_candidate_pumpportal", AsyncMock(return_value=None))
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=1)
+
+    assert stats["abandoned"] == 1
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_survives_a_tracking_error(monkeypatch):
+    """One bad candidate must never kill the loop that runs the whole pocket."""
+    feed = _FakeQueueFeed([_pp_event(bonding_curve_key="curveBoom")])
+    monkeypatch.setattr(shadow, "_track_candidate_pumpportal", AsyncMock(side_effect=RuntimeError("boom")))
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=1)
+
+    assert stats["errors"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_stops_on_the_stop_event(monkeypatch):
+    feed = _FakeQueueFeed([_pp_event() for _ in range(5)])
+    stop = asyncio.Event()
+    stop.set()
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, stop_event=stop)
+
+    assert stats.get("confirmed", 0) == 0  # stopped before draining anything
