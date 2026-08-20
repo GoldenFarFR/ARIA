@@ -103,6 +103,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import pretrade_rejection_log
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
 from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, geckoterminal_client
@@ -565,8 +566,65 @@ async def _enrich_with_rugcheck(row_id: int, mint: str, *, bonding_ws_feed=None,
         logger.info("solana_fresh_launch_fast_discovery_shadow: rugcheck backfill write failed for row %s (%s)", row_id, exc)
         return
 
+    # 20/08 -- CONTROL-GROUP measurement, deliberately NOT a reject here.
+    # WS-EXIT rejects pre-trade on `HOLDER_EXCLUDING_POOL_REJECT_PCT=20%`
+    # (a provisional threshold on n=1). Applying it here too would double the
+    # sample but destroy the only thing that can prove the threshold is not
+    # cutting winners: a pocket that measures the same signal and enters
+    # anyway. So this pocket records both signals and keeps trading normally
+    # -- in 24h the rows it entered above 20% are exactly the counterfactual
+    # WS-EXIT's rejects cannot provide.
+    #
+    # Rides the rugcheck call this function ALREADY makes: no extra API call,
+    # no added latency, and critically nothing added to this pocket's blocking
+    # entry path (rugcheck was moved out of it on 19/08 for speed-to-entry --
+    # see _track_candidate's own comment; re-introducing it there would undo
+    # the whole point of FAST-discovery).
+    await _record_gate_measurement(row_id, report)
+
     if report.top_holder_pct is not None and report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
         await _reject_on_holder_concentration(row_id, bonding_ws_feed=bonding_ws_feed, ws_feed=ws_feed)
+
+
+async def _record_gate_measurement(row_id: int, report) -> None:
+    """Logs what the pre-trade gate WOULD have decided, without deciding it.
+    Best-effort: never raises, never blocks, never alters the position."""
+    try:
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT pool_address, token_address, chain, entry_price, reserve_usd, "
+                f"realistic_entry_price FROM {TABLE} WHERE id = ?",
+                (row_id,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return
+        row = dict(row)
+
+        from .solana_fresh_launch_ws_exit_shadow import _holder_pct_excluding_pool
+
+        excluding_pool = _holder_pct_excluding_pool(
+            getattr(report, "top_holders", []) or [], row["pool_address"],
+        )
+        await pretrade_rejection_log.record_decision(
+            pretrade_rejection_log.GateDecision(
+                pocket="fast_discovery_control", chain=row["chain"], mint=row["token_address"],
+                pool_address=row["pool_address"],
+                # Always False: this pocket enters regardless -- that is the
+                # entire point of the control group.
+                blocked=False, reason=None,
+                top_holder_pct=report.top_holder_pct, gate_latency_ms=None,
+                would_be_entry_price=row["entry_price"], would_be_reserve_usd=row["reserve_usd"],
+                realistic_would_be_entry_price=row["realistic_entry_price"],
+                top_holder_excluding_pool_pct=excluding_pool,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 -- measurement never disturbs the pocket
+        logger.info(
+            "solana_fresh_launch_fast_discovery_shadow: gate measurement failed for row %s (%s)",
+            row_id, exc,
+        )
 
 
 async def _reject_on_holder_concentration(row_id: int, *, bonding_ws_feed=None, ws_feed=None) -> None:

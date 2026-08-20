@@ -830,3 +830,61 @@ async def test_holder_reject_never_reopens_an_already_closed_row(monkeypatch):
     row = await _row_of(row_id)
     assert row["exit_reason"] == "trailing_stop"
     assert row["final_multiplier"] == pytest.approx(1.4)
+
+
+# --- 20/08, control group for WS-EXIT's provisional 20% wallet threshold ---
+# This pocket MEASURES the same signals and enters anyway. Rejecting here too
+# would double the sample but destroy the only thing that can prove the
+# threshold is not cutting winners.
+
+@pytest.mark.asyncio
+async def test_control_group_measures_the_wallet_signal_without_ever_rejecting(monkeypatch):
+    from aria_core import pretrade_rejection_log as gate_log
+
+    row_id = await _insert_open_row(pool_address="curveA", entry_price=1.0)
+    recorded = []
+
+    async def _capture(decision, **_kw):
+        recorded.append(decision)
+
+    monkeypatch.setattr(gate_log, "record_decision", _capture)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, top_holder_pct=52.6, score_normalised=50, risks=None, creator=None,
+            # A 40% whale: far above WS-EXIT's 20% reject threshold.
+            top_holders=[(52.6, "curveA"), (40.0, "whaleB")],
+        )),
+    )
+
+    await shadow._enrich_with_rugcheck(row_id, "mintA")
+
+    assert len(recorded) == 1
+    assert recorded[0].top_holder_excluding_pool_pct == pytest.approx(40.0)
+    assert recorded[0].blocked is False  # measured, never acted on
+    assert recorded[0].pocket == "fast_discovery_control"
+    # The position itself is untouched -- the pocket keeps trading normally.
+    assert (await _row_of(row_id))["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_measurement_failure_never_disturbs_the_pocket(monkeypatch):
+    from aria_core import pretrade_rejection_log as gate_log
+
+    row_id = await _insert_open_row(pool_address="curveA", entry_price=1.0)
+
+    async def _boom(*_a, **_kw):
+        raise RuntimeError("log down")
+
+    monkeypatch.setattr(gate_log, "record_decision", _boom)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, top_holder_pct=50.0, score_normalised=50, risks=None, creator=None,
+            top_holders=[(50.0, "curveA")],
+        )),
+    )
+
+    await shadow._enrich_with_rugcheck(row_id, "mintA")  # must not raise
+
+    assert (await _row_of(row_id))["exit_reason"] is None
