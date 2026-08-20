@@ -436,10 +436,26 @@ async def _track_candidate_pumpportal(
                 pool_address, exc,
             )
 
+    def _shed_subscription() -> None:
+        # 20/08, real incident: add_pools() above subscribed this pool
+        # unconditionally, but every abandonment path here used to return
+        # without ever calling remove_pools() -- most PumpPortal candidates
+        # never confirm liquidity (that's the filter's whole point), so
+        # nearly every add_pools() call leaked a permanent subscription. At
+        # ~40 events/min this silently exceeded the Solana public RPC's real
+        # accountSubscribe ceiling (1000/connection, confirmed live via
+        # "-32006 Too many subscriptions") within ~40 minutes of runtime,
+        # taking checked_via_websocket to 0 for every pocket sharing this feed.
+        for feed in (bonding_ws_feed, ws_feed):
+            remove_fn = getattr(feed, "remove_pools", None)
+            if remove_fn is not None:
+                remove_fn([pool_address])
+
     while True:
         now = time_fn()
         age_seconds = now - event.detected_at
         if age_seconds >= max_pool_age_minutes * 60.0:
+            _shed_subscription()
             return None
 
         price_usd, reserve_usd, pool_created_at, source = await resolve_fn(
@@ -451,6 +467,7 @@ async def _track_candidate_pumpportal(
             # immediately rather than keep polling, since liquidity climbing
             # further while we wait only makes this candidate worse, never
             # better.
+            _shed_subscription()
             return None
 
         if price_usd is not None and reserve_usd is not None and reserve_usd >= min_liquidity_usd:

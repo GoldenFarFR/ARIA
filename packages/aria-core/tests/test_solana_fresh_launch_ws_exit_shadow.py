@@ -203,6 +203,68 @@ async def test_pumpportal_liquidity_above_max_entry_rejected():
     resolve_fn.assert_awaited_once()
 
 
+class _FakeFeed:
+    """20/08 -- spy for remove_pools()/add_pools(), see the two tests below."""
+
+    def __init__(self):
+        self.added: list = []
+        self.removed: list = []
+
+    async def add_pools(self, pairs):
+        self.added.extend(pairs)
+        return len(pairs)
+
+    def remove_pools(self, addrs):
+        self.removed.extend(addrs)
+
+
+@pytest.mark.asyncio
+async def test_pumpportal_liquidity_above_max_entry_sheds_subscription():
+    """20/08, real incident: add_pools() was called unconditionally but this
+    abandonment path never called remove_pools() -- see MIN_LIQUIDITY_USD's
+    own 20/08 docstring for the real subscription-leak this caused."""
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
+    )
+    bonding_feed = _FakeFeed()
+    resolve_fn = AsyncMock(return_value=(1.0, shadow.MAX_LIQUIDITY_USD_ENTRY, None, "rest_dexpaprika"))
+    result = await shadow._track_candidate_pumpportal(
+        event, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+    )
+    assert result is None
+    assert bonding_feed.added == [("poolA", "mintA")]
+    assert bonding_feed.removed == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_pumpportal_abandoned_past_age_ceiling_sheds_subscription():
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    t0 = 3_000_000.0
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=t0,
+    )
+    bonding_feed = _FakeFeed()
+    fake_clock = {"t": t0}
+
+    def fake_time():
+        fake_clock["t"] = t0 + shadow.MAX_POOL_AGE_MINUTES * 60.0 + 1.0
+        return fake_clock["t"]
+
+    result = await shadow._track_candidate_pumpportal(
+        event, bonding_ws_feed=bonding_feed, resolve_fn=AsyncMock(return_value=(None, None, None, None)),
+        sleep_fn=AsyncMock(), time_fn=fake_time,
+    )
+    assert result is None
+    assert bonding_feed.removed == ["poolA"]
+
+
 @pytest.mark.asyncio
 async def test_pumpportal_liquidity_within_range_accepted():
     from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent

@@ -282,6 +282,49 @@ async def test_candidate_without_bonding_curve_key_is_never_tracked():
 
 
 @pytest.mark.asyncio
+async def test_abandoned_candidate_sheds_its_websocket_subscription(monkeypatch):
+    """20/08, real incident: add_pools() was called unconditionally but this
+    abandonment path never called remove_pools() -- most PumpPortal
+    candidates never confirm liquidity, so nearly every add_pools() call
+    leaked a permanent subscription, silently exceeding the Solana RPC's
+    real accountSubscribe ceiling (1000/connection, confirmed live) within
+    ~40 minutes of runtime."""
+    t0 = 3_000_000.0
+    event = _event(detected_at=t0)
+
+    class _FakeFeed:
+        def __init__(self):
+            self.added: list = []
+            self.removed: list = []
+
+        async def add_pools(self, pairs):
+            self.added.extend(pairs)
+            return len(pairs)
+
+        def remove_pools(self, addrs):
+            self.removed.extend(addrs)
+
+    bonding_feed = _FakeFeed()
+
+    async def fake_resolve(pool_address, *, chain, ws_feed, bonding_ws_feed=None):
+        return (0.0005, 100.0, None, "rest_dexpaprika")  # always well below the floor
+
+    fake_clock = {"t": t0}
+
+    def fake_time():
+        fake_clock["t"] = t0 + shadow.MAX_POOL_AGE_MINUTES * 60.0 + 1.0
+        return fake_clock["t"]
+
+    row = await shadow._track_candidate(
+        event, chain=CHAIN, bonding_ws_feed=bonding_feed,
+        resolve_fn=fake_resolve, sleep_fn=AsyncMock(), time_fn=fake_time,
+    )
+    assert row is None
+    assert bonding_feed.added == [(event.bonding_curve_key, event.mint)]
+    assert bonding_feed.removed == [event.bonding_curve_key]
+
+
+@pytest.mark.asyncio
 async def test_track_candidate_respects_the_poll_interval_between_checks(monkeypatch):
     """'le débit respecte une limite raisonnable' -- never a busy loop: a
     candidate not yet confirmed must sleep FAST_DISCOVERY_POLL_INTERVAL_SECONDS
