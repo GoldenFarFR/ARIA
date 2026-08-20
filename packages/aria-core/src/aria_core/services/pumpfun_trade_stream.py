@@ -41,6 +41,14 @@ import struct
 import time
 from dataclasses import dataclass, field
 
+# 20/08 -- IMPORTED, never redefined: this stream must ride the SAME endpoint
+# as every other Solana feed in the dome (ARIA_SOLANA_RPC_WS, the paid Helius
+# websocket in production). Hardcoding the free public RPC here would have put
+# the dome's highest-volume subscription -- ~6650 trades / 100s measured live,
+# by far the busiest thing ARIA runs on Solana -- on the endpoint with the
+# tightest per-IP limits, while the paid one sat unused.
+from aria_core.services.pumpswap_ws import RPC_WS_DEFAULT
+
 logger = logging.getLogger(__name__)
 
 PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
@@ -61,7 +69,7 @@ TRADE_EVENT_MIN_LEN = OFF_USER + 32
 BUYER_SET_TTL_SECONDS = 600.0
 _PRUNE_EVERY_SECONDS = 60.0
 
-RPC_WS_DEFAULT = "wss://api.mainnet-beta.solana.com"
+
 
 
 @dataclass
