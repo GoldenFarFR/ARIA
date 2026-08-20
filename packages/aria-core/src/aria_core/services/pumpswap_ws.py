@@ -128,7 +128,13 @@ class PumpSwapLiveSnapshot:
     """What ``PumpSwapWebSocketFeed.get_snapshot`` hands back to a caller --
     same shape discipline as every other snapshot dataclass in this dome:
     ``available=False`` is the honest, explicit "don't use this" signal,
-    never a fabricated/stale number passed off as live."""
+    never a fabricated/stale number passed off as live.
+
+    ``price_high_since_last_read``/``price_low_since_last_read`` (19/08):
+    see ``PumpFunBondingLiveSnapshot``'s own docstring in
+    ``pumpfun_bonding_ws.py`` for the full rationale -- same mechanism here,
+    lets a caller skip a REST OHLCV call entirely for a websocket-priced
+    row."""
 
     pool_address: str
     price_usd: float | None = None
@@ -137,6 +143,11 @@ class PumpSwapLiveSnapshot:
     updated_at: float | None = None  # time.time() of the last applied accountNotification
     available: bool = False
     error: str | None = None
+    price_high_since_last_read: float | None = None
+    price_low_since_last_read: float | None = None
+    # 19/08 -- see PumpFunBondingLiveSnapshot's own docstring for the full
+    # rationale. True when priced from a quiet-but-connected account.
+    stale: bool = False
 
 
 def decode_pool_account(raw: bytes) -> dict[str, str] | None:
@@ -324,6 +335,22 @@ class PumpSwapWebSocketFeed:
         self._amounts: dict[str, int] = {}
         self._updated_at: dict[str, float] = {}
         self._pending_subscribe: list[str] = []
+        self._pending_unsubscribe: list[int] = []
+
+        # 19/08 -- high/low tracked across EVERY notification since the
+        # caller's last read, reset by get_snapshot() itself -- see
+        # PumpSwapLiveSnapshot's own docstring.
+        self._price_high_since_read: dict[str, float] = {}
+        self._price_low_since_read: dict[str, float] = {}
+
+        # 19/08 -- same real-incident fix as pumpfun_bonding_ws.py's own
+        # remove_pools (see that method's own docstring): tracks the active
+        # accountSubscribe id for each TOKEN ACCOUNT (two per pool -- base +
+        # quote), so remove_pools() can send real accountUnsubscribe calls
+        # instead of leaving stale subscriptions accumulating forever.
+        self._account_to_sub_id: dict[str, int] = {}
+        self._sub_id_to_account: dict[int, str] = {}
+        self._ws = None
 
         self._sol_usd: float | None = None
         self._last_calibration_at: float = 0.0
@@ -360,6 +387,29 @@ class PumpSwapWebSocketFeed:
     def tracked_pools(self) -> list[str]:
         return list(self._pools.keys())
 
+    def remove_pools(self, pool_addresses: list[str]) -> None:
+        """Sheds a pool once the caller no longer needs it -- see
+        ``pumpfun_bonding_ws.PumpFunBondingWebSocketFeed.remove_pools``'s own
+        docstring for the real incident this class of fix addresses. Drops
+        BOTH token accounts (base + quote) per pool -- this feed subscribes
+        to two accounts per pool, unlike the bonding-curve feed's one."""
+        for pool_addr in pool_addresses:
+            accounts = self._pools.pop(pool_addr, None)
+            self._updated_at.pop(pool_addr, None)
+            self._price_high_since_read.pop(pool_addr, None)
+            self._price_low_since_read.pop(pool_addr, None)
+            if accounts is None:
+                continue
+            for ta in (accounts.pool_base_token_account, accounts.pool_quote_token_account):
+                self._token_account_to_pool.pop(ta, None)
+                self._amounts.pop(ta, None)
+                sub_id = self._account_to_sub_id.pop(ta, None)
+                if sub_id is not None:
+                    self._sub_id_to_account.pop(sub_id, None)
+                    self._pending_unsubscribe.append(sub_id)
+                elif ta in self._pending_subscribe:
+                    self._pending_subscribe.remove(ta)
+
     # --- lifecycle --------------------------------------------------------
 
     async def start(self, pool_addresses: list[str] | None = None) -> None:
@@ -392,9 +442,16 @@ class PumpSwapWebSocketFeed:
         updated_at = self._updated_at.get(pool_address)
         if updated_at is None:
             return PumpSwapLiveSnapshot(pool_address=pool_address, available=False, error="no_notification_yet")
-        if (time.time() - updated_at) > self._max_staleness_seconds:
+
+        # 19/08 -- see PumpFunBondingWebSocketFeed.get_snapshot's own comment
+        # for the full rationale (same real incident, same fix, mirrored
+        # here): a quiet account on a LIVE connection means the price hasn't
+        # moved, not that the data is unusable. Only force REST-required
+        # unavailability while genuinely disconnected.
+        is_stale = (time.time() - updated_at) > self._max_staleness_seconds
+        if is_stale and self._ws is None:
             return PumpSwapLiveSnapshot(
-                pool_address=pool_address, available=False, updated_at=updated_at, error="stale",
+                pool_address=pool_address, available=False, updated_at=updated_at, error="stale_disconnected",
             )
 
         if accounts.quote_mint != WSOL_MINT:
@@ -428,9 +485,19 @@ class PumpSwapWebSocketFeed:
         # roughly-balanced constant-product pool has both sides at similar
         # fair value, so total reserve_usd ~= 2x the quote side's USD value.
         reserve_usd = 2.0 * quote_tokens * self._sol_usd
+
+        # High/low since the caller's last read -- see PumpSwapLiveSnapshot's
+        # own docstring. Reset AFTER reading so the next window starts fresh.
+        price_high = self._price_high_since_read.get(pool_address, price_usd)
+        price_low = self._price_low_since_read.get(pool_address, price_usd)
+        self._price_high_since_read[pool_address] = price_usd
+        self._price_low_since_read[pool_address] = price_usd
+
         return PumpSwapLiveSnapshot(
             pool_address=pool_address, price_usd=price_usd, reserve_usd=reserve_usd,
-            dex_id="pumpswap", updated_at=updated_at, available=True,
+            dex_id="pumpswap", updated_at=updated_at, available=True, stale=is_stale,
+            price_high_since_last_read=max(price_high, price_usd),
+            price_low_since_last_read=min(price_low, price_usd),
         )
 
     # --- background loop --------------------------------------------------
@@ -440,7 +507,9 @@ class PumpSwapWebSocketFeed:
             return self._connect_fn(self._rpc_ws_url)
         import websockets
 
-        return websockets.connect(self._rpc_ws_url, ping_interval=20, ping_timeout=20)
+        # ping_timeout raised 20->40s (19/08), same empirical test as
+        # pumpfun_bonding_ws.py -- see comment there for the reasoning.
+        return websockets.connect(self._rpc_ws_url, ping_interval=20, ping_timeout=40)
 
     async def _all_token_accounts(self) -> list[str]:
         accounts: list[str] = []
@@ -507,6 +576,24 @@ class PumpSwapWebSocketFeed:
         finally:
             self._last_calibration_at = now
 
+    def _price_usd_now(self, pool_address: str) -> float | None:
+        """Shared by ``_apply_notification`` (to track high/low across
+        notifications) and ``get_snapshot`` (to report the current price) --
+        never duplicated. Returns ``None`` for anything not currently
+        priceable -- same conditions ``get_snapshot`` itself checks."""
+        accounts = self._pools.get(pool_address)
+        if accounts is None or accounts.quote_mint != WSOL_MINT or self._sol_usd is None:
+            return None
+        base_amt = self._amounts.get(accounts.pool_base_token_account)
+        quote_amt = self._amounts.get(accounts.pool_quote_token_account)
+        if base_amt is None or quote_amt is None:
+            return None
+        base_tokens = base_amt / (10 ** accounts.base_decimals)
+        quote_tokens = quote_amt / (10 ** accounts.quote_decimals)
+        if base_tokens <= 0:
+            return None
+        return (quote_tokens / base_tokens) * self._sol_usd
+
     def _apply_notification(self, msg: dict, sub_id_to_account: dict[int, str]) -> None:
         params = msg.get("params")
         if not params:
@@ -527,15 +614,38 @@ class PumpSwapWebSocketFeed:
         pool_address = self._token_account_to_pool.get(ta)
         if pool_address:
             self._updated_at[pool_address] = time.time()
+            price = self._price_usd_now(pool_address)
+            if price is not None:
+                prev_high = self._price_high_since_read.get(pool_address)
+                prev_low = self._price_low_since_read.get(pool_address)
+                self._price_high_since_read[pool_address] = price if prev_high is None else max(prev_high, price)
+                self._price_low_since_read[pool_address] = price if prev_low is None else min(prev_low, price)
 
-    async def _read_loop(self, ws, sub_id_to_account: dict[int, str]) -> None:
+    async def _process_pending_unsubscribe(self, ws) -> None:
+        if not self._pending_unsubscribe:
+            return
+        pending = self._pending_unsubscribe
+        self._pending_unsubscribe = []
+        for sub_id in pending:
+            try:
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": int(time.time() * 1000) % 1_000_000_000,
+                    "method": "accountUnsubscribe", "params": [sub_id],
+                }))
+            except Exception as exc:  # noqa: BLE001 -- unsubscribe is best-effort, never fatal
+                logger.info("pumpswap_ws: accountUnsubscribe send failed for sub_id %s (%s)", sub_id, exc)
+
+    async def _read_loop(self, ws) -> None:
         while not self._stop_event.is_set():
             if self._pending_subscribe:
                 newly = self._pending_subscribe
                 self._pending_subscribe = []
                 new_confirmed = await self._subscribe_and_confirm(ws, newly)
-                sub_id_to_account.update(new_confirmed)
+                self._sub_id_to_account.update(new_confirmed)
+                for sub_id, ta in new_confirmed.items():
+                    self._account_to_sub_id[ta] = sub_id
 
+            await self._process_pending_unsubscribe(ws)
             await self._maybe_refresh_calibration()
 
             try:
@@ -548,25 +658,31 @@ class PumpSwapWebSocketFeed:
                 continue
             if msg.get("method") != "accountNotification":
                 continue
-            self._apply_notification(msg, sub_id_to_account)
+            self._apply_notification(msg, self._sub_id_to_account)
 
     async def _run_loop(self) -> None:
         backoff = _RECONNECT_BACKOFF_INITIAL_SECONDS
         while not self._stop_event.is_set():
             try:
                 async with self._connect() as ws:
+                    self._ws = ws
                     await self._maybe_refresh_calibration()
                     token_accounts = await self._all_token_accounts()
                     self._pending_subscribe = [
                         ta for ta in self._pending_subscribe if ta not in token_accounts
                     ]  # avoid a double-subscribe of accounts already covered by the fresh full set
-                    sub_id_to_account = await self._subscribe_and_confirm(ws, token_accounts)
+                    self._pending_unsubscribe = []  # a fresh connection has no stale subscription to shed
+                    confirmed = await self._subscribe_and_confirm(ws, token_accounts)
+                    self._sub_id_to_account = dict(confirmed)
+                    self._account_to_sub_id = {ta: sid for sid, ta in confirmed.items()}
                     backoff = _RECONNECT_BACKOFF_INITIAL_SECONDS
-                    await self._read_loop(ws, sub_id_to_account)
+                    await self._read_loop(ws)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 -- a single connection error must never kill the feed
                 logger.info("pumpswap_ws: feed loop error (%s) -- reconnecting in %.1fs", exc, backoff)
+            finally:
+                self._ws = None
             if self._stop_event.is_set():
                 break
             try:

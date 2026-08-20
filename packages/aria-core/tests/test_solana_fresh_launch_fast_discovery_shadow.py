@@ -74,6 +74,10 @@ def test_exit_rule_is_the_same_imported_function_as_ws_exit_sibling():
 
 
 # --- _fetch_pool_snapshot_rest: parses the real DexPaprika detail shape ----
+# 19/08: briefly removed entirely (operator-directed, "il sert a rien"),
+# reinstated minutes later after a real measured regression (zero candidates
+# confirmed for 10+ minutes during a bonding_ws_feed reconnect storm, with no
+# fallback left) -- see _resolve_liquidity_snapshot's own docstring.
 
 @pytest.mark.asyncio
 async def test_fetch_pool_snapshot_rest_parses_real_shaped_response(monkeypatch):
@@ -111,7 +115,9 @@ async def test_fetch_pool_snapshot_rest_handles_unparseable_created_at(monkeypat
     assert created_at is None  # never fabricated
 
 
-# --- _resolve_liquidity_snapshot: pumpswap_ws tier first, REST fallback ----
+# --- _resolve_liquidity_snapshot: bonding_ws_feed then pumpswap_ws, REST as
+# a last-resort safety net (see module docstring for why REST can't be
+# dropped) ------------------------------------------------------------------
 
 class FakeSnapshot:
     def __init__(self, *, available, price_usd=None, reserve_usd=None, dex_id="pumpswap"):
@@ -139,14 +145,15 @@ async def test_resolve_liquidity_snapshot_uses_pumpswap_ws_when_available(monkey
     price, reserve, created_at, source = await shadow._resolve_liquidity_snapshot("curveAAA", chain=CHAIN, ws_feed=ws_feed)
     assert (price, reserve, source) == (0.05, 9000.0, "pumpswap_ws")
     assert created_at is None  # never known via this tier
-    rest_mock.assert_not_called()  # REST never consulted once the ws tier already answered
+    rest_mock.assert_not_called()  # REST never consulted once a websocket tier already answered
 
 
 @pytest.mark.asyncio
-async def test_resolve_liquidity_snapshot_falls_back_to_rest_when_realtime_flux_fails(monkeypatch):
-    """Mission-required coverage: the real-time flux (here: the PumpSwap
-    websocket tier, unavailable for a pool this young -- see module
-    docstring) must fall back cleanly to the REST DexPaprika tier."""
+async def test_resolve_liquidity_snapshot_falls_back_to_rest_when_both_websockets_fail(monkeypatch):
+    """Mission-required coverage: the real bug this restores REST for --
+    both websocket tiers unavailable (e.g. a reconnect storm) must still
+    fall back cleanly to the REST DexPaprika tier rather than silently
+    stalling every candidate."""
     ws_feed = FakeWsFeed({"curveAAA": FakeSnapshot(available=False)})
     monkeypatch.setattr(
         shadow, "_fetch_pool_snapshot_rest",
@@ -185,7 +192,7 @@ async def test_candidate_reaching_liquidity_in_time_is_confirmed_with_real_age(m
 
     calls = {"n": 0}
 
-    async def fake_resolve(pool_address, *, chain, ws_feed):
+    async def fake_resolve(pool_address, *, chain, ws_feed, bonding_ws_feed=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return (0.001, shadow.MIN_LIQUIDITY_USD - 500.0, None, "rest_dexpaprika")  # below floor
@@ -226,7 +233,7 @@ async def test_candidate_confirmed_without_rest_created_at_falls_back_to_detecte
     t0 = 2_000_000.0
     event = _event(detected_at=t0)
 
-    async def fake_resolve(pool_address, *, chain, ws_feed):
+    async def fake_resolve(pool_address, *, chain, ws_feed, bonding_ws_feed=None):
         return (0.002, shadow.MIN_LIQUIDITY_USD + 1.0, None, "pumpswap_ws")
 
     def fake_time():
@@ -248,7 +255,7 @@ async def test_candidate_never_reaching_liquidity_is_abandoned_past_age_ceiling(
     t0 = 3_000_000.0
     event = _event(detected_at=t0)
 
-    async def fake_resolve(pool_address, *, chain, ws_feed):
+    async def fake_resolve(pool_address, *, chain, ws_feed, bonding_ws_feed=None):
         return (0.0005, 100.0, None, "rest_dexpaprika")  # always well below the floor
 
     fake_clock = {"t": t0}
@@ -280,7 +287,7 @@ async def test_track_candidate_respects_the_poll_interval_between_checks(monkeyp
     event = _event(detected_at=t0)
     call_count = {"n": 0}
 
-    async def fake_resolve(pool_address, *, chain, ws_feed):
+    async def fake_resolve(pool_address, *, chain, ws_feed, bonding_ws_feed=None):
         call_count["n"] += 1
         if call_count["n"] >= 3:
             return (0.01, shadow.MIN_LIQUIDITY_USD, None, "rest_dexpaprika")

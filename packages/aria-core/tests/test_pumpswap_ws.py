@@ -206,15 +206,35 @@ def test_get_snapshot_unavailable_before_first_notification():
     assert snap.error == "no_notification_yet"
 
 
-def test_get_snapshot_stale_past_max_staleness():
+def test_get_snapshot_stale_and_disconnected_unavailable():
     import time
     feed = pumpswap_ws.PumpSwapWebSocketFeed(max_staleness_seconds=5.0)
     feed._pools["poolA"] = _accounts()
     feed._sol_usd = 150.0
     feed._updated_at["poolA"] = time.time() - 999.0
+    assert feed._ws is None
     snap = feed.get_snapshot("poolA")
     assert snap.available is False
-    assert snap.error == "stale"
+    assert snap.error == "stale_disconnected"
+
+
+def test_get_snapshot_stale_but_connected_still_prices():
+    """19/08 -- a quiet account on a LIVE connection means the price hasn't
+    moved, not that the data is unusable (real incident: forcing every
+    caller into REST just to "confirm" an unchanged price saturated the
+    shared REST throttle for both fresh-launch pockets at once)."""
+    import time
+    feed = pumpswap_ws.PumpSwapWebSocketFeed(max_staleness_seconds=5.0)
+    feed._pools["poolA"] = _accounts()
+    feed._sol_usd = 150.0
+    feed._amounts[_accounts().pool_base_token_account] = 1_000_000
+    feed._amounts[_accounts().pool_quote_token_account] = 2_000_000
+    feed._updated_at["poolA"] = time.time() - 999.0
+    feed._ws = object()  # any non-None sentinel signals a live connection
+    snap = feed.get_snapshot("poolA")
+    assert snap.available is True
+    assert snap.stale is True
+    assert snap.price_usd is not None
 
 
 def test_get_snapshot_unsupported_non_wsol_quote():

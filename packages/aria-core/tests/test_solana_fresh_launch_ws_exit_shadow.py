@@ -182,6 +182,42 @@ async def test_liquidity_at_floor_accepted(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pumpportal_liquidity_above_max_entry_rejected():
+    """19/08 -- MAX_LIQUIDITY_USD_ENTRY: unlike every other liquidity check
+    in this dome (a floor), this pocket's real closures showed the opposite
+    risk at the high end (see that constant's own docstring for the real
+    numbers). Abandoned immediately, never left polling."""
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
+    )
+    resolve_fn = AsyncMock(return_value=(1.0, shadow.MAX_LIQUIDITY_USD_ENTRY, None, "rest_dexpaprika"))
+    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    assert result is None
+    resolve_fn.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pumpportal_liquidity_within_range_accepted():
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
+    )
+    mid_liquidity = (shadow.MIN_LIQUIDITY_USD + shadow.MAX_LIQUIDITY_USD_ENTRY) / 2
+    resolve_fn = AsyncMock(return_value=(1.0, mid_liquidity, None, "rest_dexpaprika"))
+    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    assert result is not None
+    assert result["pool_address"] == "poolA"
+    assert result["reserve_usd"] == mid_liquidity
+
+
+@pytest.mark.asyncio
 async def test_zero_price_candidate_never_logged(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=[]))
     result = await shadow.record_signals([_pool(price_usd=0.0)], chain=CHAIN)

@@ -115,6 +115,20 @@ CHECKPOINT_TABLE = "solana_fresh_launch_checkpoint_log"
 # practice rather than expecting an improvement. Compare closures before/
 # after this change using last_checked_at, same method as the 19/08
 # starvation-fix before/after split.
+#
+# 19/08, SAME session, briefly tried 2000->1000 then REVERTED (real test,
+# not a guess): the hypothesis was that a lower floor is crossed faster
+# (real-liquidity-accumulation wait is the actual bottleneck, not the
+# pipeline itself -- see FAST_DISCOVERY_POLL_INTERVAL_SECONDS's own
+# docstring). Measured the OPPOSITE in practice: mean delay went from 66.1s
+# (2000$ floor, 7-position sample) to 84.2s (1000$ floor, 20-position
+# sample) -- a lower floor qualifies far more candidates per minute (7 -> 20
+# in a comparable window), which saturates MAX_CONCURRENT_TRACKED_CANDIDATES
+# and the shared DexPaprika REST throttle, moving the real bottleneck from
+# "market liquidity wait" to "internal contention" instead of removing it.
+# Kept at 2000.0 -- lowering this floor is NOT a viable lever for the entry
+# delay without ALSO raising the concurrency/throughput ceilings it
+# collides with, which is a different, larger change.
 MIN_LIQUIDITY_USD = 2000.0
 MAX_POOL_AGE_MINUTES = 5.0
 
@@ -698,7 +712,7 @@ async def advance_exit_simulation(
                     remaining_qty = 0.0
                     exit_reason = "max_hold"
 
-            final_multiplier = (realized_proceeds / entry_price) if exit_reason else None
+            final_multiplier = (realized_proceeds / entry_price) if exit_reason and entry_price else None
             realistic_final_multiplier = (
                 realistic_realized_proceeds / realistic_entry_price
                 if exit_reason and not realistic_unreachable and realistic_entry_price

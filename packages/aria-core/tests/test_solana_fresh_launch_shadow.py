@@ -142,7 +142,7 @@ async def test_age_beyond_ceiling_rejected(monkeypatch):
 @pytest.mark.asyncio
 async def test_liquidity_below_floor_rejected(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
-    result = await shadow.record_signals([_pool(reserve=1999.0)], chain=CHAIN)
+    result = await shadow.record_signals([_pool(reserve=shadow.MIN_LIQUIDITY_USD - 1.0)], chain=CHAIN)
     assert result["logged"] == 0
 
 

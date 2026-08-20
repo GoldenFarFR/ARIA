@@ -61,7 +61,9 @@ pockets no longer independently comparable, and would corrupt each other's
 dedup logic)."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -70,11 +72,11 @@ from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
-    OHLCVResult,
     PoolSnapshot,
     TrendingPool,
     geckoterminal_client,
 )
+from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent, PumpPortalNewTokenFeed
 from aria_core.solana_fresh_launch_shadow import (
     MAX_POOL_AGE_MINUTES,
     MIN_LIQUIDITY_USD,
@@ -85,7 +87,6 @@ from aria_core.solana_fresh_launch_shadow import (
 from aria_core.solana_pump_shadow import (
     SIMULATED_TRADE_SIZE_USD,
     _apply_price_impact_and_fee,
-    _epoch_of,
     _minutes_since,
     _snapshot_with_fallback,
 )
@@ -102,6 +103,25 @@ TABLE = "solana_fresh_launch_ws_exit_shadow_log"
 TRAILING_STOP_PCT = 15.0
 MAX_HOLD_MINUTES = 60.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
+
+# 19/08, operator decision after reviewing this pocket's own real closures
+# (144 with a valid reserve_usd read): unlike every other liquidity check in
+# this dome (a MINIMUM floor), this pocket's real data shows the opposite
+# risk at the HIGH end. Bucketed by entry reserve_usd: 3990-21200$ (top
+# quartile) closed at a 44.4% liquidity_collapse rate vs 11.1% for the
+# bottom two quartiles; a finer 1000$-wide cut confirms >=5000$ specifically
+# as the worst bucket in the whole pocket (21 cases, avg realistic_final_
+# multiplier 0.702, i.e. -29.8% average) -- clearly worse than every lower
+# bucket, including the 3000-3500$ one that stays net positive (+21.2%)
+# despite a similar 27% collapse rate (a favorable winner/loser asymmetry
+# that high-liquidity entries don't share). Working theory: on a
+# support-bounce entry, unusually high liquidity at entry likely signals a
+# speculative hype spike rather than a stable floor -- exactly the kind of
+# pool that dumps hard once that hype fades. Applied as an entry-time reject
+# (never confirmed) rather than a post-entry exit, since reserve_usd is
+# already known before the simulated buy -- see
+# ``_track_candidate_pumpportal``'s own call site.
+MAX_LIQUIDITY_USD_ENTRY = 5000.0
 
 _ensured_db_paths: set[str] = set()
 
@@ -332,6 +352,257 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
     return result
 
 
+# 19/08, operator decision: this pocket's own sourcing (``record_signals``
+# above, DexPaprika trending-pools poll every 60s) starved out almost
+# entirely once the fresh-launch discovery moved to PumpPortal's instant
+# push for the FAST-DISCOVERY pocket -- 11 total positions ever logged here
+# vs 188 there, and 0 currently open. The functions below give this pocket
+# the SAME PumpPortal-driven sourcing as FAST-DISCOVERY (structurally
+# mirroring ``solana_fresh_launch_fast_discovery_shadow.py``'s own
+# ``_track_candidate``/``run_forever`` -- necessary duplication since each
+# pocket owns its own persistence/schema, never reimplemented differently
+# where the two are the same, e.g. ``_resolve_liquidity_snapshot`` itself is
+# imported, not copied). The A/B comparison this pocket exists for now
+# isolates a DIFFERENT variable than originally designed (see module
+# docstring): no longer "REST polling vs websocket exit-detection" against
+# the retired ORIGINAL pocket, but "single-shot exit, no holder-concentration
+# filter" (this pocket) vs "single-shot exit, WITH the holder-concentration
+# filter" (FAST-DISCOVERY) -- still a valid, deliberate one-variable-at-a-time
+# comparison, just a different variable than 19/08's earlier note describes.
+
+
+async def _has_open_or_recent_signal(db: aiosqlite.Connection, pool_address: str, chain: str) -> bool:
+    """Same dedup key as ``_has_open_signal`` -- a closed row for this pool
+    never blocks re-tracking it (only a currently-open one does), matching
+    FAST-DISCOVERY's own dedup semantics for the same PumpPortal-driven
+    sourcing pattern."""
+    return await _has_open_signal(db, pool_address, chain)
+
+
+async def _track_candidate_pumpportal(
+    event: PumpPortalNewTokenEvent,
+    *,
+    chain: str = "solana",
+    ws_feed=None,
+    bonding_ws_feed=None,
+    min_liquidity_usd: float = MIN_LIQUIDITY_USD,
+    max_liquidity_usd_entry: float = MAX_LIQUIDITY_USD_ENTRY,
+    max_pool_age_minutes: float = MAX_POOL_AGE_MINUTES,
+    poll_interval_seconds: float | None = None,
+    resolve_fn=None,
+    sleep_fn=asyncio.sleep,
+    time_fn=time.time,
+) -> dict | None:
+    """Polls a single candidate's liquidity until confirmed or abandoned --
+    structurally identical to ``solana_fresh_launch_fast_discovery_shadow.
+    _track_candidate`` (same ``resolve_fn`` default, same age-ceiling
+    abandonment), returning a dict shaped for THIS pocket's own schema
+    (no ``age_at_entry_seconds``/``market_cap_sol_at_creation`` columns
+    here -- those are FAST-DISCOVERY-only fields).
+
+    ``resolve_fn``/``poll_interval_seconds`` default to FAST-DISCOVERY's own
+    values via a LOCAL import (never at module load) -- that module imports
+    THIS one (``evaluate_exit``/``TRAILING_STOP_PCT``), so a top-level
+    import back here would be circular."""
+    from aria_core.solana_fresh_launch_fast_discovery_shadow import (
+        FAST_DISCOVERY_POLL_INTERVAL_SECONDS,
+        _resolve_liquidity_snapshot,
+    )
+
+    resolve_fn = resolve_fn or _resolve_liquidity_snapshot
+    poll_interval_seconds = poll_interval_seconds if poll_interval_seconds is not None else FAST_DISCOVERY_POLL_INTERVAL_SECONDS
+    pool_address = event.bonding_curve_key
+    if not pool_address:
+        return None
+
+    if bonding_ws_feed is not None:
+        try:
+            await bonding_ws_feed.add_pools([(pool_address, event.mint)])
+        except Exception as exc:  # noqa: BLE001 -- feed subscription is an enhancement, never a hard requirement
+            logger.info(
+                "solana_fresh_launch_ws_exit_shadow: bonding_ws_feed.add_pools failed for %s (%s)",
+                pool_address, exc,
+            )
+
+    while True:
+        now = time_fn()
+        age_seconds = now - event.detected_at
+        if age_seconds >= max_pool_age_minutes * 60.0:
+            return None
+
+        price_usd, reserve_usd, pool_created_at, source = await resolve_fn(
+            pool_address, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
+        )
+
+        if price_usd is not None and reserve_usd is not None and reserve_usd >= max_liquidity_usd_entry:
+            # 19/08 -- see MAX_LIQUIDITY_USD_ENTRY's own docstring: abandon
+            # immediately rather than keep polling, since liquidity climbing
+            # further while we wait only makes this candidate worse, never
+            # better.
+            return None
+
+        if price_usd is not None and reserve_usd is not None and reserve_usd >= min_liquidity_usd:
+            realistic_entry_price = _apply_price_impact_and_fee(
+                price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD, reserve_usd=reserve_usd, side="buy",
+            )
+            return {
+                "pool_address": pool_address,
+                "token_address": event.mint,
+                "chain": chain,
+                "symbol": event.symbol,
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+                "entry_price": price_usd,
+                "reserve_usd": reserve_usd,
+                "pool_created_at": pool_created_at.isoformat() if pool_created_at is not None else None,
+                "peak_price": price_usd,
+                "realistic_entry_price": realistic_entry_price,
+                "dex_id": source,
+            }
+
+        await sleep_fn(poll_interval_seconds)
+
+
+async def _insert_confirmed_row_pumpportal(row: dict) -> int:
+    await _ensure_table()
+    async with aiosqlite.connect(_db_path()) as db:
+        cur = await db.execute(
+            f"""
+            INSERT INTO {TABLE} (
+                pool_address, token_address, chain, symbol, detected_at, entry_price,
+                reserve_usd, pool_created_at, remaining_qty, realized_proceeds, peak_price,
+                realistic_entry_price, dex_id
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?
+            )
+            """,
+            (
+                row["pool_address"], row["token_address"], row["chain"], row["symbol"], row["detected_at"],
+                row["entry_price"], row["reserve_usd"], row["pool_created_at"], row["peak_price"],
+                row["realistic_entry_price"], row["dex_id"],
+            ),
+        )
+        new_id = cur.lastrowid
+        await db.commit()
+    return new_id
+
+
+async def _enrich_with_rugcheck_pumpportal(row_id: int, mint: str) -> None:
+    """Fire-and-forget rugcheck backfill, mirroring FAST-DISCOVERY's own
+    ``_enrich_with_rugcheck`` -- but WITHOUT the holder-concentration early
+    exit (see module comment above: that filter is deliberately the one
+    variable this pocket does NOT apply, so the A/B comparison stays
+    meaningful)."""
+    try:
+        report = await rugcheck.get_token_report(mint)
+    except Exception as exc:  # noqa: BLE001 -- enrichment must never propagate
+        logger.info("solana_fresh_launch_ws_exit_shadow: rugcheck lookup failed for %s (%s)", mint, exc)
+        return
+    if not report.available:
+        return
+    try:
+        async with aiosqlite.connect(_db_path()) as db:
+            await db.execute(
+                f"""
+                UPDATE {TABLE} SET rugcheck_score = ?, rugcheck_risks = ?,
+                    rugcheck_top_holder_pct = ?, rugcheck_creator = ?
+                WHERE id = ?
+                """,
+                (
+                    report.score_normalised,
+                    ",".join(report.risks) if report.risks else None,
+                    report.top_holder_pct,
+                    report.creator,
+                    row_id,
+                ),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- enrichment must never propagate
+        logger.info("solana_fresh_launch_ws_exit_shadow: rugcheck backfill write failed for row %s (%s)", row_id, exc)
+
+
+async def _track_and_maybe_insert_pumpportal(
+    event: PumpPortalNewTokenEvent, *, chain: str, ws_feed, bonding_ws_feed=None,
+    semaphore: asyncio.Semaphore, stats: dict,
+) -> None:
+    async with semaphore:
+        try:
+            await _ensure_table()
+            if event.bonding_curve_key:
+                async with aiosqlite.connect(_db_path()) as db:
+                    if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
+                        stats["deduped"] = stats.get("deduped", 0) + 1
+                        return
+            row = await _track_candidate_pumpportal(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
+            if row is None:
+                stats["abandoned"] = stats.get("abandoned", 0) + 1
+                return
+            new_id = await _insert_confirmed_row_pumpportal(row)
+            stats["confirmed"] = stats.get("confirmed", 0) + 1
+            asyncio.create_task(_enrich_with_rugcheck_pumpportal(new_id, event.mint))
+        except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
+            logger.info("solana_fresh_launch_ws_exit_shadow: _track_and_maybe_insert_pumpportal failed (%s)", exc)
+            stats["errors"] = stats.get("errors", 0) + 1
+
+
+async def run_forever_pumpportal(
+    feed: PumpPortalNewTokenFeed | None = None,
+    *,
+    chain: str = "solana",
+    ws_feed=None,
+    bonding_ws_feed=None,
+    max_concurrent: int | None = None,
+    max_events: int | None = None,
+    stop_event: asyncio.Event | None = None,
+) -> dict[str, int]:
+    """Mirrors ``solana_fresh_launch_fast_discovery_shadow.run_forever`` --
+    same drain-the-queue/bounded-concurrency shape, own stats dict. Takes
+    its OWN ``feed`` instance (a second, independent PumpPortal websocket
+    connection) -- ``PumpPortalNewTokenFeed``'s queue has a single consumer
+    by design (``asyncio.Queue.get()``), so sharing one feed instance with
+    FAST-DISCOVERY would silently split the token stream between the two
+    pockets instead of both seeing the same entry universe.
+
+    ``max_concurrent`` defaults to FAST-DISCOVERY's own constant via a LOCAL
+    import -- see ``_track_candidate_pumpportal``'s own docstring for why
+    (circular import at module load otherwise)."""
+    if max_concurrent is None:
+        from aria_core.solana_fresh_launch_fast_discovery_shadow import MAX_CONCURRENT_TRACKED_CANDIDATES
+
+        max_concurrent = MAX_CONCURRENT_TRACKED_CANDIDATES
+    feed = feed or PumpPortalNewTokenFeed()
+    await feed.start()
+    await _ensure_table()
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+    stats: dict[str, int] = {}
+    tasks: list[asyncio.Task] = []
+    events_seen = 0
+
+    try:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+            if max_events is not None and events_seen >= max_events:
+                break
+            event = await feed.next_event(timeout=1.0)
+            if event is None:
+                continue
+            events_seen += 1
+            task = asyncio.create_task(
+                _track_and_maybe_insert_pumpportal(
+                    event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
+                    semaphore=semaphore, stats=stats,
+                )
+            )
+            tasks.append(task)
+            tasks = [t for t in tasks if not t.done()]
+    finally:
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return stats
+
+
 async def _stamp_last_checked_only(row_id: int) -> None:
     """Same starvation-bug fix as the original module -- marks a row as
     attempted this cycle even when no price could be obtained at all
@@ -435,7 +706,7 @@ def evaluate_exit(
         remaining_qty = 0.0
         exit_reason = "max_hold"
 
-    final_multiplier = (realized_proceeds / entry_price) if exit_reason else None
+    final_multiplier = (realized_proceeds / entry_price) if exit_reason and entry_price else None
     realistic_final_multiplier = (
         realistic_realized_proceeds / realistic_entry_price
         if exit_reason and not realistic_unreachable and realistic_entry_price
@@ -482,7 +753,7 @@ async def _persist_exit_result(row_id: int, result: dict, price_source: str) -> 
 
 async def advance_exit_simulation(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 30,
-    ws_feed=None,
+    ws_feed=None, max_rest_calls: int | None = None,
 ) -> dict[str, int]:
     """Real calibrated exit rule (trailing stop + liquidity_collapse +
     max_hold, no ladder), sourced first from ``ws_feed`` (a
@@ -496,6 +767,22 @@ async def advance_exit_simulation(
     makes this module behave as pure REST polling, useful for testing or a
     degraded-mode run.
 
+    ``max_rest_calls`` (19/08, real regression fix): ``limit`` alone used to
+    double as the REST-call budget too -- raising ``limit`` to clear a real
+    backlog (80 open positions, most never checked once) made a single
+    cycle take 4+ minutes, because the round-robin queue
+    (``COALESCE(last_checked_at, detected_at) ASC``) checks the OLDEST rows
+    first, and those are structurally the ones neither websocket feed can
+    price (already migrated to a non-WSOL-quoted pool) -- so a big ``limit``
+    meant a big pile of serialized REST calls, all queued behind
+    GeckoTerminal's own shared throttle. Now ``limit`` bounds how many rows
+    are considered per cycle (cheap -- a websocket hit costs nothing), while
+    ``max_rest_calls`` separately bounds real REST calls (``None`` = no cap,
+    same as before). A row skipped for budget reasons is NEVER stamped
+    (``_stamp_last_checked_only`` untouched), so it stays at the front of
+    the queue for the next cycle instead of being pushed behind rows that
+    got lucky with the websocket.
+
     Same round-robin queue fix as the original module
     (``COALESCE(last_checked_at, detected_at)``), ported from day one."""
     client = client or geckoterminal_client
@@ -503,6 +790,7 @@ async def advance_exit_simulation(
         "checked": 0, "checked_via_websocket": 0, "checked_via_polling": 0,
         "closed_trailing_stop": 0, "closed_max_hold": 0, "closed_liquidity_collapse": 0,
     }
+    rest_calls_used = 0
     try:
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
@@ -544,8 +832,21 @@ async def advance_exit_simulation(
                     dex_id = live.dex_id
                     price_source = "websocket"
                     counts["checked_via_websocket"] += 1
+                    # 19/08 -- the feed tracks high/low across every
+                    # notification since our last read (see
+                    # PumpFunBondingLiveSnapshot/PumpSwapLiveSnapshot's own
+                    # docstrings) -- same "spike between checks" coverage a
+                    # REST OHLCV call would give, at zero extra network cost.
+                    window_high = getattr(live, "price_high_since_last_read", None)
+                    window_low = getattr(live, "price_low_since_last_read", None)
 
             if current_price is None:
+                if max_rest_calls is not None and rest_calls_used >= max_rest_calls:
+                    # Budget exhausted this cycle -- never stamped, stays at
+                    # the front of the queue for the next cycle rather than
+                    # being pushed behind rows the websocket already served.
+                    continue
+                rest_calls_used += 1
                 try:
                     snapshot: PoolSnapshot = await _snapshot_with_fallback(
                         client, row["pool_address"], row["token_address"], chain=chain,
@@ -576,36 +877,17 @@ async def advance_exit_simulation(
                     transactions=snapshot.transactions, volume_usd=snapshot.volume_usd,
                 )
 
-                try:
-                    ohlcv: OHLCVResult = await client.get_ohlcv(
-                        row["pool_address"], network=chain, mode="scalping_5m",
-                    )
-                except Exception as exc:  # noqa: BLE001 -- OHLCV is an enhancement, never a hard requirement
-                    logger.info(
-                        "solana_fresh_launch_ws_exit_shadow: get_ohlcv failed for %s (%s)",
-                        row["pool_address"], exc,
-                    )
-                    ohlcv = None
-                if ohlcv is not None and ohlcv.available and ohlcv.candles:
-                    boundary_epoch = _epoch_of(row.get("last_checked_at") or row["detected_at"])
-                    new_candles = [
-                        c for c in ohlcv.candles if boundary_epoch is None or c.ts > boundary_epoch
-                    ]
-                    if new_candles:
-                        window_high = max(c.high for c in new_candles)
-                        window_low = min(c.low for c in new_candles)
-                        from aria_core import shadow_candle_archive
-
-                        await shadow_candle_archive.store_candles(
-                            module="solana_fresh_launch_ws_exit", position_id=row["id"],
-                            pool_address=row["pool_address"], chain=chain, phase="after",
-                            candles=new_candles,
-                        )
-            # A websocket-priced check has no closed-candle window (the
-            # whole point is not waiting on candles) -- window_high/low stay
-            # None, evaluate_exit() falls back to the point-sample price
-            # itself, appropriate since the price stream is near-continuous
-            # rather than a periodic snapshot.
+            # 19/08, real removal (operator call): the REST OHLCV call that
+            # used to run here (fetch candles, compute window_high/low,
+            # archive to shadow_candle_archive) was cut entirely -- at this
+            # pocket's real transaction volume, archiving candles stopped
+            # being worth its own network cost (a second GeckoTerminal call
+            # per REST-priced row, serialized behind the SAME shared
+            # throttle that was already the real bottleneck this session).
+            # window_high/low now stay None for a REST-priced row exactly
+            # like they already did for a websocket-priced one --
+            # evaluate_exit() falls back to the point-sample price itself in
+            # both cases.
 
             counts["checked"] += 1
             result = evaluate_exit(
@@ -617,6 +899,16 @@ async def advance_exit_simulation(
                 continue
 
             await _persist_exit_result(row["id"], result, price_source)
+
+            if result["exit_reason"] is not None and ws_feed is not None:
+                # 19/08 -- sheds this pool's websocket subscription(s) the
+                # MOMENT a position closes -- see FAST-DISCOVERY sibling's
+                # own comment at the same call site for the real incident
+                # this fixes (216 stale pools accumulated on one connection,
+                # correlated with recurring reconnects).
+                remove_fn = getattr(ws_feed, "remove_pools", None)
+                if remove_fn is not None:
+                    remove_fn([row["pool_address"]])
 
             if result["exit_reason"] == "trailing_stop":
                 counts["closed_trailing_stop"] += 1
