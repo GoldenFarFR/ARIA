@@ -182,7 +182,26 @@ MAX_LIQUIDITY_USD_ENTRY = 5000.0
 # way (an early exit on RugCheck's async backfill, never an entry gate, which
 # would reintroduce the multi-minute RugCheck wait this pocket's design
 # exists to avoid).
-HOLDER_CONCENTRATION_REJECT_PCT = 92.0
+# 20/08, RECALIBRATED 92 -> 80 on 1496 real closures (operator-directed
+# "verifie comment les autres wallets gagnent" / "cible les tokens qui
+# naissent"). What this number actually measures was established the same day:
+# topHolders[0] is the POOL itself on a fresh launch, so this is the share of
+# supply still UNSOLD in the curve -- i.e. the inverse of traction. Comparing
+# the dome's x2+ winners against its losers ON ENTRY FEATURES made it the one
+# clearly discriminating variable:
+#     winners (n=36)  top_holder 63.9%   losers (n=1476)  82.8%
+#     (liquidity 4162$ vs 3237$, rugcheck score 10.6 vs 10.6 -- no power)
+# A token that explodes is a token real people were ALREADY buying before we
+# arrived. Splitting the whole sample at 80%:
+#     kept  (<80%)  n=499  winrate 24.8%  PnL +1923 pts  26 of the 36 x2 winners
+#     cut  (>=80%)  n=997  winrate  5.1%  PnL -8057 pts  10 of them
+# The kept side is the first POSITIVE segment found in this dome (+3.85%/trade
+# against -4.07% overall) and holds 72% of the big winners for 33% of volume.
+# That winner-share-vs-volume-share test is the bar any entry filter must clear
+# here, since 1.8% of trades carry 100% of the gain -- see the Doctrine's
+# out-of-bounds rule. Cuts ~2/3 of flow: deliberate, fewer positive trades beat
+# more negative ones.
+HOLDER_CONCENTRATION_REJECT_PCT = 80.0
 
 # 20/08, explicit operator decision -- the REAL wallet concentration guardrail,
 # pool excluded. Distinct from the threshold above, which the same day's
