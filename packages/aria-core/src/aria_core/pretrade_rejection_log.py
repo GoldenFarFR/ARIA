@@ -68,6 +68,11 @@ class GateDecision:
     would_be_entry_price: float | None
     would_be_reserve_usd: float | None
     realistic_would_be_entry_price: float | None
+    # 20/08 -- the real concentration among actual wallets, pool excluded.
+    # Defaulted so existing call sites keep working; see the gate's own
+    # `top_holder_excluding_pool_pct` docstring for why the two are measured
+    # side by side before either threshold is touched.
+    top_holder_excluding_pool_pct: float | None = None
 
 
 async def _ensure_table(db_path: str | None = None) -> None:
@@ -87,6 +92,7 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 blocked INTEGER NOT NULL,
                 reason TEXT,
                 top_holder_pct REAL,
+                top_holder_excluding_pool_pct REAL,
                 gate_latency_ms REAL,
                 would_be_entry_price REAL,
                 would_be_reserve_usd REAL,
@@ -104,6 +110,13 @@ async def _ensure_table(db_path: str | None = None) -> None:
         # expensive fast.
         await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_decided ON {TABLE}(decided_at)")
         await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status ON {TABLE}(tracking_status)")
+        # Hot ALTER for a table that already exists in prod -- proactive-
+        # ingestion doctrine: add the column and start accumulating now,
+        # never wait for a rebuild. A PRAGMA guard keeps it idempotent.
+        cur = await db.execute(f"PRAGMA table_info({TABLE})")
+        columns = {row[1] for row in await cur.fetchall()}
+        if "top_holder_excluding_pool_pct" not in columns:
+            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN top_holder_excluding_pool_pct REAL")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -130,15 +143,16 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
                 f"""
                 INSERT INTO {TABLE}
                     (pocket, chain, mint, pool_address, decided_at, blocked, reason,
-                     top_holder_pct, gate_latency_ms, would_be_entry_price,
-                     would_be_reserve_usd, realistic_would_be_entry_price,
+                     top_holder_pct, top_holder_excluding_pool_pct, gate_latency_ms,
+                     would_be_entry_price, would_be_reserve_usd, realistic_would_be_entry_price,
                      peak_price, tracking_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision.pocket, decision.chain, decision.mint, decision.pool_address,
                     datetime.now(timezone.utc).isoformat(), 1 if decision.blocked else 0,
-                    decision.reason, decision.top_holder_pct, decision.gate_latency_ms,
+                    decision.reason, decision.top_holder_pct,
+                    decision.top_holder_excluding_pool_pct, decision.gate_latency_ms,
                     decision.would_be_entry_price, decision.would_be_reserve_usd,
                     decision.realistic_would_be_entry_price,
                     decision.would_be_entry_price if trackable else None,

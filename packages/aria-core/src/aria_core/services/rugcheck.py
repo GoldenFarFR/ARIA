@@ -104,6 +104,17 @@ class RugCheckReport:
     # that does. Banked for a future per-creator behavior analysis, not
     # built yet.
     creator: str | None = None
+    # 20/08 -- the top holders as (pct, owner) pairs, most-held first.
+    # Added after a real finding: on a Solana fresh launch `top_holder_pct` is
+    # almost always the POOL/bonding curve itself, not a wallet (verified live
+    # on 6 real tokens, 5 of 6 had topHolders[0].owner == the pool address,
+    # with the second real holder at 0.01-0.39%). So `top_holder_pct` measures
+    # how much of the supply is still UNSOLD in the curve -- the inverse of
+    # traction -- and NOT the holder concentration its name suggests. Callers
+    # that know the pool address can now exclude it and read the real
+    # concentration among actual wallets; the scalar above is kept unchanged
+    # so every existing caller keeps its current behavior.
+    top_holders: list[tuple[float, str | None]] = field(default_factory=list)
     available: bool = True
     error: str | None = None
 
@@ -229,16 +240,22 @@ async def get_token_report(mint_address: str) -> RugCheckReport:
                 risks.append(r["name"])
 
     top_holder_pct: float | None = None
+    top_holders: list[tuple[float, str | None]] = []
     raw_holders = data.get("topHolders")
     if isinstance(raw_holders, list) and raw_holders:
         first = raw_holders[0]
         if isinstance(first, dict) and isinstance(first.get("pct"), (int, float)):
             top_holder_pct = float(first["pct"])
+        for h in raw_holders:
+            if isinstance(h, dict) and isinstance(h.get("pct"), (int, float)):
+                owner = h.get("owner")
+                top_holders.append((float(h["pct"]), owner if isinstance(owner, str) else None))
 
     raw_creator = data.get("creator")
     creator = raw_creator if isinstance(raw_creator, str) and raw_creator else None
 
     return RugCheckReport(
         score_normalised=score_normalised, risks=risks,
-        top_holder_pct=top_holder_pct, creator=creator, available=True, error=None,
+        top_holder_pct=top_holder_pct, top_holders=top_holders, creator=creator,
+        available=True, error=None,
     )

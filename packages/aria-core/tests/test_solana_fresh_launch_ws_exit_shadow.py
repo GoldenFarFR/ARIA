@@ -21,7 +21,7 @@ from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, Trending
 CHAIN = "solana"
 
 
-async def _gate_clears(_mint):
+async def _gate_clears(_mint, _pool=None):
     """20/08 -- stubs the PRE-TRADE holder gate as "cleared". Required in
     every _track_candidate_pumpportal test: the real gate is fail-closed
     and would otherwise hit the live RugCheck endpoint (never a real
@@ -827,9 +827,14 @@ def _pp_event(mint="mintA", bonding_curve_key="poolA"):
 
 
 class _Report:
-    def __init__(self, top_holder_pct, available=True):
+    def __init__(self, top_holder_pct, available=True, top_holders=None):
         self.available = available
         self.top_holder_pct = top_holder_pct
+        # (pct, owner) pairs -- defaults to "the pool holds it all", the real
+        # shape on a Solana fresh launch (verified live on 6 tokens).
+        self.top_holders = top_holders if top_holders is not None else (
+            [(top_holder_pct, "poolA"), (0.3, "walletB")] if top_holder_pct is not None else []
+        )
 
 
 @pytest.mark.asyncio
@@ -893,7 +898,7 @@ async def test_gate_fails_closed_when_the_report_carries_no_holder_data(monkeypa
 async def test_a_blocked_candidate_never_becomes_a_position():
     """The whole point: no row, so no entry fee and no loss -- unlike the
     post-entry reject, which only ever closed an already-open position."""
-    async def _blocks(_mint):
+    async def _blocks(_mint, _pool=None):
         return shadow.HolderGateOutcome(
             blocked=True, reason="blocked_holder_concentration: top_holder=99.0%",
             top_holder_pct=99.0, latency_ms=2.0,
@@ -916,7 +921,7 @@ async def test_an_outage_is_counted_separately_from_a_real_reject():
     """Fail-closed must stay VISIBLE: a RugCheck outage must never hide inside
     the normal reject count, or a silent provider failure would read as "the
     filter is working well" while the pocket is simply not trading at all."""
-    async def _unavailable(_mint):
+    async def _unavailable(_mint, _pool=None):
         return shadow.HolderGateOutcome(
             blocked=True, reason="blocked_holder_gate_unavailable: timeout", latency_ms=12000.0,
         )
@@ -936,7 +941,7 @@ async def test_an_outage_is_counted_separately_from_a_real_reject():
 async def test_a_blocked_candidate_sheds_its_websocket_subscription():
     """A blocked candidate must not leak the subscription add_pools() took --
     the exact failure that once exceeded the RPC's accountSubscribe ceiling."""
-    async def _blocks(_mint):
+    async def _blocks(_mint, _pool=None):
         return shadow.HolderGateOutcome(
             blocked=True, reason="blocked_holder_concentration: top_holder=99.0%",
             top_holder_pct=99.0, latency_ms=2.0,
@@ -959,7 +964,7 @@ async def test_the_gate_runs_only_after_the_liquidity_filter_clears():
     ~40/min of the raw PumpPortal feed -- otherwise it would queue forever."""
     calls = []
 
-    async def _counting_gate(mint):
+    async def _counting_gate(mint, _pool=None):
         calls.append(mint)
         return shadow.HolderGateOutcome(blocked=False)
 
@@ -971,3 +976,43 @@ async def test_the_gate_runs_only_after_the_liquidity_filter_clears():
     )
 
     assert calls == []  # liquidity never cleared, so no RugCheck call was spent
+
+
+# --- 20/08, the pool-excluded holder pct ---------------------------------
+# Real finding, verified live on 6 tokens: topHolders[0] is the POOL itself in
+# 5 of 6 cases (second real holder at 0.01-0.39%). So the live threshold is a
+# TRACTION filter, not the holder-concentration guardrail its name implies.
+# Both are measured side by side; neither threshold is changed on this alone.
+
+def test_pool_is_excluded_so_the_real_wallet_concentration_surfaces():
+    holders = [(99.3, "poolA"), (0.24, "walletB"), (0.1, "walletC")]
+    assert shadow._holder_pct_excluding_pool(holders, "poolA") == pytest.approx(0.24)
+
+
+def test_the_top_holder_is_kept_when_it_is_not_the_pool():
+    holders = [(44.9, "walletB"), (30.0, "poolA")]
+    assert shadow._holder_pct_excluding_pool(holders, "poolA") == pytest.approx(44.9)
+
+
+def test_missing_holder_data_is_none_never_a_flattering_zero():
+    """A 0.0 fallback would read as "no concentration at all" and silently
+    flatter a token whose data is simply missing."""
+    assert shadow._holder_pct_excluding_pool([], "poolA") is None
+    assert shadow._holder_pct_excluding_pool([(99.0, "poolA")], "poolA") is None
+
+
+def test_an_unknown_pool_address_never_silently_drops_the_top_holder():
+    holders = [(99.3, "poolA"), (0.24, "walletB")]
+    assert shadow._holder_pct_excluding_pool(holders, None) == pytest.approx(99.3)
+
+
+@pytest.mark.asyncio
+async def test_both_signals_are_carried_out_of_the_gate(monkeypatch):
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(99.3, top_holders=[(99.3, "poolA"), (0.24, "walletB")])),
+    )
+    gate = await shadow._holder_concentration_gate("mintA", "poolA")
+
+    assert gate.top_holder_pct == pytest.approx(99.3)          # the traction signal, acted on
+    assert gate.top_holder_excluding_pool_pct == pytest.approx(0.24)  # the real one, measured only

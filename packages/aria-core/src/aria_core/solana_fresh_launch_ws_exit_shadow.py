@@ -429,6 +429,12 @@ async def _has_open_or_recent_signal(db: aiosqlite.Connection, pool_address: str
 # rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED).
 HOLDER_GATE_TIMEOUT_S = 12.0
 
+# 20/08 -- how often the discovery loop emits its running outcome counters.
+# At the real feed rate (~38 events/min, measured live) this is roughly one
+# line every 5 minutes: frequent enough to notice a stalled or fail-closed
+# pocket quickly, rare enough not to drown the log.
+STATS_LOG_EVERY_N_EVENTS = 200
+
 # 20/08, explicit operator instruction ("ou rejette par securite"): if the
 # holder concentration cannot be established in time, the order is NOT sent.
 # Fail-closed, the same doctrine as every other guardrail in this project.
@@ -454,9 +460,35 @@ class HolderGateOutcome:
     reason: str | None = None
     top_holder_pct: float | None = None
     latency_ms: float | None = None
+    # 20/08 -- the SECOND signal, measured but deliberately NOT acted on yet.
+    # Verified live on 6 real tokens: `top_holder_pct` is the POOL itself in
+    # 5 of 6 cases (topHolders[0].owner == pool address, second real holder at
+    # 0.01-0.39%), so the existing threshold is really a TRACTION filter ("how
+    # much supply is still unsold in the curve"), not the holder-concentration
+    # guardrail its name implies. This field is the real concentration among
+    # actual wallets, pool excluded. Logged side by side with the other so 24h
+    # of data can say which of the two actually carries the performance --
+    # changing the live threshold on today's reasoning alone would be exactly
+    # the un-verified, same-sample tuning this project's doctrine forbids.
+    top_holder_excluding_pool_pct: float | None = None
 
 
-async def _holder_concentration_gate(mint: str) -> HolderGateOutcome:
+def _holder_pct_excluding_pool(
+    top_holders: list[tuple[float, str | None]], pool_address: str | None,
+) -> float | None:
+    """Largest holder that is NOT the pool. ``None`` when it cannot be
+    established -- never a 0.0 fallback, which would read as "no concentration
+    at all" and silently flatter a token whose data is simply missing."""
+    if not top_holders:
+        return None
+    for pct, owner in top_holders:
+        if pool_address and owner == pool_address:
+            continue
+        return pct
+    return None
+
+
+async def _holder_concentration_gate(mint: str, pool_address: str | None = None) -> HolderGateOutcome:
     """Pre-trade check. ``blocked=False`` means the token is CLEARED to enter.
 
     Never raises -- any failure resolves through ``HOLDER_GATE_FAIL_CLOSED``
@@ -486,17 +518,21 @@ async def _holder_concentration_gate(mint: str) -> HolderGateOutcome:
         # exactly like an outage, never as an implicit pass.
         return _unavailable("no data")
 
+    excluding_pool = _holder_pct_excluding_pool(report.top_holders, pool_address)
+
     if report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
         return HolderGateOutcome(
             blocked=True,
             reason=f"blocked_holder_concentration: top_holder={report.top_holder_pct:.1f}%",
             top_holder_pct=report.top_holder_pct,
             latency_ms=_elapsed_ms(),
+            top_holder_excluding_pool_pct=excluding_pool,
         )
     # Cleared -- the pct is still carried so the accepted side is measurable
     # too, otherwise only rejections would ever have holder data.
     return HolderGateOutcome(
         blocked=False, top_holder_pct=report.top_holder_pct, latency_ms=_elapsed_ms(),
+        top_holder_excluding_pool_pct=excluding_pool,
     )
 
 
@@ -638,7 +674,7 @@ async def _track_candidate_pumpportal(
             # payload (zero latency, zero quota) diverged from RugCheck on
             # 4 of 14 live tokens and returned impossible values (105-107%,
             # since the field counts VIRTUAL tokens, not a supply fraction).
-            gate = await holder_gate_fn(event.mint)
+            gate = await holder_gate_fn(event.mint, pool_address)
 
             realistic_entry_price = _apply_price_impact_and_fee(
                 price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD, reserve_usd=reserve_usd, side="buy",
@@ -655,6 +691,7 @@ async def _track_candidate_pumpportal(
                     blocked=gate.blocked, reason=gate.reason, top_holder_pct=gate.top_holder_pct,
                     gate_latency_ms=gate.latency_ms, would_be_entry_price=price_usd,
                     would_be_reserve_usd=reserve_usd,
+                    top_holder_excluding_pool_pct=gate.top_holder_excluding_pool_pct,
                     realistic_would_be_entry_price=realistic_entry_price,
                 )
             )
@@ -941,6 +978,20 @@ async def run_forever_pumpportal(
             if event is None:
                 continue
             events_seen += 1
+            # 20/08 -- these stats used to accumulate in memory and NEVER be
+            # emitted anywhere: a real observability hole found while trying to
+            # answer "is the fail-closed gate ever firing?". Without this line
+            # a RugCheck outage silently stopping every entry is
+            # indistinguishable from a quiet market -- exactly the failure this
+            # pocket's fail-closed design makes possible, so it has to be
+            # visible. Emitted on a count interval rather than a timer so it
+            # costs nothing when the feed is idle.
+            if events_seen % STATS_LOG_EVERY_N_EVENTS == 0:
+                logger.info(
+                    "solana_fresh_launch_ws_exit_shadow: %s events seen -- %s",
+                    events_seen,
+                    ", ".join(f"{k}={v}" for k, v in sorted(stats.items())) or "no outcome yet",
+                )
             task = asyncio.create_task(
                 _track_and_maybe_insert_pumpportal(
                     event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
