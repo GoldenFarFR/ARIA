@@ -896,7 +896,7 @@ async def chain_pnl_summary_realistic(chain: str = "solana") -> dict:
     outlier_excluded = 0
     for r in rows:
         entry = r["realistic_entry_price"]
-        if entry is None:
+        if not entry:
             unreachable_liquidity += 1
             continue
         sanity_reference = r.get("entry_price")
