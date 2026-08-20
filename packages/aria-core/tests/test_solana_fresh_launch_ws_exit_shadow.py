@@ -283,6 +283,47 @@ async def test_pumpportal_liquidity_within_range_accepted():
 
 
 @pytest.mark.asyncio
+async def test_pumpportal_candidate_in_market_cap_dead_zone_rejected_before_add_pools():
+    """20/08 -- same dead zone as FAST-DISCOVERY, reused here since both
+    pockets share the same PumpPortal source event (no WS-EXIT-specific
+    history needed, see _track_candidate_pumpportal's own docstring)."""
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+    from aria_core.solana_fresh_launch_fast_discovery_shadow import MARKET_CAP_SOL_AT_CREATION_REJECT_MIN
+
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=MARKET_CAP_SOL_AT_CREATION_REJECT_MIN, v_sol_in_bonding_curve=None,
+        v_tokens_in_bonding_curve=None, sol_amount=None, initial_buy=None, signature=None,
+        detected_at=__import__("time").time(),
+    )
+    bonding_feed = _FakeFeed()
+    resolve_fn = AsyncMock()
+    result = await shadow._track_candidate_pumpportal(
+        event, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+    )
+    assert result is None
+    resolve_fn.assert_not_awaited()
+    assert bonding_feed.added == []
+
+
+@pytest.mark.asyncio
+async def test_pumpportal_candidate_at_market_cap_dead_zone_upper_boundary_accepted():
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+    from aria_core.solana_fresh_launch_fast_discovery_shadow import MARKET_CAP_SOL_AT_CREATION_REJECT_MAX
+
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="poolA",
+        market_cap_sol=MARKET_CAP_SOL_AT_CREATION_REJECT_MAX, v_sol_in_bonding_curve=None,
+        v_tokens_in_bonding_curve=None, sol_amount=None, initial_buy=None, signature=None,
+        detected_at=__import__("time").time(),
+    )
+    mid_liquidity = (shadow.MIN_LIQUIDITY_USD + shadow.MAX_LIQUIDITY_USD_ENTRY) / 2
+    resolve_fn = AsyncMock(return_value=(1.0, mid_liquidity, None, "rest_dexpaprika"))
+    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_zero_price_candidate_never_logged(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=[]))
     result = await shadow.record_signals([_pool(price_usd=0.0)], chain=CHAIN)

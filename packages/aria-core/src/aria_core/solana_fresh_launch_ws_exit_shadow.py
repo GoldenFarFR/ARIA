@@ -195,6 +195,13 @@ async def _ensure_table() -> None:
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_lookup ON {TABLE} (pool_address, chain, exit_reason)"
         )
         await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_detected_at ON {TABLE} (detected_at)")
+        # 20/08 -- hot migration for a table that already pre-exists in prod
+        # (SQLite's CREATE TABLE IF NOT EXISTS above never adds columns to an
+        # existing table), same pattern as agent_wallet_monitor.py/
+        # paper_trader.py: PRAGMA table_info then ALTER TABLE only if missing.
+        existing = {row[1] for row in await (await db.execute(f"PRAGMA table_info({TABLE})")).fetchall()}
+        if "market_cap_sol_at_creation" not in existing:
+            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN market_cap_sol_at_creation REAL")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -400,6 +407,8 @@ async def _track_candidate_pumpportal(
     min_liquidity_usd: float = MIN_LIQUIDITY_USD,
     max_liquidity_usd_entry: float = MAX_LIQUIDITY_USD_ENTRY,
     max_pool_age_minutes: float = MAX_POOL_AGE_MINUTES,
+    market_cap_sol_at_creation_reject_min: float | None = None,
+    market_cap_sol_at_creation_reject_max: float | None = None,
     poll_interval_seconds: float | None = None,
     resolve_fn=None,
     sleep_fn=asyncio.sleep,
@@ -410,7 +419,12 @@ async def _track_candidate_pumpportal(
     _track_candidate`` (same ``resolve_fn`` default, same age-ceiling
     abandonment), returning a dict shaped for THIS pocket's own schema
     (no ``age_at_entry_seconds``/``market_cap_sol_at_creation`` columns
-    here -- those are FAST-DISCOVERY-only fields).
+    here -- those are FAST-DISCOVERY-only fields, never stored on this
+    pocket's rows). The 20/08 market-cap-at-creation reject band IS applied
+    here even so -- it reads straight off the incoming ``event``, no stored
+    history needed, since the dead zone is a source-side token-creation
+    property shared by both pockets (same PumpPortal feed), not something
+    specific to how this pocket then tracks the exit.
 
     ``resolve_fn``/``poll_interval_seconds`` default to FAST-DISCOVERY's own
     values via a LOCAL import (never at module load) -- that module imports
@@ -418,13 +432,39 @@ async def _track_candidate_pumpportal(
     import back here would be circular."""
     from aria_core.solana_fresh_launch_fast_discovery_shadow import (
         FAST_DISCOVERY_POLL_INTERVAL_SECONDS,
+        MARKET_CAP_SOL_AT_CREATION_REJECT_MAX,
+        MARKET_CAP_SOL_AT_CREATION_REJECT_MIN,
         _resolve_liquidity_snapshot,
     )
 
     resolve_fn = resolve_fn or _resolve_liquidity_snapshot
     poll_interval_seconds = poll_interval_seconds if poll_interval_seconds is not None else FAST_DISCOVERY_POLL_INTERVAL_SECONDS
+    market_cap_sol_at_creation_reject_min = (
+        market_cap_sol_at_creation_reject_min
+        if market_cap_sol_at_creation_reject_min is not None
+        else MARKET_CAP_SOL_AT_CREATION_REJECT_MIN
+    )
+    market_cap_sol_at_creation_reject_max = (
+        market_cap_sol_at_creation_reject_max
+        if market_cap_sol_at_creation_reject_max is not None
+        else MARKET_CAP_SOL_AT_CREATION_REJECT_MAX
+    )
     pool_address = event.bonding_curve_key
     if not pool_address:
+        return None
+
+    if (
+        event.market_cap_sol is not None
+        and market_cap_sol_at_creation_reject_min <= event.market_cap_sol < market_cap_sol_at_creation_reject_max
+    ):
+        # 20/08 -- same dead zone found on FAST-DISCOVERY's own calibration
+        # data (MARKET_CAP_SOL_AT_CREATION_REJECT_MIN/MAX's docstring): both
+        # pockets consume the same PumpPortalNewTokenEvent source, and the
+        # dead zone is a property of the token at creation, independent of
+        # which pocket then tracks the exit -- no WS-EXIT-specific history
+        # is needed to justify reusing FAST-DISCOVERY's calibrated band here.
+        # Rejected before add_pools() so a doomed candidate never costs a
+        # websocket subscription either.
         return None
 
     if bonding_ws_feed is not None:
@@ -486,6 +526,7 @@ async def _track_candidate_pumpportal(
                 "peak_price": price_usd,
                 "realistic_entry_price": realistic_entry_price,
                 "dex_id": source,
+                "market_cap_sol_at_creation": event.market_cap_sol,
             }
 
         await sleep_fn(poll_interval_seconds)
@@ -499,15 +540,15 @@ async def _insert_confirmed_row_pumpportal(row: dict) -> int:
             INSERT INTO {TABLE} (
                 pool_address, token_address, chain, symbol, detected_at, entry_price,
                 reserve_usd, pool_created_at, remaining_qty, realized_proceeds, peak_price,
-                realistic_entry_price, dex_id
+                realistic_entry_price, dex_id, market_cap_sol_at_creation
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?
             )
             """,
             (
                 row["pool_address"], row["token_address"], row["chain"], row["symbol"], row["detected_at"],
                 row["entry_price"], row["reserve_usd"], row["pool_created_at"], row["peak_price"],
-                row["realistic_entry_price"], row["dex_id"],
+                row["realistic_entry_price"], row["dex_id"], row.get("market_cap_sol_at_creation"),
             ),
         )
         new_id = cur.lastrowid
