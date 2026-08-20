@@ -83,45 +83,46 @@ WSOL_MINT = "So11111111111111111111111111111111111111112"
 # code change -- defaults to the same free public RPC verified live 19/08
 # (solana.com/docs/references/clusters: 40 req/10s per method / 100 req/10s
 # overall per IP, respected throughout this module's setup calls).
-_PUBLIC_RPC_HTTP = "https://api.mainnet-beta.solana.com"
-_PUBLIC_RPC_WS = "wss://api.mainnet-beta.solana.com"
+# 20/08, operator decision: "detruit tout ces chemins vers les API et le RPC
+# Solana public, au moins on est sur de notre coup" -- there is NO public
+# fallback any more. The free endpoint used to be the default value, so a
+# process missing `ARIA_SOLANA_RPC_*` silently degraded onto the tightest
+# per-IP limits; that is how the dome's busiest subscription (~6650 trades per
+# 100s) shipped on the public RPC while the paid one sat unused.
+#
+# Empty rather than raising AT IMPORT on purpose: these modules are imported by
+# the whole test suite and by tools that never touch Solana, so a module-level
+# raise would break unrelated things over a config issue. The failure surfaces
+# at the moment a Solana call is actually attempted, via
+# `require_solana_rpc_http()`/`require_solana_rpc_ws()` below -- loud, named,
+# and impossible to mistake for a working degraded mode.
+RPC_HTTP_DEFAULT = (os.environ.get("ARIA_SOLANA_RPC_HTTP", "") or "").strip()
+RPC_WS_DEFAULT = (os.environ.get("ARIA_SOLANA_RPC_WS", "") or "").strip()
 
-RPC_HTTP_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_HTTP", _PUBLIC_RPC_HTTP)
-RPC_WS_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_WS", _PUBLIC_RPC_WS)
+_RPC_MISSING_MSG = (
+    "Solana RPC not configured: set {var} to the dedicated endpoint. There is NO "
+    "public fallback by design (operator decision 20/08) -- running on the free "
+    "public RPC silently throttled the busiest feed while the paid endpoint went "
+    "unused. If the dedicated RPC is down, point this variable at another one."
+)
 
 
 def solana_rpc_is_dedicated() -> bool:
-    """True when BOTH endpoints resolve to the paid dedicated RPC rather than
-    the free public one."""
-    return RPC_HTTP_DEFAULT != _PUBLIC_RPC_HTTP and RPC_WS_DEFAULT != _PUBLIC_RPC_WS
+    """True when both endpoints are configured. There is no public fallback, so
+    "configured" and "dedicated" are now the same thing."""
+    return bool(RPC_HTTP_DEFAULT) and bool(RPC_WS_DEFAULT)
 
 
-def _warn_if_public_rpc() -> None:
-    """20/08 -- the fallback to the free public RPC used to be SILENT, which is
-    how ARIA's busiest Solana subscription (~6650 trades/100s) ended up on the
-    endpoint with the tightest per-IP limits while the PAID Helius one, already
-    configured in `ARIA_SOLANA_RPC_*`, sat unused for it. The env vars are set
-    in production, so the fallback only ever fires when something is
-    misconfigured -- and that is exactly the case that must be LOUD instead of
-    silent. Warns rather than raises: a hard failure here would take down
-    read-only shadow pockets over a config issue, which is worse than running
-    degraded with a visible warning."""
-    missing = []
-    if RPC_HTTP_DEFAULT == _PUBLIC_RPC_HTTP:
-        missing.append("ARIA_SOLANA_RPC_HTTP")
-    if RPC_WS_DEFAULT == _PUBLIC_RPC_WS:
-        missing.append("ARIA_SOLANA_RPC_WS")
-    if missing:
-        logger.warning(
-            "SOLANA RPC DEGRADED: falling back to the FREE PUBLIC endpoint because %s "
-            "%s not set -- the dedicated paid RPC is configured in the backend .env and "
-            "every Solana feed is meant to ride it (tighter per-IP limits here will "
-            "throttle the trade stream first)",
-            " and ".join(missing), "is" if len(missing) == 1 else "are",
-        )
+def require_solana_rpc_http() -> str:
+    if not RPC_HTTP_DEFAULT:
+        raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_HTTP"))
+    return RPC_HTTP_DEFAULT
 
 
-_warn_if_public_rpc()
+def require_solana_rpc_ws() -> str:
+    if not RPC_WS_DEFAULT:
+        raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_WS"))
+    return RPC_WS_DEFAULT
 
 SETUP_REQUEST_GAP_SECONDS = 0.4  # keeps sequential setup calls well under the verified ceiling above
 
@@ -245,7 +246,9 @@ async def _rpc_get_multiple_accounts(
         "method": "getMultipleAccounts",
         "params": [pubkeys, {"encoding": "base64", "commitment": "confirmed"}],
     }
-    resp = await http_client.post(rpc_http_url, json=payload, timeout=15.0)
+    # No public fallback by design: an unset endpoint fails here, named,
+    # rather than silently sending the dome's Solana reads to the free RPC.
+    resp = await http_client.post(rpc_http_url or require_solana_rpc_http(), json=payload, timeout=15.0)
     resp.raise_for_status()
     data = resp.json()
     if "error" in data:
@@ -550,6 +553,9 @@ class PumpSwapWebSocketFeed:
     def _connect(self):
         if self._connect_fn is not None:
             return self._connect_fn(self._rpc_ws_url)
+        # No public fallback by design (see pumpswap_ws's own comment): an
+        # unset endpoint fails here, named, rather than silently degrading.
+        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws()
         import websockets
 
         # ping_timeout raised 20->40s (19/08), same empirical test as

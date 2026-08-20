@@ -79,6 +79,8 @@ from aria_core.services.coingecko import coingecko_client
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
     RPC_WS_DEFAULT,
+    require_solana_rpc_http,
+    require_solana_rpc_ws,
     _pubkey_from_bytes,
     _rpc_get_multiple_accounts,
     decode_mint_decimals,
@@ -313,6 +315,9 @@ async def resolve_bonding_curves(
     half-verified result handed to a caller."""
     if not pool_mint_pairs:
         return {}
+    # No public fallback by design (see pumpswap_ws): an unset endpoint fails
+    # here, loudly and named, rather than quietly hitting the free RPC.
+    rpc_http_url = rpc_http_url or require_solana_rpc_http()
 
     pool_addrs = [p for p, _ in pool_mint_pairs]
     mint_by_pool = dict(pool_mint_pairs)
@@ -613,6 +618,9 @@ class PumpFunBondingWebSocketFeed:
     def _connect(self):
         if self._connect_fn is not None:
             return self._connect_fn(self._rpc_ws_url)
+        # No public fallback by design (see pumpswap_ws's own comment): an
+        # unset endpoint fails here, named, rather than silently degrading.
+        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws()
         import websockets
 
         # ping_timeout raised 20->40s (19/08 empirical test): recurring "keepalive

@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 # the dome's highest-volume subscription -- ~6650 trades / 100s measured live,
 # by far the busiest thing ARIA runs on Solana -- on the endpoint with the
 # tightest per-IP limits, while the paid one sat unused.
-from aria_core.services.pumpswap_ws import RPC_WS_DEFAULT
+from aria_core.services.pumpswap_ws import RPC_WS_DEFAULT, require_solana_rpc_ws
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +326,9 @@ class PumpFunTradeStream:
     def _connect(self):
         if self._connect_fn is not None:
             return self._connect_fn(self._rpc_ws_url)
+        # No public fallback by design -- fail here rather than stream the
+        # dome's busiest subscription over the free endpoint.
+        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws()
         import websockets
 
         return websockets.connect(self._rpc_ws_url, ping_interval=20, ping_timeout=40)

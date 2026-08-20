@@ -17,6 +17,11 @@ import pytest
 from aria_core.services import pumpswap_ws
 from aria_core.services.coingecko import SimplePriceResult
 
+# 20/08 -- passed explicitly everywhere: there is no public RPC default any
+# more, so a test that omits it now fails loudly (by design). The HTTP client
+# is mocked in these tests, so the value itself is irrelevant to the assertions.
+_TEST_RPC = "https://rpc.test.invalid"
+
 
 def _pk_bytes(label: str) -> bytes:
     """Deterministic 32-byte fake pubkey, unique per label."""
@@ -130,7 +135,7 @@ async def test_resolve_pool_accounts_fully_verified_pool():
         pumpswap_ws._pubkey_from_bytes(quote_mint): _build_mint_raw(9),
     }
     async with httpx.AsyncClient(transport=_mock_transport(accounts)) as http_client:
-        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr])
+        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr], rpc_http_url=_TEST_RPC)
     assert pool_addr in result
     resolved = result[pool_addr]
     assert resolved.base_decimals == 6
@@ -153,7 +158,7 @@ async def test_resolve_pool_accounts_excludes_pool_on_mint_mismatch():
         pumpswap_ws._pubkey_from_bytes(quote_mint): _build_mint_raw(9),
     }
     async with httpx.AsyncClient(transport=_mock_transport(accounts)) as http_client:
-        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr])
+        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr], rpc_http_url=_TEST_RPC)
     assert result == {}
 
 
@@ -170,14 +175,14 @@ async def test_resolve_pool_accounts_excludes_pool_on_missing_decimals():
         # quote mint account missing entirely -> decimals unresolved -> pool excluded.
     }
     async with httpx.AsyncClient(transport=_mock_transport(accounts)) as http_client:
-        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr])
+        result = await pumpswap_ws.resolve_pool_accounts(http_client, [pool_addr], rpc_http_url=_TEST_RPC)
     assert result == {}
 
 
 @pytest.mark.asyncio
 async def test_resolve_pool_accounts_empty_input_returns_empty():
     async with httpx.AsyncClient(transport=_mock_transport({})) as http_client:
-        result = await pumpswap_ws.resolve_pool_accounts(http_client, [])
+        result = await pumpswap_ws.resolve_pool_accounts(http_client, [], rpc_http_url=_TEST_RPC)
     assert result == {}
 
 
@@ -304,7 +309,9 @@ async def test_add_pools_resolves_and_queues_subscriptions():
         pumpswap_ws._pubkey_from_bytes(quote_mint): _build_mint_raw(9),
     }
     transport = _mock_transport(accounts)
-    feed = pumpswap_ws.PumpSwapWebSocketFeed(http_client_factory=lambda: httpx.AsyncClient(transport=transport))
+    feed = pumpswap_ws.PumpSwapWebSocketFeed(
+        http_client_factory=lambda: httpx.AsyncClient(transport=transport), rpc_http_url=_TEST_RPC,
+    )
 
     added = await feed.add_pools([pool_addr])
     assert added == 1
@@ -487,39 +494,38 @@ def test_a_module_that_needs_solana_rpc_can_ask_whether_it_is_dedicated():
     assert isinstance(solana_rpc_is_dedicated(), bool)
 
 
-def test_the_public_fallback_is_reported_not_silent(caplog):
-    import logging
+def test_an_unset_endpoint_raises_a_named_error_rather_than_using_the_public_rpc():
+    """20/08, operator decision: the public fallback is GONE. An unset endpoint
+    must fail loudly and name the variable -- running degraded on the free RPC
+    is what silently throttled the busiest feed while the paid one sat unused."""
+    import pytest as _pytest
 
     from aria_core.services import pumpswap_ws as m
 
-    with caplog.at_level(logging.WARNING):
-        original_http, original_ws = m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT
-        try:
-            m.RPC_HTTP_DEFAULT = m._PUBLIC_RPC_HTTP
-            m.RPC_WS_DEFAULT = m._PUBLIC_RPC_WS
-            m._warn_if_public_rpc()
-        finally:
-            m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT = original_http, original_ws
+    original_http, original_ws = m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT
+    try:
+        m.RPC_HTTP_DEFAULT = ""
+        m.RPC_WS_DEFAULT = ""
+        assert m.solana_rpc_is_dedicated() is False
+        for fn, var in ((m.require_solana_rpc_http, "ARIA_SOLANA_RPC_HTTP"),
+                        (m.require_solana_rpc_ws, "ARIA_SOLANA_RPC_WS")):
+            with _pytest.raises(RuntimeError) as exc:
+                fn()
+            assert var in str(exc.value)
+            assert "NO public fallback" in str(exc.value)
+    finally:
+        m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT = original_http, original_ws
 
-    assert any("RPC DEGRADED" in r.message for r in caplog.records)
 
-
-def test_a_dedicated_endpoint_produces_no_warning(caplog):
-    import logging
-
+def test_a_configured_endpoint_is_returned_unchanged():
     from aria_core.services import pumpswap_ws as m
 
-    with caplog.at_level(logging.WARNING):
-        original_http, original_ws = m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT
-        try:
-            m.RPC_HTTP_DEFAULT = "https://mainnet.helius-rpc.com/?api-key=x"
-            m.RPC_WS_DEFAULT = "wss://mainnet.helius-rpc.com/?api-key=x"
-            assert m.solana_rpc_is_dedicated() is True
-            m._warn_if_public_rpc()
-        finally:
-            m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT = original_http, original_ws
-
-    assert not any("RPC DEGRADED" in r.message for r in caplog.records)
+    original = m.RPC_HTTP_DEFAULT
+    try:
+        m.RPC_HTTP_DEFAULT = "https://mainnet.helius-rpc.com/?api-key=x"
+        assert m.require_solana_rpc_http() == "https://mainnet.helius-rpc.com/?api-key=x"
+    finally:
+        m.RPC_HTTP_DEFAULT = original
 
 
 def test_every_solana_feed_imports_the_shared_endpoint_rather_than_restating_it():
