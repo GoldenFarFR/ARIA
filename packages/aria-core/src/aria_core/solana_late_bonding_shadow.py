@@ -203,7 +203,10 @@ async def consider_candidate(
                 await client.aclose()
 
         account = resolved.get(pool_address) if resolved else None
-        curve = getattr(account, "raw", None) or (account if isinstance(account, dict) else None)
+        #  carries the decoded account fields the resolver used to discard
+        # -- see PumpFunBondingCurveAccount. Falls back to a raw dict so an
+        # injected test double can hand one directly.
+        curve = getattr(account, "curve", None) or (account if isinstance(account, dict) else None)
         decimals = getattr(account, "token_decimals", None)
 
         accepted, reason, metrics = await screen_candidate(

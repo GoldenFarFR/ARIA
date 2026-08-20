@@ -71,7 +71,7 @@ import base64
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -183,6 +183,14 @@ class PumpFunBondingCurveAccount:
     mint: str
     quote_mint: str
     token_decimals: int
+    # 20/08 -- the decoded account fields, kept instead of discarded. This
+    # resolver ALREADY decodes the whole account to verify its discriminator,
+    # then threw the reserves away, so any caller needing curve position had
+    # no way to get it short of a second read. Found live: the LATE-BONDING
+    # pocket rejected 88 straight candidates as `blocked_progress_unknown`
+    # because of exactly this. Defaults to an empty dict so every existing
+    # construction site keeps working unchanged.
+    curve: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -344,6 +352,7 @@ async def resolve_bonding_curves(
             continue
         result[pool_addr] = PumpFunBondingCurveAccount(
             pool_address=pool_addr, mint=mint, quote_mint=d["quote_mint"], token_decimals=dec,
+            curve=d,
         )
     return result
 

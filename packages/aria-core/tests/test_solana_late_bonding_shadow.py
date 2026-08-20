@@ -128,7 +128,7 @@ async def test_no_trade_stream_at_all_is_rejected_not_assumed_clean():
 
 async def _resolve_ok(_client, pairs, **_kw):
     pool, _mint = pairs[0]
-    return {pool: SimpleNamespace(raw=_curve(0.78), token_decimals=6, creator="devSolo")}
+    return {pool: SimpleNamespace(curve=_curve(0.78), token_decimals=6, creator="devSolo")}
 
 
 async def _snapshot_ok(_client, _pool, _mint, *, chain):
@@ -189,7 +189,7 @@ async def test_every_decision_is_logged_including_the_rejections(_tmp_db):
 
     async def _resolve_early(_client, pairs, **_kw):
         pool, _ = pairs[0]
-        return {pool: SimpleNamespace(raw=_curve(0.20), token_decimals=6, creator="devSolo")}
+        return {pool: SimpleNamespace(curve=_curve(0.20), token_decimals=6, creator="devSolo")}
 
     await pocket.consider_candidate(
         "mintB", "poolB", trade_stream=_Stream(), resolve_curves_fn=_resolve_early,
