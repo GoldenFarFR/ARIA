@@ -226,6 +226,31 @@ class PumpFunBondingLiveSnapshot:
     stale: bool = False
 
 
+def derive_bonding_curve_address(mint: str) -> str | None:
+    """The bonding-curve PDA for a mint, computed LOCALLY (no RPC call).
+
+    20/08 -- added because the LATE-BONDING pocket sources candidates from the
+    program-wide trade stream, which only ever knows MINTS: pump.fun's trade
+    events carry the mint, not the curve address. Every earlier caller got the
+    resolved address handed to it by PumpPortal's creation event
+    (``bondingCurveKey``), so nothing had needed to derive it before -- and the
+    pocket silently rejected every candidate with `blocked_progress_unknown`
+    until this existed.
+
+    Seeds ``["bonding-curve", mint]`` under the pump.fun program, straight from
+    the official IDL's own instruction account list (see module docstring).
+    ``None`` on anything unparseable -- never a fabricated address."""
+    try:
+        from solders.pubkey import Pubkey
+
+        program = Pubkey.from_string(PUMPFUN_PROGRAM_ID)
+        mint_key = Pubkey.from_string(mint)
+        pda, _bump = Pubkey.find_program_address([b"bonding-curve", bytes(mint_key)], program)
+        return str(pda)
+    except Exception:  # noqa: BLE001 -- a bad mint is never fatal
+        return None
+
+
 def bonding_progress(decoded: dict | None, *, token_decimals: int | None = None) -> float | None:
     """0.0 at creation, 1.0 at graduation. ``None`` when it cannot be computed
     honestly -- never a guessed value.

@@ -114,3 +114,24 @@ def test_reserves_inconsistent_with_the_provisional_constant_return_none():
     assert bonding_progress({"real_token_reserves": -1, "complete": False}) is None
     assert bonding_progress({"complete": False}) is None
     assert bonding_progress(None) is None
+
+
+# --- 20/08, bonding-curve PDA derivation ---------------------------------
+# The LATE-BONDING pocket sources from the program-wide trade stream, which
+# only knows MINTS. Every earlier caller got the curve address handed to it by
+# PumpPortal's creation event, so nothing had needed to derive it -- and the
+# pocket rejected every candidate until this existed.
+
+def test_a_real_mint_derives_a_stable_curve_address():
+    from aria_core.services.pumpfun_bonding_ws import derive_bonding_curve_address
+    mint = "FceDnS4HVKb9EMnpvGrP3XrhAyyXSMakguMLxNGtp4oC"  # a real one from our own closures
+    addr = derive_bonding_curve_address(mint)
+
+    assert addr and addr != mint
+    assert derive_bonding_curve_address(mint) == addr  # deterministic
+
+
+def test_an_unparseable_mint_returns_none_never_a_fabricated_address():
+    from aria_core.services.pumpfun_bonding_ws import derive_bonding_curve_address
+    assert derive_bonding_curve_address("not-a-pubkey") is None
+    assert derive_bonding_curve_address("") is None
