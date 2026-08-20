@@ -52,6 +52,7 @@ VANGUARD_PUBLIC_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/aria/diagnostics/agent-wallet-ledger"),
     ("GET", "/api/aria/diagnostics/paper-ledger"),
     ("GET", "/api/aria/diagnostics/circuit-breakers"),
+    ("GET", "/api/aria/diagnostics/fresh-launch-segment"),
 )
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import aiosqlite
@@ -749,3 +750,83 @@ async def test_advance_exit_simulation_never_raises_on_a_single_pool_failure():
     assert counts["checked"] == 0
     rows = await _rows()
     assert rows[0]["last_checked_at"] is not None  # starvation-fix stamp still applied
+
+
+# --- 20/08, coverage gap closed ------------------------------------------
+# `_reject_on_holder_concentration` shipped here with ZERO test coverage
+# despite having closed 651 real positions -- found while porting the same
+# filter over to WS-EXIT (see that module's own test file for the mirror).
+
+class _RugcheckReport:
+    def __init__(self, top_holder_pct, available=True):
+        self.available = available
+        self.top_holder_pct = top_holder_pct
+        self.score_normalised = 50.0
+        self.risks = None
+        self.creator = "devA"
+
+
+async def _row_of(row_id: int):
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(f"SELECT * FROM {shadow.TABLE} WHERE id = ?", (row_id,))
+        return dict(await cur.fetchone())
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_backfill_closes_a_row_above_the_holder_threshold(monkeypatch):
+    row_id = await _insert_open_row(pool_address="curveA", entry_price=1.0)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_RugcheckReport(shadow.HOLDER_CONCENTRATION_REJECT_PCT + 0.5)),
+    )
+    monkeypatch.setattr(
+        shadow, "_snapshot_with_fallback",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, price_usd=0.5, reserve_usd=4000.0, dex_id="rest_dexpaprika",
+        )),
+    )
+    await shadow._enrich_with_rugcheck(row_id, "mintA")
+
+    row = await _row_of(row_id)
+    assert row["exit_reason"] == "holder_concentration_reject"
+    assert row["final_multiplier"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_backfill_leaves_a_row_below_the_holder_threshold_open(monkeypatch):
+    row_id = await _insert_open_row(pool_address="curveA", entry_price=1.0)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_RugcheckReport(shadow.HOLDER_CONCENTRATION_REJECT_PCT - 0.5)),
+    )
+    snapshot_mock = AsyncMock()
+    monkeypatch.setattr(shadow, "_snapshot_with_fallback", snapshot_mock)
+
+    await shadow._enrich_with_rugcheck(row_id, "mintA")
+
+    row = await _row_of(row_id)
+    assert row["exit_reason"] is None
+    snapshot_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_holder_reject_never_reopens_an_already_closed_row(monkeypatch):
+    row_id = await _insert_open_row(pool_address="curveA", entry_price=1.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET exit_reason='trailing_stop', final_multiplier=1.4 WHERE id=?",
+            (row_id,),
+        )
+        await db.commit()
+    monkeypatch.setattr(
+        shadow, "_snapshot_with_fallback",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, price_usd=0.5, reserve_usd=4000.0, dex_id="rest_dexpaprika",
+        )),
+    )
+    await shadow._reject_on_holder_concentration(row_id)
+
+    row = await _row_of(row_id)
+    assert row["exit_reason"] == "trailing_stop"
+    assert row["final_multiplier"] == pytest.approx(1.4)

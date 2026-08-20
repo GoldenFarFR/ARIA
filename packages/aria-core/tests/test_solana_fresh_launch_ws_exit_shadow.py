@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import aiosqlite
@@ -696,3 +697,101 @@ async def test_summary_tracks_price_source_breakdown():
     s = await shadow.summary(chain=CHAIN)
     assert s["completed"] == 2
     assert s["by_exit_price_source"] == {"websocket": 1, "polling": 1}
+
+
+# --- 20/08, holder-concentration reject ported over from FAST-DISCOVERY ----
+# The A/B that deliberately kept this pocket WITHOUT the filter returned its
+# verdict on 1003 real closures (see HOLDER_CONCENTRATION_REJECT_PCT's own
+# docstring). Note this logic shipped on FAST-DISCOVERY with ZERO test
+# coverage despite closing 651 real positions -- covered on both pockets now.
+
+class _RugcheckReport:
+    def __init__(self, top_holder_pct, available=True):
+        self.available = available
+        self.top_holder_pct = top_holder_pct
+        self.score_normalised = 50.0
+        self.risks = None
+        self.creator = "devA"
+
+
+async def _exit_reason_of(row_id: int):
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(f"SELECT * FROM {shadow.TABLE} WHERE id = ?", (row_id,))
+        return dict(await cur.fetchone())
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_backfill_closes_a_row_above_the_holder_threshold(monkeypatch):
+    row_id = await _insert_open_row(pool_address="poolA", entry_price=1.0, reserve_usd=4000.0)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_RugcheckReport(shadow.HOLDER_CONCENTRATION_REJECT_PCT + 0.5)),
+    )
+    monkeypatch.setattr(
+        shadow, "_snapshot_with_fallback",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, price_usd=0.5, reserve_usd=4000.0, dex_id="rest_dexpaprika",
+        )),
+    )
+    feed = _FakeFeed()
+    await shadow._enrich_with_rugcheck_pumpportal(row_id, "mintA", bonding_ws_feed=feed)
+
+    row = await _exit_reason_of(row_id)
+    assert row["exit_reason"] == "holder_concentration_reject"
+    assert row["remaining_qty"] == 0.0
+    assert row["final_multiplier"] == pytest.approx(0.5)
+    assert feed.removed == ["poolA"]  # subscription shed, never leaked
+
+
+@pytest.mark.asyncio
+async def test_rugcheck_backfill_leaves_a_row_below_the_holder_threshold_open(monkeypatch):
+    row_id = await _insert_open_row(pool_address="poolA", entry_price=1.0)
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_RugcheckReport(shadow.HOLDER_CONCENTRATION_REJECT_PCT - 0.5)),
+    )
+    snapshot_mock = AsyncMock()
+    monkeypatch.setattr(shadow, "_snapshot_with_fallback", snapshot_mock)
+
+    await shadow._enrich_with_rugcheck_pumpportal(row_id, "mintA")
+
+    row = await _exit_reason_of(row_id)
+    assert row["exit_reason"] is None
+    assert row["rugcheck_top_holder_pct"] == pytest.approx(shadow.HOLDER_CONCENTRATION_REJECT_PCT - 0.5)
+    snapshot_mock.assert_not_awaited()  # no needless network call on the accepted path
+
+
+@pytest.mark.asyncio
+async def test_holder_reject_never_reopens_an_already_closed_row(monkeypatch):
+    """`WHERE exit_reason IS NULL` guards the race against the normal exit
+    loop closing the same row first -- whichever writes first wins."""
+    row_id = await _insert_open_row(pool_address="poolA", entry_price=1.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET exit_reason='trailing_stop', final_multiplier=1.4 WHERE id=?",
+            (row_id,),
+        )
+        await db.commit()
+    monkeypatch.setattr(
+        shadow, "_snapshot_with_fallback",
+        AsyncMock(return_value=SimpleNamespace(
+            available=True, price_usd=0.5, reserve_usd=4000.0, dex_id="rest_dexpaprika",
+        )),
+    )
+    await shadow._reject_on_holder_concentration(row_id)
+
+    row = await _exit_reason_of(row_id)
+    assert row["exit_reason"] == "trailing_stop"
+    assert row["final_multiplier"] == pytest.approx(1.4)
+
+
+@pytest.mark.asyncio
+async def test_holder_reject_never_raises_when_the_snapshot_fails(monkeypatch):
+    row_id = await _insert_open_row(pool_address="poolA", entry_price=1.0)
+    monkeypatch.setattr(shadow, "_snapshot_with_fallback", AsyncMock(side_effect=RuntimeError("boom")))
+
+    await shadow._reject_on_holder_concentration(row_id)  # must not raise
+
+    row = await _exit_reason_of(row_id)
+    assert row["exit_reason"] is None  # left open, never closed on a guessed price

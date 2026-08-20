@@ -534,6 +534,36 @@ async def diagnostics_agent_wallet_ledger(request: Request, limit: int = 100):
     return {"transactions": await agent_wallet_log.list_transactions(limit=limit)}
 
 
+@router.get("/diagnostics/fresh-launch-segment")
+async def diagnostics_fresh_launch_segment(request: Request, pocket: str = "fast_discovery"):
+    """Forward-test du segment ">=6000$ + top_holder<92%" des poches fresh-launch
+    Solana (20/08). Pure lecture : ne change aucune entrée, aucune sortie, aucun
+    seuil — il observe si le seul profil rentable trouvé le 20/08 se confirme sur
+    un échantillon que l'hypothèse n'a jamais vu. Même gate dédié que
+    `/diagnostics/agent-wallet-ledger`.
+    """
+    from aria_core import fresh_launch_segment_forward_test as fwd
+    from aria_core.diagnostics_access import verify_diagnostic_access
+
+    if not verify_diagnostic_access(request.headers.get("X-Diagnostic-Access")):
+        raise HTTPException(status_code=403, detail="Diagnostic access required")
+
+    try:
+        report = await fwd.build_report(pocket)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "pocket": report.pocket,
+        "since": report.since,
+        "baseline_in_sample": report.baseline,
+        "segment": vars(report.segment),
+        "control": vars(report.control),
+        "verdict": report.verdict,
+        "text": fwd.format_report(report),
+    }
+
+
 @router.get("/diagnostics/paper-ledger")
 async def diagnostics_paper_ledger(request: Request, closed_limit: int = 100):
     """Registre du paper-trading 1M$ (#194) : positions ouvertes ET clôturées, avec

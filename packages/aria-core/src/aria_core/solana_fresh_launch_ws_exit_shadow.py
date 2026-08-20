@@ -135,6 +135,27 @@ MIN_LIQUIDITY_USD = 3000.0
 # ``_track_candidate_pumpportal``'s own call site.
 MAX_LIQUIDITY_USD_ENTRY = 5000.0
 
+# 20/08, operator-directed emergency performance investigation. This pocket
+# deliberately did NOT apply FAST-DISCOVERY's holder-concentration reject --
+# it was the A/B variable kept open on purpose. That A/B has now returned its
+# verdict on THIS pocket's own 1003 real closures, and it is unambiguous:
+#   top_holder <85%   n=267  winrate 18.7%  avg -6.19%
+#   top_holder 85-92% n=63   winrate  7.9%  avg -9.43%
+#   top_holder 92-97% n=136  winrate  8.1%  avg -7.27%
+#   top_holder >=97%  n=529  winrate  0.8%  avg -10.30%   <-- 53% of the flow
+# The >=97% band alone carried 53% of every entry this pocket made, at a 0.8%
+# winrate -- statistically indistinguishable from noise, and the single
+# mechanical reason WS-EXIT sat at a 9% winrate while FAST-DISCOVERY (which
+# has cut this segment since 20/08) sat at 17%. Simulated over those same real
+# closures, cutting >=92% takes this pocket from 7.1% to 16.6% winrate.
+# Keeping the A/B open any longer would only re-confirm a settled result at
+# the cost of more (fictitious) capital, so it is closed here deliberately --
+# same value as FAST-DISCOVERY's own calibrated constant, applied the same
+# way (an early exit on RugCheck's async backfill, never an entry gate, which
+# would reintroduce the multi-minute RugCheck wait this pocket's design
+# exists to avoid).
+HOLDER_CONCENTRATION_REJECT_PCT = 92.0
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -556,12 +577,15 @@ async def _insert_confirmed_row_pumpportal(row: dict) -> int:
     return new_id
 
 
-async def _enrich_with_rugcheck_pumpportal(row_id: int, mint: str) -> None:
+async def _enrich_with_rugcheck_pumpportal(
+    row_id: int, mint: str, *, bonding_ws_feed=None, ws_feed=None,
+) -> None:
     """Fire-and-forget rugcheck backfill, mirroring FAST-DISCOVERY's own
-    ``_enrich_with_rugcheck`` -- but WITHOUT the holder-concentration early
-    exit (see module comment above: that filter is deliberately the one
-    variable this pocket does NOT apply, so the A/B comparison stays
-    meaningful)."""
+    ``_enrich_with_rugcheck`` -- INCLUDING its holder-concentration early
+    exit as of 20/08. That filter used to be the one variable this pocket
+    deliberately did not apply, so the A/B stayed meaningful; the A/B has
+    since returned a settled verdict on this pocket's own real closures, see
+    ``HOLDER_CONCENTRATION_REJECT_PCT``'s own docstring for the numbers."""
     try:
         report = await rugcheck.get_token_report(mint)
     except Exception as exc:  # noqa: BLE001 -- enrichment must never propagate
@@ -588,6 +612,97 @@ async def _enrich_with_rugcheck_pumpportal(row_id: int, mint: str) -> None:
             await db.commit()
     except Exception as exc:  # noqa: BLE001 -- enrichment must never propagate
         logger.info("solana_fresh_launch_ws_exit_shadow: rugcheck backfill write failed for row %s (%s)", row_id, exc)
+        return
+
+    if report.top_holder_pct is not None and report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
+        await _reject_on_holder_concentration(row_id, bonding_ws_feed=bonding_ws_feed, ws_feed=ws_feed)
+
+
+async def _reject_on_holder_concentration(row_id: int, *, bonding_ws_feed=None, ws_feed=None) -> None:
+    """Closes a still-open row the moment RugCheck's backfill (see
+    ``_enrich_with_rugcheck_pumpportal``) reveals ``top_holder_pct`` at/above
+    ``HOLDER_CONCENTRATION_REJECT_PCT`` -- see that constant's own docstring
+    for this pocket's own real win-rate evidence. ``WHERE exit_reason IS
+    NULL`` makes this safe against a race with the normal exit-tracking loop
+    closing the same row concurrently (trailing_stop/max_hold/
+    liquidity_collapse) -- whichever writes first wins, never a double-close.
+
+    Structurally a mirror of FAST-DISCOVERY's function of the same name; the
+    ~60 duplicated lines are a known, tracked debt (backlog #329, shadow
+    module unification) and deliberately NOT refactored here -- that refactor
+    needs its own operator go, and this pocket was actively bleeding."""
+    try:
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(f"SELECT * FROM {TABLE} WHERE id = ? AND exit_reason IS NULL", (row_id,))
+            row = await cur.fetchone()
+            if row is None:
+                return
+            row = dict(row)
+
+        entry_price = row["entry_price"]
+        if not entry_price:
+            return
+        try:
+            snapshot = await _snapshot_with_fallback(
+                geckoterminal_client, row["pool_address"], row["token_address"], chain=row["chain"],
+            )
+        except Exception as exc:  # noqa: BLE001 -- best-effort close, never raises
+            logger.info(
+                "solana_fresh_launch_ws_exit_shadow: holder-concentration close snapshot failed for %s (%s)",
+                row["pool_address"], exc,
+            )
+            return
+        if not snapshot.available or snapshot.price_usd is None:
+            return
+        current_price = snapshot.price_usd
+        remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
+        realized_proceeds = (row["realized_proceeds"] or 0.0) + remaining_qty * current_price
+
+        realistic_entry_price = row.get("realistic_entry_price")
+        realistic_realized_proceeds = row.get("realistic_realized_proceeds") or 0.0
+        realistic_final_multiplier = None
+        if realistic_entry_price:
+            impacted = _apply_price_impact_and_fee(
+                current_price, trade_size_usd=remaining_qty * SIMULATED_TRADE_SIZE_USD,
+                reserve_usd=snapshot.reserve_usd, side="sell",
+            )
+            if impacted is not None:
+                realistic_realized_proceeds += remaining_qty * impacted
+                realistic_final_multiplier = realistic_realized_proceeds / realistic_entry_price
+
+        final_multiplier = realized_proceeds / entry_price
+
+        async with aiosqlite.connect(_db_path()) as db:
+            await db.execute(
+                f"""
+                UPDATE {TABLE} SET
+                    remaining_qty = 0.0, realized_proceeds = ?, exit_reason = 'holder_concentration_reject',
+                    final_multiplier = ?, last_checked_at = ?, last_price = ?,
+                    realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?,
+                    exit_price_source = ?
+                WHERE id = ? AND exit_reason IS NULL
+                """,
+                (
+                    realized_proceeds, final_multiplier, datetime.now(timezone.utc).isoformat(),
+                    current_price, realistic_realized_proceeds, realistic_final_multiplier,
+                    snapshot.reserve_usd, snapshot.dex_id, row_id,
+                ),
+            )
+            await db.commit()
+        for feed in (bonding_ws_feed, ws_feed):
+            remove_fn = getattr(feed, "remove_pools", None)
+            if remove_fn is not None:
+                remove_fn([row["pool_address"]])
+        logger.info(
+            "solana_fresh_launch_ws_exit_shadow: closed %s on holder_concentration_reject "
+            "(top_holder_pct>=%.0f)", row["pool_address"], HOLDER_CONCENTRATION_REJECT_PCT,
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort close, never raises into the enrichment task
+        logger.info(
+            "solana_fresh_launch_ws_exit_shadow: _reject_on_holder_concentration failed for row %s (%s)",
+            row_id, exc,
+        )
 
 
 async def _track_and_maybe_insert_pumpportal(
@@ -620,7 +735,9 @@ async def _track_and_maybe_insert_pumpportal(
                     return
                 new_id = await _insert_confirmed_row_pumpportal(row)
                 stats["confirmed"] = stats.get("confirmed", 0) + 1
-                asyncio.create_task(_enrich_with_rugcheck_pumpportal(new_id, event.mint))
+                asyncio.create_task(_enrich_with_rugcheck_pumpportal(
+                    new_id, event.mint, bonding_ws_feed=bonding_ws_feed, ws_feed=ws_feed,
+                ))
             except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
                 logger.info("solana_fresh_launch_ws_exit_shadow: _track_and_maybe_insert_pumpportal failed (%s)", exc)
                 stats["errors"] = stats.get("errors", 0) + 1
