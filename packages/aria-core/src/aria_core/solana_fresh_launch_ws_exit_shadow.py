@@ -910,6 +910,29 @@ async def advance_exit_simulation(
                     window_high = getattr(live, "price_high_since_last_read", None)
                     window_low = getattr(live, "price_low_since_last_read", None)
 
+                    # 20/08 -- unlike the REST branch below, a websocket-priced
+                    # check used to archive NOTHING to shadow_snapshot_archive,
+                    # even though this is a pure local SQLite write (zero extra
+                    # network cost, unlike the 19/08-removed candle archiving
+                    # this module's own history note above describes) and
+                    # websocket checks are the large majority of this pocket's
+                    # real traffic. Real gap found investigating why
+                    # `liquidity_collapse` exits get caught so late (up to
+                    # ~100% reserve already gone) -- without a per-check
+                    # reserve path we can't tell "checked too rarely" from
+                    # "this pool collapsed in a single tick, nothing could
+                    # have caught it earlier". This starts closing that gap
+                    # going forward (can't backfill the past).
+                    from aria_core import shadow_snapshot_archive
+
+                    await shadow_snapshot_archive.store_snapshot(
+                        module="solana_fresh_launch_ws_exit", position_id=row["id"],
+                        pool_address=row["pool_address"], chain=chain,
+                        price_usd=current_price, reserve_usd=reserve_usd,
+                        dex_id=dex_id, price_change_pct=None,
+                        transactions=None, volume_usd=None,
+                    )
+
             if current_price is None:
                 if max_rest_calls is not None and rest_calls_used >= max_rest_calls:
                     # Budget exhausted this cycle -- never stamped, stays at

@@ -852,6 +852,28 @@ async def advance_exit_simulation(
                 # -- evaluate_exit() falls back to the point-sample price
                 # itself in both cases.
 
+            if current_price is not None:
+                # 20/08 -- this pocket never archived a single exit-check
+                # snapshot on EITHER path (unlike WS-EXIT's REST branch,
+                # which already did) -- real gap found investigating why
+                # WS-EXIT's `liquidity_collapse` exits get caught so late
+                # (up to ~100% reserve already gone): without a per-check
+                # reserve path there's no way to tell "checked too rarely"
+                # from "this pool collapsed in a single tick, nothing could
+                # have caught it earlier". Pure local SQLite write, zero
+                # extra network cost (unlike the 19/08-removed candle
+                # archiving referenced above) -- starts closing that gap
+                # going forward for this pocket too (can't backfill the past).
+                from aria_core import shadow_snapshot_archive
+
+                await shadow_snapshot_archive.store_snapshot(
+                    module="solana_fresh_launch_fast_discovery", position_id=row["id"],
+                    pool_address=row["pool_address"], chain=chain,
+                    price_usd=current_price, reserve_usd=reserve_usd,
+                    dex_id=dex_id, price_change_pct=None,
+                    transactions=None, volume_usd=None,
+                )
+
             counts["checked"] += 1
             result = evaluate_exit(
                 row, current_price=current_price, reserve_usd=reserve_usd, dex_id=dex_id,

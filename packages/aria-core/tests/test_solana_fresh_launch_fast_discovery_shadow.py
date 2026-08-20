@@ -673,6 +673,23 @@ async def test_advance_exit_simulation_prefers_websocket_price_when_available():
 
 
 @pytest.mark.asyncio
+async def test_advance_exit_simulation_archives_snapshot_on_websocket_price(monkeypatch):
+    """20/08 -- this pocket never archived a single exit-check snapshot on
+    either path before this fix (see solana_fresh_launch_ws_exit_shadow's
+    own version of this test for the real gap this closes)."""
+    from aria_core import shadow_snapshot_archive
+
+    store = AsyncMock(return_value=True)
+    monkeypatch.setattr(shadow_snapshot_archive, "store_snapshot", store)
+    await _insert_open_row(pool_address="curveA", entry_price=1.0, reserve_usd=8000.0)
+    ws_feed = FakeWsFeed({"curveA": FakeSnapshot(available=True, price_usd=1.0, reserve_usd=6000.0, dex_id="raydium")})
+    await shadow.advance_exit_simulation(FakeClient({}), chain=CHAIN, ws_feed=ws_feed)
+    store.assert_awaited_once()
+    assert store.await_args.kwargs["module"] == "solana_fresh_launch_fast_discovery"
+    assert store.await_args.kwargs["reserve_usd"] == pytest.approx(6000.0)
+
+
+@pytest.mark.asyncio
 async def test_advance_exit_simulation_never_raises_on_a_single_pool_failure():
     await _insert_open_row(pool_address="curveA", entry_price=1.0)
 

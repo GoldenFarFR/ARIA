@@ -485,6 +485,25 @@ async def test_websocket_price_used_when_feed_available_no_rest_call():
 
 
 @pytest.mark.asyncio
+async def test_websocket_price_archives_snapshot(monkeypatch):
+    """20/08 -- real gap found investigating late liquidity_collapse catches:
+    a websocket-priced check used to archive nothing to
+    shadow_snapshot_archive, unlike the REST branch below."""
+    from aria_core import shadow_snapshot_archive
+
+    store = AsyncMock(return_value=True)
+    monkeypatch.setattr(shadow_snapshot_archive, "store_snapshot", store)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    feed = FakeWsFeed({"poolA": FakeSnapshot(available=True, price_usd=1.30, reserve_usd=8000.0, dex_id="pumpswap")})
+
+    await shadow.advance_exit_simulation(FakeClient({}), chain=CHAIN, ws_feed=feed)
+    store.assert_awaited_once()
+    assert store.await_args.kwargs["module"] == "solana_fresh_launch_ws_exit"
+    assert store.await_args.kwargs["pool_address"] == "poolA"
+    assert store.await_args.kwargs["reserve_usd"] == pytest.approx(8000.0)
+
+
+@pytest.mark.asyncio
 async def test_websocket_trailing_stop_closes_position_with_source_recorded():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     # Cycle 1: price rises, sets peak via websocket.
