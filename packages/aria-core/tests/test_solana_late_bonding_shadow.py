@@ -80,9 +80,11 @@ async def test_a_token_too_early_on_its_curve_is_rejected():
 @pytest.mark.asyncio
 async def test_a_token_about_to_graduate_is_rejected():
     """Past MAX_BONDING_PROGRESS a curve can complete mid-tracking and migrate
-    its liquidity to the AMM under us."""
+    its liquidity to the AMM under us. Uses the constant rather than a literal
+    so widening the collection band cannot silently void this guarantee."""
     ok, reason, _ = await pocket.screen_candidate(
-        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(0.95),
+        "mintA", "poolA", trade_stream=_Stream(),
+        curve=_curve(min(0.999, pocket.MAX_BONDING_PROGRESS + 0.02)),
     )
     assert ok is False and reason.startswith("blocked_outside_band")
 
@@ -99,19 +101,24 @@ async def test_an_unknown_curve_position_fails_CLOSED():
 
 
 @pytest.mark.asyncio
-async def test_a_high_curve_with_no_buyers_left_is_rejected():
+async def test_a_high_curve_with_literally_no_buyer_is_rejected():
     """A curve can sit at 75% for hours after its crowd left -- curve position
-    is history, trade flow is the present."""
+    is history, trade flow is the present. 20/08: the required N was relaxed
+    to 1 for collection, but ZERO buyers stays refused -- buying what nobody
+    buys is the single behaviour the data condemns most clearly (-21.56%)."""
     ok, reason, _ = await pocket.screen_candidate(
-        "mintA", "poolA", trade_stream=_Stream(buyers=1), curve=_curve(0.78),
+        "mintA", "poolA", trade_stream=_Stream(buyers=0), curve=_curve(0.78),
     )
     assert ok is False and reason.startswith("blocked_no_traction")
 
 
 @pytest.mark.asyncio
 async def test_volume_concentrated_in_one_wallet_is_rejected_as_wash_trading():
+    # Uses the constant, not a literal: the cutoff is deliberately loose while
+    # collecting, but "one wallet is the ONLY buyer" must stay refused.
     ok, reason, _ = await pocket.screen_candidate(
-        "mintA", "poolA", trade_stream=_Stream(top_share=0.85), curve=_curve(0.78),
+        "mintA", "poolA", trade_stream=_Stream(top_share=pocket.MAX_TOP_BUYER_SHARE + 0.02),
+        curve=_curve(0.78),
     )
     assert ok is False and reason.startswith("blocked_wash_trading")
 
@@ -253,3 +260,23 @@ async def test_summary_reports_the_average_entry_progress(_tmp_db):
 
     assert out["open"] == 1
     assert out["completed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_collection_band_stays_wide_enough_to_answer_which_band_wins():
+    """20/08 -- the band was widened to 0.40-0.95 so the pocket answers "WHICH
+    band works" rather than only "does 70-90% work". Guarded here because
+    narrowing it again would silently turn the experiment back into a single
+    hypothesis test."""
+    assert pocket.MIN_BONDING_PROGRESS <= 0.40
+    assert pocket.MAX_BONDING_PROGRESS >= 0.95
+
+
+@pytest.mark.asyncio
+async def test_mid_curve_tokens_are_now_collected_too():
+    ok, _, metrics = await pocket.screen_candidate(
+        "mintA", "poolA", trade_stream=_Stream(buyers=1), curve=_curve(0.45),
+    )
+    assert ok is True
+    # Recorded on the row, so sub-bands stay separable at analysis time.
+    assert metrics["bonding_progress"] == pytest.approx(0.45, abs=0.01)

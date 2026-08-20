@@ -68,24 +68,41 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(shadow_db_path())
 TABLE = "solana_late_bonding_shadow_log"
 
-# The band this pocket exists to measure. Lower bound is where the measured
-# winrate trend was still climbing (20.9% at 30-50%); upper bound stops short
-# of graduation itself, since a curve at >90% can complete mid-tracking and
-# migrate its liquidity to the AMM under us.
-MIN_BONDING_PROGRESS = 0.70
-MAX_BONDING_PROGRESS = 0.90
+# 20/08, WIDENED 0.70-0.90 -> 0.40-0.95 (operator: "ne filtre rien et laisse
+# courir un max de position, ca nous permettra d'obtenir toutes les valeurs
+# necessaires"). The point of this pocket is to MEASURE which band works, and
+# a narrow band answers "does 70-90% work" while a wide one answers "which
+# band is best" -- the actual open question. 0.40 is where the existing
+# pockets' own data stops being dense (they cluster under 30%), 0.95 still
+# stops short of graduation itself, where a curve can complete mid-tracking
+# and migrate its liquidity to the AMM underneath the position.
+# `bonding_progress_at_entry` is recorded on every row, so the sub-bands are
+# separable at analysis time -- collecting wide costs nothing and un-collecting
+# is impossible.
+MIN_BONDING_PROGRESS = 0.40
+MAX_BONDING_PROGRESS = 0.95
 
-# A candidate must show real trade flow, not just a high curve position -- a
-# curve can sit at 75% for hours after its buyers left. Reuses the shared
-# trade stream's distinct-buyer counting (velocity alone is forgeable by one
-# wallet; distinct wallets are not).
-MIN_DISTINCT_BUYERS = 3
+# 20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still
+# show SOME real buyer (buying what nobody buys is the behaviour the data
+# condemns most clearly, -21.56% on the <30s band), but the exact N is one of
+# the values this pocket exists to find -- fixing it at 3 up front would
+# pre-decide the answer. `distinct_buyers_at_entry` is on every row, so the
+# real threshold gets read off the data instead of guessed.
+MIN_DISTINCT_BUYERS = 1
 
-# Above this, one wallet supplies most of the buy volume: wash trading rather
-# than demand. Same provisional-threshold discipline as everywhere else here.
-MAX_TOP_BUYER_SHARE = 0.60
+# 20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single
+# wallet is literally the only buyer, which is not a market at all. Everything
+# below that is COLLECTED rather than judged -- `top_buyer_share_at_entry` is
+# recorded, so the real wash-trading cutoff is measurable later.
+MAX_TOP_BUYER_SHARE = 0.95
 
-MAX_CONCURRENT_TRACKED = 10
+# 20/08 -- raised with the widened band. The REAL constraint is the exit
+# loop: more open positions means each one is checked less often, which is
+# exactly what caused the late liquidity_collapse catches fixed earlier today
+# (first check landing 32-116s after entry despite a 10s cadence). The exit
+# sweep's own `limit` is raised in step below so widening collection cannot
+# quietly re-create that failure.
+MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
 
 
@@ -274,7 +291,7 @@ async def consider_candidate(
 
 
 async def advance_exit_simulation(
-    geckoterminal_client=None, *, chain: str = "solana", limit: int = 50,
+    geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, db_path: str | None = None,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
