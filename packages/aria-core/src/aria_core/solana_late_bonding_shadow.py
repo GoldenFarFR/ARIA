@@ -233,8 +233,24 @@ async def consider_candidate(
 
         snapshot = None
         if accepted:
-            fn = snapshot_fn or _snapshot_with_fallback
-            snapshot = await fn(geckoterminal_client, pool_address, mint, chain=chain)
+            # 20/08 -- MUST price the entry from the SAME source the exit will
+            # use. Real bug found live within 30 minutes of going live: the
+            # entry was priced through the REST cascade while
+            # `advance_exit_simulation` priced through the RPC feed, so every
+            # PnL compared two different sources. It showed up as impossible
+            # arithmetic -- a position whose reserve fell 53% reported a 79%
+            # price drop, which a constant-product curve cannot produce.
+            # Subscribing BEFORE pricing is what makes the RPC path available
+            # on the very first read.
+            if bonding_ws_feed is not None:
+                try:
+                    await bonding_ws_feed.add_pools([(pool_address, mint)])
+                except Exception:  # noqa: BLE001 -- subscription is an enhancement
+                    pass
+            snapshot = await _price_position(
+                {"pool_address": pool_address, "token_address": mint},
+                chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
+            )
             if not snapshot.available or snapshot.price_usd is None:
                 accepted, reason = False, "blocked_no_price"
 
@@ -281,13 +297,6 @@ async def consider_candidate(
                 ),
             )
             await db.commit()
-            if bonding_ws_feed is not None:
-                # Subscribe on entry so the RPC feed prices this position from
-                # here on -- without it every check would fall back to REST.
-                try:
-                    await bonding_ws_feed.add_pools([(pool_address, mint)])
-                except Exception:  # noqa: BLE001 -- subscription is an enhancement
-                    pass
             logger.info(
                 "solana_late_bonding_shadow: ENTRY %s progress=%.2f buyers=%s",
                 pool_address, metrics.get("bonding_progress") or -1, metrics.get("distinct_buyers"),

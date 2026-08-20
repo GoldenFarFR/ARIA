@@ -374,3 +374,40 @@ async def test_a_feed_error_falls_back_rather_than_leaving_the_position_unchecke
     await pocket.advance_exit_simulation(snapshot_fn=_rest, bonding_ws_feed=_Broken(), db_path=_tmp_db)
 
     assert rest_calls == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_entry_and_exit_are_priced_from_the_SAME_source(_tmp_db):
+    """Real bug found live within 30 minutes of this pocket going live: the
+    entry was priced through the REST cascade while the exit used the RPC feed,
+    so every PnL compared two different sources. It surfaced as impossible
+    arithmetic -- a position whose reserve fell 53% reporting a 79% price drop,
+    which a constant-product curve cannot produce."""
+    rest_calls = []
+
+    async def _rest(_client, pool, mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=13000.0, dex_id="raydium")
+
+    feed = _BondingFeed(price=0.004)
+    row_id = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_rest, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+
+    assert row_id is not None
+    assert rest_calls == []  # entry never went through REST while the curve is live
+    # ...and the recorded entry price is the RPC one, not the REST one.
+    assert (await _rows(_tmp_db))[0]["entry_price"] == pytest.approx(0.004)
+
+
+@pytest.mark.asyncio
+async def test_the_pool_is_subscribed_BEFORE_the_entry_is_priced(_tmp_db):
+    """Subscribing after pricing would make the very first read fall back to
+    REST, which is exactly how the two-source mismatch happened."""
+    feed = _BondingFeed()
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+    assert feed.subscribed == [("poolA", "mintA")]
