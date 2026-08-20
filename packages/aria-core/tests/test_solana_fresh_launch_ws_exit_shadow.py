@@ -1016,3 +1016,67 @@ async def test_both_signals_are_carried_out_of_the_gate(monkeypatch):
 
     assert gate.top_holder_pct == pytest.approx(99.3)          # the traction signal, acted on
     assert gate.top_holder_excluding_pool_pct == pytest.approx(0.24)  # the real one, measured only
+
+
+@pytest.mark.asyncio
+async def test_a_single_wallet_over_the_threshold_is_blocked_even_on_a_clean_pool_share(monkeypatch):
+    """The 20:14:18 case: 52.6% pool share reads perfectly "clean" against the
+    traction threshold while one non-pool wallet holds enough to dump the pool.
+    The wallet guardrail must fire independently of the traction one."""
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(52.6, top_holders=[(52.6, "poolA"), (25.0, "whaleB")])),
+    )
+    gate = await shadow._holder_concentration_gate("mintA", "poolA")
+
+    assert gate.blocked is True
+    assert gate.reason.startswith("blocked_wallet_concentration")
+    assert gate.top_holder_excluding_pool_pct == pytest.approx(25.0)
+
+
+@pytest.mark.asyncio
+async def test_the_real_20h14_case_still_passes_below_the_threshold(monkeypatch):
+    """Deliberately loose at 20%: the actual observed token (16.97%) must NOT
+    be cut. The threshold is provisional market logic on n=1, so it may only
+    catch flagrant cases until real data can recalibrate it."""
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(52.6, top_holders=[(52.6, "poolA"), (16.97, "walletB")])),
+    )
+    gate = await shadow._holder_concentration_gate("mintA", "poolA")
+
+    assert gate.blocked is False
+    assert gate.top_holder_excluding_pool_pct == pytest.approx(16.97)
+
+
+@pytest.mark.asyncio
+async def test_unknown_wallet_concentration_never_blocks_on_its_own(monkeypatch):
+    """Missing pool-excluded data must not become a second silent fail-closed:
+    the traction threshold still applies, but an unknown wallet share alone is
+    not grounds to reject -- that would double the fail-closed surface on a
+    threshold calibrated on n=1."""
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(52.6, top_holders=[(52.6, "poolA")])),
+    )
+    gate = await shadow._holder_concentration_gate("mintA", "poolA")
+
+    assert gate.blocked is False
+    assert gate.top_holder_excluding_pool_pct is None
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_pool_address_never_triggers_the_wallet_reject(monkeypatch):
+    """Without the pool address the pool cannot be told apart from a wallet,
+    and since it holds 92-100% of a fresh launch it would trip the 20%
+    threshold itself -- blocking essentially every token. The value is still
+    RECORDED for measurement, just never acted on."""
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(99.0, top_holders=[(99.0, "poolA"), (0.2, "walletB")])),
+    )
+    gate = await shadow._holder_concentration_gate("mintA", None)
+
+    # Blocked by the TRACTION threshold (99 >= 92), never by the wallet one.
+    assert gate.reason.startswith("blocked_holder_concentration")
+    assert gate.top_holder_excluding_pool_pct == pytest.approx(99.0)  # recorded, not acted on

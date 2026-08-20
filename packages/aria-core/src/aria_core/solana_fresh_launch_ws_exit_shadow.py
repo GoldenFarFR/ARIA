@@ -158,6 +158,29 @@ MAX_LIQUIDITY_USD_ENTRY = 5000.0
 # exists to avoid).
 HOLDER_CONCENTRATION_REJECT_PCT = 92.0
 
+# 20/08, explicit operator decision -- the REAL wallet concentration guardrail,
+# pool excluded. Distinct from the threshold above, which the same day's
+# investigation showed measures something else entirely (the pool's own unsold
+# share, i.e. traction). A single wallet holding >=20% of a fresh launch can
+# dump the whole pool at will, and the constant above cannot see it: the first
+# real gate decision logged (20:14:18) passed a token at 52.6% pool share --
+# comfortably "clean" by that threshold -- while a single non-pool wallet held
+# 16.97%.
+#
+# HONESTY ABOUT THIS NUMBER: 20% is a CONSERVATIVE PROVISIONAL threshold from
+# market logic (a fifth of supply in one hand is a well-understood dump risk),
+# NOT a value calibrated on ARIA's own data -- there is exactly n=1 measured
+# observation behind it today. It follows the proactive-ingestion doctrine's
+# third step (a temporary conservative hypothesis WITH an explicit
+# recalibration plan) rather than waiting for data while unprotected. The
+# recalibration plan is concrete and already instrumented: every decision,
+# blocked or passed, records `top_holder_excluding_pool_pct` in
+# `pretrade_rejection_log`, so once n>=100 the real winrate/PnL curve against
+# this variable can move the threshold onto measured ground. Until then it is
+# deliberately loose (20%, not 10%) so it cuts only the flagrant cases and
+# cannot quietly become the pocket's main filter on an uncalibrated number.
+HOLDER_EXCLUDING_POOL_REJECT_PCT = 20.0
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -519,6 +542,31 @@ async def _holder_concentration_gate(mint: str, pool_address: str | None = None)
         return _unavailable("no data")
 
     excluding_pool = _holder_pct_excluding_pool(report.top_holders, pool_address)
+
+    # Checked FIRST: this is the real anti-rug guardrail, the other one is a
+    # traction filter. A token can be flagrantly unsafe here while sitting
+    # comfortably under the traction threshold -- exactly the 20:14:18 case.
+    #
+    # `pool_address` is REQUIRED to reject on this. Without it the pool cannot
+    # be told apart from a wallet, and since the pool holds 92-100% of a fresh
+    # launch it would itself trip the 20% threshold -- blocking essentially
+    # every token. Caught by the two pre-existing gate tests, which call the
+    # gate without a pool address and started failing the moment this reject
+    # was added. The measurement side still records the value either way (see
+    # `_holder_pct_excluding_pool`): losing the data point would be worse than
+    # not acting on it.
+    if (
+        pool_address
+        and excluding_pool is not None
+        and excluding_pool >= HOLDER_EXCLUDING_POOL_REJECT_PCT
+    ):
+        return HolderGateOutcome(
+            blocked=True,
+            reason=f"blocked_wallet_concentration: top_wallet={excluding_pool:.1f}%",
+            top_holder_pct=report.top_holder_pct,
+            latency_ms=_elapsed_ms(),
+            top_holder_excluding_pool_pct=excluding_pool,
+        )
 
     if report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
         return HolderGateOutcome(

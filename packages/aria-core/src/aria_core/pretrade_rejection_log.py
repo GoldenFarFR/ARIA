@@ -135,7 +135,7 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
         trackable = (
             decision.blocked
             and decision.reason is not None
-            and decision.reason.startswith("blocked_holder_concentration")
+            and decision.reason.startswith(("blocked_holder_concentration", "blocked_wallet_concentration"))
             and decision.would_be_entry_price
         )
         async with aiosqlite.connect(path) as db:
