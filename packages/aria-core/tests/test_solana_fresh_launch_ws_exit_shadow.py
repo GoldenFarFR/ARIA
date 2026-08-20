@@ -141,12 +141,15 @@ class FakeWsFeed:
 # --- entry criterion: identical to the original module (imported thresholds) --
 
 def test_thresholds_are_the_same_imported_objects_as_original_module():
-    """The whole A/B pairing hinges on this: MIN_LIQUIDITY_USD/
-    MAX_POOL_AGE_MINUTES must be the SAME objects (imported), never a
-    redefinition that could silently drift from the original module."""
-    assert shadow.MIN_LIQUIDITY_USD is original_shadow.MIN_LIQUIDITY_USD
+    """MAX_POOL_AGE_MINUTES/PEAK_PRICE_SANITY_MULTIPLE must be the SAME
+    objects (imported), never a redefinition that could silently drift from
+    the original module. MIN_LIQUIDITY_USD is DELIBERATELY decoupled as of
+    20/08 (own value, see its docstring) -- real per-pocket data showed the
+    two pockets' optimal liquidity bands diverge, so this constant is the one
+    exception to the "same imported object" rule from here on."""
     assert shadow.MAX_POOL_AGE_MINUTES is original_shadow.MAX_POOL_AGE_MINUTES
     assert shadow.PEAK_PRICE_SANITY_MULTIPLE is original_shadow.PEAK_PRICE_SANITY_MULTIPLE
+    assert shadow.MIN_LIQUIDITY_USD != original_shadow.MIN_LIQUIDITY_USD
 
 
 @pytest.mark.asyncio
@@ -233,8 +236,9 @@ async def test_dedup_is_against_own_table_not_shared_with_original(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
     monkeypatch.setattr(original_shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
 
-    result_original = await original_shadow.record_signals([_pool()], chain=CHAIN)
-    result_ws = await shadow.record_signals([_pool()], chain=CHAIN)
+    # reserve clears BOTH pockets' now-decoupled floors (original=6000, ws=3000).
+    result_original = await original_shadow.record_signals([_pool(reserve=10000.0)], chain=CHAIN)
+    result_ws = await shadow.record_signals([_pool(reserve=10000.0)], chain=CHAIN)
     assert result_original["logged"] == 1
     assert result_ws["logged"] == 1  # NOT suppressed by the original module's own row
 

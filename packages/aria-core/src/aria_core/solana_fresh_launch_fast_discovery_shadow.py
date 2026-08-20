@@ -23,11 +23,15 @@ actually good at once a candidate is already known: reading its LIQUIDITY.
 
 **What is held constant vs. what changes (the whole point of this A/B/C
 comparison)**:
-  - ENTRY THRESHOLD values: ``MIN_LIQUIDITY_USD``/``MAX_POOL_AGE_MINUTES`` are
-    IMPORTED from ``solana_fresh_launch_shadow.py`` (never redefined here),
-    exactly like ``solana_fresh_launch_ws_exit_shadow.py`` already does --
-    keeps every sibling's entry bar numerically identical, isolating
-    DISCOVERY SPEED as the one real variable under test.
+  - ENTRY THRESHOLD values: ``MAX_POOL_AGE_MINUTES`` stays IMPORTED from
+    ``solana_fresh_launch_shadow.py``. ``MIN_LIQUIDITY_USD`` is DECOUPLED as
+    of 20/08 (own constant below, no longer imported) -- same operator-
+    directed investigation that decoupled ``solana_fresh_launch_ws_exit_
+    shadow.py``'s copy: this pocket's own real closures show no benefit
+    above 6000$ (unlike the original module's confirmed 6-20k$ sweet spot),
+    so keeping one shared floor across all three pockets would force this
+    one either into a dead zone or an unproven band with no supporting
+    data. See ``MIN_LIQUIDITY_USD``'s own docstring below for the numbers.
   - EXIT mechanism: IMPORTED, never reimplemented. ``evaluate_exit`` (the
     pure liquidity_collapse > trailing_stop > max_hold rule, closed over
     ws-exit's own ``TRAILING_STOP_PCT``/``MAX_HOLD_MINUTES``/
@@ -105,7 +109,6 @@ from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, 
 from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent, PumpPortalNewTokenFeed
 from aria_core.solana_fresh_launch_shadow import (
     MAX_POOL_AGE_MINUTES,
-    MIN_LIQUIDITY_USD,
     PEAK_PRICE_SANITY_MULTIPLE,
 )
 from aria_core.solana_fresh_launch_ws_exit_shadow import (
@@ -157,6 +160,18 @@ FAST_DISCOVERY_POLL_INTERVAL_SECONDS = 1.0
 # would reintroduce the multi-minute RugCheck wait this pocket's
 # fire-and-forget design exists to avoid (see that function's own docstring).
 HOLDER_CONCENTRATION_REJECT_PCT = 92.0
+
+# 20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD
+# (operator-directed performance investigation, 1261-closure sample). 500$-
+# wide buckets: the 2000-2499$ bucket alone holds 775/1099 closures (70% of
+# the liquidity-known sample) at a 4.9% winrate/0.951 avg realistic
+# multiplier -- by far the worst bucket. From 3000$ up, winrate roughly
+# triples to quadruples (16.0-23.7% across the 3000-5500$ buckets). Unlike
+# the original module, no positive signal was found above 6000$ here (only
+# 1-2 closures in that range, avg_mult 0.18-0.58) -- raising the floor only
+# as far as 3000 removes the confirmed dead zone without extrapolating past
+# what the data actually supports.
+MIN_LIQUIDITY_USD = 3000.0
 
 # Sanity bound on concurrently-tracked candidates -- protects against an
 # unbounded task explosion during a real creation burst (measured ~40/min

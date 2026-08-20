@@ -63,9 +63,12 @@ async def _rows() -> list[dict]:
 # --- entry thresholds/exit rule: imported, never redefined -----------------
 
 def test_entry_thresholds_are_the_same_imported_objects_as_original_module():
-    assert shadow.MIN_LIQUIDITY_USD is original_shadow.MIN_LIQUIDITY_USD
+    """MIN_LIQUIDITY_USD is DELIBERATELY decoupled as of 20/08 (own value,
+    see its docstring) -- real per-pocket data showed this pocket's optimal
+    liquidity band diverges from the original module's."""
     assert shadow.MAX_POOL_AGE_MINUTES is original_shadow.MAX_POOL_AGE_MINUTES
     assert shadow.PEAK_PRICE_SANITY_MULTIPLE is original_shadow.PEAK_PRICE_SANITY_MULTIPLE
+    assert shadow.MIN_LIQUIDITY_USD != original_shadow.MIN_LIQUIDITY_USD
 
 
 def test_exit_rule_is_the_same_imported_function_as_ws_exit_sibling():

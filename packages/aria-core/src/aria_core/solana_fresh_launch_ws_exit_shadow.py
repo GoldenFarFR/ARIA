@@ -5,14 +5,15 @@ them objectively before any production change. NOT wired to the heartbeat,
 NOT gated by any ``ARIA_*`` flag, silently available only.
 
 **What is held constant vs. what changes (the whole point of this module)**:
-  - ENTRY criterion: IDENTICAL, byte-for-byte, to ``solana_fresh_launch_
-    shadow.py`` -- ``MIN_LIQUIDITY_USD``/``MAX_POOL_AGE_MINUTES`` are
-    IMPORTED from that module (never redefined here), so a future
-    recalibration of the entry criterion in the original automatically
-    applies here too, keeping the A/B pairing valid forever. No entry filter
-    beyond age<=``MAX_POOL_AGE_MINUTES``min + liquidity>=``MIN_LIQUIDITY_USD``$
-    (values live-imported, never hardcoded here -- see that module's own
-    docstring for the empirical basis and its current numbers).
+  - ENTRY criterion: ``MAX_POOL_AGE_MINUTES`` stays IMPORTED (byte-for-byte
+    shared) from ``solana_fresh_launch_shadow.py``. ``MIN_LIQUIDITY_USD`` is
+    DECOUPLED as of 20/08 (own constant below, no longer imported) --
+    operator-directed performance investigation found the two pockets'
+    liquidity/PnL bands genuinely diverge (this pocket's own real closures
+    show 6-10k$ as a WORSE band than 3-6k$, the opposite of the original
+    module's confirmed 6-20k$ sweet spot), so forcing them to share one
+    value would push whichever pocket's real data disagrees into its own
+    dead zone. See ``MIN_LIQUIDITY_USD``'s own docstring below for the data.
   - EXIT mechanism: DIFFERENT by design. No scale-out ladder -- the position
     is held 100% until ONE of trailing_stop / liquidity_collapse / max_hold
     fires, then closed in a single shot. ``TRAILING_STOP_PCT``/
@@ -79,7 +80,6 @@ from aria_core.services.geckoterminal import (
 from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent, PumpPortalNewTokenFeed
 from aria_core.solana_fresh_launch_shadow import (
     MAX_POOL_AGE_MINUTES,
-    MIN_LIQUIDITY_USD,
     PEAK_PRICE_SANITY_MULTIPLE,
     SUPPORT_CANDLE_INTERVAL,
     SUPPORT_CANDLE_MAX_COUNT,
@@ -103,6 +103,18 @@ TABLE = "solana_fresh_launch_ws_exit_shadow_log"
 TRAILING_STOP_PCT = 15.0
 MAX_HOLD_MINUTES = 60.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
+
+# 20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD
+# (operator-directed performance investigation, 558-closure sample). 500$-wide
+# buckets inside this pocket's own operative 2000-5000$ range (bounded above
+# by MAX_LIQUIDITY_USD_ENTRY, see below): the 2000-2499$ bucket alone holds
+# 253/394 closures (64% of the sample) at a 3.2% winrate/0.916 avg realistic
+# multiplier -- by far the worst bucket in the pocket. From 3000$ up, winrate
+# roughly triples (13.8-31.3% across the 3000-4500$ buckets). Raising the
+# floor to 3000 removes the dead zone while staying well inside the
+# MAX_LIQUIDITY_USD_ENTRY=5000 ceiling the 19/08 finding below still confirms
+# on the current sample.
+MIN_LIQUIDITY_USD = 3000.0
 
 # 19/08, operator decision after reviewing this pocket's own real closures
 # (144 with a valid reserve_usd read): unlike every other liquidity check in

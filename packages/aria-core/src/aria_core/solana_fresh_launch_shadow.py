@@ -126,10 +126,17 @@ CHECKPOINT_TABLE = "solana_fresh_launch_checkpoint_log"
 # in a comparable window), which saturates MAX_CONCURRENT_TRACKED_CANDIDATES
 # and the shared DexPaprika REST throttle, moving the real bottleneck from
 # "market liquidity wait" to "internal contention" instead of removing it.
-# Kept at 2000.0 -- lowering this floor is NOT a viable lever for the entry
-# delay without ALSO raising the concurrency/throughput ceilings it
-# collides with, which is a different, larger change.
-MIN_LIQUIDITY_USD = 2000.0
+#
+# 20/08, raised 2000->6000 (operator-directed performance investigation,
+# 446-closure sample vs the 180-closure sample above): re-bucketing
+# reserve_usd against realistic_final_multiplier on the FULL current sample
+# confirms the earlier 3000-6000$ "worst band" reading was itself only a
+# transient artifact of the smaller sample -- the durable pattern is 2-6k$
+# net-negative across the board (winrate 4.1-18.6%, n=205) vs 6-20k$
+# net-positive (winrate 46.9-53.2%, avg_mult 1.24-1.38, n=96). Raising the
+# floor to 6000 keeps this pocket entirely inside the confirmed-positive
+# band instead of straddling the dead zone below it.
+MIN_LIQUIDITY_USD = 6000.0
 MAX_POOL_AGE_MINUTES = 5.0
 
 # Informational-only support-distance reading, see module docstring -- NEVER

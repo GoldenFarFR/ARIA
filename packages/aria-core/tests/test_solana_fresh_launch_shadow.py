@@ -52,7 +52,7 @@ async def _checkpoint_rows() -> list[dict]:
 
 def _pool(
     *, pool_address="poolA", token_address="tokA", symbol="FRESH",
-    price_usd=1.0, reserve=5000.0, age_minutes=2.0, price_change_pct=None,
+    price_usd=1.0, reserve=10000.0, age_minutes=2.0, price_change_pct=None,
 ) -> TrendingPool:
     return TrendingPool(
         pool_address=pool_address, token_address=token_address, symbol=symbol,
@@ -149,7 +149,7 @@ async def test_liquidity_below_floor_rejected(monkeypatch):
 @pytest.mark.asyncio
 async def test_liquidity_at_floor_accepted(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_flat_candles(3, 1.0)))
-    result = await shadow.record_signals([_pool(reserve=2000.0)], chain=CHAIN)
+    result = await shadow.record_signals([_pool(reserve=shadow.MIN_LIQUIDITY_USD)], chain=CHAIN)
     assert result["logged"] == 1
 
 
