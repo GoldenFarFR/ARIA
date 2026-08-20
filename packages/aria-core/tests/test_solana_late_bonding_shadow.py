@@ -280,3 +280,97 @@ async def test_mid_curve_tokens_are_now_collected_too():
     assert ok is True
     # Recorded on the row, so sub-bands stay separable at analysis time.
     assert metrics["bonding_progress"] == pytest.approx(0.45, abs=0.01)
+
+
+# --- 20/08, RPC-first pricing --------------------------------------------
+# This pocket trades tokens still ON their bonding curve, whose price is
+# virtual_quote/virtual_token -- reserves the Helius websocket already pushes.
+# Going through the REST cascade paid a rate-limited round trip (GeckoTerminal
+# was the only provider actually 429-ing: 12 real ones in 20 minutes) for a
+# number we were already handed.
+
+class _BondingFeed:
+    def __init__(self, *, available=True, price=0.004):
+        self._snap = SimpleNamespace(
+            available=available, price_usd=price if available else None,
+            reserve_usd=14000.0, dex_id="pumpfun",
+        )
+        self.subscribed = []
+
+    def get_snapshot(self, _pool):
+        return self._snap
+
+    async def add_pools(self, pairs):
+        self.subscribed.extend(pairs)
+        return len(pairs)
+
+
+@pytest.mark.asyncio
+async def test_an_open_position_is_priced_from_the_rpc_feed_not_rest(_tmp_db):
+    rest_calls = []
+
+    async def _rest(_client, pool, mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=13000.0, dex_id="raydium")
+
+    feed = _BondingFeed()
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+    await pocket.advance_exit_simulation(snapshot_fn=_rest, bonding_ws_feed=feed, db_path=_tmp_db)
+
+    assert rest_calls == []  # REST never touched while the curve is live
+
+
+@pytest.mark.asyncio
+async def test_entry_subscribes_the_pool_so_the_feed_can_price_it(_tmp_db):
+    """Without the subscription every check would silently fall back to REST."""
+    feed = _BondingFeed()
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+    assert feed.subscribed == [("poolA", "mintA")]
+
+
+@pytest.mark.asyncio
+async def test_a_graduated_curve_falls_back_to_the_rest_cascade(_tmp_db):
+    """A curve that completed mid-position has moved its liquidity to the AMM;
+    the bonding feed then honestly reports unavailable and REST takes over --
+    the cascade is not wrong, it is built for migrated tokens."""
+    rest_calls = []
+
+    async def _rest(_client, pool, mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=13000.0, dex_id="raydium")
+
+    live, dead = _BondingFeed(), _BondingFeed(available=False)
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=live, db_path=_tmp_db,
+    )
+    await pocket.advance_exit_simulation(snapshot_fn=_rest, bonding_ws_feed=dead, db_path=_tmp_db)
+
+    assert rest_calls == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_a_feed_error_falls_back_rather_than_leaving_the_position_unchecked(_tmp_db):
+    class _Broken(_BondingFeed):
+        def get_snapshot(self, _pool):
+            raise RuntimeError("feed down")
+
+    rest_calls = []
+
+    async def _rest(_client, pool, mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=13000.0, dex_id="raydium")
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=_BondingFeed(), db_path=_tmp_db,
+    )
+    await pocket.advance_exit_simulation(snapshot_fn=_rest, bonding_ws_feed=_Broken(), db_path=_tmp_db)
+
+    assert rest_calls == ["poolA"]

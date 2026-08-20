@@ -200,6 +200,7 @@ async def screen_candidate(
 async def consider_candidate(
     mint: str, pool_address: str, *, chain: str = "solana", trade_stream=None,
     http_client: httpx.AsyncClient | None = None, geckoterminal_client=None,
+    bonding_ws_feed=None,
     resolve_curves_fn=None, snapshot_fn=None, db_path: str | None = None,
 ) -> int | None:
     """Screens one mint and, if it passes, records a simulated entry.
@@ -280,6 +281,13 @@ async def consider_candidate(
                 ),
             )
             await db.commit()
+            if bonding_ws_feed is not None:
+                # Subscribe on entry so the RPC feed prices this position from
+                # here on -- without it every check would fall back to REST.
+                try:
+                    await bonding_ws_feed.add_pools([(pool_address, mint)])
+                except Exception:  # noqa: BLE001 -- subscription is an enhancement
+                    pass
             logger.info(
                 "solana_late_bonding_shadow: ENTRY %s progress=%.2f buyers=%s",
                 pool_address, metrics.get("bonding_progress") or -1, metrics.get("distinct_buyers"),
@@ -290,9 +298,35 @@ async def consider_candidate(
         return None
 
 
+async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn):
+    """Prices one open position, RPC FIRST.
+
+    20/08 -- this pocket trades tokens that are BY DEFINITION still on their
+    bonding curve, and a bonding curve's price is `virtual_quote_reserves /
+    virtual_token_reserves`: the Helius websocket already pushes us those
+    reserves, so the price is a local read. Going through the REST cascade
+    (DexScreener -> GeckoTerminal) instead paid a rate-limited round trip for
+    a number we were already being handed -- and GeckoTerminal was the only
+    provider actually 429-ing under load (12 real 429s in 20 minutes,
+    throttle auto-tightened 8s -> 12s).
+    That cascade is NOT wrong, it is just built for MIGRATED tokens; it stays
+    as the fallback for a curve that completed mid-position, whose liquidity
+    has moved to the AMM and which the bonding feed then honestly reports as
+    unavailable."""
+    if bonding_ws_feed is not None:
+        try:
+            snap = bonding_ws_feed.get_snapshot(row["pool_address"])
+            if getattr(snap, "available", False) and snap.price_usd is not None:
+                return snap
+        except Exception:  # noqa: BLE001 -- a feed hiccup falls through to REST
+            pass
+    fn = snapshot_fn or _snapshot_with_fallback
+    return await fn(None, row["pool_address"], row["token_address"], chain=chain)
+
+
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
-    snapshot_fn=None, db_path: str | None = None,
+    snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
     imported, never reimplemented, so the two pockets differ on ENTRY only and
@@ -311,11 +345,12 @@ async def advance_exit_simulation(
         )
         rows = [dict(r) for r in await cur.fetchall()]
 
-    fn = snapshot_fn or _snapshot_with_fallback
     for row in rows:
         stats["checked"] += 1
         try:
-            snapshot = await fn(geckoterminal_client, row["pool_address"], row["token_address"], chain=chain)
+            snapshot = await _price_position(
+                row, chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
+            )
         except Exception:  # noqa: BLE001 -- a provider failure is not a verdict
             continue
         if not snapshot.available or snapshot.price_usd is None:

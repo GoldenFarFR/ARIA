@@ -83,8 +83,45 @@ WSOL_MINT = "So11111111111111111111111111111111111111112"
 # code change -- defaults to the same free public RPC verified live 19/08
 # (solana.com/docs/references/clusters: 40 req/10s per method / 100 req/10s
 # overall per IP, respected throughout this module's setup calls).
-RPC_HTTP_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_HTTP", "https://api.mainnet-beta.solana.com")
-RPC_WS_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_WS", "wss://api.mainnet-beta.solana.com")
+_PUBLIC_RPC_HTTP = "https://api.mainnet-beta.solana.com"
+_PUBLIC_RPC_WS = "wss://api.mainnet-beta.solana.com"
+
+RPC_HTTP_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_HTTP", _PUBLIC_RPC_HTTP)
+RPC_WS_DEFAULT = os.environ.get("ARIA_SOLANA_RPC_WS", _PUBLIC_RPC_WS)
+
+
+def solana_rpc_is_dedicated() -> bool:
+    """True when BOTH endpoints resolve to the paid dedicated RPC rather than
+    the free public one."""
+    return RPC_HTTP_DEFAULT != _PUBLIC_RPC_HTTP and RPC_WS_DEFAULT != _PUBLIC_RPC_WS
+
+
+def _warn_if_public_rpc() -> None:
+    """20/08 -- the fallback to the free public RPC used to be SILENT, which is
+    how ARIA's busiest Solana subscription (~6650 trades/100s) ended up on the
+    endpoint with the tightest per-IP limits while the PAID Helius one, already
+    configured in `ARIA_SOLANA_RPC_*`, sat unused for it. The env vars are set
+    in production, so the fallback only ever fires when something is
+    misconfigured -- and that is exactly the case that must be LOUD instead of
+    silent. Warns rather than raises: a hard failure here would take down
+    read-only shadow pockets over a config issue, which is worse than running
+    degraded with a visible warning."""
+    missing = []
+    if RPC_HTTP_DEFAULT == _PUBLIC_RPC_HTTP:
+        missing.append("ARIA_SOLANA_RPC_HTTP")
+    if RPC_WS_DEFAULT == _PUBLIC_RPC_WS:
+        missing.append("ARIA_SOLANA_RPC_WS")
+    if missing:
+        logger.warning(
+            "SOLANA RPC DEGRADED: falling back to the FREE PUBLIC endpoint because %s "
+            "%s not set -- the dedicated paid RPC is configured in the backend .env and "
+            "every Solana feed is meant to ride it (tighter per-IP limits here will "
+            "throttle the trade stream first)",
+            " and ".join(missing), "is" if len(missing) == 1 else "are",
+        )
+
+
+_warn_if_public_rpc()
 
 SETUP_REQUEST_GAP_SECONDS = 0.4  # keeps sequential setup calls well under the verified ceiling above
 

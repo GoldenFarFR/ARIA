@@ -474,3 +474,66 @@ async def test_subscribe_and_confirm_batches_large_pool_counts(monkeypatch):
     assert len(confirmed) == 100
     # 3 batches -> 2 inter-batch gaps, never one sleep per account (100).
     assert sleep_calls == [pumpswap_ws._SUBSCRIBE_BATCH_GAP_SECONDS] * 2
+
+
+# --- 20/08, no more SILENT fallback to the free public Solana RPC --------
+# ARIA's busiest Solana subscription (~6650 trades/100s) once ran on the public
+# endpoint while the PAID one, already configured in ARIA_SOLANA_RPC_*, sat
+# unused for it -- because the fallback was silent. Caught by the operator, not
+# by any check. Now it warns loudly.
+
+def test_a_module_that_needs_solana_rpc_can_ask_whether_it_is_dedicated():
+    from aria_core.services.pumpswap_ws import solana_rpc_is_dedicated
+    assert isinstance(solana_rpc_is_dedicated(), bool)
+
+
+def test_the_public_fallback_is_reported_not_silent(caplog):
+    import logging
+
+    from aria_core.services import pumpswap_ws as m
+
+    with caplog.at_level(logging.WARNING):
+        original_http, original_ws = m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT
+        try:
+            m.RPC_HTTP_DEFAULT = m._PUBLIC_RPC_HTTP
+            m.RPC_WS_DEFAULT = m._PUBLIC_RPC_WS
+            m._warn_if_public_rpc()
+        finally:
+            m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT = original_http, original_ws
+
+    assert any("RPC DEGRADED" in r.message for r in caplog.records)
+
+
+def test_a_dedicated_endpoint_produces_no_warning(caplog):
+    import logging
+
+    from aria_core.services import pumpswap_ws as m
+
+    with caplog.at_level(logging.WARNING):
+        original_http, original_ws = m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT
+        try:
+            m.RPC_HTTP_DEFAULT = "https://mainnet.helius-rpc.com/?api-key=x"
+            m.RPC_WS_DEFAULT = "wss://mainnet.helius-rpc.com/?api-key=x"
+            assert m.solana_rpc_is_dedicated() is True
+            m._warn_if_public_rpc()
+        finally:
+            m.RPC_HTTP_DEFAULT, m.RPC_WS_DEFAULT = original_http, original_ws
+
+    assert not any("RPC DEGRADED" in r.message for r in caplog.records)
+
+
+def test_every_solana_feed_imports_the_shared_endpoint_rather_than_restating_it():
+    """The architectural-coherence rule, enforced mechanically: restating a
+    default is how the busiest consumer ended up on the weakest endpoint."""
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "src" / "aria_core"
+    offenders = []
+    for path in src.rglob("*.py"):
+        if path.name in {"pumpswap_ws.py"}:
+            continue  # the single source of truth
+        text = path.read_text()
+        for marker in ("api.mainnet-beta.solana.com", "wss://api.mainnet-beta.solana.com"):
+            if marker in text and "devnet" not in text:
+                offenders.append(f"{path.name}: restates {marker}")
+    assert offenders == [], offenders
