@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import aiosqlite
 import pytest
@@ -211,3 +212,47 @@ async def test_summary_breaks_latency_down_by_reason(db):
 
     assert reasons["blocked_holder_concentration: top_holder=99.0%"]["avg_latency_ms"] == pytest.approx(170.0)
     assert reasons["blocked_holder_gate_unavailable: timeout"]["avg_latency_ms"] == pytest.approx(12000.0)
+
+
+@pytest.mark.asyncio
+async def test_the_ready_to_call_cycle_uses_the_pockets_own_price_cascade(db, monkeypatch):
+    """The counterfactual must be measured on the SAME source the real
+    positions use -- a different source would make the comparison meaningless
+    -- and must share that cascade's throttles rather than adding a parallel,
+    uncoordinated load on the same providers."""
+    from aria_core import solana_fresh_launch_ws_exit_shadow as pocket
+
+    await log.record_decision(_decision(realistic_would_be_entry_price=1.0), db_path=db)
+    calls = []
+
+    async def _fake_snapshot(_client, pool_address, mint, *, chain):
+        calls.append((pool_address, mint, chain))
+        return SimpleNamespace(available=True, price_usd=0.6, reserve_usd=3000.0, dex_id="rest")
+
+    monkeypatch.setattr(pocket, "_snapshot_with_fallback", _fake_snapshot)
+
+    stats = await log.advance_avoided_tracking_cycle(db_path=db)
+
+    assert stats["updated"] == 1
+    assert calls == [("poolA", "mintA", "solana")]
+    summary = await log.avoided_pnl_summary(db_path=db)
+    assert summary["avoided_pnl_pct"] == pytest.approx(40.0)
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_snapshot_is_not_read_as_a_price_of_zero(db, monkeypatch):
+    """A dead provider must never be recorded as "the token went to zero" --
+    that would credit the filter with an enormous fake saving."""
+    from aria_core import solana_fresh_launch_ws_exit_shadow as pocket
+
+    await log.record_decision(_decision(), db_path=db)
+
+    async def _unavailable(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=False, price_usd=None, reserve_usd=None, dex_id=None)
+
+    monkeypatch.setattr(pocket, "_snapshot_with_fallback", _unavailable)
+
+    stats = await log.advance_avoided_tracking_cycle(db_path=db)
+
+    assert stats["updated"] == 0
+    assert (await _rows(db))[0]["avoided_multiplier"] is None

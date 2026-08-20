@@ -226,6 +226,28 @@ async def advance_avoided_tracking(
     return stats
 
 
+async def advance_avoided_tracking_cycle(*, max_rows: int = 40, db_path: str | None = None) -> dict:
+    """Ready-to-call wrapper for the standalone shadow process: resolves prices
+    through the SAME REST cascade the pockets themselves use, so the
+    counterfactual is measured on the same data source as the real positions
+    (a different source would make the comparison meaningless) and shares that
+    cascade's own throttles and circuit breakers rather than adding a parallel,
+    uncoordinated load on the same providers.
+
+    Kept here, in the tracked repo and under test, precisely because its only
+    caller lives OUTSIDE the repo (`shadow_persistent.py`) where nothing is
+    covered by CI -- the call site there stays a single line."""
+    from .solana_fresh_launch_ws_exit_shadow import _snapshot_with_fallback, geckoterminal_client
+
+    async def _resolve(pool_address, mint, chain):
+        snapshot = await _snapshot_with_fallback(geckoterminal_client, pool_address, mint, chain=chain)
+        if not snapshot.available or snapshot.price_usd is None:
+            return (None, None)
+        return (snapshot.price_usd, snapshot.reserve_usd)
+
+    return await advance_avoided_tracking(resolve_price_fn=_resolve, max_rows=max_rows, db_path=db_path)
+
+
 async def _set_status(path: str, row_id: int, status: str) -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(f"UPDATE {TABLE} SET tracking_status = ? WHERE id = ?", (status, row_id))
