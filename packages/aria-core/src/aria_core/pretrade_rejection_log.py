@@ -20,7 +20,8 @@ than assumed. Two deliberate honesty constraints:
   - The would-be entry price is the SLIPPAGE-ADJUSTED one (same
     ``_apply_price_impact_and_fee`` the real pockets use). Comparing a raw
     mid price against a real exit would flatter the filter.
-  - Tracking is bounded (``TRACKING_WINDOW_MINUTES``) and rejections whose
+  - Tracking is bounded (``_tracking_window_minutes()``, which READS the
+    pocket's own MAX_HOLD_MINUTES rather than restating it) and rejections whose
     price can no longer be resolved are marked ``unresolvable`` rather than
     silently dropped -- a pool that went dark IS the outcome, and dropping
     those would bias the result toward whichever tokens survived.
@@ -40,11 +41,21 @@ from .paths import shadow_db_path
 
 TABLE = "fresh_launch_pretrade_gate_log"
 
-# How long a rejected candidate's counterfactual is tracked. Matched to the
-# pockets' own MAX_HOLD_MINUTES (180) so the avoided PnL is measured over the
-# same horizon a real position would have lived, never a longer one that would
-# quietly credit the filter with a later collapse it never avoided.
-TRACKING_WINDOW_MINUTES = 180.0
+def _tracking_window_minutes() -> float:
+    """How long a rejected candidate's counterfactual is tracked: EXACTLY the
+    horizon a real position would have lived, so the avoided PnL is never
+    credited with a collapse the position would not have been exposed to.
+
+    20/08 -- was hardcoded to 180.0 with a comment claiming it matched the
+    pocket's MAX_HOLD_MINUTES. It did NOT: that constant is 60.0, so every
+    counterfactual was being measured over 3x the real horizon. Found by
+    auditing this dome's own modules against the architectural-coherence rule
+    the same day. Read lazily to avoid an import cycle (the pocket imports
+    this module).
+    """
+    from .solana_fresh_launch_ws_exit_shadow import MAX_HOLD_MINUTES
+
+    return float(MAX_HOLD_MINUTES)
 
 # 20/08, security/robustness pass -- this table grows on EVERY gate decision
 # (accepted ones included), not just on entries, so at the measured rate it
@@ -215,7 +226,7 @@ async def advance_avoided_tracking(
     path = db_path or _db_path()
     await _ensure_table(path)
     stats = {"checked": 0, "updated": 0, "closed": 0, "unresolvable": 0}
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=TRACKING_WINDOW_MINUTES)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=_tracking_window_minutes())).isoformat()
 
     async with aiosqlite.connect(path) as db:
         db.row_factory = aiosqlite.Row

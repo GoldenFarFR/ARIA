@@ -51,7 +51,10 @@ from aria_core.services.pumpswap_ws import RPC_WS_DEFAULT
 
 logger = logging.getLogger(__name__)
 
-PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+# Program id IMPORTED from the bonding-curve feed rather than restated --
+# two copies of the same address is exactly the drift the architectural
+# coherence rule forbids.
+from aria_core.services.pumpfun_bonding_ws import PUMPFUN_PROGRAM_ID  # noqa: E402
 
 # Anchor discriminator of the TradeEvent, taken from real decoded events.
 TRADE_EVENT_DISCRIMINATOR = bytes.fromhex("bddb7fd34ee661ee")

@@ -44,7 +44,17 @@ SEGMENT_FORWARD_TEST_START = "2026-08-20T20:00:00+00:00"
 
 # The segment's own definition, straight from the 20/08 finding.
 SEGMENT_MIN_RESERVE_USD = 6000.0
-SEGMENT_MAX_TOP_HOLDER_PCT = 92.0
+def _segment_max_top_holder_pct() -> float:
+    """The live traction threshold, IMPORTED rather than copied.
+
+    20/08 -- was hardcoded to 92.0 and went stale the moment the real threshold
+    was recalibrated to 80.0 on 1496 closures, so this observer was silently
+    measuring a segment the pockets no longer trade. Read lazily to keep this
+    module importable without pulling a pocket in at module load.
+    """
+    from .solana_fresh_launch_ws_exit_shadow import HOLDER_CONCENTRATION_REJECT_PCT
+
+    return float(HOLDER_CONCENTRATION_REJECT_PCT)
 
 # The in-sample numbers this forward test exists to confirm or kill. NEVER
 # merged into a forward result -- kept only as the comparison baseline.
@@ -163,7 +173,7 @@ async def build_report(
             try:
                 cur = await db.execute(
                     _stats_sql(table, segment=is_segment),
-                    (since, SEGMENT_MIN_RESERVE_USD, SEGMENT_MAX_TOP_HOLDER_PCT),
+                    (since, SEGMENT_MIN_RESERVE_USD, _segment_max_top_holder_pct()),
                 )
             except aiosqlite.OperationalError:
                 # Table not created yet (a pocket that has never run) -- an

@@ -133,7 +133,7 @@ async def test_a_pool_that_went_dark_is_marked_not_dropped(db):
     """Dropping unresolvable rows would bias the result toward whichever
     tokens survived -- a pool going dark IS the outcome."""
     await log.record_decision(_decision(), db_path=db)
-    stale = (datetime.now(timezone.utc) - timedelta(minutes=log.TRACKING_WINDOW_MINUTES + 1)).isoformat()
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=log._tracking_window_minutes() + 1)).isoformat()
     async with aiosqlite.connect(db) as c:
         await c.execute(f"UPDATE {log.TABLE} SET decided_at = ?", (stale,))
         await c.commit()
@@ -152,7 +152,7 @@ async def test_tracking_closes_at_the_same_horizon_a_real_position_would_live(db
     """Tracking past MAX_HOLD would credit the filter with a collapse it never
     actually avoided."""
     await log.record_decision(_decision(), db_path=db)
-    stale = (datetime.now(timezone.utc) - timedelta(minutes=log.TRACKING_WINDOW_MINUTES + 1)).isoformat()
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=log._tracking_window_minutes() + 1)).isoformat()
     async with aiosqlite.connect(db) as c:
         await c.execute(f"UPDATE {log.TABLE} SET decided_at = ?", (stale,))
         await c.commit()
