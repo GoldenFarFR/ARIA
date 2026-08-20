@@ -1,0 +1,263 @@
+"""Real-time pump.fun trade stream with the BUYER'S ADDRESS (20/08).
+
+**What this unlocks.** The bonding-curve feed (`pumpfun_bonding_ws.py`) can
+count trades but never says WHO traded -- an `accountNotification` carries the
+account state, not the signer. That capped the entry signal at raw velocity.
+This module closes that gap: pump.fun's program emits a `TradeEvent` as a
+`Program data:` log line on every buy and sell, and that event carries the
+user's pubkey. Subscribing to the program's logs therefore yields
+`(mint, sol_amount, is_buy, user)` per trade with NO extra RPC call and no
+per-trade lookup -- verified live before this module was written.
+
+Alternatives checked and rejected first, on evidence rather than preference:
+  - PumpPortal `subscribeTokenTrade`: METERED (0.01 SOL / 10k events per its
+    own docs) and returned ZERO events across 18 real fresh tokens in a live
+    30s test.
+  - `logsSubscribe` + `getTransaction(signature)` per trade: gives the signer
+    but adds one RPC round-trip PER TRADE, exactly the latency cost the
+    pockets' design exists to avoid.
+
+**Why DISTINCT wallets and not trade count.** Trade velocity alone is
+forgeable: one wallet can fire ten buys in a second and look like a crowd.
+Counting distinct buyers is what actually separates real traction from a
+single actor making noise -- and it is the one thing this stream can measure
+that the bonding-curve counters cannot.
+
+**Layout of the TradeEvent** (offsets AFTER the 8-byte Anchor discriminator
+`bddb7fd34ee661ee`, confirmed by decoding real live events, never guessed):
+`mint` pubkey@8, `sol_amount` u64@40, `token_amount` u64@48, `is_buy` bool@56,
+`user` pubkey@57. Events shorter than that are skipped rather than
+mis-parsed.
+
+Read-only: subscribes, decodes, counts. Never signs, never writes.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import struct
+import time
+from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+# Anchor discriminator of the TradeEvent, taken from real decoded events.
+TRADE_EVENT_DISCRIMINATOR = bytes.fromhex("bddb7fd34ee661ee")
+
+OFF_MINT = 8
+OFF_SOL_AMOUNT = 40
+OFF_TOKEN_AMOUNT = 48
+OFF_IS_BUY = 56
+OFF_USER = 57
+TRADE_EVENT_MIN_LEN = OFF_USER + 32
+
+# How long a mint's buyer set is kept after its last trade. Long enough to
+# cover the pockets' whole pre-entry tracking window (MAX_POOL_AGE_MINUTES=5),
+# short enough that an all-day stream cannot grow unbounded in memory.
+BUYER_SET_TTL_SECONDS = 600.0
+_PRUNE_EVERY_SECONDS = 60.0
+
+RPC_WS_DEFAULT = "wss://api.mainnet-beta.solana.com"
+
+
+@dataclass
+class TokenTradeFlow:
+    """Per-mint live trade flow. `distinct_buyers` is the signal that matters
+    -- see the module docstring on why it beats a raw trade count."""
+
+    mint: str
+    distinct_buyers: int = 0
+    distinct_sellers: int = 0
+    buy_count: int = 0
+    sell_count: int = 0
+    buy_sol_volume: float = 0.0
+    first_trade_at: float | None = None
+    last_trade_at: float | None = None
+    # 20/08 -- SCAM-SHAPE metrics. Operator's framing: "si on comprend les
+    # scam alors on comprend le jeu". Distinct buyers alone can still be
+    # manufactured -- these expose the two cheapest fakes:
+    #   top_buyer_share  : one wallet supplying most of the buy volume is
+    #                      wash trading, not demand (a real crowd spreads out)
+    #   sell_pressure    : more sellers than buyers means the exit has already
+    #                      started, whatever the buy count says
+    top_buyer_sol: float = 0.0
+
+    @property
+    def top_buyer_share(self) -> float | None:
+        """Share of ALL buy volume coming from the single biggest buyer.
+        ``None`` when nothing was bought -- never a fabricated 0.0."""
+        if self.buy_sol_volume <= 0:
+            return None
+        return round(self.top_buyer_sol / self.buy_sol_volume, 4)
+
+    @property
+    def sell_pressure(self) -> float | None:
+        """Distinct sellers per distinct buyer. Above 1.0 means more wallets
+        are leaving than arriving."""
+        if not self.distinct_buyers:
+            return None
+        return round(self.distinct_sellers / self.distinct_buyers, 3)
+
+    @property
+    def seconds_active(self) -> float | None:
+        if self.first_trade_at is None or self.last_trade_at is None:
+            return None
+        return max(0.0, self.last_trade_at - self.first_trade_at)
+
+
+@dataclass
+class _MintState:
+    buyers: set[str] = field(default_factory=set)
+    sellers: set[str] = field(default_factory=set)
+    buy_count: int = 0
+    sell_count: int = 0
+    buy_sol_volume: float = 0.0
+    buy_sol_by_wallet: dict = field(default_factory=dict)
+    first_trade_at: float | None = None
+    last_trade_at: float | None = None
+
+
+def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str] | None:
+    """``(mint, sol_amount, is_buy, user)`` or ``None`` when the payload is not
+    a TradeEvent (or is too short to trust). Never raises on malformed input --
+    this parses attacker-influenceable bytes off a public chain."""
+    try:
+        if len(raw) < TRADE_EVENT_MIN_LEN or raw[:8] != TRADE_EVENT_DISCRIMINATOR:
+            return None
+        import base58
+
+        mint = base58.b58encode(raw[OFF_MINT:OFF_MINT + 32]).decode()
+        sol_amount = struct.unpack_from("<Q", raw, OFF_SOL_AMOUNT)[0] / 1e9
+        is_buy = bool(raw[OFF_IS_BUY])
+        user = base58.b58encode(raw[OFF_USER:OFF_USER + 32]).decode()
+        return mint, sol_amount, is_buy, user
+    except Exception:  # noqa: BLE001 -- malformed on-chain data is never fatal
+        return None
+
+
+def extract_trade_events(logs: list[str]) -> list[tuple[str, float, bool, str]]:
+    """Pulls every decodable TradeEvent out of one notification's log lines."""
+    out = []
+    for line in logs or []:
+        if not isinstance(line, str) or not line.startswith("Program data: "):
+            continue
+        try:
+            raw = base64.b64decode(line.split("Program data: ", 1)[1])
+        except Exception:  # noqa: BLE001
+            continue
+        decoded = decode_trade_event(raw)
+        if decoded is not None:
+            out.append(decoded)
+    return out
+
+
+class PumpFunTradeStream:
+    """Single program-wide log subscription, shared by every caller.
+
+    Deliberately ONE subscription for the whole program rather than one per
+    token: pump.fun emits every token's trades through the same program, so a
+    per-token subscription would multiply connections for strictly the same
+    data -- and the pockets track dozens of candidates at once."""
+
+    def __init__(self, *, rpc_ws_url: str = RPC_WS_DEFAULT, connect_fn=None):
+        self._rpc_ws_url = rpc_ws_url
+        self._connect_fn = connect_fn
+        self._state: dict[str, _MintState] = {}
+        self._task: asyncio.Task | None = None
+        self._last_prune = time.time()
+        self.connected = False
+
+    def get_flow(self, mint: str) -> TokenTradeFlow:
+        """Never returns None -- an unseen mint is an empty flow (zero buyers),
+        which is itself the honest answer: nobody has bought it."""
+        st = self._state.get(mint)
+        if st is None:
+            return TokenTradeFlow(mint=mint)
+        return TokenTradeFlow(
+            mint=mint,
+            distinct_buyers=len(st.buyers), distinct_sellers=len(st.sellers),
+            buy_count=st.buy_count, sell_count=st.sell_count,
+            buy_sol_volume=round(st.buy_sol_volume, 6),
+            top_buyer_sol=round(max(st.buy_sol_by_wallet.values()), 6) if st.buy_sol_by_wallet else 0.0,
+            first_trade_at=st.first_trade_at, last_trade_at=st.last_trade_at,
+        )
+
+    def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str) -> None:
+        st = self._state.get(mint)
+        if st is None:
+            st = self._state[mint] = _MintState()
+        now = time.time()
+        if st.first_trade_at is None:
+            st.first_trade_at = now
+        st.last_trade_at = now
+        if is_buy:
+            st.buyers.add(user)
+            st.buy_count += 1
+            st.buy_sol_volume += sol_amount
+            st.buy_sol_by_wallet[user] = st.buy_sol_by_wallet.get(user, 0.0) + sol_amount
+        else:
+            st.sellers.add(user)
+            st.sell_count += 1
+
+    def _prune(self, *, now: float | None = None) -> int:
+        """Drops mints idle past the TTL. Without this an always-on stream
+        accumulates every mint pump.fun ever emitted."""
+        now = now if now is not None else time.time()
+        stale = [m for m, st in self._state.items()
+                 if st.last_trade_at is not None and now - st.last_trade_at > BUYER_SET_TTL_SECONDS]
+        for m in stale:
+            self._state.pop(m, None)
+        self._last_prune = now
+        return len(stale)
+
+    def handle_notification(self, msg: dict) -> int:
+        """Feeds one raw websocket message in. Returns how many trades it held
+        (0 for anything that is not a log notification)."""
+        try:
+            value = (msg.get("params") or {}).get("result", {}).get("value") or {}
+        except AttributeError:
+            return 0
+        if value.get("err"):
+            return 0  # a failed transaction is not a trade
+        events = extract_trade_events(value.get("logs") or [])
+        for mint, sol_amount, is_buy, user in events:
+            self._record(mint, sol_amount, is_buy, user)
+        if time.time() - self._last_prune > _PRUNE_EVERY_SECONDS:
+            self._prune()
+        return len(events)
+
+    def _connect(self):
+        if self._connect_fn is not None:
+            return self._connect_fn(self._rpc_ws_url)
+        import websockets
+
+        return websockets.connect(self._rpc_ws_url, ping_interval=20, ping_timeout=40)
+
+    async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
+        """Reconnects with backoff forever. Same resilience shape as the other
+        feeds in this dome: one connection failure never ends the stream."""
+        backoff = 1.0
+        while not (stop_event is not None and stop_event.is_set()):
+            try:
+                async with self._connect() as ws:
+                    await ws.send(json.dumps({
+                        "jsonrpc": "2.0", "id": 1, "method": "logsSubscribe",
+                        "params": [{"mentions": [PUMPFUN_PROGRAM_ID]}, {"commitment": "processed"}],
+                    }))
+                    self.connected = True
+                    backoff = 1.0
+                    while not (stop_event is not None and stop_event.is_set()):
+                        raw = await ws.recv()
+                        try:
+                            self.handle_notification(json.loads(raw))
+                        except Exception as exc:  # noqa: BLE001 -- one bad frame never kills the stream
+                            logger.debug("pumpfun_trade_stream: bad frame (%s)", exc)
+            except Exception as exc:  # noqa: BLE001
+                self.connected = False
+                logger.info("pumpfun_trade_stream: disconnected (%s), retrying in %.0fs", exc, backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
