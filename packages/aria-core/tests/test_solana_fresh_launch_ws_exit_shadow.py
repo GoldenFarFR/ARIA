@@ -26,7 +26,7 @@ async def _gate_clears(_mint):
     every _track_candidate_pumpportal test: the real gate is fail-closed
     and would otherwise hit the live RugCheck endpoint (never a real
     network call in this dome) and refuse every synthetic mint."""
-    return None
+    return shadow.HolderGateOutcome(blocked=False, top_holder_pct=50.0, latency_ms=1.0)
 
 
 @pytest.fixture(autouse=True)
@@ -839,9 +839,10 @@ async def test_gate_blocks_a_token_at_or_above_the_threshold(monkeypatch):
         AsyncMock(return_value=_Report(shadow.HOLDER_CONCENTRATION_REJECT_PCT)),
     )
     gate = await shadow._holder_concentration_gate("mintA")
-    assert gate is not None
-    assert gate[0].startswith("blocked_holder_concentration")
-    assert gate[1] == pytest.approx(shadow.HOLDER_CONCENTRATION_REJECT_PCT)
+    assert gate.blocked is True
+    assert gate.reason.startswith("blocked_holder_concentration")
+    assert gate.top_holder_pct == pytest.approx(shadow.HOLDER_CONCENTRATION_REJECT_PCT)
+    assert gate.latency_ms is not None  # latency captured even on the reject path
 
 
 @pytest.mark.asyncio
@@ -850,7 +851,11 @@ async def test_gate_clears_a_token_below_the_threshold(monkeypatch):
         shadow.rugcheck, "get_token_report",
         AsyncMock(return_value=_Report(shadow.HOLDER_CONCENTRATION_REJECT_PCT - 0.1)),
     )
-    assert await shadow._holder_concentration_gate("mintA") is None
+    gate = await shadow._holder_concentration_gate("mintA")
+    assert gate.blocked is False
+    # The pct is carried on the ACCEPTED path too, otherwise only rejections
+    # would ever have holder data and the filter could not be judged.
+    assert gate.top_holder_pct is not None
 
 
 @pytest.mark.asyncio
@@ -862,16 +867,16 @@ async def test_gate_fails_closed_on_a_timeout(monkeypatch):
 
     gate = await shadow._holder_concentration_gate("mintA")
 
-    assert gate is not None
-    assert gate[0].startswith("blocked_holder_gate_unavailable")
+    assert gate.blocked is True
+    assert gate.reason.startswith("blocked_holder_gate_unavailable")
 
 
 @pytest.mark.asyncio
 async def test_gate_fails_closed_on_a_provider_error(monkeypatch):
     monkeypatch.setattr(shadow.rugcheck, "get_token_report", AsyncMock(side_effect=RuntimeError("boom")))
     gate = await shadow._holder_concentration_gate("mintA")
-    assert gate is not None
-    assert gate[0].startswith("blocked_holder_gate_unavailable")
+    assert gate.blocked is True
+    assert gate.reason.startswith("blocked_holder_gate_unavailable")
 
 
 @pytest.mark.asyncio
@@ -880,8 +885,8 @@ async def test_gate_fails_closed_when_the_report_carries_no_holder_data(monkeypa
     same as an outage, never as an implicit pass."""
     monkeypatch.setattr(shadow.rugcheck, "get_token_report", AsyncMock(return_value=_Report(None)))
     gate = await shadow._holder_concentration_gate("mintA")
-    assert gate is not None
-    assert gate[0].startswith("blocked_holder_gate_unavailable")
+    assert gate.blocked is True
+    assert gate.reason.startswith("blocked_holder_gate_unavailable")
 
 
 @pytest.mark.asyncio
@@ -889,7 +894,10 @@ async def test_a_blocked_candidate_never_becomes_a_position():
     """The whole point: no row, so no entry fee and no loss -- unlike the
     post-entry reject, which only ever closed an already-open position."""
     async def _blocks(_mint):
-        return ("blocked_holder_concentration: top_holder=99.0%", 99.0)
+        return shadow.HolderGateOutcome(
+            blocked=True, reason="blocked_holder_concentration: top_holder=99.0%",
+            top_holder_pct=99.0, latency_ms=2.0,
+        )
 
     stats: dict = {}
     result = await shadow._track_candidate_pumpportal(
@@ -909,7 +917,9 @@ async def test_an_outage_is_counted_separately_from_a_real_reject():
     the normal reject count, or a silent provider failure would read as "the
     filter is working well" while the pocket is simply not trading at all."""
     async def _unavailable(_mint):
-        return ("blocked_holder_gate_unavailable: timeout", None)
+        return shadow.HolderGateOutcome(
+            blocked=True, reason="blocked_holder_gate_unavailable: timeout", latency_ms=12000.0,
+        )
 
     stats: dict = {}
     await shadow._track_candidate_pumpportal(
@@ -927,7 +937,10 @@ async def test_a_blocked_candidate_sheds_its_websocket_subscription():
     """A blocked candidate must not leak the subscription add_pools() took --
     the exact failure that once exceeded the RPC's accountSubscribe ceiling."""
     async def _blocks(_mint):
-        return ("blocked_holder_concentration: top_holder=99.0%", 99.0)
+        return shadow.HolderGateOutcome(
+            blocked=True, reason="blocked_holder_concentration: top_holder=99.0%",
+            top_holder_pct=99.0, latency_ms=2.0,
+        )
 
     feed = _FakeFeed()
     await shadow._track_candidate_pumpportal(
@@ -948,7 +961,7 @@ async def test_the_gate_runs_only_after_the_liquidity_filter_clears():
 
     async def _counting_gate(mint):
         calls.append(mint)
-        return None
+        return shadow.HolderGateOutcome(blocked=False)
 
     await shadow._track_candidate_pumpportal(
         _pp_event(),

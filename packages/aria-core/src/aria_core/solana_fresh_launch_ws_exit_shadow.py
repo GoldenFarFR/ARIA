@@ -65,10 +65,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import pretrade_rejection_log
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
 from aria_core.services.geckoterminal import (
@@ -439,28 +441,63 @@ HOLDER_GATE_TIMEOUT_S = 12.0
 HOLDER_GATE_FAIL_CLOSED = True
 
 
-async def _holder_concentration_gate(mint: str) -> tuple[str, float | None] | None:
-    """Pre-trade check. Returns ``None`` when the token is CLEARED to enter,
-    or a ``(reason, pct)`` tuple when the order must not be sent.
+@dataclass
+class HolderGateOutcome:
+    """20/08 -- the gate's full verdict, not just pass/fail. `latency_ms` and
+    `top_holder_pct` are carried out deliberately: a blocked candidate produces
+    no position row (that is the whole point), so if the gate does not hand
+    these values back they are lost forever and the "avoided PnL" can never be
+    measured. Proactive-ingestion doctrine: instrument the collection at the
+    moment the mechanism is built, never after."""
+
+    blocked: bool
+    reason: str | None = None
+    top_holder_pct: float | None = None
+    latency_ms: float | None = None
+
+
+async def _holder_concentration_gate(mint: str) -> HolderGateOutcome:
+    """Pre-trade check. ``blocked=False`` means the token is CLEARED to enter.
 
     Never raises -- any failure resolves through ``HOLDER_GATE_FAIL_CLOSED``
     rather than propagating into the tracking loop."""
+    started = time.monotonic()
+
+    def _elapsed_ms() -> float:
+        return round((time.monotonic() - started) * 1000.0, 1)
+
+    def _unavailable(kind: str) -> HolderGateOutcome:
+        if not HOLDER_GATE_FAIL_CLOSED:
+            return HolderGateOutcome(blocked=False, latency_ms=_elapsed_ms())
+        return HolderGateOutcome(
+            blocked=True, reason=f"blocked_holder_gate_unavailable: {kind}", latency_ms=_elapsed_ms(),
+        )
+
     try:
         report = await asyncio.wait_for(rugcheck.get_token_report(mint), timeout=HOLDER_GATE_TIMEOUT_S)
     except asyncio.TimeoutError:
-        return ("blocked_holder_gate_unavailable: timeout", None) if HOLDER_GATE_FAIL_CLOSED else None
+        return _unavailable("timeout")
     except Exception as exc:  # noqa: BLE001 -- a provider error must never reach the loop
         logger.info("solana_fresh_launch_ws_exit_shadow: holder gate lookup failed for %s (%s)", mint, exc)
-        return ("blocked_holder_gate_unavailable: error", None) if HOLDER_GATE_FAIL_CLOSED else None
+        return _unavailable("error")
 
     if not report.available or report.top_holder_pct is None:
         # An unenriched answer is NOT evidence the token is clean -- treated
         # exactly like an outage, never as an implicit pass.
-        return ("blocked_holder_gate_unavailable: no data", None) if HOLDER_GATE_FAIL_CLOSED else None
+        return _unavailable("no data")
 
     if report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
-        return (f"blocked_holder_concentration: top_holder={report.top_holder_pct:.1f}%", report.top_holder_pct)
-    return None
+        return HolderGateOutcome(
+            blocked=True,
+            reason=f"blocked_holder_concentration: top_holder={report.top_holder_pct:.1f}%",
+            top_holder_pct=report.top_holder_pct,
+            latency_ms=_elapsed_ms(),
+        )
+    # Cleared -- the pct is still carried so the accepted side is measurable
+    # too, otherwise only rejections would ever have holder data.
+    return HolderGateOutcome(
+        blocked=False, top_holder_pct=report.top_holder_pct, latency_ms=_elapsed_ms(),
+    )
 
 
 async def _track_candidate_pumpportal(
@@ -602,8 +639,28 @@ async def _track_candidate_pumpportal(
             # 4 of 14 live tokens and returned impossible values (105-107%,
             # since the field counts VIRTUAL tokens, not a supply fraction).
             gate = await holder_gate_fn(event.mint)
-            if gate is not None:
-                reason, _pct = gate
+
+            realistic_entry_price = _apply_price_impact_and_fee(
+                price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD, reserve_usd=reserve_usd, side="buy",
+            )
+            # Logged on BOTH branches, deliberately. A filter can only be
+            # judged against what it let through -- a table of rejections
+            # alone cannot tell a good cut from an indiscriminate one. The
+            # slippage-adjusted price is what gets stored as the would-be
+            # entry: comparing a raw mid price against a real later price
+            # would flatter the filter.
+            await pretrade_rejection_log.record_decision(
+                pretrade_rejection_log.GateDecision(
+                    pocket="ws_exit", chain=chain, mint=event.mint, pool_address=pool_address,
+                    blocked=gate.blocked, reason=gate.reason, top_holder_pct=gate.top_holder_pct,
+                    gate_latency_ms=gate.latency_ms, would_be_entry_price=price_usd,
+                    would_be_reserve_usd=reserve_usd,
+                    realistic_would_be_entry_price=realistic_entry_price,
+                )
+            )
+
+            if gate.blocked:
+                reason = gate.reason or "blocked_unknown"
                 if stats is not None:
                     # Counted under its own key, split on the ":" prefix, so a
                     # RugCheck outage (blocked_holder_gate_unavailable) never
@@ -620,9 +677,6 @@ async def _track_candidate_pumpportal(
                 _shed_subscription()
                 return None
 
-            realistic_entry_price = _apply_price_impact_and_fee(
-                price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD, reserve_usd=reserve_usd, side="buy",
-            )
             return {
                 "pool_address": pool_address,
                 "token_address": event.mint,
