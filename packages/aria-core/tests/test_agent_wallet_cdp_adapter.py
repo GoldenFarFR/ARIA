@@ -2,6 +2,7 @@
 jamais un vrai appel réseau (aucun identifiant CDP dans cette suite)."""
 from __future__ import annotations
 
+import logging
 import sys
 import types
 
@@ -263,15 +264,38 @@ def test_patch_relaxes_gas_fee_validation_on_the_real_sdk():
     ``_patch_cdp_swap_fee_validation()`` -- unlike the module-level flag reset
     by the fixture above, mutating ``CommonSwapResponseFees.model_fields`` is a
     real, permanent change to the imported class for the rest of the process
-    (Pydantic model rebuilds aren't undoable by monkeypatch). This is the only
-    test asserting the PRE-patch failure mode, so it must be the first to
-    touch the real class -- kept in one self-contained test rather than split
-    across two, precisely to avoid that ordering trap."""
+    (Pydantic model rebuilds aren't undoable by monkeypatch). Kept as one
+    self-contained test rather than split across two, to avoid that ordering
+    trap.
+
+    20/08 -- real finding: cdp-sdk 1.48.0 (released after this test's 26/07
+    origin, confirmed via a fresh install: ``pip show cdp-sdk`` -> 1.48.0,
+    vs the 1.47.1 this test was written against) already ships
+    ``gas_fee``/``protocol_fee`` as ``Optional[TokenFee]`` upstream --
+    Coinbase fixed the exact bug this module's own patch works around. The
+    PRE-patch failure mode is therefore no longer universal across installed
+    SDK versions (``cdp-sdk>=1.0.0`` is deliberately unbounded, see
+    pyproject.toml's own comment on why) -- asserting it unconditionally
+    made this test SDK-version-dependent rather than testing ARIA's own
+    code. Detected live instead of hardcoded either way: if the installed
+    SDK still rejects null (older pin), the pre-patch raise is verified; if
+    it doesn't (>=1.48.0), that's recorded as already-fixed-upstream rather
+    than silently skipped. Either way, the real invariant this module
+    depends on -- construction succeeds AFTER the patch runs, patched or
+    already-native -- is asserted unconditionally below."""
     pytest.importorskip("cdp", reason="cdp-sdk is the optional [agent_wallet] extra")
     from cdp.openapi_client.models.common_swap_response_fees import CommonSwapResponseFees
 
-    with pytest.raises(Exception):  # noqa: PT011 -- real pydantic.ValidationError, unpatched
+    try:
         CommonSwapResponseFees.from_dict({"gasFee": None, "protocolFee": None})
+    except Exception:
+        pass  # pre-1.48.0 behavior: still rejects null, exactly what the patch below fixes
+    else:
+        logging.getLogger(__name__).info(
+            "installed cdp-sdk already accepts a null gasFee/protocolFee natively "
+            "(Coinbase fixed this upstream in 1.48.0) -- the patch below is now a no-op "
+            "for this SDK version, kept for backward compatibility with older pins."
+        )
 
     adapter._patch_cdp_swap_fee_validation()
 
