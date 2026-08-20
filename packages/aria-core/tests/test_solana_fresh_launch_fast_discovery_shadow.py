@@ -694,8 +694,17 @@ async def _insert_open_row(
 
 @pytest.mark.asyncio
 async def test_advance_exit_simulation_via_rest_closes_on_trailing_stop():
+    # 20/08 -- the trailing now only ARMS once the peak cleared
+    # TRAILING_STOP_ARM_PEAK_PCT above entry (a trailing firing on a flat peak
+    # is really a guaranteed ~-15% market sell: -16.8% measured against
+    # max_hold's -7.35% on the same positions). So this row is seeded with a
+    # peak that HAS risen, which is the case the trailing is actually for.
+    armed_peak = 1.0 * (1 + ws_exit_shadow.TRAILING_STOP_ARM_PEAK_PCT / 100.0)
     await _insert_open_row(pool_address="curveA", entry_price=1.0, reserve_usd=8000.0)
-    stop_price = 1.0 * (1 - shadow.TRAILING_STOP_PCT / 100.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(f"UPDATE {shadow.TABLE} SET peak_price = ?", (armed_peak,))
+        await db.commit()
+    stop_price = armed_peak * (1 - shadow.TRAILING_STOP_PCT / 100.0)
     client = FakeClient({"curveA": stop_price}, reserve_by_pool={"curveA": 8000.0})
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_trailing_stop"] == 1

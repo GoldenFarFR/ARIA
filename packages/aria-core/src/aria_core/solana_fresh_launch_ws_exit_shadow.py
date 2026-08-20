@@ -103,6 +103,32 @@ TABLE = "solana_fresh_launch_ws_exit_shadow_log"
 # solana_fresh_launch_shadow.py -- see module docstring for why they are
 # not shared state.
 TRAILING_STOP_PCT = 15.0
+
+# 20/08 -- the trailing stop only ARMS once the peak has risen this far above
+# entry. Below it, the position is left to the other two rules (max_hold /
+# liquidity_collapse) instead.
+#
+# WHY, on 942 real closures. A trailing stop sells at `peak * 0.85`; when the
+# peak never rose meaningfully above entry, that is not a trailing stop at all,
+# it is a guaranteed ~-15% market sell. Measured on positions whose peak never
+# exceeded +10% -- 79% of every trailing_stop this pocket ever fired:
+#   max_hold           n=556  -7.35%
+#   trailing_stop      n=187  -16.80%   <-- 2.3x worse than simply waiting
+#   liquidity_collapse n=191  -31.17%
+# And the trailing's own PnL by peak reached is cleanly monotonic:
+#   <+5%   n=184  -16.9%      +15-25% n=3   -1.4%
+#   +5-10% n=3    -10.8%      +25-50% n=11  +14.2%
+#   +10-15% n=6   -6.83%      >+50%   n=28  +91.4%
+# So the mechanism is genuinely excellent once a token actually moves, and
+# purely destructive before that. Arming at +10% removes the destructive half
+# (~187 trades moving from ~-16.7% to max_hold's -7.35%) while keeping every
+# case where the trailing earns its keep.
+#
+# CRITICALLY, this changes NO entry filter. The dome's PnL is carried by 1.8%
+# of trades (46 of 2522 producing +15928 points against -15351 total), so any
+# additional entry filter risks cutting the rare winners that carry everything.
+# Reducing what the losers cost is the one lever that cannot do that.
+TRAILING_STOP_ARM_PEAK_PCT = 10.0
 MAX_HOLD_MINUTES = 60.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
@@ -1146,7 +1172,10 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * current_price
         remaining_qty = 0.0
         exit_reason = "liquidity_collapse"
-    elif effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0):
+    elif (
+        peak_price >= entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
+        and effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+    ):
         stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
         _realistic_sell(remaining_qty, stop_price)
         realized_proceeds += remaining_qty * stop_price

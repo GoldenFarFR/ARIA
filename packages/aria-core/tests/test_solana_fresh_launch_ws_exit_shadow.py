@@ -1242,3 +1242,65 @@ async def test_run_forever_pumpportal_stops_on_the_stop_event(monkeypatch):
     stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, stop_event=stop)
 
     assert stats.get("confirmed", 0) == 0  # stopped before draining anything
+
+
+# --- 20/08, trailing stop only arms once the peak actually rose -----------
+# On 942 real closures, a trailing firing on a peak below +10% cost -16.8%
+# against max_hold's -7.35% on the same kind of position: below that peak it
+# is not a trailing stop, it is a guaranteed ~-15% market sell.
+
+def _open_row(*, entry_price=1.0, peak_price=1.0, reserve_usd=4000.0):
+    return {
+        "entry_price": entry_price, "peak_price": peak_price, "reserve_usd": reserve_usd,
+        "remaining_qty": 1.0, "realized_proceeds": 0.0,
+        "realistic_entry_price": entry_price, "realistic_realized_proceeds": 0.0,
+        "support_range_high": None,
+    }
+
+
+def test_trailing_does_not_fire_when_the_peak_never_rose():
+    """The 79%-of-volume case. Must fall through to the other rules."""
+    out = shadow.evaluate_exit(
+        _open_row(peak_price=1.02),  # peak only +2%, below the arm threshold
+        current_price=0.80, reserve_usd=4000.0, dex_id="pumpswap", age_minutes=10.0,
+    )
+    assert out["exit_reason"] != "trailing_stop"
+
+
+def test_trailing_fires_normally_once_the_peak_cleared_the_threshold():
+    out = shadow.evaluate_exit(
+        _open_row(peak_price=1.50),  # +50%, well armed
+        current_price=1.20, reserve_usd=4000.0, dex_id="pumpswap", age_minutes=10.0,
+    )
+    assert out["exit_reason"] == "trailing_stop"
+
+
+def test_the_arm_threshold_is_inclusive_at_its_exact_boundary():
+    peak = 1.0 * (1 + shadow.TRAILING_STOP_ARM_PEAK_PCT / 100.0)
+    out = shadow.evaluate_exit(
+        _open_row(peak_price=peak),
+        current_price=peak * 0.80, reserve_usd=4000.0, dex_id="pumpswap", age_minutes=10.0,
+    )
+    assert out["exit_reason"] == "trailing_stop"
+
+
+def test_an_unarmed_position_still_exits_on_liquidity_collapse():
+    """Disarming the trailing must never leave a rugging position unprotected
+    -- the collapse guard keeps priority regardless of peak."""
+    out = shadow.evaluate_exit(
+        _open_row(peak_price=1.01),
+        current_price=0.5, reserve_usd=100.0,  # 97% of entry liquidity gone
+        # NOT pumpswap on purpose: the collapse guard is deliberately inert on
+        # PumpSwap, where reserve legitimately fluctuates (see the guard itself).
+        dex_id="pumpfun", age_minutes=5.0,
+    )
+    assert out["exit_reason"] == "liquidity_collapse"
+
+
+def test_an_unarmed_position_still_exits_on_max_hold():
+    out = shadow.evaluate_exit(
+        _open_row(peak_price=1.01),
+        current_price=0.95, reserve_usd=4000.0, dex_id="pumpswap",
+        age_minutes=shadow.MAX_HOLD_MINUTES + 1,
+    )
+    assert out["exit_reason"] == "max_hold"
