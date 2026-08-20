@@ -495,6 +495,12 @@ async def _has_open_or_recent_signal(db: aiosqlite.Connection, pool_address: str
 # in services/rugcheck.py). 12s covers a couple of queued turns at that
 # throttle while still bounding the entry delay -- past that the candidate is
 # rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED).
+# 20/08 -- gate on the live trade flow: refuse to enter a candidate on which
+# not a single BUY was observed while tracking it. Provisional and deliberately
+# minimal (>=1 buy, never a tuned threshold) until the counters logged on every
+# decision give enough history to calibrate a real N-buys-in-T-seconds rule.
+REQUIRE_OBSERVED_BUY = True
+
 HOLDER_GATE_TIMEOUT_S = 12.0
 
 # 20/08 -- how often the discovery loop emits its running outcome counters.
@@ -636,6 +642,7 @@ async def _track_candidate_pumpportal(
     ws_feed=None,
     bonding_ws_feed=None,
     holder_gate_fn=_holder_concentration_gate,
+    require_observed_buy: bool = REQUIRE_OBSERVED_BUY,
     stats: dict | None = None,
     min_liquidity_usd: float = MIN_LIQUIDITY_USD,
     max_liquidity_usd_entry: float = MAX_LIQUIDITY_USD_ENTRY,
@@ -767,6 +774,45 @@ async def _track_candidate_pumpportal(
             # payload (zero latency, zero quota) diverged from RugCheck on
             # 4 of 14 live tokens and returned impossible values (105-107%,
             # since the field counts VIRTUAL tokens, not a supply fraction).
+            # 20/08 -- LIVE TRADE FLOW, read off the bonding-curve subscription
+            # this candidate already has (see pumpfun_bonding_ws's own counters:
+            # every accountNotification IS a trade, and the quote reserve's
+            # direction says buy or sell). Zero extra call, zero latency.
+            #
+            # Provisional rule, stated as such: reject a candidate on which NOT
+            # ONE buy was observed during the whole tracking window. Grounds,
+            # measured rather than assumed -- a live 30s test on 18 real fresh
+            # tokens saw ZERO trades on any of them, and the <30s age band
+            # (where by construction nobody has bought yet) is the pocket's
+            # worst at -21.56%. Buying a token nobody else is buying is the
+            # single behaviour the data condemns most clearly.
+            # It is deliberately the WEAKEST possible threshold (>=1 buy, not a
+            # tuned N-buys-in-T-seconds): the real threshold cannot be
+            # calibrated until this counter has accumulated history, and
+            # `buys_observed`/`sells_observed` are logged on every decision
+            # precisely so it can be, at n>=100. Fails OPEN when the feed has
+            # no data at all (never subscribed, feed down) -- an absent counter
+            # means "not measured", never "nobody bought".
+            buys_observed = sells_observed = None
+            if bonding_ws_feed is not None:
+                try:
+                    flow = bonding_ws_feed.get_snapshot(pool_address)
+                    if getattr(flow, "trades_total", 0):
+                        buys_observed = getattr(flow, "buys_since_last_read", 0)
+                        sells_observed = getattr(flow, "sells_since_last_read", 0)
+                except Exception:  # noqa: BLE001 -- a feed hiccup never blocks a decision
+                    buys_observed = sells_observed = None
+
+            if buys_observed == 0 and require_observed_buy:
+                if stats is not None:
+                    stats["blocked_no_buyer"] = stats.get("blocked_no_buyer", 0) + 1
+                logger.info(
+                    "solana_fresh_launch_ws_exit_shadow: entry BLOCKED for %s "
+                    "(blocked_no_buyer: 0 buys, %s sells observed)", pool_address, sells_observed,
+                )
+                _shed_subscription()
+                return None
+
             gate = await holder_gate_fn(event.mint, pool_address)
 
             realistic_entry_price = _apply_price_impact_and_fee(
@@ -785,6 +831,7 @@ async def _track_candidate_pumpportal(
                     gate_latency_ms=gate.latency_ms, would_be_entry_price=price_usd,
                     would_be_reserve_usd=reserve_usd,
                     top_holder_excluding_pool_pct=gate.top_holder_excluding_pool_pct,
+                    buys_observed=buys_observed, sells_observed=sells_observed,
                     realistic_would_be_entry_price=realistic_entry_price,
                 )
             )

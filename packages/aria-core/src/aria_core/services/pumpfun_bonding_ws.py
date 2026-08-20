@@ -190,6 +190,14 @@ class PumpFunBondingLiveSnapshot:
     available: bool = False
     error: str | None = None
     price_high_since_last_read: float | None = None
+    # 20/08 -- live trade flow, derived from the notification stream
+    # itself (each notification IS a trade; the quote reserve rising means
+    # a buy, falling means a sell). `trades_total`/`seconds_tracked` are
+    # cumulative since first sight, the buy/sell pair resets per read.
+    buys_since_last_read: int = 0
+    sells_since_last_read: int = 0
+    trades_total: int = 0
+    seconds_tracked: float | None = None
     price_low_since_last_read: float | None = None
     # 19/08 -- True when this snapshot is priced from a quiet-but-connected
     # account (no notification in over max_staleness_seconds, connection
@@ -312,6 +320,11 @@ class PumpFunBondingWebSocketFeed:
         # caller's last read, reset by get_snapshot() itself (see that
         # method + PumpFunBondingLiveSnapshot's own docstring).
         self._price_high_since_read: dict[str, float] = {}
+        # 20/08 trade-flow counters, see _handle_account_notification.
+        self._buys_since_read: dict[str, int] = {}
+        self._sells_since_read: dict[str, int] = {}
+        self._trades_total: dict[str, int] = {}
+        self._first_seen_at: dict[str, float] = {}
         self._price_low_since_read: dict[str, float] = {}
 
         # 19/08 -- tracks the active accountSubscribe id for each pool, so
@@ -378,6 +391,10 @@ class PumpFunBondingWebSocketFeed:
             self._raw_state.pop(pool_addr, None)
             self._updated_at.pop(pool_addr, None)
             self._price_high_since_read.pop(pool_addr, None)
+            self._buys_since_read.pop(pool_addr, None)
+            self._sells_since_read.pop(pool_addr, None)
+            self._trades_total.pop(pool_addr, None)
+            self._first_seen_at.pop(pool_addr, None)
             self._price_low_since_read.pop(pool_addr, None)
             sub_id = self._pool_to_sub_id.pop(pool_addr, None)
             if sub_id is not None:
@@ -504,6 +521,16 @@ class PumpFunBondingWebSocketFeed:
             dex_id="pumpfun", complete=False, updated_at=updated_at, available=True, stale=is_stale,
             price_high_since_last_read=max(price_high, price_usd),
             price_low_since_last_read=min(price_low, price_usd),
+            # Buy/sell counters RESET on read (same window semantics as the
+            # high/low above), totals stay cumulative so a caller can compute
+            # velocity over the whole tracking window rather than one cycle.
+            buys_since_last_read=self._buys_since_read.pop(pool_address, 0),
+            sells_since_last_read=self._sells_since_read.pop(pool_address, 0),
+            trades_total=self._trades_total.get(pool_address, 0),
+            seconds_tracked=(
+                time.time() - self._first_seen_at[pool_address]
+                if pool_address in self._first_seen_at else None
+            ),
         )
 
     # --- background loop --------------------------------------------------
@@ -625,6 +652,35 @@ class PumpFunBondingWebSocketFeed:
         decoded = decode_bonding_curve_account(raw)
         if decoded is None:
             return
+
+        # 20/08 -- TRADE-FLOW COUNTERS. Every accountNotification on a bonding
+        # curve IS a trade: the account only changes when someone buys or
+        # sells. The DIRECTION is readable too -- the quote reserve (SOL put
+        # in) rises on a buy and falls on a sell. So the buy/sell split and the
+        # trade velocity come free from a subscription that already exists,
+        # with no extra call and no new provider.
+        #
+        # Why this matters, measured the same day: comparing x2+ winners to
+        # losers on entry features, the ONE discriminating variable was how
+        # much supply had already been bought (63.9% still unsold for winners
+        # vs 82.8% for losers). A token that explodes is one people were
+        # already buying. But that was only readable via RugCheck's async
+        # backfill, i.e. AFTER entry. These counters make the same signal
+        # readable DURING the pre-entry tracking window, live.
+        #
+        # PumpPortal's own `subscribeTokenTrade` was checked first and rejected:
+        # it is a METERED endpoint (0.01 SOL / 10k events) and returned zero
+        # events on 18 real fresh tokens over 30s in a live test.
+        previous = self._raw_state.get(pool_addr)
+        if previous is not None:
+            delta_quote = decoded["virtual_quote_reserves"] - previous["virtual_quote_reserves"]
+            if delta_quote > 0:
+                self._buys_since_read[pool_addr] = self._buys_since_read.get(pool_addr, 0) + 1
+            elif delta_quote < 0:
+                self._sells_since_read[pool_addr] = self._sells_since_read.get(pool_addr, 0) + 1
+        self._trades_total[pool_addr] = self._trades_total.get(pool_addr, 0) + 1
+        self._first_seen_at.setdefault(pool_addr, time.time())
+
         self._raw_state[pool_addr] = decoded
         self._updated_at[pool_addr] = time.time()
 

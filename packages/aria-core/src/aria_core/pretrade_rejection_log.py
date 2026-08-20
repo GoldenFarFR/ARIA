@@ -83,6 +83,11 @@ class GateDecision:
     # `top_holder_excluding_pool_pct` docstring for why the two are measured
     # side by side before either threshold is touched.
     top_holder_excluding_pool_pct: float | None = None
+    # 20/08 -- live trade flow observed while tracking, from the
+    # bonding-curve subscription. Logged on EVERY decision so the
+    # provisional >=1-buy rule can be recalibrated on real history.
+    buys_observed: int | None = None
+    sells_observed: int | None = None
 
 
 async def _ensure_table(db_path: str | None = None) -> None:
@@ -103,6 +108,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 reason TEXT,
                 top_holder_pct REAL,
                 top_holder_excluding_pool_pct REAL,
+                buys_observed INTEGER,
+                sells_observed INTEGER,
                 gate_latency_ms REAL,
                 would_be_entry_price REAL,
                 would_be_reserve_usd REAL,
@@ -125,8 +132,10 @@ async def _ensure_table(db_path: str | None = None) -> None:
         # never wait for a rebuild. A PRAGMA guard keeps it idempotent.
         cur = await db.execute(f"PRAGMA table_info({TABLE})")
         columns = {row[1] for row in await cur.fetchall()}
-        if "top_holder_excluding_pool_pct" not in columns:
-            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN top_holder_excluding_pool_pct REAL")
+        for col, decl in (("top_holder_excluding_pool_pct", "REAL"),
+                          ("buys_observed", "INTEGER"), ("sells_observed", "INTEGER")):
+            if col not in columns:
+                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {decl}")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -155,8 +164,8 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
                     (pocket, chain, mint, pool_address, decided_at, blocked, reason,
                      top_holder_pct, top_holder_excluding_pool_pct, gate_latency_ms,
                      would_be_entry_price, would_be_reserve_usd, realistic_would_be_entry_price,
-                     peak_price, tracking_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     buys_observed, sells_observed, peak_price, tracking_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision.pocket, decision.chain, decision.mint, decision.pool_address,
@@ -165,6 +174,7 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
                     decision.top_holder_excluding_pool_pct, decision.gate_latency_ms,
                     decision.would_be_entry_price, decision.would_be_reserve_usd,
                     decision.realistic_would_be_entry_price,
+                    decision.buys_observed, decision.sells_observed,
                     decision.would_be_entry_price if trackable else None,
                     "tracking" if trackable else "not_tracked",
                 ),

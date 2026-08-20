@@ -1304,3 +1304,73 @@ def test_an_unarmed_position_still_exits_on_max_hold():
         age_minutes=shadow.MAX_HOLD_MINUTES + 1,
     )
     assert out["exit_reason"] == "max_hold"
+
+
+# --- 20/08, live buy-flow gate -------------------------------------------
+# Buying a token nobody else is buying is the behaviour the data condemns most
+# clearly: the <30s age band (where by construction nobody has bought yet) is
+# the pocket's worst at -21.56%, and a live 30s test saw ZERO trades on 18
+# real fresh tokens.
+
+class _FlowFeed:
+    def __init__(self, *, buys, sells, total):
+        self._snap = SimpleNamespace(
+            buys_since_last_read=buys, sells_since_last_read=sells, trades_total=total,
+        )
+        self.removed = []
+
+    def get_snapshot(self, _pool):
+        return self._snap
+
+    def remove_pools(self, pools):
+        self.removed.extend(pools)
+
+    async def add_pools(self, _pairs):
+        return None
+
+
+async def _track_with_flow(feed, **kw):
+    return await shadow._track_candidate_pumpportal(
+        _pp_event(), bonding_ws_feed=feed,
+        resolve_fn=AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD + 1.0, None, "rest")),
+        sleep_fn=AsyncMock(), holder_gate_fn=_gate_clears, **kw,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_with_zero_observed_buys_is_blocked():
+    stats: dict = {}
+    feed = _FlowFeed(buys=0, sells=3, total=3)
+
+    assert await _track_with_flow(feed, stats=stats) is None
+    assert stats.get("blocked_no_buyer") == 1
+    assert feed.removed == ["poolA"]  # subscription shed, never leaked
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_with_real_buyers_passes():
+    feed = _FlowFeed(buys=4, sells=1, total=5)
+    assert await _track_with_flow(feed) is not None
+
+
+@pytest.mark.asyncio
+async def test_no_flow_data_at_all_fails_OPEN():
+    """An absent counter means "not measured" (feed down, never subscribed) --
+    never "nobody bought". Rejecting there would block on an outage."""
+    feed = _FlowFeed(buys=0, sells=0, total=0)  # trades_total 0 => unmeasured
+    assert await _track_with_flow(feed) is not None
+
+
+@pytest.mark.asyncio
+async def test_the_gate_can_be_disabled_for_the_control_arm():
+    feed = _FlowFeed(buys=0, sells=3, total=3)
+    assert await _track_with_flow(feed, require_observed_buy=False) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_feed_error_never_blocks_a_decision():
+    class _Broken(_FlowFeed):
+        def get_snapshot(self, _pool):
+            raise RuntimeError("feed down")
+
+    assert await _track_with_flow(_Broken(buys=0, sells=0, total=0)) is not None
