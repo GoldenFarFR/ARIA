@@ -109,6 +109,15 @@ class TokenTradeFlow:
         return max(0.0, self.last_trade_at - self.first_trade_at)
 
 
+# 20/08 -- how far back the per-mint trade log is kept for the time-window
+# derivatives (buyer acceleration, sell-pressure slope). Bounded on purpose:
+# the live stream runs at ~50 trades/s across ~170 tokens, so an unbounded
+# log would be the biggest memory consumer in the process within minutes.
+# 120s covers the pockets' whole pre-entry window with room for a
+# before/after comparison.
+TRADE_LOG_WINDOW_SECONDS = 120.0
+
+
 @dataclass
 class _MintState:
     buyers: set[str] = field(default_factory=set)
@@ -119,6 +128,8 @@ class _MintState:
     buy_sol_by_wallet: dict = field(default_factory=dict)
     first_trade_at: float | None = None
     last_trade_at: float | None = None
+    # (timestamp, user, is_buy) trimmed to TRADE_LOG_WINDOW_SECONDS.
+    recent: list = field(default_factory=list)
 
 
 def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str] | None:
@@ -186,6 +197,52 @@ class PumpFunTradeStream:
             first_trade_at=st.first_trade_at, last_trade_at=st.last_trade_at,
         )
 
+    def window_stats(self, mint: str, *, seconds: float, now: float | None = None) -> tuple[int, int]:
+        """``(distinct_buyers, distinct_sellers)`` over the last ``seconds``.
+        The building block for every derivative below."""
+        st = self._state.get(mint)
+        if st is None:
+            return (0, 0)
+        cutoff = (now if now is not None else time.time()) - seconds
+        buyers, sellers = set(), set()
+        for ts, user, is_buy in st.recent:
+            if ts < cutoff:
+                continue
+            (buyers if is_buy else sellers).add(user)
+        return (len(buyers), len(sellers))
+
+    def buyer_acceleration(self, mint: str, *, window: float = 20.0, now: float | None = None) -> float | None:
+        """Distinct buyers in the LAST ``window`` seconds divided by those in
+        the window before it. >1 means the crowd is still arriving, <1 means it
+        has started to thin out.
+
+        This is the LURE-PHASE signal: a rug's price climbs steadily while new
+        buyers keep coming, and the climb ends when they stop -- visible here
+        BEFORE it shows in the price. ``None`` when the previous window is
+        empty (nothing to compare against) rather than a fabricated ratio."""
+        now = now if now is not None else time.time()
+        recent_buyers, _ = self.window_stats(mint, seconds=window, now=now)
+        prior_buyers, _ = self.window_stats(mint, seconds=window * 2, now=now)
+        prior_only = prior_buyers - recent_buyers
+        if prior_only <= 0:
+            return None
+        return round(recent_buyers / prior_only, 3)
+
+    def sell_pressure_slope(self, mint: str, *, window: float = 20.0, now: float | None = None) -> float | None:
+        """Change in sellers-per-buyer between the previous window and the
+        current one. POSITIVE means the exit is accelerating -- the ultra-early
+        exit signal, which fires while the price is still holding.
+
+        ``None`` when either window has no buyers to normalise against; an
+        undefined ratio must never read as "calm"."""
+        now = now if now is not None else time.time()
+        rb, rs = self.window_stats(mint, seconds=window, now=now)
+        tb, ts_ = self.window_stats(mint, seconds=window * 2, now=now)
+        prior_b, prior_s = tb - rb, ts_ - rs
+        if rb <= 0 or prior_b <= 0:
+            return None
+        return round((rs / rb) - (prior_s / prior_b), 3)
+
     def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str) -> None:
         st = self._state.get(mint)
         if st is None:
@@ -194,6 +251,11 @@ class PumpFunTradeStream:
         if st.first_trade_at is None:
             st.first_trade_at = now
         st.last_trade_at = now
+        st.recent.append((now, user, is_buy))
+        if len(st.recent) > 8:  # amortised trim, never on every single trade
+            cutoff = now - TRADE_LOG_WINDOW_SECONDS
+            if st.recent[0][0] < cutoff:
+                st.recent = [t for t in st.recent if t[0] >= cutoff]
         if is_buy:
             st.buyers.add(user)
             st.buy_count += 1

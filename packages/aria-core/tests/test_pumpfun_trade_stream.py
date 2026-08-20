@@ -177,3 +177,91 @@ def test_sell_pressure_exposes_an_exit_already_under_way():
 
     flow = s.get_flow(_mint_of(buy))
     assert flow.sell_pressure == pytest.approx(3.0)  # 3 sellers leaving per buyer arriving
+
+
+# --- 20/08, time-window derivatives --------------------------------------
+# The lure-phase signal (are buyers still arriving?) and the ultra-early exit
+# signal (is the exit accelerating?). Both fire BEFORE the price reacts --
+# which is the whole point: on the operator's own reference chart the climb
+# lasted 6 minutes and the dump was vertical, so a price-based stop cannot
+# get out in time.
+
+def _at(s, mint_raw, *, t, user, is_buy=True):
+    """Injects one trade at an explicit timestamp."""
+    st = s._state.setdefault(_mint_of(mint_raw), stream._MintState())
+    st.recent.append((t, user, is_buy))
+    (st.buyers if is_buy else st.sellers).add(user)
+
+
+def test_a_crowd_still_arriving_reads_as_acceleration_above_one():
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    now = 1000.0
+    for u in ("a1", "a2"):                       # prior window (20-40s ago)
+        _at(s, raw, t=now - 30, user=u)
+    for u in ("b1", "b2", "b3", "b4"):           # recent window (last 20s)
+        _at(s, raw, t=now - 5, user=u)
+
+    assert s.buyer_acceleration(_mint_of(raw), window=20.0, now=now) == pytest.approx(2.0)
+
+
+def test_a_crowd_thinning_out_reads_below_one():
+    """The lure phase ending -- visible before the price turns."""
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    now = 1000.0
+    for u in ("a1", "a2", "a3", "a4"):
+        _at(s, raw, t=now - 30, user=u)
+    _at(s, raw, t=now - 5, user="b1")
+
+    assert s.buyer_acceleration(_mint_of(raw), window=20.0, now=now) == pytest.approx(0.25)
+
+
+def test_acceleration_is_none_when_there_is_nothing_to_compare():
+    """A brand-new token with no prior window must not read as a ratio."""
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    now = 1000.0
+    _at(s, raw, t=now - 2, user="b1")
+
+    assert s.buyer_acceleration(_mint_of(raw), window=20.0, now=now) is None
+
+
+def test_an_accelerating_exit_shows_a_positive_sell_pressure_slope():
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    now = 1000.0
+    # prior window: 2 buyers, 1 seller  -> 0.5 sellers per buyer
+    _at(s, raw, t=now - 30, user="a1"); _at(s, raw, t=now - 30, user="a2")
+    _at(s, raw, t=now - 30, user="s1", is_buy=False)
+    # recent window: 1 buyer, 3 sellers -> 3.0 sellers per buyer
+    _at(s, raw, t=now - 5, user="b1")
+    for u in ("s2", "s3", "s4"):
+        _at(s, raw, t=now - 5, user=u, is_buy=False)
+
+    slope = s.sell_pressure_slope(_mint_of(raw), window=20.0, now=now)
+    assert slope == pytest.approx(2.5)  # 3.0 - 0.5, exit clearly accelerating
+
+
+def test_sell_pressure_slope_is_none_rather_than_reading_as_calm():
+    """An undefined ratio must never be reported as zero -- that would look
+    like a healthy token when it is simply unmeasured."""
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    now = 1000.0
+    for u in ("s1", "s2"):
+        _at(s, raw, t=now - 5, user=u, is_buy=False)  # sellers only, no buyers
+
+    assert s.sell_pressure_slope(_mint_of(raw), window=20.0, now=now) is None
+
+
+def test_the_trade_log_stays_bounded_under_sustained_flow():
+    """~50 trades/s across ~170 tokens live -- an unbounded log would be the
+    process's biggest memory consumer within minutes."""
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    for i in range(400):
+        s._record(_mint_of(raw), 0.01, True, f"user{i}")
+
+    st = s._state[_mint_of(raw)]
+    assert all(t >= st.recent[-1][0] - stream.TRADE_LOG_WINDOW_SECONDS for t, _, _ in st.recent)

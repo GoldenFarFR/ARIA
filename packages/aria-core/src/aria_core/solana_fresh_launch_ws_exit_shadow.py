@@ -643,6 +643,7 @@ async def _track_candidate_pumpportal(
     bonding_ws_feed=None,
     holder_gate_fn=_holder_concentration_gate,
     require_observed_buy: bool = REQUIRE_OBSERVED_BUY,
+    trade_stream=None,
     stats: dict | None = None,
     min_liquidity_usd: float = MIN_LIQUIDITY_USD,
     max_liquidity_usd_entry: float = MAX_LIQUIDITY_USD_ENTRY,
@@ -813,6 +814,25 @@ async def _track_candidate_pumpportal(
                 _shed_subscription()
                 return None
 
+            # 20/08 -- LURE-PHASE metrics, real buyer identities decoded free
+            # from pump.fun's program logs (services/pumpfun_trade_stream.py).
+            # COLLECTED ONLY for now: the N-distinct-buyers threshold gets
+            # calibrated on this history rather than guessed, exactly as the
+            # holder threshold was recalibrated 92->80 on 1496 real closures.
+            lure = {"distinct_buyers": None, "top_buyer_share": None,
+                    "buyer_acceleration": None, "sell_pressure_slope": None}
+            if trade_stream is not None:
+                try:
+                    flow = trade_stream.get_flow(event.mint)
+                    lure = {
+                        "distinct_buyers": flow.distinct_buyers,
+                        "top_buyer_share": flow.top_buyer_share,
+                        "buyer_acceleration": trade_stream.buyer_acceleration(event.mint),
+                        "sell_pressure_slope": trade_stream.sell_pressure_slope(event.mint),
+                    }
+                except Exception:  # noqa: BLE001 -- measurement never blocks a decision
+                    pass
+
             gate = await holder_gate_fn(event.mint, pool_address)
 
             realistic_entry_price = _apply_price_impact_and_fee(
@@ -831,7 +851,7 @@ async def _track_candidate_pumpportal(
                     gate_latency_ms=gate.latency_ms, would_be_entry_price=price_usd,
                     would_be_reserve_usd=reserve_usd,
                     top_holder_excluding_pool_pct=gate.top_holder_excluding_pool_pct,
-                    buys_observed=buys_observed, sells_observed=sells_observed,
+                    buys_observed=buys_observed, sells_observed=sells_observed, **lure,
                     realistic_would_be_entry_price=realistic_entry_price,
                 )
             )
@@ -1027,6 +1047,7 @@ async def _reject_on_holder_concentration(row_id: int, *, bonding_ws_feed=None, 
 async def _track_and_maybe_insert_pumpportal(
     event: PumpPortalNewTokenEvent, *, chain: str, ws_feed, bonding_ws_feed=None,
     semaphore: asyncio.Semaphore, stats: dict, in_flight: set[str] | None = None,
+    trade_stream=None,
 ) -> None:
     """20/08 -- ``in_flight`` dedup checked BEFORE the semaphore (not after):
     a candidate PumpPortal keeps re-broadcasting must never compete for a
@@ -1050,6 +1071,7 @@ async def _track_and_maybe_insert_pumpportal(
                             return
                 row = await _track_candidate_pumpportal(
                     event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed, stats=stats,
+                    trade_stream=trade_stream,
                 )
                 if row is None:
                     stats["abandoned"] = stats.get("abandoned", 0) + 1
@@ -1076,6 +1098,7 @@ async def run_forever_pumpportal(
     max_concurrent: int | None = None,
     max_events: int | None = None,
     stop_event: asyncio.Event | None = None,
+    trade_stream=None,
 ) -> dict[str, int]:
     """Mirrors ``solana_fresh_launch_fast_discovery_shadow.run_forever`` --
     same drain-the-queue/bounded-concurrency shape, own stats dict. Takes
@@ -1136,6 +1159,7 @@ async def run_forever_pumpportal(
                 _track_and_maybe_insert_pumpportal(
                     event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
                     semaphore=semaphore, stats=stats, in_flight=in_flight,
+                    trade_stream=trade_stream,
                 )
             )
             tasks.append(task)
