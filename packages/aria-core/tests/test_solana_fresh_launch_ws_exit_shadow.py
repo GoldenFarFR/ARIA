@@ -21,6 +21,14 @@ from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, Trending
 CHAIN = "solana"
 
 
+async def _gate_clears(_mint):
+    """20/08 -- stubs the PRE-TRADE holder gate as "cleared". Required in
+    every _track_candidate_pumpportal test: the real gate is fail-closed
+    and would otherwise hit the live RugCheck endpoint (never a real
+    network call in this dome) and refuse every synthetic mint."""
+    return None
+
+
 @pytest.fixture(autouse=True)
 async def _tmp_db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "shadow.db")
@@ -200,7 +208,9 @@ async def test_pumpportal_liquidity_above_max_entry_rejected():
         sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
     )
     resolve_fn = AsyncMock(return_value=(1.0, shadow.MAX_LIQUIDITY_USD_ENTRY, None, "rest_dexpaprika"))
-    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    result = await shadow._track_candidate_pumpportal(
+        event, holder_gate_fn=_gate_clears, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+    )
     assert result is None
     resolve_fn.assert_awaited_once()
 
@@ -235,7 +245,7 @@ async def test_pumpportal_liquidity_above_max_entry_sheds_subscription():
     bonding_feed = _FakeFeed()
     resolve_fn = AsyncMock(return_value=(1.0, shadow.MAX_LIQUIDITY_USD_ENTRY, None, "rest_dexpaprika"))
     result = await shadow._track_candidate_pumpportal(
-        event, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+        event, holder_gate_fn=_gate_clears, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
     )
     assert result is None
     assert bonding_feed.added == [("poolA", "mintA")]
@@ -260,7 +270,7 @@ async def test_pumpportal_abandoned_past_age_ceiling_sheds_subscription():
         return fake_clock["t"]
 
     result = await shadow._track_candidate_pumpportal(
-        event, bonding_ws_feed=bonding_feed, resolve_fn=AsyncMock(return_value=(None, None, None, None)),
+        event, holder_gate_fn=_gate_clears, bonding_ws_feed=bonding_feed, resolve_fn=AsyncMock(return_value=(None, None, None, None)),
         sleep_fn=AsyncMock(), time_fn=fake_time,
     )
     assert result is None
@@ -278,7 +288,9 @@ async def test_pumpportal_liquidity_within_range_accepted():
     )
     mid_liquidity = (shadow.MIN_LIQUIDITY_USD + shadow.MAX_LIQUIDITY_USD_ENTRY) / 2
     resolve_fn = AsyncMock(return_value=(1.0, mid_liquidity, None, "rest_dexpaprika"))
-    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    result = await shadow._track_candidate_pumpportal(
+        event, holder_gate_fn=_gate_clears, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+    )
     assert result is not None
     assert result["pool_address"] == "poolA"
     assert result["reserve_usd"] == mid_liquidity
@@ -301,7 +313,7 @@ async def test_pumpportal_candidate_in_market_cap_dead_zone_rejected_before_add_
     bonding_feed = _FakeFeed()
     resolve_fn = AsyncMock()
     result = await shadow._track_candidate_pumpportal(
-        event, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+        event, holder_gate_fn=_gate_clears, bonding_ws_feed=bonding_feed, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
     )
     assert result is None
     resolve_fn.assert_not_awaited()
@@ -321,7 +333,9 @@ async def test_pumpportal_candidate_at_market_cap_dead_zone_upper_boundary_accep
     )
     mid_liquidity = (shadow.MIN_LIQUIDITY_USD + shadow.MAX_LIQUIDITY_USD_ENTRY) / 2
     resolve_fn = AsyncMock(return_value=(1.0, mid_liquidity, None, "rest_dexpaprika"))
-    result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
+    result = await shadow._track_candidate_pumpportal(
+        event, holder_gate_fn=_gate_clears, resolve_fn=resolve_fn, sleep_fn=AsyncMock(),
+    )
     assert result is not None
 
 
@@ -795,3 +809,152 @@ async def test_holder_reject_never_raises_when_the_snapshot_fails(monkeypatch):
 
     row = await _exit_reason_of(row_id)
     assert row["exit_reason"] is None  # left open, never closed on a guessed price
+
+
+# --- 20/08, PRE-TRADE holder gate (operator-directed) ---------------------
+# Blocks the order BEFORE it is sent, rather than closing the position after
+# RugCheck's async backfill lands. Measured live first: of the first 4 real
+# entries at top_holder>=92%, the post-entry reject closed ZERO of them.
+
+def _pp_event(mint="mintA", bonding_curve_key="poolA"):
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+    import time as _t
+    return PumpPortalNewTokenEvent(
+        mint=mint, symbol="FRESH", name=None, pool="pump", bonding_curve_key=bonding_curve_key,
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=_t.time(),
+    )
+
+
+class _Report:
+    def __init__(self, top_holder_pct, available=True):
+        self.available = available
+        self.top_holder_pct = top_holder_pct
+
+
+@pytest.mark.asyncio
+async def test_gate_blocks_a_token_at_or_above_the_threshold(monkeypatch):
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(shadow.HOLDER_CONCENTRATION_REJECT_PCT)),
+    )
+    gate = await shadow._holder_concentration_gate("mintA")
+    assert gate is not None
+    assert gate[0].startswith("blocked_holder_concentration")
+    assert gate[1] == pytest.approx(shadow.HOLDER_CONCENTRATION_REJECT_PCT)
+
+
+@pytest.mark.asyncio
+async def test_gate_clears_a_token_below_the_threshold(monkeypatch):
+    monkeypatch.setattr(
+        shadow.rugcheck, "get_token_report",
+        AsyncMock(return_value=_Report(shadow.HOLDER_CONCENTRATION_REJECT_PCT - 0.1)),
+    )
+    assert await shadow._holder_concentration_gate("mintA") is None
+
+
+@pytest.mark.asyncio
+async def test_gate_fails_closed_on_a_timeout(monkeypatch):
+    async def _hang(_mint):
+        await asyncio.sleep(10)
+    monkeypatch.setattr(shadow.rugcheck, "get_token_report", _hang)
+    monkeypatch.setattr(shadow, "HOLDER_GATE_TIMEOUT_S", 0.01)
+
+    gate = await shadow._holder_concentration_gate("mintA")
+
+    assert gate is not None
+    assert gate[0].startswith("blocked_holder_gate_unavailable")
+
+
+@pytest.mark.asyncio
+async def test_gate_fails_closed_on_a_provider_error(monkeypatch):
+    monkeypatch.setattr(shadow.rugcheck, "get_token_report", AsyncMock(side_effect=RuntimeError("boom")))
+    gate = await shadow._holder_concentration_gate("mintA")
+    assert gate is not None
+    assert gate[0].startswith("blocked_holder_gate_unavailable")
+
+
+@pytest.mark.asyncio
+async def test_gate_fails_closed_when_the_report_carries_no_holder_data(monkeypatch):
+    """An unenriched answer is NOT evidence the token is clean -- treated the
+    same as an outage, never as an implicit pass."""
+    monkeypatch.setattr(shadow.rugcheck, "get_token_report", AsyncMock(return_value=_Report(None)))
+    gate = await shadow._holder_concentration_gate("mintA")
+    assert gate is not None
+    assert gate[0].startswith("blocked_holder_gate_unavailable")
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_candidate_never_becomes_a_position():
+    """The whole point: no row, so no entry fee and no loss -- unlike the
+    post-entry reject, which only ever closed an already-open position."""
+    async def _blocks(_mint):
+        return ("blocked_holder_concentration: top_holder=99.0%", 99.0)
+
+    stats: dict = {}
+    result = await shadow._track_candidate_pumpportal(
+        _pp_event(),
+        resolve_fn=AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD + 1.0, None, "rest_dexpaprika")),
+        sleep_fn=AsyncMock(), holder_gate_fn=_blocks, stats=stats,
+    )
+
+    assert result is None
+    assert stats.get("blocked_holder_concentration") == 1
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_an_outage_is_counted_separately_from_a_real_reject():
+    """Fail-closed must stay VISIBLE: a RugCheck outage must never hide inside
+    the normal reject count, or a silent provider failure would read as "the
+    filter is working well" while the pocket is simply not trading at all."""
+    async def _unavailable(_mint):
+        return ("blocked_holder_gate_unavailable: timeout", None)
+
+    stats: dict = {}
+    await shadow._track_candidate_pumpportal(
+        _pp_event(),
+        resolve_fn=AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD + 1.0, None, "rest_dexpaprika")),
+        sleep_fn=AsyncMock(), holder_gate_fn=_unavailable, stats=stats,
+    )
+
+    assert stats.get("blocked_holder_gate_unavailable") == 1
+    assert "blocked_holder_concentration" not in stats
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_candidate_sheds_its_websocket_subscription():
+    """A blocked candidate must not leak the subscription add_pools() took --
+    the exact failure that once exceeded the RPC's accountSubscribe ceiling."""
+    async def _blocks(_mint):
+        return ("blocked_holder_concentration: top_holder=99.0%", 99.0)
+
+    feed = _FakeFeed()
+    await shadow._track_candidate_pumpportal(
+        _pp_event(), bonding_ws_feed=feed,
+        resolve_fn=AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD + 1.0, None, "rest_dexpaprika")),
+        sleep_fn=AsyncMock(), holder_gate_fn=_blocks,
+    )
+
+    assert feed.removed == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_the_gate_runs_only_after_the_liquidity_filter_clears():
+    """Budget guarantee: RugCheck's shared throttle allows ~13/min. The gate
+    must see only confirmed candidates (~1.2/min on this pocket), never the
+    ~40/min of the raw PumpPortal feed -- otherwise it would queue forever."""
+    calls = []
+
+    async def _counting_gate(mint):
+        calls.append(mint)
+        return None
+
+    await shadow._track_candidate_pumpportal(
+        _pp_event(),
+        resolve_fn=AsyncMock(return_value=(1.0, shadow.MIN_LIQUIDITY_USD - 1.0, None, "rest_dexpaprika")),
+        sleep_fn=AsyncMock(), holder_gate_fn=_counting_gate,
+        max_pool_age_minutes=0.0,  # ages out immediately, never confirms
+    )
+
+    assert calls == []  # liquidity never cleared, so no RugCheck call was spent

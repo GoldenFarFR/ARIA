@@ -419,12 +419,58 @@ async def _has_open_or_recent_signal(db: aiosqlite.Connection, pool_address: str
     return await _has_open_signal(db, pool_address, chain)
 
 
+# 20/08 -- how long the pre-trade gate may wait on RugCheck before giving up.
+# Sized against real measurements, not guessed: RugCheck answers in ~0.17s, and
+# the only real wait is this dome's OWN shared throttle (_MIN_INTERVAL_S=4.5s
+# in services/rugcheck.py). 12s covers a couple of queued turns at that
+# throttle while still bounding the entry delay -- past that the candidate is
+# rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED).
+HOLDER_GATE_TIMEOUT_S = 12.0
+
+# 20/08, explicit operator instruction ("ou rejette par securite"): if the
+# holder concentration cannot be established in time, the order is NOT sent.
+# Fail-closed, the same doctrine as every other guardrail in this project.
+# The real cost of this choice is stated plainly rather than hidden: a RugCheck
+# outage stops this pocket entering ENTIRELY (it does not degrade to entering
+# unchecked). That is the intended trade -- an unchecked entry on this pocket
+# has a measured 0.8% winrate in the >=97% band, so entering blind is strictly
+# worse than not entering. `blocked_holder_gate_unavailable` in the cycle stats
+# is what makes such an outage visible instead of silent.
+HOLDER_GATE_FAIL_CLOSED = True
+
+
+async def _holder_concentration_gate(mint: str) -> tuple[str, float | None] | None:
+    """Pre-trade check. Returns ``None`` when the token is CLEARED to enter,
+    or a ``(reason, pct)`` tuple when the order must not be sent.
+
+    Never raises -- any failure resolves through ``HOLDER_GATE_FAIL_CLOSED``
+    rather than propagating into the tracking loop."""
+    try:
+        report = await asyncio.wait_for(rugcheck.get_token_report(mint), timeout=HOLDER_GATE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return ("blocked_holder_gate_unavailable: timeout", None) if HOLDER_GATE_FAIL_CLOSED else None
+    except Exception as exc:  # noqa: BLE001 -- a provider error must never reach the loop
+        logger.info("solana_fresh_launch_ws_exit_shadow: holder gate lookup failed for %s (%s)", mint, exc)
+        return ("blocked_holder_gate_unavailable: error", None) if HOLDER_GATE_FAIL_CLOSED else None
+
+    if not report.available or report.top_holder_pct is None:
+        # An unenriched answer is NOT evidence the token is clean -- treated
+        # exactly like an outage, never as an implicit pass.
+        return ("blocked_holder_gate_unavailable: no data", None) if HOLDER_GATE_FAIL_CLOSED else None
+
+    if report.top_holder_pct >= HOLDER_CONCENTRATION_REJECT_PCT:
+        return (f"blocked_holder_concentration: top_holder={report.top_holder_pct:.1f}%", report.top_holder_pct)
+    return None
+
+
 async def _track_candidate_pumpportal(
     event: PumpPortalNewTokenEvent,
     *,
     chain: str = "solana",
     ws_feed=None,
     bonding_ws_feed=None,
+    holder_gate_fn=_holder_concentration_gate,
+    stats: dict | None = None,
     min_liquidity_usd: float = MIN_LIQUIDITY_USD,
     max_liquidity_usd_entry: float = MAX_LIQUIDITY_USD_ENTRY,
     max_pool_age_minutes: float = MAX_POOL_AGE_MINUTES,
@@ -532,6 +578,48 @@ async def _track_candidate_pumpportal(
             return None
 
         if price_usd is not None and reserve_usd is not None and reserve_usd >= min_liquidity_usd:
+            # 20/08 -- PRE-TRADE holder-concentration gate (operator-directed).
+            # The post-entry reject ported here earlier the same day was
+            # measured live and does NOT protect: of the first 4 real entries
+            # at top_holder>=92%, zero were closed by it (2 exited on
+            # trailing_stop after ~36s, 2 were still open past 33s) -- the
+            # position has already paid entry fees and taken the loss by the
+            # time RugCheck's async backfill lands. Blocking at the source is
+            # the only thing that actually saves the trade.
+            #
+            # The old comment claiming an entry gate would reintroduce a
+            # "multi-minute RugCheck wait" was measured and found WRONG: it
+            # assumed filtering the ~40 events/min of the raw PumpPortal feed.
+            # Only candidates that already cleared the liquidity filter ever
+            # reach this line -- 1.2/min on this pocket, 2.63/min across both
+            # pockets sharing rugcheck's throttle, against a 13/min budget
+            # (_MIN_INTERVAL_S=4.5). Real measured latency is 0.17s once the
+            # shared throttle is not the binding constraint. 5x of headroom.
+            #
+            # A free proxy was tried first and REJECTED on real data rather
+            # than on principle: `vTokensInBondingCurve` from the creation
+            # payload (zero latency, zero quota) diverged from RugCheck on
+            # 4 of 14 live tokens and returned impossible values (105-107%,
+            # since the field counts VIRTUAL tokens, not a supply fraction).
+            gate = await holder_gate_fn(event.mint)
+            if gate is not None:
+                reason, _pct = gate
+                if stats is not None:
+                    # Counted under its own key, split on the ":" prefix, so a
+                    # RugCheck outage (blocked_holder_gate_unavailable) never
+                    # hides inside the normal reject count -- fail-closed must
+                    # stay VISIBLE, otherwise a silent provider outage reads as
+                    # "the filter is working well" while the pocket is simply
+                    # not trading at all.
+                    key = reason.split(":", 1)[0]
+                    stats[key] = stats.get(key, 0) + 1
+                logger.info(
+                    "solana_fresh_launch_ws_exit_shadow: entry BLOCKED for %s (%s)",
+                    pool_address, reason,
+                )
+                _shed_subscription()
+                return None
+
             realistic_entry_price = _apply_price_impact_and_fee(
                 price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD, reserve_usd=reserve_usd, side="buy",
             )
@@ -729,7 +817,9 @@ async def _track_and_maybe_insert_pumpportal(
                         if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
                             stats["deduped"] = stats.get("deduped", 0) + 1
                             return
-                row = await _track_candidate_pumpportal(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
+                row = await _track_candidate_pumpportal(
+                    event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed, stats=stats,
+                )
                 if row is None:
                     stats["abandoned"] = stats.get("abandoned", 0) + 1
                     return
