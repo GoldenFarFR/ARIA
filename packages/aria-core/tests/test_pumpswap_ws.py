@@ -388,7 +388,17 @@ async def test_feed_start_subscribes_and_applies_a_real_notification(monkeypatch
     async def _fake_get_simple_price(coin_ids, *, vs_currencies=None):
         return SimplePriceResult(prices={"solana": {"usd": 150.0}}, available=True)
 
-    monkeypatch.setattr(pumpswap_ws.coingecko_client, "get_simple_price", _fake_get_simple_price)
+    # Patch the CLASS, not the instance -- setattr on the singleton instance
+    # leaves a permanent residual instance attribute once monkeypatch
+    # "restores" it (the pre-patch value it captures via getattr is the
+    # class-bound method, and restoring re-assigns that onto the instance),
+    # which then shadows any later test's class-level monkeypatch on this
+    # same shared coingecko_client singleton (real incident, 20/08: broke
+    # test_paper_trader_risk.py's usdc_depeg_pct tests whenever this file
+    # ran first in the same pytest session).
+    monkeypatch.setattr(
+        type(pumpswap_ws.coingecko_client), "get_simple_price", staticmethod(_fake_get_simple_price)
+    )
 
     feed = pumpswap_ws.PumpSwapWebSocketFeed(connect_fn=lambda url: ws, max_staleness_seconds=1000.0)
     feed._pools["poolA"] = accounts
