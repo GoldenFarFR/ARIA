@@ -1,3 +1,14 @@
+"""PumpFun bonding-curve feed (19/08) -- trade-flow counters and curve
+progress. Isolated, no network: every account payload is built locally with
+the SAME offsets the module decodes, taken from the official Anchor IDL."""
+from __future__ import annotations
+
+import pytest
+
+from aria_core.services.pumpfun_bonding_ws import (
+    NATIVE_SOL_QUOTE_MARKER,
+    PumpFunBondingWebSocketFeed,
+)
 
 
 # --- 20/08, trade-flow counters ------------------------------------------
@@ -69,3 +80,37 @@ def test_counters_are_dropped_when_a_pool_is_unsubscribed():
 
     assert "poolA" not in feed._trades_total
     assert "poolA" not in feed._first_seen_at
+
+
+# --- 20/08, bonding-curve progress ---------------------------------------
+# Operator's question: does entering near the END of the bonding curve work?
+# Winrate already doubles from the <30% band (9.9%, n=1277) to 30-50% (20.9%,
+# n=239), but ARIA has only 4 closures past 50% -- the sourcing never goes
+# there. This exposes the axis so the band can finally be measured.
+
+def test_a_fresh_curve_reads_near_zero_progress():
+    from aria_core.services.pumpfun_bonding_ws import bonding_progress, INITIAL_CURVE_TOKENS
+    decoded = {"real_token_reserves": INITIAL_CURVE_TOKENS * 10**6, "complete": False}
+    assert bonding_progress(decoded) == pytest.approx(0.0)
+
+
+def test_a_half_sold_curve_reads_near_half():
+    from aria_core.services.pumpfun_bonding_ws import bonding_progress, INITIAL_CURVE_TOKENS
+    decoded = {"real_token_reserves": INITIAL_CURVE_TOKENS * 10**6 // 2, "complete": False}
+    assert bonding_progress(decoded) == pytest.approx(0.5, abs=1e-3)
+
+
+def test_a_completed_curve_is_one_whatever_the_reserves_say():
+    """`complete` is the authoritative fact -- reserves can lag it."""
+    from aria_core.services.pumpfun_bonding_ws import bonding_progress
+    assert bonding_progress({"real_token_reserves": 12345, "complete": True}) == 1.0
+
+
+def test_reserves_inconsistent_with_the_provisional_constant_return_none():
+    """INITIAL_CURVE_TOKENS is not read from chain -- anything it cannot
+    explain must say None, never a fabricated ratio."""
+    from aria_core.services.pumpfun_bonding_ws import bonding_progress, INITIAL_CURVE_TOKENS
+    assert bonding_progress({"real_token_reserves": INITIAL_CURVE_TOKENS * 10**9, "complete": False}) is None
+    assert bonding_progress({"real_token_reserves": -1, "complete": False}) is None
+    assert bonding_progress({"complete": False}) is None
+    assert bonding_progress(None) is None

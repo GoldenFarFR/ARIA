@@ -113,6 +113,25 @@ SOL_DECIMALS = 9
 # never hand-typed.
 NATIVE_SOL_QUOTE_MARKER = "11111111111111111111111111111111"
 
+# 20/08 -- how far a token has progressed along its bonding curve, 0.0 at
+# creation to 1.0 at graduation. Derived from ``real_token_reserves`` (how many
+# of the curve's sale tokens are LEFT), which is price-independent -- unlike a
+# USD-liquidity proxy, which drifts with the SOL price and with whatever the
+# pocket happened to measure.
+#
+# Why it matters, operator's question and the data behind it: winrate already
+# DOUBLES between the <30%-of-curve band (9.9%, n=1277) and the 30-50% band
+# (20.9%, n=239), yet ARIA has only FOUR closures past 50% and four past 75% --
+# the sourcing never goes there, so the most promising band in the whole dome
+# is entirely unmeasured. This exposes the axis so it can finally be measured.
+#
+# INITIAL_CURVE_TOKENS is pump.fun's documented 793.1M sale allocation. Treated
+# as a PROVISIONAL constant: it is not read from chain, so `bonding_progress`
+# self-corrects by clamping and returns None on anything inconsistent rather
+# than a fabricated ratio. Recalibrate against the real max observed just
+# before `complete` flips once enough graduations are captured.
+INITIAL_CURVE_TOKENS = 793_100_000
+
 DEFAULT_MAX_STALENESS_SECONDS = 30.0
 SOL_USD_CALIBRATION_REFRESH_SECONDS = 240.0
 
@@ -207,6 +226,26 @@ class PumpFunBondingLiveSnapshot:
     stale: bool = False
 
 
+def bonding_progress(decoded: dict | None, *, token_decimals: int | None = None) -> float | None:
+    """0.0 at creation, 1.0 at graduation. ``None`` when it cannot be computed
+    honestly -- never a guessed value.
+
+    A curve already flagged ``complete`` is 1.0 by definition, whatever its
+    reserves say."""
+    if not decoded:
+        return None
+    if decoded.get("complete"):
+        return 1.0
+    left = decoded.get("real_token_reserves")
+    if left is None:
+        return None
+    decimals = token_decimals if token_decimals is not None else 6
+    total = INITIAL_CURVE_TOKENS * (10 ** decimals)
+    if total <= 0 or left < 0 or left > total:
+        return None  # inconsistent with the provisional constant -- say so
+    return round(1.0 - (left / total), 4)
+
+
 def decode_bonding_curve_account(raw: bytes) -> dict | None:
     """Returns the fields this module needs from a raw ``BondingCurve``
     account, or ``None`` if too short or the discriminator doesn't match
@@ -217,12 +256,14 @@ def decode_bonding_curve_account(raw: bytes) -> dict | None:
         return None
     virtual_token_reserves = int.from_bytes(raw[OFF_VIRTUAL_TOKEN_RESERVES:OFF_VIRTUAL_TOKEN_RESERVES + 8], "little")
     virtual_quote_reserves = int.from_bytes(raw[OFF_VIRTUAL_QUOTE_RESERVES:OFF_VIRTUAL_QUOTE_RESERVES + 8], "little")
+    real_token_reserves = int.from_bytes(raw[OFF_REAL_TOKEN_RESERVES:OFF_REAL_TOKEN_RESERVES + 8], "little")
     real_quote_reserves = int.from_bytes(raw[OFF_REAL_QUOTE_RESERVES:OFF_REAL_QUOTE_RESERVES + 8], "little")
     complete = bool(raw[OFF_COMPLETE])
     quote_mint = _pubkey_from_bytes(raw[OFF_QUOTE_MINT:OFF_QUOTE_MINT + 32])
     return {
         "virtual_token_reserves": virtual_token_reserves,
         "virtual_quote_reserves": virtual_quote_reserves,
+        "real_token_reserves": real_token_reserves,
         "real_quote_reserves": real_quote_reserves,
         "complete": complete,
         "quote_mint": quote_mint,
