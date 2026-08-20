@@ -130,6 +130,28 @@ _RECONNECT_BACKOFF_INITIAL_SECONDS = 1.0
 _RECONNECT_BACKOFF_MAX_SECONDS = 30.0
 SETUP_REQUEST_GAP_SECONDS = 0.4
 
+# 20/08, real production incident: ``_subscribe_and_confirm`` used to send
+# every ``accountSubscribe`` request ONE AT A TIME with a blocking
+# ``asyncio.sleep(SETUP_REQUEST_GAP_SECONDS)`` between each. That constant
+# is calibrated for ``resolve_bonding_curves``'s REST ``getMultipleAccounts``
+# calls (the verified 40 req/10s ceiling, see ``pumpswap_ws.py``'s own
+# docstring) -- fine at a handful of pools, but ``_run_loop`` resubscribes
+# to EVERY currently-tracked pool on EVERY reconnect (see its own comment),
+# and a real live backlog reached 333 pools on one connection: 333 * 0.4s =
+# 133s just to finish SENDING, blowing well past ``ping_timeout=40s`` and
+# triggering a fresh reconnect before setup even completed -- which then
+# retried the exact same 133s send phase from scratch, a self-sustaining
+# reconnect storm that left ``get_snapshot`` unavailable for every tracked
+# pool the whole time. Batched, concurrent sends below fix this: no
+# officially documented rate ceiling exists for ``accountSubscribe``
+# specifically (unlike the REST endpoint above), so this batch size is kept
+# at the same conservative order of magnitude as the one REAL verified
+# ceiling this module has evidence for, rather than assumed safe at any
+# size. 333 pools / 40 per batch = 9 batches * 1.0s = ~9s total, comfortably
+# under the 40s ping_timeout even with zero headroom left for anything else.
+_SUBSCRIBE_BATCH_SIZE = 40
+_SUBSCRIBE_BATCH_GAP_SECONDS = 1.0
+
 
 @dataclass(frozen=True)
 class PumpFunBondingCurveAccount:
@@ -507,12 +529,24 @@ class PumpFunBondingWebSocketFeed:
         for i, pool_addr in enumerate(pool_addresses):
             local_id = base_id + i
             local_id_to_pool[local_id] = pool_addr
-            req = {
-                "jsonrpc": "2.0", "id": local_id, "method": "accountSubscribe",
-                "params": [pool_addr, {"encoding": "base64", "commitment": "confirmed"}],
-            }
-            await ws.send(json.dumps(req))
-            await asyncio.sleep(SETUP_REQUEST_GAP_SECONDS)
+
+        # 20/08 -- batched concurrent sends, see _SUBSCRIBE_BATCH_SIZE's own
+        # docstring for the real incident this replaces (one-at-a-time sends
+        # with a blocking gap took 133s for 333 pools, well past
+        # ping_timeout). Each batch's sends fire concurrently (asyncio.gather),
+        # only the GAP between batches is paced.
+        items = list(local_id_to_pool.items())
+        for batch_start in range(0, len(items), _SUBSCRIBE_BATCH_SIZE):
+            batch = items[batch_start:batch_start + _SUBSCRIBE_BATCH_SIZE]
+            await asyncio.gather(*(
+                ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": local_id, "method": "accountSubscribe",
+                    "params": [pool_addr, {"encoding": "base64", "commitment": "confirmed"}],
+                }))
+                for local_id, pool_addr in batch
+            ))
+            if batch_start + _SUBSCRIBE_BATCH_SIZE < len(items):
+                await asyncio.sleep(_SUBSCRIBE_BATCH_GAP_SECONDS)
 
         confirmed: dict[int, str] = {}
         deadline = time.time() + _SUBSCRIBE_CONFIRM_TIMEOUT_SECONDS

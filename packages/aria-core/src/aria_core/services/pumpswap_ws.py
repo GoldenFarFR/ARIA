@@ -103,6 +103,14 @@ _RECV_POLL_TIMEOUT_SECONDS = 5.0
 _RECONNECT_BACKOFF_INITIAL_SECONDS = 1.0
 _RECONNECT_BACKOFF_MAX_SECONDS = 30.0
 
+# 20/08, same real incident and fix as pumpfun_bonding_ws.py's own constant
+# of this name (see its docstring) -- this module subscribes to TWO token
+# accounts per pool (base+quote), so it is even more exposed to the same
+# one-at-a-time-with-a-blocking-gap send pattern blowing past ping_timeout
+# on a real reconnect-resubscribe-all-tracked-pools cycle.
+_SUBSCRIBE_BATCH_SIZE = 40
+_SUBSCRIBE_BATCH_GAP_SECONDS = 1.0
+
 
 def _pubkey_from_bytes(raw: bytes) -> str:
     return base58.b58encode(raw).decode()
@@ -526,12 +534,21 @@ class PumpSwapWebSocketFeed:
         for i, ta in enumerate(token_accounts):
             local_id = base_id + i
             local_id_to_account[local_id] = ta
-            req = {
-                "jsonrpc": "2.0", "id": local_id, "method": "accountSubscribe",
-                "params": [ta, {"encoding": "base64", "commitment": "confirmed"}],
-            }
-            await ws.send(json.dumps(req))
-            await asyncio.sleep(SETUP_REQUEST_GAP_SECONDS)
+
+        # 20/08 -- batched concurrent sends, see _SUBSCRIBE_BATCH_SIZE's own
+        # docstring for the real incident this replaces.
+        items = list(local_id_to_account.items())
+        for batch_start in range(0, len(items), _SUBSCRIBE_BATCH_SIZE):
+            batch = items[batch_start:batch_start + _SUBSCRIBE_BATCH_SIZE]
+            await asyncio.gather(*(
+                ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": local_id, "method": "accountSubscribe",
+                    "params": [ta, {"encoding": "base64", "commitment": "confirmed"}],
+                }))
+                for local_id, ta in batch
+            ))
+            if batch_start + _SUBSCRIBE_BATCH_SIZE < len(items):
+                await asyncio.sleep(_SUBSCRIBE_BATCH_GAP_SECONDS)
 
         confirmed: dict[int, str] = {}
         deadline = time.time() + _SUBSCRIBE_CONFIRM_TIMEOUT_SECONDS

@@ -444,3 +444,33 @@ async def test_feed_stop_is_clean_and_idempotent():
     await feed.start()
     await feed.stop()
     await feed.stop()  # must not raise on a second stop
+
+
+@pytest.mark.asyncio
+async def test_subscribe_and_confirm_batches_large_pool_counts(monkeypatch):
+    """20/08, real incident: one-at-a-time sends with a blocking gap took
+    133s for 333 pools, well past ping_timeout=40s, causing a self-sustaining
+    reconnect storm (see _SUBSCRIBE_BATCH_SIZE's own docstring). Locks in
+    the fix: sends within a batch fire concurrently, only inter-batch gaps
+    are paced -- so the sleep count must scale with batch COUNT, not pool
+    count, and every account must still get sent and confirmed."""
+    monkeypatch.setattr(pumpswap_ws, "_SUBSCRIBE_BATCH_SIZE", 40)
+    sleep_calls: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def _counting_sleep(seconds):
+        sleep_calls.append(seconds)
+        await real_sleep(0)  # yield control without a real delay -- test speed
+
+    monkeypatch.setattr(pumpswap_ws.asyncio, "sleep", _counting_sleep)
+
+    ws = FakeWebSocket()
+    feed = pumpswap_ws.PumpSwapWebSocketFeed(connect_fn=lambda url: ws)
+    accounts = [_pk(f"acct{i}") for i in range(100)]  # 100 accounts -> 3 batches of 40/40/20
+
+    confirmed = await feed._subscribe_and_confirm(ws, accounts)
+
+    assert len(ws.sent) == 100
+    assert len(confirmed) == 100
+    # 3 batches -> 2 inter-batch gaps, never one sleep per account (100).
+    assert sleep_calls == [pumpswap_ws._SUBSCRIBE_BATCH_GAP_SECONDS] * 2
