@@ -254,6 +254,26 @@ class PumpFunTradeStream:
             return None
         return round((rs / rb) - (prior_s / prior_b), 3)
 
+    def active_mints(self, *, min_buyers: int = 1, seen_within_seconds: float = 60.0,
+                     now: float | None = None) -> list[str]:
+        """Mints with real recent buy activity, most-bought first.
+
+        This is what lets the LATE-BONDING pocket source candidates without a
+        scanning loop or a second subscription: the program-wide stream already
+        sees every actively-traded token, so "which tokens are alive right now"
+        is a local read. Filtering on distinct BUYERS (not trades) keeps a
+        single wallet from putting a dead token on the list."""
+        now = now if now is not None else time.time()
+        out = []
+        for mint, st in self._state.items():
+            if st.last_trade_at is None or now - st.last_trade_at > seen_within_seconds:
+                continue
+            if len(st.buyers) < min_buyers:
+                continue
+            out.append((len(st.buyers), mint))
+        out.sort(reverse=True)
+        return [m for _, m in out]
+
     def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str) -> None:
         st = self._state.get(mint)
         if st is None:

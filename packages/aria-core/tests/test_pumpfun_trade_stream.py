@@ -14,13 +14,23 @@ import pytest
 from aria_core.services import pumpfun_trade_stream as stream
 
 
+def _pubkey(label: str) -> bytes:
+    """Any label -> 32 deterministic bytes. Deliberately NOT base58-decoding
+    the label: the on-chain field is raw bytes, so a test that required its
+    fixtures to already be valid base58 was testing the fixture, not the
+    module (and broke on characters base58 happens to exclude: 0, O, I, l)."""
+    import hashlib
+
+    return hashlib.sha256(label.encode()).digest()
+
+
 def _event_bytes(*, mint="MintAAA", sol=0.05, is_buy=True, user="UserAAA", discriminator=None) -> bytes:
     buf = bytearray(stream.TRADE_EVENT_MIN_LEN)
     buf[0:8] = discriminator if discriminator is not None else stream.TRADE_EVENT_DISCRIMINATOR
-    buf[stream.OFF_MINT:stream.OFF_MINT + 32] = base58.b58decode(mint.encode()).rjust(32, b"\0")
+    buf[stream.OFF_MINT:stream.OFF_MINT + 32] = _pubkey(mint)
     struct.pack_into("<Q", buf, stream.OFF_SOL_AMOUNT, int(sol * 1e9))
     buf[stream.OFF_IS_BUY] = 1 if is_buy else 0
-    buf[stream.OFF_USER:stream.OFF_USER + 32] = base58.b58decode(user.encode()).rjust(32, b"\0")
+    buf[stream.OFF_USER:stream.OFF_USER + 32] = _pubkey(user)
     return bytes(buf)
 
 
@@ -265,3 +275,38 @@ def test_the_trade_log_stays_bounded_under_sustained_flow():
 
     st = s._state[_mint_of(raw)]
     assert all(t >= st.recent[-1][0] - stream.TRADE_LOG_WINDOW_SECONDS for t, _, _ in st.recent)
+
+
+# --- 20/08, candidate sourcing for the LATE-BONDING pocket ---------------
+# The program-wide stream already sees every actively-traded token, so
+# "which tokens are alive right now" is a local read -- no scanning loop, no
+# second subscription.
+
+def test_active_mints_ranks_by_distinct_buyers():
+    s = stream.PumpFunTradeStream()
+    hot = _event_bytes(mint="MintAAA")
+    cold = _event_bytes(mint="MintBBB")
+    s.handle_notification(_notif(*[_event_bytes(mint="MintAAA", user=f"user{i+1}") for i in range(5)]))
+    s.handle_notification(_notif(_event_bytes(mint="MintBBB", user="userSingle")))
+
+    ranked = s.active_mints(min_buyers=1)
+    assert ranked[0] == _mint_of(hot)
+    assert _mint_of(cold) in ranked
+
+
+def test_a_token_bought_by_a_single_wallet_can_be_filtered_out():
+    """One wallet must not be able to put a dead token on the candidate list."""
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes(mint="MintBBB")
+    s.handle_notification(_notif(raw, raw, raw))  # 3 buys, 1 wallet
+
+    assert s.active_mints(min_buyers=3) == []
+
+
+def test_a_token_that_stopped_trading_drops_off_the_list():
+    s = stream.PumpFunTradeStream()
+    raw = _event_bytes()
+    s.handle_notification(_notif(raw))
+    import time as _t
+
+    assert s.active_mints(now=_t.time() + 3600) == []
