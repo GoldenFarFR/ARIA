@@ -1248,8 +1248,26 @@ async def advance_exit_simulation(
         async with aiosqlite.connect(_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
+                # 20/08 -- NEVER-CHECKED POSITIONS FIRST, then the usual
+                # round-robin. Real defect found in the liquidity_collapse
+                # investigation: `COALESCE(last_checked_at, detected_at)` ranks
+                # a brand-new position on its detected_at, which is RECENT, so
+                # it sorted to the BACK of the queue. A position opened 2h ago
+                # and checked 40s ago was served BEFORE one opened 5 seconds
+                # ago and never checked once -- exactly backwards, since a
+                # fresh position is also the one most exposed to a rug and is
+                # not yet subscribed to the websocket (subscription happens on
+                # the following cycle), so its first check MUST come through
+                # the REST budget capped at 5 calls/cycle.
+                # Measured consequence on 16 real liquidity_collapse closures:
+                # first check landing 32-116s after entry despite a 10s
+                # cadence, and on 5 of them the reserve was ALREADY 97-100%
+                # gone by that first look -- the exit had nothing left to save.
+                # `last_checked_at IS NOT NULL` yields 0 for never-checked
+                # rows, so ASC puts them first without a second query.
                 f"SELECT * FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL "
-                f"ORDER BY COALESCE(last_checked_at, detected_at) ASC LIMIT ?",
+                f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
+                f"COALESCE(last_checked_at, detected_at) ASC LIMIT ?",
                 (chain, limit),
             )
             rows = [dict(r) for r in await cur.fetchall()]

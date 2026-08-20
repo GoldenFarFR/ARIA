@@ -1080,3 +1080,68 @@ async def test_an_unknown_pool_address_never_triggers_the_wallet_reject(monkeypa
     # Blocked by the TRACTION threshold (99 >= 92), never by the wallet one.
     assert gate.reason.startswith("blocked_holder_concentration")
     assert gate.top_holder_excluding_pool_pct == pytest.approx(99.0)  # recorded, not acted on
+
+
+# --- 20/08, never-checked positions get the REST budget first --------------
+# Root cause of the liquidity_collapse late catches: a brand-new position was
+# ranked on its (recent) detected_at and sorted to the BACK of the queue, so
+# its first check landed 32-116s after entry despite a 10s cadence -- and on
+# 5 of 16 real closures the reserve was already 97-100% gone by then.
+
+@pytest.mark.asyncio
+async def test_a_never_checked_position_is_served_before_an_older_recently_checked_one():
+    """The exact inversion found in prod: 2h-old-but-just-checked used to win
+    over 5s-old-and-never-checked."""
+    old_id = await _insert_open_row(pool_address="oldPool", entry_price=1.0, minutes_ago=120.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        # Checked 40 seconds ago -- very recent.
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET last_checked_at = ? WHERE id = ?", (recent, old_id),
+        )
+        await db.commit()
+    fresh_id = await _insert_open_row(pool_address="freshPool", entry_price=1.0, minutes_ago=0.1)
+
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT id FROM {shadow.TABLE} WHERE chain = ? AND exit_reason IS NULL "
+            f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
+            f"COALESCE(last_checked_at, detected_at) ASC",
+            (CHAIN,),
+        )
+        order = [r["id"] for r in await cur.fetchall()]
+
+    assert order[0] == fresh_id, "a never-checked position must get the capped REST budget first"
+    assert order[1] == old_id
+
+
+@pytest.mark.asyncio
+async def test_round_robin_still_holds_among_already_checked_positions():
+    """The fix must not break the round-robin it sits on top of: among rows
+    that HAVE been checked, least-recently-checked still wins."""
+    a_id = await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=30.0)
+    b_id = await _insert_open_row(pool_address="poolB", entry_price=1.0, minutes_ago=30.0)
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET last_checked_at = ? WHERE id = ?",
+            ((now - timedelta(seconds=5)).isoformat(), a_id),
+        )
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET last_checked_at = ? WHERE id = ?",
+            ((now - timedelta(seconds=300)).isoformat(), b_id),
+        )
+        await db.commit()
+
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT id FROM {shadow.TABLE} WHERE chain = ? AND exit_reason IS NULL "
+            f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
+            f"COALESCE(last_checked_at, detected_at) ASC",
+            (CHAIN,),
+        )
+        order = [r["id"] for r in await cur.fetchall()]
+
+    assert order == [b_id, a_id]  # 300s-stale before 5s-fresh

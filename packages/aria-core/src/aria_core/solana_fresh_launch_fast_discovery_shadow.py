@@ -856,7 +856,14 @@ async def advance_exit_simulation(
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 f"SELECT * FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL "
-                f"ORDER BY COALESCE(last_checked_at, detected_at) ASC LIMIT ?",
+                # 20/08 -- same inversion fixed on WS-EXIT the same day (see its own
+                # comment for the measured evidence): ranking a brand-new
+                # position on its RECENT detected_at sorted it to the back of
+                # the queue, so the position most exposed to a rug -- and not
+                # yet websocket-subscribed, hence dependent on the capped REST
+                # budget -- waited the longest for its first check.
+                f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
+                f"COALESCE(last_checked_at, detected_at) ASC LIMIT ?",
                 (chain, limit),
             )
             rows = [dict(r) for r in await cur.fetchall()]

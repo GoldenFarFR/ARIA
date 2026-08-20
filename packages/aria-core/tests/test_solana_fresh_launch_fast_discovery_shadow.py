@@ -888,3 +888,30 @@ async def test_a_measurement_failure_never_disturbs_the_pocket(monkeypatch):
     await shadow._enrich_with_rugcheck(row_id, "mintA")  # must not raise
 
     assert (await _row_of(row_id))["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_never_checked_position_is_served_before_an_older_recently_checked_one():
+    """Same inversion fixed on WS-EXIT the same day: a fresh position ranked
+    on its recent detected_at sorted to the BACK of the capped REST queue."""
+    old_id = await _insert_open_row(pool_address="oldCurve", entry_price=1.0, minutes_ago=120.0)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            f"UPDATE {shadow.TABLE} SET last_checked_at = ? WHERE id = ?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat(), old_id),
+        )
+        await db.commit()
+    fresh_id = await _insert_open_row(pool_address="freshCurve", entry_price=1.0, minutes_ago=0.1)
+
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT id FROM {shadow.TABLE} WHERE chain = ? AND exit_reason IS NULL "
+            f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
+            f"COALESCE(last_checked_at, detected_at) ASC",
+            (CHAIN,),
+        )
+        order = [r["id"] for r in await cur.fetchall()]
+
+    assert order[0] == fresh_id
+    assert order[1] == old_id
