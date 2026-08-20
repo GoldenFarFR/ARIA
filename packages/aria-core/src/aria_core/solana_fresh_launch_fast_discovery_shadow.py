@@ -653,35 +653,50 @@ async def _reject_on_holder_concentration(row_id: int, *, bonding_ws_feed=None, 
 
 async def _track_and_maybe_insert(
     event: PumpPortalNewTokenEvent, *, chain: str, ws_feed, bonding_ws_feed=None,
-    semaphore: asyncio.Semaphore, stats: dict,
+    semaphore: asyncio.Semaphore, stats: dict, in_flight: set[str] | None = None,
 ) -> None:
     """Fire-and-forget task body: acquire a concurrency slot, track the
     candidate to confirmation or abandonment, insert if confirmed. Never
     raises into the caller (a single candidate's failure must never break
-    the discovery loop)."""
-    async with semaphore:
-        try:
-            await _ensure_table()
-            if event.bonding_curve_key:
-                async with aiosqlite.connect(_db_path()) as db:
-                    if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
-                        stats["deduped"] = stats.get("deduped", 0) + 1
-                        return
-            row = await _track_candidate(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
-            if row is None:
-                stats["abandoned"] = stats.get("abandoned", 0) + 1
-                return
-            new_id = await _insert_confirmed_row(row)
-            stats["confirmed"] = stats.get("confirmed", 0) + 1
-            asyncio.create_task(
-                _enrich_with_rugcheck(new_id, event.mint, bonding_ws_feed=bonding_ws_feed, ws_feed=ws_feed)
-            )
-        except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
-            logger.info(
-                "solana_fresh_launch_fast_discovery_shadow: tracking failed for mint=%s (%s)",
-                event.mint, exc,
-            )
-            stats["errors"] = stats.get("errors", 0) + 1
+    the discovery loop).
+
+    20/08 -- ``in_flight`` dedup checked BEFORE the semaphore (not after):
+    a candidate PumpPortal keeps re-broadcasting must never compete for a
+    concurrency slot at all, it should be rejected immediately. See
+    ``run_forever``'s own comment for the real incident this closes."""
+    key = event.bonding_curve_key
+    if in_flight is not None and key:
+        if key in in_flight:
+            stats["deduped_in_flight"] = stats.get("deduped_in_flight", 0) + 1
+            return
+        in_flight.add(key)
+    try:
+        async with semaphore:
+            try:
+                await _ensure_table()
+                if event.bonding_curve_key:
+                    async with aiosqlite.connect(_db_path()) as db:
+                        if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
+                            stats["deduped"] = stats.get("deduped", 0) + 1
+                            return
+                row = await _track_candidate(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
+                if row is None:
+                    stats["abandoned"] = stats.get("abandoned", 0) + 1
+                    return
+                new_id = await _insert_confirmed_row(row)
+                stats["confirmed"] = stats.get("confirmed", 0) + 1
+                asyncio.create_task(
+                    _enrich_with_rugcheck(new_id, event.mint, bonding_ws_feed=bonding_ws_feed, ws_feed=ws_feed)
+                )
+            except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
+                logger.info(
+                    "solana_fresh_launch_fast_discovery_shadow: tracking failed for mint=%s (%s)",
+                    event.mint, exc,
+                )
+                stats["errors"] = stats.get("errors", 0) + 1
+    finally:
+        if in_flight is not None and key:
+            in_flight.discard(key)
 
 
 async def run_forever(
@@ -716,6 +731,18 @@ async def run_forever(
     stats: dict[str, int] = {}
     tasks: list[asyncio.Task] = []
     events_seen = 0
+    # 20/08 -- real incident: a candidate that never confirms (liquidity
+    # never resolves, e.g. a bad `bondingCurveKey` from PumpPortal itself --
+    # confirmed live via a direct Helius getAccountInfo call showing a plain
+    # System-Program-owned wallet, not a bonding curve at all) never gets a
+    # DB row, so `_has_open_or_recent_signal`'s dedup (DB-only) can never see
+    # it -- if PumpPortal re-broadcasts the same key, a brand new tracking
+    # task spins up every time, unbounded. Found via 594 wasted DexPaprika
+    # 404s against ONE address over 2h+ (a chain of ~5min-capped tasks
+    # respawning back-to-back, never blocked). This in-memory set closes
+    # that gap -- cheap, no I/O, scoped to this loop's own lifetime (a
+    # restart after an exception correctly starts fresh).
+    in_flight: set[str] = set()
 
     try:
         while True:
@@ -729,7 +756,7 @@ async def run_forever(
             events_seen += 1
             task = asyncio.create_task(
                 _track_and_maybe_insert(
-                    event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
+                    event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed, in_flight=in_flight,
                     semaphore=semaphore, stats=stats,
                 )
             )

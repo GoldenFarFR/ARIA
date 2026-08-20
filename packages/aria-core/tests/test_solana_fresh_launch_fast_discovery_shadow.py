@@ -451,6 +451,51 @@ async def test_track_and_maybe_insert_records_confirmed_and_abandoned(monkeypatc
     assert await _rows() == []
 
 
+@pytest.mark.asyncio
+async def test_track_and_maybe_insert_skips_a_key_already_in_flight(monkeypatch):
+    """20/08 -- real incident: a candidate that never confirms has no DB row,
+    so the DB-only dedup above can never catch a re-broadcast of the same
+    key. `in_flight` closes that gap -- checked BEFORE the DB dedup, before
+    even the semaphore."""
+    track_mock = AsyncMock()
+    monkeypatch.setattr(shadow, "_track_candidate", track_mock)
+    stats: dict = {}
+    in_flight = {"curveStuck"}
+    await shadow._track_and_maybe_insert(
+        _event(bonding_curve_key="curveStuck"), chain=CHAIN, ws_feed=None,
+        semaphore=asyncio.Semaphore(1), stats=stats, in_flight=in_flight,
+    )
+    assert stats.get("deduped_in_flight") == 1
+    track_mock.assert_not_called()
+    assert in_flight == {"curveStuck"}  # untouched -- the ALREADY-in-flight task owns removal
+
+
+@pytest.mark.asyncio
+async def test_track_and_maybe_insert_adds_then_removes_from_in_flight(monkeypatch):
+    monkeypatch.setattr(shadow, "_track_candidate", AsyncMock(return_value=None))
+    stats: dict = {}
+    in_flight: set = set()
+    await shadow._track_and_maybe_insert(
+        _event(bonding_curve_key="curveTransient"), chain=CHAIN, ws_feed=None,
+        semaphore=asyncio.Semaphore(1), stats=stats, in_flight=in_flight,
+    )
+    assert stats.get("abandoned") == 1
+    assert in_flight == set()  # removed once the task finished, never left dangling
+
+
+@pytest.mark.asyncio
+async def test_track_and_maybe_insert_removes_from_in_flight_even_on_error(monkeypatch):
+    monkeypatch.setattr(shadow, "_track_candidate", AsyncMock(side_effect=RuntimeError("boom")))
+    stats: dict = {}
+    in_flight: set = set()
+    await shadow._track_and_maybe_insert(
+        _event(bonding_curve_key="curveBoom"), chain=CHAIN, ws_feed=None,
+        semaphore=asyncio.Semaphore(1), stats=stats, in_flight=in_flight,
+    )
+    assert stats.get("errors") == 1
+    assert in_flight == set()
+
+
 # --- run_forever: wiring + bounded concurrency -------------------------------
 
 @pytest.mark.asyncio

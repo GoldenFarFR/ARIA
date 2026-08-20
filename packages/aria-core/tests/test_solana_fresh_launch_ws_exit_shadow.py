@@ -4,6 +4,7 @@ injected-feed pattern as every other shadow test file in this dome; never a
 real network call."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -321,6 +322,49 @@ async def test_pumpportal_candidate_at_market_cap_dead_zone_upper_boundary_accep
     resolve_fn = AsyncMock(return_value=(1.0, mid_liquidity, None, "rest_dexpaprika"))
     result = await shadow._track_candidate_pumpportal(event, resolve_fn=resolve_fn, sleep_fn=AsyncMock())
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_track_and_maybe_insert_pumpportal_skips_a_key_already_in_flight(monkeypatch):
+    """20/08 -- mirrors FAST-DISCOVERY's own fix: a candidate that never
+    confirms has no DB row, so the DB-only dedup can never catch a
+    re-broadcast of the same key. `in_flight` closes that gap."""
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    track_mock = AsyncMock()
+    monkeypatch.setattr(shadow, "_track_candidate_pumpportal", track_mock)
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="curveStuck",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
+    )
+    stats: dict = {}
+    in_flight = {"curveStuck"}
+    await shadow._track_and_maybe_insert_pumpportal(
+        event, chain=CHAIN, ws_feed=None, semaphore=asyncio.Semaphore(1), stats=stats, in_flight=in_flight,
+    )
+    assert stats.get("deduped_in_flight") == 1
+    track_mock.assert_not_called()
+    assert in_flight == {"curveStuck"}
+
+
+@pytest.mark.asyncio
+async def test_track_and_maybe_insert_pumpportal_removes_from_in_flight_when_done(monkeypatch):
+    from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent
+
+    monkeypatch.setattr(shadow, "_track_candidate_pumpportal", AsyncMock(return_value=None))
+    event = PumpPortalNewTokenEvent(
+        mint="mintA", symbol="FRESH", name=None, pool="pump", bonding_curve_key="curveTransient",
+        market_cap_sol=None, v_sol_in_bonding_curve=None, v_tokens_in_bonding_curve=None,
+        sol_amount=None, initial_buy=None, signature=None, detected_at=__import__("time").time(),
+    )
+    stats: dict = {}
+    in_flight: set = set()
+    await shadow._track_and_maybe_insert_pumpportal(
+        event, chain=CHAIN, ws_feed=None, semaphore=asyncio.Semaphore(1), stats=stats, in_flight=in_flight,
+    )
+    assert stats.get("abandoned") == 1
+    assert in_flight == set()
 
 
 @pytest.mark.asyncio

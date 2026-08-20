@@ -592,26 +592,41 @@ async def _enrich_with_rugcheck_pumpportal(row_id: int, mint: str) -> None:
 
 async def _track_and_maybe_insert_pumpportal(
     event: PumpPortalNewTokenEvent, *, chain: str, ws_feed, bonding_ws_feed=None,
-    semaphore: asyncio.Semaphore, stats: dict,
+    semaphore: asyncio.Semaphore, stats: dict, in_flight: set[str] | None = None,
 ) -> None:
-    async with semaphore:
-        try:
-            await _ensure_table()
-            if event.bonding_curve_key:
-                async with aiosqlite.connect(_db_path()) as db:
-                    if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
-                        stats["deduped"] = stats.get("deduped", 0) + 1
-                        return
-            row = await _track_candidate_pumpportal(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
-            if row is None:
-                stats["abandoned"] = stats.get("abandoned", 0) + 1
-                return
-            new_id = await _insert_confirmed_row_pumpportal(row)
-            stats["confirmed"] = stats.get("confirmed", 0) + 1
-            asyncio.create_task(_enrich_with_rugcheck_pumpportal(new_id, event.mint))
-        except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
-            logger.info("solana_fresh_launch_ws_exit_shadow: _track_and_maybe_insert_pumpportal failed (%s)", exc)
-            stats["errors"] = stats.get("errors", 0) + 1
+    """20/08 -- ``in_flight`` dedup checked BEFORE the semaphore (not after):
+    a candidate PumpPortal keeps re-broadcasting must never compete for a
+    concurrency slot at all, it should be rejected immediately. See
+    ``run_forever_pumpportal``'s own comment for the real incident this
+    closes (mirrors FAST-DISCOVERY's own fix, same root cause)."""
+    key = event.bonding_curve_key
+    if in_flight is not None and key:
+        if key in in_flight:
+            stats["deduped_in_flight"] = stats.get("deduped_in_flight", 0) + 1
+            return
+        in_flight.add(key)
+    try:
+        async with semaphore:
+            try:
+                await _ensure_table()
+                if event.bonding_curve_key:
+                    async with aiosqlite.connect(_db_path()) as db:
+                        if await _has_open_or_recent_signal(db, event.bonding_curve_key, chain):
+                            stats["deduped"] = stats.get("deduped", 0) + 1
+                            return
+                row = await _track_candidate_pumpportal(event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed)
+                if row is None:
+                    stats["abandoned"] = stats.get("abandoned", 0) + 1
+                    return
+                new_id = await _insert_confirmed_row_pumpportal(row)
+                stats["confirmed"] = stats.get("confirmed", 0) + 1
+                asyncio.create_task(_enrich_with_rugcheck_pumpportal(new_id, event.mint))
+            except Exception as exc:  # noqa: BLE001 -- one candidate's failure must never break the loop
+                logger.info("solana_fresh_launch_ws_exit_shadow: _track_and_maybe_insert_pumpportal failed (%s)", exc)
+                stats["errors"] = stats.get("errors", 0) + 1
+    finally:
+        if in_flight is not None and key:
+            in_flight.discard(key)
 
 
 async def run_forever_pumpportal(
@@ -647,6 +662,13 @@ async def run_forever_pumpportal(
     stats: dict[str, int] = {}
     tasks: list[asyncio.Task] = []
     events_seen = 0
+    # 20/08 -- see _track_and_maybe_insert_pumpportal's own docstring: a
+    # candidate that never confirms has no DB row, so the DB-only dedup
+    # below can never see it if PumpPortal re-broadcasts the same key.
+    # Real incident: 594 wasted DexPaprika 404s against one address over
+    # 2h+ (confirmed via a direct Helius getAccountInfo call: the address
+    # is a plain System-Program-owned wallet, not a real bonding curve).
+    in_flight: set[str] = set()
 
     try:
         while True:
@@ -661,7 +683,7 @@ async def run_forever_pumpportal(
             task = asyncio.create_task(
                 _track_and_maybe_insert_pumpportal(
                     event, chain=chain, ws_feed=ws_feed, bonding_ws_feed=bonding_ws_feed,
-                    semaphore=semaphore, stats=stats,
+                    semaphore=semaphore, stats=stats, in_flight=in_flight,
                 )
             )
             tasks.append(task)
