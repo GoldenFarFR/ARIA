@@ -102,6 +102,28 @@ async def _discover_flaunch_direct(*, limit: int = 50) -> list[str]:
     return list(seen.keys())
 
 
+async def _discover_zora_direct(*, limit: int = 50) -> list[str]:
+    """REST discovery (``GET /explore?listType=NEW``, ``services/zora.py``) --
+    confirmed live 20/08 (real, unauthenticated call, see zora.py's own
+    docstring for the full diligence). No on-chain fallback needed yet
+    (unlike Flaunch's 24/07 case) since the REST path works right now."""
+    from aria_core.services.zora import zora_client
+
+    try:
+        tokens = await zora_client.fetch_recent(limit=limit)
+    except Exception as exc:  # noqa: BLE001 — never blocking
+        logger.info("launchpad_discovery: zora fetch_recent failed (%s)", exc)
+        return []
+    seen: dict[str, None] = {}
+    for token in tokens:
+        addr = (token.contract or "").lower()
+        if addr.startswith("0x") and len(addr) == 42 and addr not in seen:
+            seen[addr] = None
+        if len(seen) >= limit:
+            break
+    return list(seen.keys())
+
+
 # Registry: ONE entry per recognized launchpad. Seams (discover=None) document
 # an intent without building a client — see the module docstring.
 _ADAPTERS: dict[str, LaunchpadAdapter] = {
@@ -113,7 +135,7 @@ _ADAPTERS: dict[str, LaunchpadAdapter] = {
     ),
     "clanker": LaunchpadAdapter("clanker", "Clanker", "direct", _discover_clanker_direct),
     "flaunch": LaunchpadAdapter("flaunch", "Flaunch", "direct", _discover_flaunch_direct),
-    "zora": LaunchpadAdapter("zora", "Zora", "direct", None),
+    "zora": LaunchpadAdapter("zora", "Zora", "direct", _discover_zora_direct),
     "bankr": LaunchpadAdapter("bankr", "Bankr", "unknown", None),
 }
 
