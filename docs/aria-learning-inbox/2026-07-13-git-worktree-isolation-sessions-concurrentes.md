@@ -1,5 +1,14 @@
 # [VPS Research] Git worktree — isoler des sessions Claude Code concurrentes sur la même machine
 
+> **Addendum 20/08 (relecture file-staleness-watch)** : `git worktree list`
+> ne montre plus qu'un seul worktree (`/opt/aria`, sur `main`) — les
+> worktrees orphelins décrits ci-dessous (`/opt/aria-research`,
+> `/opt/aria-secondaire`, etc.) ont depuis été nettoyés. `.gitignore` contient
+> déjà `.claude/worktrees/` (recommandation #1 ci-dessous appliquée). Les deux
+> actions concrètes de la section "Recommandation" sont donc résolues ; seule
+> la veille sur le ticket #55724 (lock contention, non re-vérifiée ici) reste
+> potentiellement à jour.
+
 ## Contexte et constat de départ
 
 Deux accidents de commit croisé ce soir (13/07) attribués au partage d'un

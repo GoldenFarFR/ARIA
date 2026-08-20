@@ -1,5 +1,15 @@
 # Diligence — launchpads Base : Flaunch et Zora Coins
 
+> **Addendum 20/08 (relecture file-staleness-watch)** : vérifié en direct
+> contre le code réel. Flaunch EST intégré (`services/flaunch.py`, câblé dans
+> `launchpad_discovery.py`). Zora Coins, malgré un verdict "vert" identique
+> ci-dessous et une API documentée comme plus mature que Flaunch (SDK+REST+
+> Swagger+Explore), n'a JAMAIS été réellement câblé — `launchpad_discovery.py`
+> déclare `"zora": LaunchpadAdapter("zora", "Zora", "direct", None)`, le
+> `None` confirmant l'absence de client dédié. Ajouté au backlog technique
+> (`docs/task-backlog.md`) comme piste concrète à reprendre plutôt que de
+> rester invisible dans cet inbox.
+
 Source : VPS Research, 13/07/2026. Recherche externe sourcée (WebSearch, sources
 citées) — aucun appel à du code interne (l'architecture multi-launchpad réelle,
 `services/launchpad_discovery.py` etc., vit dans ce monorepo mais n'était pas

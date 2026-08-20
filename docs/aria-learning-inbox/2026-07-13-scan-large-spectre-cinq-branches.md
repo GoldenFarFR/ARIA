@@ -2,6 +2,16 @@
 
 # Scan large-spectre — cinq branches (mode par défaut, décision opérateur 12/07)
 
+> **Addendum 20/08 (relecture file-staleness-watch)** : les branches 1 et 5
+> ci-dessous décrivaient `include_ta`/GeckoTerminal OHLCV et `include_social`/
+> lecture X comme des seams "planifiés", pas encore construits. Les deux sont
+> depuis passés en PRODUCTION RÉELLE (GeckoTerminal OHLCV : `services/
+> geckoterminal.py`, brique centrale du pipeline momentum ; lecture X :
+> réactivée 19/07, bornée `x_research_budget.py`, cf. CLAUDE.md "Established
+> facts"). Contenu ci-dessous conservé tel quel comme trace historique de la
+> diligence initiale — ne plus le lire comme une piste ouverte sur ces deux
+> points précis.
+
 ## Contexte et méthode
 
 Retour au mode par défaut (scan large-spectre, pas une tâche ciblée) sur

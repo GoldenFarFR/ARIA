@@ -1,5 +1,14 @@
 # [VPS Research] Rollback automatique sur échec de health-check — setup single-VPS Docker+nginx
 
+> **Addendum 20/08 (relecture file-staleness-watch)** : les 2 recommandations
+> "Haute priorité" ci-dessous (blue-green par alternance de port +
+> `willfarrell/autoheal`) sont depuis IMPLÉMENTÉES ET DÉPLOYÉES, avec en plus
+> le circuit breaker autoheal (section 3, jugé "moyenne priorité, après le
+> blue-green" ici) — référence à jour de l'état actuel réel :
+> `docs/deploy-rollback-blue-green.md`. Contenu ci-dessous conservé comme
+> trace de la diligence initiale (comparatif des pistes, sources), plus une
+> piste ouverte.
+
 ## Contexte et constat de départ
 
 Veille sur les patterns éprouvés de rollback automatique post-déploiement,
