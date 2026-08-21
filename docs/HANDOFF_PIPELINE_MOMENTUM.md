@@ -2088,3 +2088,9 @@ Solution : `REENTRY_COOLDOWN_MINUTES = 30.0`, keyed on the TOKEN rather than the
 [CONFIG] Sujet    : FAST discovery pocket retired, late bonding left as the only sourcing pocket
 Date : 2026.08.21  /  Probleme : fresh-launch fast discovery closed 2016 positions for -3.53% PnL, -6.40% once its two best trades are removed, 17.4% winrate. Large enough sample to be a verdict, not a hunch; late bonding on the same engine reads +7.67% (+4.28% without its top two) at 59.2%.
 Solution : sourcing loop unwired in shadow_persistent.py (outside this repo, no commit); exit tracking DELIBERATELY kept so the still-open positions close at a real market price; all 2016 closures kept in the DB as the control group — shadow_persistent.py (CONFIG, operator decision)
+
+--------------------------------------------------------------------------
+[CONFIG] Sujet    : late-bonding sourcing starved by narrowing the trade stream
+Date : 2026.08.21  /  Probleme : switching pumpfun_trade_stream to targeted mode to stop paying for 74 GB/day silently killed late-bonding discovery -- zero candidates for 13 minutes (18:19->18:32). late_bonding_discovery_loop sources candidates from _TRADE_STREAM.active_mints(): that stream is not only a metrics feed, it IS the discovery source. Verified beforehand that its metrics fed no rejection rule, which is true, but never that it fed the SOURCE. Caught by the operator, by no guardrail.
+Solution : program-wide restored immediately with the reason written inline so no future session repeats the shortcut; replacement (pumpfun_curve_tracker fed by PumpPortal's free creation feed) now runs as a SHADOW loop alongside, changing nothing, until it is proven to surface the same candidates — shadow_persistent.py (CONFIG, outside this repo)
+Lecon : before narrowing ANY feed, grep for what reads it as a SOURCE, not only what reads its values.
