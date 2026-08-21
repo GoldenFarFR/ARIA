@@ -156,7 +156,18 @@ MIN_LIQUIDITY_USD = 3000.0
 # se reprend VRAIMENT reste une opportunite legitime (CALLOUTS l'a prouve),
 # mais pas dans les secondes qui suivent, quand le prix oscille autour du
 # seuil qui vient de nous sortir.
-REENTRY_COOLDOWN_MINUTES = 30.0
+# 21/08 -- RE-ENTREES INTERDITES, plus seulement retardees. Diagnostic sur 206
+# clotures : les 22 re-entrees rapportent -4.07% avec 23% de winrate, contre
+# +25.12% et 68% pour les premieres entrees. Surtout, elles ne contiennent PAS
+# UN SEUL gagnant x2 sur 22 -- ce qui les distingue de tous les autres filtres
+# testes le meme jour, qui coupaient tous au moins un gros gagnant. Les
+# supprimer fait passer la poche de +21.99% a +25.12%.
+#
+# Un token qui nous a deja ejectes une fois ne redevient pas bon 30 minutes
+# plus tard : il a montre ce qu'il valait. Valeur volontairement enorme plutot
+# qu'un booleen -- la carence reste le mecanisme, seule sa duree change, donc
+# rien d'autre a modifier et le retour arriere tient en une ligne.
+REENTRY_COOLDOWN_MINUTES = 525600.0  # un an = interdiction de fait
 
 # 20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single
 # wallet is literally the only buyer, which is not a market at all. Everything
@@ -285,7 +296,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T16:31:20+00:00"
+CONFIG_EPOCH = "2026-08-21T23:37:10+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
 # loop: more open positions means each one is checked less often, which is
