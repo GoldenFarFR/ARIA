@@ -308,6 +308,16 @@ async def _ensure_table() -> None:
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_lookup ON {TABLE} (pool_address, chain, exit_reason)"
         )
         await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_detected_at ON {TABLE} (detected_at)")
+        # 21/08 -- hot idempotent ALTER. This pocket had NO migration path at
+        # all, only a CREATE TABLE, so adding `exit_detail` to the schema left
+        # the already-existing live table without it: `advance_exit_simulation`
+        # threw `no such column` on every pass and the pocket stopped closing
+        # ANY position. Caught within minutes by reading the real log after
+        # deploying, which is the only reason it was not silent -- the
+        # exception was swallowed into an INFO line, not a crash.
+        cur = await db.execute(f"PRAGMA table_info({TABLE})")
+        if "exit_detail" not in {r[1] for r in await cur.fetchall()}:
+            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
         await db.commit()
     _ensured_db_paths.add(path)
 

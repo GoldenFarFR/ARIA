@@ -924,3 +924,37 @@ async def test_a_never_checked_position_is_served_before_an_older_recently_check
 
     assert order[0] == fresh_id
     assert order[1] == old_id
+
+
+@pytest.mark.asyncio
+async def test_a_pre_existing_table_gains_new_columns_rather_than_breaking(tmp_path):
+    """21/08 regression: `exit_detail` was added to the CREATE TABLE with no
+    migration, so the live table never gained it and every exit pass died on
+    `no such column` -- the pocket silently stopped closing positions."""
+    import aiosqlite
+
+    from aria_core import solana_fresh_launch_fast_discovery_shadow as fd
+
+    db_path = str(tmp_path / "old.db")
+    async with aiosqlite.connect(db_path) as db:
+        # a table shaped like the pre-migration one: no exit_detail
+        await db.execute(
+            f"CREATE TABLE {fd.TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            f"pool_address TEXT, chain TEXT, exit_reason TEXT, detected_at TEXT)"
+        )
+        await db.commit()
+
+    fd._ensured_db_paths.discard(db_path)
+    monkeypatch_path = db_path
+
+    import aria_core.solana_fresh_launch_fast_discovery_shadow as mod
+    original = mod._db_path
+    mod._db_path = lambda: monkeypatch_path
+    try:
+        await fd._ensure_table()
+    finally:
+        mod._db_path = original
+
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(f"PRAGMA table_info({fd.TABLE})")
+        assert "exit_detail" in {r[1] for r in await cur.fetchall()}
