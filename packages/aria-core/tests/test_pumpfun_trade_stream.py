@@ -5,7 +5,9 @@ live events off mainnet before the module was written -- never a guessed shape.
 No network in any test."""
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import struct
 
 import base58
@@ -440,3 +442,113 @@ def test_a_trade_with_no_token_amount_leaves_the_price_unset():
     s.handle_notification(_notif(_event_bytes(sol=2.0, token_amount=0)))
 
     assert s._state[_mint_of(_event_bytes())].last_trade_price_sol_raw is None
+
+
+# --- targeted subscription mode (2026.08.21) --------------------------------
+# Program-wide streaming was measured at 74 GB/day, 74.7% of it holding no
+# decodable trade. These cover the per-mint mode that replaces it without
+# changing what the pockets read.
+
+
+def _targeted(max_watched: int = 3):
+    return stream.PumpFunTradeStream(targeted=True, max_watched=max_watched)
+
+
+class _FakeWs:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+
+def _drain(st, ws) -> None:
+    """Runs the sender task just long enough to flush the queue."""
+
+    async def once():
+        task = asyncio.create_task(st._drain_watch_queue(ws))
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(once())
+
+
+def test_program_wide_mode_never_refuses_a_watch():
+    # Every mint is already covered there, so callers may call watch()
+    # unconditionally without branching on the mode.
+    st = stream.PumpFunTradeStream()
+    assert st.watch("anything") is True
+    assert st.watched_mints() == []
+
+
+def test_the_budget_cap_refuses_rather_than_silently_overspending():
+    st = _targeted(max_watched=2)
+    assert st.watch("a") is True
+    assert st.watch("b") is True
+    assert st.watch("c") is False
+    assert st.watched_mints() == ["a", "b"]
+
+
+def test_watching_the_same_mint_twice_costs_one_slot():
+    st = _targeted(max_watched=2)
+    assert st.watch("a") is True
+    assert st.watch("a") is True
+    assert st.watch("b") is True
+    assert st.watched_mints() == ["a", "b"]
+
+
+def test_refused_watches_are_counted_never_hidden():
+    st = _targeted(max_watched=1)
+    st.watch("a")
+    st.watch("b")
+    st.watch("c")
+    assert st.refused_watches == 2
+
+
+def test_a_subscription_ack_binds_its_mint():
+    st = _targeted()
+    st.watch("mint1")
+    ws = _FakeWs()
+    _drain(st, ws)
+    assert ws.sent and ws.sent[0]["method"] == "logsSubscribe"
+    assert ws.sent[0]["params"][0] == {"mentions": ["mint1"]}
+    assert st._handle_ack({"id": ws.sent[0]["id"], "result": 4242}) is True
+    assert st._watched["mint1"] == 4242
+
+
+def test_a_notification_is_not_mistaken_for_an_ack():
+    st = _targeted()
+    assert st._handle_ack({"method": "logsNotification", "params": {}}) is False
+
+
+def test_unwatching_releases_the_slot_and_unsubscribes_server_side():
+    st = _targeted(max_watched=1)
+    st.watch("a")
+    st._watched["a"] = 77
+    st._watch_queue.clear()
+    st.unwatch("a")
+    ws = _FakeWs()
+    _drain(st, ws)
+    assert ws.sent[0]["method"] == "logsUnsubscribe"
+    assert ws.sent[0]["params"] == [77]
+    assert st.watched_mints() == []
+    assert st.watch("b") is True
+
+
+def test_unwatching_an_unknown_mint_is_harmless():
+    st = _targeted()
+    st.unwatch("never-seen")
+    assert st.watched_mints() == []
+
+
+def test_targeted_mode_reads_the_same_trades_as_program_wide():
+    # The whole point: the wire format is identical, only the filter moved to
+    # the server. A notification must feed the metrics exactly as before.
+    wide = stream.PumpFunTradeStream()
+    narrow = _targeted()
+    mint = _mint_key("MintAAA")
+    narrow.watch(mint)
+    msg = _slot_notif("MintAAA", "UserAAA", True, 10)
+    assert wide.handle_notification(msg) == narrow.handle_notification(msg)
+    assert wide.get_flow(mint).distinct_buyers == narrow.get_flow(mint).distinct_buyers
+    assert narrow.get_flow(mint).distinct_buyers == 1

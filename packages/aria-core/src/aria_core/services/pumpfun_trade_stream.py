@@ -246,6 +246,23 @@ class _MintState:
     last_trade_at_monotonic: float | None = None
 
 
+# Measured 2026.08.21 against the live Helius websocket: 120 targeted mint
+# subscriptions carried 11 286 MB/day, i.e. ~94 MB per watched mint per day.
+# Helius bills 20 credits/MB, so the 1M credit/month plan pays for ~50 GB/month
+# (~1667 MB/day) -- 17.7 mints watched continuously would consume the ENTIRE
+# monthly quota, leaving nothing for the bonding account subscriptions, the
+# getMultipleAccounts reads or anything else on the same key. The default is
+# therefore set so this stream claims ~two thirds of the budget and no more:
+# 12 mints x 94 MB = 1128 MB/day = ~677k credits/month. Raise it only against a
+# fresh measurement of what the OTHER consumers on this key actually spend.
+MAX_WATCHED_MINTS = 12
+
+# How often the sender task looks for new watch/unwatch requests. 0.2 s is far
+# below the ~40 s of history buyer_acceleration needs, so it never delays a
+# metric; it only costs an idle wakeup five times a second.
+_WATCH_QUEUE_POLL_SECONDS = 0.2
+
+
 def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str, int] | None:
     """``(mint, sol_amount, is_buy, user, token_amount)`` or ``None`` when the
     payload is not a TradeEvent (or is too short to trust). Never raises on
@@ -294,14 +311,32 @@ def extract_trade_events(logs: list[str]) -> list[tuple[str, float, bool, str, i
 class PumpFunTradeStream:
     """Single program-wide log subscription, shared by every caller.
 
-    Deliberately ONE subscription for the whole program rather than one per
-    token: pump.fun emits every token's trades through the same program, so a
-    per-token subscription would multiply connections for strictly the same
-    data -- and the pockets track dozens of candidates at once."""
+    Two subscription modes. The default listens to the whole pump.fun program
+    (one subscription, every token's trades). `targeted=True` instead
+    subscribes per mint, on the SAME single connection.
 
-    def __init__(self, *, rpc_ws_url: str = RPC_WS_DEFAULT, connect_fn=None):
+    The program-wide mode was long justified by the claim that per-token
+    subscriptions would "multiply connections for strictly the same data".
+    Both halves were measured false on 2026.08.21: 120 per-mint subscriptions
+    were accepted on one connection, and the data is far from the same --
+    Helius bills streamed BYTES (20 credits/MB), and program-wide streaming
+    carries 74 GB/day of which 74.7% holds no decodable trade at all. The
+    same measurement over 120 targeted mints carried 11.3 GB/day, a 6.6x cut
+    for strictly the same signal. See MAX_WATCHED_MINTS for the budget."""
+
+    def __init__(self, *, rpc_ws_url: str = RPC_WS_DEFAULT, connect_fn=None,
+                 targeted: bool = False, max_watched: int = MAX_WATCHED_MINTS):
         self._rpc_ws_url = rpc_ws_url
         self._connect_fn = connect_fn
+        self._targeted = targeted
+        self._max_watched = max_watched
+        # mint -> server subscription id (None while the ack is in flight).
+        self._watched: dict[str, int | None] = {}
+        # Requests raised by callers between reconnects; drained by the sender.
+        self._watch_queue: list[tuple[str, bool]] = []
+        self._req_mints: dict[int, str] = {}
+        self._next_req_id = 100
+        self._refused = 0
         self._state: dict[str, _MintState] = {}
         # Separate from `_state` and far longer-lived -- see FOUNDING_COHORT_SIZE.
         self._founding: dict[str, FoundingCohort] = {}
@@ -476,6 +511,78 @@ class PumpFunTradeStream:
         self._last_prune = now
         return len(stale)
 
+    def watch(self, mint: str) -> bool:
+        """Registers ``mint`` for a targeted subscription, subject to the budget
+        cap. Returns False when the cap is already full, so the caller learns it
+        was refused instead of silently believing the mint is covered.
+
+        A no-op returning True in program-wide mode: every mint is already
+        covered there, so callers can call this unconditionally."""
+        if not self._targeted or mint in self._watched:
+            return True
+        if len(self._watched) >= self._max_watched:
+            self._refused += 1
+            return False
+        self._watched[mint] = None
+        self._watch_queue.append((mint, True))
+        return True
+
+    def unwatch(self, mint: str) -> None:
+        """Releases a budget slot. Safe to call for an unwatched mint."""
+        if self._targeted and mint in self._watched:
+            self._watch_queue.append((mint, False))
+
+    def watched_mints(self) -> list[str]:
+        return sorted(self._watched)
+
+    @property
+    def refused_watches(self) -> int:
+        """How many watch() calls the cap turned down since start. A rising
+        number means the cap is too tight for the pocket's real candidate
+        rate -- surface it, never let the budget silently blind the metrics."""
+        return self._refused
+
+    def _handle_ack(self, msg: dict) -> bool:
+        """Binds a subscription id to its mint. Returns True if the message was
+        an ack (and therefore not a notification)."""
+        rid = msg.get("id")
+        if not isinstance(rid, int) or "result" not in msg:
+            return False
+        mint = self._req_mints.pop(rid, None)
+        if mint is not None and isinstance(msg.get("result"), int) and mint in self._watched:
+            self._watched[mint] = msg["result"]
+        return True
+
+    async def _drain_watch_queue(self, ws) -> None:
+        """Sends subscribe/unsubscribe frames while run_forever blocks on recv.
+        websockets allows a concurrent send from another task on the same
+        connection, which is what keeps this to ONE connection."""
+        while True:
+            if not self._watch_queue:
+                await asyncio.sleep(_WATCH_QUEUE_POLL_SECONDS)
+                continue
+            mint, add = self._watch_queue.pop(0)
+            try:
+                if add:
+                    req = self._next_req_id
+                    self._next_req_id += 1
+                    self._req_mints[req] = mint
+                    await ws.send(json.dumps({
+                        "jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
+                        "params": [{"mentions": [mint]}, {"commitment": "processed"}],
+                    }))
+                else:
+                    sub_id = self._watched.pop(mint, None)
+                    if isinstance(sub_id, int):
+                        await ws.send(json.dumps({
+                            "jsonrpc": "2.0", "id": self._next_req_id,
+                            "method": "logsUnsubscribe", "params": [sub_id],
+                        }))
+                        self._next_req_id += 1
+            except Exception:  # noqa: BLE001 -- the reconnect path re-subscribes
+                self._watch_queue.insert(0, (mint, add))
+                return
+
     def handle_notification(self, msg: dict) -> int:
         """Feeds one raw websocket message in. Returns how many trades it held
         (0 for anything that is not a log notification)."""
@@ -518,18 +625,36 @@ class PumpFunTradeStream:
         while not (stop_event is not None and stop_event.is_set()):
             try:
                 async with self._connect() as ws:
-                    await ws.send(json.dumps({
-                        "jsonrpc": "2.0", "id": 1, "method": "logsSubscribe",
-                        "params": [{"mentions": [PUMPFUN_PROGRAM_ID]}, {"commitment": "processed"}],
-                    }))
+                    sender: asyncio.Task | None = None
+                    if self._targeted:
+                        # Re-arm every mint the callers still care about: a
+                        # reconnect drops server-side subscriptions, and a
+                        # silently unsubscribed mint would read as "no buyers"
+                        # rather than "not measured".
+                        self._req_mints.clear()
+                        self._watch_queue = [(m, True) for m in self._watched]
+                        for m in self._watched:
+                            self._watched[m] = None
+                        sender = asyncio.create_task(self._drain_watch_queue(ws))
+                    else:
+                        await ws.send(json.dumps({
+                            "jsonrpc": "2.0", "id": 1, "method": "logsSubscribe",
+                            "params": [{"mentions": [PUMPFUN_PROGRAM_ID]}, {"commitment": "processed"}],
+                        }))
                     self.connected = True
                     backoff = 1.0
-                    while not (stop_event is not None and stop_event.is_set()):
-                        raw = await ws.recv()
-                        try:
-                            self.handle_notification(json.loads(raw))
-                        except Exception as exc:  # noqa: BLE001 -- one bad frame never kills the stream
-                            logger.debug("pumpfun_trade_stream: bad frame (%s)", exc)
+                    try:
+                        while not (stop_event is not None and stop_event.is_set()):
+                            raw = await ws.recv()
+                            try:
+                                msg = json.loads(raw)
+                                if not (self._targeted and self._handle_ack(msg)):
+                                    self.handle_notification(msg)
+                            except Exception as exc:  # noqa: BLE001 -- one bad frame never kills the stream
+                                logger.debug("pumpfun_trade_stream: bad frame (%s)", exc)
+                    finally:
+                        if sender is not None:
+                            sender.cancel()
             except Exception as exc:  # noqa: BLE001
                 self.connected = False
                 logger.info("pumpfun_trade_stream: disconnected (%s), retrying in %.0fs", exc, backoff)
