@@ -135,6 +135,9 @@ MAX_TOP_BUYER_SHARE = 0.95
 # liquidity_collapse still applies.
 EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 
+# How many of the most recent closures the 'recent' summary covers.
+RECENT_WINDOW_CLOSURES = 50
+
 MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
 
@@ -441,7 +444,7 @@ async def summary(*, chain: str = "solana", db_path: str | None = None) -> dict:
         cur = await db.execute(
             f"SELECT COALESCE(realistic_final_multiplier, final_multiplier) AS m, "
             f"bonding_progress_at_entry AS p FROM {TABLE} "
-            f"WHERE chain = ? AND exit_reason IS NOT NULL", (chain,),
+            f"WHERE chain = ? AND exit_reason IS NOT NULL ORDER BY last_checked_at ASC", (chain,),
         )
         closed = [dict(r) for r in await cur.fetchall()]
         cur = await db.execute(
@@ -451,7 +454,21 @@ async def summary(*, chain: str = "solana", db_path: str | None = None) -> dict:
 
     mults = [c["m"] for c in closed if c["m"] is not None]
     wins = sum(1 for m in mults if m > 1.0)
+
+    # 21/08 -- RECENT window alongside the cumulative one. Operator spotted the
+    # real problem: the notification's PnL had not moved off -2.0% for over an
+    # hour despite violent per-trade swings. The figure was correct but useless
+    # -- at 775 closures each new one carries 1/776 of the average, so even a
+    # +100% trade moves the headline by 0.13 points. Meanwhile the hourly
+    # reality was +26.4% then -21.9%. A number that cannot move is a number
+    # nobody can act on.
+    recent = [c["m"] for c in closed[-RECENT_WINDOW_CLOSURES:] if c["m"] is not None]
+    recent_wins = sum(1 for m in recent if m > 1.0)
+
     return {
+        "recent_n": len(recent),
+        "recent_win_rate": (recent_wins / len(recent)) if recent else None,
+        "recent_avg_pnl_pct": (round((sum(recent) / len(recent) - 1) * 100, 2)) if recent else None,
         "completed": len(closed), "open": open_n,
         "win_rate": (wins / len(mults)) if mults else None,
         "avg_pnl_pct": (round((sum(mults) / len(mults) - 1) * 100, 2)) if mults else None,

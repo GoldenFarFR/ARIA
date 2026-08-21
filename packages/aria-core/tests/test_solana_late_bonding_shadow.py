@@ -523,3 +523,55 @@ async def test_headroom_is_kept_above_the_floor_for_execution_latency():
     actually moving), so the usable band must stay wide enough that latency
     cannot push a candidate straight through the ceiling."""
     assert pocket.MAX_BONDING_PROGRESS - pocket.MIN_BONDING_PROGRESS >= 0.25
+
+
+# --- 21/08, recent window alongside the cumulative average ---------------
+# Operator spotted the real problem: the notification's PnL had not moved off
+# -2.0% for over an hour despite violent per-trade swings. Correct but useless
+# -- at 775 closures each new one carries 1/776 of the average, so even a +100%
+# trade moves the headline by 0.13 points, while the hourly reality was +26.4%
+# then -21.9%. A number that cannot move is a number nobody can act on.
+
+async def _close_row(db_path, mult, when):
+    async with aiosqlite.connect(db_path) as c:
+        await c.execute(
+            f"""INSERT INTO {pocket.TABLE}
+                (pool_address, token_address, chain, detected_at, entry_price, reserve_usd,
+                 exit_reason, realistic_final_multiplier, last_checked_at)
+                VALUES ('p','m',?,?,1.0,5000.0,'trailing_stop',?,?)""",
+            (CHAIN, when, mult, when),
+        )
+        await c.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_recent_window_moves_while_the_cumulative_average_barely_does(_tmp_db):
+    # a long history of flat closures, then a violent recent swing
+    for i in range(200):
+        await _close_row(_tmp_db, 1.0, f"2026-08-20T{10 + i % 10:02d}:00:00+00:00")
+    for i in range(10):
+        await _close_row(_tmp_db, 3.0, f"2026-08-21T{10 + i % 10:02d}:30:00+00:00")
+
+    out = await pocket.summary(db_path=_tmp_db)
+
+    # The cumulative average is dragged down by 200 flat closures...
+    assert out["avg_pnl_pct"] < 20
+    # ...while the recent window shows what is actually happening now.
+    assert out["recent_avg_pnl_pct"] > out["avg_pnl_pct"]
+
+
+@pytest.mark.asyncio
+async def test_the_recent_window_is_bounded_and_ordered(_tmp_db):
+    for i in range(RECENT := pocket.RECENT_WINDOW_CLOSURES + 20):
+        await _close_row(_tmp_db, 1.0, f"2026-08-2{i % 2}T{10 + i % 10:02d}:00:00+00:00")
+
+    out = await pocket.summary(db_path=_tmp_db)
+
+    assert out["recent_n"] == pocket.RECENT_WINDOW_CLOSURES
+
+
+@pytest.mark.asyncio
+async def test_an_empty_pocket_reports_none_rather_than_a_fabricated_zero(_tmp_db):
+    out = await pocket.summary(db_path=_tmp_db)
+    assert out["recent_avg_pnl_pct"] is None
+    assert out["recent_win_rate"] is None
