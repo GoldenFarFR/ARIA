@@ -1345,16 +1345,34 @@ def evaluate_exit(
         peak_price >= entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
         and effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
     ):
+        # 21/08 -- bounded by the real market, exactly like the hard stop
+        # above. It was NOT, and the gap was measured on 45 real closures:
+        # the fill credited the theoretical stop while the low actually
+        # OBSERVED in the same window sat 27.4 points lower on average. Worst
+        # real case: stop +61.6%, observed low -76.0%, and the position was
+        # credited +57.6%. Claiming a fill at +61% on a window where price
+        # reached -76% is not a modelling nuance, it is a fabricated gain --
+        # and since this branch carries the pocket's ENTIRE upside, it
+        # inflated every headline PnL the pocket has ever reported.
+        #
+        # Same rule as the hard stop: if the market is still above the stop,
+        # the crossing was real and fillable there; if price is still below
+        # it, we fill where the market actually is. Applies to BOTH active
+        # pockets through this shared rule -- the point is one honest
+        # accounting, not one per pocket.
         stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
-        _realistic_sell(remaining_qty, stop_price)
-        realized_proceeds += remaining_qty * stop_price
+        fill_price = min(stop_price, current_price) if current_price > 0 else stop_price
+        _realistic_sell(remaining_qty, fill_price)
+        realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "trailing_stop"
         exit_detail = (
             f"TRAILING_STOP_PCT={TRAILING_STOP_PCT:.0f}% below a peak of "
             f"{(peak_price / entry_price - 1) * 100:+.1f}% | armed at "
             f"TRAILING_STOP_ARM_PEAK_PCT={TRAILING_STOP_ARM_PEAK_PCT:.0f}% | "
-            f"low touched {(effective_low / entry_price - 1) * 100:+.1f}%"
+            f"low touched {(effective_low / entry_price - 1) * 100:+.1f}% | "
+            + ("filled at market, price had already gapped below the stop"
+               if fill_price < stop_price else "filled at the stop")
         )
     elif age_minutes >= MAX_HOLD_MINUTES:
         _realistic_sell(remaining_qty, current_price)

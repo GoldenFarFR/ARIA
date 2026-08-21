@@ -1101,3 +1101,31 @@ async def test_an_archiving_failure_never_blocks_an_exit(_tmp_db, monkeypatch):
 
     stats = await pocket.advance_exit_simulation(snapshot_fn=_collapsed, db_path=_tmp_db)
     assert stats["closed"] == 1
+
+
+def test_the_trailing_stop_cannot_be_credited_above_the_real_market():
+    """21/08, found by reading a real closure notification. On 45 closures the
+    trailing credited its theoretical stop while the low OBSERVED in the same
+    window sat 27.4 points lower on average -- worst real case crediting
+    +57.6% on a window where price reached -76%. Since this branch carries the
+    pocket's entire upside, it inflated every headline PnL reported."""
+    row = {"entry_price": 1.0, "peak_price": 2.0, "reserve_usd": 10_000.0,
+           "remaining_qty": 1.0, "realized_proceeds": 0.0,
+           "realistic_entry_price": 1.0, "realistic_realized_proceeds": 0.0,
+           "pool_address": "pool"}
+
+    # price collapsed far below the 1.70 stop and is still there
+    crashed = ws_exit_shadow.evaluate_exit(
+        row, current_price=0.24, reserve_usd=9_000.0, dex_id="pumpfun", age_minutes=5.0,
+    )
+    assert crashed["exit_reason"] == "trailing_stop"
+    assert crashed["realized_proceeds"] == pytest.approx(0.24)
+
+    # dipped through the stop and recovered above it: the crossing was real
+    # and fillable there
+    recovered = ws_exit_shadow.evaluate_exit(
+        row, current_price=1.80, reserve_usd=9_000.0, dex_id="pumpfun", age_minutes=5.0,
+        window_low=1.60,
+    )
+    assert recovered["exit_reason"] == "trailing_stop"
+    assert recovered["realized_proceeds"] == pytest.approx(1.70)
