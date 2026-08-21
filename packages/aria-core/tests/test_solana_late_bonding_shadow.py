@@ -42,9 +42,10 @@ def _curve(progress: float, *, complete: bool = False, decimals: int = 6) -> dic
 
 
 class _Stream:
-    def __init__(self, *, buyers=5, top_share=0.1, accel=1.4, sol_velocity=0.05):
+    def __init__(self, *, buyers=5, top_share=0.1, accel=1.4, sol_velocity=0.05,
+                 sell_pressure=0.4):
         self._flow = SimpleNamespace(distinct_buyers=buyers, top_buyer_share=top_share,
-                                     sol_velocity=sol_velocity)
+                                     sol_velocity=sol_velocity, sell_pressure=sell_pressure)
         self._accel = accel
 
     def get_flow(self, _mint):
@@ -52,6 +53,9 @@ class _Stream:
 
     def buyer_acceleration(self, _mint):
         return self._accel
+
+    def sell_pressure_slope(self, _mint):
+        return 0.1
 
 
 async def _rows(path):

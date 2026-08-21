@@ -339,6 +339,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 exit_detail TEXT,
                 amm_pool_address TEXT,
                 sol_velocity_at_entry REAL,
+                sell_pressure_at_entry REAL,
+                sell_pressure_slope_at_entry REAL,
                 sellable_at_entry INTEGER,
                 roundtrip_loss_pct_at_entry REAL,
                 reinforce_price REAL,
@@ -375,6 +377,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # REST -- on this pocket's best-performing segment.
             ("amm_pool_address", "TEXT"),
             ("sol_velocity_at_entry", "REAL"),
+            ("sell_pressure_at_entry", "REAL"),
+            ("sell_pressure_slope_at_entry", "REAL"),
             ("sellable_at_entry", "INTEGER"),
             ("roundtrip_loss_pct_at_entry", "REAL"),
             ("reinforce_price", "REAL"),
@@ -430,6 +434,25 @@ async def screen_candidate(
         # separates this pocket's real winners, and speed is the one signal
         # plausibly predicting it that we were not recording. COLLECTED ONLY.
         "sol_velocity": flow.sol_velocity if flow else None,
+        # 21/08 -- PRESSION VENDEUSE, quatrieme signal disponible et jamais lu
+        # de la journee. Le flux la calcule deja en memoire et la poche temoin
+        # s'en sert; celle-ci ne lisait que l'accélération des ACHETEURS.
+        #
+        # Cas fondateur, capture par l'operateur : une position morte a -28.6%
+        # en DEUX SECONDES, un seul point de trajectoire, plus bas vu -42.9%.
+        # Aucune vitesse d'observation n'aurait pu l'intercepter -- il n'y a
+        # eu aucun prix intermediaire. La seule prevention possible etait de
+        # ne pas entrer, et le signal qui l'aurait dit etait deja la.
+        #
+        # `sell_pressure` = vendeurs distincts / acheteurs distincts. Au-dessus
+        # de 1.0, plus de monde sort qu'il n'entre. COLLECTE SEULEMENT : cela
+        # ne devient un filtre que si les donnees montrent qu'il separe
+        # vraiment, et tout filtre d'entree risque de couper les rares
+        # gagnants qui portent tout.
+        "sell_pressure": flow.sell_pressure if flow else None,
+        "sell_pressure_slope": (
+            trade_stream.sell_pressure_slope(mint) if trade_stream is not None else None
+        ),
     }
 
     if progress is None:
@@ -637,8 +660,9 @@ async def consider_candidate(
                      buyer_acceleration_at_entry, peak_price, realistic_entry_price,
                      founding_tracked_at_entry, founding_exited_at_entry,
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
-                     creator_address, creator_sold_at_entry, sol_velocity_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     creator_address, creator_sold_at_entry, sol_velocity_at_entry,
+                     sell_pressure_at_entry, sell_pressure_slope_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -648,6 +672,7 @@ async def consider_candidate(
                     founding.get("tracked"), founding.get("exited"),
                     founding.get("exit_ratio"), founding.get("bundle_size"),
                     creator, creator_sold, metrics.get("sol_velocity"),
+                    metrics.get("sell_pressure"), metrics.get("sell_pressure_slope"),
                 ),
             )
             await db.commit()
