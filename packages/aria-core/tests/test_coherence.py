@@ -1262,3 +1262,41 @@ def test_known_sanitize_untrusted_text_consumers_keep_using_it(rel):
         "tiers), retire-le de _KNOWN_SANITIZE_CONSUMERS dans le MÊME commit avec une "
         "justification ; sinon c'est une régression de sécurité réelle."
     )
+
+
+def test_pocket_parameter_registry_matches_the_code():
+    """The pocket registry must never drift from the code it describes.
+
+    21/08, operator-directed. A -81.5% close was explained away as a "-20%
+    trailing stop" that was really 15% and only armed above +10%: a parameter
+    nobody had re-read. A hand-kept registry would drift the same way, so the
+    committed JSON is generated and this test fails the build the moment it
+    stops matching. Regenerate with `python -m aria_core.pocket_parameters
+    --write` and READ THE DIFF -- that reading is the point of the mechanism."""
+    from aria_core import pocket_parameters
+
+    assert pocket_parameters.REGISTRY_PATH.exists(), (
+        "docs/pocket-parameters.json is missing -- run "
+        "`python -m aria_core.pocket_parameters --write`"
+    )
+    assert pocket_parameters.is_current(), (
+        "docs/pocket-parameters.json is stale: a pocket parameter changed "
+        "without the registry being regenerated. Run "
+        "`python -m aria_core.pocket_parameters --write` and review the diff."
+    )
+
+
+def test_every_shadow_pocket_module_is_in_the_registry():
+    """A new pocket that never reaches the registry is invisible to the very
+    re-reading this exists to force."""
+    from pathlib import Path
+
+    from aria_core import pocket_parameters
+
+    src = Path(pocket_parameters.__file__).resolve().parent
+    on_disk = {p.stem for p in src.glob("*_shadow.py")}
+    missing = on_disk - set(pocket_parameters.POCKET_MODULES)
+    assert not missing, (
+        f"shadow pocket modules absent from POCKET_MODULES: {sorted(missing)} -- "
+        f"add them to aria_core/pocket_parameters.py so their parameters are tracked"
+    )

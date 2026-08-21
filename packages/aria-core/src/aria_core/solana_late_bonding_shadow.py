@@ -117,12 +117,6 @@ MIN_DISTINCT_BUYERS = 1
 # recorded, so the real wash-trading cutoff is measurable later.
 MAX_TOP_BUYER_SHARE = 0.95
 
-# 20/08 -- raised with the widened band. The REAL constraint is the exit
-# loop: more open positions means each one is checked less often, which is
-# exactly what caused the late liquidity_collapse catches fixed earlier today
-# (first check landing 32-116s after entry despite a 10s cadence). The exit
-# sweep's own `limit` is raised in step below so widening collection cannot
-# quietly re-create that failure.
 # 21/08 -- a position whose token GRADUATED is exempt from max_hold.
 # Measured on this pocket's own graduated closures: `trailing_stop` exits
 # returned +228.3% (n=47, capturing 71% of a +296% peak) while `max_hold`
@@ -165,6 +159,12 @@ RECENT_WINDOW_CLOSURES = 50
 # rows.
 CONFIG_EPOCH = "2026-08-21T11:44:10+00:00"
 
+# 20/08 -- raised with the widened band. The REAL constraint is the exit
+# loop: more open positions means each one is checked less often, which is
+# exactly what caused the late liquidity_collapse catches fixed earlier today
+# (first check landing 32-116s after entry despite a 10s cadence). The exit
+# sweep's own `limit` is raised in step below so widening collection cannot
+# quietly re-create that failure.
 MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
 
@@ -204,7 +204,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 last_price REAL,
                 last_reserve_usd REAL,
                 last_checked_at TEXT,
-                exit_price_source TEXT
+                exit_price_source TEXT,
+                exit_detail TEXT
             )
             """
         )
@@ -215,8 +216,11 @@ async def _ensure_table(db_path: str | None = None) -> None:
         # Hot idempotent ALTER, same pattern as everywhere else here -- start
         # accumulating on the live table rather than waiting for a rebuild.
         cur = await db.execute(f"PRAGMA table_info({TABLE})")
-        if "has_paid_profile" not in {r[1] for r in await cur.fetchall()}:
+        existing = {r[1] for r in await cur.fetchall()}
+        if "has_paid_profile" not in existing:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN has_paid_profile INTEGER")
+        if "exit_detail" not in existing:
+            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -489,7 +493,7 @@ async def advance_exit_simulation(
                 UPDATE {TABLE} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
                     realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                     realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
-                    last_checked_at = ?, exit_price_source = ?
+                    last_checked_at = ?, exit_price_source = ?, exit_detail = ?
                 WHERE id = ? AND exit_reason IS NULL
                 """,
                 (
@@ -497,7 +501,8 @@ async def advance_exit_simulation(
                     result.get("realistic_realized_proceeds"), result.get("exit_reason"),
                     result.get("final_multiplier"), result.get("realistic_final_multiplier"),
                     snapshot.price_usd, snapshot.reserve_usd,
-                    datetime.now(timezone.utc).isoformat(), snapshot.dex_id, row["id"],
+                    datetime.now(timezone.utc).isoformat(), snapshot.dex_id,
+                    result.get("exit_detail"), row["id"],
                 ),
             )
             await db.commit()

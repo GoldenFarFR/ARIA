@@ -529,6 +529,13 @@ async def _has_open_or_recent_signal(db: aiosqlite.Connection, pool_address: str
 # decision give enough history to calibrate a real N-buys-in-T-seconds rule.
 REQUIRE_OBSERVED_BUY = True
 
+# 20/08 -- how long the pre-trade gate may wait on RugCheck before giving up.
+# Sized against real measurements, not guessed: RugCheck answers in ~0.17s, and
+# the only real wait is this dome's OWN shared throttle (_MIN_INTERVAL_S=4.5s
+# in services/rugcheck.py). 12s covers a couple of queued turns at that
+
+# throttle while still bounding the entry delay -- past that the candidate is
+# rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED).
 HOLDER_GATE_TIMEOUT_S = 12.0
 
 # 20/08 -- how often the discovery loop emits its running outcome counters.
@@ -1297,6 +1304,10 @@ def evaluate_exit(
     )
 
     exit_reason: str | None = None
+    # 21/08, operator-directed: every closed line must name the mechanism AND
+    # the parameter value that decided it -- a bare `liquidity_collapse` label
+    # is what let a -81.5% close be misread as a stop-loss failure for a day.
+    exit_detail: str | None = None
     if hard_stopped:
         # Fills at the stop price ONLY if the market still shows at least
         # that much. When price has already gapped below, the stop fills at
@@ -1311,11 +1322,25 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "hard_stop"
+        gapped = fill_price < stop_price
+        exit_detail = (
+            f"HARD_STOP_PCT={hard_stop_pct:.0f}% | low touched "
+            f"{(effective_low / entry_price - 1) * 100:+.1f}% vs entry | "
+            f"trailing never armed (peak {(peak_price / entry_price - 1) * 100:+.1f}% "
+            f"< TRAILING_STOP_ARM_PEAK_PCT={TRAILING_STOP_ARM_PEAK_PCT:.0f}%) | "
+            + ("filled at market, price had already gapped below the stop"
+               if gapped else "filled at the stop")
+        )
     elif liquidity_collapsed:
         _realistic_sell(remaining_qty, current_price)
         realized_proceeds += remaining_qty * current_price
         remaining_qty = 0.0
         exit_reason = "liquidity_collapse"
+        exit_detail = (
+            f"LIQUIDITY_COLLAPSE_EXIT_PCT={LIQUIDITY_COLLAPSE_EXIT_PCT:.0f}% | reserve "
+            f"{entry_reserve:,.0f}$ -> {reserve_usd:,.0f}$ "
+            f"({(reserve_usd / entry_reserve - 1) * 100:+.1f}%) | sold at market"
+        )
     elif (
         peak_price >= entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
         and effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
@@ -1325,11 +1350,22 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * stop_price
         remaining_qty = 0.0
         exit_reason = "trailing_stop"
+        exit_detail = (
+            f"TRAILING_STOP_PCT={TRAILING_STOP_PCT:.0f}% below a peak of "
+            f"{(peak_price / entry_price - 1) * 100:+.1f}% | armed at "
+            f"TRAILING_STOP_ARM_PEAK_PCT={TRAILING_STOP_ARM_PEAK_PCT:.0f}% | "
+            f"low touched {(effective_low / entry_price - 1) * 100:+.1f}%"
+        )
     elif age_minutes >= MAX_HOLD_MINUTES:
         _realistic_sell(remaining_qty, current_price)
         realized_proceeds += remaining_qty * current_price
         remaining_qty = 0.0
         exit_reason = "max_hold"
+        exit_detail = (
+            f"MAX_HOLD_MINUTES={MAX_HOLD_MINUTES:.0f} | held {age_minutes:.0f}min | "
+            f"peak reached {(peak_price / entry_price - 1) * 100:+.1f}% | "
+            f"the clock closed it, no price rule fired"
+        )
 
     final_multiplier = (realized_proceeds / entry_price) if exit_reason and entry_price else None
     realistic_final_multiplier = (
@@ -1340,6 +1376,7 @@ def evaluate_exit(
 
     return {
         "skipped": False,
+        "exit_detail": exit_detail,
         "peak_price": peak_price,
         "remaining_qty": remaining_qty,
         "realized_proceeds": realized_proceeds,

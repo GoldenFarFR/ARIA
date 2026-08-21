@@ -1,0 +1,757 @@
+{
+  "ath_shadow": {
+    "label": "ATH persistence",
+    "parameters": {},
+    "status": "present"
+  },
+  "candle_staleness_shadow": {
+    "label": "OBSERVER -- candle freshness (#261)",
+    "parameters": {
+      "STALENESS_SHADOW_MULTIPLIER": {
+        "line": 52,
+        "value": 5.0,
+        "why": "Candidate threshold under shadow evaluation -- NOT yet validated against real observations. Reasoned starting point, not a guess pulled from nowhere: the existing scalping continuity gate already uses 4.0x the median candle interval to flag \"too old\" for TRADING SILENCE (`_SCALPING_MAX_CANDLE_GAP_MULTIPLIER`, momentum_entry.py); staleness-to- NOW deserves a bit more slack than that (normal fetch/processing latency alone eats into it, and this applies to every mode, not just scalping's tight cadence) -- 5.0x chosen as a deliberately slightly wider starting candidate, to be tightened or loosened once shadow data accumulates."
+      }
+    },
+    "status": "present"
+  },
+  "chasing_filter_shadow": {
+    "label": "OBSERVER -- anti-chasing filter",
+    "parameters": {
+      "RECENT_LOW_WINDOW_BOLLINGER_VWAP": {
+        "line": 52,
+        "value": 20,
+        "why": null
+      },
+      "RECENT_LOW_WINDOW_GOLDEN_POCKET": {
+        "line": 53,
+        "value": 25,
+        "why": null
+      },
+      "RECENT_LOW_WINDOW_STOCHASTIC": {
+        "line": 51,
+        "value": 14,
+        "why": "recent_low window, per mechanism -- NOT a single N=14 uniform choice (the workflow found no reason to tie this to \"whatever's already computed\" for variants that don't use a 14-candle oscillator). Matches each variant's OWN lookback: Stochastique %K (V3/V4) = 14, Bollinger/VWAP (V1/V2/V5) = 20, golden-pocket lookback (V6 legacy + standard momentum/swing) = 25."
+      }
+    },
+    "status": "present"
+  },
+  "dip_recovery_shadow": {
+    "label": "DIP-RECOVERY (operator-proposed entry signal)",
+    "parameters": {
+      "DIP_THRESHOLD_PCT": {
+        "line": 55,
+        "value": -30.0,
+        "why": "Candidate thresholds under shadow evaluation -- verbatim from the operator's own proposal (13/08), not independently tuned. Shadow mode exists precisely so these can be validated (or not) against real forward data before ever considering a live paper pocket."
+      },
+      "LOOKBACK_CANDLES": {
+        "line": 61,
+        "value": 24,
+        "why": null
+      },
+      "MAX_HOLD_HOURS": {
+        "line": 59,
+        "value": 168.0,
+        "why": "Safety net only, never an invented take-profit -- see module docstring."
+      },
+      "STOP_LOSS_PCT": {
+        "line": 56,
+        "value": -5.0,
+        "why": null
+      }
+    },
+    "status": "present"
+  },
+  "early_legitimacy_shadow": {
+    "label": "OBSERVER -- early on-chain legitimacy",
+    "parameters": {
+      "MAX_TOKEN_AGE_HOURS": {
+        "line": 94,
+        "value": 6.0,
+        "why": "Tokens older than this at evaluation time are skipped (not re-attempted forever) -- past this point they're no longer \"early legitimacy\" data points, and the LP-scan window above wouldn't reach back to their real creation anyway. Bounds the pending backlog to a rolling window instead of growing forever on tokens the collector never got to in time."
+      },
+      "_BASE_SECONDS_PER_BLOCK": {
+        "line": 87,
+        "value": 2.0,
+        "why": null
+      },
+      "_DEFAULT_RPC_URL": {
+        "line": 64,
+        "value": "https://mainnet.base.org",
+        "why": null
+      },
+      "_LP_SCAN_CHUNK_BLOCKS": {
+        "line": 81,
+        "value": 500,
+        "why": "services/doppler.py's own docstring: eth_getLogs on mainnet.base.org empirically rejects (413) wide ranges, even 5000-20000 blocks on a heavily-used contract -- 500 is the same window already validated safe in prod there (discover_new_pools/discover_recent_pools)."
+      },
+      "_LP_SCAN_MAX_CHUNKS": {
+        "line": 86,
+        "value": 4,
+        "why": "Bounds a single token's worst-case scan cost: 4 chunks * 500 blocks = ~2000 blocks =~ 1.1h at Base's ~2s/block (documented alongside this same constant in doppler.py) -- comfortably covers the \"early legitimacy\" window this module cares about without an unbounded scan."
+      },
+      "_PRICE_LOOKUP_TOLERANCE_HOURS": {
+        "line": 355,
+        "value": 2.0,
+        "why": "Forward price tracking deliberately does NOT introduce a second write path -- it reads whatever candle_history_watchlist_cycle already collected for this token (same doctrine as dip_recovery_shadow_cycle: zero extra network call). Read-only helpers, computed on demand rather than stored, so a later change to the horizon set (e.g. adding +3d) never requires a migration or a backfill."
+      }
+    },
+    "status": "present"
+  },
+  "narrative_signal_shadow": {
+    "label": "NARRATIVE (trade the news, not the chart)",
+    "parameters": {
+      "MIN_CONVICTION_SCORE": {
+        "line": 89,
+        "value": 7.0,
+        "why": "conviction_research scores on a 0-10 scale (see its potential_score)."
+      },
+      "MIN_REVENUE_30D_USD": {
+        "line": 70,
+        "value": 10000.0,
+        "why": "A protocol only counts as \"real revenue\" above this floor -- calibrated on the 08/08 session's real comparisons: gitlawb's ENTIRE cumulative burn was ~$8k (marketing tier), while every genuine mechanism (clanker $274k/30d, Aerodrome $5.2M/30d, RAY) clears $10k/30d by an order of magnitude."
+      },
+      "SIGNAL_CEX_LISTING_PHASE": {
+        "line": 77,
+        "value": "cex_listing_phase",
+        "why": null
+      },
+      "SIGNAL_CONVICTION_RESEARCH": {
+        "line": 87,
+        "value": "conviction_research",
+        "why": "Generic third detector (08/08, operator: \"tous signaux suffisamment importants sur n'importe quel token, pas juste coinbase ou defillama\") -- conviction_research's per-candidate diligence (X buzz, website, GitHub, Farcaster, Telegram, Tavily) logged as a dated signal whenever it scores high. Honest limit, documented where it's hooked: conviction_research only runs on candidates that already reached a technical BUY (standard mode) -- an aeon-at-the-ATL (active GitHub, no technical setup) still never reaches it; mass pre-BUY coverage costs real X/Tavily budget per candidate and is a separate chantier."
+      },
+      "SIGNAL_DEFILLAMA_REVENUE": {
+        "line": 76,
+        "value": "defillama_revenue",
+        "why": null
+      },
+      "_CEX_SEEN_DDL": {
+        "line": 232,
+        "value": "CREATE TABLE IF NOT EXISTS narrative_shadow_cex_seen (symbol TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL)",
+        "why": null
+      },
+      "_COINBASE_PRODUCTS_URL": {
+        "line": 58,
+        "value": "https://api.exchange.coinbase.com/products",
+        "why": null
+      },
+      "_COINBASE_TTL_SECONDS": {
+        "line": 64,
+        "value": 3600.0,
+        "why": null
+      },
+      "_DEDUP_WINDOW_DAYS": {
+        "line": 74,
+        "value": 7.0,
+        "why": "One signal row per (contract, signal_type) per this window -- a catalog that keeps matching must not re-log the same discovery every evaluation."
+      },
+      "_DEFILLAMA_FEES_URL": {
+        "line": 54,
+        "value": "https://api.llama.fi/overview/fees/base?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true",
+        "why": null
+      },
+      "_DEFILLAMA_PROTOCOLS_URL": {
+        "line": 53,
+        "value": "https://api.llama.fi/protocols",
+        "why": null
+      }
+    },
+    "status": "present"
+  },
+  "robinhood_pump_shadow": {
+    "label": "PUMP (Robinhood Chain)",
+    "parameters": {
+      "DEX_FEE_PCT": {
+        "line": 212,
+        "value": 1.0,
+        "why": "Robinhood Chain memecoin launchpads: Uniswap's own pools.trade charges 0.25% (Uniswap v4 base fee), Robinpad charges 1% (Uniswap v3 LP fee) -- 1.0% used as the conservative middle-to-higher estimate across the real launchpads observed on this chain. Sourced 17/08 (crypto.news/coinreporter pools.trade launch coverage, robinpad.app docs), never assumed from memory."
+      },
+      "M5_SURGE_THRESHOLD_PCT": {
+        "line": 153,
+        "value": 25.0,
+        "why": "Calibrated threshold from the 16/08 Dune/DexScreener research pass (see module docstring) -- the ONLY entry signal this shadow layer evaluates. Recalibrated same day from the 15min to the 5min window (second Dune pass, same exit methodology, beat 15min on both winrate and avg multiplier)."
+      },
+      "MAX_POOL_AGE_MINUTES": {
+        "line": 169,
+        "value": 25.0,
+        "why": "16/08, operator-requested protection against a token whose liquidity gets pulled shortly after launch (real case observed live this session on the Solana twin module: a ~35min-old pool's LP fully removed, price down -38.6% in 5min). A pool older than this at DETECTION time is never logged as a new signal. An already-open, currently-LOSING position (current price <= entry) is force-closed the moment its real age crosses this line -- see the priority-1 check at the top of ``advance_exit_simulation``'s per-row loop. A still-WINNING position keeps being tracked normally instead (16/08, second pass, operator decision: a real 1000% run shouldn't be cut short just because 25min passed -- the scale-out ladder already banks gains progressively either way). Fail-CLOSED on missing data (unlike this module's usual \"never fabricate, fail-open\" doctrine for pure observations): this is a protective filter, not a reported metric, so an unknown age is treated as \"too risky to trade\", never \"assume it's fine\"."
+      },
+      "SCALE_OUT_SELL_FRACTION": {
+        "line": 180,
+        "value": 0.25,
+        "why": null
+      },
+      "SCALE_OUT_STEP_PCT": {
+        "line": 179,
+        "value": 25.0,
+        "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
+      },
+      "SIMULATED_TRADE_SIZE_USD": {
+        "line": 206,
+        "value": 0.1,
+        "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- mirrors solana_pump_shadow.py's own addition, same session, same real trigger (X17690 on Solana: reserve_usd essentially zero at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price). NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 181,
+        "value": 20.0,
+        "why": null
+      },
+      "_SCALE_OUT_DUST_FRACTION": {
+        "line": 190,
+        "value": 0.01,
+        "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
+      }
+    },
+    "status": "present"
+  },
+  "solana_fresh_launch_fast_discovery_shadow": {
+    "label": "FAST-DISCOVERY (control pocket)",
+    "parameters": {
+      "FAST_DISCOVERY_POLL_INTERVAL_SECONDS": {
+        "line": 165,
+        "value": 1.0,
+        "why": "How often a still-unconfirmed candidate's liquidity is re-checked. Deliberately NOT a rate limiter itself -- dexpaprika.py's own module-level throttle/lock (_get_json's choke point, shared process-wide) is what actually caps real REST request throughput regardless of how many candidates are tracked concurrently -- this constant only controls how promptly a single candidate is re-polled. 19/08, lowered 5.0->1.0 (operator target: ideally 10-20s total from creation to confirmed entry, acceptable under 30-40s) now that ``bonding_ws_feed``/``ws_feed`` are tried FIRST each poll (in-memory snapshot reads, zero extra network cost when a websocket notification has already landed) -- REST/DexPaprika stays the fallback tier, still governed by its own shared throttle regardless of how often this loop retries it."
+      },
+      "HARD_STOP_PCT": {
+        "line": 151,
+        "value": 20.0,
+        "why": "21/08 -- same hard stop as LATE-BONDING, on the operator's explicit call after seeing a -42.1% `liquidity_collapse` close here too (\"lui idem\").  Measured on THIS pocket's own 1852 closures, so the decision is not borrowed from the other pocket: trailing ARMED n=336 +68.2%, trailing NEVER armed n=1516 -18.4%. Counterfactual, pessimistic (dead within 90s = uncuttable) and outlier-tested: -2.7% (-5.8% without its two best) becomes +1.2% (-2.0%). A real ~4-point gain, and deliberately NOT presented as a fix: this pocket stays negative once its two best trades are removed. Its problem is entry, not exit -- 82% of its positions never rise 10% above entry, against 47% in LATE-BONDING, which is the clearest evidence yet that the bonding threshold is what separates the two.  NOTE this ends FAST-DISCOVERY's role as an untouched control on the exit rule. Accepted knowingly: leaving a pocket bleeding to preserve a comparison is a bad trade. The two still differ on ENTRY, which is the variable under test."
+      },
+      "HOLDER_CONCENTRATION_REJECT_PCT": {
+        "line": 202,
+        "value": 80.0,
+        "why": "19/08, raised 85.0->92.0 after measuring the filter's own real effect on this pocket's first 50 post-deployment closures: winrate barely moved (9%->12%) while avg PnL got WORSE (-4.2%->-9.35%), because 76% of exits were now this filter selling at an average -10.47%. Re-bucketing non-rejected closures by their real rugcheck_top_holder_pct exposed why: the 85-92% bracket (n=21) was actually the BEST-performing bucket in the whole pocket (19.0% winrate, +18% avg multiplier) -- the original 85.0 threshold was cutting the wrong segment. The real cliff sits at 92%: the 92-97% and >=97% buckets (n=29 and n=119, both robust samples) both show a flat 0% winrate and a clearly negative avg multiplier (~0.83-0.85). Raising the threshold lets the 85-92% bracket ride the normal trailing stop again while still cutting the actual bad segment (>=92%, which is also most of the volume). Applied as an early exit the moment RugCheck's async backfill confirms it in ``_enrich_with_rugcheck`` -- never as an entry gate, which would reintroduce the multi-minute RugCheck wait this pocket's fire-and-forget design exists to avoid (see that function's own docstring). 20/08, RECALIBRATED 92 -> 80 on 1496 real closures (operator-directed \"verifie comment les autres wallets gagnent\" / \"cible les tokens qui naissent\"). What this number actually measures was established the same day: topHolders[0] is the POOL itself on a fresh launch, so this is the share of supply still UNSOLD in the curve -- i.e. the inverse of traction. Comparing the dome's x2+ winners against its losers ON ENTRY FEATURES made it the one clearly discriminating variable: winners (n=36)  top_holder 63.9%   losers (n=1476)  82.8% (liquidity 4162$ vs 3237$, rugcheck score 10.6 vs 10.6 -- no power) A token that explodes is a token real people were ALREADY buying before we arrived. Splitting the whole sample at 80%: kept  (<80%)  n=499  winrate 24.8%  PnL +1923 pts  26 of the 36 x2 winners cut  (>=80%)  n=997  winrate  5.1%  PnL -8057 pts  10 of them The kept side is the first POSITIVE segment found in this dome (+3.85%/trade against -4.07% overall) and holds 72% of the big winners for 33% of volume. That winner-share-vs-volume-share test is the bar any entry filter must clear here, since 1.8% of trades carry 100% of the gain -- see the Doctrine's out-of-bounds rule. Cuts ~2/3 of flow: deliberate, fewer positive trades beat more negative ones."
+      },
+      "MARKET_CAP_SOL_AT_CREATION_REJECT_MAX": {
+        "line": 220,
+        "value": 50.0,
+        "why": null
+      },
+      "MARKET_CAP_SOL_AT_CREATION_REJECT_MIN": {
+        "line": 219,
+        "value": 30.0,
+        "why": "20/08, entry-time traction filter (operator-directed performance investigation, point 2, 1418-closure sample -- 100% market_cap_sol_at_ creation coverage, better than m5_pct's coverage anywhere else in this dome). Bucketed by the token's own market cap AT THE PUMPPORTAL CREATION EVENT (before this bot does anything): <30 SOL is the best band (18.1% winrate, n=281), 30-50 SOL is a confirmed dead zone (3.5-7.9% winrate across two sub-bands, n=1024 combined -- by far the largest, most robust sample in this cross-tab). 50-70/70+ show interesting extremes (23.4%/ 4.3%) but n=47/23 is too thin to act on either direction. Working theory: a token that already has a MODERATE market cap the instant it's created (not tiny, not huge) suggests a bot/insider already bought a set chunk at mint -- neither organically undiscovered (the <30 SOL case) nor an outright genuine buy-frenzy. Rejects immediately in _track_candidate, before add_pools() -- never wastes a websocket subscription on a candidate already in the confirmed dead zone."
+      },
+      "MAX_CONCURRENT_TRACKED_CANDIDATES": {
+        "line": 252,
+        "value": 20,
+        "why": "Sanity bound on concurrently-tracked candidates -- protects against an unbounded task explosion during a real creation burst (measured ~40/min live 19/08; MAX_POOL_AGE_MINUTES=5 means, worst case, ~200 concurrent trackers if literally none ever confirmed or got abandoned early). NOT a REST throughput control (see FAST_DISCOVERY_POLL_INTERVAL_SECONDS above) -- dexpaprika's shared throttle already serializes real REST calls regardless of this number.  19/08, raised 10->20 now that bonding_ws_feed is tried first: a candidate that resolves via the websocket never touches the REST throttle at all, so more of them running concurrently now genuinely means faster confirmation, not just \"checked less often\" as the note above described for the REST-only era. Kept modest (not e.g. 100) because the bonding feed's own add_pools() calls the PUBLIC Solana RPC (100 req/10s, 40 concurrent connections per IP -- verified live 19/08, see pumpswap_ws.py's own RPC_HTTP_DEFAULT comment) -- a much higher value would risk trading a DexPaprika bottleneck for an RPC one instead of actually confirming candidates faster."
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 232,
+        "value": 3000.0,
+        "why": "20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD (operator-directed performance investigation, 1261-closure sample). 500$- wide buckets: the 2000-2499$ bucket alone holds 775/1099 closures (70% of the liquidity-known sample) at a 4.9% winrate/0.951 avg realistic multiplier -- by far the worst bucket. From 3000$ up, winrate roughly triples to quadruples (16.0-23.7% across the 3000-5500$ buckets). Unlike the original module, no positive signal was found above 6000$ here (only 1-2 closures in that range, avg_mult 0.18-0.58) -- raising the floor only as far as 3000 removes the confirmed dead zone without extrapolating past what the data actually supports."
+      },
+      "TABLE": {
+        "line": 132,
+        "value": "solana_fresh_launch_fast_discovery_shadow_log",
+        "why": null
+      }
+    },
+    "status": "present"
+  },
+  "solana_fresh_launch_shadow": {
+    "label": "FRESH-LAUNCH",
+    "parameters": {
+      "CHECKPOINT_INTERVAL": {
+        "line": 166,
+        "value": 50,
+        "why": "19/08, operator correction: no closure cap that stops sourcing (unlike solana_variant_shadow.py's TARGET_CLOSURES_PER_VARIANT) -- this pocket trades indefinitely. A checkpoint snapshot is written every N total closures instead, see module docstring."
+      },
+      "CHECKPOINT_TABLE": {
+        "line": 104,
+        "value": "solana_fresh_launch_checkpoint_log",
+        "why": null
+      },
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 153,
+        "value": 50.0,
+        "why": null
+      },
+      "MAX_HOLD_MINUTES": {
+        "line": 152,
+        "value": 60.0,
+        "why": null
+      },
+      "MAX_POOL_AGE_MINUTES": {
+        "line": 140,
+        "value": 5.0,
+        "why": null
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 139,
+        "value": 6000.0,
+        "why": "Entry criteria (operator-specified 19/08, real live test confirmed both server-side DexPaprika filters -- liquidity_usd_min/created_after -- work independently of order_by, so nothing is lost sourcing this way). 19/08, lowered 3000->2000 (operator-requested live test): real data on the first ~180 closures showed 3000-6000$ as the WORST liquidity band (net loss, up to 54% liquidity_collapse rate) vs 6000-10000$+ being net positive -- the operator's own hypothesis going in was that few real pools even exist below 3000$ at the moment they'd pass the other entry criteria, so this mostly tests whether lowering the floor changes anything in practice rather than expecting an improvement. Compare closures before/ after this change using last_checked_at, same method as the 19/08 starvation-fix before/after split.  19/08, SAME session, briefly tried 2000->1000 then REVERTED (real test, not a guess): the hypothesis was that a lower floor is crossed faster (real-liquidity-accumulation wait is the actual bottleneck, not the pipeline itself -- see FAST_DISCOVERY_POLL_INTERVAL_SECONDS's own docstring). Measured the OPPOSITE in practice: mean delay went from 66.1s (2000$ floor, 7-position sample) to 84.2s (1000$ floor, 20-position sample) -- a lower floor qualifies far more candidates per minute (7 -> 20 in a comparable window), which saturates MAX_CONCURRENT_TRACKED_CANDIDATES and the shared DexPaprika REST throttle, moving the real bottleneck from \"market liquidity wait\" to \"internal contention\" instead of removing it.  20/08, raised 2000->6000 (operator-directed performance investigation, 446-closure sample vs the 180-closure sample above): re-bucketing reserve_usd against realistic_final_multiplier on the FULL current sample confirms the earlier 3000-6000$ \"worst band\" reading was itself only a transient artifact of the smaller sample -- the durable pattern is 2-6k$ net-negative across the board (winrate 4.1-18.6%, n=205) vs 6-20k$ net-positive (winrate 46.9-53.2%, avg_mult 1.24-1.38, n=96). Raising the floor to 6000 keeps this pocket entirely inside the confirmed-positive band instead of straddling the dead zone below it."
+      },
+      "PEAK_PRICE_SANITY_MULTIPLE": {
+        "line": 160,
+        "value": 50.0,
+        "why": "Same doctrine/incident as solana_support_bounce_shadow.py's own constant (see that module's comment for the full Jotchua/WW writeup) -- ported here from day one rather than found live a second time. 50x is deliberately generous, catches a corrupted-upstream-read artifact without ever rejecting a genuine pump."
+      },
+      "SUPPORT_CANDLE_INTERVAL": {
+        "line": 145,
+        "value": "1m",
+        "why": "Informational-only support-distance reading, see module docstring -- NEVER gates entry. 1-minute candles, 1-5 available (never wait for the full 5 -- the earliest window is the whole point, operator-explicit)."
+      },
+      "SUPPORT_CANDLE_MAX_COUNT": {
+        "line": 146,
+        "value": 5,
+        "why": null
+      },
+      "TABLE": {
+        "line": 103,
+        "value": "solana_fresh_launch_shadow_log",
+        "why": null
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 151,
+        "value": 15.0,
+        "why": "Exit mechanics -- ladder constants imported from solana_pump_shadow.py (never duplicated); these three are THIS module's own tuning, operator- specified 19/08."
+      }
+    },
+    "status": "present"
+  },
+  "solana_fresh_launch_ws_exit_shadow": {
+    "label": "WS-EXIT (stopped as a pocket -- still the SHARED exit rule)",
+    "parameters": {
+      "HARD_STOP_PCT_DEFAULT": {
+        "line": 159,
+        "value": null,
+        "why": "21/08 -- HARD STOP covering the window the trailing stop does NOT protect.  Arming the trailing at +10% (above) removed a destructive mechanism, but it left a hole nobody looked at: between entry and +10%, a position has NO downside rule at all. It falls until `liquidity_collapse` fires at a 50% reserve drop, which on a curve is a far worse price than 50%. Operator saw it live as a -81.5% close and asked the right question -- how does that happen with a -15% trailing stop? It doesn't: the trailing was never armed.  Measured on the LATE-BONDING pocket's own 304 closures at 70%+ progress: trailing ARMED   (peak >= +10%)  n=162   +58.2% trailing NEVER armed             n=142   -55.5%   <-- unprotected Counterfactual on those same closures, PESSIMISTIC (any position dead within 90s is assumed uncuttable -- its price gapped, no -20% ever printed) and outlier-tested as the statistical mandate requires: today          +5.1%   (without its two best: +2.2%) hard stop -15% +23.7%  (+20.9%) hard stop -20% +21.8%  (+19.0%)   <-- chosen hard stop -25% +20.0%  (+17.2%) -20% over -15% deliberately: -15% scores marginally better here but sits only 5 points off the trailing's own distance, so it would start cutting ordinary noise on a curve this volatile. It changes NO entry filter, which matters because 1.8% of trades carry 100% of this dome's PnL.  ``None`` by default so the FAST-DISCOVERY control pocket is untouched and the two pockets keep differing on one variable at a time."
+      },
+      "HOLDER_CONCENTRATION_REJECT_PCT": {
+        "line": 232,
+        "value": 80.0,
+        "why": "20/08, operator-directed emergency performance investigation. This pocket deliberately did NOT apply FAST-DISCOVERY's holder-concentration reject -- it was the A/B variable kept open on purpose. That A/B has now returned its verdict on THIS pocket's own 1003 real closures, and it is unambiguous: top_holder <85%   n=267  winrate 18.7%  avg -6.19% top_holder 85-92% n=63   winrate  7.9%  avg -9.43% top_holder 92-97% n=136  winrate  8.1%  avg -7.27% top_holder >=97%  n=529  winrate  0.8%  avg -10.30%   <-- 53% of the flow The >=97% band alone carried 53% of every entry this pocket made, at a 0.8% winrate -- statistically indistinguishable from noise, and the single mechanical reason WS-EXIT sat at a 9% winrate while FAST-DISCOVERY (which has cut this segment since 20/08) sat at 17%. Simulated over those same real closures, cutting >=92% takes this pocket from 7.1% to 16.6% winrate. Keeping the A/B open any longer would only re-confirm a settled result at the cost of more (fictitious) capital, so it is closed here deliberately -- same value as FAST-DISCOVERY's own calibrated constant, applied the same way (an early exit on RugCheck's async backfill, never an entry gate, which would reintroduce the multi-minute RugCheck wait this pocket's design exists to avoid). 20/08, RECALIBRATED 92 -> 80 on 1496 real closures (operator-directed \"verifie comment les autres wallets gagnent\" / \"cible les tokens qui naissent\"). What this number actually measures was established the same day: topHolders[0] is the POOL itself on a fresh launch, so this is the share of supply still UNSOLD in the curve -- i.e. the inverse of traction. Comparing the dome's x2+ winners against its losers ON ENTRY FEATURES made it the one clearly discriminating variable: winners (n=36)  top_holder 63.9%   losers (n=1476)  82.8% (liquidity 4162$ vs 3237$, rugcheck score 10.6 vs 10.6 -- no power) A token that explodes is a token real people were ALREADY buying before we arrived. Splitting the whole sample at 80%: kept  (<80%)  n=499  winrate 24.8%  PnL +1923 pts  26 of the 36 x2 winners cut  (>=80%)  n=997  winrate  5.1%  PnL -8057 pts  10 of them The kept side is the first POSITIVE segment found in this dome (+3.85%/trade against -4.07% overall) and holds 72% of the big winners for 33% of volume. That winner-share-vs-volume-share test is the bar any entry filter must clear here, since 1.8% of trades carry 100% of the gain -- see the Doctrine's out-of-bounds rule. Cuts ~2/3 of flow: deliberate, fewer positive trades beat more negative ones."
+      },
+      "HOLDER_EXCLUDING_POOL_REJECT_PCT": {
+        "line": 255,
+        "value": 20.0,
+        "why": "20/08, explicit operator decision -- the REAL wallet concentration guardrail, pool excluded. Distinct from the threshold above, which the same day's investigation showed measures something else entirely (the pool's own unsold share, i.e. traction). A single wallet holding >=20% of a fresh launch can dump the whole pool at will, and the constant above cannot see it: the first real gate decision logged (20:14:18) passed a token at 52.6% pool share -- comfortably \"clean\" by that threshold -- while a single non-pool wallet held 16.97%.  HONESTY ABOUT THIS NUMBER: 20% is a CONSERVATIVE PROVISIONAL threshold from market logic (a fifth of supply in one hand is a well-understood dump risk), NOT a value calibrated on ARIA's own data -- there is exactly n=1 measured observation behind it today. It follows the proactive-ingestion doctrine's third step (a temporary conservative hypothesis WITH an explicit recalibration plan) rather than waiting for data while unprotected. The recalibration plan is concrete and already instrumented: every decision, blocked or passed, records `top_holder_excluding_pool_pct` in `pretrade_rejection_log`, so once n>=100 the real winrate/PnL curve against this variable can move the threshold onto measured ground. Until then it is deliberately loose (20%, not 10%) so it cuts only the flagrant cases and cannot quietly become the pocket's main filter on an uncalibrated number."
+      },
+      "HOLDER_GATE_FAIL_CLOSED": {
+        "line": 556,
+        "value": true,
+        "why": "20/08, explicit operator instruction (\"ou rejette par securite\"): if the holder concentration cannot be established in time, the order is NOT sent. Fail-closed, the same doctrine as every other guardrail in this project. The real cost of this choice is stated plainly rather than hidden: a RugCheck outage stops this pocket entering ENTIRELY (it does not degrade to entering unchecked). That is the intended trade -- an unchecked entry on this pocket has a measured 0.8% winrate in the >=97% band, so entering blind is strictly worse than not entering. `blocked_holder_gate_unavailable` in the cycle stats is what makes such an outage visible instead of silent."
+      },
+      "HOLDER_GATE_TIMEOUT_S": {
+        "line": 539,
+        "value": 12.0,
+        "why": "throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED)."
+      },
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 161,
+        "value": 50.0,
+        "why": null
+      },
+      "MAX_HOLD_MINUTES": {
+        "line": 160,
+        "value": 60.0,
+        "why": null
+      },
+      "MAX_LIQUIDITY_USD_ENTRY": {
+        "line": 192,
+        "value": 5000.0,
+        "why": "19/08, operator decision after reviewing this pocket's own real closures (144 with a valid reserve_usd read): unlike every other liquidity check in this dome (a MINIMUM floor), this pocket's real data shows the opposite risk at the HIGH end. Bucketed by entry reserve_usd: 3990-21200$ (top quartile) closed at a 44.4% liquidity_collapse rate vs 11.1% for the bottom two quartiles; a finer 1000$-wide cut confirms >=5000$ specifically as the worst bucket in the whole pocket (21 cases, avg realistic_final_ multiplier 0.702, i.e. -29.8% average) -- clearly worse than every lower bucket, including the 3000-3500$ one that stays net positive (+21.2%) despite a similar 27% collapse rate (a favorable winner/loser asymmetry that high-liquidity entries don't share). Working theory: on a support-bounce entry, unusually high liquidity at entry likely signals a speculative hype spike rather than a stable floor -- exactly the kind of pool that dumps hard once that hype fades. Applied as an entry-time reject (never confirmed) rather than a post-entry exit, since reserve_usd is already known before the simulated buy -- see ``_track_candidate_pumpportal``'s own call site."
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 173,
+        "value": 3000.0,
+        "why": "20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD (operator-directed performance investigation, 558-closure sample). 500$-wide buckets inside this pocket's own operative 2000-5000$ range (bounded above by MAX_LIQUIDITY_USD_ENTRY, see below): the 2000-2499$ bucket alone holds 253/394 closures (64% of the sample) at a 3.2% winrate/0.916 avg realistic multiplier -- by far the worst bucket in the pocket. From 3000$ up, winrate roughly triples (13.8-31.3% across the 3000-4500$ buckets). Raising the floor to 3000 removes the dead zone while staying well inside the MAX_LIQUIDITY_USD_ENTRY=5000 ceiling the 19/08 finding below still confirms on the current sample."
+      },
+      "REQUIRE_OBSERVED_BUY": {
+        "line": 530,
+        "value": true,
+        "why": "20/08 -- how long the pre-trade gate may wait on RugCheck before giving up. Sized against real measurements, not guessed: RugCheck answers in ~0.17s, and the only real wait is this dome's OWN shared throttle (_MIN_INTERVAL_S=4.5s in services/rugcheck.py). 12s covers a couple of queued turns at that throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED). 20/08 -- gate on the live trade flow: refuse to enter a candidate on which not a single BUY was observed while tracking it. Provisional and deliberately minimal (>=1 buy, never a tuned threshold) until the counters logged on every decision give enough history to calibrate a real N-buys-in-T-seconds rule."
+      },
+      "STATS_LOG_EVERY_N_EVENTS": {
+        "line": 545,
+        "value": 200,
+        "why": "20/08 -- how often the discovery loop emits its running outcome counters. At the real feed rate (~38 events/min, measured live) this is roughly one line every 5 minutes: frequent enough to notice a stalled or fail-closed pocket quickly, rare enough not to drown the log."
+      },
+      "TABLE": {
+        "line": 100,
+        "value": "solana_fresh_launch_ws_exit_shadow_log",
+        "why": null
+      },
+      "TRAILING_STOP_ARM_PEAK_PCT": {
+        "line": 131,
+        "value": 10.0,
+        "why": "20/08 -- the trailing stop only ARMS once the peak has risen this far above entry. Below it, the position is left to the other two rules (max_hold / liquidity_collapse) instead.  WHY, on 942 real closures. A trailing stop sells at `peak * 0.85`; when the peak never rose meaningfully above entry, that is not a trailing stop at all, it is a guaranteed ~-15% market sell. Measured on positions whose peak never exceeded +10% -- 79% of every trailing_stop this pocket ever fired: max_hold           n=556  -7.35% trailing_stop      n=187  -16.80%   <-- 2.3x worse than simply waiting liquidity_collapse n=191  -31.17% And the trailing's own PnL by peak reached is cleanly monotonic: <+5%   n=184  -16.9%      +15-25% n=3   -1.4% +5-10% n=3    -10.8%      +25-50% n=11  +14.2% +10-15% n=6   -6.83%      >+50%   n=28  +91.4% So the mechanism is genuinely excellent once a token actually moves, and purely destructive before that. Arming at +10% removes the destructive half (~187 trades moving from ~-16.7% to max_hold's -7.35%) while keeping every case where the trailing earns its keep.  CRITICALLY, this changes NO entry filter. The dome's PnL is carried by 1.8% of trades (46 of 2522 producing +15928 points against -15351 total), so any additional entry filter risks cutting the rare winners that carry everything. Reducing what the losers cost is the one lever that cannot do that."
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 105,
+        "value": 15.0,
+        "why": "Own constants, deliberately the SAME numeric values as solana_fresh_launch_shadow.py -- see module docstring for why they are not shared state."
+      }
+    },
+    "status": "present"
+  },
+  "solana_late_bonding_shadow": {
+    "label": "LATE-BONDING (70-98.5% of the bonding curve)",
+    "parameters": {
+      "CONFIG_EPOCH": {
+        "line": 160,
+        "value": "2026-08-21T11:44:10+00:00",
+        "why": "21/08 -- CONFIG EPOCH. Everything closed before this instant was produced by a DIFFERENT configuration and must not be averaged with what follows: the 40-95% collection band, and a window where entry was priced by REST while the exit used the RPC (every PnL then compared two sources). Mixing them makes the headline meaningless, which is exactly the problem the recent-window fix was already treating.  Deliberately an EPOCH MARKER, not a delete. The rows stay: they produced every finding of the last two days (the rug gradient 48.9% -> 27.0%, the graduation rate 2.0% -> 50.0%, the +161% on migrated positions) and this dome's standing rule is that real history is never destroyed. `summary()` reports from here; anything older is still queryable, just not averaged in. Move this forward on the NEXT configuration change rather than editing the rows."
+      },
+      "EXEMPT_GRADUATED_FROM_MAX_HOLD": {
+        "line": 130,
+        "value": true,
+        "why": "21/08 -- a position whose token GRADUATED is exempt from max_hold. Measured on this pocket's own graduated closures: `trailing_stop` exits returned +228.3% (n=47, capturing 71% of a +296% peak) while `max_hold` exits returned -5.3% (n=12) despite having reached a +52.4% peak. Those 12 were still alive when the clock killed them -- the trailing was armed and simply had not triggered, because the price had never fallen back far enough. A token that graduated has PROVEN its traction (87% winrate, +161% average), so it is handed to the trailing stop alone rather than to a timer that knows nothing about it. The trailing still protects the downside, and liquidity_collapse still applies."
+      },
+      "HARD_STOP_PCT": {
+        "line": 141,
+        "value": 20.0,
+        "why": "21/08 -- floor loss for the window the trailing stop does not cover (it only arms once the peak reaches +10% above entry). Measured on THIS pocket's own 304 closures at 70%+: the 142 positions whose trailing never armed averaged -55.5%, with no downside rule protecting any of them. Full derivation, the pessimistic assumption and the outlier test live next to `HARD_STOP_PCT_DEFAULT` in the shared exit module -- not restated here. Deliberately passed as an ARGUMENT to the shared `evaluate_exit` rather than forked into a local copy of the exit rule, so FAST-DISCOVERY stays an untouched control and the two pockets keep differing on one variable."
+      },
+      "MAX_BONDING_PROGRESS": {
+        "line": 104,
+        "value": 0.985,
+        "why": "21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed because a curve past 90% can COMPLETE mid-position and migrate its liquidity to the AMM -- treated as a risk to avoid. The data says that is the single BEST outcome available: stayed on the curve   n=620  winrate 32.6%  PnL  -15.93% MIGRATED to PumpSwap  n= 54  winrate 87.0%  PnL +161.42% and the migrated figure survives the outlier test intact (+138.5% without its two best, 47 winners of 54). Graduation is also PREDICTABLE from entry position, monotonically: 40-60%: 2.0%   60-70%: 2.5%   70-80%: 8.3%   80-90%: 24.5%   90-95%: 50.0% So the ceiling was excluding exactly the band with the highest chance of the best outcome. Kept just below 1.0 rather than removed: at a fully complete curve there is no bonding liquidity left to enter against at all."
+      },
+      "MAX_CONCURRENT_TRACKED": {
+        "line": 168,
+        "value": 60,
+        "why": "20/08 -- raised with the widened band. The REAL constraint is the exit loop: more open positions means each one is checked less often, which is exactly what caused the late liquidity_collapse catches fixed earlier today (first check landing 32-116s after entry despite a 10s cadence). The exit sweep's own `limit` is raised in step below so widening collection cannot quietly re-create that failure."
+      },
+      "MAX_TOP_BUYER_SHARE": {
+        "line": 118,
+        "value": 0.95,
+        "why": "20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single wallet is literally the only buyer, which is not a market at all. Everything below that is COLLECTED rather than judged -- `top_buyer_share_at_entry` is recorded, so the real wash-trading cutoff is measurable later."
+      },
+      "MIN_BONDING_PROGRESS": {
+        "line": 90,
+        "value": 0.7,
+        "why": "21/08, RAISED 0.40 -> 0.70 on 721 real closures. The band was widened to 0.40 the night before to COLLECT broadly and find out which sub-band works. It has now answered, and the answer is monotonic on both axes at once: 40-60%  n=327  rug 48.9%  win 37.0%  PnL -4.3% 60-70%  n=132  rug 43.2%  win 37.1%  PnL -4.0% 70-80%  n=140  rug 37.1%  win 42.9%  PnL +6.5% 80%+    n=122  rug 27.0%  win 50.0%  PnL +5.7% Rug risk nearly HALVES climbing the curve while the win rate rises -- a token that already convinced hundreds of buyers gets rug-pulled far less often than a fresh one. Yet 71% of entries were landing in 40-60%, the worst band of all (operator spotted this from a live screenshot before the data was queried).  Second reason, operator's own: real on-chain execution is NOT instant. Curve drift during a ~5s execution window is negligible on a quiet token (+0.10%) but reaches several points on one actually moving (+47.5%/min average among risers) -- precisely the tokens worth buying. Latency therefore pushes the real entry UP the curve, which is the right direction, but it means a floor has to be set where the band is already good rather than where it is barely acceptable."
+      },
+      "MIN_DISTINCT_BUYERS": {
+        "line": 112,
+        "value": 1,
+        "why": "20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still show SOME real buyer (buying what nobody buys is the behaviour the data condemns most clearly, -21.56% on the <30s band), but the exact N is one of the values this pocket exists to find -- fixing it at 3 up front would pre-decide the answer. `distinct_buyers_at_entry` is on every row, so the real threshold gets read off the data instead of guessed."
+      },
+      "RECENT_WINDOW_CLOSURES": {
+        "line": 144,
+        "value": 50,
+        "why": "How many of the most recent closures the 'recent' summary covers."
+      },
+      "TABLE": {
+        "line": 69,
+        "value": "solana_late_bonding_shadow_log",
+        "why": null
+      }
+    },
+    "status": "present"
+  },
+  "solana_pump_shadow": {
+    "label": "PUMP (Solana)",
+    "parameters": {
+      "DEX_FEE_PCT": {
+        "line": 308,
+        "value": 1.25,
+        "why": "Pump.fun bonding-curve fee (1.25% = 0.30% creator + 0.95% protocol), the conservative/higher rate applicable to the very young tokens this shadow overwhelmingly captures -- graduated PumpSwap pools fall to 0.25-0.30%. Sourced 17/08 (blocmates.com/uwuu.ai PumpSwap fee breakdown), never assumed from memory."
+      },
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 245,
+        "value": 50.0,
+        "why": null
+      },
+      "M5_SURGE_THRESHOLD_PCT": {
+        "line": 152,
+        "value": 25.0,
+        "why": "Calibrated threshold from the 16/08 Dune/DexScreener research pass (see module docstring) -- the ONLY entry signal this shadow layer evaluates. Recalibrated same day from the 15min to the 5min window (second Dune pass, same exit methodology, beat 15min on both winrate and avg multiplier)."
+      },
+      "MAX_POOL_AGE_MINUTES": {
+        "line": 168,
+        "value": 240.0,
+        "why": "16/08, operator-requested protection against a token whose liquidity gets pulled shortly after launch (real case observed live this session: a ~35min-old pool's LP fully removed, price down -38.6% in 5min). A pool older than this at DETECTION time is never logged as a new signal. An already-open, currently-LOSING position (current price <= entry) is force-closed the moment its real age crosses this line -- see the priority-1 check at the top of ``advance_exit_simulation``'s per-row loop. A still-WINNING position keeps being tracked normally instead (16/08, second pass, operator decision: a real 1000% run shouldn't be cut short just because 25min passed -- the scale-out ladder already banks gains progressively either way). Fail-CLOSED on missing data (unlike this module's usual \"never fabricate, fail-open\" doctrine for pure observations): this is a protective filter, not a reported metric, so an unknown age is treated as \"too risky to trade\", never \"assume it's fine\"."
+      },
+      "MIN_POOL_AGE_MINUTES": {
+        "line": 194,
+        "value": 20.0,
+        "why": "17/08, operator-directed age-window test (\"faisons un test tranche par tranche met 20 a 120 minutes\"), upper bound widened same day 120->240 (operator: \"agrandi la fenetre 20-120 a 20-240 sur solana\") to keep measuring further into the 120-240min range instead of cutting it off -- nothing in the archived sample yet says where the stranded-rate curve flattens past 120min, so the window stays open until it does. Robinhood is untouched (paused, its own separate calibration -- see ENABLED_CHAINS below). Rationale, and it is HIS hypothesis confirmed by the archive rather than a guess: the stranded rate falls sharply with pool age at entry -- 0-5min -> 73% stranded (-70.4%), 5-10min -> 61% (-59.4%), 10-15min -> 31% (-29.1%), 20-26min -> 0% (+5.1%, only 4 rows). Reading: in the first minutes you are buying mid-launch, while the deployer can still drain the pool; a pool that has SURVIVED a while has already had time to rug and did not.  The old MAX_POOL_AGE_MINUTES=25 was therefore cutting on exactly the wrong side -- it FORCED entries into the most dangerous window and made anything past 25min unobservable (median observed age was 7.8min). Now inverted into a real window: a MINIMUM age to skip the launch chaos, a MAXIMUM raised to 120min so the 20-120 range can finally be measured tranche by tranche. Both remain fail-CLOSED on unknown age.  Explicitly a MEASUREMENT window, not a validated setting: the 20-26min tranche that motivated it holds only 4 rows, and NOTHING is known past 25min because the old cap hid it. This run exists to produce that data."
+      },
+      "MIN_RESERVE_USD_AT_ENTRY": {
+        "line": 244,
+        "value": 10000.0,
+        "why": "--- 17/08, LIQUIDITY-FIRST REVISION (operator-directed) ------------------ Root cause found by splitting the real 156-position sample by outcome after the survivorship-bias fix: positions that managed to EXIT cleanly were collectively PROFITABLE (+0.37$ over 64 rows), while positions that became unsellable mid-flight lost -7.91$ over 80 rows -- i.e. 96% of the total loss came from being STUCK, not from bad entries or a bad stop. The exit rule was never the problem; not getting out was.  Two levers, in the order they matter:  1. MIN_RESERVE_USD_AT_ENTRY -- the stranded rate is strongly monotone in entry liquidity, measured on the same sample: <2k$ -> 65-72% stranded, 2-5k$ -> 74%, 5-10k$ -> 42%, 10-25k$ -> 34%, >25k$ -> 36%. Entering below ~10k$ is close to a coin flip on whether the position can ever be closed at all. NOTE this is a real behavioural change to the shadow: it no longer FUNDS every signal it sees. Sourcing itself stays unfiltered (every candidate is still logged, per this module's own doctrine) -- what changes is that a too-thin pool is recorded with ``realistic_entry_price`` left NULL, i.e. observed but never bought, exactly like a pool already too shallow to fill the trade size. 2. LIQUIDITY_COLLAPSE_EXIT_PCT -- the entry filter alone is NOT enough (35% of >=10k$ positions still ended stranded, still -26% overall), because what traps a position is liquidity draining WHILE it is held, not its depth at entry. The pool's current reserve is already fetched every single cycle for the price-impact maths and was simply never compared against the entry value. Now it is: a reserve that has fallen past this fraction of its entry level closes the position IMMEDIATELY at the current price, without waiting for the price stop -- the whole point being to sell while a buyer still exists.  Both are deliberately EXPRESSED AS CONSTANTS rather than hardcoded, and both are UNVALIDATED out-of-sample: they were derived from the very sample that revealed them (textbook overfitting risk, cf. this project's own anti-overfitting doctrine). The 17/08 shadow reset exists precisely to test them on independent data before anything is promoted further."
+      },
+      "SCALE_OUT_SELL_FRACTION": {
+        "line": 205,
+        "value": 0.25,
+        "why": null
+      },
+      "SCALE_OUT_STEP_PCT": {
+        "line": 204,
+        "value": 25.0,
+        "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
+      },
+      "SIMULATED_TRADE_SIZE_USD": {
+        "line": 302,
+        "value": 0.1,
+        "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- after observing X17690 live (reserve_usd=$0.0000002 at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price -- fantasy on a pool with essentially zero depth). This parallel calculation estimates what a REAL trade of SIMULATED_TRADE_SIZE_USD would have actually captured, using a constant-product AMM approximation. NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- this feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 206,
+        "value": 20.0,
+        "why": null
+      },
+      "_SCALE_OUT_DUST_FRACTION": {
+        "line": 284,
+        "value": 0.01,
+        "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
+      }
+    },
+    "status": "present"
+  },
+  "solana_support_bounce_shadow": {
+    "label": "SUPPORT-BOUNCE v1",
+    "parameters": {
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 148,
+        "value": 50.0,
+        "why": null
+      },
+      "MAX_HOLD_MINUTES": {
+        "line": 147,
+        "value": 120.0,
+        "why": null
+      },
+      "MAX_RANGE_RATIO": {
+        "line": 116,
+        "value": 5.0,
+        "why": "17/08, real bug caught live by the operator (BULLSHIT: range_high_10c was 7386x range_low_10c -- a near-total collapse within the 50min lookback, not a real consolidation. entry_price landed exactly at range_low, \"distance 0%\" was technically true but this was catching a falling knife after a crash, not a support bounce). No sane bound previously existed on how WIDE the 10-candle range itself could be. Claude's own pick (operator had no preference -- \"je sais pas\"), first guess like SUPPORT_TOLERANCE_PCT, to recalibrate once enough real outcomes accumulate.  18/08 -- widened 3.0 -> 5.0, operator-directed: the 3.0 cap meant this module could NEVER accumulate any real outcome data past 3.0x (structural zero, not \"untested\" -- a query against the 104 real closures confirmed n=0 above 3.0). Pure data-gathering move, not a claim that 5.0 is a good threshold -- exactly the \"recalibrate once enough real outcomes accumulate\" the original comment already asked for, now extended to the 3.0-5.0x range specifically so it stops being permanently invisible."
+      },
+      "MIN_H1_PCT": {
+        "line": 94,
+        "value": -5.0,
+        "why": "Entry criteria (operator-specified 17/08) 18/08, operator decision: raised from 0.0 (required h1 strictly positive) to -5.0 after observing the discovery funnel live -- get_trending_pools sorts by strongest 1h gainer, so most fetched candidates sit near the TOP of their own 10-candle range (still actively pumping), not the bottom, which structurally starves the support-distance filter downstream. Letting in mildly-cooling candidates (down to -5% over 1h, not just still-positive ones) gives more candidates a real chance of sitting near their recent low."
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 95,
+        "value": 5000.0,
+        "why": null
+      },
+      "MIN_POOL_AGE_MINUTES": {
+        "line": 96,
+        "value": 70.0,
+        "why": null
+      },
+      "PEAK_PRICE_SANITY_MULTIPLE": {
+        "line": 166,
+        "value": 50.0,
+        "why": "19/08, real bug found live by the operator asking for a PnL point: two positions (Jotchua, WW) had `peak_price` set to a manifestly corrupted upstream price (7.38 and 2.5 respectively) -- ~5000x/4700x above their own entry AND above their own range_high_10c measured just minutes earlier at entry (0.00151/0.000539). `advance_exit_simulation` took whatever snapshot.price_usd/OHLCV high it received at face value with zero plausibility check, so a single bad upstream read (known DexPaprika/ GeckoTerminal data-quality gap, documented elsewhere in this dome) got baked PERMANENTLY into peak_price (never decreases) and then into the trailing-stop fill price -- a multiplier of x5651/x4669 on just 3-4 positions out of 220+ was enough to swing the WHOLE pocket's aggregate PnL from a real +2.1%/position to a fabricated +8802% return_on_deployed_pct. 50x the entry-time range_high_10c is deliberately generous (no real candidate observed anywhere near that in this pocket's whole history so far) -- high enough to never reject a genuine pump, low enough to catch this exact class of corrupted-price artifact."
+      },
+      "SUPPORT_CANDLE_COUNT": {
+        "line": 98,
+        "value": 10,
+        "why": null
+      },
+      "SUPPORT_CANDLE_INTERVAL": {
+        "line": 99,
+        "value": "5m",
+        "why": null
+      },
+      "SUPPORT_TOLERANCE_PCT": {
+        "line": 97,
+        "value": 20.0,
+        "why": null
+      },
+      "TABLE": {
+        "line": 84,
+        "value": "solana_support_bounce_shadow_log",
+        "why": null
+      },
+      "TARGET_CLOSURES": {
+        "line": 188,
+        "value": 100,
+        "why": "18/08, lowered back 150 -> 50, operator-directed, paired with the TRAILING_STOP_PCT change above -- same size as the very first batch this module ever ran (which came back net positive, winrate 45%, PnL +9.7%, before being raised to 150 the same day). A fresh, smaller, faster read on the new stop width before committing to another 150-closure run.  18/08, same day -- raised 50 -> 100, operator-directed: the first 50-batch read (74 closures logged before this cap fired, since record_signals only checks the cap BEFORE sourcing new candidates, not mid-cycle) surfaced a real signal worth confirming on a larger, still-fresh sample before touching the entry filter -- entries 10-15% into the support range (distance_from_support_pct) outperformed the naive \"closest to support\" 0-5% band on BOTH v1 and v2 independently, but each bucket's n (13-50) was too thin to trust. Never sourcing new candidates once the cap is hit means this run does NOT reset -- it just keeps accumulating past 74 toward 100 on the exact same -5% stop / distance filter, so the comparison stays apples-to-apples. Once at 100: split train/validation, re-check the distance-bucket signal on each half independently before ever narrowing the entry filter based on it -- same anti-overfitting doctrine as the v8 wick-gate incident (never promote a pattern mined on one un-split batch)."
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 146,
+        "value": 15.0,
+        "why": "Exit mechanics (operator-specified originally: \"stop loss suiveur -10%\", \"aucun palier\"). 18/08, second change: tightened 10.0 -> 5.0, operator- directed, ISOLATED single-variable test to see whether a tighter stop would do BETTER. The 160-closure 10% batch (archived, PnL +4.9% realistic at the time) is preserved, not discarded -- see the reset note on TARGET_CLOSURES below.  19/08, reverted 5.0 -> 10.0 -- the experiment's own answer came back negative. Same-day operator observation (\"les donnees etaient meilleures quand on prenait plus de risque\") verified against real numbers, both batches re-cleaned through the SAME PEAK_PRICE_SANITY_MULTIPLE filter (the earlier same-day naive comparison, made BEFORE that filter existed, was flagged inconclusive -- this redo is the clean version): archived 10%-stop batch, n=153 closed (0 outliers found), return +4.87% -- vs the live 5%-stop batch, n=213 closed (4 outliers excluded), return -0.57%. A ~5.4-point gap on comparable sample sizes, both cleaned the same way -- more solid than the MAX_RANGE_RATIO=1.5 signal that turned out to be noise on a small sample. Still NOT a true replayed-backtest (two different time periods, not the same positions re-run under both widths) -- flagged for a real candle-replay redo if this needs firmer proof later.  19/08, same day, widened again 10.0 -> 15.0 -- operator-directed exploratory test (\"test 15 plutot de stop loss\"), extrapolating the same \"more risk did better\" direction one step further. UNLIKE the 5.0 -> 10.0 revert above, this is NOT yet backed by any real closed-position data at 15% (no batch exists to compare) -- purely a new hypothesis to test prospectively, same doctrine as every other untested first guess in this module. Recalibrate once enough real 15%-stop outcomes accumulate."
+      }
+    },
+    "status": "present"
+  },
+  "solana_support_bounce_v2_shadow": {
+    "label": "SUPPORT-BOUNCE v2",
+    "parameters": {
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 98,
+        "value": 50.0,
+        "why": null
+      },
+      "MAX_HOLD_MINUTES": {
+        "line": 97,
+        "value": 120.0,
+        "why": null
+      },
+      "MAX_RANGE_RATIO": {
+        "line": 86,
+        "value": 5.0,
+        "why": null
+      },
+      "MAX_TOP_HOLDER_PCT": {
+        "line": 80,
+        "value": 15.0,
+        "why": null
+      },
+      "MIN_H1_PCT": {
+        "line": 78,
+        "value": -5.0,
+        "why": "Entry criteria -- identical to the original except MIN_LIQUIDITY_USD and the new MAX_TOP_HOLDER_PCT check, see module docstring for the real-data basis of the change."
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 79,
+        "value": 20000.0,
+        "why": null
+      },
+      "MIN_POOL_AGE_MINUTES": {
+        "line": 82,
+        "value": 70.0,
+        "why": "missing rugcheck data, fail-closed only on a confirmed reading above this."
+      },
+      "PEAK_PRICE_SANITY_MULTIPLE": {
+        "line": 105,
+        "value": 50.0,
+        "why": "19/08, same real bug as solana_support_bounce_shadow.py -- see its own PEAK_PRICE_SANITY_MULTIPLE comment for the full incident writeup (Jotchua/WW corrupted upstream prices, x5651/x4669 multipliers on just a few positions swinging this pocket's whole aggregate PnL from a real ~flat/-0.1% to a fabricated +57579% return_on_deployed_pct)."
+      },
+      "SUPPORT_CANDLE_COUNT": {
+        "line": 84,
+        "value": 10,
+        "why": null
+      },
+      "SUPPORT_CANDLE_INTERVAL": {
+        "line": 85,
+        "value": "5m",
+        "why": null
+      },
+      "SUPPORT_TOLERANCE_PCT": {
+        "line": 83,
+        "value": 20.0,
+        "why": null
+      },
+      "TABLE": {
+        "line": 73,
+        "value": "solana_support_bounce_v2_shadow_log",
+        "why": null
+      },
+      "TARGET_CLOSURES": {
+        "line": 107,
+        "value": 150,
+        "why": null
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 96,
+        "value": 15.0,
+        "why": "Exit mechanics -- identical to the original, no longer a v2-distinctive test variable. 19/08, reverted 5.0 -> 10.0 alongside the original -- see that module's own TRAILING_STOP_PCT comment for the real-data reasoning (archived 10%-stop batch +4.87% vs live 5%-stop batch -0.57%, both cleaned through PEAK_PRICE_SANITY_MULTIPLE). Same day, widened again 10.0 -> 15.0, operator-directed exploratory test -- NOT yet backed by real 15%-stop data, see the original module's own comment."
+      }
+    },
+    "status": "present"
+  },
+  "solana_variant_shadow": {
+    "label": "SOLANA VARIANTS (3 parallel entry thresholds)",
+    "parameters": {
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 89,
+        "value": 50.0,
+        "why": null
+      },
+      "MAX_HOLD_MINUTES": {
+        "line": 88,
+        "value": 120.0,
+        "why": null
+      },
+      "MAX_POOL_AGE_MINUTES": {
+        "line": 82,
+        "value": 120.0,
+        "why": null
+      },
+      "MIN_POOL_AGE_MINUTES": {
+        "line": 81,
+        "value": 20.0,
+        "why": "Age window -- deliberately the ORIGINAL, already-validated 20-120min band (not the 20-240min currently under test in solana_pump_shadow.py). This experiment already varies entry threshold, liquidity floor, and exit mechanics at once (operator-directed) -- holding age constant at a known value avoids piling on a FOURTH simultaneous variable."
+      },
+      "SCALE_OUT_SELL_FRACTION": {
+        "line": 87,
+        "value": 0.25,
+        "why": null
+      },
+      "SCALE_OUT_STEP_PCT": {
+        "line": 86,
+        "value": 25.0,
+        "why": "Exit mechanics -- scale-out ladder identical to solana_pump_shadow.py. TRAILING_STOP_PCT deliberately does not exist in this module."
+      },
+      "TABLE": {
+        "line": 61,
+        "value": "solana_variant_shadow_log",
+        "why": null
+      },
+      "TARGET_CLOSURES_PER_VARIANT": {
+        "line": 74,
+        "value": 50,
+        "why": null
+      },
+      "_SCALE_OUT_DUST_FRACTION": {
+        "line": 90,
+        "value": 0.01,
+        "why": null
+      }
+    },
+    "status": "present"
+  },
+  "wallet_copy_shadow": {
+    "label": "WALLET-COPY (8 verified Base wallets)",
+    "parameters": {
+      "DYNAMIC_CANDIDATE_MAX_AGE_DAYS": {
+        "line": 245,
+        "value": 90,
+        "why": "Absolute TTL: a wallet's percentile at discovery is a SNAPSHOT, not a standing guarantee -- tracking it forever just because it's still technically \"active\" would let an early-lucky wallet ride on a stale justification indefinitely. Forces periodic re-discovery instead (a wallet still worth tracking clears the percentile bar again on its own)."
+      },
+      "INACTIVITY_THRESHOLD_DAYS": {
+        "line": 67,
+        "value": 14,
+        "why": "08/08 -- operator concern, verified real: some tracked wallets rotate (the leaderboard's \"all-time\" history can outlive the specific on-chain address currently associated with a handle -- confirmed live for songz, see TRACKED_WALLETS below). No reliable automatic way to discover a trader's NEW address exists here (would require re-scraping fomoscan/GMGN on a schedule, too fragile for a heartbeat cycle) -- what IS reliably buildable: flag a tracked wallet as dormant once it goes quiet, so a session can notice and manually look up whether the trader moved."
+      },
+      "LEADERBOARD_DISCOVERY_MIN_PERCENTILE": {
+        "line": 225,
+        "value": 80.0,
+        "why": "Arbitrary first calibration, not empirically derived -- the real leaderboard has only 1 active wallet at 37.5%p as of 14/08 (verified live against smart_money_leaderboard), well under this floor, so this seam starts genuinely empty and stays that way until #147/#151's sourcing work grows the leaderboard's population. Recalibrate once enough wallets clear a real percentile to judge a meaningful cutoff -- never lower this just to force candidates through before the leaderboard itself has real signal."
+      },
+      "MAX_DYNAMIC_CANDIDATES": {
+        "line": 238,
+        "value": 20,
+        "why": "15/08 (#172) -- the dynamic-candidates table had NO lifecycle: once added, a wallet stayed tracked (scanned every cycle via Blockscout, sequentially, forever) with no way back out, even once dormant or no longer competitive. Real gap: #147/#151's sourcing work is actively growing the leaderboard's population (the very thing #146's own comment above says this seam is waiting for) -- unbounded growth here means run_scan_cycle's sequential scan only ever gets slower, never self-corrects. Same \"unique registry with a real lifecycle\" doctrine as goplus_watchlist.add_or_touch (worst-first eviction when full) -- deliberately NOT applied to the 8 hand-picked TRACKED_WALLETS, which stay permanent by design (manually vetted evidence, never auto-pruned)."
+      },
+      "POSITION_SIZE_USD": {
+        "line": 57,
+        "value": 1000.0,
+        "why": "Fictional stake per detected buy -- never real capital, purely a common yardstick so every copied wallet is compared on equal footing regardless of the source wallet's own real position sizing."
+      },
+      "_CURSOR_DDL": {
+        "line": 187,
+        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (\n    wallet_address TEXT PRIMARY KEY,\n    last_tx_hash TEXT,\n    last_scanned_at TEXT NOT NULL,\n    last_transfer_at TEXT\n)\n",
+        "why": null
+      },
+      "_DYNAMIC_CANDIDATES_DDL": {
+        "line": 210,
+        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_dynamic_candidates (\n    wallet_address TEXT PRIMARY KEY,\n    added_at TEXT NOT NULL,\n    composite_percentile_at_add REAL NOT NULL\n)\n",
+        "why": "14/08 (#146) -- backlog item: \"hook de tracking continu des wallets performants pour v11\" (a future scalping pocket, not yet designed -- operator-confirmed this is what \"v11\" means). Real gap found investigating it: smart_money_leaderboard.py already scores wallets dynamically (feeds the real leaderboard), but this module's TRACKED_WALLETS above stays a hand-picked, never-updated list of 8 -- the two mechanisms never connect. This table + discover_leaderboard_candidates() close that gap: wallets that clear a percentile threshold on the REAL leaderboard get added here and shadow-copied continuously, same engine as the 8 static wallets, but kept in a SEPARATE table/tier (never merged into TRACKED_WALLETS itself) -- same \"kept honest, never blended\" doctrine as the existing 3 tiers. This is deliberately just the data-collection seam for v11, not v11 itself (still undesigned) -- CLAUDE.md anticipation doctrine: \"lay the seam now, even empty, rather than rewriting later.\""
+      },
+      "_MIN_POOL_LIQUIDITY_USD_FOR_PRICE": {
+        "line": 84,
+        "value": 1000.0,
+        "why": "10/08 -- real bug found auditing this table's live data: several tracked wallets received DUST/SPAM token airdrops (a transfer IN with no real swap behind it -- this module treats every non-quote transfer IN as a \"buy\", with no way yet to tell an airdrop from a real purchase). DexScreener still returns a \"price\" for these tokens' near-empty pools (real case found: \"(RNDR)\" at contract 0x6eba7f...2666, pool liquidity $1.45, price 4.268e-24 -- not a real market, a discarded/scam pool). A tiny denominator then turns an ordinary later price into an absurd ratio (found: one position showing +8.6e15% latent P&L). Below this floor, a DexScreener price is not trusted as a real market price -- same degradation as no price found at all (``None``), never a fabricated number. Not a trading gate (this module never executes anything) -- just enough to keep a spam/rug pool's near-zero liquidity from posing as a real price. $1,000 chosen as a sanity floor (same order of magnitude as this module's own ``POSITION_SIZE_USD``), not an empirically calibrated threshold."
+      },
+      "_POSITION_DDL": {
+        "line": 168,
+        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_position (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    wallet_address TEXT NOT NULL,\n    wallet_label TEXT NOT NULL,\n    contract TEXT NOT NULL,\n    chain TEXT NOT NULL DEFAULT 'base',\n    symbol TEXT,\n    entry_tx_hash TEXT NOT NULL,\n    entry_price_usd REAL,\n    entry_at TEXT NOT NULL,\n    status TEXT NOT NULL DEFAULT 'open',\n    exit_tx_hash TEXT,\n    exit_price_usd REAL,\n    exit_at TEXT,\n    last_mark_price_usd REAL,\n    last_mark_at TEXT\n)\n",
+        "why": null
+      }
+    },
+    "status": "present"
+  }
+}

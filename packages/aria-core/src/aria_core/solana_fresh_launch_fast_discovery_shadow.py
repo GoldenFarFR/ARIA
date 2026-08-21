@@ -131,6 +131,25 @@ DB_PATH = str(shadow_db_path())
 
 TABLE = "solana_fresh_launch_fast_discovery_shadow_log"
 
+# 21/08 -- same hard stop as LATE-BONDING, on the operator's explicit call
+# after seeing a -42.1% `liquidity_collapse` close here too ("lui idem").
+#
+# Measured on THIS pocket's own 1852 closures, so the decision is not borrowed
+# from the other pocket: trailing ARMED n=336 +68.2%, trailing NEVER armed
+# n=1516 -18.4%. Counterfactual, pessimistic (dead within 90s = uncuttable)
+# and outlier-tested: -2.7% (-5.8% without its two best) becomes +1.2%
+# (-2.0%). A real ~4-point gain, and deliberately NOT presented as a fix: this
+# pocket stays negative once its two best trades are removed. Its problem is
+# entry, not exit -- 82% of its positions never rise 10% above entry, against
+# 47% in LATE-BONDING, which is the clearest evidence yet that the bonding
+# threshold is what separates the two.
+#
+# NOTE this ends FAST-DISCOVERY's role as an untouched control on the exit
+# rule. Accepted knowingly: leaving a pocket bleeding to preserve a comparison
+# is a bad trade. The two still differ on ENTRY, which is the variable under
+# test.
+HARD_STOP_PCT = 20.0
+
 # How often a still-unconfirmed candidate's liquidity is re-checked. Deliberately
 # NOT a rate limiter itself -- dexpaprika.py's own module-level throttle/lock
 # (_get_json's choke point, shared process-wide) is what actually caps real
@@ -271,6 +290,7 @@ async def _ensure_table() -> None:
                 last_reserve_usd REAL,
                 last_price_source TEXT,
                 exit_price_source TEXT,
+                exit_detail TEXT,
                 realistic_entry_price REAL,
                 realistic_realized_proceeds REAL NOT NULL DEFAULT 0.0,
                 realistic_final_multiplier REAL,
@@ -998,6 +1018,7 @@ async def advance_exit_simulation(
             result = evaluate_exit(
                 row, current_price=current_price, reserve_usd=reserve_usd, dex_id=dex_id,
                 age_minutes=age_minutes, window_high=window_high, window_low=window_low,
+                hard_stop_pct=HARD_STOP_PCT,
             )
             if result["skipped"]:
                 await _stamp_last_checked_only(row["id"])
@@ -1053,7 +1074,7 @@ async def _persist_exit_result(row_id: int, result: dict, price_source: str) -> 
                 peak_price = ?, remaining_qty = ?, realized_proceeds = ?,
                 exit_reason = ?, final_multiplier = ?, last_checked_at = ?, last_price = ?,
                 realistic_realized_proceeds = ?, realistic_final_multiplier = ?, last_reserve_usd = ?,
-                trailing_stop_pct_used = ?, last_price_source = ?,
+                trailing_stop_pct_used = ?, last_price_source = ?, exit_detail = ?,
                 exit_price_source = CASE WHEN ? IS NOT NULL THEN ? ELSE exit_price_source END
             WHERE id = ?
             """,
@@ -1062,6 +1083,7 @@ async def _persist_exit_result(row_id: int, result: dict, price_source: str) -> 
                 result["exit_reason"], result["final_multiplier"], datetime.now(timezone.utc).isoformat(),
                 result["last_price"], result["realistic_realized_proceeds"], result["realistic_final_multiplier"],
                 result["last_reserve_usd"], TRAILING_STOP_PCT, price_source,
+                result.get("exit_detail"),
                 result["exit_reason"], price_source,
                 row_id,
             ),
