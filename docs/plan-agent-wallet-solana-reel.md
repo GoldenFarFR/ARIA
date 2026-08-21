@@ -87,6 +87,34 @@ y a des opportunites. Deux sorties possibles : financer ~10$ pour absorber le
 pic observe, ou abaisser `MAX_CONCURRENT_TRACKED` pour tenir dans 5$ (environ
 17 positions). Decision operateur, pas technique.
 
+## Les ordres declenches Jupiter : la vraie sortie au depassement, a partir de 5$
+
+Mesure du 21/08 sur 84 clotures au stop fixe -5% : la perte moyenne est de
+11.4 points, decomposee en 5.0 de seuil, 5.8 de DEPASSEMENT avant observation
+et 0.6 de friction. Mais la distribution est trompeuse -- depassement median
++1.8 point seulement, et 15 clotures (18%) portent 70% du total. Sur ces
+15-la, la chute traverse le seuil en une seule transaction : il n'existe
+AUCUN instant ou le prix vaut -5%, donc aucune vitesse de lecture ne peut les
+intercepter. Sur une courbe a 7000$, une vente de ~700$ suffit a faire -20%
+d'un coup.
+
+**Le remede n'est donc pas la vitesse, c'est de ne plus avoir a reagir.**
+L'API Trigger de Jupiter (limites, take-profit, stop-loss, stop suiveur
+depuis 07/2026, ordres stockes hors chaine et prives -- ce qui ferme au
+passage le vecteur MEV de l'ordre visible) executerait dans la meme
+transaction que la vente qui fait chuter le prix.
+
+**BLOQUANT VERIFIE EN DIRECT LE 21/08** : `createOrder` refuse tout ordre
+sous 5 USD (`Order size must be at least 5 USD`). Consequences :
+  - sous 5$/position, on est structurellement condamne a reagir et a subir
+    le depassement -- ce n'est pas un defaut de notre code ;
+  - a partir de 5$/position, la mecanique de sortie CHANGE : les paliers
+    deviennent des take-profit poses d'avance, le stop fixe un vrai
+    stop-loss on-chain, le delai de reaction disparait ;
+  - **un test a 0.1$ ne prefigure donc PAS le fonctionnement a 5$** : ce ne
+    sont pas les memes outils. Prevoir une SECONDE phase de validation au
+    passage a 5$, distincte de la validation de plomberie.
+
 ## OBLIGATION de la chaine de vente : fermer le compte du token
 
 Verifie le 21/08 sur l'endpoint `swap-instructions` de Jupiter : il fournit
