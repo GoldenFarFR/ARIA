@@ -48,4 +48,4 @@ Solution : `geckoterminal_outage_suspension.py` (new), same `SingleRowStore` exp
 --------------------------------------------------------------------------
 [CODE] Sujet    : Helius quota burned by program-wide pump.fun log streaming
 Date : 2026.08.21  /  Probleme : logsSubscribe on the whole pump.fun program carried 74 GB/day (~1.48M credits/day vs a 1M/month plan); 74.7% of those bytes held no decodable trade. Provider swap ruled out -- every provider bills streamed bytes.
-Solution : targeted per-mint subscription mode on the SAME single connection (120 subs accepted live, 11.3 GB/day, 6.6x cut), capped at 12 watched mints (~677k credits/month, two thirds of budget) with refusals counted not hidden; off by default, program-wide unchanged — services/pumpfun_trade_stream.py (8c808105)
+Solution : targeted per-mint subscription mode on the SAME single connection (120 subs accepted live, 11.3 GB/day, 6.6x cut), capped at 12 watched mints (~677k credits/month, two thirds of budget) with refusals counted not hidden; off by default, program-wide unchanged — services/pumpfun_trade_stream.py (5915abaf)
