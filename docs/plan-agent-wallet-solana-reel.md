@@ -69,6 +69,29 @@ vente : a 1% elle laisse +5.1% de PnL hors outliers, a 5% elle l'annule).
    grandeur devnet, pas la cible 200$ : le relever est une decision distincte.
 5. **Cycle complet en mainnet a montant minimal** avant tout volume.
 
+## OBLIGATION de la chaine de vente : fermer le compte du token
+
+Verifie le 21/08 sur l'endpoint `swap-instructions` de Jupiter : il fournit
+bien une `cleanupInstruction`, mais elle ne couvre que le SOL temporairement
+emballe pendant le swap. **Le compte du token lui-meme reste OUVERT apres une
+vente totale, avec sa caution dedans.**
+
+Sur Solana, detenir un token exige un compte dedie, et un compte doit
+contenir un minimum de SOL pour exister (2 039 280 lamports, ~0.19$ au cours
+du jour). C'est une caution, pas un frais : le reseau la rend integralement a
+la fermeture du compte. Mais elle n'est PAS rendue automatiquement.
+
+Consequence chiffree, au portefeuille de test de 5$ evoque par l'operateur :
+15 positions tradees sans fermeture = 2.85$ immobilises definitivement, soit
+plus de la moitie du capital rendue inutilisable sans qu'une seule mauvaise
+transaction ait eu lieu.
+
+**Donc la vente n'est pas terminee quand le swap passe : elle est terminee
+quand le compte est ferme.** A traiter comme une etape obligatoire de la
+chaine, jamais comme une optimisation ulterieure -- exactement la meme
+discipline que "un deploiement n'est pas fini quand le script rend la main,
+mais quand le commit reellement servi est verifie".
+
 ## Points ouverts qui appartiennent a l'operateur, pas a moi
 
 - **La regle Solana de CLAUDE.md.** Elle dit, mot pour mot : desactiver Solana
@@ -81,6 +104,16 @@ vente : a 1% elle laisse +5.1% de PnL hors outliers, a 5% elle l'annule).
 - **L'ecart d'audit AllowanceModule v0.1.1** (jambe EVM) reste ouvert.
 - **Le plafond cible** (0.003 SOL aujourd'hui vs 200$ vise) est une decision
   d'operateur, pas un reglage technique.
+- **L'architecture du portefeuille de test** (operateur, 21/08 : "brancher un
+  semblant de portefeuille avec 5$ et de reels trades a 0.1$") : wallet simple
+  a cle dediee, ou multisig Squads avec plafond on-chain ? Pour 5$ le wallet
+  simple est defendable -- le plafond, c'est le solde -- et c'est deja le
+  choix fait pour le pilote CDP. Mais la doctrine ecrite dit "smart wallets,
+  pas EOA". Question posee, non tranchee par moi.
+- **La taille de position pour la phase de test** : l'operateur vise 0.1$, la
+  mesure du jour montre que 1$ donne le meme risque pratique avec des chiffres
+  exploitables (a 0.1$ les frais fixes coutent 1.3 point de PnL et faussent la
+  comparaison avec le shadow).
 
 ## Faisabilite des 24h -- avis honnete
 
