@@ -310,3 +310,92 @@ def test_a_token_that_stopped_trading_drops_off_the_list():
     import time as _t
 
     assert s.active_mints(now=_t.time() + 3600) == []
+
+
+# --- founding cohort + Jito bundle detection (21/08, operator-directed) ---
+
+def _slot_notif(mint, user, is_buy, slot, sol=1.0):
+    """One notification carrying a single TradeEvent AND its slot -- the slot
+    is what makes bundle detection possible. Reuses the module's existing
+    `_event_bytes` rather than rebuilding a payload by hand."""
+    n = _notif(_event_bytes(mint=mint, user=user, is_buy=is_buy, sol=sol))
+    n["params"]["result"]["context"] = {"slot": slot}
+    return n
+
+
+def _mint_key(label: str) -> str:
+    return base58.b58encode(_pubkey(label)).decode()
+
+
+def test_a_jito_bundle_is_visible_as_several_buyers_in_one_slot():
+    """The operator's point: a creator seeding a launch with his own wallets
+    is not merely suspicious-looking, he is structurally visible -- a bundle
+    forces its transactions into the SAME slot."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    for w in ("walletA", "walletB", "walletC"):
+        s.handle_notification(_slot_notif("mintZ", w, True, slot=100))
+    s.handle_notification(_slot_notif("mintZ", "latecomer", True, slot=104))
+
+    c = s.founding_cohort(_mint_key("mintZ"))
+    assert c["bundle_size"] == 3
+    assert c["tracked"] == 4
+
+
+def test_an_ordinary_launch_shows_no_bundle():
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    for i, w in enumerate(("w1", "w2", "w3")):
+        s.handle_notification(_slot_notif("mintN", w, True, slot=200 + i))
+    assert s.founding_cohort(_mint_key("mintN"))["bundle_size"] == 1
+
+
+def test_founding_buyers_selling_is_recorded():
+    """"cest de la que demarre les scam souvent si les premiers acheteurs ont
+    deja vendu"."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    for w in ("f1", "f2", "f3", "f4"):
+        s.handle_notification(_slot_notif("mintS", w, True, slot=300))
+    s.handle_notification(_slot_notif("mintS", "f1", False, slot=340))
+    s.handle_notification(_slot_notif("mintS", "f2", False, slot=341))
+
+    c = s.founding_cohort(_mint_key("mintS"))
+    assert c["exited"] == 2
+    assert c["exit_ratio"] == 0.5
+
+
+def test_a_seller_who_never_bought_early_is_not_a_founder_exit():
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    s.handle_notification(_slot_notif("mintX", "founder", True, slot=400))
+    s.handle_notification(_slot_notif("mintX", "stranger", False, slot=401))
+    assert s.founding_cohort(_mint_key("mintX"))["exited"] == 0
+
+
+def test_an_unseen_mint_reports_none_never_a_clean_zero():
+    """Reading "0 founders sold" off a token we never watched is exactly the
+    false comfort this must not produce."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    assert s.founding_cohort("neverSeen") is None
+
+
+def test_a_notification_without_a_slot_still_records_the_cohort():
+    """Bundle detection degrades to unknown, the rest keeps working -- a
+    missing slot must never cost us the founder tracking itself."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    s.handle_notification(_notif(_event_bytes(mint="mintNS", user="f1", is_buy=True)))
+    c = s.founding_cohort(_mint_key("mintNS"))
+    assert c["tracked"] == 1
+    assert c["first_slot"] is None
+    assert c["bundle_size"] == 0
+
+
+def test_the_cohort_is_capped_per_mint_and_across_mints():
+    """Memory is the real constraint: this process peaked at 629MB on a 3.8GB
+    VPS, so an unbounded registry would sink it first."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    for i in range(stream.FOUNDING_COHORT_SIZE + 6):
+        s.handle_notification(_slot_notif("mintCap", f"buyer{i}", True, slot=500 + i))
+    assert s.founding_cohort(_mint_key("mintCap"))["tracked"] == stream.FOUNDING_COHORT_SIZE
+
+    s._founding.clear()
+    for i in range(stream.FOUNDING_MAX_MINTS + 5):
+        s.handle_notification(_slot_notif(f"m{i}", "b", True, slot=1))
+    assert len(s._founding) <= stream.FOUNDING_MAX_MINTS

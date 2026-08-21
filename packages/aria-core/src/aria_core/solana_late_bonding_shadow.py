@@ -192,6 +192,12 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 distinct_buyers_at_entry INTEGER,
                 top_buyer_share_at_entry REAL,
                 buyer_acceleration_at_entry REAL,
+                founding_tracked_at_entry INTEGER,
+                founding_exited_at_entry INTEGER,
+                founding_exit_ratio_at_entry REAL,
+                founding_bundle_size_at_entry INTEGER,
+                creator_address TEXT,
+                creator_sold_at_entry INTEGER,
                 has_paid_profile INTEGER,
                 remaining_qty REAL NOT NULL DEFAULT 1.0,
                 realized_proceeds REAL NOT NULL DEFAULT 0.0,
@@ -221,6 +227,18 @@ async def _ensure_table(db_path: str | None = None) -> None:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN has_paid_profile INTEGER")
         if "exit_detail" not in existing:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
+        # 21/08 -- founding-cohort columns, hot-ALTERed like the rest so the
+        # live table starts accumulating immediately.
+        for col, typ in (
+            ("founding_tracked_at_entry", "INTEGER"),
+            ("founding_exited_at_entry", "INTEGER"),
+            ("founding_exit_ratio_at_entry", "REAL"),
+            ("founding_bundle_size_at_entry", "INTEGER"),
+            ("creator_address", "TEXT"),
+            ("creator_sold_at_entry", "INTEGER"),
+        ):
+            if col not in existing:
+                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -268,6 +286,34 @@ async def screen_candidate(
         return (False, f"blocked_wash_trading: top_buyer={share:.2f}", metrics)
 
     return (True, "accepted", metrics)
+
+
+def _founding_snapshot(trade_stream, mint: str) -> dict:
+    """The founding cohort as recorded by the live stream, or all-None when
+    the mint was never seen from early enough.
+
+    All-None rather than zeros on purpose: "no founder sold" and "we were not
+    watching this token when it launched" are different facts, and collapsing
+    them would quietly bias the sample the moment we start measuring it. The
+    stream only knows a mint from the moment this process connected, so an
+    unknown cohort is the NORMAL state right after a restart."""
+    empty = {"tracked": None, "exited": None, "exit_ratio": None, "bundle_size": None}
+    if trade_stream is None or not hasattr(trade_stream, "founding_cohort"):
+        return empty
+    try:
+        return trade_stream.founding_cohort(mint) or empty
+    except Exception:  # noqa: BLE001 -- an observation never blocks an entry
+        return empty
+
+
+def _founder_has_sold(trade_stream, mint: str, creator: str) -> bool:
+    """Whether the token's own creator was seen selling. The single most
+    direct rug signal there is, and free -- the stream already carries every
+    seller's wallet."""
+    try:
+        return bool(trade_stream.founder_sold(mint, creator))
+    except Exception:  # noqa: BLE001 -- an observation never blocks an entry
+        return False
 
 
 async def consider_candidate(
@@ -353,20 +399,40 @@ async def consider_candidate(
             snapshot.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
             reserve_usd=snapshot.reserve_usd, side="buy",
         )
+        # 21/08, operator's own idea -- who launched this, did his cohort
+        # already sell, and did they arrive as one Jito bundle. Read from the
+        # trade stream we already consume: no extra API call, no added entry
+        # latency. COLLECTED ONLY for now, nothing rejects on it: a filter
+        # would need its own forward sample first, and any new entry filter
+        # risks cutting the rare winners that carry the whole PnL.
+        founding = _founding_snapshot(trade_stream, mint)
+        creator = getattr(account, "creator", None)
+        # `creator_sold` stays NULL rather than 0 when the cohort is unknown:
+        # the stream only knows a mint from the moment this process connected,
+        # so "he did not sell" and "we were not watching" are different facts.
+        creator_sold = None
+        if creator is not None and founding.get("tracked") is not None:
+            creator_sold = 1 if _founder_has_sold(trade_stream, mint, creator) else 0
         async with aiosqlite.connect(db_path or _db_path()) as db:
             cur = await db.execute(
                 f"""
                 INSERT INTO {TABLE}
                     (pool_address, token_address, chain, detected_at, entry_price, reserve_usd,
                      bonding_progress_at_entry, distinct_buyers_at_entry, top_buyer_share_at_entry,
-                     buyer_acceleration_at_entry, peak_price, realistic_entry_price)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     buyer_acceleration_at_entry, peak_price, realistic_entry_price,
+                     founding_tracked_at_entry, founding_exited_at_entry,
+                     founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
+                     creator_address, creator_sold_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
                     snapshot.price_usd, snapshot.reserve_usd, metrics.get("bonding_progress"),
                     metrics.get("distinct_buyers"), metrics.get("top_buyer_share"),
                     metrics.get("buyer_acceleration"), snapshot.price_usd, realistic,
+                    founding.get("tracked"), founding.get("exited"),
+                    founding.get("exit_ratio"), founding.get("bundle_size"),
+                    creator, creator_sold,
                 ),
             )
             await db.commit()

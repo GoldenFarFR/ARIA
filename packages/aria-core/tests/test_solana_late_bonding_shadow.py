@@ -731,3 +731,71 @@ def test_late_bonding_actually_passes_its_hard_stop_to_the_shared_rule():
     src = inspect.getsource(pocket)
     assert "hard_stop_pct=HARD_STOP_PCT" in src
     assert pocket.HARD_STOP_PCT == 20.0
+
+
+# --- founding cohort collected at entry (21/08, operator's idea) ---
+
+class _CohortStream(_Stream):
+    """A trade stream that also knows who founded the token."""
+
+    def __init__(self, cohort=None, sold=False):
+        super().__init__()
+        self._cohort = cohort
+        self._sold = sold
+
+    def founding_cohort(self, mint):
+        return self._cohort
+
+    def founder_sold(self, mint, wallet):
+        return self._sold
+
+
+@pytest.mark.asyncio
+async def test_the_founding_cohort_is_recorded_at_entry(_tmp_db):
+    await pocket.consider_candidate(
+        "mintA", "poolA", db_path=_tmp_db, resolve_curves_fn=_resolve_ok, snapshot_fn=_snapshot_ok,
+        trade_stream=_CohortStream({"tracked": 8, "exited": 5, "exit_ratio": 0.625, "bundle_size": 4}),
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["founding_tracked_at_entry"] == 8
+    assert row["founding_exited_at_entry"] == 5
+    assert row["founding_exit_ratio_at_entry"] == 0.625
+    assert row["founding_bundle_size_at_entry"] == 4
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_cohort_stays_null_never_zero(_tmp_db):
+    """"0 founders sold" and "we were not watching" must never be the same
+    value -- collapsing them would quietly bias the sample being collected."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", db_path=_tmp_db, resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, trade_stream=_CohortStream(None),
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["founding_tracked_at_entry"] is None
+    assert row["founding_bundle_size_at_entry"] is None
+    assert row["creator_sold_at_entry"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_creator_seen_selling_is_recorded(_tmp_db):
+    """The most direct rug signal there is, and free."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", db_path=_tmp_db, resolve_curves_fn=_resolve_ok, snapshot_fn=_snapshot_ok,
+        trade_stream=_CohortStream({"tracked": 6, "exited": 1, "exit_ratio": 0.167, "bundle_size": 1},
+                                   sold=True),
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["creator_sold_at_entry"] == 1
+
+
+@pytest.mark.asyncio
+async def test_collecting_the_cohort_never_rejects_an_entry(_tmp_db):
+    """Collection only: a filter on this would need its own forward sample,
+    and any new entry filter risks cutting the rare winners carrying the PnL."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", db_path=_tmp_db, resolve_curves_fn=_resolve_ok, snapshot_fn=_snapshot_ok,
+        trade_stream=_CohortStream({"tracked": 10, "exited": 10, "exit_ratio": 1.0, "bundle_size": 9},
+                                   sold=True),
+    )
+    assert len(await _rows(_tmp_db)) == 1

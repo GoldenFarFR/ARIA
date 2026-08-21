@@ -194,6 +194,20 @@ class PumpFunBondingCurveAccount:
     # construction site keeps working unchanged.
     curve: dict = field(default_factory=dict)
 
+    @property
+    def creator(self) -> str | None:
+        """The token's on-chain creator.
+
+        21/08 -- exposed after finding a silent guardrail failure: callers
+        already wrote `getattr(account, "creator", None)`, which always
+        returned None because no such attribute existed, so
+        `creator_reputation.is_factory()` was handed None on EVERY candidate
+        and (being fail-open by design) never rejected a single one. The
+        token-factory filter had been wired, seeded with 996 creators and 115
+        known factories, and was dead on arrival. Tests passed throughout:
+        they exercised `is_factory` directly, never the attribute path."""
+        return self.curve.get("creator")
+
 
 @dataclass
 class PumpFunBondingLiveSnapshot:
@@ -294,6 +308,11 @@ def decode_bonding_curve_account(raw: bytes) -> dict | None:
     real_token_reserves = int.from_bytes(raw[OFF_REAL_TOKEN_RESERVES:OFF_REAL_TOKEN_RESERVES + 8], "little")
     real_quote_reserves = int.from_bytes(raw[OFF_REAL_QUOTE_RESERVES:OFF_REAL_QUOTE_RESERVES + 8], "little")
     complete = bool(raw[OFF_COMPLETE])
+    # 21/08 -- the creator was mapped at OFF_CREATOR from the start but never
+    # actually decoded, so every "who launched this" question was answered by
+    # guessing at the first buyer. It is the token's own on-chain creator
+    # field: free, exact, and the anchor the founding-cohort check needs.
+    creator = _pubkey_from_bytes(raw[OFF_CREATOR:OFF_CREATOR + 32])
     quote_mint = _pubkey_from_bytes(raw[OFF_QUOTE_MINT:OFF_QUOTE_MINT + 32])
     return {
         "virtual_token_reserves": virtual_token_reserves,
@@ -301,6 +320,7 @@ def decode_bonding_curve_account(raw: bytes) -> dict | None:
         "real_token_reserves": real_token_reserves,
         "real_quote_reserves": real_quote_reserves,
         "complete": complete,
+        "creator": creator,
         "quote_mint": quote_mint,
     }
 

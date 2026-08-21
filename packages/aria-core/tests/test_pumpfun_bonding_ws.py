@@ -135,3 +135,26 @@ def test_an_unparseable_mint_returns_none_never_a_fabricated_address():
     from aria_core.services.pumpfun_bonding_ws import derive_bonding_curve_address
     assert derive_bonding_curve_address("not-a-pubkey") is None
     assert derive_bonding_curve_address("") is None
+
+
+def test_the_decoded_account_exposes_its_creator():
+    """21/08 -- regression guard on a silent guardrail failure: callers read
+    `account.creator`, the attribute did not exist, so `is_factory()` received
+    None on every candidate and the token-factory filter never fired once."""
+    from aria_core.services.pumpfun_bonding_ws import PumpFunBondingCurveAccount
+
+    acct = PumpFunBondingCurveAccount(
+        pool_address="pool", mint="mint", quote_mint="q", token_decimals=6,
+        curve={"creator": "CreatorWallet111"},
+    )
+    assert acct.creator == "CreatorWallet111"
+    assert getattr(acct, "creator", None) == "CreatorWallet111"
+
+
+def test_a_curve_without_a_creator_reports_none_not_a_crash():
+    from aria_core.services.pumpfun_bonding_ws import PumpFunBondingCurveAccount
+
+    acct = PumpFunBondingCurveAccount(
+        pool_address="pool", mint="mint", quote_mint="q", token_decimals=6,
+    )
+    assert acct.creator is None

@@ -76,6 +76,47 @@ _PRUNE_EVERY_SECONDS = 60.0
 
 
 @dataclass
+class FoundingCohort:
+    """Who bought first, whether they are still in, and whether they arrived
+    together in one slot."""
+
+    mint: str
+    first_slot: int | None = None
+    created_at: float = 0.0
+    # ordered, capped at FOUNDING_COHORT_SIZE -- the first buyers, in order
+    buyers: list = field(default_factory=list)
+    # subset of `buyers` observed selling afterwards
+    exited: set = field(default_factory=set)
+    # distinct wallets that bought in the very FIRST slot seen for this mint
+    first_slot_buyers: set = field(default_factory=set)
+
+    @property
+    def bundle_size(self) -> int:
+        """Distinct wallets buying atomically in the first slot. 1 is an
+        ordinary launch; several means they were bundled together, which on
+        Solana effectively means Jito."""
+        return len(self.first_slot_buyers)
+
+    @property
+    def exit_ratio(self) -> float | None:
+        """Share of the tracked founding buyers that has already sold.
+        ``None`` when none are tracked -- never a fabricated 0.0, because
+        "nobody sold" and "we were not watching" must stay distinguishable."""
+        if not self.buyers:
+            return None
+        return round(len(self.exited) / len(self.buyers), 3)
+
+    def as_dict(self) -> dict:
+        return {
+            "tracked": len(self.buyers),
+            "exited": len(self.exited),
+            "exit_ratio": self.exit_ratio,
+            "bundle_size": self.bundle_size,
+            "first_slot": self.first_slot,
+        }
+
+
+@dataclass
 class TokenTradeFlow:
     """Per-mint live trade flow. `distinct_buyers` is the signal that matters
     -- see the module docstring on why it beats a raw trade count."""
@@ -127,6 +168,38 @@ class TokenTradeFlow:
 # 120s covers the pockets' whole pre-entry window with room for a
 # before/after comparison.
 TRADE_LOG_WINDOW_SECONDS = 120.0
+
+# 21/08, operator-directed -- FOUNDING COHORT. His framing: "regarde le
+# createur et surtout si il y a un bundle jito associe, sa devrait se voir",
+# and "les premiers ceux qui sont entres quand le token a ete cree, car cest
+# de la que demarre les scam souvent si les premiers acheteurs ont deja
+# vendu".
+#
+# Both are answerable from the stream we ALREADY consume, with no extra API
+# call and no added entry latency: every TradeEvent carries the buyer's
+# wallet, and the notification carries the slot its transaction landed in.
+#
+# A Jito bundle is several transactions forced into the SAME slot atomically.
+# So a creator seeding a launch with his own wallets does not merely look
+# suspicious -- he is structurally visible as N distinct buyers sharing the
+# very first slot. That is a fact about how the chain works, not a heuristic.
+#
+# Kept SEPARATE from `_MintState` on purpose: that one is pruned after
+# BUYER_SET_TTL_SECONDS=600 because it holds a full trade log, while this must
+# survive from the token's creation until it reaches the pocket's 70% entry
+# band -- a far longer trip. Only the first few buyers are retained, so the
+# per-mint cost stays tiny.
+FOUNDING_COHORT_SIZE = 10
+
+# Hard ceiling on how many mints keep a founding cohort, evicted oldest-first.
+# pump.fun launches thousands of tokens a day and this process peaked at 629MB
+# on a 3.8GB VPS, so an unbounded registry would be the first thing to sink
+# it. At ~10 wallets per mint this stays around 12MB.
+FOUNDING_MAX_MINTS = 8000
+
+# Beyond this a mint is dropped whatever the ceiling says: a token that has
+# not reached the entry band in 6 hours never will on this pocket's cadence.
+FOUNDING_TTL_SECONDS = 21_600.0
 
 
 @dataclass
@@ -189,6 +262,8 @@ class PumpFunTradeStream:
         self._rpc_ws_url = rpc_ws_url
         self._connect_fn = connect_fn
         self._state: dict[str, _MintState] = {}
+        # Separate from `_state` and far longer-lived -- see FOUNDING_COHORT_SIZE.
+        self._founding: dict[str, FoundingCohort] = {}
         self._task: asyncio.Task | None = None
         self._last_prune = time.time()
         self.connected = False
@@ -274,6 +349,51 @@ class PumpFunTradeStream:
         out.sort(reverse=True)
         return [m for _, m in out]
 
+    def _record_founding(self, mint: str, is_buy: bool, user: str, slot: int | None) -> None:
+        """Maintains the founding cohort. Cheap by construction: after the
+        first FOUNDING_COHORT_SIZE buys a mint only ever does set lookups."""
+        c = self._founding.get(mint)
+        if c is None:
+            if len(self._founding) >= FOUNDING_MAX_MINTS:
+                # oldest-first eviction; dicts preserve insertion order
+                self._founding.pop(next(iter(self._founding)), None)
+            c = self._founding[mint] = FoundingCohort(mint=mint, created_at=time.time())
+        if is_buy:
+            if c.first_slot is None and slot is not None:
+                c.first_slot = slot
+            if slot is not None and slot == c.first_slot:
+                c.first_slot_buyers.add(user)
+            if len(c.buyers) < FOUNDING_COHORT_SIZE and user not in c.buyers:
+                c.buyers.append(user)
+        elif user in c.buyers:
+            c.exited.add(user)
+
+    def founding_cohort(self, mint: str) -> dict | None:
+        """What we know about who launched this token, or ``None`` when the
+        mint was never seen from early enough to know anything.
+
+        ``None`` matters: the stream only knows a token from the moment this
+        process connected, so a mint created before that has no cohort. Fail
+        LOUD rather than reporting a clean-looking zero -- reading "0 founders
+        sold" off a token we simply never watched is exactly the kind of
+        false comfort that gets acted on."""
+        c = self._founding.get(mint)
+        return c.as_dict() if c is not None else None
+
+    def founder_sold(self, mint: str, wallet: str) -> bool:
+        """Whether one specific founding wallet -- typically the token's own
+        creator -- was seen selling. Public so callers never reach into the
+        registry directly."""
+        c = self._founding.get(mint)
+        return bool(c and wallet in c.exited)
+
+    def _prune_founding(self, *, now: float | None = None) -> int:
+        now = now if now is not None else time.time()
+        stale = [m for m, c in self._founding.items() if now - c.created_at > FOUNDING_TTL_SECONDS]
+        for m in stale:
+            self._founding.pop(m, None)
+        return len(stale)
+
     def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str) -> None:
         st = self._state.get(mint)
         if st is None:
@@ -316,11 +436,20 @@ class PumpFunTradeStream:
             return 0
         if value.get("err"):
             return 0  # a failed transaction is not a trade
+        # The slot is what makes bundle detection possible at all: several
+        # buys sharing one slot were submitted atomically.
+        try:
+            slot = (msg.get("params") or {}).get("result", {}).get("context", {}).get("slot")
+        except AttributeError:
+            slot = None
+        slot = slot if isinstance(slot, int) else None
         events = extract_trade_events(value.get("logs") or [])
         for mint, sol_amount, is_buy, user in events:
             self._record(mint, sol_amount, is_buy, user)
+            self._record_founding(mint, is_buy, user, slot)
         if time.time() - self._last_prune > _PRUNE_EVERY_SECONDS:
             self._prune()
+            self._prune_founding()
         return len(events)
 
     def _connect(self):
