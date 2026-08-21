@@ -530,6 +530,34 @@ async def advance_exit_simulation(
         )
         rows = [dict(r) for r in await cur.fetchall()]
 
+    # 21/08 -- LOCAL-FIRST ordering. The queue is sequential, and a single
+    # MIGRATED position waiting on GeckoTerminal's adaptive throttle (measured
+    # at 16.2s after a real 429) stalled every bonding-curve position behind
+    # it -- whose price needs no network at all, since the websocket already
+    # holds their reserves in memory.
+    #
+    # The cost was not theoretical. It made the average gap between two checks
+    # of the SAME position 41s against a 10s nominal cadence, and that is what
+    # broke the hard stop on its first live batch: 15 closures averaging -44.5%
+    # against a -20% floor, with `exit_detail` reading "low touched -78.7%" on
+    # a position whose peak was +0.0%. A stop cannot cut a price it never sees;
+    # 41 seconds is long enough for a pump.fun rug to run to completion.
+    #
+    # So rows whose price is a free local read go FIRST, in one uninterrupted
+    # sweep, and the network-bound ones follow. No parallelism, no new client,
+    # no threshold touched -- just refusing to let the slow tail set the pace
+    # for everyone.
+    def _priced_locally(row: dict) -> bool:
+        if bonding_ws_feed is None:
+            return False
+        try:
+            snap = bonding_ws_feed.get_snapshot(row["pool_address"])
+            return bool(getattr(snap, "available", False) and snap.price_usd is not None)
+        except Exception:  # noqa: BLE001
+            return False
+
+    rows.sort(key=lambda r: not _priced_locally(r))
+
     for row in rows:
         stats["checked"] += 1
         try:

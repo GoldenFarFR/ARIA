@@ -799,3 +799,52 @@ async def test_collecting_the_cohort_never_rejects_an_entry(_tmp_db):
                                    sold=True),
     )
     assert len(await _rows(_tmp_db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_locally_priced_positions_are_checked_before_network_bound_ones(_tmp_db):
+    """21/08 -- one migrated position waiting on GeckoTerminal's 16s throttle
+    stalled every bonding-curve position behind it, pushing the real gap
+    between checks to 41s against a 10s cadence. That is what let a -20% hard
+    stop fill at -78%: a stop cannot cut a price it never sees."""
+    for mint, pool in (("mintSlow", "poolSlow"), ("mintFast", "poolFast")):
+        await pocket.consider_candidate(
+            mint, pool, trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+            snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+        )
+
+    class _FeedWithOnlyFast:
+        def get_snapshot(self, pool_address):
+            if pool_address == "poolFast":
+                return SimpleNamespace(available=True, price_usd=0.001,
+                                       reserve_usd=9_000.0, dex_id="pumpfun")
+            return SimpleNamespace(available=False, price_usd=None)
+
+    order: list[str] = []
+
+    async def _tracking_snapshot(_client, pool, _mint, *, chain):
+        order.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.001,
+                               reserve_usd=9_000.0, dex_id="pumpfun")
+
+    async def _record_local(pool):
+        order.append(pool)
+
+    feed = _FeedWithOnlyFast()
+    original = pocket._price_position
+
+    async def _spy(row, **kwargs):
+        order.append(row["pool_address"])
+        return await original(row, **kwargs)
+
+    pocket._price_position = _spy
+    try:
+        await pocket.advance_exit_simulation(
+            snapshot_fn=_tracking_snapshot, bonding_ws_feed=feed, db_path=_tmp_db,
+        )
+    finally:
+        pocket._price_position = original
+
+    assert order and order[0] == "poolFast", (
+        f"the locally-priced position must be served first, got {order}"
+    )
