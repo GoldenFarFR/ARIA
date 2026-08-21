@@ -231,6 +231,31 @@ when preparing real scaling beyond this pilot, explicitly re-evaluate with the
 real exposure figures in hand (asymmetry to keep in mind: going private is always
 still possible later, the reverse — an already-public git history — never is).
 
+## Active state — Solana sourcing & RPC split (21/08)
+**Candidates no longer come from a program-wide websocket.** `pumpfun_curve_tracker.py`
+discovers via PumpPortal's free creation feed and follows curve progress by BATCHED
+POLLING (`getMultipleAccounts`, 1 credit per CALL for up to 100 accounts), banded by
+progress: below 30% every 60s, 30-50% every 20s, 50-70% every 10s. Above 70% the pocket's
+own targeted trade subscription takes over, PRE-ARMED at `PRE_ARM_PROGRESS=0.45` so
+`distinct_buyers` is populated when `consider_candidate` reads it.
+
+**Why it matters, measured not assumed**: program-wide `logsSubscribe` carried 74 GB/day,
+74.7% of it holding no decodable trade, i.e. ~1.69M Helius credits/day against a 1M/month
+plan. The replacement produces 48 qualified candidates/hour against the pocket's real 53
+detections/hour.
+
+**Two providers, split by billing model** — this is the point, not redundancy: Helius bills
+1 credit per CALL but 20 credits per MB STREAMED; Chainstack bills 1 unit per call flat,
+3M/month free. So polling goes to Chainstack (`ARIA_SOLANA_RPC_HTTP_POLLING`, falls back to
+the main endpoint when unset) and streaming stays on Helius. Verified side by side on 100
+real accounts: 36ms vs 37ms median, 100/100 resolved both, 0 errors.
+
+**Trap that cost two 13-minute outages the same day**: that stream fed TWO things nobody had
+inventoried -- discovery via `active_mints()` AND buyer history via `get_flow()`. Before
+narrowing ANY feed, grep for what reads it as a SOURCE, not only what reads its values.
+Detail: `docs/HANDOFF_RESOURCE_BUDGET.md`.
+
+
 ## Active state — pocket lineup (18/08, explicit operator decision)
 **Scalping v1-v9 all RETIRED on 18/08** ("supprime toutes les poches v8 et v9 on sen servira plus cest les poche bouncy qui font office de test") — v8 (Claude's own scalping agent, 05/08-18/08) and v9 (operator-spec'd fixed-watchlist SPX engine, 06/08-18/08) both fully deleted (code, tests, heartbeat wiring, Telegram commands), their 12/43 open paper positions force-closed at real market price first. Active sourcing pockets: **swing + vc** only. **Solana FAST discovery retired 21/08** (operator decision on a 2016-closure verdict: -3.53% PnL, -6.40% without its top two, 17.4% winrate) -- **`solana_late_bonding_shadow` is now the only Solana sourcing pocket**; FAST exit tracking stays wired until its open positions close, and its closures remain in the DB as the control group. The **support-bounce shadow pockets (v1/v2)** now serve as the reference test instead. **"megacap" pocket fully removed on 15/08** (operator confirmed it never opened a single position across its lifetime) — code, tests, and docs all cleaned in the same pass, `fixed_watchlist.py` deleted entirely. Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 entry).
 
