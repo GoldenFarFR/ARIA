@@ -422,9 +422,28 @@ async def consider_candidate(
     http_client: httpx.AsyncClient | None = None, geckoterminal_client=None,
     bonding_ws_feed=None,
     resolve_curves_fn=None, snapshot_fn=None, db_path: str | None = None,
+    execute_fn=None,
 ) -> int | None:
-    """Screens one mint and, if it passes, records a simulated entry.
-    Returns the new row id, or ``None``. Never raises into the caller."""
+    """Screens one mint and, if it passes, records an entry.
+    Returns the new row id, or ``None``. Never raises into the caller.
+
+    ``execute_fn`` -- 21/08, the seam for REAL capital, on the operator's
+    explicit constraint: "il faut exactement les memes outils que la poche
+    bonding". Real trading must REPLACE the execution and nothing else --
+    sourcing, filters, exit rule and price feed stay this shared code. A
+    second module reimplementing the strategy would diverge silently and make
+    every hour of calibration worthless, which is the exact defect the shared
+    `evaluate_exit` already exists to prevent.
+
+    Signature: ``await execute_fn(mint, pool_address, chain=...,
+    quoted_price=...)`` returning ``{"entry_price": float, "tx": str}`` on a
+    real fill, or ``None`` if the buy failed. ``None`` ABORTS the entry
+    entirely rather than recording a position that does not exist -- a shadow
+    row standing in for a failed real trade would corrupt every measurement
+    built on this table.
+
+    Default ``None`` keeps the pocket in pure simulation, byte-identical to
+    its behaviour before this parameter existed."""
     try:
         await _ensure_table(db_path)
         async with aiosqlite.connect(db_path or _db_path()) as db:
@@ -514,6 +533,29 @@ async def consider_candidate(
         creator_sold = None
         if creator is not None and founding.get("tracked") is not None:
             creator_sold = 1 if _founder_has_sold(trade_stream, mint, creator) else 0
+        # REAL execution, when wired. The price actually paid replaces the
+        # quoted one: recording the quote while the fill happened elsewhere
+        # would reproduce, on real money, exactly the optimistic-fill bug
+        # found in the exit rule earlier today.
+        entry_price = snapshot.price_usd
+        tx_hash = None
+        if execute_fn is not None:
+            try:
+                filled = await execute_fn(
+                    mint, pool_address, chain=chain, quoted_price=snapshot.price_usd,
+                )
+            except Exception as exc:  # noqa: BLE001 -- a failed buy is not a position
+                logger.info("solana_late_bonding_shadow: execute_fn raised for %s (%s)", mint, exc)
+                return None
+            if not filled or not filled.get("entry_price"):
+                return None
+            # The real fill price becomes the entry, and the "realistic"
+            # column too: a modelled impact makes no sense once a genuine
+            # price has been paid.
+            entry_price = filled["entry_price"]
+            realistic = entry_price
+            tx_hash = filled.get("tx")
+
         async with aiosqlite.connect(db_path or _db_path()) as db:
             cur = await db.execute(
                 f"""
@@ -528,9 +570,9 @@ async def consider_candidate(
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
-                    snapshot.price_usd, snapshot.reserve_usd, metrics.get("bonding_progress"),
+                    entry_price, snapshot.reserve_usd, metrics.get("bonding_progress"),
                     metrics.get("distinct_buyers"), metrics.get("top_buyer_share"),
-                    metrics.get("buyer_acceleration"), snapshot.price_usd, realistic,
+                    metrics.get("buyer_acceleration"), entry_price, realistic,
                     founding.get("tracked"), founding.get("exited"),
                     founding.get("exit_ratio"), founding.get("bundle_size"),
                     creator, creator_sold, metrics.get("sol_velocity"),

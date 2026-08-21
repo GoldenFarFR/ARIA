@@ -1416,3 +1416,72 @@ async def test_a_position_crossing_and_closing_in_one_check_still_counts(_tmp_db
     assert row["reinforce_price"] == pytest.approx(entry * 1.30)
     assert row["exit_reason"] == "trailing_stop"
     assert row["reinforced_final_multiplier"] is not None
+
+
+# --- real-execution seam (21/08) ---
+
+@pytest.mark.asyncio
+async def test_the_real_fill_price_replaces_the_quoted_one(_tmp_db):
+    """Operator's constraint: real trading REPLACES the execution and nothing
+    else. Recording the quote while the fill happened elsewhere would
+    reproduce, on real money, the optimistic-fill bug found in the exit rule
+    earlier the same day."""
+    calls = []
+
+    async def _execute(mint, pool, *, chain, quoted_price):
+        calls.append((mint, pool, chain, quoted_price))
+        return {"entry_price": quoted_price * 1.03, "tx": "sig123"}
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db, execute_fn=_execute,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert len(calls) == 1
+    quoted = calls[0][3]
+    assert row["entry_price"] == pytest.approx(quoted * 1.03)
+    # a modelled price impact makes no sense once a genuine price was paid
+    assert row["realistic_entry_price"] == pytest.approx(quoted * 1.03)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_buy_records_no_position_at_all(_tmp_db):
+    """A shadow row standing in for a failed real trade would corrupt every
+    measurement built on this table."""
+    async def _fails(_mint, _pool, *, chain, quoted_price):
+        return None
+
+    got = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db, execute_fn=_fails,
+    )
+    assert got is None
+    assert await _rows(_tmp_db) == []
+
+
+@pytest.mark.asyncio
+async def test_an_executor_that_raises_never_creates_a_phantom_position(_tmp_db):
+    async def _boom(_mint, _pool, *, chain, quoted_price):
+        raise RuntimeError("rpc down mid-swap")
+
+    got = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db, execute_fn=_boom,
+    )
+    assert got is None
+    assert await _rows(_tmp_db) == []
+
+
+@pytest.mark.asyncio
+async def test_without_an_executor_the_pocket_is_byte_identical_to_before(_tmp_db):
+    """The seam must not perturb the measurement in flight -- default None
+    keeps pure simulation."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["entry_price"] > 0
+    # the simulated realistic price still carries the modelled impact,
+    # i.e. it differs from the raw quote
+    assert row["realistic_entry_price"] != row["entry_price"]
