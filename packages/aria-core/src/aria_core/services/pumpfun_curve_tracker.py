@@ -84,20 +84,50 @@ def default_polling_rpc_url() -> str:
 # NOT chunk, so this module must.
 MAX_ACCOUNTS_PER_CALL = 100
 
-# Chainstack's Developer plan caps at 25 requests/second -- stated on the node
-# dashboard and enforced with HTTP 429. Project norm is to use ~90% of the real
-# sustained rate, never to guess it, so 22 req/s -> ~45ms between calls.
+# Per-provider rate limits. Each number is the PLAN's real cap, and each
+# throttle targets ~90% of it -- the project norm is to use most of the real
+# sustained rate and never to guess it.
 #
-# Added 2026.08.21 after the module went to production WITHOUT any throttle,
-# which is a straight violation of that norm. With 588 mints tracked the poll
-# fired its batches back to back, drew 429s, and candidate evaluation collapsed
-# from 34 to 18 detections/hour. The symptom looked like "fewer trades"; the
-# cause was a missing rate limit.
+#   Chainstack Developer : 25 req/s, stated on the node dashboard, enforced
+#                          with HTTP 429. Throttled to 22.
+#   Helius Free          : 10 req/s, from their published plan. Throttled to 9.
 #
-# Re-derive this if the provider changes: the number belongs to the plan, not
-# to this module.
-MAX_REQUESTS_PER_SECOND = 22.0
+# Two SEPARATE throttles on purpose: a shared one would pace the fast provider
+# down to the slow one's limit, wasting more than half of Chainstack's capacity
+# for no reason.
+#
+# Added 2026.08.21 after this module went to production with NO throttle at
+# all. With 588 mints tracked the poll fired its batches back to back, drew
+# 429s, and candidate evaluation collapsed from 34 to 18 detections/hour. The
+# symptom read as "fewer trades"; the cause was a missing rate limit.
+CHAINSTACK_MAX_RPS = 22.0
+HELIUS_MAX_RPS = 9.0
+
+# Kept for callers/tests that reason about the primary path.
+MAX_REQUESTS_PER_SECOND = CHAINSTACK_MAX_RPS
 _MIN_INTERVAL_SECONDS = 1.0 / MAX_REQUESTS_PER_SECOND
+
+
+@dataclass
+class _Endpoint:
+    """One provider, with its own pacing state.
+
+    `failures` is informational: it says which provider is struggling without
+    ever disabling it. A provider that failed once may be fine on the next
+    sweep, and permanently sidelining it on a transient error would be worse
+    than retrying.
+    """
+
+    url: str
+    name: str
+    max_rps: float
+    last_call_at: float = 0.0
+    calls: int = 0
+    failures: int = 0
+
+    @property
+    def min_interval(self) -> float:
+        return 1.0 / self.max_rps if self.max_rps > 0 else 0.0
 
 # Band edges as curve progress (0.0 -> 1.0) and their polling cadence.
 # Deliberately NOT a single interval: the population below 30% is five times
@@ -199,8 +229,21 @@ class PumpFunCurveTracker:
     """
 
     def __init__(self, *, rpc_http_url: str | None = None,
-                 max_tracked: int = 600):
+                 max_tracked: int = 600, fallback_http_url: str | None = None):
         self._rpc_http_url = rpc_http_url or default_polling_rpc_url()
+        # Chainstack first, Helius second. Chainstack is the better primary on
+        # measured facts: 3M units/month against 1M, 25 req/s against 10, and a
+        # flat 1 unit per call instead of Helius's per-megabyte streaming rate,
+        # which is what burned a month of quota in hours on 2026.08.21.
+        # The fallback exists because a failed batch is not neutral: its mints
+        # are simply never measured that round.
+        fb = fallback_http_url if fallback_http_url is not None else RPC_HTTP_DEFAULT
+        self._endpoints: list[_Endpoint] = [
+            _Endpoint(url=self._rpc_http_url, name="primary", max_rps=CHAINSTACK_MAX_RPS)
+        ]
+        if fb and fb != self._rpc_http_url:
+            self._endpoints.append(
+                _Endpoint(url=fb, name="fallback", max_rps=HELIUS_MAX_RPS))
         self._max_tracked = max_tracked
         self._tracked: dict[str, TrackedMint] = {}
         self._decimals_cache: dict[str, int] = {}
@@ -266,26 +309,30 @@ class PumpFunCurveTracker:
         due = self.due(now=now)
         if not due:
             return []
-        url = self._rpc_http_url or require_solana_rpc_http()
         crossings: list[tuple[str, float | None, float]] = []
 
         for start in range(0, len(due), MAX_ACCOUNTS_PER_CALL):
             chunk = due[start:start + MAX_ACCOUNTS_PER_CALL]
-            # Pace the batches. Without this the whole sweep goes out back to
-            # back and the provider answers 429, which costs far more than the
-            # wait: a rejected batch means its mints are simply not measured.
-            wait = _MIN_INTERVAL_SECONDS - (time.monotonic() - self._last_call_at)
-            if wait > 0:
-                self.throttled_waits += 1
-                await asyncio.sleep(wait)
-            self._last_call_at = time.monotonic()
-            try:
-                accounts = await _rpc_get_multiple_accounts(
-                    http_client, url, [e.pool_address for e in chunk])
-            except Exception as exc:  # noqa: BLE001 -- one failed batch never stops the rest
-                logger.info("pumpfun_curve_tracker: batch failed (%s)", exc)
-                continue
-            self.credits_spent += 1  # 1 credit per CALL, not per account
+            # Try each provider in order, each paced by ITS OWN limit. A shared
+            # throttle would drag the fast one down to the slow one's rate.
+            accounts = None
+            for ep in self._endpoints:
+                wait = ep.min_interval - (time.monotonic() - ep.last_call_at)
+                if wait > 0:
+                    self.throttled_waits += 1
+                    await asyncio.sleep(wait)
+                ep.last_call_at = time.monotonic()
+                try:
+                    accounts = await _rpc_get_multiple_accounts(
+                        http_client, ep.url, [e.pool_address for e in chunk])
+                    ep.calls += 1
+                    self.credits_spent += 1  # 1 credit per CALL, not per account
+                    break
+                except Exception as exc:  # noqa: BLE001 -- fall through to the next provider
+                    ep.failures += 1
+                    logger.info("pumpfun_curve_tracker: batch failed on %s (%s)", ep.name, exc)
+            if accounts is None:
+                continue  # every provider refused this batch; its mints wait for the next sweep
             for entry, acc in zip(chunk, accounts):
                 entry.last_polled_at = now
                 if not acc or not acc.get("data"):

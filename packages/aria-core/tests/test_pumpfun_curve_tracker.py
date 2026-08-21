@@ -341,3 +341,90 @@ def test_the_rate_is_below_the_provider_cap():
     # of the real rate, never the ceiling itself.
     assert tracker.MAX_REQUESTS_PER_SECOND < 25.0
     assert tracker.MAX_REQUESTS_PER_SECOND >= 20.0
+
+
+# --- provider cascade (2026.08.21) -------------------------------------------
+# Chainstack primary, Helius fallback. Chainstack wins on measured facts: 3M
+# units/month vs 1M, 25 req/s vs 10, and a flat 1 unit per call instead of a
+# per-megabyte streaming rate. The fallback matters because a failed batch is
+# not neutral -- its mints go unmeasured for that round.
+
+
+def _two_provider_tracker():
+    return PumpFunCurveTracker(rpc_http_url="http://primary.test",
+                               fallback_http_url="http://fallback.test", max_tracked=10)
+
+
+def test_the_primary_is_used_when_it_answers(monkeypatch):
+    seen = []
+
+    async def ok(http_client, url, pubkeys):
+        seen.append(url)
+        return [None] * len(pubkeys)
+
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", ok)
+    t = _two_provider_tracker()
+    t.add("m", "p")
+    asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+    assert seen == ["http://primary.test"]
+    assert t._endpoints[1].calls == 0
+
+
+def test_it_falls_back_when_the_primary_refuses(monkeypatch):
+    seen = []
+
+    async def flaky(http_client, url, pubkeys):
+        seen.append(url)
+        if url == "http://primary.test":
+            raise RuntimeError("429 Too Many Requests")
+        return [None] * len(pubkeys)
+
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", flaky)
+    t = _two_provider_tracker()
+    t.add("m", "p")
+    asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+    assert seen == ["http://primary.test", "http://fallback.test"]
+    assert t._endpoints[0].failures == 1
+    assert t._endpoints[1].calls == 1
+    assert t.credits_spent == 1  # billed once, on the provider that answered
+
+
+def test_a_failure_never_disables_a_provider(monkeypatch):
+    # A transient error must not sideline the primary: permanently demoting it
+    # on one bad response would be worse than retrying next sweep.
+    calls = {"n": 0}
+
+    async def once_bad(http_client, url, pubkeys):
+        calls["n"] += 1
+        if url == "http://primary.test" and calls["n"] == 1:
+            raise RuntimeError("boom")
+        return [None] * len(pubkeys)
+
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", once_bad)
+    t = _two_provider_tracker()
+    t.add("m", "p")
+    asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+    t._tracked["m"].last_polled_at = 0.0
+    asyncio.run(t.poll_due(http_client=None, now=20_000.0))
+    assert t._endpoints[0].calls == 1  # primary tried again and succeeded
+
+
+def test_each_provider_keeps_its_own_pace():
+    # A shared throttle would drag Chainstack down to Helius's slower limit.
+    t = _two_provider_tracker()
+    assert t._endpoints[0].max_rps == tracker.CHAINSTACK_MAX_RPS
+    assert t._endpoints[1].max_rps == tracker.HELIUS_MAX_RPS
+    assert t._endpoints[0].min_interval < t._endpoints[1].min_interval
+    assert tracker.HELIUS_MAX_RPS < 10.0     # under the published Helius cap
+    assert tracker.CHAINSTACK_MAX_RPS < 25.0  # under the published Chainstack cap
+
+
+def test_a_single_provider_still_works_alone(monkeypatch):
+    async def ok(http_client, url, pubkeys):
+        return [None] * len(pubkeys)
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", ok)
+    t = PumpFunCurveTracker(rpc_http_url="http://only.test", fallback_http_url="")
+    assert len(t._endpoints) == 1
+    t.add("m", "p")
+    asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+    assert t._endpoints[0].calls == 1
