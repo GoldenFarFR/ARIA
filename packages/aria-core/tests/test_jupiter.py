@@ -107,3 +107,65 @@ def test_the_module_cannot_sign_or_send_anything():
     assert not any("swap/v1/swap" in u or "/v6/swap" in u for u in urls), (
         "building a swap transaction is a separate, explicitly-authorised step"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_token_with_no_exit_route_is_flagged_unsellable():
+    """A route in but none out is the clearest honeypot signature there is."""
+    class _NoExit:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, url, params=None):
+            self.calls += 1
+            if self.calls == 1:
+                return httpx.Response(200, json={"outAmount": "1000", "otherAmountThreshold": "900"},
+                                      request=httpx.Request("GET", url))
+            return httpx.Response(200, json={"outAmount": None},
+                                  request=httpx.Request("GET", url))
+
+        async def aclose(self):
+            pass
+
+    out = await jupiter.roundtrip_cost_pct("scamMint", 0.01, client=_NoExit())
+    assert out["sellable"] is False
+    assert out["roundtrip_loss_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_token_reports_its_real_roundtrip_cost():
+    class _Healthy:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, url, params=None):
+            self.calls += 1
+            if self.calls == 1:
+                return httpx.Response(200, json={"outAmount": "1000000", "otherAmountThreshold": "9"},
+                                      request=httpx.Request("GET", url))
+            # sells back 97.5% of the lamports put in
+            return httpx.Response(200, json={"outAmount": str(int(0.01 * 1e9 * 0.975)),
+                                             "otherAmountThreshold": "1"},
+                                  request=httpx.Request("GET", url))
+
+        async def aclose(self):
+            pass
+
+    out = await jupiter.roundtrip_cost_pct("goodMint", 0.01, client=_Healthy())
+    assert out["sellable"] is True
+    assert out["roundtrip_loss_pct"] == pytest.approx(2.5, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_reports_none_never_a_silent_false():
+    """Refusing a token because a provider hiccuped would be worse than not
+    checking at all."""
+    class _Broken:
+        async def get(self, *a, **k):
+            raise RuntimeError("provider down")
+
+        async def aclose(self):
+            pass
+
+    out = await jupiter.roundtrip_cost_pct("anyMint", 0.01, client=_Broken())
+    assert out["sellable"] is None

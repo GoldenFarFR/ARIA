@@ -119,6 +119,60 @@ async def fetch_quote(
             await client.aclose()
 
 
+async def roundtrip_cost_pct(
+    token_mint: str, sol_amount: float, *, client: httpx.AsyncClient | None = None,
+) -> dict:
+    """Buys then immediately sells, on quotes only -- the exit-route check.
+
+    21/08, operator's design: "on va trader des token legerement dangereux
+    (bonding), il faut le mecanisme de verification en simulation achat-vente
+    instantanee". A token you can buy but cannot sell only reveals itself when
+    you try to sell, and the pocket had NO scam check of any kind -- no
+    RugCheck, no honeypot screen, nothing.
+
+    Two things are learned in one pass:
+      - ``sellable``: whether an exit route exists at all. No route out is the
+        single clearest honeypot signature.
+      - ``roundtrip_loss_pct``: what a buy-then-sell actually costs right now.
+        Measured on healthy tokens the same day it sits near 2.5%; a figure far
+        above that means the exit is priced against us even when it exists.
+
+    Quotes only -- no key, no signature, nothing sent. This is the cheap half
+    of the check; simulating the two swaps atomically on-chain is the stronger
+    version and a separate step.
+
+    ``sellable=None`` means the check could not be completed (provider down),
+    never a silent ``False``: refusing a token because a provider hiccuped
+    would be worse than not checking at all.
+    """
+    out = {"sellable": None, "roundtrip_loss_pct": None, "buy_impact_pct": None}
+    try:
+        buy = await fetch_quote(SOL_MINT, token_mint, int(sol_amount * 1e9), client=client)
+    except JupiterQuoteError:
+        # No route IN either -- nothing to judge, and the pocket would not be
+        # able to enter anyway.
+        return out
+    except Exception:  # noqa: BLE001
+        return out
+
+    out["buy_impact_pct"] = buy.get("price_impact_pct")
+    tokens = int(buy["outAmount"])
+    try:
+        sell = await fetch_quote(token_mint, SOL_MINT, tokens, client=client)
+    except JupiterQuoteError:
+        # A route in but none out is the clearest honeypot signature there is.
+        out["sellable"] = False
+        return out
+    except Exception:  # noqa: BLE001
+        return out
+
+    lamports_in = int(sol_amount * 1e9)
+    lamports_back = int(sell["outAmount"])
+    out["sellable"] = True
+    out["roundtrip_loss_pct"] = round((1 - lamports_back / lamports_in) * 100, 3)
+    return out
+
+
 async def quote_sol_for_token(
     token_mint: str, sol_amount: float, *, client: httpx.AsyncClient | None = None,
 ) -> dict:

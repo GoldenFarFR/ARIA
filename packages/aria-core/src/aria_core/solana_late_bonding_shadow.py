@@ -320,6 +320,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 exit_detail TEXT,
                 amm_pool_address TEXT,
                 sol_velocity_at_entry REAL,
+                sellable_at_entry INTEGER,
+                roundtrip_loss_pct_at_entry REAL,
                 reinforce_price REAL,
                 reinforce_at TEXT,
                 reinforced_final_multiplier REAL
@@ -354,6 +356,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # REST -- on this pocket's best-performing segment.
             ("amm_pool_address", "TEXT"),
             ("sol_velocity_at_entry", "REAL"),
+            ("sellable_at_entry", "INTEGER"),
+            ("roundtrip_loss_pct_at_entry", "REAL"),
             ("reinforce_price", "REAL"),
             ("reinforce_at", "TEXT"),
             ("reinforced_final_multiplier", "REAL"),
@@ -612,6 +616,7 @@ async def consider_candidate(
             )
             await db.commit()
             asyncio.create_task(_enrich_paid_profile(cur.lastrowid, mint, chain=chain, db_path=db_path))
+            asyncio.create_task(_enrich_exit_route(cur.lastrowid, mint, db_path=db_path))
             logger.info(
                 "solana_late_bonding_shadow: ENTRY %s progress=%.2f buyers=%s",
                 pool_address, metrics.get("bonding_progress") or -1, metrics.get("distinct_buyers"),
@@ -656,6 +661,41 @@ async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn
             pass
     fn = snapshot_fn or _snapshot_with_fallback
     return await fn(None, row["pool_address"], row["token_address"], chain=chain)
+
+
+async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = None) -> None:
+    """Fire-and-forget: can this token actually be SOLD, and at what cost.
+
+    21/08, operator's design -- "on va trader des token legerement dangereux
+    (bonding), il faut le mecanisme de verification achat-vente instantanee".
+    This pocket had NO scam check of any kind: no RugCheck, no honeypot
+    screen, nothing, while FAST-DISCOVERY has run RugCheck since it was
+    written. A token you can buy but not sell only reveals itself on the way
+    out.
+
+    Runs AFTER the entry is recorded, deliberately: the whole day was spent
+    cutting milliseconds off the entry path, and this costs two HTTP calls.
+    COLLECTED ONLY for now -- it becomes a pre-trade block once the data shows
+    it actually separates rugs from survivors, not before.
+    """
+    try:
+        from aria_core.services import jupiter
+
+        # Priced at the size we would really trade, since the cost is
+        # size-dependent -- a check run at a different size measures a
+        # different token than the one we hold.
+        out = await jupiter.roundtrip_cost_pct(mint, SIMULATED_TRADE_SIZE_USD / 92.0)
+        sellable = out.get("sellable")
+        async with aiosqlite.connect(db_path or _db_path()) as db:
+            await db.execute(
+                f"UPDATE {TABLE} SET sellable_at_entry = ?, roundtrip_loss_pct_at_entry = ? "
+                f"WHERE id = ?",
+                (None if sellable is None else int(sellable),
+                 out.get("roundtrip_loss_pct"), row_id),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- an observation never breaks a pocket
+        logger.info("solana_late_bonding_shadow: exit-route check failed for %s (%s)", mint, exc)
 
 
 async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana", db_path: str | None = None) -> None:
