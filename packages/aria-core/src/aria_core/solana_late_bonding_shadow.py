@@ -588,6 +588,7 @@ async def resolve_migrated_pools(
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
+    max_rest_calls: int | None = None,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
     imported, never reimplemented, so the two pockets differ on ENTRY only and
@@ -634,8 +635,25 @@ async def advance_exit_simulation(
 
     rows.sort(key=lambda r: not _priced_locally(r))
 
+    # 21/08 -- REST ceiling per cycle, the guardrail the two sibling pockets
+    # already had and this one did not. Measured cost of its absence: an exit
+    # pass took 23.5s for 9 positions (2.6s each) because every position the
+    # websocket had lost fell through to the throttled REST cascade, one after
+    # another -- pushing the gap between two checks of the SAME position to
+    # 60s against a 10s cadence, which is precisely why the hard stop filled
+    # at -44.5% instead of -20%. Beyond this ceiling a position is simply left
+    # for the next pass rather than made to wait: a stale check on ONE
+    # position is far cheaper than delaying every other position behind it.
+    rest_budget = max_rest_calls
     for row in rows:
         stats["checked"] += 1
+        locally_priced = _priced_locally(row)
+        if not locally_priced and rest_budget is not None:
+            if rest_budget <= 0:
+                stats["checked"] -= 1
+                stats["deferred_no_rest_budget"] = stats.get("deferred_no_rest_budget", 0) + 1
+                continue
+            rest_budget -= 1
         try:
             snapshot = await _price_position(
                 row, chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,

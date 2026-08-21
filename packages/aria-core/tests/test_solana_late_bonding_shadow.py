@@ -950,3 +950,56 @@ async def test_a_failed_resolution_is_retried_rather_than_recorded(_tmp_db):
         None, bonding_ws_feed=_CurveGoneFeed(), find_pool_fn=_broken, db_path=_tmp_db,
     ) == 0
     assert (await _rows(_tmp_db))[0]["amm_pool_address"] is None
+
+
+@pytest.mark.asyncio
+async def test_rest_bound_positions_are_capped_per_cycle(_tmp_db):
+    """21/08 -- without this ceiling an exit pass took 23.5s for 9 positions
+    because every websocket-orphaned one queued behind the throttled REST
+    cascade, pushing the gap between checks of the SAME position to 60s. A
+    stale check on one position is far cheaper than delaying all the others."""
+    for i in range(6):
+        await pocket.consider_candidate(
+            f"mint{i}", f"pool{i}", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+            snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+        )
+
+    rest_calls = []
+
+    async def _rest(_client, pool, _mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.001,
+                               reserve_usd=9_000.0, dex_id="pumpfun")
+
+    class _NothingTracked:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=False, price_usd=None)
+
+    stats = await pocket.advance_exit_simulation(
+        snapshot_fn=_rest, bonding_ws_feed=_NothingTracked(), db_path=_tmp_db,
+        max_rest_calls=2,
+    )
+    assert len(rest_calls) == 2
+    assert stats["deferred_no_rest_budget"] == 4
+
+
+@pytest.mark.asyncio
+async def test_locally_priced_positions_never_consume_the_rest_budget(_tmp_db):
+    """The ceiling must not throttle free in-memory reads -- that would make
+    the fix worse than the problem."""
+    for i in range(5):
+        await pocket.consider_candidate(
+            f"mint{i}", f"pool{i}", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+            snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+        )
+
+    class _AllTracked:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=0.001,
+                                   reserve_usd=9_000.0, dex_id="pumpfun")
+
+    stats = await pocket.advance_exit_simulation(
+        bonding_ws_feed=_AllTracked(), db_path=_tmp_db, max_rest_calls=1,
+    )
+    assert stats["checked"] == 5
+    assert "deferred_no_rest_budget" not in stats
