@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -388,6 +389,10 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("reinforce_price", "REAL"),
             ("reinforce_at", "TEXT"),
             ("reinforced_final_multiplier", "REAL"),
+            # Makes distinct_buyers_at_entry interpretable -- see the metric's
+            # own comment. A count without its observation window measures the
+            # listening strategy, not the token.
+            ("observation_seconds_at_entry", "REAL"),
             # Highest profit rung already taken. Added 2026.08.21: the exit rule
             # read it from day one but nothing ever wrote it and the column did
             # not exist, so every rung re-fired on each ~10s evaluation and sold
@@ -432,6 +437,18 @@ async def screen_candidate(
     metrics = {
         "bonding_progress": progress,
         "distinct_buyers": flow.distinct_buyers if flow else None,
+        # 21/08 -- HOW LONG this token has been observed when the count above
+        # was taken. Without it `distinct_buyers` is uninterpretable: it counts
+        # buyers seen SINCE THE STREAM SUBSCRIBED, not since the token existed.
+        # Proof from the same day: shortening the listening window from
+        # "program-wide, always on" to "pre-armed ~26s" divided the average
+        # from 196 to 34 with no market change whatsoever. Any analysis mixing
+        # the two regimes measures its own methodology, which is exactly what
+        # made a buyers-vs-outcome study read as pure noise.
+        "observation_seconds": (
+            (time.time() - getattr(flow, "first_trade_at", None))
+            if (flow is not None and getattr(flow, "first_trade_at", None)) else None
+        ),
         "top_buyer_share": flow.top_buyer_share if flow else None,
         "buyer_acceleration": (
             trade_stream.buyer_acceleration(mint) if trade_stream is not None else None
@@ -668,8 +685,9 @@ async def consider_candidate(
                      founding_tracked_at_entry, founding_exited_at_entry,
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
-                     sell_pressure_at_entry, sell_pressure_slope_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sell_pressure_at_entry, sell_pressure_slope_at_entry,
+                     observation_seconds_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -680,6 +698,7 @@ async def consider_candidate(
                     founding.get("exit_ratio"), founding.get("bundle_size"),
                     creator, creator_sold, metrics.get("sol_velocity"),
                     metrics.get("sell_pressure"), metrics.get("sell_pressure_slope"),
+                    metrics.get("observation_seconds"),
                 ),
             )
             await db.commit()
