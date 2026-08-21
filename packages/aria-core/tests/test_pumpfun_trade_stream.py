@@ -24,11 +24,13 @@ def _pubkey(label: str) -> bytes:
     return hashlib.sha256(label.encode()).digest()
 
 
-def _event_bytes(*, mint="MintAAA", sol=0.05, is_buy=True, user="UserAAA", discriminator=None) -> bytes:
+def _event_bytes(*, mint="MintAAA", sol=0.05, is_buy=True, user="UserAAA", discriminator=None,
+                 token_amount=0) -> bytes:
     buf = bytearray(stream.TRADE_EVENT_MIN_LEN)
     buf[0:8] = discriminator if discriminator is not None else stream.TRADE_EVENT_DISCRIMINATOR
     buf[stream.OFF_MINT:stream.OFF_MINT + 32] = _pubkey(mint)
     struct.pack_into("<Q", buf, stream.OFF_SOL_AMOUNT, int(sol * 1e9))
+    struct.pack_into("<Q", buf, stream.OFF_TOKEN_AMOUNT, int(token_amount))
     buf[stream.OFF_IS_BUY] = 1 if is_buy else 0
     buf[stream.OFF_USER:stream.OFF_USER + 32] = _pubkey(user)
     return bytes(buf)
@@ -50,10 +52,11 @@ def test_a_real_shaped_event_decodes_to_mint_amount_side_and_user():
     decoded = stream.decode_trade_event(raw)
 
     assert decoded is not None
-    mint, sol_amount, is_buy, user = decoded
+    mint, sol_amount, is_buy, user, token_amount = decoded
     assert sol_amount == pytest.approx(0.0045)
     assert is_buy is True
     assert len(user) > 0
+    assert isinstance(token_amount, int)
 
 
 def test_a_foreign_discriminator_is_not_parsed_as_a_trade():
@@ -415,3 +418,25 @@ def test_sol_velocity_is_none_rather_than_zero_when_unmeasurable():
     assert stream.TokenTradeFlow(mint="m").sol_velocity is None
     assert stream.TokenTradeFlow(mint="m", buy_sol_volume=5.0,
                                  first_trade_at=1000.0, last_trade_at=1000.0).sol_velocity is None
+
+
+def test_the_trade_price_is_derived_from_the_raw_event():
+    """21/08, operator's question -- why read a price rather than the raw data.
+    SOL divided by tokens IS a price, and this stream listens at `processed`
+    commitment, 400-800ms earlier than the account subscription that currently
+    prices positions. The earliest usable price was already arriving here and
+    being discarded (`OFF_TOKEN_AMOUNT` was mapped and never read)."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    s.handle_notification(_notif(_event_bytes(sol=2.0, token_amount=1_000_000)))
+
+    st = s._state[_mint_of(_event_bytes())]
+    assert st.last_trade_price_sol_raw == pytest.approx(2.0 / 1_000_000)
+
+
+def test_a_trade_with_no_token_amount_leaves_the_price_unset():
+    """Raw on purpose: no decimals are carried here, so a fabricated default
+    would be a silent unit bug rather than a missing value."""
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://x")
+    s.handle_notification(_notif(_event_bytes(sol=2.0, token_amount=0)))
+
+    assert s._state[_mint_of(_event_bytes())].last_trade_price_sol_raw is None

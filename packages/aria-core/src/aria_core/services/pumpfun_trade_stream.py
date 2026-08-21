@@ -242,12 +242,24 @@ class _MintState:
     last_trade_at: float | None = None
     # (timestamp, user, is_buy) trimmed to TRADE_LOG_WINDOW_SECONDS.
     recent: list = field(default_factory=list)
+    last_trade_price_sol_raw: float | None = None
+    last_trade_at_monotonic: float | None = None
 
 
-def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str] | None:
-    """``(mint, sol_amount, is_buy, user)`` or ``None`` when the payload is not
-    a TradeEvent (or is too short to trust). Never raises on malformed input --
-    this parses attacker-influenceable bytes off a public chain."""
+def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str, int] | None:
+    """``(mint, sol_amount, is_buy, user, token_amount)`` or ``None`` when the
+    payload is not a TradeEvent (or is too short to trust). Never raises on
+    malformed input -- this parses attacker-influenceable bytes off a public
+    chain.
+
+    21/08 -- ``token_amount`` decoded after the operator asked why we do not
+    read the raw data directly instead of a price. `OFF_TOKEN_AMOUNT` had been
+    mapped in the constants from the start and never read, exactly like
+    `creator` earlier the same day. It matters because SOL divided by tokens
+    IS a price: this stream listens at `processed` commitment, i.e. as early
+    as the chain allows, while the account subscription that currently prices
+    positions waits for `confirmed` -- 400-800ms later. The earliest usable
+    price was already arriving here and being discarded."""
     try:
         if len(raw) < TRADE_EVENT_MIN_LEN or raw[:8] != TRADE_EVENT_DISCRIMINATOR:
             return None
@@ -257,12 +269,13 @@ def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str] | None:
         sol_amount = struct.unpack_from("<Q", raw, OFF_SOL_AMOUNT)[0] / 1e9
         is_buy = bool(raw[OFF_IS_BUY])
         user = base58.b58encode(raw[OFF_USER:OFF_USER + 32]).decode()
-        return mint, sol_amount, is_buy, user
+        token_amount = struct.unpack_from("<Q", raw, OFF_TOKEN_AMOUNT)[0]
+        return mint, sol_amount, is_buy, user, token_amount
     except Exception:  # noqa: BLE001 -- malformed on-chain data is never fatal
         return None
 
 
-def extract_trade_events(logs: list[str]) -> list[tuple[str, float, bool, str]]:
+def extract_trade_events(logs: list[str]) -> list[tuple[str, float, bool, str, int]]:
     """Pulls every decodable TradeEvent out of one notification's log lines."""
     out = []
     for line in logs or []:
@@ -422,7 +435,8 @@ class PumpFunTradeStream:
             self._founding.pop(m, None)
         return len(stale)
 
-    def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str) -> None:
+    def _record(self, mint: str, sol_amount: float, is_buy: bool, user: str,
+                token_amount: int = 0) -> None:
         st = self._state.get(mint)
         if st is None:
             st = self._state[mint] = _MintState()
@@ -431,6 +445,13 @@ class PumpFunTradeStream:
             st.first_trade_at = now
         st.last_trade_at = now
         st.recent.append((now, user, is_buy))
+        # SOL per RAW token unit for this trade. Raw on purpose: converting to
+        # a per-token price needs the mint's decimals, which this stream does
+        # not carry -- fabricating a default here would be a silent unit bug,
+        # so the conversion is left to the caller that knows them.
+        if token_amount > 0 and sol_amount > 0:
+            st.last_trade_price_sol_raw = sol_amount / token_amount
+            st.last_trade_at_monotonic = now
         if len(st.recent) > 8:  # amortised trim, never on every single trade
             cutoff = now - TRADE_LOG_WINDOW_SECONDS
             if st.recent[0][0] < cutoff:
@@ -472,8 +493,8 @@ class PumpFunTradeStream:
             slot = None
         slot = slot if isinstance(slot, int) else None
         events = extract_trade_events(value.get("logs") or [])
-        for mint, sol_amount, is_buy, user in events:
-            self._record(mint, sol_amount, is_buy, user)
+        for mint, sol_amount, is_buy, user, token_amount in events:
+            self._record(mint, sol_amount, is_buy, user, token_amount)
             self._record_founding(mint, is_buy, user, slot)
         if time.time() - self._last_prune > _PRUNE_EVERY_SECONDS:
             self._prune()
