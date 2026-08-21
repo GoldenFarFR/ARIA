@@ -53,6 +53,21 @@ REGISTRY_PATH = Path(__file__).resolve().parents[4] / "docs" / "pocket-parameter
 
 _SCALARS = (int, float, str, bool, type(None))
 
+# A tuple longer than this is a lookup table, not a knob.
+_MAX_TUPLE_LEN = 8
+
+
+def _is_tunable(value) -> bool:
+    if isinstance(value, _SCALARS):
+        return True
+    if isinstance(value, tuple) and 0 < len(value) <= _MAX_TUPLE_LEN:
+        return all(
+            isinstance(v, _SCALARS)
+            or (isinstance(v, tuple) and len(v) <= 3 and all(isinstance(x, _SCALARS) for x in v))
+            for v in value
+        )
+    return False
+
 
 def _leading_comment(lines: list[str], lineno: int) -> str | None:
     """The comment block directly above a constant, flattened to one line.
@@ -75,9 +90,16 @@ def _leading_comment(lines: list[str], lineno: int) -> str | None:
 
 
 def extract_parameters(source: str) -> dict:
-    """Every module-level UPPER_CASE scalar constant, with its value, line and
-    justification. Scalars only: a dict/list constant is a lookup table, not a
-    tuning knob, and dumping it here would bury the knobs that matter."""
+    """Every module-level UPPER_CASE tuning constant, with its value, line and
+    justification.
+
+    Scalars, plus TUPLES of scalars or of scalar pairs. The original rule was
+    scalars only, on the reasoning that a collection constant is a lookup
+    table rather than a knob. That was too broad and it cost us: 21/08, the
+    single most important setting of the new exit -- `PROFIT_LADDER =
+    ((50, .25), (100, .25), (200, .25))` -- was silently absent from the
+    registry built precisely so no setting could go unread. Dicts and long
+    lists stay excluded: those really are lookup tables."""
     tree = ast.parse(source)
     lines = source.splitlines()
     params: dict = {}
@@ -91,7 +113,7 @@ def extract_parameters(source: str) -> dict:
             value = ast.literal_eval(node.value)
         except (ValueError, SyntaxError):
             continue
-        if not isinstance(value, _SCALARS):
+        if not _is_tunable(value):
             continue
         params[target.id] = {
             "value": value,

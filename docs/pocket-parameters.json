@@ -375,6 +375,20 @@
         "value": "solana_fresh_launch_ws_exit_shadow_log",
         "why": null
       },
+      "TRAILING_BANDS": {
+        "line": 133,
+        "value": [
+          [
+            25.0,
+            6.0
+          ],
+          [
+            100.0,
+            13.0
+          ]
+        ],
+        "why": "21/08 -- PROGRESSIVE trailing distance, replacing a single fixed number.  Operator's objection, and it was right where the replay was wrong: \"meme les zigzag se font pas ejecter?\". Measured on 69 archived price paths -- the LARGEST pullback a position suffers BEFORE reaching its own peak, i.e. what a trailing stop must tolerate to let a winner run: peak < +25%      n=31   median  1.8%   32% exceed 5%    3% exceed 15% peak +25..+100%  n=24   median  7.5%   58% exceed 5%    8% exceed 15% peak > +100%     n= 9   median  9.6%   78% exceed 5%    0% exceed 15% So the bigger the eventual move, the more it zigzags on the way up: a 5% stop would have ejected 78% of the biggest winners BEFORE their peak, while nothing at all pulled back past 15%.  This corrects a decision taken an hour earlier from `exit_replay` alone, which ranked 5% best. That replay is dominated by the mass of small losers (where tight genuinely wins) and structurally blind to what a wider stop would have captured afterwards -- the truncation caveat was documented and then not applied to its own conclusion.  A single distance is therefore wrong by construction: too wide for a +20% move, too tight for a +200% one. The bands below are the measured pullbacks with margin, not round numbers.  CAVEAT: only 9 paths carry the >+100% band. Enough to overturn the 5% decision (78% vs 0% is not a marginal difference), NOT enough to fine-tune 18 against 20. Revisit when the archive is deeper."
+      },
       "TRAILING_STOP_ARM_PEAK_PCT": {
         "line": 178,
         "value": 10.0,
@@ -440,6 +454,24 @@
         "line": 112,
         "value": 1,
         "why": "20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still show SOME real buyer (buying what nobody buys is the behaviour the data condemns most clearly, -21.56% on the <30s band), but the exact N is one of the values this pocket exists to find -- fixing it at 3 up front would pre-decide the answer. `distinct_buyers_at_entry` is on every row, so the real threshold gets read off the data instead of guessed."
+      },
+      "PROFIT_LADDER": {
+        "line": 169,
+        "value": [
+          [
+            50.0,
+            0.25
+          ],
+          [
+            100.0,
+            0.25
+          ],
+          [
+            200.0,
+            0.25
+          ]
+        ],
+        "why": "21/08 -- floor loss for the window the trailing stop does not cover (it only arms once the peak reaches +10% above entry). Measured on THIS pocket's own 304 closures at 70%+: the 142 positions whose trailing never armed averaged -55.5%, with no downside rule protecting any of them. Full derivation, the pessimistic assumption and the outlier test live next to `HARD_STOP_PCT_DEFAULT` in the shared exit module -- not restated here. Deliberately passed as an ARGUMENT to the shared `evaluate_exit` rather than forked into a local copy of the exit rule, so FAST-DISCOVERY stays an untouched control and the two pockets keep differing on one variable. 21/08 -- OPERATOR-DESIGNED EXIT: fixed stop from entry + staged profit taking, replacing the trailing stop entirely for this pocket.  His reasoning, and it is the right one: a trailing stop keeps the HIGHEST price, so every swing during a climb eats its margin without ever giving it back -- a token that runs to +50%, falls to +10% and recovers to +30% ends up glued to a stop set on a peak it no longer trades near. A fixed stop never moves, so the ladder is what secures gains: the two do distinct jobs instead of fighting each other.  Measured on 86 archived paths, 1% sell friction included: ladder 50/100/200 + fixed -5%   +7.0%  (outlier-tested +3.8%) free-ride variant               +5.6%  (+3.1%) banded trailing                 +4.9%  (+2.1%) Robust across ladder SHAPES -- every configuration tested landed between +7.1% and +8.5% before friction -- so the principle carries it, not these exact thresholds. Tested against the trailing this MORNING the ladder degraded, because there the two overlapped; the pairing is what changed.  Independently confirmed by looking at what happens after we sell: of 12 closures above +100%, TEN collapsed afterwards (median -81.8%) and only two kept rising. On these tokens the peak is a point of no return, so selling ON THE WAY UP structurally beats a trailing stop, which by construction can only act once the fall has already started.  The friction caveat matters: at 3% sell friction this advantage halves, at 5% it disappears. Rungs are small fractions of a small position, so real impact should stay well under that -- to be verified on live closures."
       },
       "RECENT_WINDOW_CLOSURES": {
         "line": 225,
@@ -770,6 +802,14 @@
         "line": 84,
         "value": 1000.0,
         "why": "10/08 -- real bug found auditing this table's live data: several tracked wallets received DUST/SPAM token airdrops (a transfer IN with no real swap behind it -- this module treats every non-quote transfer IN as a \"buy\", with no way yet to tell an airdrop from a real purchase). DexScreener still returns a \"price\" for these tokens' near-empty pools (real case found: \"(RNDR)\" at contract 0x6eba7f...2666, pool liquidity $1.45, price 4.268e-24 -- not a real market, a discarded/scam pool). A tiny denominator then turns an ordinary later price into an absurd ratio (found: one position showing +8.6e15% latent P&L). Below this floor, a DexScreener price is not trusted as a real market price -- same degradation as no price found at all (``None``), never a fabricated number. Not a trading gate (this module never executes anything) -- just enough to keep a spam/rug pool's near-zero liquidity from posing as a real price. $1,000 chosen as a sanity floor (same order of magnitude as this module's own ``POSITION_SIZE_USD``), not an empirically calibrated threshold."
+      },
+      "_PLAUSIBLE_PRICE_RATIO_BOUNDS": {
+        "line": 93,
+        "value": [
+          0.001,
+          1000.0
+        ],
+        "why": "A ratio outside this range between two REAL prices of the same token is not a plausible price move for this pipeline's targets (the largest real pumps documented in this codebase are on the order of x10-x50, never anywhere near x1000) -- used as a mechanical safety net in ``summary()`` against exactly the artifact above, whether from a future edge case this module's own liquidity floor doesn't catch, or from data recorded before this fix existed."
       },
       "_POSITION_DDL": {
         "line": 168,
