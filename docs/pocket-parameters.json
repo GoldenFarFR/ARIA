@@ -393,7 +393,7 @@
     "parameters": {
       "CONFIG_EPOCH": {
         "line": 160,
-        "value": "2026-08-21T11:44:10+00:00",
+        "value": "2026-08-21T13:08:04+00:00",
         "why": "21/08 -- CONFIG EPOCH. Everything closed before this instant was produced by a DIFFERENT configuration and must not be averaged with what follows: the 40-95% collection band, and a window where entry was priced by REST while the exit used the RPC (every PnL then compared two sources). Mixing them makes the headline meaningless, which is exactly the problem the recent-window fix was already treating.  Deliberately an EPOCH MARKER, not a delete. The rows stay: they produced every finding of the last two days (the rug gradient 48.9% -> 27.0%, the graduation rate 2.0% -> 50.0%, the +161% on migrated positions) and this dome's standing rule is that real history is never destroyed. `summary()` reports from here; anything older is still queryable, just not averaged in. Move this forward on the NEXT configuration change rather than editing the rows."
       },
       "EXEMPT_GRADUATED_FROM_MAX_HOLD": {
