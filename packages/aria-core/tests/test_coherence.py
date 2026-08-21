@@ -1328,3 +1328,52 @@ async def test_the_two_active_pockets_put_their_database_in_wal_mode(tmp_path):
         async with aiosqlite.connect(db_path) as db:
             cur = await db.execute("PRAGMA journal_mode")
             assert (await cur.fetchone())[0].lower() == "wal", f"{name} is not in WAL mode"
+
+
+def test_the_two_active_pockets_share_the_same_exit_guardrails():
+    """21/08, operator-directed ("verifie toujours pour toutes les poches").
+
+    LATE-BONDING was written after FAST-DISCOVERY and silently inherited none
+    of its hard-won guardrails. Every one of these was found missing on the
+    same day, each after real damage:
+      - `window_high`/`window_low`: without them the exit rule only ever sees
+        a point sample, which is why a -20% hard stop filled at -78% -- the
+        websocket HAD recorded the crossing, the pocket never read it;
+      - `max_rest_calls`: without it, websocket-orphaned positions queued
+        behind the throttled REST cascade, 2.6s each;
+      - hot ALTER: without it, adding a column silently stopped a pocket from
+        closing any position at all;
+      - `hard_stop_pct`: the trailing stop only arms above +10%, leaving
+        everything below it with no downside rule.
+
+    Checked as SOURCE TEXT on purpose: these are call-site wiring defects, and
+    every one of them shipped with a green unit suite because each component
+    worked perfectly on its own. This asserts they are actually connected."""
+    import inspect
+
+    from aria_core import solana_fresh_launch_fast_discovery_shadow as fd
+    from aria_core import solana_late_bonding_shadow as lb
+
+    required = {
+        "window_high=": "the high reached since the last read",
+        "window_low=": "the low reached since the last read",
+        "hard_stop_pct=": "a floor loss for the window the trailing does not cover",
+        "max_rest_calls": "a per-cycle ceiling on REST-bound pricing",
+        "PRAGMA table_info": "a hot migration path for new columns",
+        "ensure_wal": "WAL journal mode",
+    }
+    for mod, name in ((lb, "late_bonding"), (fd, "fast_discovery")):
+        src = inspect.getsource(mod)
+        missing = [f"{k} ({why})" for k, why in required.items() if k not in src]
+        assert not missing, f"{name} is missing: {missing}"
+
+
+def test_both_active_pockets_import_the_shared_exit_rule():
+    """They must differ on ENTRY only. A local copy of the exit logic would
+    make every comparison between them meaningless."""
+    from aria_core import solana_fresh_launch_fast_discovery_shadow as fd
+    from aria_core import solana_fresh_launch_ws_exit_shadow as shared
+    from aria_core import solana_late_bonding_shadow as lb
+
+    assert lb.evaluate_exit is shared.evaluate_exit
+    assert fd.evaluate_exit is shared.evaluate_exit

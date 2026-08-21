@@ -1003,3 +1003,38 @@ async def test_locally_priced_positions_never_consume_the_rest_budget(_tmp_db):
     )
     assert stats["checked"] == 5
     assert "deferred_no_rest_budget" not in stats
+
+
+@pytest.mark.asyncio
+async def test_the_exit_rule_sees_the_low_reached_between_reads(_tmp_db):
+    """21/08 -- the websocket records the extremes reached since the last
+    read, and FAST-DISCOVERY passed them; this pocket did not, so its stop
+    could only react to a point sample. That is why a -20% hard stop filled at
+    -78%: the crossing HAD been recorded, the pocket never read it."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    class _FeedWithExtremes:
+        """Price recovered to -5% by the time we look, but it dipped to -30%
+        in between -- a real stop would have been taken there."""
+
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(
+                available=True, price_usd=entry * 0.95, reserve_usd=9_000.0,
+                dex_id="pumpfun",
+                price_high_since_last_read=entry * 0.99,
+                price_low_since_last_read=entry * 0.70,
+            )
+
+    stats = await pocket.advance_exit_simulation(
+        bonding_ws_feed=_FeedWithExtremes(), db_path=_tmp_db,
+    )
+    assert stats["closed"] == 1
+    row = (await _rows(_tmp_db))[0]
+    assert row["exit_reason"] == "hard_stop"
+    # filled AT the stop: the market is above it now, so the crossing was real
+    # and fillable -- not the -30% low, and not the -5% current price.
+    assert row["realized_proceeds"] == pytest.approx(entry * 0.80)

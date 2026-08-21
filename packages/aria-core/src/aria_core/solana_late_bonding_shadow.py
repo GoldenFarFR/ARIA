@@ -674,6 +674,18 @@ async def advance_exit_simulation(
         result = evaluate_exit(
             row, current_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
             dex_id=snapshot.dex_id, age_minutes=age if age is not None else 0.0,
+            # 21/08 -- the extremes REACHED since the last read, not just the
+            # price at the instant we happen to look. The websocket already
+            # tracks them (`price_high/low_since_last_read`) and
+            # FAST-DISCOVERY already passed them; this pocket did not, so a
+            # stop could only ever react to a point sample. That is the real
+            # reason a -20% hard stop filled at -78%: the feed HAD recorded
+            # the -20% crossing, the pocket simply never read it. Fixing the
+            # queue's freshness narrowed the gap; this closes it at the source
+            # and is also what makes filling AT the stop legitimate rather
+            # than optimistic -- we genuinely observed the crossing.
+            window_high=getattr(snapshot, "price_high_since_last_read", None),
+            window_low=getattr(snapshot, "price_low_since_last_read", None),
             hard_stop_pct=HARD_STOP_PCT,
         )
         async with aiosqlite.connect(db_path or _db_path()) as db:
