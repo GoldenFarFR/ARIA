@@ -809,11 +809,16 @@ async def test_collecting_the_cohort_never_rejects_an_entry(_tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_locally_priced_positions_are_checked_before_network_bound_ones(_tmp_db):
+async def test_a_locally_priced_position_is_served_even_with_no_rest_budget(_tmp_db):
     """21/08 -- one migrated position waiting on GeckoTerminal's 16s throttle
     stalled every bonding-curve position behind it, pushing the real gap
     between checks to 41s against a 10s cadence. That is what let a -20% hard
-    stop fill at -78%: a stop cannot cut a price it never sees."""
+    stop fill at -78%: a stop cannot cut a price it never sees.
+
+    Stated as "a free read is never starved by a paid one" rather than as a
+    call ordering, because locally-priced rows no longer go through the REST
+    path at all -- a test asserting on that call would pass while proving
+    nothing."""
     for mint, pool in (("mintSlow", "poolSlow"), ("mintFast", "poolFast")):
         await pocket.consider_candidate(
             mint, pool, trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
@@ -823,41 +828,29 @@ async def test_locally_priced_positions_are_checked_before_network_bound_ones(_t
     class _FeedWithOnlyFast:
         def get_snapshot(self, pool_address):
             if pool_address == "poolFast":
-                return SimpleNamespace(available=True, price_usd=0.001,
-                                       reserve_usd=9_000.0, dex_id="pumpfun")
+                return SimpleNamespace(available=True, price_usd=0.0002,
+                                       reserve_usd=390.0, dex_id="pumpfun",
+                                       price_high_since_last_read=0.0002,
+                                       price_low_since_last_read=0.0002)
             return SimpleNamespace(available=False, price_usd=None)
 
-    order: list[str] = []
+    rest_calls = []
 
-    async def _tracking_snapshot(_client, pool, _mint, *, chain):
-        order.append(pool)
+    async def _rest(_client, pool, _mint, *, chain):
+        rest_calls.append(pool)
         return SimpleNamespace(available=True, price_usd=0.001,
                                reserve_usd=9_000.0, dex_id="pumpfun")
 
-    async def _record_local(pool):
-        order.append(pool)
-
-    feed = _FeedWithOnlyFast()
-    original = pocket._price_position
-
-    async def _spy(row, **kwargs):
-        order.append(row["pool_address"])
-        return await original(row, **kwargs)
-
-    pocket._price_position = _spy
-    try:
-        await pocket.advance_exit_simulation(
-            snapshot_fn=_tracking_snapshot, bonding_ws_feed=feed, db_path=_tmp_db,
-        )
-    finally:
-        pocket._price_position = original
-
-    assert order and order[0] == "poolFast", (
-        f"the locally-priced position must be served first, got {order}"
+    stats = await pocket.advance_exit_simulation(
+        snapshot_fn=_rest, bonding_ws_feed=_FeedWithOnlyFast(), db_path=_tmp_db,
+        max_rest_calls=0,
     )
 
+    assert rest_calls == [], "the REST budget was zero, nothing should have been fetched"
+    assert stats["checked"] == 1, "the free local read must still have been served"
+    closed = [r for r in await _rows(_tmp_db) if r["exit_reason"] is not None]
+    assert [r["pool_address"] for r in closed] == ["poolFast"]
 
-# --- graduated positions keep being priced on the RPC (21/08) ---
 
 class _CurveGoneFeed:
     """The curve feed after graduation: honestly unavailable on the curve
@@ -1131,3 +1124,38 @@ def test_the_trailing_stop_cannot_be_credited_above_the_real_market():
     )
     assert recovered["exit_reason"] == "trailing_stop"
     assert recovered["realized_proceeds"] == pytest.approx(1.70)
+
+
+@pytest.mark.asyncio
+async def test_the_feed_is_read_exactly_once_per_position_per_pass(_tmp_db):
+    """21/08, self-inflicted: `get_snapshot()` RESETS the window extremes
+    after every read, by design. The ordering pass called it separately, so it
+    consumed the window and the real evaluation got extremes already flattened
+    to the current price -- silently undoing the exit rule's window_low. Two
+    fixes that each looked right cancelled each other out, and nothing failed."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    class _ConsumingFeed:
+        """Mirrors the real feed: the extremes are returned once, then reset."""
+
+        def __init__(self):
+            self.reads = 0
+            self._low = 0.0007
+
+        def get_snapshot(self, _pool):
+            self.reads += 1
+            low, self._low = self._low, 0.001
+            return SimpleNamespace(available=True, price_usd=0.001, reserve_usd=9_000.0,
+                                   dex_id="pumpfun", price_high_since_last_read=0.0012,
+                                   price_low_since_last_read=low)
+
+    feed = _ConsumingFeed()
+    stats = await pocket.advance_exit_simulation(bonding_ws_feed=feed, db_path=_tmp_db)
+
+    assert feed.reads == 1, f"the feed was read {feed.reads} times, consuming the window"
+    # the -30% low was seen, so the hard stop must have fired
+    assert stats["closed"] == 1
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"

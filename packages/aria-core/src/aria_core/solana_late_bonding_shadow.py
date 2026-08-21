@@ -625,16 +625,29 @@ async def advance_exit_simulation(
     # sweep, and the network-bound ones follow. No parallelism, no new client,
     # no threshold touched -- just refusing to let the slow tail set the pace
     # for everyone.
-    def _priced_locally(row: dict) -> bool:
-        if bonding_ws_feed is None:
-            return False
-        try:
-            snap = bonding_ws_feed.get_snapshot(row["pool_address"])
-            return bool(getattr(snap, "available", False) and snap.price_usd is not None)
-        except Exception:  # noqa: BLE001
-            return False
+    # READ THE FEED EXACTLY ONCE PER POSITION, then reuse that snapshot for
+    # ordering, evaluation and archiving alike.
+    #
+    # 21/08, self-inflicted bug found by reading the archive table: this
+    # ordering pass used to call `get_snapshot()` on its own, and that call
+    # is NOT free of side effects -- the feed RESETS `price_high/low_since_
+    # last_read` after every read, by design ("since the caller's last read").
+    # So the ordering pass consumed the window and the real evaluation
+    # received extremes already reset to the current price, silently undoing
+    # the whole point of passing window_low to the exit rule. Two fixes that
+    # each looked right in isolation cancelled each other out, and nothing
+    # failed -- the columns were simply empty.
+    local_snaps: dict[int, object] = {}
+    if bonding_ws_feed is not None:
+        for row in rows:
+            try:
+                snap = bonding_ws_feed.get_snapshot(row["pool_address"])
+                if getattr(snap, "available", False) and snap.price_usd is not None:
+                    local_snaps[row["id"]] = snap
+            except Exception:  # noqa: BLE001 -- a feed hiccup is not a verdict
+                continue
 
-    rows.sort(key=lambda r: not _priced_locally(r))
+    rows.sort(key=lambda r: r["id"] not in local_snaps)
 
     # 21/08 -- REST ceiling per cycle, the guardrail the two sibling pockets
     # already had and this one did not. Measured cost of its absence: an exit
@@ -648,7 +661,7 @@ async def advance_exit_simulation(
     rest_budget = max_rest_calls
     for row in rows:
         stats["checked"] += 1
-        locally_priced = _priced_locally(row)
+        locally_priced = row["id"] in local_snaps
         if not locally_priced and rest_budget is not None:
             if rest_budget <= 0:
                 stats["checked"] -= 1
@@ -656,7 +669,10 @@ async def advance_exit_simulation(
                 continue
             rest_budget -= 1
         try:
-            snapshot = await _price_position(
+            # Reuse the single read taken above rather than asking again --
+            # asking again would consume a second window and hand the exit
+            # rule a flattened one.
+            snapshot = local_snaps.get(row["id"]) or await _price_position(
                 row, chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
             )
         except Exception:  # noqa: BLE001 -- a provider failure is not a verdict
