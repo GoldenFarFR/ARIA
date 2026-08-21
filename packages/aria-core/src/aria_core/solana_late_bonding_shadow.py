@@ -135,6 +135,17 @@ MAX_TOP_BUYER_SHARE = 0.95
 # liquidity_collapse still applies.
 EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 
+# 21/08 -- floor loss for the window the trailing stop does not cover (it only
+# arms once the peak reaches +10% above entry). Measured on THIS pocket's own
+# 304 closures at 70%+: the 142 positions whose trailing never armed averaged
+# -55.5%, with no downside rule protecting any of them. Full derivation, the
+# pessimistic assumption and the outlier test live next to
+# `HARD_STOP_PCT_DEFAULT` in the shared exit module -- not restated here.
+# Deliberately passed as an ARGUMENT to the shared `evaluate_exit` rather than
+# forked into a local copy of the exit rule, so FAST-DISCOVERY stays an
+# untouched control and the two pockets keep differing on one variable.
+HARD_STOP_PCT = 20.0
+
 # How many of the most recent closures the 'recent' summary covers.
 RECENT_WINDOW_CLOSURES = 50
 
@@ -470,6 +481,7 @@ async def advance_exit_simulation(
         result = evaluate_exit(
             row, current_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
             dex_id=snapshot.dex_id, age_minutes=age if age is not None else 0.0,
+            hard_stop_pct=HARD_STOP_PCT,
         )
         async with aiosqlite.connect(db_path or _db_path()) as db:
             await db.execute(

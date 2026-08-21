@@ -250,7 +250,11 @@ async def test_a_collapsing_position_is_closed_by_the_shared_rule(_tmp_db):
     stats = await pocket.advance_exit_simulation(snapshot_fn=_collapsed, db_path=_tmp_db)
 
     assert stats["closed"] == 1
-    assert (await _rows(_tmp_db))[0]["exit_reason"] == "liquidity_collapse"
+    # 21/08 -- was `liquidity_collapse`. The hard stop now owns this case: a
+    # position down 97% necessarily crossed -20% first, and letting the
+    # collapse branch claim it is exactly how -81.5% closes kept happening
+    # under a -15% trailing stop. It still fills at the real market price.
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
 
 
 @pytest.mark.asyncio
@@ -653,3 +657,77 @@ async def test_a_provider_failure_leaves_the_field_null_and_never_raises(_tmp_db
     await pocket._enrich_paid_profile(row_id, "mintA", db_path=_tmp_db)
 
     assert (await _rows(_tmp_db))[0]["has_paid_profile"] is None
+
+
+# --- hard stop: the window the trailing stop never covered (21/08) ---
+
+def _row(entry=1.0, peak=None, qty=1.0):
+    return {"entry_price": entry, "peak_price": peak if peak is not None else entry,
+            "reserve_usd": 10_000.0, "remaining_qty": qty, "realized_proceeds": 0.0,
+            "realistic_entry_price": entry, "realistic_realized_proceeds": 0.0,
+            "pool_address": "pool"}
+
+
+def test_hard_stop_fires_when_trailing_never_armed():
+    """The exact hole the operator saw live as a -81.5% close."""
+    # price dipped through the stop and came back up: the stop fills at the
+    # stop, since the market is still bidding above it.
+    r = ws_exit_shadow.evaluate_exit(
+        _row(), current_price=0.85, reserve_usd=9_000.0, dex_id="pumpfun",
+        age_minutes=5.0, window_low=0.78, hard_stop_pct=20.0,
+    )
+    assert r["exit_reason"] == "hard_stop"
+    assert r["realized_proceeds"] == pytest.approx(0.80)
+
+
+def test_hard_stop_never_fills_above_a_gapped_market():
+    """A stop cannot conjure liquidity that is gone -- a price already at -60%
+    fills at -60%, never at the -20% stop. Overstating this fill is how a
+    counterfactual becomes a fantasy."""
+    r = ws_exit_shadow.evaluate_exit(
+        _row(), current_price=0.40, reserve_usd=9_000.0, dex_id="pumpfun",
+        age_minutes=5.0, hard_stop_pct=20.0,
+    )
+    assert r["exit_reason"] == "hard_stop"
+    assert r["realized_proceeds"] == pytest.approx(0.40)
+
+
+def test_hard_stop_yields_to_an_armed_trailing_stop():
+    """Once the peak has risen past the arming threshold the trailing owns the
+    position -- the hard stop must not pre-empt the mechanism that returned
+    +58.2% on this pocket's own closures."""
+    r = ws_exit_shadow.evaluate_exit(
+        _row(peak=2.0), current_price=0.79, reserve_usd=9_000.0, dex_id="pumpfun",
+        age_minutes=5.0, hard_stop_pct=20.0,
+    )
+    assert r["exit_reason"] == "trailing_stop"
+
+
+def test_hard_stop_takes_priority_over_liquidity_collapse():
+    """Chronologically it would have fired first, well before the reserve
+    halved -- otherwise the collapse branch keeps claiming closes the stop
+    should already have taken."""
+    r = ws_exit_shadow.evaluate_exit(
+        _row(), current_price=0.19, reserve_usd=1_000.0, dex_id="pumpfun",
+        age_minutes=5.0, hard_stop_pct=20.0,
+    )
+    assert r["exit_reason"] == "hard_stop"
+
+
+def test_hard_stop_absent_by_default_so_the_control_pocket_is_untouched():
+    """FAST-DISCOVERY must keep behaving exactly as before, or the two pockets
+    stop differing on one variable and neither result is attributable."""
+    r = ws_exit_shadow.evaluate_exit(
+        _row(), current_price=0.50, reserve_usd=9_000.0, dex_id="pumpfun",
+        age_minutes=5.0,
+    )
+    assert r["exit_reason"] is None
+    assert ws_exit_shadow.HARD_STOP_PCT_DEFAULT is None
+
+
+def test_late_bonding_actually_passes_its_hard_stop_to_the_shared_rule():
+    """A constant defined but never wired is the failure mode this guards."""
+    import inspect
+    src = inspect.getsource(pocket)
+    assert "hard_stop_pct=HARD_STOP_PCT" in src
+    assert pocket.HARD_STOP_PCT == 20.0

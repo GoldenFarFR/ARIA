@@ -129,6 +129,34 @@ TRAILING_STOP_PCT = 15.0
 # additional entry filter risks cutting the rare winners that carry everything.
 # Reducing what the losers cost is the one lever that cannot do that.
 TRAILING_STOP_ARM_PEAK_PCT = 10.0
+
+# 21/08 -- HARD STOP covering the window the trailing stop does NOT protect.
+#
+# Arming the trailing at +10% (above) removed a destructive mechanism, but it
+# left a hole nobody looked at: between entry and +10%, a position has NO
+# downside rule at all. It falls until `liquidity_collapse` fires at a 50%
+# reserve drop, which on a curve is a far worse price than 50%. Operator saw
+# it live as a -81.5% close and asked the right question -- how does that
+# happen with a -15% trailing stop? It doesn't: the trailing was never armed.
+#
+# Measured on the LATE-BONDING pocket's own 304 closures at 70%+ progress:
+#   trailing ARMED   (peak >= +10%)  n=162   +58.2%
+#   trailing NEVER armed             n=142   -55.5%   <-- unprotected
+# Counterfactual on those same closures, PESSIMISTIC (any position dead within
+# 90s is assumed uncuttable -- its price gapped, no -20% ever printed) and
+# outlier-tested as the statistical mandate requires:
+#   today          +5.1%   (without its two best: +2.2%)
+#   hard stop -15% +23.7%  (+20.9%)
+#   hard stop -20% +21.8%  (+19.0%)   <-- chosen
+#   hard stop -25% +20.0%  (+17.2%)
+# -20% over -15% deliberately: -15% scores marginally better here but sits
+# only 5 points off the trailing's own distance, so it would start cutting
+# ordinary noise on a curve this volatile. It changes NO entry filter, which
+# matters because 1.8% of trades carry 100% of this dome's PnL.
+#
+# ``None`` by default so the FAST-DISCOVERY control pocket is untouched and
+# the two pockets keep differing on one variable at a time.
+HARD_STOP_PCT_DEFAULT = None
 MAX_HOLD_MINUTES = 60.0
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
@@ -1197,6 +1225,7 @@ def evaluate_exit(
     age_minutes: float,
     window_high: float | None = None,
     window_low: float | None = None,
+    hard_stop_pct: float | None = HARD_STOP_PCT_DEFAULT,
 ) -> dict:
     """Pure exit-check: given a row and an ALREADY-KNOWN price/reserve/dex_id
     (from either a websocket push or a REST polling snapshot -- this
@@ -1256,8 +1285,33 @@ def evaluate_exit(
         and reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
     )
 
+    # A hard stop that has been breached takes priority over
+    # `liquidity_collapse`: chronologically it would have fired FIRST, well
+    # before the reserve halved. Ordering it after would let the collapse
+    # branch keep claiming closes the stop should already have taken.
+    hard_stopped = (
+        hard_stop_pct is not None
+        and entry_price > 0
+        and peak_price < entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
+        and effective_low <= entry_price * (1 - hard_stop_pct / 100.0)
+    )
+
     exit_reason: str | None = None
-    if liquidity_collapsed:
+    if hard_stopped:
+        # Fills at the stop price ONLY if the market still shows at least
+        # that much. When price has already gapped below, the stop fills at
+        # the real current price -- a stop cannot conjure liquidity that is
+        # gone. Stricter than the trailing branch below on purpose: that one
+        # fires after a rise, into a market still bidding, while this one
+        # fires mid-collapse. Overstating this fill is exactly how a
+        # counterfactual turns into a fantasy.
+        stop_price = entry_price * (1 - hard_stop_pct / 100.0)
+        fill_price = min(stop_price, current_price) if current_price > 0 else stop_price
+        _realistic_sell(remaining_qty, fill_price)
+        realized_proceeds += remaining_qty * fill_price
+        remaining_qty = 0.0
+        exit_reason = "hard_stop"
+    elif liquidity_collapsed:
         _realistic_sell(remaining_qty, current_price)
         realized_proceeds += remaining_qty * current_price
         remaining_qty = 0.0
