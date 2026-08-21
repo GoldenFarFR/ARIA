@@ -102,7 +102,12 @@ BAND_EDGES: tuple[tuple[float, float, float], ...] = (
     # cadence would miss the subscription that populates buyer history, and
     # every candidate would be rejected on MIN_DISTINCT_BUYERS -- the exact
     # failure of the 18:49 switchover. Cheapness stops where correctness does.
-    (0.00, 0.30, 180.0),
+    # Back to 60s on 2026.08.21 once the polling workload moved to a provider
+    # that bills 1 unit per call with 3M free per month. It had been slowed to
+    # 180s purely to survive a nearly exhausted Helius quota, at the cost of
+    # seeing the low band five times less often. The constraint is gone, so the
+    # coverage comes back: nothing about 180s was ever better, it was cheaper.
+    (0.00, 0.30, 60.0),
     # RESTORED to 20s on 2026.08.21 after it broke entries. At 45s a token can
     # go from 45% to 75% between two polls, skipping the pre-arm window
     # entirely -- it is then never subscribed, reads zero buyers, and is
@@ -118,11 +123,11 @@ HANDOVER_PROGRESS = 0.70
 # A mint that has not moved at all for this long is dropped: pump.fun creates
 # thousands a day and the vast majority die within minutes. Without this the
 # tracked set grows without bound and the "cheap" poll stops being cheap.
-# Shortened from 900s on 2026.08.21 for the same budget reason. pump.fun
-# creates thousands of tokens a day and the overwhelming majority die within
-# minutes; holding them for a quarter of an hour inflates the tracked set,
-# which is what every poll pays for.
-STALE_AFTER_SECONDS = 480.0
+# Back to 900s with the budget constraint lifted. pump.fun creates thousands
+# of tokens a day and most die within minutes, so this still matters -- a
+# tracked corpse is polled like a live token -- but 480s was cutting tokens
+# that were merely slow, not dead.
+STALE_AFTER_SECONDS = 900.0
 
 # pump.fun mints are minted with 6 decimals. Kept as the fallback ONLY, never
 # as a substitute for the real value: a wrong exponent silently scales the
