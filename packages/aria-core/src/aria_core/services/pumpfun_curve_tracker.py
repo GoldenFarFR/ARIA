@@ -242,6 +242,90 @@ class PumpFunCurveTracker:
                     crossings.append((entry.mint, previous, new))
         return crossings
 
+    def save_state(self, path: str) -> int:
+        """Persists the tracked set so a restart does not start blind.
+
+        Real incident 2026.08.21: a process restart emptied the tracker, and a
+        switchover done in the minute that followed found it with nothing to
+        offer -- it only knows tokens created AFTER it connects, and they need
+        minutes to climb. Persisting turns a 10-minute sourcing hole into none.
+
+        Wall-clock is stored, not the monotonic clock, because monotonic does
+        not survive a reboot. Returns how many entries were written.
+        """
+        import json
+        import time as _time
+
+        now_mono = _time.monotonic()
+        wall = _time.time()
+        rows = [
+            {
+                "mint": e.mint,
+                "pool": e.pool_address,
+                "progress": e.progress,
+                # Seconds of staleness, resolved back against wall clock on load.
+                "idle_for": max(0.0, now_mono - e.last_change_at),
+                "saved_at": wall,
+                "decimals": e.decimals,
+            }
+            for e in self._tracked.values()
+        ]
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh)
+        # Atomic swap: a half-written state file would be worse than none.
+        import os as _os
+
+        _os.replace(tmp, path)
+        return len(rows)
+
+    def load_state(self, path: str) -> int:
+        """Restores a persisted set, dropping anything already stale.
+
+        A mint that was idle before the save PLUS the time the process was down
+        is very likely dead -- pump.fun creates thousands a day and most die in
+        minutes. Reloading those would spend credits polling corpses, so the
+        same STALE_AFTER_SECONDS rule that prunes at runtime applies here.
+        Returns how many entries were actually restored.
+        """
+        import json
+        import time as _time
+
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rows = json.load(fh)
+        except FileNotFoundError:
+            return 0
+        except Exception:  # noqa: BLE001 -- a corrupt state file is not fatal
+            logger.info("pumpfun_curve_tracker: unreadable state at %s, starting empty", path)
+            return 0
+
+        now_wall = _time.time()
+        now_mono = _time.monotonic()
+        restored = 0
+        for row in rows if isinstance(rows, list) else []:
+            mint, pool = row.get("mint"), row.get("pool")
+            if not mint or not pool or mint in self._tracked:
+                continue
+            if len(self._tracked) >= self._max_tracked:
+                self.refused_adds += 1
+                continue
+            downtime = max(0.0, now_wall - float(row.get("saved_at") or now_wall))
+            idle = float(row.get("idle_for") or 0.0) + downtime
+            if idle > STALE_AFTER_SECONDS:
+                continue
+            entry = TrackedMint(mint=mint, pool_address=pool)
+            entry.progress = row.get("progress")
+            entry.decimals = row.get("decimals")
+            # Rebased onto this process's monotonic clock, preserving how long
+            # the mint has actually been idle.
+            entry.last_change_at = now_mono - idle
+            self._tracked[mint] = entry
+            if entry.decimals:
+                self._decimals_cache[mint] = entry.decimals
+            restored += 1
+        return restored
+
     @staticmethod
     def crossed(previous: float | None, new: float, threshold: float) -> bool:
         """True only on the pass that actually crosses ``threshold`` upward.

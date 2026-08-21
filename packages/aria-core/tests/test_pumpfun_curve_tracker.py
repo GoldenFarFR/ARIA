@@ -202,3 +202,75 @@ def test_missing_accounts_are_skipped_not_guessed(monkeypatch):
     moved = asyncio.run(t.poll_due(http_client=None, now=10_000.0))
     assert [m for m, _, _ in moved] == ["mintA"]
     assert t.progress_of("mintB") is None
+
+
+# --- state persistence -------------------------------------------------------
+# Real incident 2026.08.21: a restart emptied the tracker and a switchover done
+# in the following minute found it with nothing to offer. It only knows tokens
+# created after it connects, and they need minutes to climb.
+
+
+def test_a_restart_no_longer_starts_blind(tmp_path):
+    path = str(tmp_path / "curve_state.json")
+    a = PumpFunCurveTracker()
+    a.add("mintA", "poolA")
+    a._tracked["mintA"].progress = 0.42
+    assert a.save_state(path) == 1
+
+    b = PumpFunCurveTracker()
+    assert b.load_state(path) == 1
+    assert b.tracked_count() == 1
+    assert b.progress_of("mintA") == 0.42
+
+
+def test_mints_that_went_stale_while_down_are_not_reloaded(tmp_path):
+    path = str(tmp_path / "curve_state.json")
+    a = PumpFunCurveTracker()
+    a.add("mintA", "poolA")
+    a.save_state(path)
+
+    # Rewrite the saved timestamp as if the process had been down far longer
+    # than the staleness window: polling those would spend credits on corpses.
+    import json
+    rows = json.load(open(path))
+    rows[0]["saved_at"] = rows[0]["saved_at"] - (tracker.STALE_AFTER_SECONDS + 60)
+    json.dump(rows, open(path, "w"))
+
+    b = PumpFunCurveTracker()
+    assert b.load_state(path) == 0
+    assert b.tracked_count() == 0
+
+
+def test_a_missing_state_file_is_not_an_error(tmp_path):
+    t = PumpFunCurveTracker()
+    assert t.load_state(str(tmp_path / "nope.json")) == 0
+
+
+def test_a_corrupt_state_file_starts_empty_rather_than_crashing(tmp_path):
+    path = tmp_path / "curve_state.json"
+    path.write_text("{ this is not json")
+    t = PumpFunCurveTracker()
+    assert t.load_state(str(path)) == 0
+
+
+def test_loading_respects_the_cap(tmp_path):
+    path = str(tmp_path / "curve_state.json")
+    a = PumpFunCurveTracker(max_tracked=5)
+    for i in range(5):
+        a.add(f"mint{i}", f"pool{i}")
+    a.save_state(path)
+
+    b = PumpFunCurveTracker(max_tracked=2)
+    assert b.load_state(path) == 2
+    assert b.refused_adds == 3
+
+
+def test_the_state_file_is_swapped_atomically(tmp_path):
+    # A half-written state file would be worse than none: the next start would
+    # silently restore a truncated set and read as "the market is quiet".
+    path = tmp_path / "curve_state.json"
+    t = PumpFunCurveTracker()
+    t.add("mintA", "poolA")
+    t.save_state(str(path))
+    assert path.exists()
+    assert not (tmp_path / "curve_state.json.tmp").exists()
