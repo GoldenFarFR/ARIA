@@ -192,9 +192,12 @@ until deployed, the momentum pipeline alone remains active in prod. Detail:
 
 **Multi-chain for THIS TEST (Base/Solana/Robinhood), no limit** — 15/07 operator
 decision, GoPlus honeypot remains the only hard guardrail, verified multi-chain.
-**⚠️ Disable Solana before any move to real capital** (the operator doesn't fund a
-SOL wallet) — nothing to do now, just explicitly re-check when preparing the
-paper → real transition, never assume it survives as-is.
+**Solana IS allowed for real capital (21/08, explicit operator decision).**
+This replaces the former "disable Solana before any move to real capital"
+rule, whose premise — that the operator does not fund a SOL wallet — he
+retired himself while preparing the 5$ live test: "supprime cette regle en
+integrale, se sera plus simple qu'un gate on ou off". The bound is now the
+gate plus the wallet balance, not a chain-level ban.
 **⚠️ Re-evaluate publishing exact parameters before any move to real capital
 beyond the 10-25$ pilot** (04/08 operator decision, Fable 5 second opinion sought) —
 current status quo (public strategy/security HANDOFFs) judged safe as long as

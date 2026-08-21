@@ -69,6 +69,24 @@ vente : a 1% elle laisse +5.1% de PnL hors outliers, a 5% elle l'annule).
    grandeur devnet, pas la cible 200$ : le relever est une decision distincte.
 5. **Cycle complet en mainnet a montant minimal** avant tout volume.
 
+## Dimensionnement du portefeuille de test -- mesure, pas estime
+
+Pic de positions ouvertes SIMULTANEMENT, mesure sur 407 positions reelles de
+la configuration courante (6 heures) :
+
+| | positions | capital immobilise | dont cautions |
+|---|---|---|---|
+| mediane | 5 | 1.45$ | 0.95$ |
+| 90e centile | 29 | 8.41$ | 5.51$ |
+| **pic observe** | **35** | **10.15$** | 6.65$ |
+| plafond configure | 60 | 17.40$ | 11.40$ |
+
+**Les 5$ evoques ne suffisent pas.** Ils couvrent largement la mediane mais
+saturent des que l'activite monte -- et l'activite monte precisement quand il
+y a des opportunites. Deux sorties possibles : financer ~10$ pour absorber le
+pic observe, ou abaisser `MAX_CONCURRENT_TRACKED` pour tenir dans 5$ (environ
+17 positions). Decision operateur, pas technique.
+
 ## OBLIGATION de la chaine de vente : fermer le compte du token
 
 Verifie le 21/08 sur l'endpoint `swap-instructions` de Jupiter : il fournit
@@ -94,13 +112,12 @@ mais quand le commit reellement servi est verifie".
 
 ## Points ouverts qui appartiennent a l'operateur, pas a moi
 
-- **La regle Solana de CLAUDE.md.** Elle dit, mot pour mot : desactiver Solana
-  avant tout passage au capital reel, l'operateur ne finançant pas de wallet
-  SOL, et re-verifier explicitement au moment de preparer la transition
-  papier -> reel. C'est ce moment. Cette architecture Squads est justement
-  concue pour Solana : la regle a probablement ete ecrite dans un autre
-  contexte (le test papier multi-chaines), mais elle demande une
-  reconfirmation explicite, pas une interpretation de ma part.
+- **La regle Solana : TRANCHEE le 21/08.** L'operateur l'a retiree lui-meme
+  ("supprime cette regle en integrale, se sera plus simple qu'un gate on ou
+  off") -- sa premisse, qu'il ne finance pas de wallet SOL, est devenue fausse
+  au moment ou il a decide de financer le test a 5$. La borne est desormais le
+  gate plus le solde du wallet, pas une interdiction de chaine. Plus rien a
+  reconfirmer ici.
 - **L'ecart d'audit AllowanceModule v0.1.1** (jambe EVM) reste ouvert.
 - **Le plafond cible** (0.003 SOL aujourd'hui vs 200$ vise) est une decision
   d'operateur, pas un reglage technique.
