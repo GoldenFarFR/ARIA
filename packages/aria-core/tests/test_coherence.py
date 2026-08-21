@@ -835,6 +835,11 @@ _KNOWN_ENABLED_GATES = {
     # (solana_trade_pilot.py). Separate from the Coinbase pilot above: another
     # chain, another key, another pot of money. Ships OFF; funding the wallet
     # is a distinct operator decision from opening this gate.
+    # 21/08 -- automatic sweep of surplus above 500$ to the operator's cold
+    # wallet (solana_cold_sweep.py). Destination hard-coded, never a parameter.
+    # REDUCES exposure rather than raising it, which is why the 17/08 caution on
+    # a 500$ HOT ceiling does not apply to this threshold. Ships OFF.
+    "ARIA_SOLANA_COLD_SWEEP_ENABLED",
     "ARIA_SOLANA_TRADE_PILOT_ENABLED",
     "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
