@@ -263,6 +263,38 @@ MAX_WATCHED_MINTS = 12
 _WATCH_QUEUE_POLL_SECONDS = 0.2
 
 
+# Public endpoint, NO API KEY, flat-rate free tier with no credit metering --
+# which is the whole point. Measured live 2026.08.21: the full program-wide
+# pump.fun feed runs at ~240 notifications/s, 32 GB/day. The same volume costs
+# ~646 000 credits/day on Helius (20 credits/MB), seven times the entire
+# remaining monthly quota. Here it costs nothing, because the plan bills a flat
+# rate rather than usage.
+#
+# Their own terms warn the free tier is "not intended for production" and may
+# see unscheduled downtime, which is exactly why it is PRIMARY and not SOLE:
+# the paid Helius endpoint stays wired as fallback. Cheap where it works,
+# reliable when it does not.
+#
+# Not a secret (public URL, no key), so it lives in code rather than .env --
+# but overridable for tests and for the day the endpoint moves.
+STREAM_WS_PUBLIC_DEFAULT = "wss://public.rpc.solanavibestation.com"
+
+
+def stream_ws_endpoints() -> list[str]:
+    """Streaming endpoints in priority order: free flat-rate first, metered
+    fallback second. Duplicates and blanks removed so a misconfigured env can
+    never make the same provider be tried twice."""
+    import os as _os
+
+    primary = (_os.environ.get("ARIA_SOLANA_RPC_WS_STREAM", "") or "").strip() \
+        or STREAM_WS_PUBLIC_DEFAULT
+    out = []
+    for url in (primary, RPC_WS_DEFAULT):
+        if url and url not in out:
+            out.append(url)
+    return out
+
+
 def decode_trade_event(raw: bytes) -> tuple[str, float, bool, str, int] | None:
     """``(mint, sol_amount, is_buy, user, token_amount)`` or ``None`` when the
     payload is not a TradeEvent (or is too short to trust). Never raises on
@@ -324,7 +356,11 @@ class PumpFunTradeStream:
     same measurement over 120 targeted mints carried 11.3 GB/day, a 6.6x cut
     for strictly the same signal. See MAX_WATCHED_MINTS for the budget."""
 
-    def __init__(self, *, rpc_ws_url: str = RPC_WS_DEFAULT, connect_fn=None,
+    # rpc_ws_url defaults to None, NOT to RPC_WS_DEFAULT: a non-empty default
+    # pins the metered endpoint and the cascade in current_stream_url() is
+    # never consulted. That exact mistake sent the full feed back to Helius on
+    # 2026.08.21 at 2.4M credits/day -- the whole remaining quota in minutes.
+    def __init__(self, *, rpc_ws_url: str | None = None, connect_fn=None,
                  targeted: bool = False, max_watched: int = MAX_WATCHED_MINTS):
         self._rpc_ws_url = rpc_ws_url
         self._connect_fn = connect_fn
@@ -337,6 +373,8 @@ class PumpFunTradeStream:
         self._req_mints: dict[int, str] = {}
         self._next_req_id = 100
         self._refused = 0
+        self._endpoint_index = 0
+        self.endpoint_failures = 0
         self._state: dict[str, _MintState] = {}
         # Separate from `_state` and far longer-lived -- see FOUNDING_COHORT_SIZE.
         self._founding: dict[str, FoundingCohort] = {}
@@ -608,15 +646,30 @@ class PumpFunTradeStream:
             self._prune_founding()
         return len(events)
 
+    def current_stream_url(self) -> str:
+        """Endpoint for the next connection attempt, cycling through
+        stream_ws_endpoints() as failures accumulate.
+
+        The old comment here said "no public fallback by design -- fail rather
+        than stream the dome's busiest subscription over the free endpoint".
+        That was written when "free endpoint" meant the public Solana RPC with
+        its punishing per-IP limits. It no longer applies: this endpoint is a
+        flat-rate plan that carries the full 240 notifications/s feed measured
+        on 2026.08.21, for nothing, where the metered one costs seven times the
+        monthly quota per day. The reasoning inverted with the facts.
+        """
+        urls = stream_ws_endpoints()
+        if not urls:
+            return require_solana_rpc_ws()
+        return urls[self._endpoint_index % len(urls)]
+
     def _connect(self):
+        url = self._rpc_ws_url or self.current_stream_url()
         if self._connect_fn is not None:
-            return self._connect_fn(self._rpc_ws_url)
-        # No public fallback by design -- fail here rather than stream the
-        # dome's busiest subscription over the free endpoint.
-        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws()
+            return self._connect_fn(url)
         import websockets
 
-        return websockets.connect(self._rpc_ws_url, ping_interval=20, ping_timeout=40)
+        return websockets.connect(url, ping_interval=20, ping_timeout=40)
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         """Reconnects with backoff forever. Same resilience shape as the other
@@ -657,6 +710,15 @@ class PumpFunTradeStream:
                             sender.cancel()
             except Exception as exc:  # noqa: BLE001
                 self.connected = False
-                logger.info("pumpfun_trade_stream: disconnected (%s), retrying in %.0fs", exc, backoff)
+                self.endpoint_failures += 1
+                # Rotate to the next provider. The free flat-rate tier warns of
+                # unscheduled downtime, so a failure is expected occasionally --
+                # it must cost a reconnect, never the feed.
+                if len(stream_ws_endpoints()) > 1 and not self._rpc_ws_url:
+                    self._endpoint_index += 1
+                logger.info(
+                    "pumpfun_trade_stream: disconnected (%s), retrying in %.0fs on %s",
+                    exc, backoff, self.current_stream_url().split("//")[-1].split("/")[0],
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)

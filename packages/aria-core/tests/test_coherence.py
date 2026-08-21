@@ -831,6 +831,11 @@ _KNOWN_ENABLED_GATES = {
     # daily forward-price refresh + one-time WARNING log per window once
     # _MIN_SAMPLES_PER_SIDE is reached. Own dedicated flag, independent of
     # every source column's own gate. OFF by default.
+    # 21/08 -- REAL CAPITAL on Solana, 0.10$ hard cap per trade
+    # (solana_trade_pilot.py). Separate from the Coinbase pilot above: another
+    # chain, another key, another pot of money. Ships OFF; funding the wallet
+    # is a distinct operator decision from opening this gate.
+    "ARIA_SOLANA_TRADE_PILOT_ENABLED",
     "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
     "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",

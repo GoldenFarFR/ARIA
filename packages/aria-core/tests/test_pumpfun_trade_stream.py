@@ -552,3 +552,56 @@ def test_targeted_mode_reads_the_same_trades_as_program_wide():
     assert wide.handle_notification(msg) == narrow.handle_notification(msg)
     assert wide.get_flow(mint).distinct_buyers == narrow.get_flow(mint).distinct_buyers
     assert narrow.get_flow(mint).distinct_buyers == 1
+
+
+# --- streaming endpoint cascade (2026.08.21) --------------------------------
+# The free flat-rate endpoint carries the full program-wide feed (240 notif/s,
+# 32 GB/day measured) at no cost, where the metered one bills ~646k credits/day
+# for the same volume -- seven times the whole monthly quota. It is primary;
+# the metered one stays as fallback because the free tier warns of downtime.
+
+
+def test_the_free_endpoint_comes_first(monkeypatch):
+    monkeypatch.delenv("ARIA_SOLANA_RPC_WS_STREAM", raising=False)
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
+    urls = stream.stream_ws_endpoints()
+    assert urls[0] == stream.STREAM_WS_PUBLIC_DEFAULT
+    assert "metered.example" in urls[1]
+
+
+def test_an_explicit_override_wins(monkeypatch):
+    monkeypatch.setenv("ARIA_SOLANA_RPC_WS_STREAM", "wss://chosen.example")
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
+    assert stream.stream_ws_endpoints()[0] == "wss://chosen.example"
+
+
+def test_the_same_provider_is_never_tried_twice(monkeypatch):
+    # A misconfigured env pointing at the metered endpoint must not produce a
+    # two-entry list that retries the identical host.
+    monkeypatch.setenv("ARIA_SOLANA_RPC_WS_STREAM", "wss://same.example")
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://same.example")
+    assert stream.stream_ws_endpoints() == ["wss://same.example"]
+
+
+def test_a_blank_override_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("ARIA_SOLANA_RPC_WS_STREAM", "   ")
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
+    assert stream.stream_ws_endpoints()[0] == stream.STREAM_WS_PUBLIC_DEFAULT
+
+
+def test_failures_rotate_to_the_next_provider(monkeypatch):
+    monkeypatch.delenv("ARIA_SOLANA_RPC_WS_STREAM", raising=False)
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
+    s = stream.PumpFunTradeStream()
+    first = s.current_stream_url()
+    s._endpoint_index += 1
+    second = s.current_stream_url()
+    assert first != second
+    s._endpoint_index += 1
+    assert s.current_stream_url() == first  # wraps around, never gives up
+
+
+def test_an_explicit_url_pins_the_endpoint(monkeypatch):
+    # A caller that passed a URL on purpose keeps it, whatever the cascade says.
+    s = stream.PumpFunTradeStream(rpc_ws_url="wss://pinned.example")
+    assert s._rpc_ws_url == "wss://pinned.example"
