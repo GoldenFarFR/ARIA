@@ -1172,3 +1172,52 @@ async def test_the_curve_speed_is_recorded_at_entry(_tmp_db):
         snapshot_fn=_snapshot_ok, db_path=_tmp_db,
     )
     assert (await _rows(_tmp_db))[0]["sol_velocity_at_entry"] == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
+async def test_the_summary_reports_live_throughput(_tmp_db):
+    """21/08, operator request: see the rate of entries and closures live, to
+    project how long until there is enough data to judge anything."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    out = await pocket.summary(db_path=_tmp_db)
+    assert out["entries_last_hour"] == 1
+    assert out["closures_last_hour"] == 0
+
+
+@pytest.mark.asyncio
+async def test_throughput_survives_an_epoch_reset(_tmp_db):
+    """Measured on a rolling wall-clock window, NOT from CONFIG_EPOCH: the
+    epoch moves on every parameter change, which would collapse the rate to
+    zero right after each reset and read as a stalled pocket."""
+    await _close_row(_tmp_db, 1.5, datetime.now(timezone.utc).isoformat())
+
+    # a summary anchored far in the future returns no closures for the epoch...
+    out = await pocket.summary(
+        since=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(), db_path=_tmp_db,
+    )
+    assert out["completed"] == 0
+    # ...but the throughput must still see the real activity
+    assert out["closures_last_hour"] == 1
+
+
+@pytest.mark.asyncio
+async def test_throughput_excludes_activity_older_than_its_window(_tmp_db):
+    """21/08 -- SQLite's datetime() yields "YYYY-MM-DD HH:MM:SS" while these
+    columns hold ISO strings with a "T", and "T" sorts after " ", so a naive
+    comparison matched the WHOLE day: 911 entries/hour reported against a real
+    ~78."""
+    old = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    await _close_row(_tmp_db, 1.5, old)
+    async with aiosqlite.connect(_tmp_db) as db:
+        await db.execute(
+            f"UPDATE {pocket.TABLE} SET last_checked_at = ? WHERE detected_at = ?", (old, old),
+        )
+        await db.commit()
+
+    out = await pocket.summary(db_path=_tmp_db)
+    assert out["entries_last_hour"] == 0, "a 6-hour-old entry must not count as this hour's"
+    assert out["closures_last_hour"] == 0
+    assert out["closures_24h"] == 1, "but it is still inside the 24h window"

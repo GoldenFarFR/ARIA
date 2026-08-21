@@ -789,6 +789,42 @@ async def summary(*, chain: str = "solana", since: str | None = None, db_path: s
         )
         open_n = (await cur.fetchone())["n"]
 
+        # NOTE on the `replace(...,' ','T')`: SQLite's `datetime()` returns
+        # "YYYY-MM-DD HH:MM:SS" while these columns hold ISO strings with a
+        # "T". Compared as text, "T" sorts AFTER " ", so a naive
+        # `>= datetime('now','-1 hour')` matched the WHOLE day and reported
+        # 911 entries/hour against a real ~78. Found before it was ever shown.
+        #
+        # 21/08, operator request: "le nombre de token trade par heure sur la
+        # derniere heure et une moyenne comme le pnl sur 24h que je puisse voir
+        # le debit en direct... et mieux me projeter". Throughput answers a
+        # question the cumulative figures cannot: how long until there is
+        # enough of anything to judge. Deliberately measured on a rolling
+        # WALL-CLOCK window, NOT from CONFIG_EPOCH -- the epoch moves whenever
+        # a parameter changes, which would make the rate collapse to zero
+        # right after every reset and read as a stalled pocket.
+        cur = await db.execute(
+            f"SELECT COUNT(*) AS n FROM {TABLE} WHERE chain = ? "
+            f"AND detected_at >= replace(datetime('now','-1 hour'),' ','T')", (chain,),
+        )
+        entries_1h = (await cur.fetchone())["n"]
+        cur = await db.execute(
+            f"SELECT COUNT(*) AS n FROM {TABLE} WHERE chain = ? AND exit_reason IS NOT NULL "
+            f"AND last_checked_at >= replace(datetime('now','-1 hour'),' ','T')", (chain,),
+        )
+        closures_1h = (await cur.fetchone())["n"]
+        # The 24h PnL spans configurations by construction, so it is a
+        # THROUGHPUT-scale reading, never the figure to judge a setting on.
+        cur = await db.execute(
+            f"SELECT AVG(COALESCE(realistic_final_multiplier, final_multiplier)) AS m, "
+            f"COUNT(*) AS n FROM {TABLE} WHERE chain = ? AND exit_reason IS NOT NULL "
+            f"AND last_checked_at >= replace(datetime('now','-24 hours'),' ','T') "
+            f"AND COALESCE(realistic_final_multiplier, final_multiplier) IS NOT NULL", (chain,),
+        )
+        row24 = await cur.fetchone()
+        avg_24h = (row24["m"] - 1) * 100 if row24["m"] is not None else None
+        closures_24h = row24["n"]
+
     mults = [c["m"] for c in closed if c["m"] is not None]
     wins = sum(1 for m in mults if m > 1.0)
 
@@ -813,4 +849,8 @@ async def summary(*, chain: str = "solana", since: str | None = None, db_path: s
             round(sum(c["p"] for c in closed if c["p"] is not None) / max(1, sum(1 for c in closed if c["p"] is not None)), 3)
             if closed else None
         ),
+        "entries_last_hour": entries_1h,
+        "closures_last_hour": closures_1h,
+        "avg_pnl_pct_24h": round(avg_24h, 2) if avg_24h is not None else None,
+        "closures_24h": closures_24h,
     }
