@@ -552,7 +552,7 @@ async def test_the_recent_window_moves_while_the_cumulative_average_barely_does(
     for i in range(10):
         await _close_row(_tmp_db, 3.0, f"2026-08-21T{10 + i % 10:02d}:30:00+00:00")
 
-    out = await pocket.summary(db_path=_tmp_db)
+    out = await pocket.summary(since="2026-08-01T00:00:00+00:00", db_path=_tmp_db)
 
     # The cumulative average is dragged down by 200 flat closures...
     assert out["avg_pnl_pct"] < 20
@@ -565,7 +565,7 @@ async def test_the_recent_window_is_bounded_and_ordered(_tmp_db):
     for i in range(RECENT := pocket.RECENT_WINDOW_CLOSURES + 20):
         await _close_row(_tmp_db, 1.0, f"2026-08-2{i % 2}T{10 + i % 10:02d}:00:00+00:00")
 
-    out = await pocket.summary(db_path=_tmp_db)
+    out = await pocket.summary(since="2026-08-01T00:00:00+00:00", db_path=_tmp_db)
 
     assert out["recent_n"] == pocket.RECENT_WINDOW_CLOSURES
 
@@ -575,3 +575,27 @@ async def test_an_empty_pocket_reports_none_rather_than_a_fabricated_zero(_tmp_d
     out = await pocket.summary(db_path=_tmp_db)
     assert out["recent_avg_pnl_pct"] is None
     assert out["recent_win_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_closures_from_an_earlier_config_are_not_averaged_in(_tmp_db):
+    """21/08 -- operator asked to reset and restart clean. Done as an EPOCH
+    MARKER, not a delete: the old rows produced every finding of the last two
+    days and this dome never destroys real history."""
+    await _close_row(_tmp_db, 5.0, "2026-08-20T12:00:00+00:00")   # old config
+    await _close_row(_tmp_db, 1.1, "2026-08-21T12:00:00+00:00")   # current
+
+    out = await pocket.summary(db_path=_tmp_db)
+
+    assert out["completed"] == 1  # only the current-config closure
+    assert out["avg_pnl_pct"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_the_old_rows_are_still_readable_on_request(_tmp_db):
+    """Not averaged in is not the same as gone."""
+    await _close_row(_tmp_db, 5.0, "2026-08-20T12:00:00+00:00")
+
+    out = await pocket.summary(since="2026-08-01T00:00:00+00:00", db_path=_tmp_db)
+
+    assert out["completed"] == 1

@@ -138,6 +138,22 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # How many of the most recent closures the 'recent' summary covers.
 RECENT_WINDOW_CLOSURES = 50
 
+# 21/08 -- CONFIG EPOCH. Everything closed before this instant was produced by
+# a DIFFERENT configuration and must not be averaged with what follows: the
+# 40-95% collection band, and a window where entry was priced by REST while the
+# exit used the RPC (every PnL then compared two sources). Mixing them makes
+# the headline meaningless, which is exactly the problem the recent-window fix
+# was already treating.
+#
+# Deliberately an EPOCH MARKER, not a delete. The rows stay: they produced
+# every finding of the last two days (the rug gradient 48.9% -> 27.0%, the
+# graduation rate 2.0% -> 50.0%, the +161% on migrated positions) and this
+# dome's standing rule is that real history is never destroyed. `summary()`
+# reports from here; anything older is still queryable, just not averaged in.
+# Move this forward on the NEXT configuration change rather than editing the
+# rows.
+CONFIG_EPOCH = "2026-08-21T11:05:00+00:00"
+
 MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
 
@@ -435,20 +451,26 @@ async def advance_exit_simulation(
     return stats
 
 
-async def summary(*, chain: str = "solana", db_path: str | None = None) -> dict:
+async def summary(*, chain: str = "solana", since: str | None = None, db_path: str | None = None) -> dict:
     """Same shape as the sibling pockets' own summary, so the comparative
-    report can treat all three identically."""
+    report can treat all three identically.
+
+    Reports from ``CONFIG_EPOCH`` by default -- closures from an earlier
+    configuration are still in the table but are not averaged in. Pass
+    ``since`` explicitly to read any other window, including the full history."""
     await _ensure_table(db_path)
     async with aiosqlite.connect(db_path or _db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             f"SELECT COALESCE(realistic_final_multiplier, final_multiplier) AS m, "
             f"bonding_progress_at_entry AS p FROM {TABLE} "
-            f"WHERE chain = ? AND exit_reason IS NOT NULL ORDER BY last_checked_at ASC", (chain,),
+            f"WHERE chain = ? AND exit_reason IS NOT NULL AND detected_at >= ? "
+            f"ORDER BY last_checked_at ASC", (chain, since or CONFIG_EPOCH),
         )
         closed = [dict(r) for r in await cur.fetchall()]
         cur = await db.execute(
-            f"SELECT COUNT(*) AS n FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL", (chain,),
+            f"SELECT COUNT(*) AS n FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL "
+            f"AND detected_at >= ?", (chain, since or CONFIG_EPOCH),
         )
         open_n = (await cur.fetchone())["n"]
 
