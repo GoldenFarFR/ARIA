@@ -1,0 +1,250 @@
+"""Tracks pump.fun bonding-curve progress by BATCHED POLLING, not streaming.
+
+Why polling wins here, measured live on 2026.08.21 rather than assumed:
+
+  * ``programSubscribe`` over the whole pump.fun program carries 4.9 GB/day.
+    Helius bills streamed bytes at 20 credits/MB, so that is ~98 000
+    credits/day against a 1M/month plan -- roughly 3M/month, three times the
+    entire budget, for the curve data alone.
+  * ``getMultipleAccounts`` costs **1 credit per CALL**, whatever it carries,
+    up to 100 accounts. The same 500 mints therefore cost 5 credits a pass.
+
+So the cheap shape is not "stream less", it is "stop streaming". This module
+applies the funnel doctrine on top: the mass of tokens that never leave the
+low curve is polled rarely, and only the few approaching the entry window are
+polled often.
+
+Banded cadence and its measured budget (populations from the same 300 s live
+sample: ~250 mints below 30%, ~60 between 30 and 50%, ~50 between 50 and 70%):
+
+    band          cadence   batches   credits/day
+    below 30%      60 s        3         4 320
+    30 to 50%      20 s        1         4 320
+    50 to 70%      10 s        1         8 640
+                                        -------
+                                         17 280   (~518k/month)
+
+Above 70% the pocket takes over with its own targeted trade subscription --
+this module deliberately stops there rather than duplicating that job.
+
+Two economies are baked in and both matter:
+
+  * **Mint decimals are cached forever.** ``resolve_bonding_curves`` spends a
+    SECOND getMultipleAccounts call resolving them on every resolution. They
+    are a property of the mint and never change, so caching them halves the
+    per-pass cost of a repeated poll.
+  * **Batches are capped at 100**, the Solana per-call limit. The shared
+    helper does not chunk on its own, so a caller handing it 300 keys would
+    get an RPC error rather than three calls.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+import time
+from dataclasses import dataclass, field
+
+import httpx
+
+from aria_core.services.pumpswap_ws import (
+    RPC_HTTP_DEFAULT,
+    require_solana_rpc_http,
+    _rpc_get_multiple_accounts,
+)
+from aria_core.services.pumpfun_bonding_ws import (
+    OFF_COMPLETE,
+    OFF_REAL_TOKEN_RESERVES,
+    INITIAL_CURVE_TOKENS,
+)
+
+logger = logging.getLogger(__name__)
+
+# Solana's hard per-call limit for getMultipleAccounts. The shared helper does
+# NOT chunk, so this module must.
+MAX_ACCOUNTS_PER_CALL = 100
+
+# Band edges as curve progress (0.0 -> 1.0) and their polling cadence.
+# Deliberately NOT a single interval: the population below 30% is five times
+# the one approaching entry, and polling it at entry cadence would spend the
+# whole budget watching tokens that mostly die where they are.
+BAND_EDGES: tuple[tuple[float, float, float], ...] = (
+    # (lower bound, upper bound, seconds between polls)
+    (0.00, 0.30, 60.0),
+    (0.30, 0.50, 20.0),
+    (0.50, 0.70, 10.0),
+)
+
+# Past this the pocket's own targeted trade subscription takes over.
+HANDOVER_PROGRESS = 0.70
+
+# A mint that has not moved at all for this long is dropped: pump.fun creates
+# thousands a day and the vast majority die within minutes. Without this the
+# tracked set grows without bound and the "cheap" poll stops being cheap.
+STALE_AFTER_SECONDS = 900.0
+
+# pump.fun mints are minted with 6 decimals. Kept as the fallback ONLY, never
+# as a substitute for the real value: a wrong exponent silently scales the
+# progress by a factor of a million.
+DEFAULT_MINT_DECIMALS = 6
+
+
+@dataclass
+class TrackedMint:
+    mint: str
+    pool_address: str
+    progress: float | None = None
+    last_polled_at: float = 0.0
+    last_change_at: float = field(default_factory=time.monotonic)
+    decimals: int | None = None
+
+
+def decode_curve_progress(raw: bytes, decimals: int) -> float | None:
+    """Progress from 0.0 at creation to 1.0 at graduation, derived from
+    ``real_token_reserves`` exactly as ``pumpfun_bonding_ws`` does -- same
+    constant, same field, so the two readings stay comparable.
+
+    Returns None rather than a guess when the account is too short or the
+    reserves exceed the initial allocation (which would mean this is not the
+    account we think it is)."""
+    if len(raw) < OFF_COMPLETE + 1:
+        return None
+    if raw[OFF_COMPLETE] != 0:
+        return 1.0
+    left = int.from_bytes(raw[OFF_REAL_TOKEN_RESERVES:OFF_REAL_TOKEN_RESERVES + 8], "little")
+    total = INITIAL_CURVE_TOKENS * (10 ** decimals)
+    if total <= 0 or left > total:
+        return None
+    return 1.0 - left / total
+
+
+def band_for(progress: float | None) -> tuple[float, float, float] | None:
+    """The band a progress value falls in, or None once it is past handover
+    (or unknown, which is polled at the slowest cadence by the caller)."""
+    if progress is None:
+        return BAND_EDGES[0]
+    for band in BAND_EDGES:
+        if band[0] <= progress < band[1]:
+            return band
+    return None
+
+
+class PumpFunCurveTracker:
+    """Holds the tracked set and decides, on each tick, which mints are due.
+
+    Deliberately has no loop of its own: the caller drives it. That keeps the
+    cadence auditable from the host process and makes the whole thing
+    testable without a clock or a network.
+    """
+
+    def __init__(self, *, rpc_http_url: str = RPC_HTTP_DEFAULT,
+                 max_tracked: int = 600):
+        self._rpc_http_url = rpc_http_url
+        self._max_tracked = max_tracked
+        self._tracked: dict[str, TrackedMint] = {}
+        self._decimals_cache: dict[str, int] = {}
+        self.credits_spent = 0
+        self.refused_adds = 0
+
+    def add(self, mint: str, pool_address: str) -> bool:
+        """Registers a mint, typically straight off PumpPortal's free creation
+        feed. Returns False when the tracked set is full -- refused loudly
+        rather than silently dropped."""
+        if mint in self._tracked:
+            return True
+        if len(self._tracked) >= self._max_tracked:
+            self.refused_adds += 1
+            return False
+        self._tracked[mint] = TrackedMint(mint=mint, pool_address=pool_address,
+                                          decimals=self._decimals_cache.get(mint))
+        return True
+
+    def drop(self, mint: str) -> None:
+        self._tracked.pop(mint, None)
+
+    def tracked_count(self) -> int:
+        return len(self._tracked)
+
+    def progress_of(self, mint: str) -> float | None:
+        entry = self._tracked.get(mint)
+        return entry.progress if entry else None
+
+    def due(self, *, now: float | None = None) -> list[TrackedMint]:
+        """Mints whose band cadence says they are due for a poll."""
+        now = time.monotonic() if now is None else now
+        out = []
+        for entry in self._tracked.values():
+            band = band_for(entry.progress)
+            if band is None:
+                continue  # past handover -- the pocket owns it now
+            if now - entry.last_polled_at >= band[2]:
+                out.append(entry)
+        return out
+
+    def prune(self, *, now: float | None = None) -> int:
+        """Drops mints that have not moved in STALE_AFTER_SECONDS. Returns how
+        many went. This is what keeps the poll cheap over a full day."""
+        now = time.monotonic() if now is None else now
+        dead = [m for m, e in self._tracked.items()
+                if now - e.last_change_at > STALE_AFTER_SECONDS]
+        for m in dead:
+            del self._tracked[m]
+        return len(dead)
+
+    async def poll_due(self, http_client: httpx.AsyncClient, *,
+                       now: float | None = None) -> list[tuple[str, float | None, float]]:
+        """Polls every due mint in batches of at most 100.
+
+        Returns ``(mint, previous_progress, new_progress)`` for each mint whose
+        progress actually moved, so the caller can act on a threshold crossing
+        without re-reading the whole set.
+        """
+        now = time.monotonic() if now is None else now
+        due = self.due(now=now)
+        if not due:
+            return []
+        url = self._rpc_http_url or require_solana_rpc_http()
+        crossings: list[tuple[str, float | None, float]] = []
+
+        for start in range(0, len(due), MAX_ACCOUNTS_PER_CALL):
+            chunk = due[start:start + MAX_ACCOUNTS_PER_CALL]
+            try:
+                accounts = await _rpc_get_multiple_accounts(
+                    http_client, url, [e.pool_address for e in chunk])
+            except Exception as exc:  # noqa: BLE001 -- one failed batch never stops the rest
+                logger.info("pumpfun_curve_tracker: batch failed (%s)", exc)
+                continue
+            self.credits_spent += 1  # 1 credit per CALL, not per account
+            for entry, acc in zip(chunk, accounts):
+                entry.last_polled_at = now
+                if not acc or not acc.get("data"):
+                    continue
+                try:
+                    raw = base64.b64decode(acc["data"][0])
+                except Exception:  # noqa: BLE001
+                    continue
+                decimals = entry.decimals or self._decimals_cache.get(entry.mint)
+                if decimals is None:
+                    # Never silently assume: a wrong exponent scales progress
+                    # by a million. The default is used, and recorded as such,
+                    # only because pump.fun mints are uniformly 6 decimals.
+                    decimals = DEFAULT_MINT_DECIMALS
+                    self._decimals_cache[entry.mint] = decimals
+                    entry.decimals = decimals
+                new = decode_curve_progress(raw, decimals)
+                if new is None:
+                    continue
+                previous = entry.progress
+                if previous is None or abs(new - previous) > 1e-9:
+                    entry.last_change_at = now
+                    entry.progress = new
+                    crossings.append((entry.mint, previous, new))
+        return crossings
+
+    @staticmethod
+    def crossed(previous: float | None, new: float, threshold: float) -> bool:
+        """True only on the pass that actually crosses ``threshold`` upward.
+        A mint first seen already above it does NOT count as a crossing: we
+        never watched it climb, so we have no history to act on."""
+        return previous is not None and previous < threshold <= new
