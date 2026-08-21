@@ -1300,3 +1300,96 @@ async def test_both_exit_paths_run_the_same_code(_tmp_db):
 
     for fn in (pocket.advance_exit_simulation, pocket.advance_position_by_pool):
         assert "_apply_exit_check" in inspect.getsource(fn)
+
+
+# --- reinforcement measured in parallel, never acted on (21/08) ---
+
+@pytest.mark.asyncio
+async def test_crossing_the_trigger_records_a_would_be_reinforcement(_tmp_db):
+    """Operator's idea: capital added after a token proved something returns
+    +8.2% while capital committed blind at entry returns -10.4%, on the same
+    tokens over the same period."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    class _Rising:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=entry * 1.40,
+                                   reserve_usd=9_000.0, dex_id="pumpfun",
+                                   price_high_since_last_read=entry * 1.40,
+                                   price_low_since_last_read=entry * 1.40)
+
+    await pocket.advance_exit_simulation(bonding_ws_feed=_Rising(), db_path=_tmp_db)
+    row = (await _rows(_tmp_db))[0]
+    assert row["reinforce_price"] == pytest.approx(entry * 1.30)
+    assert row["reinforce_at"] is not None
+    # the live position is untouched: shadow-only, measured in parallel
+    assert row["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_position_that_never_rises_records_no_reinforcement(_tmp_db):
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    class _Flat:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=entry * 1.05,
+                                   reserve_usd=9_000.0, dex_id="pumpfun",
+                                   price_high_since_last_read=entry * 1.05,
+                                   price_low_since_last_read=entry * 1.05)
+
+    await pocket.advance_exit_simulation(bonding_ws_feed=_Flat(), db_path=_tmp_db)
+    row = (await _rows(_tmp_db))[0]
+    assert row["reinforce_price"] is None
+    assert row["reinforced_final_multiplier"] is None
+
+
+def test_the_reinforced_pnl_is_weighted_by_capital_deployed():
+    """Weighted by capital DEPLOYED, not by position count: a reinforcement
+    that never fires means half the capital was never committed."""
+    # entry 1.0, reinforced at 1.30, exits at 2.0
+    got = pocket._reinforced_multiplier(
+        {"entry_price": 1.0, "reinforce_price": 1.30}, 2.0,
+    )
+    # entry half: +100%, added half: 2.0/1.3-1 = +53.8% -> mean +76.9%
+    assert got == pytest.approx(1.769, abs=1e-3)
+
+
+def test_an_untriggered_position_reports_none_not_its_own_result():
+    """Reporting the same number twice would silently pad the sample of
+    "reinforced" trades with untouched ones."""
+    assert pocket._reinforced_multiplier({"entry_price": 1.0, "reinforce_price": None}, 2.0) is None
+
+
+@pytest.mark.asyncio
+async def test_a_position_crossing_and_closing_in_one_check_still_counts(_tmp_db):
+    """The fastest movers are exactly the ones worth reinforcing -- recording
+    the trigger after the exit rule would systematically miss them."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    class _SpikeThenStop:
+        """Peaked at +60% and fell back through the trailing stop in the same
+        window."""
+
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=entry * 1.20,
+                                   reserve_usd=9_000.0, dex_id="pumpfun",
+                                   price_high_since_last_read=entry * 1.60,
+                                   price_low_since_last_read=entry * 1.20)
+
+    await pocket.advance_exit_simulation(bonding_ws_feed=_SpikeThenStop(), db_path=_tmp_db)
+    row = (await _rows(_tmp_db))[0]
+    assert row["reinforce_price"] == pytest.approx(entry * 1.30)
+    assert row["exit_reason"] == "trailing_stop"
+    assert row["reinforced_final_multiplier"] is not None

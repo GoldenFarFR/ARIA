@@ -140,6 +140,37 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # untouched control and the two pockets keep differing on one variable.
 HARD_STOP_PCT = 20.0
 
+# 21/08 -- REINFORCEMENT, measured in parallel and never acted on.
+#
+# Operator's read of the PnL is exact: many small losers, a few explosions.
+# His question was whether adding to a position that has already proven
+# something amplifies the winning side. On 1013 real closures it does, and the
+# decisive figure is this: capital added after a token moved returns +8.2%
+# (outlier-tested) while the capital committed blind at entry returns -10.4%,
+# on the SAME tokens over the SAME period.
+#
+# Simulated at portfolio level, return on capital actually deployed:
+#     no reinforcement        -9.1%  (without top2 -11.7%)
+#     reinforce at +30%       -3.1%  (-6.6%)   <-- chosen
+#     reinforce at +50%       -4.5%  (-8.1%)
+#     reinforce at +75%       -5.8%  (-9.3%)
+# Earlier is better, and stated plainly: this REDUCES the loss by 6 points, it
+# does not make the pocket profitable. The median reinforcement still LOSES
+# (-8.4%) -- the gain comes from the same handful of explosions as everything
+# else here, so it is another asymmetric bet, not compounding.
+#
+# Half at entry and half on confirmation, because doubling both stakes changes
+# nothing per euro deployed: the two variants scored identically, and this one
+# reaches it with 0.67 of capital per position instead of 1.34.
+#
+# SHADOW-ONLY AND PARALLEL: nothing about the live position changes. The
+# would-be reinforcement price is recorded and a second PnL computed beside
+# the real one, so both are measured on the SAME tokens without splitting the
+# data rate and without any way to damage the measurement in flight.
+REINFORCE_TRIGGER_PCT = 30.0
+REINFORCE_ENTRY_WEIGHT = 0.5
+REINFORCE_ADD_WEIGHT = 0.5
+
 # How many of the most recent closures the 'recent' summary covers.
 RECENT_WINDOW_CLOSURES = 50
 
@@ -213,7 +244,10 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 exit_price_source TEXT,
                 exit_detail TEXT,
                 amm_pool_address TEXT,
-                sol_velocity_at_entry REAL
+                sol_velocity_at_entry REAL,
+                reinforce_price REAL,
+                reinforce_at TEXT,
+                reinforced_final_multiplier REAL
             )
             """
         )
@@ -245,6 +279,9 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # REST -- on this pocket's best-performing segment.
             ("amm_pool_address", "TEXT"),
             ("sol_velocity_at_entry", "REAL"),
+            ("reinforce_price", "REAL"),
+            ("reinforce_at", "TEXT"),
+            ("reinforced_final_multiplier", "REAL"),
         ):
             if col not in existing:
                 await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
@@ -593,6 +630,31 @@ async def resolve_migrated_pools(
     return resolved
 
 
+def _reinforced_multiplier(row: dict, exit_multiplier: float | None) -> float | None:
+    """PnL the position WOULD have had with half the stake at entry and half
+    added once it reached ``REINFORCE_TRIGGER_PCT``.
+
+    Returns ``None`` when the reinforcement never triggered -- the position is
+    then identical to the real one and reporting the same number twice would
+    silently inflate the sample of "reinforced" trades with untouched ones.
+
+    Weighted by capital DEPLOYED, not by position count: a reinforcement that
+    never fires means half the capital was never committed, and crediting it
+    with the full entry's result would flatter the strategy exactly where it
+    matters least."""
+    price = row.get("reinforce_price")
+    entry = row.get("entry_price")
+    if not price or not entry or exit_multiplier is None:
+        return None
+    exit_price = exit_multiplier * entry
+    gain = (
+        REINFORCE_ENTRY_WEIGHT * (exit_price / entry - 1)
+        + REINFORCE_ADD_WEIGHT * (exit_price / price - 1)
+    )
+    deployed = REINFORCE_ENTRY_WEIGHT + REINFORCE_ADD_WEIGHT
+    return 1 + gain / deployed
+
+
 async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | None) -> dict:
     """Archives the path, runs the SHARED exit rule and persists the outcome
     for ONE position.
@@ -632,6 +694,27 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
     except Exception:  # noqa: BLE001 -- archiving never blocks an exit
         pass
 
+    # Record the would-be reinforcement the first time the trigger is crossed.
+    # Written BEFORE the exit rule runs, so a position that crosses the
+    # trigger and closes in the same check still counts it -- otherwise the
+    # fastest movers, which are exactly the ones worth reinforcing, would be
+    # the ones systematically missed.
+    if row.get("reinforce_price") is None and row.get("entry_price"):
+        trigger = row["entry_price"] * (1 + REINFORCE_TRIGGER_PCT / 100.0)
+        reached = max(
+            snapshot.price_usd,
+            getattr(snapshot, "price_high_since_last_read", None) or snapshot.price_usd,
+        )
+        if reached >= trigger:
+            row["reinforce_price"] = trigger
+            async with aiosqlite.connect(db_path or _db_path()) as db:
+                await db.execute(
+                    f"UPDATE {TABLE} SET reinforce_price = ?, reinforce_at = ? "
+                    f"WHERE id = ? AND reinforce_price IS NULL",
+                    (trigger, datetime.now(timezone.utc).isoformat(), row["id"]),
+                )
+                await db.commit()
+
     age = _minutes_since(row["detected_at"])
     graduated = snapshot.dex_id not in (None, "pumpfun")
     if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
@@ -662,7 +745,8 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
             UPDATE {TABLE} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
                 realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                 realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
-                last_checked_at = ?, exit_price_source = ?, exit_detail = ?
+                last_checked_at = ?, exit_price_source = ?, exit_detail = ?,
+                reinforced_final_multiplier = ?
             WHERE id = ? AND exit_reason IS NULL
             """,
             (
@@ -671,7 +755,12 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
                 result.get("final_multiplier"), result.get("realistic_final_multiplier"),
                 snapshot.price_usd, snapshot.reserve_usd,
                 datetime.now(timezone.utc).isoformat(), snapshot.dex_id,
-                result.get("exit_detail"), row["id"],
+                result.get("exit_detail"),
+                _reinforced_multiplier(
+                    row,
+                    result.get("realistic_final_multiplier") or result.get("final_multiplier"),
+                ),
+                row["id"],
             ),
         )
         await db.commit()
