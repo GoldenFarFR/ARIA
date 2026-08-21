@@ -211,7 +211,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 last_reserve_usd REAL,
                 last_checked_at TEXT,
                 exit_price_source TEXT,
-                exit_detail TEXT
+                exit_detail TEXT,
+                amm_pool_address TEXT
             )
             """
         )
@@ -236,6 +237,11 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("founding_bundle_size_at_entry", "INTEGER"),
             ("creator_address", "TEXT"),
             ("creator_sold_at_entry", "INTEGER"),
+            # 21/08 -- the AMM pool a graduated token moved to. A pump.fun
+            # position keeps its BONDING-CURVE address for life, so after
+            # graduation the pool was simply unknown and pricing fell back to
+            # REST -- on this pocket's best-performing segment.
+            ("amm_pool_address", "TEXT"),
         ):
             if col not in existing:
                 await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
@@ -469,6 +475,16 @@ async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn
                 return snap
         except Exception:  # noqa: BLE001 -- a feed hiccup falls through to REST
             pass
+    # Graduated: the curve feed honestly reports unavailable, but the AMM pool
+    # is on the SAME RPC -- try it before paying for a REST round trip.
+    amm = row.get("amm_pool_address")
+    if amm and bonding_ws_feed is not None:
+        try:
+            snap = bonding_ws_feed.get_snapshot(amm)
+            if getattr(snap, "available", False) and snap.price_usd is not None:
+                return snap
+        except Exception:  # noqa: BLE001
+            pass
     fn = snapshot_fn or _snapshot_with_fallback
     return await fn(None, row["pool_address"], row["token_address"], chain=chain)
 
@@ -507,6 +523,66 @@ async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana",
             await db.commit()
     except Exception as exc:  # noqa: BLE001 -- enrichment never disturbs the pocket
         logger.info("solana_late_bonding_shadow: paid-profile enrichment failed for %s (%s)", mint, exc)
+
+
+async def resolve_migrated_pools(
+    http_client, *, chain: str = "solana", bonding_ws_feed=None, pumpswap_feed=None,
+    limit: int = 10, db_path: str | None = None, find_pool_fn=None,
+) -> int:
+    """Finds the AMM pool of every open position whose curve has completed, so
+    it keeps being priced on the RPC instead of falling back to REST.
+
+    21/08, operator: "on a dit tout par le RPC Helius". Bounded on purpose --
+    at most `limit` unresolved positions per pass, each costing ONE
+    `getProgramAccounts`, and each resolved exactly once for the position's
+    whole remaining life. A failure is not recorded, so it simply retries on
+    the next pass rather than poisoning the row with a wrong address."""
+    from aria_core.services.pumpswap_ws import find_pool_for_mint
+
+    find = find_pool_fn or find_pool_for_mint
+    await _ensure_table(db_path)
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT id, pool_address, token_address FROM {TABLE} "
+            f"WHERE chain = ? AND exit_reason IS NULL AND amm_pool_address IS NULL LIMIT ?",
+            (chain, limit),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    resolved = 0
+    for row in rows:
+        # Only spend an RPC call on positions the curve feed can no longer
+        # price -- a token still ON its curve has no AMM pool to find.
+        if bonding_ws_feed is not None:
+            try:
+                snap = bonding_ws_feed.get_snapshot(row["pool_address"])
+                if getattr(snap, "available", False):
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+        try:
+            pool = await find(http_client, row["token_address"])
+        except Exception:  # noqa: BLE001 -- never breaks the exit loop
+            continue
+        if not pool:
+            continue
+        async with aiosqlite.connect(db_path or _db_path()) as db:
+            await db.execute(
+                f"UPDATE {TABLE} SET amm_pool_address = ? WHERE id = ?", (pool, row["id"]),
+            )
+            await db.commit()
+        if pumpswap_feed is not None:
+            try:
+                await pumpswap_feed.add_pools([pool])
+            except Exception:  # noqa: BLE001 -- subscription is an enhancement
+                pass
+        resolved += 1
+        logger.info(
+            "solana_late_bonding_shadow: migrated pool resolved for %s -> %s",
+            row["token_address"], pool,
+        )
+    return resolved
 
 
 async def advance_exit_simulation(

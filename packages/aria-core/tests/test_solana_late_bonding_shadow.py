@@ -848,3 +848,105 @@ async def test_locally_priced_positions_are_checked_before_network_bound_ones(_t
     assert order and order[0] == "poolFast", (
         f"the locally-priced position must be served first, got {order}"
     )
+
+
+# --- graduated positions keep being priced on the RPC (21/08) ---
+
+class _CurveGoneFeed:
+    """The curve feed after graduation: honestly unavailable on the curve
+    address, live on the AMM pool."""
+
+    def __init__(self, amm_pool="ammPool"):
+        self.amm_pool = amm_pool
+
+    def get_snapshot(self, pool_address):
+        if pool_address == self.amm_pool:
+            return SimpleNamespace(available=True, price_usd=0.005,
+                                   reserve_usd=40_000.0, dex_id="pumpswap")
+        return SimpleNamespace(available=False, price_usd=None, reserve_usd=None, dex_id=None)
+
+
+@pytest.mark.asyncio
+async def test_a_graduated_position_gets_its_amm_pool_resolved_once(_tmp_db):
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    calls = []
+
+    async def _find(_client, mint):
+        calls.append(mint)
+        return "ammPool"
+
+    n = await pocket.resolve_migrated_pools(
+        None, bonding_ws_feed=_CurveGoneFeed(), find_pool_fn=_find, db_path=_tmp_db,
+    )
+    assert n == 1 and calls == ["mintA"]
+    assert (await _rows(_tmp_db))[0]["amm_pool_address"] == "ammPool"
+
+    # resolved once, never re-queried
+    await pocket.resolve_migrated_pools(
+        None, bonding_ws_feed=_CurveGoneFeed(), find_pool_fn=_find, db_path=_tmp_db,
+    )
+    assert calls == ["mintA"]
+
+
+@pytest.mark.asyncio
+async def test_a_position_still_on_its_curve_costs_no_rpc_call(_tmp_db):
+    """A token that has not graduated has no AMM pool to find -- spending a
+    getProgramAccounts on it would be pure waste."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    calls = []
+
+    async def _find(_client, mint):
+        calls.append(mint)
+        return "ammPool"
+
+    class _StillOnCurve:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=0.001,
+                                   reserve_usd=9_000.0, dex_id="pumpfun")
+
+    assert await pocket.resolve_migrated_pools(
+        None, bonding_ws_feed=_StillOnCurve(), find_pool_fn=_find, db_path=_tmp_db,
+    ) == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_amm_pool_is_priced_on_the_rpc_not_rest(_tmp_db):
+    """The whole point: after graduation the position must stay on Helius."""
+    rest_calls = []
+
+    async def _rest(_client, pool, _mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.001,
+                               reserve_usd=9_000.0, dex_id="pumpswap")
+
+    snap = await pocket._price_position(
+        {"pool_address": "poolA", "token_address": "mintA", "amm_pool_address": "ammPool"},
+        chain="solana", bonding_ws_feed=_CurveGoneFeed(), snapshot_fn=_rest,
+    )
+    assert snap.dex_id == "pumpswap" and snap.reserve_usd == 40_000.0
+    assert rest_calls == [], "the REST cascade must not be reached once the AMM pool is known"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_resolution_is_retried_rather_than_recorded(_tmp_db):
+    """Never poison the row with a wrong address -- an unresolved position
+    simply tries again next pass."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async def _broken(_client, _mint):
+        raise RuntimeError("rpc down")
+
+    assert await pocket.resolve_migrated_pools(
+        None, bonding_ws_feed=_CurveGoneFeed(), find_pool_fn=_broken, db_path=_tmp_db,
+    ) == 0
+    assert (await _rows(_tmp_db))[0]["amm_pool_address"] is None

@@ -543,3 +543,55 @@ def test_every_solana_feed_imports_the_shared_endpoint_rather_than_restating_it(
             if marker in text and "devnet" not in text:
                 offenders.append(f"{path.name}: restates {marker}")
     assert offenders == [], offenders
+
+
+# --- resolving a migrated pool through the RPC alone (21/08) ---
+
+@pytest.mark.asyncio
+async def test_find_pool_for_mint_prefers_the_wsol_quoted_pool():
+    """Several pools can share a base mint; a pump.fun migration always
+    produces the WSOL-quoted one, so returning the first row would be a coin
+    flip."""
+    import base58 as _b58
+    from types import SimpleNamespace
+
+    import base64 as _b64
+
+    from aria_core.services import pumpswap_ws as mod
+
+    def _pool_raw(quote_mint: str) -> str:
+        raw = bytearray(mod.OFF_POOL_QUOTE_TOKEN_ACCOUNT + 32)
+        raw[0:8] = mod.PUMPSWAP_POOL_DISCRIMINATOR
+        raw[mod.OFF_POOL_BASE_MINT:mod.OFF_POOL_BASE_MINT + 32] = bytes(32)
+        raw[mod.OFF_POOL_QUOTE_MINT:mod.OFF_POOL_QUOTE_MINT + 32] = bytes(
+            _b58.b58decode(quote_mint)
+        )
+        return _b64.b64encode(bytes(raw)).decode()
+
+    class _Client:
+        async def post(self, *_a, **kw):
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"result": [
+                    {"pubkey": "OtherQuotePool", "account": {"data": [
+                        _pool_raw("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), "base64"]}},
+                    {"pubkey": "TheWsolPool", "account": {"data": [
+                        _pool_raw(mod.WSOL_MINT), "base64"]}},
+                ]},
+            )
+
+    got = await mod.find_pool_for_mint(_Client(), "MintAAA", rpc_http_url="https://rpc")
+    assert got == "TheWsolPool"
+
+
+@pytest.mark.asyncio
+async def test_find_pool_for_mint_returns_none_rather_than_raising():
+    """Resolution is an enhancement; a provider failure must never break the
+    exit loop that calls it."""
+    from aria_core.services import pumpswap_ws as mod
+
+    class _Broken:
+        async def post(self, *_a, **_kw):
+            raise RuntimeError("rpc down")
+
+    assert await mod.find_pool_for_mint(_Broken(), "MintAAA", rpc_http_url="https://rpc") is None

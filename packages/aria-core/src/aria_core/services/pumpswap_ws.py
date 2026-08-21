@@ -256,6 +256,72 @@ async def _rpc_get_multiple_accounts(
     return data["result"]["value"]
 
 
+async def find_pool_for_mint(
+    http_client: httpx.AsyncClient, mint: str, *, rpc_http_url: str = RPC_HTTP_DEFAULT,
+) -> str | None:
+    """The PumpSwap pool holding this token, resolved through the RPC alone.
+
+    21/08, operator: "on a dit tout par le RPC Helius". A pump.fun position
+    keeps its BONDING-CURVE address for its whole life, so once the token
+    graduates the AMM pool is simply unknown and the pocket fell back to the
+    rate-limited REST cascade -- for the segment that performs BEST (+161% on
+    the historical sample). This closes that hole without a single third-party
+    call.
+
+    Deliberately a `getProgramAccounts` filtered on `base_mint` rather than a
+    PDA derivation. The pool PDA is documented as
+    ``["pool", index, creator, base_mint, quote_mint]``, but for a MIGRATED
+    pool the `creator` seed is not the token's creator: derivation was tested
+    against three real migrated pools with the token creator at index 0 and 1,
+    and matched none of them. Guessing the right authority would be exactly
+    the kind of unverified assumption that produces a plausible wrong address,
+    so this asks the chain instead of inferring.
+
+    Called ONCE per position, at graduation -- after which the pool is handed
+    to the websocket feed and costs nothing further.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getProgramAccounts",
+        "params": [
+            PUMPSWAP_PROGRAM_ID,
+            {
+                "encoding": "base64",
+                "commitment": "confirmed",
+                "filters": [
+                    {"memcmp": {"offset": 0, "bytes": base58.b58encode(PUMPSWAP_POOL_DISCRIMINATOR).decode()}},
+                    {"memcmp": {"offset": OFF_POOL_BASE_MINT, "bytes": mint}},
+                ],
+            },
+        ],
+    }
+    try:
+        resp = await http_client.post(
+            rpc_http_url or require_solana_rpc_http(), json=payload, timeout=20.0
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            return None
+        accounts = data.get("result") or []
+    except Exception:  # noqa: BLE001 -- resolution is an enhancement, never a hard requirement
+        return None
+
+    # Several pools can share a base mint (a second one can be created on the
+    # same token). Keep the one whose quote side is WSOL, which is what a
+    # pump.fun migration always produces, rather than the first row returned.
+    for entry in accounts:
+        try:
+            raw = base64.b64decode(entry["account"]["data"][0])
+        except Exception:  # noqa: BLE001
+            continue
+        decoded = decode_pool_account(raw)
+        if decoded and decoded.get("quote_mint") == WSOL_MINT:
+            return entry.get("pubkey")
+    return accounts[0].get("pubkey") if accounts else None
+
+
 async def resolve_pool_accounts(
     http_client: httpx.AsyncClient, pool_addresses: list[str], *, rpc_http_url: str = RPC_HTTP_DEFAULT,
 ) -> dict[str, PumpSwapPoolAccounts]:
