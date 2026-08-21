@@ -38,6 +38,7 @@ from typing import Any
 
 import aiosqlite
 
+from aria_core import db_migrations
 from aria_core.paths import shadow_db_path
 
 logger = logging.getLogger(__name__)
@@ -97,11 +98,10 @@ async def _ensure_table() -> None:
         # nothing came out -- no error, just empty columns. A dict-keyed
         # passthrough will always swallow a key it does not know; named
         # columns cannot.
-        cur = await db.execute(f"PRAGMA table_info({TABLE})")
-        existing = {r[1] for r in await cur.fetchall()}
-        for col in ("window_high", "window_low"):
-            if col not in existing:
-                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} REAL")
+        # Concurrency-safe: every shadow pocket writes here, from several
+        # processes, so read-then-ALTER is a genuine race.
+        await db_migrations.ensure_columns(
+            db, TABLE, (("window_high", "REAL"), ("window_low", "REAL")))
         await db.commit()
     _ensured_db_paths.add(path)
 

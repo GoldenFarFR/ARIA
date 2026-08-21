@@ -48,6 +48,8 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 import httpx
 
+from aria_core import db_migrations
+
 from aria_core import creator_reputation, pretrade_rejection_log
 from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.services.pumpfun_bonding_ws import (
@@ -364,7 +366,9 @@ async def _ensure_table(db_path: str | None = None) -> None:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
         # 21/08 -- founding-cohort columns, hot-ALTERed like the rest so the
         # live table starts accumulating immediately.
-        for col, typ in (
+        # Concurrency-safe: this table is opened by BOTH the API container and
+        # the standalone shadow process, so read-then-ALTER is a genuine race.
+        await db_migrations.ensure_columns(db, TABLE, (
             ("founding_tracked_at_entry", "INTEGER"),
             ("founding_exited_at_entry", "INTEGER"),
             ("founding_exit_ratio_at_entry", "REAL"),
@@ -389,9 +393,7 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # not exist, so every rung re-fired on each ~10s evaluation and sold
             # the whole position at the first rung price.
             ("ladder_done", "REAL"),
-        ):
-            if col not in existing:
-                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
+        ))
         await db.commit()
     _ensured_db_paths.add(path)
 

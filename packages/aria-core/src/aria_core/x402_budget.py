@@ -41,6 +41,8 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
+from aria_core import db_migrations
+
 from aria_core.paths import aria_db_path
 
 # 27/07 -- same fix as tavily_budget.py (real bug found via a live test
@@ -103,13 +105,10 @@ async def _ensure_table() -> None:
             )
             """
         )
-        existing = {
-            row[1]
-            for row in await (await db.execute("PRAGMA table_info(x402_spend_log)")).fetchall()
-        }
-        for name, ddl in _ADDED_COLUMNS:
-            if name not in existing:
-                await db.execute(f"ALTER TABLE x402_spend_log ADD COLUMN {name} {ddl}")
+        # Concurrency-safe: reading PRAGMA then issuing ALTER is a race, and
+        # the loser used to raise "duplicate column name". Seen live 2026.08.21
+        # when the concurrent-reservation test ran alongside another writer.
+        await db_migrations.ensure_columns(db, "x402_spend_log", _ADDED_COLUMNS)
         await db.commit()
 
 
