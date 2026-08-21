@@ -593,6 +593,138 @@ async def resolve_migrated_pools(
     return resolved
 
 
+async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | None) -> dict:
+    """Archives the path, runs the SHARED exit rule and persists the outcome
+    for ONE position.
+
+    21/08 -- extracted so the polling sweep and the event-driven handler run
+    the identical code. Two call sites each carrying their own copy would mean
+    the pocket quietly trading two policies at once, and the difference would
+    surface as unexplainable PnL rather than as a failure."""
+    # 21/08 -- archive the price path, the standing convention since 18/08
+    # that this pocket never followed. Without it a position's history
+    # holds only entry/peak/exit, so NO alternative exit threshold can
+    # ever be measured -- only guessed at. And there is a real question
+    # waiting on it: the trailing stop's fixed -15% distance captures 72%
+    # of a +100% move but LOSES money on a +12% one (n=8, -3.1% average),
+    # which is a calibration problem no stored closure can settle.
+    # Pure local SQLite write on a WAL database, zero network cost.
+    try:
+        from aria_core import shadow_snapshot_archive
+
+        await shadow_snapshot_archive.store_snapshot(
+            module="solana_late_bonding", position_id=row["id"],
+            pool_address=row["pool_address"], chain=chain,
+            price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+            dex_id=snapshot.dex_id,
+            # The extremes REACHED since the last read, not just this
+            # sample -- exactly what replaying a different stop distance
+            # needs, and what a point sample can never reconstruct.
+            price_change_pct=None,
+            transactions=None, volume_usd=None,
+            # Named parameters, NOT a dict passthrough: the first attempt
+            # routed these through `price_change_pct`, whose fixed key set
+            # silently dropped them -- 149 rows archived with the extremes
+            # missing and no error anywhere.
+            window_high=getattr(snapshot, "price_high_since_last_read", None),
+            window_low=getattr(snapshot, "price_low_since_last_read", None),
+        )
+    except Exception:  # noqa: BLE001 -- archiving never blocks an exit
+        pass
+
+    age = _minutes_since(row["detected_at"])
+    graduated = snapshot.dex_id not in (None, "pumpfun")
+    if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
+        # Reported as age 0 so `evaluate_exit`'s max_hold branch never
+        # fires -- the rule itself is left untouched and shared with the
+        # sibling pockets, as the coherence rule requires.
+        age = 0.0
+    result = evaluate_exit(
+        row, current_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+        dex_id=snapshot.dex_id, age_minutes=age if age is not None else 0.0,
+        # 21/08 -- the extremes REACHED since the last read, not just the
+        # price at the instant we happen to look. The websocket already
+        # tracks them (`price_high/low_since_last_read`) and
+        # FAST-DISCOVERY already passed them; this pocket did not, so a
+        # stop could only ever react to a point sample. That is the real
+        # reason a -20% hard stop filled at -78%: the feed HAD recorded
+        # the -20% crossing, the pocket simply never read it. Fixing the
+        # queue's freshness narrowed the gap; this closes it at the source
+        # and is also what makes filling AT the stop legitimate rather
+        # than optimistic -- we genuinely observed the crossing.
+        window_high=getattr(snapshot, "price_high_since_last_read", None),
+        window_low=getattr(snapshot, "price_low_since_last_read", None),
+        hard_stop_pct=HARD_STOP_PCT,
+    )
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        await db.execute(
+            f"""
+            UPDATE {TABLE} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
+                realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
+                realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
+                last_checked_at = ?, exit_price_source = ?, exit_detail = ?
+            WHERE id = ? AND exit_reason IS NULL
+            """,
+            (
+                result.get("remaining_qty"), result.get("realized_proceeds"), result.get("peak_price"),
+                result.get("realistic_realized_proceeds"), result.get("exit_reason"),
+                result.get("final_multiplier"), result.get("realistic_final_multiplier"),
+                snapshot.price_usd, snapshot.reserve_usd,
+                datetime.now(timezone.utc).isoformat(), snapshot.dex_id,
+                result.get("exit_detail"), row["id"],
+            ),
+        )
+        await db.commit()
+    return {"checked": 1, "closed": 1 if result.get("exit_reason") else 0}
+
+
+async def advance_position_by_pool(
+    pool_address: str, *, chain: str = "solana", bonding_ws_feed=None,
+    snapshot_fn=None, db_path: str | None = None,
+) -> dict:
+    """Evaluates the ONE open position on this pool, right now.
+
+    21/08 -- the event-driven counterpart to `advance_exit_simulation`'s
+    polling sweep. Wired to the bonding feed's `on_update` hook, it reacts to
+    a price move within the websocket's own latency instead of waiting for the
+    position's turn in a queue -- a measured 8s gap on a 10s cadence, which is
+    enough for a collapsing curve to run from -15% to -30% and is exactly why
+    a -20% stop kept filling near -30%.
+
+    Deliberately reuses `_persist_exit_result` and the shared `evaluate_exit`
+    rather than duplicating either: the polling sweep stays as the safety net
+    for anything the feed never pushes (a silent pool, a reconnect), and both
+    paths MUST apply the same rule or the pocket would trade two policies at
+    once.
+
+    Prices from the LOCAL feed only -- never REST. An event handler that could
+    block on a throttled provider would stall the very reactivity it exists
+    for, and a pool with no local price simply waits for the polling sweep."""
+    if bonding_ws_feed is None:
+        return {"checked": 0, "closed": 0}
+    await _ensure_table(db_path)
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT * FROM {TABLE} WHERE pool_address = ? AND chain = ? AND exit_reason IS NULL "
+            f"LIMIT 1", (pool_address, chain),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return {"checked": 0, "closed": 0}
+    row = dict(row)
+
+    try:
+        snapshot = bonding_ws_feed.get_snapshot(pool_address)
+    except Exception:  # noqa: BLE001 -- a feed hiccup is not a verdict
+        return {"checked": 0, "closed": 0}
+    if not getattr(snapshot, "available", False) or snapshot.price_usd is None:
+        # Graduated or not yet pushed: the polling sweep owns this one.
+        return {"checked": 0, "closed": 0}
+
+    return await _apply_exit_check(row, snapshot, chain=chain, db_path=db_path)
+
+
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
@@ -687,82 +819,8 @@ async def advance_exit_simulation(
         if not snapshot.available or snapshot.price_usd is None:
             continue
 
-        # 21/08 -- archive the price path, the standing convention since 18/08
-        # that this pocket never followed. Without it a position's history
-        # holds only entry/peak/exit, so NO alternative exit threshold can
-        # ever be measured -- only guessed at. And there is a real question
-        # waiting on it: the trailing stop's fixed -15% distance captures 72%
-        # of a +100% move but LOSES money on a +12% one (n=8, -3.1% average),
-        # which is a calibration problem no stored closure can settle.
-        # Pure local SQLite write on a WAL database, zero network cost.
-        try:
-            from aria_core import shadow_snapshot_archive
-
-            await shadow_snapshot_archive.store_snapshot(
-                module="solana_late_bonding", position_id=row["id"],
-                pool_address=row["pool_address"], chain=chain,
-                price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
-                dex_id=snapshot.dex_id,
-                # The extremes REACHED since the last read, not just this
-                # sample -- exactly what replaying a different stop distance
-                # needs, and what a point sample can never reconstruct.
-                price_change_pct=None,
-                transactions=None, volume_usd=None,
-                # Named parameters, NOT a dict passthrough: the first attempt
-                # routed these through `price_change_pct`, whose fixed key set
-                # silently dropped them -- 149 rows archived with the extremes
-                # missing and no error anywhere.
-                window_high=getattr(snapshot, "price_high_since_last_read", None),
-                window_low=getattr(snapshot, "price_low_since_last_read", None),
-            )
-        except Exception:  # noqa: BLE001 -- archiving never blocks an exit
-            pass
-
-        age = _minutes_since(row["detected_at"])
-        graduated = snapshot.dex_id not in (None, "pumpfun")
-        if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
-            # Reported as age 0 so `evaluate_exit`'s max_hold branch never
-            # fires -- the rule itself is left untouched and shared with the
-            # sibling pockets, as the coherence rule requires.
-            age = 0.0
-        result = evaluate_exit(
-            row, current_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
-            dex_id=snapshot.dex_id, age_minutes=age if age is not None else 0.0,
-            # 21/08 -- the extremes REACHED since the last read, not just the
-            # price at the instant we happen to look. The websocket already
-            # tracks them (`price_high/low_since_last_read`) and
-            # FAST-DISCOVERY already passed them; this pocket did not, so a
-            # stop could only ever react to a point sample. That is the real
-            # reason a -20% hard stop filled at -78%: the feed HAD recorded
-            # the -20% crossing, the pocket simply never read it. Fixing the
-            # queue's freshness narrowed the gap; this closes it at the source
-            # and is also what makes filling AT the stop legitimate rather
-            # than optimistic -- we genuinely observed the crossing.
-            window_high=getattr(snapshot, "price_high_since_last_read", None),
-            window_low=getattr(snapshot, "price_low_since_last_read", None),
-            hard_stop_pct=HARD_STOP_PCT,
-        )
-        async with aiosqlite.connect(db_path or _db_path()) as db:
-            await db.execute(
-                f"""
-                UPDATE {TABLE} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
-                    realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
-                    realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
-                    last_checked_at = ?, exit_price_source = ?, exit_detail = ?
-                WHERE id = ? AND exit_reason IS NULL
-                """,
-                (
-                    result.get("remaining_qty"), result.get("realized_proceeds"), result.get("peak_price"),
-                    result.get("realistic_realized_proceeds"), result.get("exit_reason"),
-                    result.get("final_multiplier"), result.get("realistic_final_multiplier"),
-                    snapshot.price_usd, snapshot.reserve_usd,
-                    datetime.now(timezone.utc).isoformat(), snapshot.dex_id,
-                    result.get("exit_detail"), row["id"],
-                ),
-            )
-            await db.commit()
-        if result.get("exit_reason"):
-            stats["closed"] += 1
+        outcome = await _apply_exit_check(row, snapshot, chain=chain, db_path=db_path)
+        stats["closed"] += outcome["closed"]
     return stats
 
 

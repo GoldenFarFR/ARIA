@@ -1221,3 +1221,82 @@ async def test_throughput_excludes_activity_older_than_its_window(_tmp_db):
     assert out["entries_last_hour"] == 0, "a 6-hour-old entry must not count as this hour's"
     assert out["closures_last_hour"] == 0
     assert out["closures_24h"] == 1, "but it is still inside the 24h window"
+
+
+# --- event-driven exit: reacting to a price move instead of waiting a turn ---
+
+@pytest.mark.asyncio
+async def test_a_price_move_closes_the_position_without_waiting_for_the_sweep(_tmp_db):
+    """21/08 -- the polling sweep measured 8s of lag on a 10s cadence, and 8s
+    is enough for a collapsing curve to run from -15% to -30%, which is why a
+    -20% stop kept filling near -30%."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    class _Crashed:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=entry * 0.75,
+                                   reserve_usd=9_000.0, dex_id="pumpfun",
+                                   price_high_since_last_read=entry * 0.99,
+                                   price_low_since_last_read=entry * 0.75)
+
+    out = await pocket.advance_position_by_pool(
+        "poolA", bonding_ws_feed=_Crashed(), db_path=_tmp_db,
+    )
+    assert out == {"checked": 1, "closed": 1}
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
+
+
+@pytest.mark.asyncio
+async def test_the_event_path_never_reaches_for_rest(_tmp_db):
+    """An event handler that could block on a throttled provider would stall
+    the very reactivity it exists for. A pool with no local price simply waits
+    for the polling sweep."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    rest_calls = []
+
+    async def _rest(_client, pool, _mint, *, chain):
+        rest_calls.append(pool)
+        return SimpleNamespace(available=True, price_usd=0.0001, reserve_usd=10.0, dex_id="pumpfun")
+
+    class _NotPushedYet:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=False, price_usd=None)
+
+    out = await pocket.advance_position_by_pool(
+        "poolA", bonding_ws_feed=_NotPushedYet(), snapshot_fn=_rest, db_path=_tmp_db,
+    )
+    assert out == {"checked": 0, "closed": 0}
+    assert rest_calls == []
+    assert (await _rows(_tmp_db))[0]["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_pool_is_a_no_op(_tmp_db):
+    """The feed pushes every tracked pool, most of which are other pockets'
+    or candidates we never entered."""
+    class _Any:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=0.001, reserve_usd=9_000.0,
+                                   dex_id="pumpfun")
+
+    assert await pocket.advance_position_by_pool(
+        "poolNeverEntered", bonding_ws_feed=_Any(), db_path=_tmp_db,
+    ) == {"checked": 0, "closed": 0}
+
+
+@pytest.mark.asyncio
+async def test_both_exit_paths_run_the_same_code(_tmp_db):
+    """Two call sites each carrying their own copy would mean the pocket
+    quietly trading two policies at once, surfacing as unexplainable PnL
+    rather than as a failure."""
+    import inspect
+
+    for fn in (pocket.advance_exit_simulation, pocket.advance_position_by_pool):
+        assert "_apply_exit_check" in inspect.getsource(fn)

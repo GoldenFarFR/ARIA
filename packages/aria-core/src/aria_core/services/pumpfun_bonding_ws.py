@@ -403,7 +403,12 @@ class PumpFunBondingWebSocketFeed:
         max_staleness_seconds: float = DEFAULT_MAX_STALENESS_SECONDS,
         connect_fn=None,
         http_client_factory=None,
+        on_update=None,
     ) -> None:
+        # Called with the pool address on every account change. See the hook
+        # site in `_apply_notification` for why it exists and why it must not
+        # block.
+        self._on_update = on_update
         self._rpc_ws_url = rpc_ws_url
         self._rpc_http_url = rpc_http_url
         self._max_staleness_seconds = max_staleness_seconds
@@ -786,6 +791,26 @@ class PumpFunBondingWebSocketFeed:
 
         self._raw_state[pool_addr] = decoded
         self._updated_at[pool_addr] = time.time()
+
+        # 21/08 -- EVENT HOOK. A bonding-curve account only changes when
+        # someone trades it, so this line is the earliest moment anything in
+        # this dome can know a price moved. Pockets used to learn it by
+        # polling their positions in a queue, which measured 8s of lag on a
+        # 10s cadence -- and 8s is enough for a collapsing curve to run from
+        # -15% to -30%, which is exactly why a -20% stop kept filling near
+        # -30%. Same shape as the RPC change: the data was already arriving,
+        # it was being read late.
+        #
+        # The callback MUST be cheap and non-blocking -- it runs inside the
+        # websocket read loop, so anything slow here stalls every other pool's
+        # updates. Callers are expected to enqueue, never to work. Wrapped
+        # because a subscriber's bug must never kill the feed everything else
+        # depends on.
+        if self._on_update is not None:
+            try:
+                self._on_update(pool_addr)
+            except Exception:  # noqa: BLE001 -- a subscriber never breaks the feed
+                logger.info("pumpfun_bonding_ws: on_update callback failed for %s", pool_addr)
 
         price = self._price_usd_for(pool_addr, decoded)
         if price is not None:
