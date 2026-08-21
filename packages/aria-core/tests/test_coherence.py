@@ -1300,3 +1300,31 @@ def test_every_shadow_pocket_module_is_in_the_registry():
         f"shadow pocket modules absent from POCKET_MODULES: {sorted(missing)} -- "
         f"add them to aria_core/pocket_parameters.py so their parameters are tracked"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_two_active_pockets_put_their_database_in_wal_mode(tmp_path):
+    """21/08, Devil's Advocate finding, verified against the real file:
+    `shadow.db` ran in `delete` journal mode while `aria.db` had been in WAL
+    for a long time. `delete` locks the whole database for every commit, so
+    the pockets' concurrent small writers serialise and can hit SQLITE_BUSY
+    inside paths written to never raise -- silently losing the very rows the
+    pockets are judged on."""
+    import aiosqlite
+
+    from aria_core import solana_fresh_launch_fast_discovery_shadow as fd
+    from aria_core import solana_late_bonding_shadow as lb
+
+    for mod, name in ((lb, "late_bonding"), (fd, "fast_discovery")):
+        db_path = str(tmp_path / f"{name}.db")
+        mod._ensured_db_paths.discard(db_path)
+        original = mod._db_path
+        mod._db_path = lambda p=db_path: p
+        try:
+            await (mod._ensure_table(db_path) if mod is lb else mod._ensure_table())
+        finally:
+            mod._db_path = original
+
+        async with aiosqlite.connect(db_path) as db:
+            cur = await db.execute("PRAGMA journal_mode")
+            assert (await cur.fetchone())[0].lower() == "wal", f"{name} is not in WAL mode"

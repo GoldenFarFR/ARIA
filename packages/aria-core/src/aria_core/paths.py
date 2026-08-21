@@ -94,3 +94,27 @@ def vector_dir() -> Path:
     path = data_dir() / "vector"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+async def ensure_wal(db) -> None:
+    """Puts an open SQLite connection's database into WAL mode, idempotently.
+
+    21/08 -- found by the Devil's Advocate and verified: `shadow.db` was in
+    `delete` journal mode while `aria.db` had been in WAL for a long time, by
+    manual configuration rather than by code. `delete` takes a whole-database
+    write lock for every commit, so the shadow pockets' many small concurrent
+    writers (entry inserts, exit updates, rejection log, integrity checks)
+    serialise against each other and can surface as `SQLITE_BUSY` inside code
+    paths written to never raise -- i.e. silently lost rows in exactly the
+    data the pockets are judged on.
+
+    The setting is persistent in the file, so this is belt-and-braces against
+    a database recreated from scratch; it is called on table setup rather
+    than on every connection, since re-issuing it per query would be a wasted
+    round trip for a no-op. Never raises: an older SQLite, or a filesystem
+    that cannot support WAL, must not stop a pocket from running.
+    """
+    try:
+        await db.execute("PRAGMA journal_mode=WAL")
+    except Exception:  # noqa: BLE001 -- a journal mode is never worth a crash
+        pass

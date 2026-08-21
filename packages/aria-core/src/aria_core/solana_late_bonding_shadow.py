@@ -49,7 +49,7 @@ import aiosqlite
 import httpx
 
 from aria_core import creator_reputation, pretrade_rejection_log
-from aria_core.paths import shadow_db_path
+from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.services.pumpfun_bonding_ws import (
     RPC_HTTP_DEFAULT,
     bonding_progress,
@@ -222,6 +222,7 @@ async def _ensure_table(db_path: str | None = None) -> None:
         await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_pool ON {TABLE}(pool_address)")
         # Hot idempotent ALTER, same pattern as everywhere else here -- start
         # accumulating on the live table rather than waiting for a rebuild.
+        await ensure_wal(db)
         cur = await db.execute(f"PRAGMA table_info({TABLE})")
         existing = {r[1] for r in await cur.fetchall()}
         if "has_paid_profile" not in existing:

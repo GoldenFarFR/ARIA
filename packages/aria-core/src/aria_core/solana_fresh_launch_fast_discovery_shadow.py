@@ -105,7 +105,7 @@ import aiosqlite
 
 from aria_core import creator_reputation
 from aria_core import pretrade_rejection_log
-from aria_core.paths import shadow_db_path
+from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.services import dexpaprika, rugcheck
 from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, geckoterminal_client
 from aria_core.services.pumpportal_ws import PumpPortalNewTokenEvent, PumpPortalNewTokenFeed
@@ -315,6 +315,7 @@ async def _ensure_table() -> None:
         # ANY position. Caught within minutes by reading the real log after
         # deploying, which is the only reason it was not silent -- the
         # exception was swallowed into an INFO line, not a crash.
+        await ensure_wal(db)
         cur = await db.execute(f"PRAGMA table_info({TABLE})")
         if "exit_detail" not in {r[1] for r in await cur.fetchall()}:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
