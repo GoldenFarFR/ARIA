@@ -1,12 +1,20 @@
-# LATE-BONDING -- what to decide at 300 closures
+# LATE-BONDING -- what to decide, and the target to hit
 
-Everything below was measured on 2026.08.21 over ~105 closures of the epoch
-starting `2026-08-21T16:31:20`. None of it is applied: an entry filter validated
-on the very sample that suggested it is circular, so each item waits for data it
-never influenced. The pocket keeps running untouched until then.
+**Operator target set 2026.08.21 (late): +30% average PnL over 500 cumulative
+closures of the current epoch** (opened 23:37:10 after banning re-entries).
+Milestones alert at 100 / 300 / 500 so the trajectory is visible before the
+deadline -- a target only measured at the finish line cannot be corrected.
 
-At the time of writing: 105 closures, winrate ~62%, PnL ~+16%, holding ~+9.4%
-with its five best trades removed.
+Everything below was measured on 2026.08.21 over ~210 closures. None of it is
+applied unless stated: a filter validated on the very sample that suggested it
+is circular, so each item waits for data it never influenced.
+
+**Two filters were already invalidated exactly that way.** Buyer acceleration
+and sell-pressure slope looked like the two strongest signals of the evening on
+90 closures (+24% and +29% against what they cut). On 207 closures they both
+fell BELOW doing nothing at all, while cutting 7-8 x2 winners each. They are
+dead, and the lesson outranks them: no signal counts until it holds on data it
+did not shape.
 
 ---
 
@@ -92,3 +100,38 @@ positions. One filter beats three.
   `db_migrations.ensure_columns`. Migrate opportunistically.
 - FAST-DISCOVERY exit tracking stays wired until its last open positions close;
   remove the loop afterwards.
+
+---
+
+## E. Found during the closure-by-closure diagnostic (21/08, late)
+
+Never analysed before that pass, all four columns filled 100% since day one.
+
+13. **Paid DexScreener profile** -- 34 closures at +5.4% (**-0.3% without their
+    top two**, 41% winrate) against +25.3% / +22.4% / 68% for the 176 without.
+    Someone paying for visibility on a bonding-curve token is buying attention,
+    not building.
+14. **Repeat creator** -- 23 creators launched more than one of our tokens; their
+    54 positions returned +10.3% against +26.1% for the 156 single-launch
+    creators. Token-factory signature.
+15. **Combined (13 + 14)** -- keeps 142 of 211, returns **+27.0% (+23.5% without
+    top two)** against +22.0%, and costs only TWO x2 winners. Best
+    gain-to-damage ratio of any filter tested. NOT applied: it comes from the
+    same sample it was found on, and two filters just died that way today.
+16. **Reinforcement is structurally losing** -- simulated on the 96 positions
+    where it triggered: +34.6% against +54.9% for the real ones, worse in 96
+    cases out of 96. Adding the second half of the stake at +30% means buying
+    higher; on a distribution where winners explode, full exposure from entry
+    always wins. Do not implement.
+17. **Transaction intensity, normalised** -- raw transaction counts are a trap
+    (they mostly measure how long the stream had been listening, correlation
+    +0.52 with observation time). Per SECOND of observation the gradient
+    reverses and holds: 0.03-0.5/s returns +20.3%, 2.65-16/s returns +32.5%.
+    Converges with curve velocity and short observation time -- three angles on
+    one idea: take the FAST tokens.
+18. **Wash trading NOT provable with current data** -- the transactions/distinct
+    buyers ratio shows no monotonic gradient and caps at 5.3 (real wash trading
+    would show 20-100). Only 1 collapse in 101 closures, so nothing to predict
+    against. What would settle it: the count of wallets that BOTH buy and sell
+    the same token in the window -- the stream tracks buyers and sellers
+    separately and never stores the intersection.
