@@ -305,3 +305,39 @@ def test_a_blank_env_value_does_not_shadow_the_fallback(monkeypatch):
     monkeypatch.setenv(tracker.POLLING_RPC_HTTP_ENV, "   ")
     monkeypatch.setattr(tracker, "RPC_HTTP_DEFAULT", "https://main.example")
     assert PumpFunCurveTracker()._rpc_http_url == "https://main.example"
+
+
+# --- rate limiting (regression 2026.08.21) ----------------------------------
+# The module shipped with NO throttle, against the project norm that every
+# external client paces itself to ~90% of the provider's real sustained rate.
+# With 588 mints tracked the sweep fired its batches back to back, drew HTTP
+# 429s, and detections fell from 34 to 18 per hour.
+
+
+def test_batches_are_paced_apart(monkeypatch):
+    calls = []
+
+    async def timed(http_client, url, pubkeys):
+        calls.append(asyncio.get_event_loop().time())
+        return [None] * len(pubkeys)
+
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", timed)
+    n = MAX_ACCOUNTS_PER_CALL * 3
+    t = PumpFunCurveTracker(rpc_http_url="http://rpc.test", max_tracked=n)
+    for i in range(n):
+        t.add(f"mint{i}", f"pool{i}")
+
+    asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+
+    assert len(calls) == 3
+    gaps = [b - a for a, b in zip(calls, calls[1:])]
+    # Allow scheduler slack, but the pacing must be real, not incidental.
+    assert all(g >= tracker._MIN_INTERVAL_SECONDS * 0.7 for g in gaps), gaps
+    assert t.throttled_waits >= 2
+
+
+def test_the_rate_is_below_the_provider_cap():
+    # Chainstack Developer plan: 25 req/s, enforced with 429. The norm is ~90%
+    # of the real rate, never the ceiling itself.
+    assert tracker.MAX_REQUESTS_PER_SECOND < 25.0
+    assert tracker.MAX_REQUESTS_PER_SECOND >= 20.0

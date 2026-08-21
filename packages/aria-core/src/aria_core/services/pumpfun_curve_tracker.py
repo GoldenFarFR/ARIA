@@ -84,6 +84,21 @@ def default_polling_rpc_url() -> str:
 # NOT chunk, so this module must.
 MAX_ACCOUNTS_PER_CALL = 100
 
+# Chainstack's Developer plan caps at 25 requests/second -- stated on the node
+# dashboard and enforced with HTTP 429. Project norm is to use ~90% of the real
+# sustained rate, never to guess it, so 22 req/s -> ~45ms between calls.
+#
+# Added 2026.08.21 after the module went to production WITHOUT any throttle,
+# which is a straight violation of that norm. With 588 mints tracked the poll
+# fired its batches back to back, drew 429s, and candidate evaluation collapsed
+# from 34 to 18 detections/hour. The symptom looked like "fewer trades"; the
+# cause was a missing rate limit.
+#
+# Re-derive this if the provider changes: the number belongs to the plan, not
+# to this module.
+MAX_REQUESTS_PER_SECOND = 22.0
+_MIN_INTERVAL_SECONDS = 1.0 / MAX_REQUESTS_PER_SECOND
+
 # Band edges as curve progress (0.0 -> 1.0) and their polling cadence.
 # Deliberately NOT a single interval: the population below 30% is five times
 # the one approaching entry, and polling it at entry cadence would spend the
@@ -190,6 +205,8 @@ class PumpFunCurveTracker:
         self._tracked: dict[str, TrackedMint] = {}
         self._decimals_cache: dict[str, int] = {}
         self.credits_spent = 0
+        self._last_call_at = 0.0
+        self.throttled_waits = 0
         self.refused_adds = 0
 
     def add(self, mint: str, pool_address: str) -> bool:
@@ -254,6 +271,14 @@ class PumpFunCurveTracker:
 
         for start in range(0, len(due), MAX_ACCOUNTS_PER_CALL):
             chunk = due[start:start + MAX_ACCOUNTS_PER_CALL]
+            # Pace the batches. Without this the whole sweep goes out back to
+            # back and the provider answers 429, which costs far more than the
+            # wait: a rejected batch means its mints are simply not measured.
+            wait = _MIN_INTERVAL_SECONDS - (time.monotonic() - self._last_call_at)
+            if wait > 0:
+                self.throttled_waits += 1
+                await asyncio.sleep(wait)
+            self._last_call_at = time.monotonic()
             try:
                 accounts = await _rpc_get_multiple_accounts(
                     http_client, url, [e.pool_address for e in chunk])
