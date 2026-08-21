@@ -93,3 +93,32 @@ async def test_store_snapshot_never_raises_on_db_failure(monkeypatch):
         price_usd=1.0, reserve_usd=1.0, dex_id=None, price_change_pct=None, transactions=None, volume_usd=None,
     )
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_window_extremes_are_stored_as_named_columns(tmp_path, monkeypatch):
+    """21/08 -- these were first passed through `price_change_pct`, whose
+    fixed key set (m5/m15/m30/h1/h6/h24) silently dropped them: 149 rows
+    archived with the extremes missing and no error anywhere. A dict-keyed
+    passthrough will always swallow a key it does not know; a named column
+    cannot."""
+    import aiosqlite
+
+    from aria_core import shadow_snapshot_archive as arch
+
+    db_path = str(tmp_path / "snap.db")
+    monkeypatch.setattr(arch, "_db_path", lambda: db_path)
+    arch._ensured_db_paths.discard(db_path)
+
+    assert await arch.store_snapshot(
+        module="test_module", position_id=1, pool_address="pool", chain="solana",
+        price_usd=0.001, reserve_usd=9_000.0, dex_id="pumpfun",
+        price_change_pct=None, transactions=None, volume_usd=None,
+        window_high=0.0012, window_low=0.0008,
+    )
+
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            f"SELECT window_high, window_low FROM {arch.TABLE} WHERE position_id = 1"
+        )
+        assert await cur.fetchone() == (0.0012, 0.0008)

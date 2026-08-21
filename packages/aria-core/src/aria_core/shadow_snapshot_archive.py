@@ -76,6 +76,8 @@ async def _ensure_table() -> None:
                 price_change_h1 REAL,
                 price_change_h6 REAL,
                 price_change_h24 REAL,
+                window_high REAL,
+                window_low REAL,
                 transactions_json TEXT,
                 volume_usd_json TEXT,
                 recorded_at TEXT NOT NULL
@@ -88,6 +90,18 @@ async def _ensure_table() -> None:
             ON {TABLE} (module, position_id)
             """
         )
+        # 21/08 -- hot idempotent ALTER for the two window-extreme columns.
+        # Added after they were silently DROPPED: they were first passed
+        # through `price_change_pct`, which only maps a fixed key set
+        # (m5/m15/m30/h1/h6/h24), so `window_high`/`window_low` went in and
+        # nothing came out -- no error, just empty columns. A dict-keyed
+        # passthrough will always swallow a key it does not know; named
+        # columns cannot.
+        cur = await db.execute(f"PRAGMA table_info({TABLE})")
+        existing = {r[1] for r in await cur.fetchall()}
+        for col in ("window_high", "window_low"):
+            if col not in existing:
+                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} REAL")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -104,6 +118,8 @@ async def store_snapshot(
     price_change_pct: dict[str, float] | None,
     transactions: dict[str, Any] | None,
     volume_usd: dict[str, float] | None,
+    window_high: float | None = None,
+    window_low: float | None = None,
 ) -> bool:
     """Archives one exit-check snapshot for a shadow position. Returns
     whether the row was actually written (best-effort, never raises)."""
@@ -119,14 +135,16 @@ async def store_snapshot(
                     price_usd, reserve_usd, dex_id,
                     price_change_m5, price_change_m15, price_change_m30,
                     price_change_h1, price_change_h6, price_change_h24,
+                    window_high, window_low,
                     transactions_json, volume_usd_json, recorded_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     module, position_id, pool_address, chain, now,
                     price_usd, reserve_usd, dex_id,
                     price_change_pct.get("m5"), price_change_pct.get("m15"), price_change_pct.get("m30"),
                     price_change_pct.get("h1"), price_change_pct.get("h6"), price_change_pct.get("h24"),
+                    window_high, window_low,
                     json.dumps(transactions) if transactions else None,
                     json.dumps(volume_usd) if volume_usd else None,
                     now,

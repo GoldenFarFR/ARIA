@@ -683,11 +683,14 @@ async def advance_exit_simulation(
                 # The extremes REACHED since the last read, not just this
                 # sample -- exactly what replaying a different stop distance
                 # needs, and what a point sample can never reconstruct.
-                price_change_pct={
-                    "window_high": getattr(snapshot, "price_high_since_last_read", None),
-                    "window_low": getattr(snapshot, "price_low_since_last_read", None),
-                },
+                price_change_pct=None,
                 transactions=None, volume_usd=None,
+                # Named parameters, NOT a dict passthrough: the first attempt
+                # routed these through `price_change_pct`, whose fixed key set
+                # silently dropped them -- 149 rows archived with the extremes
+                # missing and no error anywhere.
+                window_high=getattr(snapshot, "price_high_since_last_read", None),
+                window_low=getattr(snapshot, "price_low_since_last_read", None),
             )
         except Exception:  # noqa: BLE001 -- archiving never blocks an exit
             pass

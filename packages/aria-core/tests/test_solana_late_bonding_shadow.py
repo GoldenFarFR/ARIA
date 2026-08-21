@@ -1078,8 +1078,10 @@ async def test_the_price_path_is_archived_on_every_check(_tmp_db, monkeypatch):
     assert stored, "no snapshot archived"
     assert stored[0]["module"] == "solana_late_bonding"
     # the window extremes are what makes replaying another stop distance possible
-    assert stored[0]["price_change_pct"]["window_low"] == 0.0009
-    assert stored[0]["price_change_pct"]["window_high"] == 0.0012
+    # named parameters, not a dict passthrough -- routing them through
+    # `price_change_pct` silently dropped them (fixed key set, no error)
+    assert stored[0]["window_low"] == 0.0009
+    assert stored[0]["window_high"] == 0.0012
 
 
 @pytest.mark.asyncio
