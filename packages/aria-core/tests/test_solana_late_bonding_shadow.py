@@ -1125,13 +1125,16 @@ def test_the_trailing_stop_cannot_be_credited_above_the_real_market():
     assert crashed["realized_proceeds"] == pytest.approx(0.24)
 
     # dipped through the stop and recovered above it: the crossing was real
-    # and fillable there
+    # and fillable there.
+    # 21/08 -- a +100% peak now sits in the widest band (18%, measured: the
+    # biggest winners pull back up to 14.7% before their peak), so the stop is
+    # at 1.64 rather than the previous flat 1.70.
     recovered = ws_exit_shadow.evaluate_exit(
         row, current_price=1.80, reserve_usd=9_000.0, dex_id="pumpfun", age_minutes=5.0,
         window_low=1.60,
     )
     assert recovered["exit_reason"] == "trailing_stop"
-    assert recovered["realized_proceeds"] == pytest.approx(1.70)
+    assert recovered["realized_proceeds"] == pytest.approx(1.64)
 
 
 @pytest.mark.asyncio

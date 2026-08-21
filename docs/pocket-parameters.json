@@ -316,57 +316,57 @@
     "label": "WS-EXIT (stopped as a pocket -- still the SHARED exit rule)",
     "parameters": {
       "HARD_STOP_PCT_DEFAULT": {
-        "line": 159,
+        "line": 206,
         "value": null,
         "why": "21/08 -- HARD STOP covering the window the trailing stop does NOT protect.  Arming the trailing at +10% (above) removed a destructive mechanism, but it left a hole nobody looked at: between entry and +10%, a position has NO downside rule at all. It falls until `liquidity_collapse` fires at a 50% reserve drop, which on a curve is a far worse price than 50%. Operator saw it live as a -81.5% close and asked the right question -- how does that happen with a -15% trailing stop? It doesn't: the trailing was never armed.  Measured on the LATE-BONDING pocket's own 304 closures at 70%+ progress: trailing ARMED   (peak >= +10%)  n=162   +58.2% trailing NEVER armed             n=142   -55.5%   <-- unprotected Counterfactual on those same closures, PESSIMISTIC (any position dead within 90s is assumed uncuttable -- its price gapped, no -20% ever printed) and outlier-tested as the statistical mandate requires: today          +5.1%   (without its two best: +2.2%) hard stop -15% +23.7%  (+20.9%) hard stop -20% +21.8%  (+19.0%)   <-- chosen hard stop -25% +20.0%  (+17.2%) -20% over -15% deliberately: -15% scores marginally better here but sits only 5 points off the trailing's own distance, so it would start cutting ordinary noise on a curve this volatile. It changes NO entry filter, which matters because 1.8% of trades carry 100% of this dome's PnL.  ``None`` by default so the FAST-DISCOVERY control pocket is untouched and the two pockets keep differing on one variable at a time."
       },
       "HOLDER_CONCENTRATION_REJECT_PCT": {
-        "line": 232,
+        "line": 279,
         "value": 80.0,
         "why": "20/08, operator-directed emergency performance investigation. This pocket deliberately did NOT apply FAST-DISCOVERY's holder-concentration reject -- it was the A/B variable kept open on purpose. That A/B has now returned its verdict on THIS pocket's own 1003 real closures, and it is unambiguous: top_holder <85%   n=267  winrate 18.7%  avg -6.19% top_holder 85-92% n=63   winrate  7.9%  avg -9.43% top_holder 92-97% n=136  winrate  8.1%  avg -7.27% top_holder >=97%  n=529  winrate  0.8%  avg -10.30%   <-- 53% of the flow The >=97% band alone carried 53% of every entry this pocket made, at a 0.8% winrate -- statistically indistinguishable from noise, and the single mechanical reason WS-EXIT sat at a 9% winrate while FAST-DISCOVERY (which has cut this segment since 20/08) sat at 17%. Simulated over those same real closures, cutting >=92% takes this pocket from 7.1% to 16.6% winrate. Keeping the A/B open any longer would only re-confirm a settled result at the cost of more (fictitious) capital, so it is closed here deliberately -- same value as FAST-DISCOVERY's own calibrated constant, applied the same way (an early exit on RugCheck's async backfill, never an entry gate, which would reintroduce the multi-minute RugCheck wait this pocket's design exists to avoid). 20/08, RECALIBRATED 92 -> 80 on 1496 real closures (operator-directed \"verifie comment les autres wallets gagnent\" / \"cible les tokens qui naissent\"). What this number actually measures was established the same day: topHolders[0] is the POOL itself on a fresh launch, so this is the share of supply still UNSOLD in the curve -- i.e. the inverse of traction. Comparing the dome's x2+ winners against its losers ON ENTRY FEATURES made it the one clearly discriminating variable: winners (n=36)  top_holder 63.9%   losers (n=1476)  82.8% (liquidity 4162$ vs 3237$, rugcheck score 10.6 vs 10.6 -- no power) A token that explodes is a token real people were ALREADY buying before we arrived. Splitting the whole sample at 80%: kept  (<80%)  n=499  winrate 24.8%  PnL +1923 pts  26 of the 36 x2 winners cut  (>=80%)  n=997  winrate  5.1%  PnL -8057 pts  10 of them The kept side is the first POSITIVE segment found in this dome (+3.85%/trade against -4.07% overall) and holds 72% of the big winners for 33% of volume. That winner-share-vs-volume-share test is the bar any entry filter must clear here, since 1.8% of trades carry 100% of the gain -- see the Doctrine's out-of-bounds rule. Cuts ~2/3 of flow: deliberate, fewer positive trades beat more negative ones."
       },
       "HOLDER_EXCLUDING_POOL_REJECT_PCT": {
-        "line": 255,
+        "line": 302,
         "value": 20.0,
         "why": "20/08, explicit operator decision -- the REAL wallet concentration guardrail, pool excluded. Distinct from the threshold above, which the same day's investigation showed measures something else entirely (the pool's own unsold share, i.e. traction). A single wallet holding >=20% of a fresh launch can dump the whole pool at will, and the constant above cannot see it: the first real gate decision logged (20:14:18) passed a token at 52.6% pool share -- comfortably \"clean\" by that threshold -- while a single non-pool wallet held 16.97%.  HONESTY ABOUT THIS NUMBER: 20% is a CONSERVATIVE PROVISIONAL threshold from market logic (a fifth of supply in one hand is a well-understood dump risk), NOT a value calibrated on ARIA's own data -- there is exactly n=1 measured observation behind it today. It follows the proactive-ingestion doctrine's third step (a temporary conservative hypothesis WITH an explicit recalibration plan) rather than waiting for data while unprotected. The recalibration plan is concrete and already instrumented: every decision, blocked or passed, records `top_holder_excluding_pool_pct` in `pretrade_rejection_log`, so once n>=100 the real winrate/PnL curve against this variable can move the threshold onto measured ground. Until then it is deliberately loose (20%, not 10%) so it cuts only the flagrant cases and cannot quietly become the pocket's main filter on an uncalibrated number."
       },
       "HOLDER_GATE_FAIL_CLOSED": {
-        "line": 556,
+        "line": 603,
         "value": true,
         "why": "20/08, explicit operator instruction (\"ou rejette par securite\"): if the holder concentration cannot be established in time, the order is NOT sent. Fail-closed, the same doctrine as every other guardrail in this project. The real cost of this choice is stated plainly rather than hidden: a RugCheck outage stops this pocket entering ENTIRELY (it does not degrade to entering unchecked). That is the intended trade -- an unchecked entry on this pocket has a measured 0.8% winrate in the >=97% band, so entering blind is strictly worse than not entering. `blocked_holder_gate_unavailable` in the cycle stats is what makes such an outage visible instead of silent."
       },
       "HOLDER_GATE_TIMEOUT_S": {
-        "line": 539,
+        "line": 586,
         "value": 12.0,
         "why": "throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED)."
       },
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 161,
+        "line": 208,
         "value": 50.0,
         "why": null
       },
       "MAX_HOLD_MINUTES": {
-        "line": 160,
+        "line": 207,
         "value": 60.0,
         "why": null
       },
       "MAX_LIQUIDITY_USD_ENTRY": {
-        "line": 192,
+        "line": 239,
         "value": 5000.0,
         "why": "19/08, operator decision after reviewing this pocket's own real closures (144 with a valid reserve_usd read): unlike every other liquidity check in this dome (a MINIMUM floor), this pocket's real data shows the opposite risk at the HIGH end. Bucketed by entry reserve_usd: 3990-21200$ (top quartile) closed at a 44.4% liquidity_collapse rate vs 11.1% for the bottom two quartiles; a finer 1000$-wide cut confirms >=5000$ specifically as the worst bucket in the whole pocket (21 cases, avg realistic_final_ multiplier 0.702, i.e. -29.8% average) -- clearly worse than every lower bucket, including the 3000-3500$ one that stays net positive (+21.2%) despite a similar 27% collapse rate (a favorable winner/loser asymmetry that high-liquidity entries don't share). Working theory: on a support-bounce entry, unusually high liquidity at entry likely signals a speculative hype spike rather than a stable floor -- exactly the kind of pool that dumps hard once that hype fades. Applied as an entry-time reject (never confirmed) rather than a post-entry exit, since reserve_usd is already known before the simulated buy -- see ``_track_candidate_pumpportal``'s own call site."
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 173,
+        "line": 220,
         "value": 3000.0,
         "why": "20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD (operator-directed performance investigation, 558-closure sample). 500$-wide buckets inside this pocket's own operative 2000-5000$ range (bounded above by MAX_LIQUIDITY_USD_ENTRY, see below): the 2000-2499$ bucket alone holds 253/394 closures (64% of the sample) at a 3.2% winrate/0.916 avg realistic multiplier -- by far the worst bucket in the pocket. From 3000$ up, winrate roughly triples (13.8-31.3% across the 3000-4500$ buckets). Raising the floor to 3000 removes the dead zone while staying well inside the MAX_LIQUIDITY_USD_ENTRY=5000 ceiling the 19/08 finding below still confirms on the current sample."
       },
       "REQUIRE_OBSERVED_BUY": {
-        "line": 530,
+        "line": 577,
         "value": true,
         "why": "20/08 -- how long the pre-trade gate may wait on RugCheck before giving up. Sized against real measurements, not guessed: RugCheck answers in ~0.17s, and the only real wait is this dome's OWN shared throttle (_MIN_INTERVAL_S=4.5s in services/rugcheck.py). 12s covers a couple of queued turns at that throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED). 20/08 -- gate on the live trade flow: refuse to enter a candidate on which not a single BUY was observed while tracking it. Provisional and deliberately minimal (>=1 buy, never a tuned threshold) until the counters logged on every decision give enough history to calibrate a real N-buys-in-T-seconds rule."
       },
       "STATS_LOG_EVERY_N_EVENTS": {
-        "line": 545,
+        "line": 592,
         "value": 200,
         "why": "20/08 -- how often the discovery loop emits its running outcome counters. At the real feed rate (~38 events/min, measured live) this is roughly one line every 5 minutes: frequent enough to notice a stalled or fail-closed pocket quickly, rare enough not to drown the log."
       },
@@ -376,7 +376,7 @@
         "why": null
       },
       "TRAILING_STOP_ARM_PEAK_PCT": {
-        "line": 131,
+        "line": 178,
         "value": 10.0,
         "why": "20/08 -- the trailing stop only ARMS once the peak has risen this far above entry. Below it, the position is left to the other two rules (max_hold / liquidity_collapse) instead.  WHY, on 942 real closures. A trailing stop sells at `peak * 0.85`; when the peak never rose meaningfully above entry, that is not a trailing stop at all, it is a guaranteed ~-15% market sell. Measured on positions whose peak never exceeded +10% -- 79% of every trailing_stop this pocket ever fired: max_hold           n=556  -7.35% trailing_stop      n=187  -16.80%   <-- 2.3x worse than simply waiting liquidity_collapse n=191  -31.17% And the trailing's own PnL by peak reached is cleanly monotonic: <+5%   n=184  -16.9%      +15-25% n=3   -1.4% +5-10% n=3    -10.8%      +25-50% n=11  +14.2% +10-15% n=6   -6.83%      >+50%   n=28  +91.4% So the mechanism is genuinely excellent once a token actually moves, and purely destructive before that. Arming at +10% removes the destructive half (~187 trades moving from ~-16.7% to max_hold's -7.35%) while keeping every case where the trailing earns its keep.  CRITICALLY, this changes NO entry filter. The dome's PnL is carried by 1.8% of trades (46 of 2522 producing +15928 points against -15351 total), so any additional entry filter risks cutting the rare winners that carry everything. Reducing what the losers cost is the one lever that cannot do that."
       },
@@ -384,6 +384,11 @@
         "line": 105,
         "value": 15.0,
         "why": "Own constants, deliberately the SAME numeric values as solana_fresh_launch_shadow.py -- see module docstring for why they are not shared state."
+      },
+      "TRAILING_STOP_PCT_HIGH": {
+        "line": 137,
+        "value": 18.0,
+        "why": null
       }
     },
     "status": "present"
@@ -392,7 +397,7 @@
     "label": "LATE-BONDING (70-98.5% of the bonding curve)",
     "parameters": {
       "CONFIG_EPOCH": {
-        "line": 215,
+        "line": 206,
         "value": "2026-08-21T14:40:00+00:00",
         "why": "21/08 -- CONFIG EPOCH. Everything closed before this instant was produced by a DIFFERENT configuration and must not be averaged with what follows: the 40-95% collection band, and a window where entry was priced by REST while the exit used the RPC (every PnL then compared two sources). Mixing them makes the headline meaningless, which is exactly the problem the recent-window fix was already treating.  Deliberately an EPOCH MARKER, not a delete. The rows stay: they produced every finding of the last two days (the rug gradient 48.9% -> 27.0%, the graduation rate 2.0% -> 50.0%, the +161% on migrated positions) and this dome's standing rule is that real history is never destroyed. `summary()` reports from here; anything older is still queryable, just not averaged in. Move this forward on the NEXT configuration change rather than editing the rows."
       },
@@ -412,7 +417,7 @@
         "why": "21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed because a curve past 90% can COMPLETE mid-position and migrate its liquidity to the AMM -- treated as a risk to avoid. The data says that is the single BEST outcome available: stayed on the curve   n=620  winrate 32.6%  PnL  -15.93% MIGRATED to PumpSwap  n= 54  winrate 87.0%  PnL +161.42% and the migrated figure survives the outlier test intact (+138.5% without its two best, 47 winners of 54). Graduation is also PREDICTABLE from entry position, monotonically: 40-60%: 2.0%   60-70%: 2.5%   70-80%: 8.3%   80-90%: 24.5%   90-95%: 50.0% So the ceiling was excluding exactly the band with the highest chance of the best outcome. Kept just below 1.0 rather than removed: at a fully complete curve there is no bonding liquidity left to enter against at all."
       },
       "MAX_CONCURRENT_TRACKED": {
-        "line": 223,
+        "line": 214,
         "value": 60,
         "why": "20/08 -- raised with the widened band. The REAL constraint is the exit loop: more open positions means each one is checked less often, which is exactly what caused the late liquidity_collapse catches fixed earlier today (first check landing 32-116s after entry despite a 10s cadence). The exit sweep's own `limit` is raised in step below so widening collection cannot quietly re-create that failure."
       },
@@ -432,22 +437,22 @@
         "why": "20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still show SOME real buyer (buying what nobody buys is the behaviour the data condemns most clearly, -21.56% on the <30s band), but the exact N is one of the values this pocket exists to find -- fixing it at 3 up front would pre-decide the answer. `distinct_buyers_at_entry` is on every row, so the real threshold gets read off the data instead of guessed."
       },
       "RECENT_WINDOW_CLOSURES": {
-        "line": 199,
+        "line": 190,
         "value": 50,
         "why": "How many of the most recent closures the 'recent' summary covers."
       },
       "REINFORCE_ADD_WEIGHT": {
-        "line": 196,
+        "line": 187,
         "value": 0.5,
         "why": null
       },
       "REINFORCE_ENTRY_WEIGHT": {
-        "line": 195,
+        "line": 186,
         "value": 0.5,
         "why": null
       },
       "REINFORCE_TRIGGER_PCT": {
-        "line": 194,
+        "line": 185,
         "value": 30.0,
         "why": "21/08 -- REINFORCEMENT, measured in parallel and never acted on.  Operator's read of the PnL is exact: many small losers, a few explosions. His question was whether adding to a position that has already proven something amplifies the winning side. On 1013 real closures it does, and the decisive figure is this: capital added after a token moved returns +8.2% (outlier-tested) while the capital committed blind at entry returns -10.4%, on the SAME tokens over the SAME period.  Simulated at portfolio level, return on capital actually deployed: no reinforcement        -9.1%  (without top2 -11.7%) reinforce at +30%       -3.1%  (-6.6%)   <-- chosen reinforce at +50%       -4.5%  (-8.1%) reinforce at +75%       -5.8%  (-9.3%) Earlier is better, and stated plainly: this REDUCES the loss by 6 points, it does not make the pocket profitable. The median reinforcement still LOSES (-8.4%) -- the gain comes from the same handful of explosions as everything else here, so it is another asymmetric bet, not compounding.  Half at entry and half on confirmation, because doubling both stakes changes nothing per euro deployed: the two variants scored identically, and this one reaches it with 0.67 of capital per position instead of 1.34.  SHADOW-ONLY AND PARALLEL: nothing about the live position changes. The would-be reinforcement price is recorded and a second PnL computed beside the real one, so both are measured on the SAME tokens without splitting the data rate and without any way to damage the measurement in flight."
       },
@@ -455,11 +460,6 @@
         "line": 69,
         "value": "solana_late_bonding_shadow_log",
         "why": null
-      },
-      "TRAILING_STOP_PCT": {
-        "line": 165,
-        "value": 5.0,
-        "why": "21/08 -- trailing distance TIGHTENED 15% -> 5% for this pocket only.  Chosen by replaying the real exit rule over 73 archived price paths (`exit_replay`), not by judgement: 5%   PnL +3.1%  without top2 -0.5%  winrate 53%   <-- chosen 10%       +2.7%              -2.4%           42% 15%       -1.8%              -4.7%           38%   <-- what ran until now 20-35%  -1.4..-0.4%      -4.4..-3.4%      38-40% The 15% default was the WORST setting tested. Truncation is comparable between 5% and 15% (21 vs 23 paths ending before their exit), so the comparison is honest rather than an artefact of wider stops simply running past the end of the archive.  Why tighter wins here, consistent with the earlier finding: a FIXED distance is miscalibrated by construction. At a +12% peak, -15% gives back more than the whole move (that cohort averaged -3.1%, capture NEGATIVE); at a +200% peak it leaves 30 points on the table. Most positions sit near the low end, so the tight setting wins on volume.  Passed as an ARGUMENT so FAST-DISCOVERY keeps the 15% default: the two pockets now form a live A/B on stop distance, which is worth more than assuming this replay generalises."
       }
     },
     "status": "present"

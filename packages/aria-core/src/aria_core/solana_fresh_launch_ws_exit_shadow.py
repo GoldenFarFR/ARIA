@@ -104,6 +104,53 @@ TABLE = "solana_fresh_launch_ws_exit_shadow_log"
 # not shared state.
 TRAILING_STOP_PCT = 15.0
 
+# 21/08 -- PROGRESSIVE trailing distance, replacing a single fixed number.
+#
+# Operator's objection, and it was right where the replay was wrong: "meme les
+# zigzag se font pas ejecter?". Measured on 69 archived price paths -- the
+# LARGEST pullback a position suffers BEFORE reaching its own peak, i.e. what
+# a trailing stop must tolerate to let a winner run:
+#     peak < +25%      n=31   median  1.8%   32% exceed 5%    3% exceed 15%
+#     peak +25..+100%  n=24   median  7.5%   58% exceed 5%    8% exceed 15%
+#     peak > +100%     n= 9   median  9.6%   78% exceed 5%    0% exceed 15%
+# So the bigger the eventual move, the more it zigzags on the way up: a 5%
+# stop would have ejected 78% of the biggest winners BEFORE their peak, while
+# nothing at all pulled back past 15%.
+#
+# This corrects a decision taken an hour earlier from `exit_replay` alone,
+# which ranked 5% best. That replay is dominated by the mass of small losers
+# (where tight genuinely wins) and structurally blind to what a wider stop
+# would have captured afterwards -- the truncation caveat was documented and
+# then not applied to its own conclusion.
+#
+# A single distance is therefore wrong by construction: too wide for a +20%
+# move, too tight for a +200% one. The bands below are the measured pullbacks
+# with margin, not round numbers.
+#
+# CAVEAT: only 9 paths carry the >+100% band. Enough to overturn the 5%
+# decision (78% vs 0% is not a marginal difference), NOT enough to fine-tune
+# 18 against 20. Revisit when the archive is deeper.
+TRAILING_BANDS = (
+    (25.0, 6.0),    # peak below +25%  -> 6% (measured median 1.8%, max 16.8%)
+    (100.0, 13.0),  # peak +25..+100%  -> 13% (median 7.5%, max 16.0%)
+)
+TRAILING_STOP_PCT_HIGH = 18.0  # peak above +100% (median 9.6%, max 14.7%)
+
+
+def trailing_distance_for(peak_gain_pct: float, base_pct: float | None = None) -> float:
+    """Trailing distance to apply for a position whose peak sits this far
+    above entry.
+
+    ``base_pct`` (a pocket's own fixed value) disables banding entirely and is
+    returned as-is -- FAST-DISCOVERY keeps a flat distance so the two pockets
+    stay a live A/B on this exact question rather than both moving at once."""
+    if base_pct is not None:
+        return base_pct
+    for ceiling, distance in TRAILING_BANDS:
+        if peak_gain_pct < ceiling:
+            return distance
+    return TRAILING_STOP_PCT_HIGH
+
 # 20/08 -- the trailing stop only ARMS once the peak has risen this far above
 # entry. Below it, the position is left to the other two rules (max_hold /
 # liquidity_collapse) instead.
@@ -1256,7 +1303,6 @@ def evaluate_exit(
     (closed in one shot) -- priority order identical to the original module:
     liquidity_collapse > trailing_stop > max_hold."""
     entry_price = row["entry_price"]
-    trail_pct = TRAILING_STOP_PCT if trailing_stop_pct is None else trailing_stop_pct
     arm_pct = TRAILING_STOP_ARM_PEAK_PCT if trailing_arm_peak_pct is None else trailing_arm_peak_pct
     hold_minutes = MAX_HOLD_MINUTES if max_hold_minutes is None else max_hold_minutes
 
@@ -1274,6 +1320,14 @@ def evaluate_exit(
 
     peak_price = row.get("peak_price") or entry_price
     peak_price = max(peak_price, effective_high)
+
+    # Banded by default, resolved on the UP-TO-DATE peak: a token that just
+    # printed a new high this cycle must be judged on that high, not on the
+    # previous one, or the band always lags a step behind the move it exists
+    # to follow. A pocket passing an explicit distance opts out entirely.
+    trail_pct = trailing_stop_pct if trailing_stop_pct is not None else trailing_distance_for(
+        (peak_price / entry_price - 1) * 100 if entry_price else 0.0
+    )
 
     remaining_qty = row["remaining_qty"] if row.get("remaining_qty") is not None else 1.0
     realized_proceeds = row.get("realized_proceeds") or 0.0

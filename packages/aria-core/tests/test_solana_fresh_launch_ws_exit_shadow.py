@@ -1374,3 +1374,42 @@ async def test_a_feed_error_never_blocks_a_decision():
             raise RuntimeError("feed down")
 
     assert await _track_with_flow(_Broken(buys=0, sells=0, total=0)) is not None
+
+
+# --- progressive trailing bands (21/08) ---
+
+def test_the_trailing_distance_widens_with_the_move():
+    """Measured on 69 archived paths: the bigger the eventual move, the more
+    it zigzags on the way up. A 5% stop would have ejected 78% of the >+100%
+    winners BEFORE their peak, while none pulled back past 15%."""
+    from aria_core.solana_fresh_launch_ws_exit_shadow import trailing_distance_for
+
+    assert trailing_distance_for(10.0) == 6.0      # +10% peak, median pullback 1.8%
+    assert trailing_distance_for(60.0) == 13.0     # +60% peak, median 7.5%
+    assert trailing_distance_for(300.0) == 18.0    # +300% peak, median 9.6%
+
+
+def test_a_pocket_can_opt_out_of_banding_with_an_explicit_distance():
+    """FAST-DISCOVERY keeps a flat distance so the two pockets A/B
+    banded-vs-fixed on live data instead of both moving on one replay."""
+    from aria_core.solana_fresh_launch_ws_exit_shadow import trailing_distance_for
+
+    assert trailing_distance_for(300.0, base_pct=15.0) == 15.0
+
+
+def test_the_band_follows_a_high_printed_in_the_same_cycle():
+    """A token that just printed a new high must be judged on THAT high, or
+    the band always lags a step behind the move it exists to follow."""
+    from aria_core import solana_fresh_launch_ws_exit_shadow as mod
+
+    row = {"entry_price": 1.0, "peak_price": 1.0, "reserve_usd": 10_000.0,
+           "remaining_qty": 1.0, "realized_proceeds": 0.0,
+           "realistic_entry_price": 1.0, "realistic_realized_proceeds": 0.0,
+           "pool_address": "pool"}
+    # peak of +150% reached within this very window, then a pullback to +110%:
+    # under the widest band (18%) the stop sits at 2.05, so it must NOT fire.
+    result = mod.evaluate_exit(
+        row, current_price=2.10, reserve_usd=9_000.0, dex_id="pumpfun",
+        age_minutes=1.0, window_high=2.50, window_low=2.10,
+    )
+    assert result["exit_reason"] is None

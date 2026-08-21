@@ -140,29 +140,20 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # untouched control and the two pockets keep differing on one variable.
 HARD_STOP_PCT = 20.0
 
-# 21/08 -- trailing distance TIGHTENED 15% -> 5% for this pocket only.
+# 21/08 -- this pocket uses the SHARED progressive trailing bands
+# (`trailing_distance_for`), so it passes no fixed distance at all.
 #
-# Chosen by replaying the real exit rule over 73 archived price paths
-# (`exit_replay`), not by judgement:
-#     5%   PnL +3.1%  without top2 -0.5%  winrate 53%   <-- chosen
-#    10%       +2.7%              -2.4%           42%
-#    15%       -1.8%              -4.7%           38%   <-- what ran until now
-#    20-35%  -1.4..-0.4%      -4.4..-3.4%      38-40%
-# The 15% default was the WORST setting tested. Truncation is comparable
-# between 5% and 15% (21 vs 23 paths ending before their exit), so the
-# comparison is honest rather than an artefact of wider stops simply running
-# past the end of the archive.
+# It ran at a fixed 5% for about an hour, chosen from `exit_replay` alone.
+# That was wrong and the operator caught it: replaying only sees paths up to
+# the real exit, so it is blind to what a wider stop would have captured
+# afterwards, and it ranked tight best because the mass of small losers
+# dominates the average. Measured properly -- the largest pullback suffered
+# BEFORE reaching the peak -- 78% of the >+100% winners pull back past 5% on
+# their way up, while NONE pull back past 15%. A 5% stop ejects the winners
+# that carry the entire pocket.
 #
-# Why tighter wins here, consistent with the earlier finding: a FIXED distance
-# is miscalibrated by construction. At a +12% peak, -15% gives back more than
-# the whole move (that cohort averaged -3.1%, capture NEGATIVE); at a +200%
-# peak it leaves 30 points on the table. Most positions sit near the low end,
-# so the tight setting wins on volume.
-#
-# Passed as an ARGUMENT so FAST-DISCOVERY keeps the 15% default: the two
-# pockets now form a live A/B on stop distance, which is worth more than
-# assuming this replay generalises.
-TRAILING_STOP_PCT = 5.0
+# FAST-DISCOVERY deliberately keeps a flat 15%, so the two pockets now A/B
+# banded-vs-fixed on live data instead of both moving on one replay.
 
 # 21/08 -- REINFORCEMENT, measured in parallel and never acted on.
 #
@@ -762,7 +753,6 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
         window_high=getattr(snapshot, "price_high_since_last_read", None),
         window_low=getattr(snapshot, "price_low_since_last_read", None),
         hard_stop_pct=HARD_STOP_PCT,
-        trailing_stop_pct=TRAILING_STOP_PCT,
     )
     async with aiosqlite.connect(db_path or _db_path()) as db:
         await db.execute(
