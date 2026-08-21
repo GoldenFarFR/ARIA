@@ -605,3 +605,44 @@ def test_an_explicit_url_pins_the_endpoint(monkeypatch):
     # A caller that passed a URL on purpose keeps it, whatever the cascade says.
     s = stream.PumpFunTradeStream(rpc_ws_url="wss://pinned.example")
     assert s._rpc_ws_url == "wss://pinned.example"
+
+
+# --- wash-trading signature (2026.08.21) ------------------------------------
+# Wallets that BOTH buy and sell the same mint inflate volume and transaction
+# count without bringing demand. The diagnostic could not settle whether wash
+# trading drove the collapses because only this intersection was missing.
+
+
+def test_a_wallet_that_only_buys_is_not_a_round_tripper():
+    s = stream.PumpFunTradeStream()
+    s.handle_notification(_slot_notif("MintAAA", "UserAAA", True, 1))
+    mint = _mint_key("MintAAA")
+    assert s.round_trip_wallets(mint) == 0
+    assert s.round_trip_share(mint) == 0.0
+
+
+def test_a_wallet_that_buys_then_sells_is_counted_once():
+    s = stream.PumpFunTradeStream()
+    for is_buy in (True, False, True, False):   # cycling many times
+        s.handle_notification(_slot_notif("MintAAA", "UserAAA", is_buy, 1))
+    mint = _mint_key("MintAAA")
+    assert s.round_trip_wallets(mint) == 1      # one wallet, not four trades
+    assert s.round_trip_share(mint) == pytest.approx(1.0)
+
+
+def test_the_share_is_relative_to_distinct_buyers():
+    s = stream.PumpFunTradeStream()
+    s.handle_notification(_slot_notif("MintAAA", "UserAAA", True, 1))
+    s.handle_notification(_slot_notif("MintAAA", "UserAAA", False, 1))
+    s.handle_notification(_slot_notif("MintAAA", "UserBBB", True, 2))
+    s.handle_notification(_slot_notif("MintAAA", "UserCCC", True, 3))
+    mint = _mint_key("MintAAA")
+    assert s.round_trip_wallets(mint) == 1
+    assert s.round_trip_share(mint) == pytest.approx(1 / 3)
+
+
+def test_an_unseen_mint_reports_none_not_a_clean_zero():
+    # A fabricated 0.0 would read as "verified clean" instead of "unmeasured".
+    s = stream.PumpFunTradeStream()
+    assert s.round_trip_share("never-seen") is None
+    assert s.round_trip_wallets("never-seen") == 0

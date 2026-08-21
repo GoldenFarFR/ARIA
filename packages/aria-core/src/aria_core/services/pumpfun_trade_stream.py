@@ -397,6 +397,35 @@ class PumpFunTradeStream:
             first_trade_at=st.first_trade_at, last_trade_at=st.last_trade_at,
         )
 
+    def round_trip_wallets(self, mint: str) -> int:
+        """Wallets that BOTH bought and sold this mint in the observed window.
+
+        The clean signature of wash trading: a wallet trading against itself
+        inflates volume and transaction count without bringing any real demand.
+        Added 2026.08.21 after a diagnostic could NOT settle whether wash
+        trading explained the collapses -- the transactions/distinct-buyers
+        ratio showed no gradient and capped at 5.3, where genuine wash trading
+        would show 20-100. The stream already tracked buyers and sellers
+        separately; only their intersection was missing.
+
+        Counts wallets, not volume: one wallet cycling ten times is one
+        round-tripper, and that is the honest unit for "how many participants
+        are faking it".
+        """
+        st = self._state.get(mint)
+        if st is None:
+            return 0
+        return len(st.buyers & st.sellers)
+
+    def round_trip_share(self, mint: str) -> float | None:
+        """Round-trippers as a share of distinct buyers, or None when there is
+        nothing to divide -- never a fabricated zero, which would read as
+        "clean" instead of "unmeasured"."""
+        st = self._state.get(mint)
+        if st is None or not st.buyers:
+            return None
+        return len(st.buyers & st.sellers) / len(st.buyers)
+
     def window_stats(self, mint: str, *, seconds: float, now: float | None = None) -> tuple[int, int]:
         """``(distinct_buyers, distinct_sellers)`` over the last ``seconds``.
         The building block for every derivative below."""
