@@ -1233,6 +1233,14 @@ def evaluate_exit(
     window_high: float | None = None,
     window_low: float | None = None,
     hard_stop_pct: float | None = HARD_STOP_PCT_DEFAULT,
+    # 21/08 -- overridable so a REPLAY can re-run this exact rule against real
+    # archived price paths under different distances, instead of a second copy
+    # of the logic drifting away from the one actually trading. Defaults are
+    # the live constants, so production behaviour is unchanged by their
+    # existence.
+    trailing_stop_pct: float | None = None,
+    trailing_arm_peak_pct: float | None = None,
+    max_hold_minutes: float | None = None,
 ) -> dict:
     """Pure exit-check: given a row and an ALREADY-KNOWN price/reserve/dex_id
     (from either a websocket push or a REST polling snapshot -- this
@@ -1248,6 +1256,9 @@ def evaluate_exit(
     (closed in one shot) -- priority order identical to the original module:
     liquidity_collapse > trailing_stop > max_hold."""
     entry_price = row["entry_price"]
+    trail_pct = TRAILING_STOP_PCT if trailing_stop_pct is None else trailing_stop_pct
+    arm_pct = TRAILING_STOP_ARM_PEAK_PCT if trailing_arm_peak_pct is None else trailing_arm_peak_pct
+    hold_minutes = MAX_HOLD_MINUTES if max_hold_minutes is None else max_hold_minutes
 
     effective_high = max(window_high if window_high is not None else current_price, current_price)
     effective_low = min(window_low if window_low is not None else current_price, current_price)
@@ -1299,7 +1310,7 @@ def evaluate_exit(
     hard_stopped = (
         hard_stop_pct is not None
         and entry_price > 0
-        and peak_price < entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
+        and peak_price < entry_price * (1 + arm_pct / 100.0)
         and effective_low <= entry_price * (1 - hard_stop_pct / 100.0)
     )
 
@@ -1327,7 +1338,7 @@ def evaluate_exit(
             f"HARD_STOP_PCT={hard_stop_pct:.0f}% | low touched "
             f"{(effective_low / entry_price - 1) * 100:+.1f}% vs entry | "
             f"trailing never armed (peak {(peak_price / entry_price - 1) * 100:+.1f}% "
-            f"< TRAILING_STOP_ARM_PEAK_PCT={TRAILING_STOP_ARM_PEAK_PCT:.0f}%) | "
+            f"< TRAILING_STOP_ARM_PEAK_PCT={arm_pct:.0f}%) | "
             + ("filled at market, price had already gapped below the stop"
                if gapped else "filled at the stop")
         )
@@ -1342,8 +1353,8 @@ def evaluate_exit(
             f"({(reserve_usd / entry_reserve - 1) * 100:+.1f}%) | sold at market"
         )
     elif (
-        peak_price >= entry_price * (1 + TRAILING_STOP_ARM_PEAK_PCT / 100.0)
-        and effective_low <= peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+        peak_price >= entry_price * (1 + arm_pct / 100.0)
+        and effective_low <= peak_price * (1 - trail_pct / 100.0)
     ):
         # 21/08 -- bounded by the real market, exactly like the hard stop
         # above. It was NOT, and the gap was measured on 45 real closures:
@@ -1360,27 +1371,27 @@ def evaluate_exit(
         # it, we fill where the market actually is. Applies to BOTH active
         # pockets through this shared rule -- the point is one honest
         # accounting, not one per pocket.
-        stop_price = peak_price * (1 - TRAILING_STOP_PCT / 100.0)
+        stop_price = peak_price * (1 - trail_pct / 100.0)
         fill_price = min(stop_price, current_price) if current_price > 0 else stop_price
         _realistic_sell(remaining_qty, fill_price)
         realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "trailing_stop"
         exit_detail = (
-            f"TRAILING_STOP_PCT={TRAILING_STOP_PCT:.0f}% below a peak of "
+            f"TRAILING_STOP_PCT={trail_pct:.0f}% below a peak of "
             f"{(peak_price / entry_price - 1) * 100:+.1f}% | armed at "
-            f"TRAILING_STOP_ARM_PEAK_PCT={TRAILING_STOP_ARM_PEAK_PCT:.0f}% | "
+            f"TRAILING_STOP_ARM_PEAK_PCT={arm_pct:.0f}% | "
             f"low touched {(effective_low / entry_price - 1) * 100:+.1f}% | "
             + ("filled at market, price had already gapped below the stop"
                if fill_price < stop_price else "filled at the stop")
         )
-    elif age_minutes >= MAX_HOLD_MINUTES:
+    elif age_minutes >= hold_minutes:
         _realistic_sell(remaining_qty, current_price)
         realized_proceeds += remaining_qty * current_price
         remaining_qty = 0.0
         exit_reason = "max_hold"
         exit_detail = (
-            f"MAX_HOLD_MINUTES={MAX_HOLD_MINUTES:.0f} | held {age_minutes:.0f}min | "
+            f"MAX_HOLD_MINUTES={hold_minutes:.0f} | held {age_minutes:.0f}min | "
             f"peak reached {(peak_price / entry_price - 1) * 100:+.1f}% | "
             f"the clock closed it, no price rule fired"
         )
