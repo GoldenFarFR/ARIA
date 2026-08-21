@@ -150,3 +150,25 @@ sa sous-section dediee ; le detail va dans le fichier du composant »).
 - **Homemade website scraper (10/08, backlog #43)**: `services/website_scraper.py` -- plain HTTP fetch + regex extraction (reuses `site_snapshot.py`'s proven parser), follows internal links up to 15 pages, zero third-party quota. Wired FIRST in `website_substance._default_crawl` (scraper → Firecrawl → Tavily), never a hard replacement — both external providers stay real fallbacks for WAF/JS-only-SPA cases the scraper can't handle. `_default_crawl` itself refactored into an extensible ordered list (`_CRAWL_LAYERS`) — a future 4th candidate is one line, never a rewrite — and `website_crawl_failure_log.py` records every real case where all layers fail together (`failure_count_since`/`recent_failures`), the evidence to consult before actually adding one. Detail: `docs/HANDOFF_SIGNAL_CASCADE.md`.
 - **circuit-breaker-watch (04/08, found undocumented 18/08 -- added retroactively)**: `/opt/aria-data/circuit-breaker-watch/run.sh`, VPS cron hourly. Reads the REAL in-memory state of the 5 external clients with a true open/closed circuit (blockscout, dexscreener, goplus, wallet_transfers_fast, the shared OHLCV cascade) via `/api/aria/diagnostics/circuit-breakers` (`aria_core.circuit_breaker_status`). Telegram alert reserved for `sustained_outage` (reopened >=2x within the last hour), never a normal isolated cooldown. Detail: `docs/HANDOFF_AUTOMATISATION.md`.
 - **`solana-robinhood-shadow/shadow_persistent.py` -- standalone always-on process, OUTSIDE this git repo and outside Docker (found/documented 18/08)**: `/opt/aria-data/solana-robinhood-shadow/`, launched directly on the VPS (currently a bare `nohup`, no systemd unit, reparented to PID 1 -- no auto-restart on crash). Runs `solana_support_bounce_shadow`/`_v2_shadow`'s `record_signals()` in a tight loop against the real prod DB, importing `aria_core` as a library from the SAME repo checkout (so it picks up a library fix on its next restart, but any change to the SCRIPT ITSELF needs an explicit restart, not a redeploy). NOT wired to `heartbeat.py`/`bootstrap.py` -- a separate mechanism from every other shadow, sharing no throttle/circuit-breaker coordination with the `aria-api` container's own use of the same providers (confirmed root cause of the 18/08 `ohlcv_dexpaprika` sustained-outage alert: a same-day `max_pages` 1→3 change here tripled real DexPaprika load with no visibility from inside the container). `solana_pump_shadow`/`robinhood_pump_shadow` are a SEPARATE, currently-stopped mechanism (`shadow_loop.sh` → `shadow_kickoff.py`, one-shot per pass) -- not confused with this one. Standing gap, not yet resolved: this script should eventually be migrated into the tracked repo (or given a systemd unit) so a future session doesn't have to rediscover it via a multi-agent trace again. Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (18/08 entry).
+
+### ci-health-watch (21/08) -- ACTIF
+`/opt/aria-data/ci-health-watch/run.sh`, cron horaire (minute 25).
+Surveille l'etat REEL des 8 workflows GitHub Actions sur `main`, plus les
+alertes Dependabot ouvertes. Ouvre une entree `system_issues` par workflow
+rouge (dedup par nom), la referme automatiquement des que le workflow
+redevient vert.
+
+**Pourquoi** : le 21/08, le job "Security -- secret scan" a echoue sur CHAQUE
+push pendant sept heures, 18 runs consecutifs, sans que personne le voie --
+ni l'agent malgre une consigne permanente de verifier ce baseline, ni
+l'operateur, jusqu'a ce qu'il ouvre l'onglet Actions par hasard. Aucun des
+~14 crons existants ne regardait la CI : log-health-watch surveille le
+PROCESSUS en prod, uptime-watch le SITE, la CI elle-meme n'avait aucun
+gardien. Les alertes Dependabot avaient le meme angle mort : elles arrivent
+par email, et un email que personne ne lit ne protege de rien.
+
+Complementaire du hook `scripts/pre-push-secret-baseline-check.sh` (meme
+jour) : le hook empeche de POUSSER un secret non audite mais ne couvre qu'un
+workflow sur huit ; ce cron voit les sept autres, apres coup.
+Fail-open sur l'outillage (gh absent, API muette), jamais de bruit quand tout
+est vert.
