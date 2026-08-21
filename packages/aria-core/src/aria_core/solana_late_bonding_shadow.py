@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 import httpx
@@ -135,6 +135,25 @@ MIN_DISTINCT_BUYERS = 1
 # Also sets the tradable position size: a 3000$ pool tolerates roughly 30$
 # before price impact eats the edge (measured via Jupiter the same day).
 MIN_LIQUIDITY_USD = 3000.0
+
+# 21/08 -- CARENCE APRES SORTIE. Le defaut le plus couteux trouve ce jour-la,
+# revele par une capture de l'operateur : CALLOUTS a ete achete et stoppe
+# TROIS fois en huit minutes (0s, 33s, 2min), puis a fait +199% sans nous.
+#
+# Rien n'empechait de racheter un token qui venait de nous ejecter. Le stop
+# fixe coupe a -5%, le prix remonte de 5%, on rachete, on se refait couper.
+# Mesure sur 6h : 423 clotures pour seulement 192 tokens distincts, 73% des
+# clotures etaient des RE-ENTREES, jusqu'a 12 positions sur un meme token.
+#     tokens re-tradés   +6.7%  (79 tokens)
+#     tokens tradés 1x  +30.0%
+# On divisait notre propre performance par quatre en repayant la friction a
+# chaque aller-retour sur le meme sous-jacent.
+#
+# 30 minutes plutot qu'un blocage definitif : un token qui nous a stoppe puis
+# se reprend VRAIMENT reste une opportunite legitime (CALLOUTS l'a prouve),
+# mais pas dans les secondes qui suivent, quand le prix oscille autour du
+# seuil qui vient de nous sortir.
+REENTRY_COOLDOWN_MINUTES = 30.0
 
 # 20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single
 # wallet is literally the only buyer, which is not a market at all. Everything
@@ -368,6 +387,21 @@ async def _ensure_table(db_path: str | None = None) -> None:
     _ensured_db_paths.add(path)
 
 
+async def _in_reentry_cooldown(db, token_address: str, chain: str) -> bool:
+    """Ce token nous a-t-il ejectes recemment ?
+
+    Porte sur le TOKEN et non sur le pool : un meme token peut etre vu via
+    plusieurs adresses au cours de sa vie (courbe puis AMM apres graduation),
+    et la carence doit suivre le sous-jacent, pas l'enveloppe."""
+    cur = await db.execute(
+        f"SELECT 1 FROM {TABLE} WHERE token_address = ? AND chain = ? "
+        f"AND exit_reason IS NOT NULL AND last_checked_at >= ? LIMIT 1",
+        (token_address, chain,
+         (datetime.now(timezone.utc) - timedelta(minutes=REENTRY_COOLDOWN_MINUTES)).isoformat()),
+    )
+    return await cur.fetchone() is not None
+
+
 async def _has_open_signal(db, pool_address: str, chain: str) -> bool:
     cur = await db.execute(
         f"SELECT 1 FROM {TABLE} WHERE pool_address = ? AND chain = ? AND exit_reason IS NULL LIMIT 1",
@@ -477,6 +511,8 @@ async def consider_candidate(
         await _ensure_table(db_path)
         async with aiosqlite.connect(db_path or _db_path()) as db:
             if await _has_open_signal(db, pool_address, chain):
+                return None
+            if await _in_reentry_cooldown(db, mint, chain):
                 return None
 
         resolver = resolve_curves_fn or resolve_bonding_curves

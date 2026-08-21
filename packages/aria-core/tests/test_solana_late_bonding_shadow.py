@@ -1524,3 +1524,86 @@ async def test_the_refusal_is_logged_with_its_real_reserve(_tmp_db):
         )
         reasons = [r["reason"] or "" for r in await cur.fetchall()]
     assert any("blocked_thin_liquidity" in r for r in reasons), reasons
+
+
+# --- re-entry cooldown (21/08) ---
+
+@pytest.mark.asyncio
+async def test_a_token_that_just_stopped_us_cannot_be_bought_again(_tmp_db):
+    """21/08, the costliest defect of the day, revealed by an operator
+    screenshot: CALLOUTS was bought and stopped THREE times in eight minutes,
+    then ran +199% without us. Measured over 6h: 423 closures for only 192
+    distinct tokens, 73% were re-entries, up to 12 positions on one token --
+    re-traded tokens returned +6.7% against +30.0% for those traded once."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async def _crashed(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=9_000.0,
+                               dex_id="pumpfun")
+
+    await pocket.advance_exit_simulation(snapshot_fn=_crashed, db_path=_tmp_db)
+    assert (await _rows(_tmp_db))[0]["exit_reason"] is not None
+
+    # same token, different pool address: the cooldown follows the UNDERLYING,
+    # not the wrapper -- a token is seen under several addresses over its life
+    # (curve, then AMM after graduation).
+    again = await pocket.consider_candidate(
+        "mintA", "poolB", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert again is None
+    assert len(await _rows(_tmp_db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_cooldown_expires_rather_than_banning_forever(_tmp_db):
+    """A token that stopped us and then genuinely recovers stays a legitimate
+    opportunity -- CALLOUTS proved that by running +199%. Just not in the
+    seconds that follow, while price oscillates around the threshold that just
+    ejected us."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async def _crashed(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=9_000.0,
+                               dex_id="pumpfun")
+
+    await pocket.advance_exit_simulation(snapshot_fn=_crashed, db_path=_tmp_db)
+
+    # push the exit far enough into the past that the cooldown has elapsed
+    old = (datetime.now(timezone.utc) - timedelta(minutes=pocket.REENTRY_COOLDOWN_MINUTES + 5)).isoformat()
+    async with aiosqlite.connect(_tmp_db) as db:
+        await db.execute(f"UPDATE {pocket.TABLE} SET last_checked_at = ?", (old,))
+        await db.commit()
+
+    again = await pocket.consider_candidate(
+        "mintA", "poolB", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert again is not None
+    assert len(await _rows(_tmp_db)) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_different_token_is_unaffected(_tmp_db):
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async def _crashed(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=9_000.0,
+                               dex_id="pumpfun")
+
+    await pocket.advance_exit_simulation(snapshot_fn=_crashed, db_path=_tmp_db)
+
+    other = await pocket.consider_candidate(
+        "mintB", "poolB", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert other is not None
