@@ -84,7 +84,12 @@ BAND_EDGES: tuple[tuple[float, float, float], ...] = (
     # every candidate would be rejected on MIN_DISTINCT_BUYERS -- the exact
     # failure of the 18:49 switchover. Cheapness stops where correctness does.
     (0.00, 0.30, 180.0),
-    (0.30, 0.50, 45.0),
+    # RESTORED to 20s on 2026.08.21 after it broke entries. At 45s a token can
+    # go from 45% to 75% between two polls, skipping the pre-arm window
+    # entirely -- it is then never subscribed, reads zero buyers, and is
+    # rejected. Zero entries for 13 minutes. This band feeds the pre-arm
+    # trigger, so it is correctness, not economy.
+    (0.30, 0.50, 20.0),
     (0.50, 0.70, 10.0),
 )
 
