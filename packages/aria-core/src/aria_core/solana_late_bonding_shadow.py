@@ -393,6 +393,10 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # own comment. A count without its observation window measures the
             # listening strategy, not the token.
             ("observation_seconds_at_entry", "REAL"),
+            # Transactions seen at entry. Meaningful only RELATIVE to size --
+            # divide by reserve_usd for an intensity comparable across tokens.
+            ("trade_count_at_entry", "INTEGER"),
+            ("buy_count_at_entry", "INTEGER"),
             # Highest profit rung already taken. Added 2026.08.21: the exit rule
             # read it from day one but nothing ever wrote it and the column did
             # not exist, so every rung re-fired on each ~10s evaluation and sold
@@ -445,6 +449,16 @@ async def screen_candidate(
         # from 196 to 34 with no market change whatsoever. Any analysis mixing
         # the two regimes measures its own methodology, which is exactly what
         # made a buyers-vs-outcome study read as pure noise.
+        # 21/08, operator insight: raw counts are not comparable between tokens
+        # of different sizes. A $257K token with 220 transactions is MORE active
+        # than a $3M one with 1906 -- 0.86 vs 0.64 per $1k. Storing the counts
+        # next to the liquidity already recorded makes that ratio computable
+        # afterwards, at zero API cost since the stream holds them in memory.
+        "trade_count": (
+            (flow.buy_count + flow.sell_count)
+            if flow is not None and getattr(flow, "buy_count", None) is not None else None
+        ),
+        "buy_count": getattr(flow, "buy_count", None) if flow is not None else None,
         "observation_seconds": (
             (time.time() - getattr(flow, "first_trade_at", None))
             if (flow is not None and getattr(flow, "first_trade_at", None)) else None
@@ -686,8 +700,8 @@ async def consider_candidate(
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
-                     observation_seconds_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     observation_seconds_at_entry, trade_count_at_entry, buy_count_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -699,6 +713,7 @@ async def consider_candidate(
                     creator, creator_sold, metrics.get("sol_velocity"),
                     metrics.get("sell_pressure"), metrics.get("sell_pressure_slope"),
                     metrics.get("observation_seconds"),
+                    metrics.get("trade_count"), metrics.get("buy_count"),
                 ),
             )
             await db.commit()
