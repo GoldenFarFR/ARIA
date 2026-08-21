@@ -190,3 +190,33 @@ Bloquait toute commande Bash affichant un secret en clair.
   mémoire) → `docs/HANDOFF_AUTOMATISATION.md`.
 - `test_coherence.py` (garde-fou CI, pas un hook au sens événementiel) →
   documenté dans CLAUDE.md § Automations in place.
+
+------------------------------------------------------------
+
+## 2026.08.21 — `context-ceiling.sh` (UserPromptSubmit) — CREATION
+
+**Pourquoi.** L'opérateur a constaté le contexte à 76% alors que CLAUDE.md
+impose un compactage à 60%, mécanisé le 03/08 via
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60`. Vérification faite : **le réglage est
+toujours présent dans `.claude/settings.json` et n'est plus honoré** par la
+version courante de Claude Code. Un réglage mort qui n'a jamais signalé sa
+propre mort — la dérive que le registre de paramètres attrape pour le code,
+et que rien ne surveillait pour la configuration.
+
+**Ce qu'il fait.** Lit `context_window.used_percentage` dans le JSON reçu et
+injecte un rappel explicite au-delà de 60%.
+
+**Ce qu'il ne fait PAS, et pourquoi c'est assumé.** Il ne peut pas compacter :
+seuls l'utilisateur ou le harness le peuvent. Il rend le dépassement visible
+et impossible à ignorer, ce qui est le maximum atteignable depuis un hook.
+
+**Trois choix de conception.** (1) Silence si le pourcentage est absent du
+JSON (format variable selon la version) — une alerte fondée sur rien serait
+pire que pas d'alerte. (2) Une seule alerte par tranche de 5 points franchie,
+jamais une par message : un rappel répété devient du bruit qu'on apprend à
+ignorer, ce qui le rendrait pire qu'inutile. (3) L'état est remis à zéro dès
+qu'on repasse sous le seuil, donc une compaction réarme la surveillance.
+
+**La variable morte est conservée** dans `settings.json` : si une version
+future la réhonore, le comportement natif reprend et le hook redevient un
+simple filet.
