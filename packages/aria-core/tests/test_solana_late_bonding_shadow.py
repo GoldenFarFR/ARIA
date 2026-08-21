@@ -255,7 +255,10 @@ async def test_a_collapsing_position_is_closed_by_the_shared_rule(_tmp_db):
     # position down 97% necessarily crossed -20% first, and letting the
     # collapse branch claim it is exactly how -81.5% closes kept happening
     # under a -15% trailing stop. It still fills at the real market price.
-    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
+    # 21/08 -- the pocket moved from `hard_stop` (-20%, only below the
+    # trailing's arming threshold) to a permanent FIXED stop at -5% paired
+    # with a profit ladder. Same intent, renamed mechanism.
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "fixed_stop"
 
 
 @pytest.mark.asyncio
@@ -509,7 +512,10 @@ async def test_a_graduated_position_is_still_protected_on_the_downside(_tmp_db):
         await c.execute(f"UPDATE {pocket.TABLE} SET peak_price = entry_price * 3")
         await c.commit()
     row = await _run_exit(_tmp_db, dex_id="pumpswap", age_minutes=5, price=0.0005)
-    assert row["exit_reason"] == "trailing_stop"
+    # 21/08 -- the mechanism is now the FIXED stop, not the trailing: a graduated
+    # position is exempt from max_hold but must still have a downside rule, and
+    # that rule changed name when the pocket moved to ladder + fixed stop.
+    assert row["exit_reason"] == "fixed_stop"
 
 
 @pytest.mark.asyncio
@@ -1042,10 +1048,11 @@ async def test_the_exit_rule_sees_the_low_reached_between_reads(_tmp_db):
     )
     assert stats["closed"] == 1
     row = (await _rows(_tmp_db))[0]
-    assert row["exit_reason"] == "hard_stop"
+    assert row["exit_reason"] == "fixed_stop"
     # filled AT the stop: the market is above it now, so the crossing was real
     # and fillable -- not the -30% low, and not the -5% current price.
-    assert row["realized_proceeds"] == pytest.approx(entry * 0.80)
+    # 21/08 -- fixed stop at -5%, not the former -20% hard stop
+    assert row["realized_proceeds"] == pytest.approx(entry * 0.95)
 
 
 @pytest.mark.asyncio
@@ -1169,7 +1176,10 @@ async def test_the_feed_is_read_exactly_once_per_position_per_pass(_tmp_db):
     assert feed.reads == 1, f"the feed was read {feed.reads} times, consuming the window"
     # the -30% low was seen, so the hard stop must have fired
     assert stats["closed"] == 1
-    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
+    # 21/08 -- the pocket moved from `hard_stop` (-20%, only below the
+    # trailing's arming threshold) to a permanent FIXED stop at -5% paired
+    # with a profit ladder. Same intent, renamed mechanism.
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "fixed_stop"
 
 
 @pytest.mark.asyncio
@@ -1257,7 +1267,10 @@ async def test_a_price_move_closes_the_position_without_waiting_for_the_sweep(_t
         "poolA", bonding_ws_feed=_Crashed(), db_path=_tmp_db,
     )
     assert out == {"checked": 1, "closed": 1}
-    assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
+    # 21/08 -- the pocket moved from `hard_stop` (-20%, only below the
+    # trailing's arming threshold) to a permanent FIXED stop at -5% paired
+    # with a profit ladder. Same intent, renamed mechanism.
+    assert (await _rows(_tmp_db))[0]["exit_reason"] == "fixed_stop"
 
 
 @pytest.mark.asyncio

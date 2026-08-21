@@ -138,6 +138,41 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # Deliberately passed as an ARGUMENT to the shared `evaluate_exit` rather than
 # forked into a local copy of the exit rule, so FAST-DISCOVERY stays an
 # untouched control and the two pockets keep differing on one variable.
+# 21/08 -- OPERATOR-DESIGNED EXIT: fixed stop from entry + staged profit
+# taking, replacing the trailing stop entirely for this pocket.
+#
+# His reasoning, and it is the right one: a trailing stop keeps the HIGHEST
+# price, so every swing during a climb eats its margin without ever giving it
+# back -- a token that runs to +50%, falls to +10% and recovers to +30% ends
+# up glued to a stop set on a peak it no longer trades near. A fixed stop
+# never moves, so the ladder is what secures gains: the two do distinct jobs
+# instead of fighting each other.
+#
+# Measured on 86 archived paths, 1% sell friction included:
+#     ladder 50/100/200 + fixed -5%   +7.0%  (outlier-tested +3.8%)
+#     free-ride variant               +5.6%  (+3.1%)
+#     banded trailing                 +4.9%  (+2.1%)
+# Robust across ladder SHAPES -- every configuration tested landed between
+# +7.1% and +8.5% before friction -- so the principle carries it, not these
+# exact thresholds. Tested against the trailing this MORNING the ladder
+# degraded, because there the two overlapped; the pairing is what changed.
+#
+# Independently confirmed by looking at what happens after we sell: of 12
+# closures above +100%, TEN collapsed afterwards (median -81.8%) and only two
+# kept rising. On these tokens the peak is a point of no return, so selling
+# ON THE WAY UP structurally beats a trailing stop, which by construction can
+# only act once the fall has already started.
+#
+# The friction caveat matters: at 3% sell friction this advantage halves, at
+# 5% it disappears. Rungs are small fractions of a small position, so real
+# impact should stay well under that -- to be verified on live closures.
+PROFIT_LADDER = ((50.0, 0.25), (100.0, 0.25), (200.0, 0.25))
+FIXED_STOP_PCT = 5.0
+
+# Kept for the record: the trailing path is no longer reached by this pocket
+# (`FIXED_STOP_PCT` takes precedence), but the constant stays so the shared
+# rule's signature is honoured and FAST-DISCOVERY -- which still runs the
+# trailing at a flat 15% -- remains a live A/B against this design.
 HARD_STOP_PCT = 20.0
 
 # 21/08 -- this pocket uses the SHARED progressive trailing bands
@@ -203,7 +238,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T14:40:00+00:00"
+CONFIG_EPOCH = "2026-08-21T15:00:00+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
 # loop: more open positions means each one is checked less often, which is
@@ -753,6 +788,8 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
         window_high=getattr(snapshot, "price_high_since_last_read", None),
         window_low=getattr(snapshot, "price_low_since_last_read", None),
         hard_stop_pct=HARD_STOP_PCT,
+        profit_ladder=PROFIT_LADDER,
+        fixed_stop_pct=FIXED_STOP_PCT,
     )
     async with aiosqlite.connect(db_path or _db_path()) as db:
         await db.execute(

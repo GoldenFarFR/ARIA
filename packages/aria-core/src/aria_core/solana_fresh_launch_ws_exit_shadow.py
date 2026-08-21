@@ -1288,6 +1288,13 @@ def evaluate_exit(
     trailing_stop_pct: float | None = None,
     trailing_arm_peak_pct: float | None = None,
     max_hold_minutes: float | None = None,
+    # 21/08 -- operator-designed exit: a FIXED stop from entry plus staged
+    # profit taking, replacing the trailing entirely for pockets that opt in.
+    # `profit_ladder` is ((gain_pct, fraction), ...); `fixed_stop_pct` closes
+    # whatever is left. Both None keeps the historical trailing behaviour
+    # untouched for every existing caller.
+    profit_ladder: tuple | None = None,
+    fixed_stop_pct: float | None = None,
 ) -> dict:
     """Pure exit-check: given a row and an ALREADY-KNOWN price/reserve/dex_id
     (from either a websocket push or a REST polling snapshot -- this
@@ -1361,6 +1368,16 @@ def evaluate_exit(
     # `liquidity_collapse`: chronologically it would have fired FIRST, well
     # before the reserve halved. Ordering it after would let the collapse
     # branch keep claiming closes the stop should already have taken.
+    # A fixed stop from entry REPLACES the trailing for pockets that opt in --
+    # it is the other half of the ladder design and must not coexist with a
+    # mechanism that moves the exit price around.
+    fixed_stopped = (
+        fixed_stop_pct is not None
+        and entry_price > 0
+        and remaining_qty > 0
+        and effective_low <= entry_price * (1 - fixed_stop_pct / 100.0)
+    )
+
     hard_stopped = (
         hard_stop_pct is not None
         and entry_price > 0
@@ -1368,12 +1385,58 @@ def evaluate_exit(
         and effective_low <= entry_price * (1 - hard_stop_pct / 100.0)
     )
 
-    exit_reason: str | None = None
+    # --- staged profit taking, before any stop can fire ---
+    #
+    # 21/08, operator's design, and it measured best of everything tried on 86
+    # archived paths (+7.0%, +3.8% outlier-tested, against +4.9%/+2.1% for the
+    # banded trailing deployed minutes earlier and +5.6%/+3.1% for a free-ride
+    # variant). Robust across ladder shapes -- every configuration tested
+    # landed between +7.1% and +8.5% before friction -- so the PRINCIPLE
+    # carries it, not the exact thresholds.
+    #
+    # Why it beats a trailing stop, in his own words: a trailing keeps the
+    # HIGHEST price, so every swing on the way up eats the margin without ever
+    # giving it back. A fixed stop never moves, so the ladder is what secures
+    # gains -- the two do distinct jobs instead of fighting each other. Tested
+    # against the trailing this morning the ladder DEGRADED, because there the
+    # two overlapped; the difference is the pairing, not the ladder.
+    #
+    # Rungs are checked against `effective_high`: the window's high is a price
+    # the market actually printed, and requiring the point sample would miss
+    # every rung crossed between two reads -- exactly the failure that made a
+    # -20% stop fill at -78%.
+    ladder_detail: list[str] = []
+    if profit_ladder and remaining_qty > 0:
+        for gain_pct, fraction in profit_ladder:
+            rung_price = entry_price * (1 + gain_pct / 100.0)
+            if effective_high >= rung_price and (row.get("ladder_done") or 0) < gain_pct:
+                sell_qty = min(fraction, remaining_qty)
+                if sell_qty <= 0:
+                    continue
+                _realistic_sell(sell_qty, rung_price)
+                realized_proceeds += sell_qty * rung_price
+                remaining_qty -= sell_qty
+                ladder_detail.append(f"+{gain_pct:.0f}% ({sell_qty * 100:.0f}%)")
+
     # 21/08, operator-directed: every closed line must name the mechanism AND
     # the parameter value that decided it -- a bare `liquidity_collapse` label
     # is what let a -81.5% close be misread as a stop-loss failure for a day.
+    exit_reason: str | None = None
     exit_detail: str | None = None
-    if hard_stopped:
+    if fixed_stopped:
+        stop_price = entry_price * (1 - fixed_stop_pct / 100.0)
+        fill_price = min(stop_price, current_price) if current_price > 0 else stop_price
+        _realistic_sell(remaining_qty, fill_price)
+        realized_proceeds += remaining_qty * fill_price
+        remaining_qty = 0.0
+        exit_reason = "fixed_stop"
+        exit_detail = (
+            f"FIXED_STOP_PCT={fixed_stop_pct:.0f}% | low touched "
+            f"{(effective_low / entry_price - 1) * 100:+.1f}% vs entry"
+            + (f" | ladder taken: {', '.join(ladder_detail)}" if ladder_detail else "")
+            + ("" if fill_price >= stop_price else " | filled at market, price had gapped below")
+        )
+    elif hard_stopped:
         # Fills at the stop price ONLY if the market still shows at least
         # that much. When price has already gapped below, the stop fills at
         # the real current price -- a stop cannot conjure liquidity that is
