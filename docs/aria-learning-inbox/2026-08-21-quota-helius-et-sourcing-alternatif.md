@@ -122,3 +122,9 @@ say today whether we land at 1 GB or 40 GB per month.
 the real byte rate of the filtered stream, to extrapolate GB/month and decide
 whether 99$/mo is viable. That measurement is free and has not been run yet.
 Quota resets 21 September.
+
+**Measured point cost**: 4 requests consumed 10 of the 1000 monthly points,
+i.e. ~3 points per bonding-progress query. That caps the free tier at roughly
+330 queries/month (~11/day) -- far too few to serve as a fallback when the
+Helius quota runs dry (current usage is thousands of calls/day). Bitquery
+free is a spot-verification instrument, a few times a month, nothing more.
