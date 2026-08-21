@@ -1406,16 +1406,26 @@ def evaluate_exit(
     # every rung crossed between two reads -- exactly the failure that made a
     # -20% stop fill at -78%.
     ladder_detail: list[str] = []
+    # The highest rung already taken, carried across calls. Until 2026.08.21
+    # this was READ from the row but never written anywhere and the column did
+    # not exist, so it always resolved to 0 and every rung re-fired on EVERY
+    # evaluation -- roughly every 10 seconds. Four passes sold 4 x 25% and the
+    # whole position left at the +50% rung price, which is why 16 closures
+    # recorded a final_multiplier of exactly 1.5 regardless of where they
+    # actually exited. Spotted by the operator on two notifications showing an
+    # identical +46.3% for two different price paths.
+    ladder_done = float(row.get("ladder_done") or 0.0)
     if profit_ladder and remaining_qty > 0:
         for gain_pct, fraction in profit_ladder:
             rung_price = entry_price * (1 + gain_pct / 100.0)
-            if effective_high >= rung_price and (row.get("ladder_done") or 0) < gain_pct:
+            if effective_high >= rung_price and ladder_done < gain_pct:
                 sell_qty = min(fraction, remaining_qty)
                 if sell_qty <= 0:
                     continue
                 _realistic_sell(sell_qty, rung_price)
                 realized_proceeds += sell_qty * rung_price
                 remaining_qty -= sell_qty
+                ladder_done = max(ladder_done, float(gain_pct))
                 ladder_detail.append(f"+{gain_pct:.0f}% ({sell_qty * 100:.0f}%)")
 
     # 21/08, operator-directed: every closed line must name the mechanism AND
@@ -1532,6 +1542,7 @@ def evaluate_exit(
         "realistic_final_multiplier": realistic_final_multiplier,
         "last_price": current_price,
         "last_reserve_usd": reserve_usd,
+        "ladder_done": ladder_done,
     }
 
 

@@ -384,6 +384,11 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("reinforce_price", "REAL"),
             ("reinforce_at", "TEXT"),
             ("reinforced_final_multiplier", "REAL"),
+            # Highest profit rung already taken. Added 2026.08.21: the exit rule
+            # read it from day one but nothing ever wrote it and the column did
+            # not exist, so every rung re-fired on each ~10s evaluation and sold
+            # the whole position at the first rung price.
+            ("ladder_done", "REAL"),
         ):
             if col not in existing:
                 await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
@@ -973,7 +978,7 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
                 realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                 realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
                 last_checked_at = ?, exit_price_source = ?, exit_detail = ?,
-                reinforced_final_multiplier = ?
+                reinforced_final_multiplier = ?, ladder_done = ?
             WHERE id = ? AND exit_reason IS NULL
             """,
             (
@@ -987,6 +992,10 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
                     row,
                     result.get("realistic_final_multiplier") or result.get("final_multiplier"),
                 ),
+                # Without this the rung marker never survives the call and every
+                # rung re-fires ~every 10s, selling the whole position at the
+                # first rung price (16 closures stuck at exactly 1.5).
+                result.get("ladder_done") or 0.0,
                 row["id"],
             ),
         )

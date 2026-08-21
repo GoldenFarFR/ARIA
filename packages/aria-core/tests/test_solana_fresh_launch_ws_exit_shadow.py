@@ -1413,3 +1413,70 @@ def test_the_band_follows_a_high_printed_in_the_same_cycle():
         age_minutes=1.0, window_high=2.50, window_low=2.10,
     )
     assert result["exit_reason"] is None
+
+
+# --- profit ladder: a rung must fire ONCE (regression 2026.08.21) -----------
+# The exit rule read `ladder_done` from the row but nothing ever wrote it and
+# the column did not exist, so it always resolved to 0 and every rung re-fired
+# on each ~10s evaluation. Four passes sold 4 x 25% and the whole position left
+# at the +50% rung price: 16 closures recorded final_multiplier == exactly 1.5
+# whatever their real exit. Found by the operator on two notifications showing
+# an identical +46.3% for two different price paths.
+
+_LADDER = ((50.0, 0.25), (100.0, 0.25), (200.0, 0.25))
+
+
+def _ladder_row(**over):
+    row = {"entry_price": 1.0, "peak_price": 1.0, "remaining_qty": 1.0, "realized_proceeds": 0.0,
+           "realistic_entry_price": 1.0, "realistic_realized_proceeds": 0.0, "reserve_usd": 8000.0,
+           "support_range_high": None, "pool_address": "poolA"}
+    row.update(over)
+    return row
+
+
+def test_a_rung_sells_only_its_own_fraction():
+    result = shadow.evaluate_exit(
+        _ladder_row(), current_price=1.55, reserve_usd=8000.0, dex_id=None, age_minutes=5.0,
+        profit_ladder=_LADDER, trailing_stop_pct=90.0, hard_stop_pct=90.0,
+    )
+    assert result["remaining_qty"] == pytest.approx(0.75)
+    assert result["ladder_done"] == pytest.approx(50.0)
+
+
+def test_a_rung_already_taken_never_fires_again():
+    # THE regression: feeding back the marker the previous call returned must
+    # leave the position untouched, however many times it is re-evaluated.
+    row = _ladder_row(remaining_qty=0.75, realized_proceeds=0.375,
+                      realistic_realized_proceeds=0.375, peak_price=1.55, ladder_done=50.0)
+    result = shadow.evaluate_exit(
+        row, current_price=1.55, reserve_usd=8000.0, dex_id=None, age_minutes=5.0,
+        profit_ladder=_LADDER, trailing_stop_pct=90.0, hard_stop_pct=90.0,
+    )
+    assert result["remaining_qty"] == pytest.approx(0.75)
+    assert result["ladder_done"] == pytest.approx(50.0)
+
+
+def test_repeated_evaluations_cannot_liquidate_the_position_at_one_rung():
+    # Exactly the production loop: same price, evaluated over and over. Before
+    # the fix this reached remaining_qty == 0 on the fourth pass.
+    row = _ladder_row()
+    for _ in range(6):
+        result = shadow.evaluate_exit(
+            row, current_price=1.55, reserve_usd=8000.0, dex_id=None, age_minutes=5.0,
+            profit_ladder=_LADDER, trailing_stop_pct=90.0, hard_stop_pct=90.0,
+        )
+        row.update({k: result[k] for k in
+                    ("remaining_qty", "realized_proceeds", "realistic_realized_proceeds",
+                     "peak_price", "ladder_done")})
+    assert row["remaining_qty"] == pytest.approx(0.75)
+
+
+def test_a_higher_rung_still_fires_once_reached():
+    row = _ladder_row(remaining_qty=0.75, realized_proceeds=0.375,
+                      realistic_realized_proceeds=0.375, peak_price=1.55, ladder_done=50.0)
+    result = shadow.evaluate_exit(
+        row, current_price=2.10, reserve_usd=8000.0, dex_id=None, age_minutes=5.0,
+        profit_ladder=_LADDER, trailing_stop_pct=90.0, hard_stop_pct=90.0,
+    )
+    assert result["remaining_qty"] == pytest.approx(0.50)
+    assert result["ladder_done"] == pytest.approx(100.0)
