@@ -68,18 +68,26 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(shadow_db_path())
 TABLE = "solana_late_bonding_shadow_log"
 
-# 20/08, WIDENED 0.70-0.90 -> 0.40-0.95 (operator: "ne filtre rien et laisse
-# courir un max de position, ca nous permettra d'obtenir toutes les valeurs
-# necessaires"). The point of this pocket is to MEASURE which band works, and
-# a narrow band answers "does 70-90% work" while a wide one answers "which
-# band is best" -- the actual open question. 0.40 is where the existing
-# pockets' own data stops being dense (they cluster under 30%), 0.95 still
-# stops short of graduation itself, where a curve can complete mid-tracking
-# and migrate its liquidity to the AMM underneath the position.
-# `bonding_progress_at_entry` is recorded on every row, so the sub-bands are
-# separable at analysis time -- collecting wide costs nothing and un-collecting
-# is impossible.
-MIN_BONDING_PROGRESS = 0.40
+# 21/08, RAISED 0.40 -> 0.70 on 721 real closures. The band was widened to
+# 0.40 the night before to COLLECT broadly and find out which sub-band works.
+# It has now answered, and the answer is monotonic on both axes at once:
+#     40-60%  n=327  rug 48.9%  win 37.0%  PnL -4.3%
+#     60-70%  n=132  rug 43.2%  win 37.1%  PnL -4.0%
+#     70-80%  n=140  rug 37.1%  win 42.9%  PnL +6.5%
+#     80%+    n=122  rug 27.0%  win 50.0%  PnL +5.7%
+# Rug risk nearly HALVES climbing the curve while the win rate rises -- a token
+# that already convinced hundreds of buyers gets rug-pulled far less often than
+# a fresh one. Yet 71% of entries were landing in 40-60%, the worst band of all
+# (operator spotted this from a live screenshot before the data was queried).
+#
+# Second reason, operator's own: real on-chain execution is NOT instant. Curve
+# drift during a ~5s execution window is negligible on a quiet token (+0.10%)
+# but reaches several points on one actually moving (+47.5%/min average among
+# risers) -- precisely the tokens worth buying. Latency therefore pushes the
+# real entry UP the curve, which is the right direction, but it means a floor
+# has to be set where the band is already good rather than where it is barely
+# acceptable.
+MIN_BONDING_PROGRESS = 0.70
 # 21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed
 # because a curve past 90% can COMPLETE mid-position and migrate its liquidity
 # to the AMM -- treated as a risk to avoid. The data says that is the single

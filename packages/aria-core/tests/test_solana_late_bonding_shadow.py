@@ -265,23 +265,23 @@ async def test_summary_reports_the_average_entry_progress(_tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_the_collection_band_stays_wide_enough_to_answer_which_band_wins():
-    """20/08 -- the band was widened to 0.40-0.95 so the pocket answers "WHICH
-    band works" rather than only "does 70-90% work". Guarded here because
-    narrowing it again would silently turn the experiment back into a single
-    hypothesis test."""
-    assert pocket.MIN_BONDING_PROGRESS <= 0.40
-    assert pocket.MAX_BONDING_PROGRESS >= 0.95
+async def test_the_collect_wide_phase_is_over_and_recorded():
+    """20/08 the band was widened to 0.40 to find out WHICH sub-band works;
+    21/08 it answered (rug 48.9% at 40-60% vs 27.0% above 80%) and the floor
+    went back up to 0.70. This test replaces the one that guarded the wide
+    band, so the transition is explicit rather than a silent narrowing."""
+    assert pocket.MIN_BONDING_PROGRESS >= 0.70
+    assert pocket.MAX_BONDING_PROGRESS >= 0.98
 
 
 @pytest.mark.asyncio
-async def test_mid_curve_tokens_are_now_collected_too():
+async def test_a_token_in_the_paying_band_is_accepted_with_its_context():
     ok, _, metrics = await pocket.screen_candidate(
-        "mintA", "poolA", trade_stream=_Stream(buyers=1), curve=_curve(0.45),
+        "mintA", "poolA", trade_stream=_Stream(buyers=1), curve=_curve(0.75),
     )
     assert ok is True
     # Recorded on the row, so sub-bands stay separable at analysis time.
-    assert metrics["bonding_progress"] == pytest.approx(0.45, abs=0.01)
+    assert metrics["bonding_progress"] == pytest.approx(0.75, abs=0.01)
 
 
 # --- 20/08, RPC-first pricing --------------------------------------------
@@ -497,3 +497,29 @@ async def test_a_graduated_position_is_still_protected_on_the_downside(_tmp_db):
         await c.commit()
     row = await _run_exit(_tmp_db, dex_id="pumpswap", age_minutes=5, price=0.0005)
     assert row["exit_reason"] == "trailing_stop"
+
+
+@pytest.mark.asyncio
+async def test_the_floor_sits_where_the_data_turns_positive():
+    """21/08 -- the collect-wide phase answered: rug risk nearly halves climbing
+    the curve (48.9% at 40-60% down to 27.0% above 80%) while the win rate
+    rises (37.0% to 50.0%), and PnL turns positive at 70%. The floor must not
+    drift back below that turn."""
+    assert pocket.MIN_BONDING_PROGRESS >= 0.70
+
+
+@pytest.mark.asyncio
+async def test_the_worst_band_is_now_refused():
+    """40-60% carried 71% of entries and was the worst band on every axis."""
+    ok, reason, _ = await pocket.screen_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(0.50),
+    )
+    assert ok is False and reason.startswith("blocked_outside_band")
+
+
+@pytest.mark.asyncio
+async def test_headroom_is_kept_above_the_floor_for_execution_latency():
+    """Real execution drifts the entry UP the curve (several points on a token
+    actually moving), so the usable band must stay wide enough that latency
+    cannot push a candidate straight through the ceiling."""
+    assert pocket.MAX_BONDING_PROGRESS - pocket.MIN_BONDING_PROGRESS >= 0.25
