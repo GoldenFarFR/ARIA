@@ -411,3 +411,31 @@ async def test_the_pool_is_subscribed_BEFORE_the_entry_is_priced(_tmp_db):
         snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
     )
     assert feed.subscribed == [("poolA", "mintA")]
+
+
+@pytest.mark.asyncio
+async def test_the_band_reaches_high_enough_to_catch_graduations():
+    """21/08 -- the 0.95 ceiling was excluding the band with the HIGHEST chance
+    of the best outcome. Measured on 676 closures: migrated positions returned
+    +161% (87% winrate, +138.5% without their two best) against -15.93% for
+    those that stayed on the curve, and graduation odds rise monotonically with
+    entry position (2.0% at 40-60% up to 50.0% at 90-95%)."""
+    assert pocket.MAX_BONDING_PROGRESS >= 0.98
+
+
+@pytest.mark.asyncio
+async def test_a_fully_complete_curve_is_still_refused():
+    """At 1.0 there is no bonding liquidity left to enter against."""
+    ok, reason, _ = await pocket.screen_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(1.0, complete=True),
+    )
+    assert ok is False and reason.startswith("blocked_outside_band")
+
+
+@pytest.mark.asyncio
+async def test_a_curve_at_97_percent_is_now_accepted():
+    ok, _, metrics = await pocket.screen_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(0.97),
+    )
+    assert ok is True
+    assert metrics["bonding_progress"] == pytest.approx(0.97, abs=0.01)

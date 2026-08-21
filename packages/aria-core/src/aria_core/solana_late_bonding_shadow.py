@@ -80,7 +80,20 @@ TABLE = "solana_late_bonding_shadow_log"
 # separable at analysis time -- collecting wide costs nothing and un-collecting
 # is impossible.
 MIN_BONDING_PROGRESS = 0.40
-MAX_BONDING_PROGRESS = 0.95
+# 21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed
+# because a curve past 90% can COMPLETE mid-position and migrate its liquidity
+# to the AMM -- treated as a risk to avoid. The data says that is the single
+# BEST outcome available:
+#     stayed on the curve   n=620  winrate 32.6%  PnL  -15.93%
+#     MIGRATED to PumpSwap  n= 54  winrate 87.0%  PnL +161.42%
+# and the migrated figure survives the outlier test intact (+138.5% without its
+# two best, 47 winners of 54). Graduation is also PREDICTABLE from entry
+# position, monotonically:
+#     40-60%: 2.0%   60-70%: 2.5%   70-80%: 8.3%   80-90%: 24.5%   90-95%: 50.0%
+# So the ceiling was excluding exactly the band with the highest chance of the
+# best outcome. Kept just below 1.0 rather than removed: at a fully complete
+# curve there is no bonding liquidity left to enter against at all.
+MAX_BONDING_PROGRESS = 0.985
 
 # 20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still
 # show SOME real buyer (buying what nobody buys is the behaviour the data
