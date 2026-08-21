@@ -111,6 +111,31 @@ MAX_BONDING_PROGRESS = 0.985
 # real threshold gets read off the data instead of guessed.
 MIN_DISTINCT_BUYERS = 1
 
+# 21/08 -- LIQUIDITY FLOOR, aligned with FAST-DISCOVERY's own 3000$.
+#
+# This pocket had NO liquidity filter at all -- found while answering "70% de
+# bonding, ca correspond a quel market cap ?", which surfaced entries with a
+# pool holding TWO DOLLARS. Harmless while simulating (we only pretend to
+# buy); impossible in reality, where a 1$ order in a 2$ pool moves the price
+# 50%. The real-execution seam added the same day makes this a blocker, not a
+# cosmetic gap.
+#
+# Measured on 1114 closures with honest fills:
+#     no floor    PnL -8.3%  (without top2 -10.7%)  31% winners
+#     >= 1000$        -8.5%             -10.9%      31%
+#     >= 3000$        -7.3%             -10.0%      31%
+#     >= 5000$        -3.0%              -6.0%      35%
+# 5000$ scores clearly better AND survives the outlier test, so it is not an
+# artefact -- but it cuts 28% of the >=+100% winners (their average: +313%),
+# against 8% at 3000$. This dome's standing rule is that any extra entry
+# filter cuts the rare winners carrying everything, so the tighter floor is
+# NOT taken on backtest alone: 5000$ stays one line away if live data
+# confirms it, whereas winners we stopped observing can never be recovered.
+#
+# Also sets the tradable position size: a 3000$ pool tolerates roughly 30$
+# before price impact eats the edge (measured via Jupiter the same day).
+MIN_LIQUIDITY_USD = 3000.0
+
 # 20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single
 # wallet is literally the only buyer, which is not a market at all. Everything
 # below that is COLLECTED rather than judged -- `top_buyer_share_at_entry` is
@@ -238,7 +263,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T15:00:00+00:00"
+CONFIG_EPOCH = "2026-08-21T15:45:00+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
 # loop: more open positions means each one is checked less often, which is
@@ -492,6 +517,13 @@ async def consider_candidate(
             )
             if not snapshot.available or snapshot.price_usd is None:
                 accepted, reason = False, "blocked_no_price"
+            elif (snapshot.reserve_usd or 0) < MIN_LIQUIDITY_USD:
+                # Checked here rather than in `screen_candidate`: the reserve
+                # is only known once the position has been priced. A pool this
+                # thin is not a weak candidate, it is an UNEXECUTABLE one --
+                # entries were found on pools holding two dollars, harmless
+                # while simulating and impossible in reality.
+                accepted, reason = False, f"blocked_thin_liquidity: reserve={snapshot.reserve_usd or 0:.0f}"
 
         # Logged on BOTH branches, same discipline as the other pockets: a
         # filter can only be judged against what it let through.

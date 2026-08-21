@@ -1485,3 +1485,42 @@ async def test_without_an_executor_the_pocket_is_byte_identical_to_before(_tmp_d
     # the simulated realistic price still carries the modelled impact,
     # i.e. it differs from the raw quote
     assert row["realistic_entry_price"] != row["entry_price"]
+
+
+@pytest.mark.asyncio
+async def test_a_pool_too_thin_to_trade_is_refused(_tmp_db):
+    """21/08 -- entries were found on pools holding TWO DOLLARS. Harmless
+    while simulating (we only pretend to buy), impossible in reality where a
+    1$ order in a 2$ pool moves the price 50%. The real-execution seam added
+    the same day makes this a blocker, not a cosmetic gap."""
+    async def _thin(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=2.0,
+                               dex_id="pumpfun")
+
+    got = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_thin, db_path=_tmp_db,
+    )
+    assert got is None
+    assert await _rows(_tmp_db) == []
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_is_logged_with_its_real_reserve(_tmp_db):
+    """A filter that rejects silently cannot be judged against what it let
+    through -- same discipline as every other gate here."""
+    async def _thin(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.002, reserve_usd=1500.0,
+                               dex_id="pumpfun")
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_thin, db_path=_tmp_db,
+    )
+    async with aiosqlite.connect(_tmp_db) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT reason FROM {pretrade_rejection_log.TABLE} WHERE pocket = 'late_bonding'"
+        )
+        reasons = [r["reason"] or "" for r in await cur.fetchall()]
+    assert any("blocked_thin_liquidity" in r for r in reasons), reasons
