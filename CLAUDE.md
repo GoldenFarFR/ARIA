@@ -124,6 +124,29 @@ stakes, not applied everywhere by default.
 - **Generative research that MULTIPLIES branches, oriented toward ARIA's added value (10/07)**: the goal isn't to answer the question asked and stop — it's to **multiply branches on every research pass** (several adjacent leads per pass, not one or two), each becoming the seed of new research. A **tree of possibilities that grows with every round** (compounding effect: the more you search, the wider ARIA's field of possibilities becomes). These branches (tools, sources, angles, opportunities found along the way) are banked to widen the field over time (anticipation doctrine applied to knowledge). **Watchword: POTENTIAL.** Every branch is judged by what potential it opens for ARIA — upside, new capability, knowledge that unlocks other doors. Multiplying branches = multiplying paths of potential. **Guardrail**: every branch must bring ARIA something **concrete** — a new skill, new verified knowledge, a new capability — never idle curiosity. **And never in conflict with sensitive points**: curiosity explores but stops DEAD at the boundaries (guardrails `permission_mode`/`wallet_guard`/`regles-uniques`/`config.toml`, real capital, secrets, autonomous execution, self-modification of the system). A branch that would lead to approaching/weakening/bypassing one of these points isn't an opportunity, it's a risk — discard it, don't even bank it. End every research pass with an "open branches" section (actionable leads banked, not dug into now). Durable facts from research enter ARIA's knowledge (`knowledge/*.yaml`, `truth_ledger/`), never invented, always after verification.
 - **Auto-pivot & active research on a dead end (Initiative rule, 20/08)**: if a strategy or pocket misses its performance target after a representative trade sample (e.g. negative PnL, or below the +20% objective), don't settle for parameter micro-tweaks. Flag/document the path as a dead end (an analysis conclusion, never an autonomous shutdown — closing or disabling a pocket still needs explicit "ok", same as any other change), use web-search and documentation-analysis capability to identify new approaches/market architectures, and present a turnkey radical pivot proposal to the operator (validated by yes/no).
 
+# DOCTRINE D'INGÉNIERIE SYSTÉMIQUE ET OPTIMISATION DE RESSOURCES (MANDAT PERMANENT, 21/08)
+*Demande opérateur explicite : « tu ne dois plus jamais me proposer de solution brute ».*
+
+## 1. Pense-Système obligatoire (système sous contraintes)
+- **INTERDIT** de proposer ou de coder une solution brute ("brute-force") qui consomme des ressources de manière linéaire ou illimitée.
+- Avant chaque conception, évaluer explicitement : **coût API / latence RPC / usage mémoire / limite de bande passante**.
+
+## 2. Réflexe d'architecture multi-étages (Funnel & Staging Pattern)
+- Pour tout traitement de données, appel réseau, requête DB ou flux temps réel, TOUJOURS privilégier un pipeline filtré par étapes :
+  - **Étape 1 (filtrage passif / léger)** : éliminer 80-90 % du bruit avec des opérations quasi gratuites ou locales.
+  - **Étape 2 (enrichissement ciblé)** : appliquer les ressources lourdes ou coûteuses uniquement sur la fraction qualifiée.
+
+## 3. Recherche active de l'astuce d'efficacité
+- Ne jamais se contenter de la première idée fonctionnelle. Se demander activement : **« existe-t-il une manière de diviser par 10 le coût, la latence ou la complexité tout en gardant le même résultat ? »**
+
+**Incident fondateur (21/08)** : `pumpfun_trade_stream.py` écoutait TOUT le programme pump.fun en
+`logsSubscribe` — 74 Go/jour mesurés, dont 74,7 % d'octets ne contenant aucun trade décodable, soit
+~1,48 M de crédits Helius par jour contre un forfait de 1 M par mois. La souscription ciblée par mint
+sur la MÊME connexion unique (120 acceptées en direct) descend à 11,3 Go/jour pour strictement le même
+signal. Le réflexe manquant était l'étape 1 : filtrer côté serveur avant de payer le transport.
+Détail : `docs/HANDOFF_RESOURCE_BUDGET.md`.
+
+
 ## Profil opérateur
 Coordonnées et identité privées dans `aria-ops` (jamais le nom réel dans ce repo public — consigne opérateur explicite, 11/07). **Non-développeur** : expliquer simplement, pas à pas. Claude (chat + Claude Code) gère 100% de la construction/exploitation (Cursor/Grok abandonnés). Recoupe systématiquement. **En français**. Windows (PowerShell). **Une seule session IA à la fois sur le VPS de prod.**
 
