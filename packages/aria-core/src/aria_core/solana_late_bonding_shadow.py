@@ -212,7 +212,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 last_checked_at TEXT,
                 exit_price_source TEXT,
                 exit_detail TEXT,
-                amm_pool_address TEXT
+                amm_pool_address TEXT,
+                sol_velocity_at_entry REAL
             )
             """
         )
@@ -243,6 +244,7 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # graduation the pool was simply unknown and pricing fell back to
             # REST -- on this pocket's best-performing segment.
             ("amm_pool_address", "TEXT"),
+            ("sol_velocity_at_entry", "REAL"),
         ):
             if col not in existing:
                 await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {col} {typ}")
@@ -273,6 +275,11 @@ async def screen_candidate(
         "buyer_acceleration": (
             trade_stream.buyer_acceleration(mint) if trade_stream is not None else None
         ),
+        # 21/08 -- how FAST the curve is advancing, not just where it is. See
+        # `TokenTradeFlow.sol_velocity`: graduation is the only factor that
+        # separates this pocket's real winners, and speed is the one signal
+        # plausibly predicting it that we were not recording. COLLECTED ONLY.
+        "sol_velocity": flow.sol_velocity if flow else None,
     }
 
     if progress is None:
@@ -429,8 +436,8 @@ async def consider_candidate(
                      buyer_acceleration_at_entry, peak_price, realistic_entry_price,
                      founding_tracked_at_entry, founding_exited_at_entry,
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
-                     creator_address, creator_sold_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     creator_address, creator_sold_at_entry, sol_velocity_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -439,7 +446,7 @@ async def consider_candidate(
                     metrics.get("buyer_acceleration"), snapshot.price_usd, realistic,
                     founding.get("tracked"), founding.get("exited"),
                     founding.get("exit_ratio"), founding.get("bundle_size"),
-                    creator, creator_sold,
+                    creator, creator_sold, metrics.get("sol_velocity"),
                 ),
             )
             await db.commit()

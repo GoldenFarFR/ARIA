@@ -155,6 +155,34 @@ class TokenTradeFlow:
         return round(self.distinct_sellers / self.distinct_buyers, 3)
 
     @property
+    def sol_velocity(self) -> float | None:
+        """SOL entering the curve per second.
+
+        21/08 -- the missing predictor. A bonding curve advances with the SOL
+        paid into it, so this IS the speed at which the token is travelling
+        toward graduation, and graduation is the ONLY factor that separates
+        this pocket's real winners from everything else (43% of the >=+50%
+        closures graduated, against 6% of the rest -- a 7x gap where every
+        other measured criterion sat under 15%).
+
+        Until now the pocket recorded WHERE a curve was (70%, 85%...) but
+        never how fast it was moving, so a token climbing 70->80% in two
+        minutes and one stuck at 72% for an hour looked identical at entry.
+
+        ``None`` rather than 0.0 when nothing is measurable yet -- a token we
+        have not watched long enough is not a slow token.
+
+        CAVEAT, deliberately not hidden: ``seconds_active`` runs from the
+        first trade WE saw, not from the token's creation, so a mint first
+        seen late reads faster than it truly was. Directionally sound,
+        absolutely biased -- fine for ranking candidates against each other in
+        the same window, wrong for any absolute threshold."""
+        secs = self.seconds_active
+        if not secs or self.buy_sol_volume <= 0:
+            return None
+        return round(self.buy_sol_volume / secs, 6)
+
+    @property
     def seconds_active(self) -> float | None:
         if self.first_trade_at is None or self.last_trade_at is None:
             return None

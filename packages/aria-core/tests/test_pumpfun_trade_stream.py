@@ -399,3 +399,19 @@ def test_the_cohort_is_capped_per_mint_and_across_mints():
     for i in range(stream.FOUNDING_MAX_MINTS + 5):
         s.handle_notification(_slot_notif(f"m{i}", "b", True, slot=1))
     assert len(s._founding) <= stream.FOUNDING_MAX_MINTS
+
+
+def test_sol_velocity_measures_how_fast_the_curve_is_advancing():
+    """21/08 -- the missing predictor. A curve advances with the SOL paid into
+    it, and graduation is the ONLY factor separating this pocket's winners
+    (43% of >=+50% closures graduated vs 6% of the rest)."""
+    flow = stream.TokenTradeFlow(mint="m", buy_sol_volume=20.0,
+                                 first_trade_at=1000.0, last_trade_at=1010.0)
+    assert flow.sol_velocity == pytest.approx(2.0)
+
+
+def test_sol_velocity_is_none_rather_than_zero_when_unmeasurable():
+    """A token we have not watched long enough is not a slow token."""
+    assert stream.TokenTradeFlow(mint="m").sol_velocity is None
+    assert stream.TokenTradeFlow(mint="m", buy_sol_volume=5.0,
+                                 first_trade_at=1000.0, last_trade_at=1000.0).sol_velocity is None

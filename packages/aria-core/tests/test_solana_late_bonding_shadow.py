@@ -42,8 +42,9 @@ def _curve(progress: float, *, complete: bool = False, decimals: int = 6) -> dic
 
 
 class _Stream:
-    def __init__(self, *, buyers=5, top_share=0.1, accel=1.4):
-        self._flow = SimpleNamespace(distinct_buyers=buyers, top_buyer_share=top_share)
+    def __init__(self, *, buyers=5, top_share=0.1, accel=1.4, sol_velocity=0.05):
+        self._flow = SimpleNamespace(distinct_buyers=buyers, top_buyer_share=top_share,
+                                     sol_velocity=sol_velocity)
         self._accel = accel
 
     def get_flow(self, _mint):
@@ -1159,3 +1160,15 @@ async def test_the_feed_is_read_exactly_once_per_position_per_pass(_tmp_db):
     # the -30% low was seen, so the hard stop must have fired
     assert stats["closed"] == 1
     assert (await _rows(_tmp_db))[0]["exit_reason"] == "hard_stop"
+
+
+@pytest.mark.asyncio
+async def test_the_curve_speed_is_recorded_at_entry(_tmp_db):
+    """Recording WHERE a curve is but never how fast it moves made a token
+    climbing 70->80% in two minutes look identical to one stuck at 72% for an
+    hour. Collected only -- nothing rejects on it."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(sol_velocity=0.42), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert (await _rows(_tmp_db))[0]["sol_velocity_at_entry"] == pytest.approx(0.42)
