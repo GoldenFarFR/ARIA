@@ -158,3 +158,13 @@ def test_a_curve_without_a_creator_reports_none_not_a_crash():
         pool_address="pool", mint="mint", quote_mint="q", token_decimals=6,
     )
     assert acct.creator is None
+
+
+def test_the_account_subscription_listens_at_the_earliest_commitment():
+    """21/08 -- the account subscription IS the price feed, and it waited for
+    `confirmed` (a validator supermajority vote, 400-800ms of deliberate
+    waiting) while the trade stream in the same dome had always listened at
+    `processed`. The two halves of one pipeline were on different clocks."""
+    from aria_core.services import pumpfun_bonding_ws as mod
+
+    assert mod.ACCOUNT_COMMITMENT == "processed"

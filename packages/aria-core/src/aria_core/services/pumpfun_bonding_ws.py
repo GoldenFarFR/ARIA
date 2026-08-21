@@ -147,6 +147,30 @@ _SUBSCRIBE_CONFIRM_TIMEOUT_SECONDS = 15.0
 # cost -- just how often ws.recv() times out and the loop re-checks its
 # own local queue.
 _RECV_POLL_TIMEOUT_SECONDS = 1.0
+# 21/08 -- "processed" rather than "confirmed", operator-directed after the
+# latency work ("on est capable de lire les information en moins de 1 seconde
+# au lieu de 8 ?").
+#
+# The account only changes when someone trades, so this subscription IS the
+# price feed. At `confirmed` it waits for a validator supermajority to vote on
+# the block -- 400-800ms of DELIBERATE waiting, not network latency. The trade
+# stream in this same dome has listened at `processed` since it was written,
+# so the two halves of the same pipeline were on different clocks.
+#
+# Measured stakes: the hard stop fills 6.5 points below its -20% threshold,
+# worth +3.5 points of pocket PnL if closed, and a closure at 14:31 went from
+# a +11.3% peak to -50.2% between two observed trades -- at that speed half a
+# second is several trades.
+#
+# THE TRADE-OFF, stated rather than buried: a `processed` block can still be
+# dropped, so a price read here may occasionally never have been finalised.
+# On paper capital that costs a slightly wrong recorded closure. On REAL
+# capital it would mean selling against a phantom price, and that is an
+# explicit operator decision to take separately -- named as a constant so the
+# choice is visible and reversible in one line rather than buried in a
+# subscription payload.
+ACCOUNT_COMMITMENT = "processed"
+
 _RECONNECT_BACKOFF_INITIAL_SECONDS = 1.0
 _RECONNECT_BACKOFF_MAX_SECONDS = 30.0
 SETUP_REQUEST_GAP_SECONDS = 0.4
@@ -676,7 +700,7 @@ class PumpFunBondingWebSocketFeed:
             await asyncio.gather(*(
                 ws.send(json.dumps({
                     "jsonrpc": "2.0", "id": local_id, "method": "accountSubscribe",
-                    "params": [pool_addr, {"encoding": "base64", "commitment": "confirmed"}],
+                    "params": [pool_addr, {"encoding": "base64", "commitment": ACCOUNT_COMMITMENT}],
                 }))
                 for local_id, pool_addr in batch
             ))
