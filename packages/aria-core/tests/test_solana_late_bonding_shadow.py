@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -599,3 +600,56 @@ async def test_the_old_rows_are_still_readable_on_request(_tmp_db):
     out = await pocket.summary(since="2026-08-01T00:00:00+00:00", db_path=_tmp_db)
 
     assert out["completed"] == 1
+
+
+# --- 21/08, paid DexScreener profile -------------------------------------
+# Operator's own idea, and the strongest single signal of the investigation.
+# On 150 real closures: WITH a paid profile n=63 PnL +57.4% (+12.2% without
+# its two best), rug 22.2%; WITHOUT n=87 PnL -27.7% (-34.9%), rug 51.7%.
+# His objection was right too -- scammers pay for profiles as well -- but the
+# rug rate is still more than halved, because a ~300$ profile filters out the
+# zero-cost rugs that are the bulk of them.
+
+@pytest.mark.asyncio
+async def test_a_token_with_project_links_is_recorded_as_having_a_paid_profile(_tmp_db, monkeypatch):
+    from aria_core.services import dexscreener
+
+    await _close_row(_tmp_db, 1.5, "2026-08-21T12:00:00+00:00")
+    row_id = (await _rows(_tmp_db))[0]["id"]
+    monkeypatch.setattr(
+        dexscreener, "fetch_token_pairs",
+        AsyncMock(return_value=[SimpleNamespace(project_links=[{"url": "https://x.com/t"}])]),
+    )
+
+    await pocket._enrich_paid_profile(row_id, "mintA", db_path=_tmp_db)
+
+    assert (await _rows(_tmp_db))[0]["has_paid_profile"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_token_without_links_is_recorded_as_zero_not_null(_tmp_db, monkeypatch):
+    """0 and NULL mean different things: 0 is "checked, no profile", NULL is
+    "never checked". Conflating them would silently bias the sample."""
+    from aria_core.services import dexscreener
+
+    await _close_row(_tmp_db, 1.0, "2026-08-21T12:00:00+00:00")
+    row_id = (await _rows(_tmp_db))[0]["id"]
+    monkeypatch.setattr(dexscreener, "fetch_token_pairs",
+                        AsyncMock(return_value=[SimpleNamespace(project_links=[])]))
+
+    await pocket._enrich_paid_profile(row_id, "mintA", db_path=_tmp_db)
+
+    assert (await _rows(_tmp_db))[0]["has_paid_profile"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_leaves_the_field_null_and_never_raises(_tmp_db, monkeypatch):
+    from aria_core.services import dexscreener
+
+    await _close_row(_tmp_db, 1.0, "2026-08-21T12:00:00+00:00")
+    row_id = (await _rows(_tmp_db))[0]["id"]
+    monkeypatch.setattr(dexscreener, "fetch_token_pairs", AsyncMock(side_effect=RuntimeError("down")))
+
+    await pocket._enrich_paid_profile(row_id, "mintA", db_path=_tmp_db)
+
+    assert (await _rows(_tmp_db))[0]["has_paid_profile"] is None
