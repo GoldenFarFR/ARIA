@@ -587,8 +587,12 @@ async def test_closures_from_an_earlier_config_are_not_averaged_in(_tmp_db):
     """21/08 -- operator asked to reset and restart clean. Done as an EPOCH
     MARKER, not a delete: the old rows produced every finding of the last two
     days and this dome never destroys real history."""
-    await _close_row(_tmp_db, 5.0, "2026-08-20T12:00:00+00:00")   # old config
-    await _close_row(_tmp_db, 1.1, "2026-08-21T12:00:00+00:00")   # current
+    # Anchored on CONFIG_EPOCH itself rather than on hardcoded dates: this
+    # test used to break every time the epoch was moved forward, which is a
+    # routine operation, not a regression.
+    epoch = datetime.fromisoformat(pocket.CONFIG_EPOCH)
+    await _close_row(_tmp_db, 5.0, (epoch - timedelta(days=1)).isoformat())  # old config
+    await _close_row(_tmp_db, 1.1, (epoch + timedelta(seconds=1)).isoformat())  # current
 
     out = await pocket.summary(db_path=_tmp_db)
 
@@ -599,9 +603,12 @@ async def test_closures_from_an_earlier_config_are_not_averaged_in(_tmp_db):
 @pytest.mark.asyncio
 async def test_the_old_rows_are_still_readable_on_request(_tmp_db):
     """Not averaged in is not the same as gone."""
-    await _close_row(_tmp_db, 5.0, "2026-08-20T12:00:00+00:00")
+    epoch = datetime.fromisoformat(pocket.CONFIG_EPOCH)
+    await _close_row(_tmp_db, 5.0, (epoch - timedelta(days=1)).isoformat())
 
-    out = await pocket.summary(since="2026-08-01T00:00:00+00:00", db_path=_tmp_db)
+    out = await pocket.summary(
+        since=(epoch - timedelta(days=30)).isoformat(), db_path=_tmp_db,
+    )
 
     assert out["completed"] == 1
 
@@ -1038,3 +1045,59 @@ async def test_the_exit_rule_sees_the_low_reached_between_reads(_tmp_db):
     # filled AT the stop: the market is above it now, so the crossing was real
     # and fillable -- not the -30% low, and not the -5% current price.
     assert row["realized_proceeds"] == pytest.approx(entry * 0.80)
+
+
+@pytest.mark.asyncio
+async def test_the_price_path_is_archived_on_every_check(_tmp_db, monkeypatch):
+    """18/08 standing convention this pocket never followed. Without the path,
+    a position's history is entry/peak/exit only, so no alternative exit
+    threshold can be measured -- only guessed at."""
+    from aria_core import shadow_snapshot_archive
+
+    stored = []
+
+    async def _capture(**kwargs):
+        stored.append(kwargs)
+        return True
+
+    monkeypatch.setattr(shadow_snapshot_archive, "store_snapshot", _capture)
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    class _Feed:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=0.001, reserve_usd=9_000.0,
+                                   dex_id="pumpfun", price_high_since_last_read=0.0012,
+                                   price_low_since_last_read=0.0009)
+
+    await pocket.advance_exit_simulation(bonding_ws_feed=_Feed(), db_path=_tmp_db)
+
+    assert stored, "no snapshot archived"
+    assert stored[0]["module"] == "solana_late_bonding"
+    # the window extremes are what makes replaying another stop distance possible
+    assert stored[0]["price_change_pct"]["window_low"] == 0.0009
+    assert stored[0]["price_change_pct"]["window_high"] == 0.0012
+
+
+@pytest.mark.asyncio
+async def test_an_archiving_failure_never_blocks_an_exit(_tmp_db, monkeypatch):
+    from aria_core import shadow_snapshot_archive
+
+    async def _boom(**_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(shadow_snapshot_archive, "store_snapshot", _boom)
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async def _collapsed(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=390.0, dex_id="pumpfun")
+
+    stats = await pocket.advance_exit_simulation(snapshot_fn=_collapsed, db_path=_tmp_db)
+    assert stats["closed"] == 1

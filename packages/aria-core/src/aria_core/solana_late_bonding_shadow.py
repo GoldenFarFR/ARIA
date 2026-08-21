@@ -664,6 +664,34 @@ async def advance_exit_simulation(
         if not snapshot.available or snapshot.price_usd is None:
             continue
 
+        # 21/08 -- archive the price path, the standing convention since 18/08
+        # that this pocket never followed. Without it a position's history
+        # holds only entry/peak/exit, so NO alternative exit threshold can
+        # ever be measured -- only guessed at. And there is a real question
+        # waiting on it: the trailing stop's fixed -15% distance captures 72%
+        # of a +100% move but LOSES money on a +12% one (n=8, -3.1% average),
+        # which is a calibration problem no stored closure can settle.
+        # Pure local SQLite write on a WAL database, zero network cost.
+        try:
+            from aria_core import shadow_snapshot_archive
+
+            await shadow_snapshot_archive.store_snapshot(
+                module="solana_late_bonding", position_id=row["id"],
+                pool_address=row["pool_address"], chain=chain,
+                price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+                dex_id=snapshot.dex_id,
+                # The extremes REACHED since the last read, not just this
+                # sample -- exactly what replaying a different stop distance
+                # needs, and what a point sample can never reconstruct.
+                price_change_pct={
+                    "window_high": getattr(snapshot, "price_high_since_last_read", None),
+                    "window_low": getattr(snapshot, "price_low_since_last_read", None),
+                },
+                transactions=None, volume_usd=None,
+            )
+        except Exception:  # noqa: BLE001 -- archiving never blocks an exit
+            pass
+
         age = _minutes_since(row["detected_at"])
         graduated = snapshot.dex_id not in (None, "pumpfun")
         if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
