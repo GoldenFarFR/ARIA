@@ -274,3 +274,34 @@ def test_the_state_file_is_swapped_atomically(tmp_path):
     t.save_state(str(path))
     assert path.exists()
     assert not (tmp_path / "curve_state.json.tmp").exists()
+
+
+# --- dedicated polling endpoint ----------------------------------------------
+# Batched reads and streaming are billed on different models (Helius: 1 credit
+# per call vs 20 credits per MB), so each workload should sit where it costs
+# least rather than forcing one provider to be good at both.
+
+
+def test_the_polling_endpoint_is_used_when_configured(monkeypatch):
+    monkeypatch.setenv(tracker.POLLING_RPC_HTTP_ENV, "https://polling.example")
+    assert PumpFunCurveTracker()._rpc_http_url == "https://polling.example"
+
+
+def test_it_falls_back_to_the_main_endpoint_when_unset(monkeypatch):
+    monkeypatch.delenv(tracker.POLLING_RPC_HTTP_ENV, raising=False)
+    monkeypatch.setattr(tracker, "RPC_HTTP_DEFAULT", "https://main.example")
+    assert PumpFunCurveTracker()._rpc_http_url == "https://main.example"
+
+
+def test_an_explicit_url_still_wins(monkeypatch):
+    monkeypatch.setenv(tracker.POLLING_RPC_HTTP_ENV, "https://polling.example")
+    assert PumpFunCurveTracker(rpc_http_url="https://explicit.example")._rpc_http_url == \
+        "https://explicit.example"
+
+
+def test_a_blank_env_value_does_not_shadow_the_fallback(monkeypatch):
+    # An empty variable is a very common .env accident; it must read as "unset",
+    # never as "use the empty string", which would send every poll nowhere.
+    monkeypatch.setenv(tracker.POLLING_RPC_HTTP_ENV, "   ")
+    monkeypatch.setattr(tracker, "RPC_HTTP_DEFAULT", "https://main.example")
+    assert PumpFunCurveTracker()._rpc_http_url == "https://main.example"

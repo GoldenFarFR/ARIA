@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -60,6 +61,24 @@ from aria_core.services.pumpfun_bonding_ws import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Dedicated endpoint for the polling workload, separate from the dome's main
+# Solana RPC on purpose. Batched reads and real-time streaming are billed on
+# completely different models -- Helius charges 1 credit per CALL but 20 per MB
+# streamed, so the cheap provider for one is not the cheap provider for the
+# other. Splitting them lets each workload sit where it costs least instead of
+# forcing a single provider to be good at both.
+#
+# Falls back to the main endpoint when unset, so nothing breaks if it is not
+# configured: the tracker simply keeps polling wherever it polled before.
+POLLING_RPC_HTTP_ENV = "ARIA_SOLANA_RPC_HTTP_POLLING"
+
+
+def default_polling_rpc_url() -> str:
+    """Read at instantiation, not at import, so a test (or a redeploy that
+    changes the env) sees the current value rather than a frozen one."""
+    return (os.environ.get(POLLING_RPC_HTTP_ENV, "") or "").strip() or RPC_HTTP_DEFAULT
+
 
 # Solana's hard per-call limit for getMultipleAccounts. The shared helper does
 # NOT chunk, so this module must.
@@ -159,9 +178,9 @@ class PumpFunCurveTracker:
     testable without a clock or a network.
     """
 
-    def __init__(self, *, rpc_http_url: str = RPC_HTTP_DEFAULT,
+    def __init__(self, *, rpc_http_url: str | None = None,
                  max_tracked: int = 600):
-        self._rpc_http_url = rpc_http_url
+        self._rpc_http_url = rpc_http_url or default_polling_rpc_url()
         self._max_tracked = max_tracked
         self._tracked: dict[str, TrackedMint] = {}
         self._decimals_cache: dict[str, int] = {}
