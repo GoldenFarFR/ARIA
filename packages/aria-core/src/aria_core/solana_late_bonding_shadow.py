@@ -157,7 +157,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T13:08:04+00:00"
+CONFIG_EPOCH = "2026-08-21T13:18:53+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
 # loop: more open positions means each one is checked less often, which is
