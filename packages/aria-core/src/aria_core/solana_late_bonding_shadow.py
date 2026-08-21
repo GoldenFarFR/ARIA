@@ -140,6 +140,30 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # untouched control and the two pockets keep differing on one variable.
 HARD_STOP_PCT = 20.0
 
+# 21/08 -- trailing distance TIGHTENED 15% -> 5% for this pocket only.
+#
+# Chosen by replaying the real exit rule over 73 archived price paths
+# (`exit_replay`), not by judgement:
+#     5%   PnL +3.1%  without top2 -0.5%  winrate 53%   <-- chosen
+#    10%       +2.7%              -2.4%           42%
+#    15%       -1.8%              -4.7%           38%   <-- what ran until now
+#    20-35%  -1.4..-0.4%      -4.4..-3.4%      38-40%
+# The 15% default was the WORST setting tested. Truncation is comparable
+# between 5% and 15% (21 vs 23 paths ending before their exit), so the
+# comparison is honest rather than an artefact of wider stops simply running
+# past the end of the archive.
+#
+# Why tighter wins here, consistent with the earlier finding: a FIXED distance
+# is miscalibrated by construction. At a +12% peak, -15% gives back more than
+# the whole move (that cohort averaged -3.1%, capture NEGATIVE); at a +200%
+# peak it leaves 30 points on the table. Most positions sit near the low end,
+# so the tight setting wins on volume.
+#
+# Passed as an ARGUMENT so FAST-DISCOVERY keeps the 15% default: the two
+# pockets now form a live A/B on stop distance, which is worth more than
+# assuming this replay generalises.
+TRAILING_STOP_PCT = 5.0
+
 # 21/08 -- REINFORCEMENT, measured in parallel and never acted on.
 #
 # Operator's read of the PnL is exact: many small losers, a few explosions.
@@ -188,7 +212,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T13:18:53+00:00"
+CONFIG_EPOCH = "2026-08-21T14:40:00+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
 # loop: more open positions means each one is checked less often, which is
@@ -738,6 +762,7 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
         window_high=getattr(snapshot, "price_high_since_last_read", None),
         window_low=getattr(snapshot, "price_low_since_last_read", None),
         hard_stop_pct=HARD_STOP_PCT,
+        trailing_stop_pct=TRAILING_STOP_PCT,
     )
     async with aiosqlite.connect(db_path or _db_path()) as db:
         await db.execute(

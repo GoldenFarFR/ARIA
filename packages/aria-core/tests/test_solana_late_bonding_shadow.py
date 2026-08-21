@@ -264,7 +264,14 @@ async def test_summary_reports_the_average_entry_progress(_tmp_db):
         "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
         snapshot_fn=_snapshot_ok, db_path=_tmp_db,
     )
-    out = await pocket.summary(db_path=_tmp_db)
+    # Anchored on CONFIG_EPOCH rather than on "now": moving the epoch forward
+    # is a routine operation here (four times in one day), and a test that
+    # breaks on it reports a config change as a regression. Third occurrence,
+    # so this one is fixed at the root like the other two.
+    out = await pocket.summary(
+        since=(datetime.fromisoformat(pocket.CONFIG_EPOCH) - timedelta(days=1)).isoformat(),
+        db_path=_tmp_db,
+    )
 
     assert out["open"] == 1
     assert out["completed"] == 0
