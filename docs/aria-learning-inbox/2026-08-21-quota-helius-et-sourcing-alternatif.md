@@ -97,3 +97,28 @@ Il n'existe donc **aucune option gratuite sans contrepartie**. Trois voies :
 Operateur cree un compte Bitquery. Rien de cable, rien de degrade, systeme en
 marche. Prochaine etape : verifier EN DIRECT avec la cle que la progression de
 courbe est exploitable et a quelle cadence, avant tout branchement.
+
+## Bitquery tested live (2026-08-21)
+
+Free account created. Real limits read from the dashboard, not from docs:
+1000 API points/month, 17 min of streaming/month, 0.2 GB traffic, 10 req/min,
+2 concurrent streams. Endpoint for Solana: `https://streaming.bitquery.io/eap`.
+
+**Our bonding-progress formula is independently validated.** On mint
+`3t4NqcEJPxyc3Vm8Zja7accyPFSeFxse122X9LmDpump`, still on the curve:
+ARIA read 82.900% at 17:15:44, Bitquery 83.307% at 17:16:53 -- a 0.41 point
+gap over 69 seconds, in the direction of the rise. No scale bias, no constant
+mismatch. Query latency 0.19 s. Bitquery exposes no quota-cost header; point
+consumption is only visible on the dashboard.
+
+**Paid plans do not clear our bar.** Personal 49$/mo has streaming DISABLED
+(unusable regardless of the rest). Pro 99$/mo is the first with streaming:
+100 000 min/month, i.e. two 24/7 streams (43 200 min each), but caps traffic
+at 5 GB -- and that ceiling is unmeasured. The current Helius flow carries
+~5.7M events/day; server-side filtering would cut that a lot, but nobody can
+say today whether we land at 1 GB or 40 GB per month.
+
+**The free 17 minutes are worth keeping for exactly one purpose**: measuring
+the real byte rate of the filtered stream, to extrapolate GB/month and decide
+whether 99$/mo is viable. That measurement is free and has not been run yet.
+Quota resets 21 September.
