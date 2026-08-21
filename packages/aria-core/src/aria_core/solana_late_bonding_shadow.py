@@ -115,6 +115,18 @@ MAX_TOP_BUYER_SHARE = 0.95
 # (first check landing 32-116s after entry despite a 10s cadence). The exit
 # sweep's own `limit` is raised in step below so widening collection cannot
 # quietly re-create that failure.
+# 21/08 -- a position whose token GRADUATED is exempt from max_hold.
+# Measured on this pocket's own graduated closures: `trailing_stop` exits
+# returned +228.3% (n=47, capturing 71% of a +296% peak) while `max_hold`
+# exits returned -5.3% (n=12) despite having reached a +52.4% peak. Those 12
+# were still alive when the clock killed them -- the trailing was armed and
+# simply had not triggered, because the price had never fallen back far enough.
+# A token that graduated has PROVEN its traction (87% winrate, +161% average),
+# so it is handed to the trailing stop alone rather than to a timer that knows
+# nothing about it. The trailing still protects the downside, and
+# liquidity_collapse still applies.
+EXEMPT_GRADUATED_FROM_MAX_HOLD = True
+
 MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
 
@@ -379,6 +391,12 @@ async def advance_exit_simulation(
             continue
 
         age = _minutes_since(row["detected_at"])
+        graduated = snapshot.dex_id not in (None, "pumpfun")
+        if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
+            # Reported as age 0 so `evaluate_exit`'s max_hold branch never
+            # fires -- the rule itself is left untouched and shared with the
+            # sibling pockets, as the coherence rule requires.
+            age = 0.0
         result = evaluate_exit(
             row, current_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
             dex_id=snapshot.dex_id, age_minutes=age if age is not None else 0.0,

@@ -5,12 +5,14 @@ bonding curve it has FOUR closures total, while the winrate doubles from the
 <30% band (9.9%, n=1277) to 30-50% (20.9%, n=239)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import aiosqlite
 import pytest
 
 from aria_core import creator_reputation, pretrade_rejection_log
+from aria_core import solana_fresh_launch_ws_exit_shadow as ws_exit_shadow
 from aria_core import solana_late_bonding_shadow as pocket
 from aria_core.services.pumpfun_bonding_ws import INITIAL_CURVE_TOKENS
 
@@ -439,3 +441,59 @@ async def test_a_curve_at_97_percent_is_now_accepted():
     )
     assert ok is True
     assert metrics["bonding_progress"] == pytest.approx(0.97, abs=0.01)
+
+
+# --- 21/08, graduated positions are exempt from max_hold -----------------
+# Measured on this pocket's own graduated closures: trailing_stop exits made
+# +228.3% (n=47, 71% of a +296% peak) while max_hold exits made -5.3% (n=12)
+# despite a +52.4% peak. Those 12 were still alive when the clock killed them.
+
+async def _run_exit(db_path, *, dex_id, age_minutes, price=0.003):
+    async with aiosqlite.connect(db_path) as c:
+        old = (datetime.now(timezone.utc) - timedelta(minutes=age_minutes)).isoformat()
+        await c.execute(f"UPDATE {pocket.TABLE} SET detected_at = ?", (old,))
+        await c.commit()
+
+    async def _snap(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=price, reserve_usd=14000.0, dex_id=dex_id)
+
+    await pocket.advance_exit_simulation(snapshot_fn=_snap, db_path=db_path)
+    return (await _rows(db_path))[0]
+
+
+@pytest.mark.asyncio
+async def test_a_graduated_position_is_not_killed_by_the_clock(_tmp_db):
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    row = await _run_exit(_tmp_db, dex_id="pumpswap", age_minutes=ws_exit_shadow.MAX_HOLD_MINUTES + 30)
+    assert row["exit_reason"] != "max_hold"
+
+
+@pytest.mark.asyncio
+async def test_a_position_still_on_its_curve_still_respects_max_hold(_tmp_db):
+    """The exemption is for PROVEN traction only -- an ungraduated position
+    keeps its timer."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    row = await _run_exit(_tmp_db, dex_id="pumpfun", age_minutes=ws_exit_shadow.MAX_HOLD_MINUTES + 30)
+    assert row["exit_reason"] == "max_hold"
+
+
+@pytest.mark.asyncio
+async def test_a_graduated_position_is_still_protected_on_the_downside(_tmp_db):
+    """Exempting the timer must never leave a position unprotected: the
+    trailing stop and the collapse guard both still apply."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    async with aiosqlite.connect(_tmp_db) as c:
+        # peak well above the arm threshold, then a deep fall
+        await c.execute(f"UPDATE {pocket.TABLE} SET peak_price = entry_price * 3")
+        await c.commit()
+    row = await _run_exit(_tmp_db, dex_id="pumpswap", age_minutes=5, price=0.0005)
+    assert row["exit_reason"] == "trailing_stop"
