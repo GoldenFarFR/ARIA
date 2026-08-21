@@ -163,7 +163,7 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
-CONFIG_EPOCH = "2026-08-21T11:05:00+00:00"
+CONFIG_EPOCH = "2026-08-21T11:44:10+00:00"
 
 MAX_CONCURRENT_TRACKED = 60
 _ensured_db_paths: set[str] = set()
