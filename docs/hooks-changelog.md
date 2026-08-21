@@ -220,3 +220,30 @@ qu'on repasse sous le seuil, donc une compaction réarme la surveillance.
 **La variable morte est conservée** dans `settings.json` : si une version
 future la réhonore, le comportement natif reprend et le hook redevient un
 simple filet.
+
+--------------------------------------------------------------------------
+2026.08.21 -- AJOUT : scripts/pre-push-secret-baseline-check.sh (bloquant)
+Place en PREMIER dans la chaine pre-push, avant regression-check et avant
+devils-advocate : c'est le moins cher (~15s) et celui qui casse le plus
+visiblement cote GitHub.
+
+Pourquoi : le job "Security -- secret scan" echouait sur CHAQUE push depuis
+sept heures, 18 runs consecutifs, sans que personne le voie. Ni l'agent, qui a
+pourtant une consigne permanente de verifier ce baseline avant de pousser et ne
+l'a pas appliquee, ni l'operateur, jusqu'a ce qu'il ouvre l'onglet Actions par
+hasard. Les deux causes etaient des faux positifs inoffensifs (adresse du SPL
+Token Program, mint USDC -- toute adresse base58 ressemble a du base64 a forte
+entropie). Mais un CI durablement rouge est pire qu'un CI absent : il devient du
+bruit, et le jour ou il signale un vrai secret, plus personne ne reagit.
+
+La consigne texte existait deja et n'a pas suffi. C'est sa version mecanique,
+meme raisonnement que pre-push-regression-check.sh (17/08), ne pour la meme
+raison : "pense a lancer les tests" ne suffisait pas non plus.
+
+Reproduit EXACTEMENT .github/workflows/secrets-scan.yml (memes exclusions, meme
+diff contre baseline) -- passer localement garantit de passer a distance. Si ce
+workflow change, changer ce script aussi.
+Fail-open sur l'outillage (detect-secrets absent, baseline illisible), fail-
+closed uniquement sur une vraie detection. Verifie dans les deux sens le jour
+meme : laisse passer un arbre propre, bloque avec code 1 sur une cle AWS et un
+token GitHub factices.
