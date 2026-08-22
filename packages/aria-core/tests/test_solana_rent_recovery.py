@@ -242,6 +242,156 @@ class TestReclaimRefusals:
         assert out == {"status": "ok", "closed": 0, "reclaimed_lamports": 0, "tx": None}
 
 
+class TestSweep:
+    """Batching, bounding, and stopping on failure."""
+
+    @staticmethod
+    def _census(n_closable: int, *, frozen: int = 0):
+        accounts = [
+            {"address": ACCT, "mint": MINT, "amount": 0, "rent_lamports": 2_039_280,
+             "case": "empty", "value_usd": None}
+            for _ in range(n_closable)
+        ]
+        accounts += [
+            {"address": ACCT, "mint": MINT, "amount": 9, "rent_lamports": 2_039_280,
+             "case": "frozen", "value_usd": None}
+            for _ in range(frozen)
+        ]
+        return {
+            "accounts": accounts,
+            "totals": {},
+            "reclaimable_lamports": n_closable * 2_039_280,
+            "lost_to_frozen_lamports": frozen * 2_039_280,
+        }
+
+    @pytest.mark.asyncio
+    async def test_splits_into_batches_of_the_measured_maximum(self, monkeypatch):
+        seen = []
+
+        async def fake_inventory(*a, **k):
+            return self_census
+
+        self_census = self._census(60)
+
+        async def fake_reclaim(batch, *a, **k):
+            seen.append(len(batch))
+            return {"status": "ok", "closed": len(batch),
+                    "reclaimed_lamports": len(batch) * 2_039_280, "tx": "sig"}
+
+        monkeypatch.setattr(rr, "inventory", fake_inventory)
+        monkeypatch.setattr(rr, "reclaim", fake_reclaim)
+        out = await rr.sweep(OWNER, "/k.json", rpc_http_url="http://rpc")
+
+        assert seen == [27, 27, 6]
+        assert out["closed"] == 60
+        assert out["remaining"] == 0
+
+    @pytest.mark.asyncio
+    async def test_frozen_accounts_are_never_attempted(self, monkeypatch):
+        async def fake_inventory(*a, **k):
+            return self._census(2, frozen=5)
+
+        attempted = []
+
+        async def fake_reclaim(batch, *a, **k):
+            attempted.extend(batch)
+            return {"status": "ok", "closed": len(batch),
+                    "reclaimed_lamports": len(batch) * 2_039_280, "tx": "sig"}
+
+        monkeypatch.setattr(rr, "inventory", fake_inventory)
+        monkeypatch.setattr(rr, "reclaim", fake_reclaim)
+        out = await rr.sweep(OWNER, "/k.json", rpc_http_url="http://rpc")
+
+        assert len(attempted) == 2
+        assert all(a["case"] != "frozen" for a in attempted)
+        assert out["lost_to_frozen_lamports"] == 5 * 2_039_280
+
+    @pytest.mark.asyncio
+    async def test_a_failed_batch_stops_the_run(self, monkeypatch):
+        """Pressing on would spend a real fee per doomed attempt."""
+        calls = []
+
+        async def fake_inventory(*a, **k):
+            return self._census(60)
+
+        async def fake_reclaim(batch, *a, **k):
+            calls.append(len(batch))
+            return {"status": "failed", "closed": 0, "reclaimed_lamports": 0, "tx": "sig"}
+
+        monkeypatch.setattr(rr, "inventory", fake_inventory)
+        monkeypatch.setattr(rr, "reclaim", fake_reclaim)
+        out = await rr.sweep(OWNER, "/k.json", rpc_http_url="http://rpc")
+
+        assert len(calls) == 1
+        assert out["closed"] == 0
+        assert out["remaining"] == 60
+
+    @pytest.mark.asyncio
+    async def test_max_batches_bounds_one_run(self, monkeypatch):
+        async def fake_inventory(*a, **k):
+            return self._census(200)
+
+        async def fake_reclaim(batch, *a, **k):
+            return {"status": "ok", "closed": len(batch),
+                    "reclaimed_lamports": len(batch) * 2_039_280, "tx": "sig"}
+
+        monkeypatch.setattr(rr, "inventory", fake_inventory)
+        monkeypatch.setattr(rr, "reclaim", fake_reclaim)
+        out = await rr.sweep(OWNER, "/k.json", rpc_http_url="http://rpc", max_batches=2)
+
+        assert out["closed"] == 54
+        assert out["remaining"] == 146
+
+    @pytest.mark.asyncio
+    async def test_nothing_closable_signs_nothing(self, monkeypatch):
+        async def fake_inventory(*a, **k):
+            return self._census(0, frozen=3)
+
+        async def fake_reclaim(*a, **k):
+            raise AssertionError("must not sign when there is nothing to close")
+
+        monkeypatch.setattr(rr, "inventory", fake_inventory)
+        monkeypatch.setattr(rr, "reclaim", fake_reclaim)
+        out = await rr.sweep(OWNER, "/k.json", rpc_http_url="http://rpc")
+
+        assert out["candidates"] == 0
+        assert out["txs"] == []
+
+    def test_batch_size_really_fits_a_solana_transaction(self):
+        """Compiles the real thing rather than pinning the number: the batch
+        size must stay the largest that fits, so this fails both if the limit
+        is exceeded and if the constant is left behind by a smaller
+        instruction encoding."""
+        from solders.hash import Hash
+        from solders.keypair import Keypair
+        from solders.message import MessageV0
+        from solders.transaction import VersionedTransaction
+
+        SOLANA_TX_LIMIT = 1232
+        signer = Keypair()
+        owner = str(signer.pubkey())
+
+        def size_for(count: int) -> int:
+            ixs = []
+            for _ in range(count):
+                ixs.extend(
+                    rr.build_close_instructions(
+                        {
+                            "case": "empty",
+                            "address": str(Keypair().pubkey()),
+                            "mint": str(Keypair().pubkey()),
+                            "amount": 0,
+                        },
+                        owner,
+                    )
+                )
+            message = MessageV0.try_compile(signer.pubkey(), ixs, [], Hash.default())
+            return len(bytes(VersionedTransaction(message, [signer])))
+
+        assert size_for(rr.MAX_CLOSES_PER_TRANSACTION) <= SOLANA_TX_LIMIT
+        assert size_for(rr.MAX_CLOSES_PER_TRANSACTION + 1) > SOLANA_TX_LIMIT
+
+
 class TestCapacity:
     def test_capacity_is_deposits_not_dollars(self):
         """0.146 SOL spendable: 71 distinct tokens, whatever the trade size."""

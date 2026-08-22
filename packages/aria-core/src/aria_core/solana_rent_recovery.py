@@ -62,6 +62,13 @@ TYPICAL_RENT_LAMPORTS = 2_039_280
 
 GATE_ENV = "ARIA_SOLANA_RENT_RECOVERY_ENABLED"
 
+# Measured, not guessed: 27 closes is the most that fits in Solana's 1232-byte
+# transaction limit (28 compiles to 1260). Batching is not about the fee -- a
+# transaction costs 0.00047 $ either way, noise against a 0.10 $ trade. It is
+# about keeping cleanup OFF the selling path: a sell that waits on housekeeping
+# is a trailing stop firing late, and that costs far more than any fee.
+MAX_CLOSES_PER_TRANSACTION = 27
+
 # A token account whose value is below this is treated as dust worth burning to
 # free the deposit. Deliberately far under the 0.19 $ deposit: burning is
 # irreversible, so the only tokens eligible are ones where holding them cannot
@@ -345,6 +352,68 @@ async def reclaim(
     finally:
         if owns:
             await client.aclose()
+
+
+async def sweep(
+    owner_pubkey: str,
+    key_path: str,
+    *,
+    rpc_http_url: str,
+    price_fn=None,
+    max_batches: int = 4,
+    client: httpx.AsyncClient | None = None,
+) -> dict:
+    """Census, then close everything reclaimable, in batches. REAL MONEY.
+
+    This is the shape the pocket should call -- deliberately NOT a hook on the
+    sell path. Closing an account is a second transaction, and putting it in
+    the critical path of an exit means a trailing stop waits on housekeeping.
+    A periodic sweep costs the same fees and delays nothing.
+
+    `max_batches` bounds one run rather than looping until dry: an unbounded
+    cleanup that meets a persistent RPC failure would retry forever. Leftovers
+    are reported and picked up by the next sweep.
+
+    A failed batch stops the run instead of pressing on -- if closes are being
+    rejected, the next batch will be too, and each attempt costs a real fee.
+    """
+    census = await inventory(
+        owner_pubkey, rpc_http_url=rpc_http_url, price_fn=price_fn, client=client
+    )
+    closable = [a for a in census["accounts"] if a["case"] in ("empty", "dust")]
+
+    result = {
+        "candidates": len(closable),
+        "closed": 0,
+        "reclaimed_lamports": 0,
+        "txs": [],
+        "remaining": len(closable),
+        "lost_to_frozen_lamports": census["lost_to_frozen_lamports"],
+    }
+    if not closable:
+        return result
+
+    for index in range(max_batches):
+        start = index * MAX_CLOSES_PER_TRANSACTION
+        batch = closable[start : start + MAX_CLOSES_PER_TRANSACTION]
+        if not batch:
+            break
+        outcome = await reclaim(
+            batch, key_path, rpc_http_url=rpc_http_url, client=client
+        )
+        result["txs"].append(outcome["tx"])
+        result["closed"] += outcome["closed"]
+        result["reclaimed_lamports"] += outcome["reclaimed_lamports"]
+        if outcome["status"] != "ok":
+            logger.warning(
+                "%s: batch %d ended '%s' -- stopping this sweep, %d account(s) left",
+                _REAL_MONEY_LOG_PREFIX, index, outcome["status"],
+                len(closable) - result["closed"],
+            )
+            break
+
+    result["remaining"] = len(closable) - result["closed"]
+    return result
 
 
 def projected_capacity(spendable_lamports: int, *, rent_lamports: int = TYPICAL_RENT_LAMPORTS) -> dict:
