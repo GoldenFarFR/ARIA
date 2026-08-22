@@ -536,8 +536,14 @@ def test_every_solana_feed_imports_the_shared_endpoint_rather_than_restating_it(
     src = pathlib.Path(__file__).resolve().parents[1] / "src" / "aria_core"
     offenders = []
     for path in src.rglob("*.py"):
-        if path.name in {"pumpswap_ws.py"}:
-            continue  # the single source of truth
+        if path.name in {"pumpswap_ws.py", "solana_gateway.py"}:
+            # Both are single sources of truth, for different things:
+            # pumpswap_ws holds the configured endpoint, and solana_gateway
+            # (22/08) holds the POOL -- including the public fallbacks that
+            # keep the pocket running when every paid provider refuses.
+            # Listing a fallback there is the opposite of restating a default
+            # elsewhere: it is what centralising them looks like.
+            continue
         text = path.read_text()
         for marker in ("api.mainnet-beta.solana.com", "wss://api.mainnet-beta.solana.com"):
             if marker in text and "devnet" not in text:
