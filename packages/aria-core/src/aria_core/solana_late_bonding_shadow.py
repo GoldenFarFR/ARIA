@@ -769,6 +769,14 @@ async def consider_candidate(
             )
             return cur.lastrowid
     except Exception as exc:  # noqa: BLE001 -- a shadow pocket never breaks its caller
+        if "429" in str(exc):
+            # 22/08: 472 candidates were rejected here on a rate limit while a
+            # working second provider sat unused, because this path never told
+            # the shared resolver the primary was exhausted. Discovery is where
+            # an exhausted provider hurts most -- it stops the pocket entirely.
+            from aria_core.services import pumpswap_ws
+
+            pumpswap_ws.note_rpc_http_exhausted()
         logger.info("solana_late_bonding_shadow: consider_candidate failed for %s (%s)", mint, exc)
         return None
 
