@@ -124,6 +124,9 @@ _SOCIAL_LABELS = {
 @dataclass
 class PairSnapshot:
     pair_address: str = ""
+    # 22/08: without this, `fetch_tokens_batch` returns prices with no way to
+    # tell WHICH token each one belongs to -- the batch endpoint's whole point.
+    base_token_address: str = ""
     dex_id: str = ""
     liquidity_usd: float = 0.0
     # 02/08 -- real bug found live (B20 diligence workflow): a pool's
@@ -238,6 +241,7 @@ def _parse_pair(raw: dict) -> PairSnapshot:
     change = change if isinstance(change, dict) else {}
     return PairSnapshot(
         pair_address=str(raw.get("pairAddress") or ""),
+        base_token_address=str(base.get("address") or ""),
         dex_id=str(raw.get("dexId") or ""),
         liquidity_usd=float(liq.get("usd") or 0),
         liquidity_unknown=liquidity_unknown,
