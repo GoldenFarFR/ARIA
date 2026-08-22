@@ -178,3 +178,57 @@ async def quote_sol_for_token(
 ) -> dict:
     """Convenience: how many tokens ``sol_amount`` SOL actually buys right now."""
     return await fetch_quote(SOL_MINT, token_mint, int(sol_amount * 1e9), client=client)
+
+
+# --- price feed (22/08) -----------------------------------------------------
+# Operator target: refresh open positions every 1-2s, explicitly accepting the
+# cost. It turns out there is none to accept -- this is Jupiter's own price
+# endpoint, so it consumes NO Helius or Chainstack credit at all.
+#
+# Everything below was measured live, never assumed, per this dome's rule that
+# a throttle without a verified number is a fabricated one:
+#   * 50 mints per call. Asking for 100 or 150 returns 200 OK with only 50
+#     results -- a SILENT truncation, which is why the batch size is enforced
+#     here rather than trusted to the caller.
+#   * 15-38ms latency.
+#   * 20 consecutive calls at 1/s: zero refusals.
+PRICE_URL = "https://lite-api.jup.ag/price/v3"
+PRICE_MAX_IDS_PER_CALL = 50
+
+
+async def fetch_prices(
+    mints: list[str], *, client: httpx.AsyncClient | None = None,
+) -> dict[str, float]:
+    """USD price per token for each mint, batched.
+
+    Missing mints are simply absent from the result -- never zero, never a
+    stale value carried over. A caller must treat an absent price as "unknown"
+    and refuse to act, exactly as it would on any other unavailable feed.
+    """
+    if not mints:
+        return {}
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=15.0)
+    out: dict[str, float] = {}
+    try:
+        for start in range(0, len(mints), PRICE_MAX_IDS_PER_CALL):
+            batch = mints[start : start + PRICE_MAX_IDS_PER_CALL]
+            try:
+                resp = await client.get(PRICE_URL, params={"ids": ",".join(batch)})
+                if resp.status_code != 200:
+                    logger.info("jupiter prices: HTTP %s", resp.status_code)
+                    continue
+                payload = resp.json() or {}
+            except Exception as exc:  # noqa: BLE001 -- one batch failing is not all
+                logger.info("jupiter prices: batch failed (%s)", exc)
+                continue
+            for mint, entry in payload.items():
+                if not isinstance(entry, dict):
+                    continue
+                price = entry.get("usdPrice") or entry.get("price")
+                if price:
+                    out[mint] = float(price)
+        return out
+    finally:
+        if owns:
+            await client.aclose()

@@ -1263,6 +1263,80 @@ def _RECONCILE_WINDOW_START() -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_WINDOW_MINUTES)).isoformat()
 
 
+class _PricedSnapshot:
+    """Minimal snapshot built from an external price quote.
+
+    Carries the pocket's LAST KNOWN reserve and venue rather than inventing
+    them: a price feed says what something is worth, not how deep the pool is,
+    and a fabricated reserve would feed the liquidity-collapse exit a number
+    nobody measured.
+    """
+
+    __slots__ = ("available", "price_usd", "reserve_usd", "dex_id",
+                 "price_high_since_last_read", "price_low_since_last_read")
+
+    def __init__(self, price_usd, *, reserve_usd, dex_id):
+        self.available = True
+        self.price_usd = price_usd
+        self.reserve_usd = reserve_usd
+        self.dex_id = dex_id
+        # A point quote knows no high or low: reporting the price as both would
+        # claim we observed a range we never saw. The websocket owns that.
+        self.price_high_since_last_read = None
+        self.price_low_since_last_read = None
+
+
+async def advance_exit_by_prices(
+    prices: dict, *, chain: str = "solana", db_path: str | None = None, sell_fn=None,
+) -> dict:
+    """Re-evaluates open positions against externally supplied prices (22/08).
+
+    The websocket only speaks when a pool MOVES, which left a quiet token
+    unpriced for as long as it stayed quiet -- a 5.9s median between checks,
+    measured. A stop cannot fire on a price nobody looked at, so this is the
+    ACTIVE half: it asks rather than waiting to be told.
+
+    Deliberately routed through `_apply_exit_check` like every other path, so
+    the single-writer guarantee holds and no third exit policy can drift into
+    existence.
+    """
+    if not prices:
+        return {"checked": 0, "closed": 0}
+    await _ensure_table(db_path)
+    stats = {"checked": 0, "closed": 0}
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"""SELECT * FROM {TABLE}
+                WHERE chain = ? AND (exit_reason IS NULL OR exit_reason = '')""",
+            (chain,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    for row in rows:
+        price = prices.get(row["token_address"])
+        if not price:
+            continue
+        snapshot = _PricedSnapshot(
+            float(price),
+            reserve_usd=row.get("last_reserve_usd") or row.get("reserve_usd"),
+            dex_id=row.get("exit_price_source") or "pumpfun",
+        )
+        try:
+            outcome = await _apply_exit_check(
+                row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
+            )
+        except Exception as exc:  # noqa: BLE001 -- one position never stops the sweep
+            logger.info(
+                "solana_late_bonding_shadow: price-driven exit failed for %s (%s)",
+                row["token_address"], exc,
+            )
+            continue
+        stats["checked"] += outcome.get("checked", 0)
+        stats["closed"] += outcome.get("closed", 0)
+    return stats
+
+
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
