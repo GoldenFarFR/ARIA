@@ -5,9 +5,12 @@ import pytest
 
 from aria_core import solana_rent_recovery as rr
 
-OWNER = "w8e1uR4MjRgz67Lx1hezRrzFa1AePW1m3krDAMqhoAW"
-MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-ACCT = "6bU5m6Y1e2q4hkGZR9EJqbxNZQKcSc8QcXWpUqfyZ3xz"
+# Deliberately well-known public program addresses, never the real trading
+# wallet: a test has no reason to depend on a production address, and this repo
+# is public. Any valid base58 pubkey exercises the same code paths.
+OWNER = "11111111111111111111111111111111"
+MINT = "So11111111111111111111111111111111111111112"
+ACCT = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 
 def _account(*, amount: int, state: str = "initialized"):
@@ -120,7 +123,7 @@ class TestInventory:
                         },
                     },
                     {
-                        "pubkey": "F" * 32,
+                        "pubkey": "Sysvar1nstructions1111111111111111111111111",
                         "account": {
                             "lamports": 2_039_280,
                             "data": {
