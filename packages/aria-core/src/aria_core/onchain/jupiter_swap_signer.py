@@ -105,11 +105,21 @@ def sign_transaction(swap_transaction_b64: str, keypair) -> str:
 
 
 async def _rpc(method: str, params: list, *, rpc_http_url: str, client: httpx.AsyncClient) -> dict:
-    resp = await client.post(
-        rpc_http_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+    """Every RPC call this module makes, through the shared gateway.
+
+    HIGH priority throughout: this path signs and sends real money. A sell
+    queued behind a price refresh is the failure that cost 80% twice on 22/08,
+    and `rpc_http_url` is now only a hint -- the gateway owns endpoint choice,
+    rate, and failover.
+    """
+    from aria_core.services import solana_gateway
+    from aria_core.services.solana_rpc_budget import Priority
+
+    data = await solana_gateway.call(
+        method, params, priority=Priority.HIGH, client=client,
     )
-    resp.raise_for_status()
-    data = resp.json()
+    if data is None:
+        raise SwapSignerError(f"no endpoint could serve {method}")
     if "error" in data:
         raise SwapSignerError(f"RPC {method} failed: {data['error']}")
     return data

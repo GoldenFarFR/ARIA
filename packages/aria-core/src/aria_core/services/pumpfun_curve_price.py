@@ -31,6 +31,9 @@ import httpx
 
 from solders.pubkey import Pubkey
 
+from aria_core.services import solana_gateway
+from aria_core.services.solana_rpc_budget import Priority
+
 logger = logging.getLogger(__name__)
 
 PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
@@ -106,25 +109,19 @@ async def fetch_prices(
             except Exception as exc:  # noqa: BLE001 -- a malformed mint is not fatal
                 logger.info("pumpfun_curve_price: cannot derive a curve (%s)", exc)
                 continue
-            try:
-                resp = await client.post(
-                    rpc_http_url,
-                    json={
-                        "jsonrpc": "2.0", "id": 1, "method": "getMultipleAccounts",
-                        "params": [addresses, {"encoding": "base64"}],
-                    },
-                )
-                resp.raise_for_status()
-                values = ((resp.json() or {}).get("result") or {}).get("value") or []
-            except Exception as exc:  # noqa: BLE001 -- one batch failing is not all
-                if "429" in str(exc):
-                    # Tell the shared resolver, so EVERY caller falls back --
-                    # not just this one.
-                    from aria_core.services import pumpswap_ws
-
-                    pumpswap_ws.note_rpc_http_exhausted()
-                logger.info("pumpfun_curve_price: batch failed (%s)", exc)
+            # Through the gateway: it owns endpoint choice, rate, failover and
+            # priority. LOW because a price refresh missed now is re-taken a
+            # second later at no cost, while a sell competing for the same
+            # budget cannot wait.
+            payload = await solana_gateway.call(
+                "getMultipleAccounts",
+                [addresses, {"encoding": "base64"}],
+                priority=Priority.LOW,
+                client=client,
+            )
+            if payload is None:
                 continue
+            values = ((payload or {}).get("result") or {}).get("value") or []
 
             for mint, value in zip(batch, values):
                 if not value:

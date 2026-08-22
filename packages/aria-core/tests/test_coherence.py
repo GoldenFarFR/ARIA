@@ -1392,3 +1392,50 @@ def test_both_active_pockets_import_the_shared_exit_rule():
 
     assert lb.evaluate_exit is shared.evaluate_exit
     assert fd.evaluate_exit is shared.evaluate_exit
+
+
+# Modules allowed to make a raw Solana RPC call. The gateway itself, obviously,
+# and the two websocket feeds -- a subscription is a long-lived socket, not a
+# request, so it is not what the gateway paces.
+_SOLANA_RPC_ALLOWLIST = {
+    "services/solana_gateway.py",
+    "services/pumpswap_ws.py",
+    "services/pumpfun_bonding_ws.py",
+    "services/pumpfun_curve_tracker.py",
+    "onchain/squads_solana_wallet.py",
+    "onchain/squads_solana_signer.py",
+    # A websocket subscription is a long-lived socket, not a paced request --
+    # the gateway has nothing to give it.
+    "services/pumpfun_trade_stream.py",
+    # EVM (Robinhood Chain), not Solana at all.
+    "services/wallet_transfers_fast.py",
+}
+
+
+def test_solana_rpc_calls_go_through_the_gateway():
+    """Mechanical guard, added 22/08 after the night that made it necessary.
+
+    Seven defects in one night, every one the same shape: a module talking to
+    Solana its own way -- its endpoint, its rate or none, its failover or none.
+    When one provider's quota ran out, each fell over separately while a
+    healthy provider sat unused, and the pocket went three hours without a
+    trade.
+
+    The decisive proof that convention does not hold: the liquidation script
+    written THREE HOURS AFTER documenting the rule broke it the same day.
+    Discipline is not a mechanism; this test is.
+    """
+    offenders: list[str] = []
+    for path in CORE.rglob("*.py"):
+        rel = str(path.relative_to(CORE))
+        if rel in _SOLANA_RPC_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # A raw JSON-RPC body built by hand is the signature of a direct call.
+        if '"jsonrpc": "2.0"' in text or "'jsonrpc': '2.0'" in text:
+            offenders.append(rel)
+    assert not offenders, (
+        f"appel RPC Solana hors de la passerelle : {sorted(offenders)}. "
+        f"Utilise aria_core.services.solana_gateway.call(), ou ajoute le module "
+        f"a _SOLANA_RPC_ALLOWLIST avec la raison."
+    )

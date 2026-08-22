@@ -110,8 +110,23 @@ class TestGate:
 
 
 class TestInventory:
+    """Goes through the gateway now: the fake replaces THAT, since the module
+    no longer knows what an endpoint is."""
+
+    @staticmethod
+    def _patch(monkeypatch, payloads):
+        """`payloads` is one answer per token program, in order."""
+        seq = iter(payloads)
+
+        async def fake_call(method, params=None, **kw):
+            return next(seq, {"result": {"value": []}})
+
+        from aria_core.services import solana_gateway
+
+        monkeypatch.setattr(solana_gateway, "call", fake_call)
+
     @pytest.mark.asyncio
-    async def test_totals_split_by_case_and_frozen_is_reported_as_lost(self):
+    async def test_totals_split_by_case_and_frozen_is_reported_as_lost(self, monkeypatch):
         payload = {
             "result": {
                 "value": [
@@ -139,74 +154,36 @@ class TestInventory:
                 ]
             }
         }
-
-        class _Resp:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return payload
-
-        class _Client:
-            """Answers the classic-program call, then an empty Token-2022 one."""
-
-            def __init__(self):
-                self.calls = 0
-
-            async def post(self, *a, **k):
-                self.calls += 1
-                return _Resp() if self.calls == 1 else _Empty()
-
-        class _Empty:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"result": {"value": []}}
-
-        client = _Client()
-        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=client)
-        assert client.calls == 2, "both token programs must be scanned"
+        self._patch(monkeypatch, [payload, {"result": {"value": []}}])
+        out = await rr.inventory(OWNER, rpc_http_url="http://rpc")
         assert out["totals"]["empty"]["count"] == 1
         assert out["totals"]["frozen"]["count"] == 1
         assert out["reclaimable_lamports"] == 2_039_280
         assert out["lost_to_frozen_lamports"] == 2_039_280
 
     @pytest.mark.asyncio
-    async def test_unreadable_census_raises_never_returns_empty(self):
-        """An empty inventory would read as 'nothing to reclaim'."""
-
-        class _Client:
-            async def post(self, *a, **k):
-                raise RuntimeError("rpc down")
-
+    async def test_an_unreadable_census_raises_never_returns_empty(self, monkeypatch):
+        """An empty inventory would read as 'nothing to reclaim' -- and with
+        the gateway, None means every endpoint refused."""
+        self._patch(monkeypatch, [None])
         with pytest.raises(rr.RentRecoveryError):
-            await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
+            await rr.inventory(OWNER, rpc_http_url="http://rpc")
 
     @pytest.mark.asyncio
-    async def test_unrecognised_account_shape_is_skipped_not_guessed(self):
-        payload = {"result": {"value": [{"pubkey": ACCT, "account": {"lamports": 1}}]}}
-
-        class _Resp:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return payload
-
-        class _Client:
-            async def post(self, *a, **k):
-                return _Resp()
-
-        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
+    async def test_unrecognised_account_shape_is_skipped_not_guessed(self, monkeypatch):
+        self._patch(monkeypatch, [
+            {"result": {"value": [{"pubkey": ACCT, "account": {"lamports": 1}}]}},
+            {"result": {"value": []}},
+        ])
+        out = await rr.inventory(OWNER, rpc_http_url="http://rpc")
         assert out["accounts"] == []
 
-
     @pytest.mark.asyncio
-    async def test_token_2022_accounts_are_seen_and_closed_against_their_own_program(self):
+    async def test_token_2022_accounts_are_seen_and_closed_against_their_own_program(
+        self, monkeypatch
+    ):
         """22/08: pump.fun mints are Token-2022. Scanning only the classic
-        program reported an empty wallet while three real accounts existed --
-        and a close addressed to the wrong program simply fails."""
+        program reported an empty wallet while three real accounts existed."""
         payload = {
             "result": {
                 "value": [
@@ -220,31 +197,12 @@ class TestInventory:
                 ]
             }
         }
-
-        class _Resp:
-            def __init__(self, body):
-                self.body = body
-
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return self.body
-
-        class _Client:
-            def __init__(self):
-                self.calls = 0
-
-            async def post(self, *a, **k):
-                self.calls += 1
-                # Nothing on the classic program, everything on Token-2022.
-                return _Resp({"result": {"value": []}} if self.calls == 1 else payload)
-
-        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
+        # nothing on the classic program, everything on Token-2022
+        self._patch(monkeypatch, [{"result": {"value": []}}, payload])
+        out = await rr.inventory(OWNER, rpc_http_url="http://rpc")
         assert out["totals"]["empty"]["count"] == 1
         account = out["accounts"][0]
         assert account["program_id"] == rr.TOKEN_2022_PROGRAM_ID
-
         ixs = rr.build_close_instructions(account, OWNER)
         assert str(ixs[0].program_id) == rr.TOKEN_2022_PROGRAM_ID
 

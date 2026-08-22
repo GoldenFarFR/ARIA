@@ -54,59 +54,47 @@ class TestCurveAddress:
 
 
 class TestFetch:
+    """Now goes through the gateway, so the fake replaces THAT rather than an
+    HTTP client -- the module no longer knows what an endpoint is."""
+
     @staticmethod
-    def _client(payload, calls=None):
-        class _Resp:
-            def raise_for_status(self):
-                pass
+    def _patch(monkeypatch, payload, calls=None):
+        async def fake_call(method, params=None, **kw):
+            if calls is not None:
+                calls.append(params[0])
+            return payload
 
-            def json(self):
-                return payload
+        from aria_core.services import solana_gateway
 
-        class _Client:
-            async def post(self, url, json=None, **k):
-                if calls is not None:
-                    calls.append(json["params"][0])
-                return _Resp()
-
-        return _Client()
+        monkeypatch.setattr(solana_gateway, "call", fake_call)
 
     @pytest.mark.asyncio
-    async def test_prices_are_keyed_by_mint(self):
+    async def test_prices_are_keyed_by_mint(self, monkeypatch):
         raw = _curve(virtual_tokens=1_000_000 * 10**6, virtual_sol=30 * 10**9)
-        payload = {"result": {"value": [{"data": [base64.b64encode(raw).decode(), "base64"]}]}}
-        out = await cp.fetch_prices(
-            [MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc", client=self._client(payload)
-        )
+        self._patch(monkeypatch, {
+            "result": {"value": [{"data": [base64.b64encode(raw).decode(), "base64"]}]}
+        })
+        out = await cp.fetch_prices([MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc")
         assert set(out) == {MINT}
 
     @pytest.mark.asyncio
-    async def test_a_missing_account_is_absent_never_zero(self):
+    async def test_a_missing_account_is_absent_never_zero(self, monkeypatch):
         """Absent means 'unknown, fall back' -- a zero would fire every stop."""
-        payload = {"result": {"value": [None]}}
-        out = await cp.fetch_prices(
-            [MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc", client=self._client(payload)
-        )
+        self._patch(monkeypatch, {"result": {"value": [None]}})
+        out = await cp.fetch_prices([MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc")
         assert out == {}
 
     @pytest.mark.asyncio
-    async def test_batches_respect_the_hundred_account_limit(self):
+    async def test_batches_respect_the_hundred_account_limit(self, monkeypatch):
         calls: list = []
-        payload = {"result": {"value": []}}
-        mints = [MINT] * 250
-        await cp.fetch_prices(
-            mints, sol_usd=SOL_USD, rpc_http_url="http://rpc",
-            client=self._client(payload, calls),
-        )
+        self._patch(monkeypatch, {"result": {"value": []}}, calls)
+        await cp.fetch_prices([MINT] * 250, sol_usd=SOL_USD, rpc_http_url="http://rpc")
         assert [len(c) for c in calls] == [100, 100, 50]
 
     @pytest.mark.asyncio
-    async def test_a_dead_rpc_returns_nothing_rather_than_raising(self):
-        class _Client:
-            async def post(self, *a, **k):
-                raise RuntimeError("rpc down")
-
-        out = await cp.fetch_prices(
-            [MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc", client=_Client()
-        )
+    async def test_a_gateway_refusal_returns_nothing_rather_than_raising(self, monkeypatch):
+        """None from the gateway means 'could not be done' -- never an empty
+        price set that a caller might act on."""
+        self._patch(monkeypatch, None)
+        out = await cp.fetch_prices([MINT], sol_usd=SOL_USD, rpc_http_url="http://rpc")
         assert out == {}

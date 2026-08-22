@@ -96,15 +96,16 @@ async def recent_priority_fee(
     owns = client is None
     client = client or httpx.AsyncClient(timeout=10.0)
     try:
-        resp = await client.post(
-            rpc_http_url,
-            json={"jsonrpc": "2.0", "id": 1,
-                  "method": "getRecentPrioritizationFees", "params": [[]]},
+        from aria_core.services import solana_gateway
+        from aria_core.services.solana_rpc_budget import Priority
+
+        payload = await solana_gateway.call(
+            "getRecentPrioritizationFees", [[]],
+            priority=Priority.NORMAL, client=client,
         )
-        resp.raise_for_status()
         values = sorted(
             int(f.get("prioritizationFee") or 0)
-            for f in ((resp.json() or {}).get("result") or [])
+            for f in ((payload or {}).get("result") or [])
         )
         if values:
             observed = values[int(len(values) * 0.75)]
@@ -186,31 +187,25 @@ async def simulate_swap_transaction(
     error is a REAL failure of this swap against real liquidity -- exactly what
     must be known before any capital is committed.
     """
-    body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "simulateTransaction",
-        "params": [
-            swap_transaction_b64,
-            {
-                "encoding": "base64",
-                "commitment": "processed",
-                "sigVerify": False,
-                "replaceRecentBlockhash": True,
-            },
-        ],
-    }
-    owns = client is None
-    client = client or httpx.AsyncClient(timeout=25.0)
-    try:
-        resp = await client.post(rpc_http_url or require_solana_rpc_http(), json=body)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        raise SwapSimulationError(f"simulation call failed: {exc!r}") from exc
-    finally:
-        if owns:
-            await client.aclose()
+    params = [
+        swap_transaction_b64,
+        {
+            "encoding": "base64",
+            "commitment": "processed",
+            "sigVerify": False,
+            "replaceRecentBlockhash": True,
+        },
+    ]
+    # HIGH: this runs immediately before signing real money. `rpc_http_url` is
+    # now only a hint -- the gateway owns endpoint choice, rate and failover.
+    from aria_core.services import solana_gateway
+    from aria_core.services.solana_rpc_budget import Priority
+
+    data = await solana_gateway.call(
+        "simulateTransaction", params, priority=Priority.HIGH, client=client,
+    )
+    if data is None:
+        raise SwapSimulationError("no endpoint could simulate the swap")
 
     if "error" in data:
         raise SwapSimulationError(f"RPC error: {data['error']}")

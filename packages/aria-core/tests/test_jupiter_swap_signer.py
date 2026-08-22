@@ -154,60 +154,71 @@ class TestCommitmentLevel:
     """22/08: `finalized` cost a MEASURED 12-13s per trade on a paid endpoint --
     that is the consensus, not the provider. On the trading path, where no
     on-chain state is read afterwards, it bought a guarantee nothing used while
-    the bonding curve moved underneath."""
+    the bonding curve moved underneath.
+
+    The signer now goes through the gateway, so the fake replaces THAT: this
+    module no longer knows what an endpoint is."""
 
     @staticmethod
-    def _client(status):
-        class _Resp:
-            def raise_for_status(self):
-                pass
+    def _patch(monkeypatch, status):
+        async def fake_call(method, params=None, **kw):
+            return {"result": {"value": [status]}}
 
-            def json(self):
-                return {"result": {"value": [status]}}
+        from aria_core.services import solana_gateway
 
-        class _Client:
-            async def post(self, *a, **k):
-                return _Resp()
-
-        return _Client()
+        monkeypatch.setattr(solana_gateway, "call", fake_call)
 
     @pytest.mark.asyncio
-    async def test_confirmed_accepts_a_confirmed_status(self):
+    async def test_confirmed_accepts_a_confirmed_status(self, monkeypatch):
+        self._patch(monkeypatch, {"confirmationStatus": "confirmed", "err": None})
         out = await signer._await_finalized(
-            "sig", rpc_http_url="http://rpc",
-            client=self._client({"confirmationStatus": "confirmed", "err": None}),
+            "sig", rpc_http_url="http://rpc", client=None,
             commitment=signer.COMMITMENT_CONFIRMED,
         )
         assert out == "ok"
 
     @pytest.mark.asyncio
-    async def test_finalized_satisfies_a_confirmed_request(self):
+    async def test_finalized_satisfies_a_confirmed_request(self, monkeypatch):
         """A stricter status must never read as 'not there yet'."""
+        self._patch(monkeypatch, {"confirmationStatus": "finalized", "err": None})
         out = await signer._await_finalized(
-            "sig", rpc_http_url="http://rpc",
-            client=self._client({"confirmationStatus": "finalized", "err": None}),
+            "sig", rpc_http_url="http://rpc", client=None,
             commitment=signer.COMMITMENT_CONFIRMED,
         )
         assert out == "ok"
 
     @pytest.mark.asyncio
-    async def test_a_chain_error_fails_at_either_level(self):
+    async def test_a_chain_error_fails_at_either_level(self, monkeypatch):
+        self._patch(monkeypatch, {"confirmationStatus": "confirmed", "err": "boom"})
         for level in (signer.COMMITMENT_CONFIRMED, signer.COMMITMENT_FINALIZED):
             out = await signer._await_finalized(
-                "sig", rpc_http_url="http://rpc",
-                client=self._client({"confirmationStatus": "confirmed", "err": "boom"}),
-                commitment=level,
+                "sig", rpc_http_url="http://rpc", client=None, commitment=level,
             )
             assert out == "failed"
 
     @pytest.mark.asyncio
-    async def test_an_unknown_level_refuses_rather_than_guessing(self):
+    async def test_an_unknown_level_refuses_rather_than_guessing(self, monkeypatch):
+        self._patch(monkeypatch, {"confirmationStatus": "finalized", "err": None})
         with pytest.raises(signer.SwapSignerError):
             await signer._await_finalized(
-                "sig", rpc_http_url="http://rpc",
-                client=self._client({"confirmationStatus": "finalized", "err": None}),
-                commitment="processed",
+                "sig", rpc_http_url="http://rpc", client=None, commitment="processed",
             )
+
+    @pytest.mark.asyncio
+    async def test_sent_returns_without_any_status_call(self, monkeypatch):
+        """The whole point: no round trip, no slot wait."""
+
+        async def must_not_be_called(*a, **kw):
+            raise AssertionError("`sent` must not poll for a status")
+
+        from aria_core.services import solana_gateway
+
+        monkeypatch.setattr(solana_gateway, "call", must_not_be_called)
+        out = await signer._await_finalized(
+            "sig", rpc_http_url="http://rpc", client=None,
+            commitment=signer.COMMITMENT_SENT,
+        )
+        assert out == "ok"
 
     def test_finalized_remains_the_default(self):
         """Callers that read state afterwards must be untouched by this change."""
@@ -218,9 +229,8 @@ class TestCommitmentLevel:
 
     def test_skipping_confirmation_requires_the_reconciler_to_exist(self):
         """Neither leg waits for a slot, which is ONLY safe while the repair
-        path exists. If reconcile_with_chain is ever removed or renamed, this
-        fails rather than leaving real trades unverified -- the FOMO stranding
-        of 22/08 is precisely what happens without it."""
+        path exists. If reconcile_with_chain is removed or renamed, this fails
+        rather than leaving real trades unverified."""
         from aria_core import solana_agent_wallet as w
         from aria_core import solana_late_bonding_shadow as pocket
         from aria_core.onchain import jupiter_swap_signer as s
@@ -231,17 +241,3 @@ class TestCommitmentLevel:
             assert callable(getattr(pocket, "reconcile_with_chain", None)), (
                 "trades skip confirmation but nothing reconciles them with the chain"
             )
-
-    @pytest.mark.asyncio
-    async def test_sent_returns_without_any_status_call(self):
-        """The whole point: no round trip, no slot wait."""
-
-        class _Client:
-            async def post(self, *a, **k):
-                raise AssertionError("`sent` must not poll for a status")
-
-        out = await signer._await_finalized(
-            "sig", rpc_http_url="http://rpc", client=_Client(),
-            commitment=signer.COMMITMENT_SENT,
-        )
-        assert out == "ok"

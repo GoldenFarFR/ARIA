@@ -32,7 +32,8 @@ from aria_core import solana_trade_pilot
 from aria_core.onchain import jupiter_swap_signer, jupiter_swap_simulation
 from aria_core.services import jupiter
 from aria_core.services.coingecko import coingecko_client
-from aria_core.services.pumpswap_ws import require_solana_rpc_http
+from aria_core.services import solana_gateway
+from aria_core.services.solana_rpc_budget import Priority
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +86,15 @@ async def get_balance_usd(*, client: httpx.AsyncClient | None = None) -> float |
             logger.info("solana_agent_wallet: cannot resolve wallet pubkey (%s)", exc)
             return None
 
-        try:
-            resp = await client.post(
-                require_solana_rpc_http(),
-                json={"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [pubkey]},
-            )
-            resp.raise_for_status()
-            lamports = int(((resp.json() or {}).get("result") or {}).get("value") or 0)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("solana_agent_wallet: balance read failed (%s)", exc)
+        # HIGH: the balance gates every buy, so it must not queue behind a
+        # price refresh. None stays a refusal upstream, never a zero.
+        payload = await solana_gateway.call(
+            "getBalance", [pubkey], priority=Priority.HIGH, client=client,
+        )
+        if payload is None:
+            logger.info("solana_agent_wallet: no endpoint could read the balance")
             return None
+        lamports = int(((payload or {}).get("result") or {}).get("value") or 0)
 
         spendable = max(0, lamports - RESERVED_LAMPORTS) / 1e9
         try:
@@ -251,15 +251,13 @@ async def token_decimals(mint: str, *, client: httpx.AsyncClient | None = None) 
     owns = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
     try:
-        resp = await client.post(
-            require_solana_rpc_http(),
-            json={
-                "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
-                "params": [mint, {"encoding": "jsonParsed"}],
-            },
+        payload = await solana_gateway.call(
+            "getAccountInfo", [mint, {"encoding": "jsonParsed"}],
+            priority=Priority.HIGH, client=client,
         )
-        resp.raise_for_status()
-        value = ((resp.json() or {}).get("result") or {}).get("value") or {}
+        if payload is None:
+            return None
+        value = ((payload or {}).get("result") or {}).get("value") or {}
         parsed = ((value.get("data") or {}).get("parsed") or {}).get("info") or {}
         decimals = parsed.get("decimals")
         if decimals is None:
@@ -315,15 +313,15 @@ async def token_balance(mint: str, *, client: httpx.AsyncClient | None = None) -
         with open(key_path(), encoding="utf-8") as fh:
             pubkey = str(Keypair.from_bytes(bytes(json.load(fh))).pubkey())
 
-        resp = await client.post(
-            require_solana_rpc_http(),
-            json={
-                "jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
-                "params": [pubkey, {"mint": mint}, {"encoding": "jsonParsed"}],
-            },
+        # HIGH: this is what a SELL reads to know what it can sell.
+        payload = await solana_gateway.call(
+            "getTokenAccountsByOwner",
+            [pubkey, {"mint": mint}, {"encoding": "jsonParsed"}],
+            priority=Priority.HIGH, client=client,
         )
-        resp.raise_for_status()
-        accounts = ((resp.json() or {}).get("result") or {}).get("value") or []
+        if payload is None:
+            return None
+        accounts = ((payload or {}).get("result") or {}).get("value") or []
         total = 0
         for account in accounts:
             info = account["account"]["data"]["parsed"]["info"]

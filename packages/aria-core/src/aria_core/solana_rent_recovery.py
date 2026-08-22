@@ -46,6 +46,9 @@ import os
 
 import httpx
 
+from aria_core.services import solana_gateway
+from aria_core.services.solana_rpc_budget import Priority
+
 logger = logging.getLogger(__name__)
 
 # SPL Token program and its instruction indices. Written out rather than pulled
@@ -135,21 +138,21 @@ async def inventory(
     raw: list[tuple[dict, str]] = []
     try:
         for program_id in TOKEN_PROGRAM_IDS:
-            resp = await client.post(
-                rpc_http_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "getTokenAccountsByOwner",
-                    "params": [
-                        owner_pubkey,
-                        {"programId": program_id},
-                        {"encoding": "jsonParsed"},
-                    ],
-                },
+            # Through the gateway: endpoint choice, rate and failover are not
+            # this module's business. NORMAL because an inventory feeds both
+            # cleanup and the audit -- late is fine, wrong is not.
+            payload = await solana_gateway.call(
+                "getTokenAccountsByOwner",
+                [owner_pubkey, {"programId": program_id}, {"encoding": "jsonParsed"}],
+                priority=Priority.NORMAL,
+                client=client,
             )
-            resp.raise_for_status()
-            for entry in ((resp.json() or {}).get("result") or {}).get("value") or []:
+            if payload is None:
+                raise RentRecoveryError(
+                    "no endpoint could read token accounts -- refusing to "
+                    "report an empty wallet"
+                )
+            for entry in ((payload or {}).get("result") or {}).get("value") or []:
                 # The owning program travels with the account: closing it later
                 # must be addressed to the same one.
                 raw.append((entry, program_id))

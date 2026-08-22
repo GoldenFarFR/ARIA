@@ -336,6 +336,27 @@ async def find_pool_for_mint(
             },
         ],
     }
+    # 22/08: `getProgramAccounts` is FORBIDDEN on the free tier -- it answers
+    # 403 regardless of volume, and it was failing in a loop (11% of all our
+    # requests, long mistaken for saturation). DexScreener already knows this
+    # pool's address and already has a client here, so it goes first.
+    #
+    # The RPC path stays as the fallback, because DexScreener does not index a
+    # pool instantly and this must keep working for a token that just migrated.
+    try:
+        from aria_core.services import dexscreener
+
+        for pair in await dexscreener.fetch_tokens_batch([mint], chain="solana"):
+            if getattr(pair, "base_token_address", "") != mint:
+                continue
+            # Only a MIGRATED pool is wanted here; a bonding curve is not one.
+            if getattr(pair, "dex_id", "") == "pumpfun":
+                continue
+            if pair.pair_address:
+                return pair.pair_address
+    except Exception:  # noqa: BLE001 -- fall through to the RPC
+        pass
+
     try:
         resp = await http_client.post(
             rpc_http_url or require_solana_rpc_http(), json=payload, timeout=20.0

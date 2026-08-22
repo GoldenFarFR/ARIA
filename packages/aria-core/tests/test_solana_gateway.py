@@ -42,13 +42,46 @@ def _gw(urls=((PAID_A, True), (PAID_B, True))) -> SolanaGateway:
 
 class TestPooling:
     @pytest.mark.asyncio
-    async def test_load_spreads_across_endpoints(self):
-        """Capacity ADDS UP -- that is the whole point of several providers."""
+    async def test_traffic_stays_on_the_first_endpoint_while_it_has_headroom(self):
+        """Cascade, not round-robin (operator's design, 22/08). Round-robin
+        sent as much traffic to the backup as to the primary even when the
+        primary had headroom, and burned the backup that a burst needs."""
         gw, client = _gw(), _Client()
-        for _ in range(6):
+        for _ in range(3):
             await gw.call("getHealth", client=client)
-        assert set(client.hits) == {PAID_A, PAID_B}
-        assert abs(client.hits.count(PAID_A) - client.hits.count(PAID_B)) <= 1
+        assert set(client.hits) == {PAID_A}, "the second provider stays fresh"
+
+    @pytest.mark.asyncio
+    async def test_traffic_spills_to_the_next_endpoint_past_the_threshold(self):
+        """The spill happens BEFORE the ceiling: reaching it is the refusal."""
+        from aria_core.services import solana_gateway as mod
+
+        gw = SolanaGateway(rate_per_second=10.0)
+        gw.configure(urls=[(PAID_A, True), (PAID_B, True)])
+        client = _Client()
+        # Drain the first endpoint past OVERFLOW_AT without spending real time.
+        first = gw._endpoints[0]
+        first.budget._tokens = first.budget.burst * (1 - mod.OVERFLOW_AT) * 0.5
+        await gw.call("getHealth", client=client)
+        assert client.hits == [PAID_B]
+
+    @pytest.mark.asyncio
+    async def test_a_saturated_pool_serves_only_exits(self):
+        """Back-pressure (operator's design): under critical pressure the pool
+        stops taking anything that is not a sell, BEFORE being refused. Asking
+        and being refused still costs a round trip; standing down costs nothing
+        and leaves the capacity to whoever must get through."""
+        gw = SolanaGateway(rate_per_second=1000.0)
+        gw.configure(urls=[(PAID_A, True), (PAID_B, True)])
+        for endpoint in gw._endpoints:
+            endpoint.budget._tokens = 0.0
+
+        client = _Client()
+        assert gw.level() == "critical"
+        assert await gw.call("getHealth", client=client) is None, "normal stands down"
+        assert await gw.call(
+            "sendTransaction", client=client, priority=Priority.HIGH
+        ) == {"result": "ok"}, "a sell always gets through"
 
     @pytest.mark.asyncio
     async def test_duplicates_are_dropped(self):
@@ -151,3 +184,156 @@ class TestSizing:
         from aria_core.services import solana_gateway as mod
 
         assert isinstance(mod.gateway, SolanaGateway)
+
+
+class TestPressureFeedback:
+    """Throttles now report a POOL-wide state, so a chain failure is visible
+    before it happens rather than through the errors it causes."""
+
+    def test_pressure_ignores_benched_endpoints(self):
+        """A benched endpoint contributes no capacity. Counting it as idle
+        would report calm while the survivors drown -- the exact blindness that
+        let the 847-error storm build unnoticed."""
+        gw = SolanaGateway(rate_per_second=10.0)
+        gw.configure(urls=[(PAID_A, True), (PAID_B, True)])
+        gw._endpoints[0].budget._tokens = 0.0        # drained
+        gw._endpoints[1].bench(quota=True)           # benched
+        # Not exactly 1.0: the bucket refills continuously, so an equality here
+        # would fail on the microseconds between draining and measuring.
+        assert gw.pressure() > 0.99
+
+    def test_every_endpoint_down_reads_as_full_pressure(self):
+        gw = SolanaGateway()
+        gw.configure(urls=[(PAID_A, True)])
+        gw._endpoints[0].bench(quota=True)
+        assert gw.pressure() == 1.0
+        assert gw.level() == "critical"
+
+    def test_low_priority_stands_down_before_normal_does(self):
+        """Graduated response: ease off the cheapest work first."""
+        from aria_core.services import solana_gateway as mod
+
+        gw = SolanaGateway(rate_per_second=10.0)
+        gw.configure(urls=[(PAID_A, True)])
+        endpoint = gw._endpoints[0]
+        endpoint.budget._tokens = endpoint.budget.burst * (1 - mod.PRESSURE_TENSE) * 0.9
+
+        assert gw.level() == "tense"
+        assert gw.should_stand_down(Priority.LOW) is True
+        assert gw.should_stand_down(Priority.NORMAL) is False
+        assert gw.should_stand_down(Priority.HIGH) is False
+
+    def test_a_sell_never_stands_down(self):
+        gw = SolanaGateway(rate_per_second=10.0)
+        gw.configure(urls=[(PAID_A, True)])
+        gw._endpoints[0].budget._tokens = 0.0
+        assert gw.level() == "critical"
+        assert gw.should_stand_down(Priority.HIGH) is False
+
+    def test_stats_expose_the_level_for_diagnostics(self):
+        gw = SolanaGateway()
+        gw.configure(urls=[(PAID_A, True)])
+        stats = gw.stats()
+        assert "pressure" in stats and "level" in stats
+
+
+class TestSelfRegulation:
+    """Budget-aware, not just rate-aware. An endpoint can be perfectly fluid
+    second to second and still burn a month's quota in three days -- which is
+    what happened to Helius, invisible to instantaneous throttling."""
+
+    def test_an_unmetered_endpoint_has_no_burn_rate(self):
+        """No published quota means no guessed one, per the dome rule."""
+        gw = _gw(urls=[(PAID_A, True)])
+        assert gw._endpoints[0].burn_rate() is None
+
+    def test_spending_ahead_of_schedule_shows_a_burn_rate_above_one(self):
+        import time as _t
+
+        gw = _gw(urls=[(PAID_A, True)])
+        e = gw._endpoints[0]
+        e.quota_total = 1000
+        e.quota_period_seconds = 1000.0
+        e.quota_started_at = _t.monotonic() - 100.0    # 10% of the period gone
+        e.quota_spent = 300                            # but 30% of the budget
+        assert e.burn_rate() == pytest.approx(3.0, abs=0.1)
+
+    def test_an_endpoint_burning_too_fast_is_skipped_while_another_has_room(self):
+        """The pool rebalances ITSELF rather than waiting for a quota to run
+        out -- that is the self-managed part."""
+        import time as _t
+
+        gw = _gw()
+        greedy = gw._endpoints[0]
+        greedy.quota_total = 1000
+        greedy.quota_period_seconds = 1000.0
+        greedy.quota_started_at = _t.monotonic() - 100.0
+        greedy.quota_spent = 500                       # far ahead of schedule
+        assert gw._pick().url == PAID_B
+
+    def test_exhaustion_is_predicted_before_it_happens(self):
+        """The 'I cannot take requests until ...' figure, known in advance."""
+        import time as _t
+
+        gw = _gw(urls=[(PAID_A, True)])
+        e = gw._endpoints[0]
+        e.quota_total = 1000
+        e.quota_spent = 900
+        e.quota_started_at = _t.monotonic() - 900.0    # 1 call/s
+        left = e.exhausts_in_seconds()
+        assert left == pytest.approx(100.0, rel=0.1)
+
+    def test_a_predicted_exhaustion_raises_a_warning(self):
+        import time as _t
+
+        gw = _gw(urls=[(PAID_A, True)])
+        e = gw._endpoints[0]
+        e.quota_total = 1000
+        e.quota_spent = 990
+        e.quota_started_at = _t.monotonic() - 990.0
+        assert any("quota epuise" in w for w in gw.warnings())
+
+    def test_losing_the_last_spare_endpoint_is_surfaced(self):
+        """One healthy endpoint out of several means no failover left -- worth
+        knowing before the last one dies too."""
+        gw = _gw()
+        gw._endpoints[0].bench(quota=True)
+        assert any("un seul endpoint sain" in w for w in gw.warnings())
+
+
+class TestMemoryAcrossRestarts:
+    """This service was restarted a dozen times in one night. Without memory,
+    each restart forgets which provider is exhausted and hammers it again."""
+
+    def test_a_benched_endpoint_stays_benched_after_a_restart(self, tmp_path):
+        path = str(tmp_path / "state.json")
+        gw = _gw()
+        gw._endpoints[0].bench(quota=True)
+        gw.save_state(path)
+
+        fresh = _gw()
+        fresh.load_state(path)
+        assert not fresh._endpoints[0].healthy()
+
+    def test_quota_spending_survives_a_restart(self, tmp_path):
+        path = str(tmp_path / "state.json")
+        gw = _gw()
+        gw._endpoints[0].quota_total = 1000
+        gw._endpoints[0].quota_spent = 400
+        gw.save_state(path)
+
+        fresh = _gw()
+        fresh.load_state(path)
+        assert fresh._endpoints[0].quota_spent == 400
+
+    def test_a_missing_state_file_is_simply_a_fresh_start(self, tmp_path):
+        gw = _gw()
+        gw.load_state(str(tmp_path / "absent.json"))
+        assert all(e.healthy() for e in gw._endpoints)
+
+    def test_a_corrupt_state_file_never_raises(self, tmp_path):
+        path = tmp_path / "state.json"
+        path.write_text("{ not json")
+        gw = _gw()
+        gw.load_state(str(path))
+        assert all(e.healthy() for e in gw._endpoints)
