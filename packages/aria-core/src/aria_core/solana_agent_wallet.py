@@ -155,4 +155,115 @@ async def execute_real_buy(mint: str, pool_address: str, *, chain: str = "solana
     )
     if not result.ok:
         return None
-    return {"entry_price": result.entry_price or quoted_price, "tx_hash": result.tx_hash}
+    # `tx`, not `tx_hash`: `consider_candidate` reads `filled.get("tx")`. The
+    # mismatch cost nothing visible -- a real buy still recorded a position --
+    # but silently dropped the one field that lets a row be audited on-chain.
+    return {"entry_price": result.entry_price or quoted_price, "tx": result.tx_hash}
+
+
+async def token_balance(mint: str, *, client: httpx.AsyncClient | None = None) -> int | None:
+    """Raw units of `mint` actually held, or None if unreadable.
+
+    Read live rather than tracked: the pocket's `remaining_qty` is a FRACTION
+    of a simulated position, and any drift between it and the wallet's real
+    holding would compound silently across partial exits. The chain is the only
+    authority on what can be sold.
+    """
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=20.0)
+    try:
+        from solders.keypair import Keypair
+        import json
+
+        with open(key_path(), encoding="utf-8") as fh:
+            pubkey = str(Keypair.from_bytes(bytes(json.load(fh))).pubkey())
+
+        resp = await client.post(
+            require_solana_rpc_http(),
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
+                "params": [pubkey, {"mint": mint}, {"encoding": "jsonParsed"}],
+            },
+        )
+        resp.raise_for_status()
+        accounts = ((resp.json() or {}).get("result") or {}).get("value") or []
+        total = 0
+        for account in accounts:
+            info = account["account"]["data"]["parsed"]["info"]
+            total += int((info.get("tokenAmount") or {}).get("amount") or 0)
+        return total
+    except Exception as exc:  # noqa: BLE001 -- unknown is never zero
+        logger.info("solana_agent_wallet: token balance unreadable for %s (%s)", mint, exc)
+        return None
+    finally:
+        if owns:
+            await client.aclose()
+
+
+async def _swap_out(*, mint: str, amount_units: int, slippage_bps: int) -> dict:
+    """Sells `amount_units` of `mint` back to SOL. Mirror of `_swap`."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        quote = await jupiter.fetch_quote(
+            mint, jupiter.SOL_MINT, amount_units,
+            slippage_bps=slippage_bps, client=client,
+        )
+        result = await jupiter_swap_signer.execute_swap(quote, key_path(), client=client)
+        status = (result or {}).get("status")
+        if status != "ok":
+            raise RuntimeError(f"sell status={status!r} (tx={(result or {}).get('tx')})")
+
+        lamports_out = float((result or {}).get("out_amount") or 0)
+        price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
+        sol_usd = price.prices.get("solana", {}).get("usd") if price.available else None
+        proceeds_usd = (lamports_out / 1e9) * float(sol_usd) if sol_usd else None
+        exit_price = (proceeds_usd / amount_units) if (proceeds_usd and amount_units) else None
+        return {
+            "tx": (result or {}).get("tx") or "",
+            "exit_price": exit_price,
+            "proceeds_usd": proceeds_usd,
+            "units_sold": amount_units,
+        }
+
+
+async def execute_real_sell(mint: str, fraction: float, *, chain: str = "solana") -> dict | None:
+    """The pocket's `sell_fn`: sells `fraction` of what is really held.
+
+    Returns None on any refusal, which the pocket must treat as "the position
+    is still open" -- recording a closure that did not happen would leave real
+    tokens stranded while the table claims they were sold, the exact failure
+    this seam exists to prevent.
+
+    A fraction at or above 1 sells the entire real balance, so a full exit can
+    never leave dust behind through a rounding error.
+
+    **Deliberately NOT behind the kill-switch, unlike every buy.** `outgoing_pause`
+    exists to stop value LEAVING; a sell converts a collapsing memecoin back into
+    SOL in the same wallet, reducing exposure rather than spending it. Gating it
+    would mean hitting the emergency stop traps the capital in exactly the
+    positions the operator wanted out of -- same reasoning that puts
+    `solana_cold_sweep` outside the raise-exposure guardrails.
+    """
+    if chain != "solana":
+        return None
+    if fraction <= 0:
+        return None
+
+    held = await token_balance(mint)
+    if held is None:
+        logger.warning("solana_agent_wallet: refusing to sell %s, balance unreadable", mint)
+        return None
+    if held <= 0:
+        return None
+
+    units = held if fraction >= 1.0 else int(held * fraction)
+    if units <= 0:
+        return None
+
+    try:
+        return await _swap_out(
+            mint=mint, amount_units=units,
+            slippage_bps=solana_trade_pilot.MAX_SLIPPAGE_BPS,
+        )
+    except Exception as exc:  # noqa: BLE001 -- a failed sell is not a closure
+        logger.warning("solana_agent_wallet: real sell failed for %s (%s)", mint, exc)
+        return None

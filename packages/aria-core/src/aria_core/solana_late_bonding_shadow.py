@@ -952,14 +952,31 @@ def _reinforced_multiplier(row: dict, exit_multiplier: float | None) -> float | 
     return 1 + gain / deployed
 
 
-async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | None) -> dict:
+async def _apply_exit_check(
+    row: dict, snapshot, *, chain: str, db_path: str | None, sell_fn=None,
+) -> dict:
     """Archives the path, runs the SHARED exit rule and persists the outcome
     for ONE position.
 
     21/08 -- extracted so the polling sweep and the event-driven handler run
     the identical code. Two call sites each carrying their own copy would mean
     the pocket quietly trading two policies at once, and the difference would
-    surface as unexplainable PnL rather than as a failure."""
+    surface as unexplainable PnL rather than as a failure.
+
+    ``sell_fn`` -- 22/08, the exit counterpart of ``consider_candidate``'s
+    ``execute_fn``, and the reason real trading could not be switched on
+    before: the buy seam existed, the sell seam did not. A pocket that buys
+    for real but only SIMULATES its exits would leave real tokens stranded
+    while this table records them as sold -- the position collapses to zero
+    on-chain while the row claims a clean stop.
+
+    Signature: ``await sell_fn(mint, fraction, chain=...)`` where ``fraction``
+    is the share of the CURRENT holding to sell, returning the fill or
+    ``None``. ``None`` aborts the write entirely and leaves the position open,
+    so the table can never claim an exit that did not happen.
+
+    Default ``None`` keeps the pocket in pure simulation, byte-identical to
+    its behaviour before this parameter existed."""
     # 21/08 -- archive the price path, the standing convention since 18/08
     # that this pocket never followed. Without it a position's history
     # holds only entry/peak/exit, so NO alternative exit threshold can
@@ -1038,6 +1055,39 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
         profit_ladder=PROFIT_LADDER,
         fixed_stop_pct=FIXED_STOP_PCT,
     )
+    if sell_fn is not None:
+        # How much of the CURRENT holding this verdict sells. Expressed as a
+        # share of what is still held rather than of the original position,
+        # because the wallet's real balance already reflects every earlier
+        # partial exit -- passing a share of the original would oversell on
+        # the second rung.
+        held_before = float(row.get("remaining_qty") or 0.0)
+        held_after = float(result.get("remaining_qty") or 0.0)
+        if held_before > 0 and held_after < held_before:
+            closing = result.get("exit_reason") not in (None, "")
+            fraction = 1.0 if closing else (held_before - held_after) / held_before
+            try:
+                fill = await sell_fn(row["token_address"], fraction, chain=chain)
+            except Exception as exc:  # noqa: BLE001 -- a failed sell is not an exit
+                logger.warning(
+                    "solana_late_bonding_shadow: sell_fn raised for %s (%s) -- position stays open",
+                    row["token_address"], exc,
+                )
+                return {"checked": 1, "closed": 0}
+            if not fill:
+                logger.warning(
+                    "solana_late_bonding_shadow: real sell refused for %s -- position stays open",
+                    row["token_address"],
+                )
+                return {"checked": 1, "closed": 0}
+            # The real proceeds replace the modelled ones: once genuine money
+            # has changed hands, a simulated fill is fiction.
+            if fill.get("exit_price"):
+                result["exit_price_real"] = fill["exit_price"]
+            result["exit_detail"] = (
+                f"{result.get('exit_detail') or ''} real_tx={fill.get('tx') or ''}"
+            ).strip()
+
     async with aiosqlite.connect(db_path or _db_path()) as db:
         await db.execute(
             f"""
@@ -1072,7 +1122,7 @@ async def _apply_exit_check(row: dict, snapshot, *, chain: str, db_path: str | N
 
 async def advance_position_by_pool(
     pool_address: str, *, chain: str = "solana", bonding_ws_feed=None,
-    snapshot_fn=None, db_path: str | None = None,
+    snapshot_fn=None, db_path: str | None = None, sell_fn=None,
 ) -> dict:
     """Evaluates the ONE open position on this pool, right now.
 
@@ -1114,13 +1164,15 @@ async def advance_position_by_pool(
         # Graduated or not yet pushed: the polling sweep owns this one.
         return {"checked": 0, "closed": 0}
 
-    return await _apply_exit_check(row, snapshot, chain=chain, db_path=db_path)
+    return await _apply_exit_check(
+        row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
+    )
 
 
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
-    max_rest_calls: int | None = None,
+    max_rest_calls: int | None = None, sell_fn=None,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
     imported, never reimplemented, so the two pockets differ on ENTRY only and
@@ -1211,7 +1263,9 @@ async def advance_exit_simulation(
         if not snapshot.available or snapshot.price_usd is None:
             continue
 
-        outcome = await _apply_exit_check(row, snapshot, chain=chain, db_path=db_path)
+        outcome = await _apply_exit_check(
+            row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
+        )
         stats["closed"] += outcome["closed"]
     return stats
 
