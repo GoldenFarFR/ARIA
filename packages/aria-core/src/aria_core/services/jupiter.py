@@ -32,6 +32,67 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+# --- SHARED throughput coordination (22/08, after a real 429 outage) --------
+# Three callers hit Jupiter independently: the 1s price sweep, buy quotes, and
+# sell quotes. Each was reasonable alone; together they tripped the free tier's
+# rate limit and Jupiter started refusing everything -- including the SELL
+# quotes for two real open positions, which could not be exited at all.
+#
+# This is the dome's standing rule, broken by adding a loop without checking
+# who else called the same provider: several clients on one external provider
+# share ONE coordination point, never independent throttles that silently add
+# up (same pattern as `services/geckoterminal.wait_for_shared_rate_limit`).
+#
+# The interval is deliberately conservative rather than measured-to-the-edge:
+# 20 calls at 1/s passed in isolation, but that test did not include the other
+# two callers. Being refused costs a position; being slightly slow does not.
+_MIN_INTERVAL_SECONDS = 0.35
+_last_call_at = 0.0
+_rate_lock: asyncio.Lock | None = None
+
+# Once Jupiter answers 429 it keeps refusing for a while, so retrying one
+# request is useless -- every OTHER caller must back off too, or they burn the
+# recovery budget a sell is waiting for. The penalty is global and shared.
+_BACKOFF_ON_429_SECONDS = 6.0
+_backoff_until = 0.0
+
+
+def note_rate_limited() -> None:
+    """Called on any 429. Pauses EVERY Jupiter caller in this process."""
+    global _backoff_until
+    try:
+        _backoff_until = asyncio.get_event_loop().time() + _BACKOFF_ON_429_SECONDS
+    except RuntimeError:
+        return
+    logger.info("jupiter: rate limited, backing off %.0fs for all callers",
+                _BACKOFF_ON_429_SECONDS)
+
+
+def is_backing_off() -> bool:
+    """True while the shared penalty runs, so a LOW-priority caller (the price
+    sweep) can skip its turn rather than spend budget a sell needs."""
+    try:
+        return asyncio.get_event_loop().time() < _backoff_until
+    except RuntimeError:
+        return False
+
+
+async def wait_for_shared_rate_limit() -> None:
+    """Serialises EVERY Jupiter call in this process. Await before each one."""
+    global _last_call_at, _rate_lock
+    if _rate_lock is None:
+        _rate_lock = asyncio.Lock()
+    async with _rate_lock:
+        loop = asyncio.get_event_loop()
+        penalty = _backoff_until - loop.time()
+        if penalty > 0:
+            await asyncio.sleep(penalty)
+        wait = _MIN_INTERVAL_SECONDS - (loop.time() - _last_call_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_call_at = asyncio.get_event_loop().time()
+
 QUOTE_URL = "https://lite-api.jup.ag/swap/v1/quote"
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -87,8 +148,11 @@ async def fetch_quote(
         last_error: Exception | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
+                await wait_for_shared_rate_limit()
                 resp = await client.get(QUOTE_URL, params=params)
                 if resp.status_code in (429, 500, 502, 503, 504):
+                    if resp.status_code == 429:
+                        note_rate_limited()
                     last_error = JupiterQuoteError(f"HTTP {resp.status_code}")
                     await asyncio.sleep(_BACKOFF_SECONDS * (attempt + 1))
                     continue
@@ -207,6 +271,10 @@ async def fetch_prices(
     """
     if not mints:
         return {}
+    if is_backing_off():
+        # Returns nothing rather than queueing: a price refresh is worth far
+        # less than the sell quote competing for the same budget.
+        return {}
     owns = client is None
     client = client or httpx.AsyncClient(timeout=15.0)
     out: dict[str, float] = {}
@@ -214,8 +282,11 @@ async def fetch_prices(
         for start in range(0, len(mints), PRICE_MAX_IDS_PER_CALL):
             batch = mints[start : start + PRICE_MAX_IDS_PER_CALL]
             try:
+                await wait_for_shared_rate_limit()
                 resp = await client.get(PRICE_URL, params={"ids": ",".join(batch)})
                 if resp.status_code != 200:
+                    if resp.status_code == 429:
+                        note_rate_limited()
                     logger.info("jupiter prices: HTTP %s", resp.status_code)
                     continue
                 payload = resp.json() or {}

@@ -420,6 +420,15 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # not exist, so every rung re-fired on each ~10s evaluation and sold
             # the whole position at the first rung price.
             ("ladder_done", "REAL"),
+            # 22/08 -- the buy's real transaction hash, and the ONLY reliable
+            # marker that a position was actually purchased. It used to be
+            # inferred from `exit_detail` containing "real_tx", which is
+            # written at the SELL: an open real position therefore carried no
+            # marker at all, and the closure UPDATE overwrites exit_detail
+            # anyway. That made a real position and a simulated one
+            # indistinguishable while open -- the exact condition under which
+            # a shadow row was retried for sale several times per second.
+            ("buy_tx", "TEXT"),
         ))
         await db.commit()
     _ensured_db_paths.add(path)
@@ -728,20 +737,20 @@ async def consider_candidate(
                 INSERT INTO {TABLE}
                     (pool_address, token_address, chain, detected_at, entry_price, reserve_usd,
                      bonding_progress_at_entry, distinct_buyers_at_entry, top_buyer_share_at_entry,
-                     buyer_acceleration_at_entry, peak_price, realistic_entry_price,
+                     buyer_acceleration_at_entry, peak_price, realistic_entry_price, buy_tx,
                      founding_tracked_at_entry, founding_exited_at_entry,
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
                      observation_seconds_at_entry, trade_count_at_entry, buy_count_at_entry,
                      round_trip_wallets_at_entry, round_trip_share_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
                     entry_price, snapshot.reserve_usd, metrics.get("bonding_progress"),
                     metrics.get("distinct_buyers"), metrics.get("top_buyer_share"),
-                    metrics.get("buyer_acceleration"), entry_price, realistic,
+                    metrics.get("buyer_acceleration"), entry_price, realistic, tx_hash,
                     founding.get("tracked"), founding.get("exited"),
                     founding.get("exit_ratio"), founding.get("bundle_size"),
                     creator, creator_sold, metrics.get("sol_velocity"),
@@ -1059,7 +1068,13 @@ async def _apply_exit_check(
         profit_ladder=PROFIT_LADDER,
         fixed_stop_pct=FIXED_STOP_PCT,
     )
-    if sell_fn is not None:
+    # 22/08, caught live within three minutes of enabling real trading: a
+    # SHADOW position (never really bought) hit its stop, sell_fn found no
+    # tokens, refused, and the row stayed open -- so every loop retried it,
+    # several times per second, forever. Only a row carrying a real buy can be
+    # sold; a simulated one closes in the table as it always did.
+    is_real_position = bool(row.get("buy_tx"))
+    if sell_fn is not None and is_real_position:
         # How much of the CURRENT holding this verdict sells. Expressed as a
         # share of what is still held rather than of the original position,
         # because the wallet's real balance already reflects every earlier
@@ -1213,9 +1228,10 @@ async def reconcile_with_chain(
     async with aiosqlite.connect(db_path or _db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            f"""SELECT id, token_address, exit_reason, detected_at
+            f"""SELECT id, token_address, exit_reason, detected_at, buy_tx
                 FROM {TABLE}
-                WHERE chain = ? AND exit_detail LIKE '%real_tx%'
+                WHERE chain = ?
+                  AND (buy_tx IS NOT NULL OR exit_detail LIKE '%real_tx%')
                   AND last_checked_at > ?""",
             (chain, _RECONCILE_WINDOW_START()),
         )

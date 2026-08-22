@@ -58,10 +58,10 @@ async def open_position(tmp_path):
             f"""INSERT INTO {pocket.TABLE}
                 (pool_address, token_address, chain, detected_at, entry_price,
                  reserve_usd, remaining_qty, realized_proceeds, peak_price,
-                 realistic_entry_price, bonding_progress_at_entry)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                 realistic_entry_price, bonding_progress_at_entry, buy_tx)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             ("pool1", "mint1", "solana", datetime.now(timezone.utc).isoformat(),
-             1.0, 50_000.0, 1.0, 0.0, 1.0, 1.0, 0.80),
+             1.0, 50_000.0, 1.0, 0.0, 1.0, 1.0, 0.80, "sigBUY"),
         )
         await conn.commit()
         row_id = cur.lastrowid
@@ -195,6 +195,7 @@ class TestSimulationStaysIdentical:
         assert out["closed"] == 1
         closed = await _row(db, row_id)
         assert closed["exit_reason"]
+        # no sell_fn means no sale was attempted, so no sell tx is recorded
         assert "real_tx" not in (closed["exit_detail"] or "")
 
 
@@ -353,3 +354,43 @@ class TestReconcileWithChain:
         out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
         assert out["cancelled"] == 0
         assert (await self._row(db, rid))["exit_reason"] in (None, "")
+
+
+class TestSellOnlyAppliesToRealPositions:
+    """22/08, three minutes after enabling real trading: a SHADOW position hit
+    its stop, sell_fn found no tokens, refused, the row stayed open -- and
+    every loop retried it several times per second, forever. Simulated rows
+    must close in the table exactly as they always did."""
+
+    @pytest.mark.asyncio
+    async def test_a_shadow_position_never_calls_sell_fn(self, open_position):
+        import aiosqlite
+
+        db, row_id = open_position
+        async with aiosqlite.connect(db) as conn:
+            await conn.execute(
+                f"UPDATE {pocket.TABLE} SET buy_tx = NULL WHERE id = ?", (row_id,)
+            )
+            await conn.commit()
+        seller = SellRecorder()
+        row = await _row(db, row_id)
+        assert not row.get("buy_tx")
+
+        out = await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db, sell_fn=seller,
+        )
+
+        assert seller.calls == [], "a simulated position must never reach the wallet"
+        assert out["closed"] == 1, "and it must still close normally"
+        assert (await _row(db, row_id))["exit_reason"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_position_still_calls_sell_fn(self, open_position):
+        """The other half: the guard must not silence real exits."""
+        db, row_id = open_position
+        seller = SellRecorder()
+        row = await _row(db, row_id)
+        await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db, sell_fn=seller,
+        )
+        assert len(seller.calls) == 1 and seller.calls[0]["fraction"] == 1.0
