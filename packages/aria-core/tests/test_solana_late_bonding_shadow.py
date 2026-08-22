@@ -1651,3 +1651,37 @@ async def test_the_rest_fallback_receives_the_real_geckoterminal_client():
         "the caller's GeckoTerminal client must reach the REST cascade, "
         "otherwise the fallback path calls None.get_pool_snapshot()"
     )
+
+
+@pytest.mark.asyncio
+async def test_an_entry_is_refused_on_a_stale_price(_tmp_db):
+    """A price older than the feed's window may watch a position, never open one.
+
+    22/08, id 1772 -- the entry was recorded at a 5941$ implied mcap while
+    DexScreener's own 1-second chart shows 13260$ at that exact second. The
+    real quote landing 1.4s later was logged as a +121% PEAK and its
+    disappearance as a collapse, so the trailing stop sold a position that was
+    still climbing (the token went on to 22K, +66% above the true entry). Both
+    numbers were artefacts of comparing two prices of the same instant, and the
+    feed had been flagging the first one `stale` all along.
+
+    Paired deliberately with the identical non-stale call: without that half,
+    the test passes whenever `consider_candidate` refuses for ANY other reason.
+    """
+    async def _snap(stale):
+        async def _fn(_client, _pool, _mint, *, chain):
+            return SimpleNamespace(available=True, price_usd=0.002,
+                                   reserve_usd=13000.0, dex_id="pumpfun", stale=stale)
+        return _fn
+
+    fresh = await pocket.consider_candidate(
+        "mintFresh", "poolFresh", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=await _snap(False), db_path=_tmp_db,
+    )
+    assert fresh is not None, "the same call must succeed when the price is fresh"
+
+    stale = await pocket.consider_candidate(
+        "mintStale", "poolStale", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=await _snap(True), db_path=_tmp_db,
+    )
+    assert stale is None, "a stale price must never open a position"

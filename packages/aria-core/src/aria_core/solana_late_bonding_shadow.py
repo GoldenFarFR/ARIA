@@ -532,6 +532,18 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("observation_seconds_at_entry", "REAL"),
             ("seconds_tracked_at_entry", "REAL"),
             ("top_buyer_address_at_entry", "TEXT"),
+            # 22/08 -- WHICH source priced the entry. The pocket recorded
+            # `exit_price_source` but never its counterpart, so an entry priced
+            # by the REST fallback and a follow-up priced by the curve looked
+            # identical in the table -- and their disagreement looked like a
+            # price move. Real case (id 1772): entry at a 5941$ implied mcap,
+            # first tracking point at 13127$ 1.4s later, logged as a +121% peak
+            # that DexScreener's own 1-second chart shows never happened. The
+            # subscription had just 429'd, so the entry fell through to REST
+            # while the follow-up came from the websocket. Until this column
+            # has data, a "peak" on this pocket cannot be told apart from a
+            # change of source.
+            ("entry_price_source", "TEXT"),
             ("trades_per_second_at_entry", "REAL"),
             ("distinct_sellers_at_entry", "INTEGER"),
             ("trades_total_at_entry", "INTEGER"),
@@ -848,6 +860,24 @@ async def consider_candidate(
             )
             if not snapshot.available or snapshot.price_usd is None:
                 accepted, reason = False, "blocked_no_price"
+            elif getattr(snapshot, "stale", False):
+                # 22/08 -- a price older than the feed's staleness threshold is
+                # fine for WATCHING a position (no new trade genuinely means
+                # the price has not moved, cf. pumpfun_bonding_ws's 19/08
+                # comment) but never for DECIDING a buy. A pool subscribed
+                # seconds ago has no recent trades in memory yet, so its "last
+                # known state" can predate us by more than the window.
+                #
+                # Real case, id 1772: entry recorded at a 5941$ implied mcap
+                # while DexScreener's 1-second chart shows 13260$ at that exact
+                # second -- a ~36s old price. The real quote arriving 1.4s later
+                # was then logged as a +121% PEAK, and the return to the stale
+                # value as a collapse, so the trailing stop sold a position that
+                # was in fact still climbing (the token went on to 22K, +66%
+                # above the true entry). Both the peak and the loss were
+                # artefacts of comparing two different prices of the same
+                # instant.
+                accepted, reason = False, "blocked_stale_price"
             elif (snapshot.reserve_usd or 0) < MIN_LIQUIDITY_USD:
                 # Checked here rather than in `screen_candidate`: the reserve
                 # is only known once the position has been priced. A pool this
@@ -933,12 +963,13 @@ async def consider_candidate(
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
                      observation_seconds_at_entry, seconds_tracked_at_entry,
+                     entry_price_source,
                      top_buyer_address_at_entry, buy_sol_volume_at_entry,
                      trades_total_at_entry, trades_per_second_at_entry,
                      distinct_sellers_at_entry,
                      trade_count_at_entry, buy_count_at_entry,
                      round_trip_wallets_at_entry, round_trip_share_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -951,6 +982,10 @@ async def consider_candidate(
                     metrics.get("sell_pressure"), metrics.get("sell_pressure_slope"),
                     metrics.get("observation_seconds"),
                     metrics.get("seconds_tracked"),
+                    # Which source actually priced this entry -- see the
+                    # column's own comment for the +121% that was really a
+                    # switch from REST to the curve.
+                    getattr(snapshot, "dex_id", None),
                     metrics.get("top_buyer_address"),
                     metrics.get("buy_sol_volume"),
                     metrics.get("trades_total"),

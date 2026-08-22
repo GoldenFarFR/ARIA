@@ -309,3 +309,28 @@ class TestRawCurveFieldsAreArchived:
         ) == 1
         rows = await arch.get_candles(module="solana_late_bonding", position_id=3)
         assert rows[0]["virtual_quote_raw"] is None
+
+
+def test_a_price_spike_is_archived_even_when_the_reserve_does_not_move():
+    """On a bonding curve the price can multiply while the reserve sits still.
+
+    22/08, real miss -- position 1772 went 0% -> +121% -> 0% in 3.5 seconds
+    with the reserve pinned at 6036.55$ the whole time. The time trigger had
+    not elapsed and the reserve trigger could not fire, so the entire
+    excursion left exactly ONE archived row, and nothing can say afterwards
+    whether the price walked down past the stop or jumped over it in a single
+    transaction -- the one question these positions actually pose.
+    """
+    archive._last_observation.clear()
+    key = dict(module="solana_late_bonding", position_id=1772)
+    assert archive.should_record_observation(**key, now_ts=1000.0,
+                                             reserve_usd=6036.55, price_usd=5.94e-06)
+    archive._last_observation[("solana_late_bonding", 1772)] = (1000.0, 6036.55, 5.94e-06)
+
+    assert archive.should_record_observation(
+        **key, now_ts=1001.4, reserve_usd=6036.55, price_usd=1.3124e-05
+    ), "a 121% price move must be archived even with a flat reserve"
+
+    assert not archive.should_record_observation(
+        **key, now_ts=1001.4, reserve_usd=6036.55, price_usd=5.96e-06
+    ), "sub-threshold noise must not multiply the rows"

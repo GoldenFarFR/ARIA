@@ -195,6 +195,10 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
             "blocked_wash_trading",       # the concentration ceiling
             "blocked_no_sell_route",
             "blocked_creator",
+            # 22/08 -- how much a stale entry price was really costing. This
+            # one is tracked to answer a question the refusal itself creates:
+            # are we now dropping candidates that would have run?
+            "blocked_stale_price",
         )
         trackable = (
             decision.blocked

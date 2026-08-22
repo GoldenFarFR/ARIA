@@ -193,28 +193,47 @@ async def store_candles(
 # 5x the rows and is not meant to run indefinitely.
 OBSERVATION_MIN_INTERVAL_SECONDS = 3.0
 OBSERVATION_RESERVE_MOVE_PCT = 1.0
+# 22/08 -- PRICE move, added after a real miss. On a bonding curve the price is
+# `virtual_quote / virtual_token`, so it can move violently while the reserve
+# barely twitches: position 1772 went 0% -> +121% -> 0% in 3.5s and the reserve
+# stayed at 6036.55$ throughout, so the reserve trigger above never fired and
+# the whole excursion left ONE archived row. Without a price trigger the
+# archive cannot answer the only question that matters on these positions --
+# did the price WALK down past the stop, or JUMP over it in one transaction.
+OBSERVATION_PRICE_MOVE_PCT = 1.0
 
-# position_id -> (last archived unix ts, last archived reserve)
-_last_observation: dict[tuple[str, int], tuple[float, float | None]] = {}
+# position_id -> (last archived unix ts, last archived reserve, last archived price)
+_last_observation: dict[tuple[str, int], tuple[float, float | None, float | None]] = {}
 
 
 def should_record_observation(
     *, module: str, position_id: int, now_ts: float, reserve_usd: float | None,
+    price_usd: float | None = None,
 ) -> bool:
     """Whether this tracking point is worth a row.
 
     Keeps the FIRST point of a position unconditionally: without it a collapse
-    has no baseline to be measured against."""
+    has no baseline to be measured against.
+
+    Three triggers, deliberately: elapsed time, a reserve move, and a PRICE
+    move. The last one is not redundant -- on a bonding curve the price is a
+    ratio of virtual reserves, so it can multiply while the real reserve sits
+    still, and a time-plus-reserve rule then archives nothing during exactly
+    the excursion worth recording."""
     key = (module, position_id)
     previous = _last_observation.get(key)
     if previous is None:
         return True
-    last_ts, last_reserve = previous
+    last_ts, last_reserve, last_price = previous
     if now_ts - last_ts >= OBSERVATION_MIN_INTERVAL_SECONDS:
         return True
     if reserve_usd is not None and last_reserve:
         move = abs(reserve_usd - last_reserve) / last_reserve * 100.0
         if move >= OBSERVATION_RESERVE_MOVE_PCT:
+            return True
+    if price_usd is not None and last_price:
+        move = abs(price_usd - last_price) / last_price * 100.0
+        if move >= OBSERVATION_PRICE_MOVE_PCT:
             return True
     return False
 
@@ -253,6 +272,7 @@ async def store_observation(
     now_ts = time.time() if now_ts is None else now_ts
     if not should_record_observation(
         module=module, position_id=position_id, now_ts=now_ts, reserve_usd=reserve_usd,
+        price_usd=price_usd,
     ):
         return 0
     try:
@@ -279,7 +299,7 @@ async def store_observation(
                 ),
             )
             await db.commit()
-        _last_observation[(module, position_id)] = (now_ts, reserve_usd)
+        _last_observation[(module, position_id)] = (now_ts, reserve_usd, price_usd)
         return 1
     except Exception as exc:  # noqa: BLE001 -- archiving never breaks a real exit
         logger.info(
