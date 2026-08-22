@@ -190,7 +190,22 @@ MIN_DISTINCT_BUYERS = 1
 #
 # Also sets the tradable position size: a 3000$ pool tolerates roughly 30$
 # before price impact eats the edge (measured via Jupiter the same day).
-MIN_LIQUIDITY_USD = 5500.0
+# 22/08 -- LOWERED 5500 -> 4000, operator's explicit test, and stated plainly
+# because the data above says the opposite: this floor is the ONE entry filter
+# that survived every check this session (+23.34 points measured at CONSTANT
+# DAY -- 528 closures under it at -12.29% against 830 above at +11.06%), and
+# the 2000-3500$ band it partly reopens scored -13.2%.
+#
+# The reason to run the test anyway: lowering the entry band to 50% turned out
+# to change nothing, because THIS floor already cuts that zone -- a token at
+# mid-curve has not accumulated 5500$ of reserve yet. Measured live right
+# after the deploy: `blocked_thin_liquidity` 5, `blocked_outside_band` 3. The
+# two filters overlap, so the 50% band cannot be evaluated while both stand.
+#
+# What we are actually testing is therefore the PAIR (band 50% + floor 4000$),
+# not the floor alone. Revert is one line and the archived epochs make the
+# comparison direct.
+MIN_LIQUIDITY_USD = 4000.0
 
 # 21/08 -- CARENCE APRES SORTIE. Le defaut le plus couteux trouve ce jour-la,
 # revele par une capture de l'operateur : CALLOUTS a ete achete et stoppe

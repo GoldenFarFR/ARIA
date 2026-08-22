@@ -1451,10 +1451,26 @@ def test_late_bonding_liquidity_floor_stays_where_the_data_put_it():
     explicit operator instruction, so a later session must not quietly lower it
     back on seeing those winners in the rejection log -- that is precisely the
     trade being made, not a regression. Raising it needs fresh data, and
-    lowering it needs the operator."""
+    lowering it needs the operator.
+
+    22/08 later the same day -- lowered to 4000$ ON that operator instruction,
+    which is the one path this docstring always allowed. The verdict above is
+    NOT retracted and the numbers stand: at constant day, 528 closures under
+    5500$ returned -12.29% against +11.06% for the 830 above, and the
+    2000-3500$ band this partly reopens scored -13.2%.
+
+    Why it is being tested anyway: lowering the entry band to 50% changed
+    nothing, because THIS floor already cut that zone -- a token at mid-curve
+    has not accumulated 5500$ of reserve yet (measured live right after the
+    deploy: 5 thin-liquidity rejects against 3 out-of-band). The two filters
+    overlap, so the band could not be evaluated while both stood. What is under
+    test is the PAIR, not the floor alone.
+
+    The guard stays, one floor lower: 3000$ was measured at -13.2% and must not
+    return by accident."""
     from aria_core import solana_late_bonding_shadow as lb
 
-    assert lb.MIN_LIQUIDITY_USD == 5500.0
+    assert lb.MIN_LIQUIDITY_USD >= 4000.0
 
 
 def test_both_active_pockets_import_the_shared_exit_rule():
