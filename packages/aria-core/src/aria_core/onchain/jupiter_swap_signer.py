@@ -35,7 +35,7 @@ from aria_core.onchain.jupiter_swap_simulation import (
     build_swap_transaction,
     simulate_swap_transaction,
 )
-from aria_core.services.jupiter import MAX_SLIPPAGE_BPS
+from aria_core.services.jupiter import MAX_SLIPPAGE_BPS, SOL_MINT
 from aria_core.services.pumpswap_ws import require_solana_rpc_http
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,42 @@ _REAL_MONEY_LOG_PREFIX = "REAL-MONEY solana-swap"
 # is a false positive (same lesson as the EVM leg's receipt check).
 _FINALIZE_TIMEOUT_S = 90.0
 _POLL_INTERVAL_S = 2.0
+
+
+
+# How much SOL a single swap may legitimately move OUT of the wallet.
+#
+# A SOL->token swap spends the quoted input plus fees; a token->SOL swap spends
+# only fees and brings SOL back in. The ceiling therefore covers the quoted
+# input when there is one, plus a fixed allowance for network + priority fees
+# and rent on any account the swap has to create. Generous on purpose: this is
+# a backstop against a transaction that is not the swap we asked for, not a
+# precision accounting of fees.
+_FEE_HEADROOM_LAMPORTS = 30_000_000  # 0.03 SOL, ~6$ -- well above any real fee
+
+
+def _spend_ceiling_lamports(quote: dict, priority_fee_lamports: int | None) -> int:
+    """Upper bound on lamports this swap may take out of the wallet."""
+    quoted_in = 0
+    try:
+        if str(quote.get("inputMint") or "") == SOL_MINT:
+            quoted_in = int(quote.get("inAmount") or 0)
+    except (TypeError, ValueError):
+        quoted_in = 0
+    return quoted_in + _FEE_HEADROOM_LAMPORTS + int(priority_fee_lamports or 0)
+
+
+async def _owner_balance_lamports(
+    pubkey: str, *, rpc_http_url: str | None = None, client: httpx.AsyncClient | None = None,
+) -> int | None:
+    """The wallet's lamport balance, or None when it cannot be read."""
+    try:
+        data = await _rpc("getBalance", [pubkey], rpc_http_url=rpc_http_url, client=client)
+        value = ((data or {}).get("result") or {}).get("value")
+        return None if value is None else int(value)
+    except Exception as exc:  # noqa: BLE001 -- unknown is never zero
+        logger.info("%s: balance read failed (%s)", _REAL_MONEY_LOG_PREFIX, exc)
+        return None
 
 
 class SwapSignerError(RuntimeError):
@@ -250,7 +286,29 @@ async def execute_swap(
         # UNCONDITIONAL pre-flight. There is no parameter to skip this: a swap
         # that fails in simulation would fail on-chain, and paying a fee to
         # discover that is a choice nobody should be able to make by accident.
-        sim = await simulate_swap_transaction(unsigned, rpc_http_url=rpc_http_url, client=client)
+        # 22/08 -- SPEND CEILING. The transaction we are about to sign was built
+        # by JUPITER, not by us: we ask for a quote and sign the calldata they
+        # return. The simulation used to ask only "does it succeed?", so a
+        # transaction that succeeded while draining the wallet would have
+        # passed -- the real bound on a bad swap was the WALLET BALANCE, never
+        # the per-trade cap. Reading the balance first lets the simulation
+        # refuse anything moving more SOL out than this swap can justify.
+        #
+        # Fail-OPEN on an unreadable balance, deliberately: the ceiling is a
+        # second line of defence behind the quote checks, and making a swap
+        # impossible whenever an RPC hiccups would trade a rare risk for a
+        # frequent outage. The gap is logged, never silent.
+        pre_balance = await _owner_balance_lamports(pubkey, rpc_http_url=rpc_http_url, client=client)
+        ceiling = _spend_ceiling_lamports(quote, priority_fee_lamports)
+        if pre_balance is None:
+            logger.warning(
+                "%s: balance unreadable -- signing WITHOUT the spend ceiling", _REAL_MONEY_LOG_PREFIX,
+            )
+        sim = await simulate_swap_transaction(
+            unsigned, rpc_http_url=rpc_http_url, client=client,
+            owner_pubkey=pubkey, max_sol_spend_lamports=ceiling,
+            pre_balance_lamports=pre_balance,
+        )
         if not sim["ok"]:
             logger.warning(
                 "%s: refused before sending -- simulation failed (%s)",

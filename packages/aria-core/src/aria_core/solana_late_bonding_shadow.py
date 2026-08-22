@@ -439,6 +439,8 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # own comment. A count without its observation window measures the
             # listening strategy, not the token.
             ("observation_seconds_at_entry", "REAL"),
+            ("seconds_tracked_at_entry", "REAL"),
+            ("top_buyer_address_at_entry", "TEXT"),
             # Transactions seen at entry. Meaningful only RELATIVE to size --
             # divide by reserve_usd for an intensity comparable across tokens.
             ("trade_count_at_entry", "INTEGER"),
@@ -489,7 +491,8 @@ async def _has_open_signal(db, pool_address: str, chain: str) -> bool:
 
 
 async def screen_candidate(
-    mint: str, pool_address: str, *, trade_stream, curve: dict | None, token_decimals: int | None = None,
+    mint: str, pool_address: str, *, trade_stream, curve: dict | None,
+    token_decimals: int | None = None, curve_tracker=None,
 ) -> tuple[bool, str, dict]:
     """``(accepted, reason, metrics)``. Pure: no DB, no network -- everything
     it needs is already in hand, which is what lets the whole screen run
@@ -536,7 +539,23 @@ async def screen_candidate(
             (time.time() - getattr(flow, "first_trade_at", None))
             if (flow is not None and getattr(flow, "first_trade_at", None)) else None
         ),
+        # 22/08 -- HOW LONG THIS MINT TOOK TO QUALIFY, the strongest signal
+        # found on this pocket so far: closures qualifying in under 60s
+        # returned +29.06% after the outlier test, against +10.53% for those
+        # taking over 180s (282 archived paths).
+        #
+        # Read from the CURVE TRACKER, not from the trade stream. The stream
+        # version above is missing on a quarter of entries, and the ratio built
+        # on it (`sol_velocity`) inverted sign depending on how long we had
+        # been watching -- the duration WAS the signal and dividing by it threw
+        # it away. Every candidate passes through the tracker, so this one is
+        # measurable on all of them.
+        "seconds_tracked": (
+            curve_tracker.seconds_tracked(mint) if curve_tracker is not None else None
+        ),
         "top_buyer_share": flow.top_buyer_share if flow else None,
+        # WHO the concentration belongs to, not just how much (22/08).
+        "top_buyer_address": getattr(flow, "top_buyer_address", None) if flow else None,
         "buyer_acceleration": (
             trade_stream.buyer_acceleration(mint) if trade_stream is not None else None
         ),
@@ -619,7 +638,7 @@ async def consider_candidate(
     http_client: httpx.AsyncClient | None = None, geckoterminal_client=None,
     bonding_ws_feed=None,
     resolve_curves_fn=None, snapshot_fn=None, db_path: str | None = None,
-    execute_fn=None,
+    execute_fn=None, curve_tracker=None,
 ) -> int | None:
     """Screens one mint and, if it passes, records an entry.
     Returns the new row id, or ``None``. Never raises into the caller.
@@ -666,7 +685,8 @@ async def consider_candidate(
         decimals = getattr(account, "token_decimals", None)
 
         accepted, reason, metrics = await screen_candidate(
-            mint, pool_address, trade_stream=trade_stream, curve=curve, token_decimals=decimals,
+            mint, pool_address, trade_stream=trade_stream, curve=curve,
+            token_decimals=decimals, curve_tracker=curve_tracker,
         )
 
         snapshot = None
@@ -773,9 +793,11 @@ async def consider_candidate(
                      founding_exit_ratio_at_entry, founding_bundle_size_at_entry,
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
-                     observation_seconds_at_entry, trade_count_at_entry, buy_count_at_entry,
+                     observation_seconds_at_entry, seconds_tracked_at_entry,
+                     top_buyer_address_at_entry,
+                     trade_count_at_entry, buy_count_at_entry,
                      round_trip_wallets_at_entry, round_trip_share_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -787,6 +809,8 @@ async def consider_candidate(
                     creator, creator_sold, metrics.get("sol_velocity"),
                     metrics.get("sell_pressure"), metrics.get("sell_pressure_slope"),
                     metrics.get("observation_seconds"),
+                    metrics.get("seconds_tracked"),
+                    metrics.get("top_buyer_address"),
                     metrics.get("trade_count"), metrics.get("buy_count"),
                     metrics.get("round_trip_wallets"), metrics.get("round_trip_share"),
                 ),
@@ -1118,6 +1142,12 @@ async def _apply_exit_check(
     await shadow_candle_archive.store_observation(
         module=ARCHIVE_MODULE, position_id=row["id"], pool_address=row["pool_address"],
         chain=chain, price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+        # 22/08 -- the snapshot itself, for its RAW curve fields and its own
+        # timestamp. A live closure showed price -18.4% with the reserve
+        # unchanged to the cent across 425ms, which a bonding curve cannot do:
+        # price comes from the VIRTUAL reserves and reserve_usd from the REAL
+        # ones, and the derived pair cannot say which of the two is wrong.
+        snapshot=snapshot,
     )
 
     age = _minutes_since(row["detected_at"])

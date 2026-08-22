@@ -153,18 +153,29 @@ class TestObservationPath:
 
     @pytest.mark.asyncio
     async def test_a_quiet_position_is_throttled(self):
-        """235 positions at a 2s refresh is ~10M rows/day unthrottled."""
+        """235 positions at a 2s refresh is ~10M rows/day unthrottled.
+
+        Written against the CONFIGURED interval rather than a hard-coded
+        count: the interval is deliberately retuned (15s normally, 3s while
+        diagnosing a gap), and a test that pins the number would fail on a
+        legitimate change instead of catching a broken throttle."""
         from aria_core import shadow_candle_archive as arch
 
+        interval = arch.OBSERVATION_MIN_INTERVAL_SECONDS
+        tick, span = 0.5, interval * 4
         written = 0
-        for tick in range(10):  # 20 seconds of 2s ticks
+        elapsed = 0.0
+        while elapsed <= span:
             written += await arch.store_observation(
                 module="solana_late_bonding", position_id=1, pool_address="pool",
                 chain="solana", price_usd=0.001, reserve_usd=6000.0,
-                now_ts=1000.0 + tick * 2,
+                now_ts=1000.0 + elapsed,
             )
+            elapsed += tick
 
-        assert written == 2, "the first point, then one per interval"
+        # the first point, then one per elapsed interval -- never one per tick
+        assert written <= 6, "a still position must not write on every tick"
+        assert written >= 2, "the throttle must still let time-spaced points through"
 
     @pytest.mark.asyncio
     async def test_a_collapsing_reserve_is_never_throttled_away(self):
@@ -220,3 +231,81 @@ class TestObservationPath:
             module="solana_late_bonding", position_id=1, pool_address="pool",
             chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1.0,
         ) == 0
+
+
+class TestRawCurveFieldsAreArchived:
+    """22/08 -- a live closure showed price -18.4% with the reserve unchanged
+    to the cent across 425ms. A bonding curve cannot do that: the price comes
+    from the VIRTUAL reserves and `reserve_usd` from the REAL ones, so one of
+    the two readings is wrong and the derived pair cannot say which.
+
+    Two closures out of 32 show it, which is far too few to conclude on --
+    hence archiving the inputs rather than arguing about the outputs."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, tmp_path, monkeypatch):
+        from aria_core import shadow_candle_archive as arch
+
+        monkeypatch.setattr(arch, "DB_PATH", str(tmp_path / "shadow.db"))
+        arch._ensured_db_paths.clear()
+        arch._last_observation.clear()
+
+    @pytest.mark.asyncio
+    async def test_the_raw_fields_and_timestamp_are_kept(self):
+        from aria_core import shadow_candle_archive as arch
+
+        class Snap:
+            virtual_quote_raw = 1_234_567
+            virtual_token_raw = 890_123_456
+            real_quote_raw = 42_000
+            updated_at = 1700.5
+            stale = False
+
+        await arch.store_observation(
+            module="solana_late_bonding", position_id=1, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+            snapshot=Snap(),
+        )
+        rows = await arch.get_candles(module="solana_late_bonding", position_id=1)
+
+        assert rows[0]["virtual_quote_raw"] == 1_234_567
+        assert rows[0]["virtual_token_raw"] == 890_123_456
+        assert rows[0]["real_quote_raw"] == 42_000
+        assert rows[0]["snapshot_updated_at"] == 1700.5
+        assert rows[0]["snapshot_stale"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_stale_reading_is_flagged(self):
+        """Distinguishing "actively updating" from "confirmed unchanged" is the
+        whole point: a stale price paired with a fresh reserve would explain
+        the impossible pair directly."""
+        from aria_core import shadow_candle_archive as arch
+
+        class StaleSnap:
+            virtual_quote_raw = 1
+            virtual_token_raw = 2
+            real_quote_raw = 3
+            updated_at = 1700.5
+            stale = True
+
+        await arch.store_observation(
+            module="solana_late_bonding", position_id=2, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+            snapshot=StaleSnap(),
+        )
+        rows = await arch.get_candles(module="solana_late_bonding", position_id=2)
+
+        assert rows[0]["snapshot_stale"] == 1
+
+    @pytest.mark.asyncio
+    async def test_archiving_still_works_without_a_snapshot(self):
+        """Every other pocket calls this without one. A diagnostic addition
+        must never become a requirement for the callers that predate it."""
+        from aria_core import shadow_candle_archive as arch
+
+        assert await arch.store_observation(
+            module="solana_late_bonding", position_id=3, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+        ) == 1
+        rows = await arch.get_candles(module="solana_late_bonding", position_id=3)
+        assert rows[0]["virtual_quote_raw"] is None

@@ -86,7 +86,11 @@ async def test_a_failing_simulation_blocks_the_send_entirely(key_file, monkeypat
     async def _build(_q, _pub, client=None, **_kw):
         return base64.b64encode(b"tx").decode()
 
-    async def _sim(_tx, rpc_http_url=None, client=None):
+    # **kwargs so the mock survives the signer passing the spend-ceiling
+    # arguments added 22/08 (owner_pubkey/max_sol_spend_lamports/
+    # pre_balance_lamports) -- this test is about a FAILING simulation
+    # blocking the send, not about the ceiling.
+    async def _sim(_tx, rpc_http_url=None, client=None, **kwargs):
         return {"ok": False, "error": {"InstructionError": [0, "Custom"]},
                 "compute_units": 10, "logs": []}
 
@@ -105,7 +109,12 @@ async def test_a_failing_simulation_blocks_the_send_entirely(key_file, monkeypat
 
     assert out["status"] == "failed"
     assert out["reason"] == "simulation_failed"
-    assert sent == [], "nothing may be sent once the simulation failed"
+    # Reads are fine and expected (the spend ceiling reads the balance BEFORE
+    # simulating); what must never happen is a transaction leaving.
+    assert "sendTransaction" not in sent, "nothing may be sent once the simulation failed"
+    assert sent == ["getBalance"], (
+        f"only the pre-simulation balance read is allowed here, got {sent}"
+    )
 
 
 @pytest.mark.asyncio

@@ -428,3 +428,65 @@ def test_a_single_provider_still_works_alone(monkeypatch):
     t.add("m", "p")
     asyncio.run(t.poll_due(http_client=None, now=10_000.0))
     assert t._endpoints[0].calls == 1
+
+
+class TestTimeToQualify:
+    """22/08 -- the strongest signal measured on the late-bonding pocket:
+    closures that qualified in under 60s returned +29.06% after the outlier
+    test, against +10.53% for those taking over 180s (282 archived paths).
+
+    Recorded here rather than derived from the trade stream, whose own
+    divide-by-duration metric (`sol_velocity`) inverted sign depending on how
+    long we had been watching -- the duration WAS the signal and the ratio
+    threw it away. Every candidate passes through this tracker."""
+
+    def test_a_tracked_mint_reports_how_long_it_has_been_followed(self):
+        from aria_core.services.pumpfun_curve_tracker import PumpFunCurveTracker
+
+        tracker = PumpFunCurveTracker()
+        tracker.add("mint1", "pool1")
+        entry = tracker._tracked["mint1"]
+
+        assert tracker.seconds_tracked("mint1", now=entry.first_seen_at + 45.0) == 45.0
+
+    def test_an_unknown_mint_is_unknown_never_instant(self):
+        """0.0 would read as "qualified instantly", the most flattering
+        possible value for the strongest signal we have."""
+        from aria_core.services.pumpfun_curve_tracker import PumpFunCurveTracker
+
+        assert PumpFunCurveTracker().seconds_tracked("never-seen") is None
+
+    def test_re_adding_a_tracked_mint_does_not_reset_its_age(self):
+        """`add` is called repeatedly from the creation feed. Resetting on each
+        call would make every long-running token look brand new."""
+        from aria_core.services.pumpfun_curve_tracker import PumpFunCurveTracker
+
+        tracker = PumpFunCurveTracker()
+        tracker.add("mint1", "pool1")
+        first = tracker._tracked["mint1"].first_seen_at
+
+        tracker.add("mint1", "pool1")
+
+        assert tracker._tracked["mint1"].first_seen_at == first
+
+    def test_the_age_survives_a_restart(self, tmp_path):
+        """Without this, every restart resets every mint to "just seen" --
+        flattering precisely the signal being measured."""
+        import time
+
+        from aria_core.services.pumpfun_curve_tracker import PumpFunCurveTracker
+
+        path = str(tmp_path / "state.json")
+        saved = PumpFunCurveTracker()
+        saved.add("mint1", "pool1")
+        saved._tracked["mint1"].first_seen_at = time.monotonic() - 300.0
+        saved._tracked["mint1"].progress = 0.5
+        saved.save_state(path)
+
+        restored = PumpFunCurveTracker()
+        assert restored.load_state(path) == 1
+
+        age = restored.seconds_tracked("mint1")
+        assert age is not None and age >= 300.0, (
+            f"a mint tracked for 300s must not come back younger (got {age})"
+        )

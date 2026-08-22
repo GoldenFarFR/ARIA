@@ -151,3 +151,88 @@ async def test_our_derived_fields_are_stripped_before_the_build():
     assert "price_impact_pct" not in sent
     assert "slippage_bps_used" not in sent
     assert sent["inputMint"] == "a"
+
+
+class TestSpendCeiling:
+    """22/08, from GoPlus alert #191 (550k$ lost to a malicious approval).
+
+    The transaction we sign is BUILT BY JUPITER: we ask for a quote, they
+    return calldata, we sign it. The simulation only asked "does it succeed?",
+    so a transaction that succeeded perfectly while draining the wallet would
+    have passed -- the real bound on a bad swap was the WALLET BALANCE, never
+    the 0.10$ per-trade cap. Not a claim that Jupiter is hostile; a claim that
+    our safety should not depend on it not being."""
+
+    @pytest.mark.asyncio
+    async def test_a_swap_within_its_ceiling_is_accepted(self, monkeypatch):
+        from aria_core.onchain import jupiter_swap_simulation as sim
+
+        async def fake_call(method, params, **kwargs):
+            return {"result": {"value": {
+                "err": None, "unitsConsumed": 120_000, "logs": [],
+                "accounts": [{"lamports": 900_000}],
+            }}}
+
+        monkeypatch.setattr("aria_core.services.solana_gateway.call", fake_call)
+
+        out = await sim.simulate_swap_transaction(
+            "b64", owner_pubkey="owner",
+            max_sol_spend_lamports=200_000, pre_balance_lamports=1_000_000,
+        )
+
+        assert out["ok"] is True
+        assert out["sol_delta_lamports"] == -100_000
+
+    @pytest.mark.asyncio
+    async def test_a_transaction_that_drains_the_wallet_is_refused(self, monkeypatch):
+        """The exact scenario: it SUCCEEDS in simulation, and takes everything."""
+        from aria_core.onchain import jupiter_swap_simulation as sim
+
+        async def fake_call(method, params, **kwargs):
+            return {"result": {"value": {
+                "err": None, "unitsConsumed": 120_000, "logs": [],
+                "accounts": [{"lamports": 0}],
+            }}}
+
+        monkeypatch.setattr("aria_core.services.solana_gateway.call", fake_call)
+
+        with pytest.raises(sim.SwapSimulationError, match="refusing to sign"):
+            await sim.simulate_swap_transaction(
+                "b64", owner_pubkey="owner",
+                max_sol_spend_lamports=200_000, pre_balance_lamports=50_000_000,
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_balance_disables_the_ceiling_rather_than_faking_it(self, monkeypatch):
+        """None must never read as 0: "nothing moved" would silently disable
+        the ceiling, which is the failure mode this check exists to remove."""
+        from aria_core.onchain import jupiter_swap_simulation as sim
+
+        async def fake_call(method, params, **kwargs):
+            return {"result": {"value": {
+                "err": None, "unitsConsumed": 120_000, "logs": [], "accounts": [None],
+            }}}
+
+        monkeypatch.setattr("aria_core.services.solana_gateway.call", fake_call)
+
+        out = await sim.simulate_swap_transaction(
+            "b64", owner_pubkey="owner",
+            max_sol_spend_lamports=1, pre_balance_lamports=50_000_000,
+        )
+
+        assert out["sol_delta_lamports"] is None, "unknown stays unknown"
+
+    @pytest.mark.asyncio
+    async def test_callers_without_the_new_arguments_are_unaffected(self, monkeypatch):
+        """Every pocket that simulates without a ceiling must keep working."""
+        from aria_core.onchain import jupiter_swap_simulation as sim
+
+        async def fake_call(method, params, **kwargs):
+            assert "accounts" not in params[1], "no owner, no balance request"
+            return {"result": {"value": {"err": None, "unitsConsumed": 1_000, "logs": []}}}
+
+        monkeypatch.setattr("aria_core.services.solana_gateway.call", fake_call)
+
+        out = await sim.simulate_swap_transaction("b64")
+
+        assert out["ok"] is True and out["sol_delta_lamports"] is None

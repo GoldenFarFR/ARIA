@@ -137,6 +137,13 @@ class TokenTradeFlow:
     #   sell_pressure    : more sellers than buyers means the exit has already
     #                      started, whatever the buy count says
     top_buyer_sol: float = 0.0
+    # 22/08, operator's catch ("attention au addresse de contrat qui detienne
+    # le token"): `top_buyer_share` says HOW concentrated the buy volume is,
+    # never WHO holds it. A wallet taking 85% of the volume is a real dump
+    # risk; a router or aggregator taking the same share is not a risk at all.
+    # The address was already computed and thrown away by `max(values())` --
+    # keeping it is what makes the two cases separable.
+    top_buyer_address: str | None = None
 
     @property
     def top_buyer_share(self) -> float | None:
@@ -394,6 +401,10 @@ class PumpFunTradeStream:
             buy_count=st.buy_count, sell_count=st.sell_count,
             buy_sol_volume=round(st.buy_sol_volume, 6),
             top_buyer_sol=round(max(st.buy_sol_by_wallet.values()), 6) if st.buy_sol_by_wallet else 0.0,
+            top_buyer_address=(
+                max(st.buy_sol_by_wallet, key=st.buy_sol_by_wallet.get)
+                if st.buy_sol_by_wallet else None
+            ),
             first_trade_at=st.first_trade_at, last_trade_at=st.last_trade_at,
         )
 

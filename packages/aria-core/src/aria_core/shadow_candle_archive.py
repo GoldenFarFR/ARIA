@@ -109,6 +109,19 @@ async def _ensure_table() -> None:
         existing = {r[1] for r in await db.execute_fetchall(f"PRAGMA table_info({TABLE})")}
         if "reserve_usd" not in existing:
             await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN reserve_usd REAL")
+        # 22/08 -- raw curve fields + the snapshot's own timestamp, for ONE
+        # question the derived values cannot answer: a live closure showed
+        # price -18.4% with reserve unchanged to the cent across 425ms, which a
+        # bonding curve cannot do. Same timestamp on both reads means one price
+        # is miscomputed; different timestamps mean the price really moved and
+        # the reserve reading is the stale one.
+        for column, kind in (("virtual_quote_raw", "INTEGER"),
+                             ("virtual_token_raw", "INTEGER"),
+                             ("real_quote_raw", "INTEGER"),
+                             ("snapshot_updated_at", "REAL"),
+                             ("snapshot_stale", "INTEGER")):
+            if column not in existing:
+                await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN {column} {kind}")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -168,8 +181,18 @@ async def store_candles(
 # reconstructing a price path. At 15s, a typical 50-600s position leaves 3-40
 # points, i.e. a few tens of thousands of rows/day -- enough to see the shape of
 # a collapse, small enough to keep.
-OBSERVATION_MIN_INTERVAL_SECONDS = 15.0
-OBSERVATION_RESERVE_MOVE_PCT = 3.0
+# 22/08 -- TEMPORARILY TIGHTENED (15s/3% -> 3s/1%) to settle one question the
+# coarse setting cannot answer: when a stop set at -5% fills at -39.5%, did the
+# price WALK down past -5% unobserved, or did it jump in a single transaction?
+# On the one archived case the price went +0.5% -> -39.5% in 7s with NO
+# intermediate point, but at a 3% capture threshold that is also what a fast
+# walk would look like. At 1% a walk leaves a trail and a jump does not.
+#
+# This is the dome's standing "accelerated cadence on a new mechanism" rule:
+# revert to 15s/3% once the question is settled -- the tight setting is roughly
+# 5x the rows and is not meant to run indefinitely.
+OBSERVATION_MIN_INTERVAL_SECONDS = 3.0
+OBSERVATION_RESERVE_MOVE_PCT = 1.0
 
 # position_id -> (last archived unix ts, last archived reserve)
 _last_observation: dict[tuple[str, int], tuple[float, float | None]] = {}
@@ -206,6 +229,7 @@ async def store_observation(
     reserve_usd: float | None,
     phase: str = "after",
     now_ts: float | None = None,
+    snapshot=None,
 ) -> int:
     """Archives ONE point of a position's path: price and pool reserve at a time.
 
@@ -238,13 +262,20 @@ async def store_observation(
                 f"""
                 INSERT OR IGNORE INTO {TABLE} (
                     module, position_id, pool_address, chain, phase,
-                    candle_ts, open, high, low, close, volume, reserve_usd, recorded_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    candle_ts, open, high, low, close, volume, reserve_usd, recorded_at,
+                    virtual_quote_raw, virtual_token_raw, real_quote_raw,
+                    snapshot_updated_at, snapshot_stale
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     module, position_id, pool_address, chain, phase, int(now_ts),
                     float(price_usd), float(price_usd), float(price_usd), float(price_usd),
                     0.0, reserve_usd, datetime.now(timezone.utc).isoformat(),
+                    getattr(snapshot, "virtual_quote_raw", None),
+                    getattr(snapshot, "virtual_token_raw", None),
+                    getattr(snapshot, "real_quote_raw", None),
+                    getattr(snapshot, "updated_at", None),
+                    1 if getattr(snapshot, "stale", False) else 0,
                 ),
             )
             await db.commit()

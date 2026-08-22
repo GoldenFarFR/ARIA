@@ -188,6 +188,20 @@ class TrackedMint:
     last_polled_at: float = 0.0
     last_change_at: float = field(default_factory=time.monotonic)
     decimals: int | None = None
+    # 22/08 -- when this mint entered the tracker, i.e. when it appeared on
+    # PumpPortal's creation feed. The gap between this and the moment the mint
+    # qualifies is HOW FAST IT CLIMBED, which is the strongest predictor found
+    # so far on the late-bonding pocket: closures that qualified in under 60s
+    # returned +29.06% after the outlier test against +10.53% for those taking
+    # over 180s, measured on 282 archived paths.
+    #
+    # Recorded HERE rather than derived from the trade stream, which is what
+    # the previous attempt did: that source is missing on a quarter of entries,
+    # and its own divide-by-duration metric (`sol_velocity`) turned out to
+    # INVERT sign depending on how long we had been watching -- the duration
+    # was the signal, the ratio was hiding it. Every candidate passes through
+    # this tracker, so this covers all of them.
+    first_seen_at: float = field(default_factory=time.monotonic)
 
 
 def decode_curve_progress(raw: bytes, decimals: int) -> float | None:
@@ -270,6 +284,17 @@ class PumpFunCurveTracker:
 
     def tracked_count(self) -> int:
         return len(self._tracked)
+
+    def seconds_tracked(self, mint: str, *, now: float | None = None) -> float | None:
+        """How long this mint has been followed, i.e. how long it took to climb.
+
+        `None` for a mint we do not track -- never 0.0, which would read as
+        "qualified instantly" and be the most flattering possible value for the
+        strongest signal we have. An unknown duration must never look fast."""
+        entry = self._tracked.get(mint)
+        if entry is None:
+            return None
+        return max(0.0, (time.monotonic() if now is None else now) - entry.first_seen_at)
 
     def progress_of(self, mint: str) -> float | None:
         entry = self._tracked.get(mint)
@@ -382,6 +407,11 @@ class PumpFunCurveTracker:
                 "progress": e.progress,
                 # Seconds of staleness, resolved back against wall clock on load.
                 "idle_for": max(0.0, now_mono - e.last_change_at),
+                # How long it had already been tracked when we saved. Without
+                # this a restart resets every mint to "just seen", which would
+                # make every candidate look like it qualified instantly --
+                # flattering exactly the signal we are trying to measure.
+                "tracked_for": max(0.0, now_mono - e.first_seen_at),
                 "saved_at": wall,
                 "decimals": e.decimals,
             }
@@ -432,6 +462,10 @@ class PumpFunCurveTracker:
             if idle > STALE_AFTER_SECONDS:
                 continue
             entry = TrackedMint(mint=mint, pool_address=pool)
+            # Carry the age across the restart, downtime included.
+            entry.first_seen_at = now_mono - (
+                float(row.get("tracked_for") or 0.0) + downtime
+            )
             entry.progress = row.get("progress")
             entry.decimals = row.get("decimals")
             # Rebased onto this process's monotonic clock, preserving how long

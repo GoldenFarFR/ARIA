@@ -1383,6 +1383,34 @@ def test_the_two_active_pockets_share_the_same_exit_guardrails():
         assert not missing, f"{name} is missing: {missing}"
 
 
+def test_the_real_swap_signer_always_passes_a_spend_ceiling():
+    """22/08, from GoPlus alert #191 (550k$ lost to a malicious approval).
+
+    The transaction signed on the real-money path is BUILT BY JUPITER: we ask
+    for a quote, they return calldata, we sign it. The simulation used to check
+    only that it SUCCEEDS, so a transaction succeeding while draining the
+    wallet would have passed -- the real bound on a bad swap was the wallet
+    BALANCE, never the per-trade cap.
+
+    Checked as source text because this is a CALL-SITE guarantee: the ceiling
+    lives in `simulate_swap_transaction` and does nothing unless the signer
+    passes the owner, the balance and the cap. All three arguments are optional
+    so other callers keep working, which is exactly why this must be pinned --
+    dropping them would silently restore the old behaviour with every test
+    still green."""
+    import inspect
+
+    from aria_core.onchain import jupiter_swap_signer as signer
+
+    src = inspect.getsource(signer)
+    for needed, why in (
+        ("owner_pubkey=pubkey", "the account whose balance is bounded"),
+        ("max_sol_spend_lamports=ceiling", "the ceiling itself"),
+        ("pre_balance_lamports=pre_balance", "the before-balance the delta needs"),
+    ):
+        assert needed in src, f"the real swap path must pass {needed} ({why})"
+
+
 def test_late_bonding_archives_the_path_it_trades():
     """18/08 standing convention ("je veut les bougies avant et apres le point
     dachat a chaque futur shadow"), which this pocket alone never honoured --

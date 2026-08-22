@@ -272,6 +272,17 @@ class PumpFunBondingLiveSnapshot:
     # the account), but a caller wanting to distinguish "actively updating"
     # from "confirmed unchanged" can check this instead of re-deriving it.
     stale: bool = False
+    # 22/08 -- RAW curve fields, exposed for diagnosis only.
+    #
+    # `price_usd` is derived from the VIRTUAL reserves and `reserve_usd` from
+    # the REAL ones. On a bonding curve a trade moves both together, yet a live
+    # closure showed price -18.4% with reserve unchanged to the cent across
+    # 425ms -- physically impossible, so one of the two readings is wrong and
+    # the derived values alone cannot say which. Carrying the raw fields makes
+    # the question answerable instead of arguable.
+    virtual_quote_raw: int | None = None
+    virtual_token_raw: int | None = None
+    real_quote_raw: int | None = None
 
 
 def derive_bonding_curve_address(mint: str) -> str | None:
@@ -634,6 +645,11 @@ class PumpFunBondingWebSocketFeed:
         # pumpswap_ws.py/solana_pump_shadow.py -- real_quote_reserves is the
         # actual SOL depositors put in (never the virtual offset).
         reserve_usd = 2.0 * real_quote_norm * self._sol_usd
+        raw_fields = {
+            "virtual_quote_raw": virtual_quote,
+            "virtual_token_raw": virtual_token,
+            "real_quote_raw": state["real_quote_reserves"],
+        }
 
         # High/low since the caller's last read (see PumpFunBondingLiveSnapshot's
         # own docstring) -- fall back to the current price if nothing was
@@ -660,6 +676,7 @@ class PumpFunBondingWebSocketFeed:
                 time.time() - self._first_seen_at[pool_address]
                 if pool_address in self._first_seen_at else None
             ),
+            **raw_fields,
         )
 
     # --- background loop --------------------------------------------------
