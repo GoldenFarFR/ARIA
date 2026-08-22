@@ -143,6 +143,9 @@ async def get_balance_usd(*, client: httpx.AsyncClient | None = None) -> float |
 # cancelled, a sell that never landed REOPENS the position so the exit rule
 # retries. Without that reconciliation running, these must go back to
 # COMMITMENT_CONFIRMED.
+# How many fresh-quote attempts a sell gets before giving up for this pass.
+_SELL_RETRY_ATTEMPTS = 3
+
 BUY_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
 SELL_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
 
@@ -401,11 +404,35 @@ async def execute_real_sell(mint: str, fraction: float, *, chain: str = "solana"
     if units <= 0:
         return None
 
-    try:
-        return await _swap_out(
-            mint=mint, amount_units=units,
-            slippage_bps=solana_trade_pilot.MAX_SLIPPAGE_BPS,
-        )
-    except Exception as exc:  # noqa: BLE001 -- a failed sell is not a closure
-        logger.warning("solana_agent_wallet: real sell failed for %s (%s)", mint, exc)
-        return None
+    # A sell that fails on slippage (Jupiter 0x1771 / 6001) means the price
+    # moved more than 10% between the quote and execution -- routine on a
+    # collapsing curve. Raising the ceiling is not an option: 10% is an
+    # absolute project rule. The answer is a FRESH quote immediately, not the
+    # same stale one, and not a retry one full loop later while the token
+    # keeps falling.
+    #
+    # Bounded at three attempts: past that the market is moving faster than we
+    # can quote it, and the exit rule will try again on its next pass anyway.
+    last_error: Exception | None = None
+    for attempt in range(_SELL_RETRY_ATTEMPTS):
+        if attempt:
+            # Re-read the balance too: a partial fill would make the old
+            # amount wrong, and selling more than is held fails differently.
+            held = await token_balance(mint)
+            if not held:
+                return None
+            units = held if fraction >= 1.0 else int(held * fraction)
+            if units <= 0:
+                return None
+        try:
+            return await _swap_out(
+                mint=mint, amount_units=units,
+                slippage_bps=solana_trade_pilot.MAX_SLIPPAGE_BPS,
+            )
+        except Exception as exc:  # noqa: BLE001 -- a failed sell is not a closure
+            last_error = exc
+    logger.warning(
+        "solana_agent_wallet: real sell failed for %s after %d attempts (%s)",
+        mint, _SELL_RETRY_ATTEMPTS, last_error,
+    )
+    return None
