@@ -436,7 +436,7 @@
         "why": "21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed because a curve past 90% can COMPLETE mid-position and migrate its liquidity to the AMM -- treated as a risk to avoid. The data says that is the single BEST outcome available: stayed on the curve   n=620  winrate 32.6%  PnL  -15.93% MIGRATED to PumpSwap  n= 54  winrate 87.0%  PnL +161.42% and the migrated figure survives the outlier test intact (+138.5% without its two best, 47 winners of 54). Graduation is also PREDICTABLE from entry position, monotonically: 40-60%: 2.0%   60-70%: 2.5%   70-80%: 8.3%   80-90%: 24.5%   90-95%: 50.0% So the ceiling was excluding exactly the band with the highest chance of the best outcome. Kept just below 1.0 rather than removed: at a fully complete curve there is no bonding liquidity left to enter against at all."
       },
       "MAX_CONCURRENT_TRACKED": {
-        "line": 307,
+        "line": 311,
         "value": 60,
         "why": "20/08 -- raised with the widened band. The REAL constraint is the exit loop: more open positions means each one is checked less often, which is exactly what caused the late liquidity_collapse catches fixed earlier today (first check landing 32-116s after entry despite a 10s cadence). The exit sweep's own `limit` is raised in step below so widening collection cannot quietly re-create that failure."
       },
@@ -482,6 +482,11 @@
         "line": 283,
         "value": 50,
         "why": "How many of the most recent closures the 'recent' summary covers."
+      },
+      "RECONCILE_WINDOW_MINUTES": {
+        "line": 303,
+        "value": 30.0,
+        "why": "How far back reconciliation looks. Long enough to catch a swap that took several slots to land, short enough that an old row can never resurrect."
       },
       "REENTRY_COOLDOWN_MINUTES": {
         "line": 170,
