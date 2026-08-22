@@ -1,6 +1,7 @@
 """Real Jupiter swap, proven against mainnet state without sending it."""
 from __future__ import annotations
 
+from unittest import mock
 import base64
 
 import httpx
@@ -236,3 +237,84 @@ class TestSpendCeiling:
         out = await sim.simulate_swap_transaction("b64")
 
         assert out["ok"] is True and out["sol_delta_lamports"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_priority_fee_tracks_the_configured_percentile_and_bounds():
+    """The fee follows the network, bounded on both sides.
+
+    22/08 -- raised to the 90th percentile with a 50_000 lamport ceiling. The
+    bet is asymmetric and deliberately so: on the late-bonding pocket a gap
+    between decision and fill costs 25 points on the WINNERS, while 50_000
+    lamports is 0.0047$ -- about 0.24% of a 2$ trade.
+
+    Both bounds are asserted, not just the new one: the ceiling exists so a
+    congestion spike can never quietly drain the wallet through fees, and the
+    floor exists because paying nothing buys nothing.
+    """
+    import aria_core.onchain.jupiter_swap_simulation as sim
+
+    async def _fees(values):
+        sim._priority_fee_cache = None
+        payload = {"result": [{"prioritizationFee": v} for v in values]}
+
+        async def _call(_method, _params, **_kw):
+            return payload
+
+        with mock.patch("aria_core.services.solana_gateway.call", _call):
+            return await sim.recent_priority_fee(rpc_http_url="http://rpc.invalid")
+
+    # a calm field: the 90th percentile of 1..100 sits well inside the bounds
+    calm = await _fees(list(range(1, 101)) )
+    assert sim.PRIORITY_FEE_FLOOR_LAMPORTS <= calm <= sim.PRIORITY_FEE_CEILING_LAMPORTS
+
+    # a congestion spike must be CLAMPED, never followed
+    spike = await _fees([10_000_000] * 50)
+    assert spike == sim.PRIORITY_FEE_CEILING_LAMPORTS, (
+        "a fee spike must be capped -- latency is never worth draining the wallet"
+    )
+
+    # a field paying nothing still pays the floor
+    quiet = await _fees([0] * 50)
+    assert quiet == sim.PRIORITY_FEE_FLOOR_LAMPORTS
+
+    sim._priority_fee_cache = None
+
+
+@pytest.mark.asyncio
+async def test_the_swap_asks_jupiter_to_price_the_fee_under_our_ceiling():
+    """Jupiter prices the local fee market; we keep the hard cap.
+
+    22/08 -- replaces a hand-rolled percentile that also carried a real unit
+    bug: `getRecentPrioritizationFees` returns MICRO-lamports per compute
+    unit, while a bare `prioritizationFeeLamports` integer means total
+    LAMPORTS, and the two were used interchangeably. Jupiter knows the compute
+    budget of the transaction it just built; we do not.
+
+    Asserted here rather than trusted: a regression that silently drops the
+    cap would only surface as a drained wallet during a congestion spike.
+    """
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"swapTransaction": base64.b64encode(b"tx").decode()}
+
+    class _Client:
+        async def post(self, _url, json=None):
+            captured.update(json or {})
+            return _Resp()
+        async def aclose(self): pass
+
+    await sim.build_swap_transaction(
+        {"inAmount": "1000"}, "ownerPubkey", client=_Client(),
+        priority_fee_lamports=sim.PRIORITY_FEE_CEILING_LAMPORTS,
+    )
+    fee = captured.get("prioritizationFeeLamports")
+    assert isinstance(fee, dict), "a bare integer would be read as total lamports"
+    inner = fee["priorityLevelWithMaxLamports"]
+    assert inner["priorityLevel"] == sim.PRIORITY_LEVEL
+    assert inner["maxLamports"] == sim.PRIORITY_FEE_CEILING_LAMPORTS, (
+        "the ceiling must reach Jupiter -- it is the only thing bounding the spend"
+    )

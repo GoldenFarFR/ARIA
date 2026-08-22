@@ -190,3 +190,13 @@ est vert.
   archivé à 8-16.
 - **Seuil de décision** : ~1 coureur sur 5 (20 %) rend un trailing large rentable.
 - **Premier relevé** : 0/20, à reconfirmer au-delà de 200 clôtures.
+- **Second volet (22/08, idée opérateur)** : la VITESSE DE QUALIFICATION, mesurée
+  depuis l'apparition du mint sur le flux de création PumpPortal — jamais depuis
+  le premier trade observé, dont le code déclare lui-même la métrique
+  inutilisable pour un seuil absolu (un mint repéré tard paraît plus rapide
+  qu'il ne l'était). Premier signal, sur 113 clôtures et un seul jour :
+  qualification en moins de 60 s → +24,07 % (sans top 5), au-delà de 180 s →
+  −13,08 %, monotone entre les deux. Contrôle croisé cohérent : les 100
+  meilleurs se qualifient en 81 s de médiane contre 154 s pour les 100 pires.
+  **Pas encore validé** : un seul jour distinct, et l'échantillon est trop
+  petit pour que « 100 meilleurs » et « 100 pires » ne se recouvrent pas.

@@ -70,7 +70,26 @@ class SwapSimulationError(RuntimeError):
 # spending a tenth of the position, and a congestion spike must never silently
 # drain the wallet through fees.
 PRIORITY_FEE_FLOOR_LAMPORTS = 5_000
-PRIORITY_FEE_CEILING_LAMPORTS = 20_000
+# 22/08 -- ceiling raised 20_000 -> 50_000, percentile 75 -> 90, on the
+# operator's explicit go. The asymmetry is measured, not assumed: on the
+# late-bonding pocket a gap between the decision and the fill costs 25 points
+# on the WINNERS (trailing exits average +61.2% without a gap against +36.1%
+# with one, n=486 vs 393), while 50_000 lamports is 0.0047$ -- 0.24% of a 2$
+# trade. Roughly one to a hundred.
+#
+# Stated plainly because it cannot be simulated: shadow "gaps" are an
+# OBSERVATION artefact (price crossed the stop between two reads, no
+# transaction involved), so no replay can show what this buys. Priority fees
+# only act on the REAL leg, between signing and inclusion. This is a
+# deliberate asymmetric bet on a cheap downside, not a measured return.
+PRIORITY_FEE_CEILING_LAMPORTS = 100_000
+# Jupiter's own priority tier. "high" sits between "medium" and "veryHigh";
+# the ceiling above is what actually bounds the spend, this only says how
+# aggressively Jupiter bids INSIDE that bound.
+PRIORITY_LEVEL = "high"
+# The percentile of recent blocks to match. 90th rather than 75th: on a pocket
+# that exits within seconds, being one block late IS the loss.
+PRIORITY_FEE_PERCENTILE = 0.90
 _PRIORITY_FEE_TTL_SECONDS = 120.0
 _priority_fee_cache: tuple[float, int] | None = None
 
@@ -80,9 +99,8 @@ async def recent_priority_fee(
 ) -> int:
     """What to pay right now, from the network's own recent fees.
 
-    Takes the 75th percentile of recent blocks -- enough to be ahead of the
-    field without bidding against the top of it -- then clamps to the bounds
-    above. Falls back to the floor when the RPC cannot be read: unknown
+    Takes ``PRIORITY_FEE_PERCENTILE`` of recent blocks, then clamps to the
+    bounds above. Falls back to the floor when the RPC cannot be read: unknown
     congestion is not a reason to overpay.
     """
     import time
@@ -108,7 +126,8 @@ async def recent_priority_fee(
             for f in ((payload or {}).get("result") or [])
         )
         if values:
-            observed = values[int(len(values) * 0.75)]
+            idx = min(int(len(values) * PRIORITY_FEE_PERCENTILE), len(values) - 1)
+            observed = values[idx]
             fee = max(PRIORITY_FEE_FLOOR_LAMPORTS,
                       min(observed, PRIORITY_FEE_CEILING_LAMPORTS))
     except Exception as exc:  # noqa: BLE001 -- unknown congestion, pay the floor
@@ -154,7 +173,30 @@ async def build_swap_transaction(
         "wrapAndUnwrapSol": True,
     }
     if priority_fee_lamports:
-        payload["prioritizationFeeLamports"] = int(priority_fee_lamports)
+        # 22/08 -- Jupiter's OWN fee estimator, capped by us, replacing a
+        # hand-rolled percentile that also carried a unit bug:
+        # `getRecentPrioritizationFees` returns MICRO-lamports per compute
+        # unit, while `prioritizationFeeLamports` as a bare integer means
+        # total LAMPORTS. The two were being used interchangeably.
+        #
+        # `priorityLevelWithMaxLamports` fixes both problems at once: Jupiter
+        # prices the LOCAL fee market for this exact route (it knows the
+        # compute budget of the transaction it just built, we do not), and
+        # `maxLamports` keeps the hard ceiling on our side so a congestion
+        # spike can never drain the wallet through fees.
+        #
+        # Level "high" rather than "medium" on the operator's ask, sharpened
+        # by his own point: in euphoria everyone bids up, and a pocket whose
+        # positions live SECONDS loses the whole trade by being one block
+        # late. The measured asymmetry backs it -- a gap between decision and
+        # fill costs 25 points on the winners, the ceiling costs 0.47% of a
+        # 2$ trade.
+        payload["prioritizationFeeLamports"] = {
+            "priorityLevelWithMaxLamports": {
+                "priorityLevel": PRIORITY_LEVEL,
+                "maxLamports": int(priority_fee_lamports),
+            }
+        }
     owns = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
     try:
