@@ -117,17 +117,30 @@ MIN_ROWS_PER_DAY = 15
 # is worse than not checking, because it carries a verdict.
 MIN_DISTINCT_DAYS = 2
 
-# Values no real pool or trade can produce. Their presence means the pocket's
-# own recording is broken, and a sweep over broken data produces a confident
-# answer about nothing -- the most dangerous output this module could have.
+# A return no trade can really produce. SUPPORT-BOUNCE v1/v2 hold four
+# multipliers around x5794, and the cause is documented in the pocket's own
+# source: on 19/08 a corrupted upstream price (7.38$ against a real 0.003415$,
+# confirmed against DexScreener) was baked permanently into `peak_price`, which
+# never decreases, and from there into the trailing-stop fill price. Four rows
+# out of 321 moved that pocket's average to +6568%.
 #
-# Both ceilings come from defects seen live on 22/08: FRESH-LAUNCH holds five
-# reserves between 1M$ and 1.485 BILLION dollars on freshly launched tokens,
-# and SUPPORT-BOUNCE v1/v2 hold four multipliers around +500,000% -- the same
-# raw-units/decimals confusion that priced a token at 1.6e-11 instead of
-# 1.6e-5 on the real-money path the night before.
-IMPLAUSIBLE_RESERVE_USD = 1_000_000.0
+# The pocket was fixed the same day (`PEAK_PRICE_SANITY_MULTIPLE`, 19/08 06:12);
+# all four bad rows were detected BEFORE that commit. So this guard exists to
+# stop old contaminated rows from producing a confident verdict, not to
+# compensate for a live defect.
 IMPLAUSIBLE_MULTIPLIER = 100.0
+
+# NO CEILING ON THE RESERVE, and the reason is worth keeping.
+#
+# A first version of this guard rejected any reserve above 1M$, on the
+# assumption that a freshly launched token cannot sit in a pool that deep. It
+# was wrong, and checking rather than assuming is what caught it: FRESH-LAUNCH
+# recorded 485,976,559$ for one token, and DexScreener independently reports
+# 485,534,583$ on Orca for that same token today -- a 0.09% difference, with
+# the price matching too (0.01215 vs 0.01213). The data was real. Real Solana
+# pools reach hundreds of millions, so any absolute ceiling here would reject
+# genuine observations, which is the same class of error as trusting corrupt
+# ones. A reserve is therefore never judged on its size alone.
 
 # A candidate must beat the unfiltered baseline by this much AFTER its two best
 # trades are removed. Smaller than this and we are fitting noise: the three
@@ -377,10 +390,20 @@ def data_health(rows: list[dict]) -> dict:
     most dangerous thing this module could produce. Found the hard way on
     22/08: the sweep reported a clean candidate on FRESH-LAUNCH while five of
     its reserves sat above a billion dollars."""
-    absurd_reserve = [
+    # A peak wildly above BOTH the entry and the last observed price is the
+    # real signature of a corrupted read -- far more reliable than any absolute
+    # ceiling. The four known-bad rows show it exactly: peak 7.38$ against an
+    # entry of 0.00121$ and a last price of 0.001478$, i.e. the peak disagrees
+    # with everything else on its own row. A genuine pump moves the last price
+    # with it; a bad tick does not.
+    incoherent_peak = [
         r for r in rows
-        if isinstance(r.get("reserve_usd"), (int, float))
-        and float(r["reserve_usd"]) > IMPLAUSIBLE_RESERVE_USD
+        if isinstance(r.get("peak_price"), (int, float))
+        and isinstance(r.get("entry_price"), (int, float))
+        and isinstance(r.get("last_price"), (int, float))
+        and r.get("entry_price") and r.get("last_price")
+        and float(r["peak_price"]) > float(r["entry_price"]) * IMPLAUSIBLE_MULTIPLIER
+        and float(r["peak_price"]) > float(r["last_price"]) * IMPLAUSIBLE_MULTIPLIER
     ]
     absurd_multiplier = [
         r for r in rows
@@ -389,12 +412,13 @@ def data_health(rows: list[dict]) -> dict:
     ]
     days = {str(r.get("detected_at", ""))[:10] for r in rows if r.get("detected_at")}
     return {
-        "absurd_reserve": len(absurd_reserve),
+        "incoherent_peak": len(incoherent_peak),
         "absurd_multiplier": len(absurd_multiplier),
         "distinct_days": len(days),
-        "clean": not absurd_reserve and not absurd_multiplier,
-        "worst_reserve": max(
-            (float(r["reserve_usd"]) for r in absurd_reserve), default=None
+        "clean": not incoherent_peak and not absurd_multiplier,
+        "worst_peak_ratio": max(
+            (float(r["peak_price"]) / float(r["entry_price"]) for r in incoherent_peak),
+            default=None,
         ),
         "worst_multiplier": max(
             (float(r["final_multiplier"]) for r in absurd_multiplier), default=None
@@ -444,10 +468,10 @@ def _render(report: dict) -> str:
         # Either kind can be absent, so neither worst-value may be formatted
         # unconditionally.
         faults = []
-        if health["absurd_reserve"]:
+        if health["incoherent_peak"]:
             faults.append(
-                f"{health['absurd_reserve']} reserve(s) absurde(s) "
-                f"(max {health['worst_reserve']:,.0f}$)"
+                f"{health['incoherent_peak']} pic(s) incoherent(s) avec le reste "
+                f"de leur ligne (max x{health['worst_peak_ratio']:,.0f} l'entree)"
             )
         if health["absurd_multiplier"]:
             faults.append(
