@@ -176,10 +176,30 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
         # a fail-closed "unavailable" has no holder data to validate, and an
         # accepted candidate becomes a real position tracked by the pocket
         # itself (double-tracking it here would double the API load).
+        # 22/08, operator: "verifie si on a rater des courreur depuis le
+        # lancement de cette epoque". The answer was unobtainable: this list
+        # only ever matched the HOLDER-concentration reasons, and the pocket
+        # that actually trades emits none of them -- 1615 of its rejects sat at
+        # `not_tracked`, so the mechanism built to measure what we decline had
+        # never measured anything on the only live pocket.
+        #
+        # Tracked now: any reject carrying a JUDGEMENT we could be wrong about.
+        # Deliberately NOT `blocked_outside_band`, which is 98% of the volume
+        # and is not a judgement at all -- a token at 4% of its curve was never
+        # a candidate, and following thousands of them would spend the price
+        # cascade's whole budget re-pricing tokens nobody considered.
+        TRACKED_REJECTS = (
+            "blocked_holder_concentration",
+            "blocked_wallet_concentration",
+            "blocked_thin_liquidity",     # the 5500$ floor: is it too high?
+            "blocked_wash_trading",       # the concentration ceiling
+            "blocked_no_sell_route",
+            "blocked_creator",
+        )
         trackable = (
             decision.blocked
             and decision.reason is not None
-            and decision.reason.startswith(("blocked_holder_concentration", "blocked_wallet_concentration"))
+            and decision.reason.startswith(TRACKED_REJECTS)
             and decision.would_be_entry_price
         )
         async with aiosqlite.connect(path) as db:

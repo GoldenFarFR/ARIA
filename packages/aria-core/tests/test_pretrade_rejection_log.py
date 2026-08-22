@@ -289,3 +289,88 @@ async def test_recent_rows_are_never_purged(db):
     await log.record_decision(_decision(blocked=False, reason=None), db_path=db)
     assert await log.purge_expired(db_path=db) == 0
     assert len(await _rows(db)) == 1
+
+
+async def _row(db_path: str, row_id: int) -> dict:
+    """Reads one gate-log row. The module exposes no reader on purpose -- it
+    writes and advances, nothing else -- so the test goes to the table."""
+    import aiosqlite
+
+    from aria_core import pretrade_rejection_log as log
+
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(f"SELECT * FROM {log.TABLE} WHERE id = ?", (row_id,))
+        return dict(await cur.fetchone())
+
+
+class TestWhichRejectsGetTrackedForward:
+    """22/08, operator: "verifie si on a rater des courreur depuis le lancement
+    de cette epoque". The answer could not be produced: the tracking list only
+    matched holder-concentration reasons, and LATE-BONDING -- the only pocket
+    trading -- emits none of them. 1615 of its rejects sat at `not_tracked`, so
+    the mechanism built to measure what we decline had measured nothing."""
+
+    @pytest.mark.asyncio
+    async def test_a_liquidity_reject_is_followed(self, tmp_path):
+        """The 5500$ floor is a JUDGEMENT and it cuts 9 of the 30 best trades.
+        Whether it is set too high is exactly what forward tracking answers."""
+        from aria_core import pretrade_rejection_log as log
+
+        db = str(tmp_path / "gate.db")
+        row_id = await log.record_decision(
+            log.GateDecision(
+                pocket="late_bonding", chain="solana", mint="m1", pool_address="p1",
+                blocked=True, reason="blocked_thin_liquidity: reserve=5457",
+                top_holder_pct=None, gate_latency_ms=None,
+                would_be_entry_price=0.001, would_be_reserve_usd=5457.0,
+                realistic_would_be_entry_price=None,
+                distinct_buyers=40, top_buyer_share=0.05, buyer_acceleration=1.0,
+            ),
+            db_path=db,
+        )
+        row = await _row(db, row_id)
+        assert row["tracking_status"] == "tracking"
+        assert row["peak_price"] == 0.001
+
+    @pytest.mark.asyncio
+    async def test_an_out_of_band_reject_is_NOT_followed(self, tmp_path):
+        """98% of rejects, and not a judgement: a token at 4% of its curve was
+        never a candidate. Following them would spend the whole price budget
+        re-pricing tokens nobody considered."""
+        from aria_core import pretrade_rejection_log as log
+
+        db = str(tmp_path / "gate.db")
+        row_id = await log.record_decision(
+            log.GateDecision(
+                pocket="late_bonding", chain="solana", mint="m2", pool_address="p2",
+                blocked=True, reason="blocked_outside_band: progress=0.04",
+                top_holder_pct=None, gate_latency_ms=None,
+                would_be_entry_price=0.001, would_be_reserve_usd=6000.0,
+                realistic_would_be_entry_price=None,
+                distinct_buyers=3, top_buyer_share=0.5, buyer_acceleration=0.0,
+            ),
+            db_path=db,
+        )
+        row = await _row(db, row_id)
+        assert row["tracking_status"] == "not_tracked"
+
+    @pytest.mark.asyncio
+    async def test_an_accepted_candidate_is_never_double_tracked(self, tmp_path):
+        """It becomes a real position the pocket already follows."""
+        from aria_core import pretrade_rejection_log as log
+
+        db = str(tmp_path / "gate.db")
+        row_id = await log.record_decision(
+            log.GateDecision(
+                pocket="late_bonding", chain="solana", mint="m3", pool_address="p3",
+                blocked=False, reason=None,
+                top_holder_pct=None, gate_latency_ms=None,
+                would_be_entry_price=0.001, would_be_reserve_usd=6000.0,
+                realistic_would_be_entry_price=None,
+                distinct_buyers=40, top_buyer_share=0.05, buyer_acceleration=1.0,
+            ),
+            db_path=db,
+        )
+        row = await _row(db, row_id)
+        assert row["tracking_status"] == "not_tracked"
