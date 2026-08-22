@@ -434,6 +434,7 @@ from scratch.
 - `docs/HANDOFF_BLOCKSCOUT.md` — holders, wallet scoring, contract data, Pro credits.
 - `docs/HANDOFF_COINBASE_CDP.md` — REAL CAPITAL agent wallet (balance, swap, CDP auth).
 - `docs/HANDOFF_AGENT_WALLET.md` — homemade agent wallet (Safe+AllowanceModule / Squads v4), testnet-only so far.
+- `docs/HANDOFF_SOLANA_TRADE_PILOT.md` — REAL CAPITAL Solana leg (delegate key, Jupiter swaps, rent-deposit recovery).
 - `docs/HANDOFF_X402.md` — micropayments, weekly budget, Bazaar providers.
 - `docs/HANDOFF_LLM.md` — LLM provider (Spark/Grok/Virtuals), routing, identity.
 - `docs/HANDOFF_PIPELINE_MOMENTUM.md` — sourcing, hard guardrails, sizing, exit (1M$ test).

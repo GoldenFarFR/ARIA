@@ -841,6 +841,11 @@ _KNOWN_ENABLED_GATES = {
     # a 500$ HOT ceiling does not apply to this threshold. Ships OFF.
     "ARIA_SOLANA_COLD_SWEEP_ENABLED",
     "ARIA_SOLANA_TRADE_PILOT_ENABLED",
+    # 22/08 -- reclaims the 0.00204 SOL rent deposit locked in each token
+    # account (solana_rent_recovery.py). Deliberately NOT the trade pilot's
+    # gate: closing an account sends a real signed transaction, so cleanup
+    # being on must never be implied by trading being on. Ships OFF.
+    "ARIA_SOLANA_RENT_RECOVERY_ENABLED",
     "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
     "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",
