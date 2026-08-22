@@ -19,6 +19,22 @@ l'utilise — il ne lui « fournit » pas la donnée.
   doublon inutile. (Le backend a AUSSI son propre `app/services/geckoterminal.py` pour son API web —
   deux couches distinctes, c'est voulu.)
 
+- **Comment la poche late-bonding fixe son prix d'entrée et de sortie ? (22/08)**
+  → **Depuis la courbe de bonding lue on-chain**, pas depuis le websocket.
+  `price_and_reserve_from_curve` (dans `services/pumpfun_bonding_ws.py`) calcule
+  `virtual_quote / virtual_token` à partir du compte que `resolve_bonding_curves`
+  lit déjà pour vérifier la progression — donc zéro appel et zéro crédit en plus,
+  et une lecture de compte ne peut pas être périmée puisqu'elle EST l'état à ce
+  slot. Le websocket appelle la même fonction : **une seule formule de prix dans
+  tout le projet**, jamais deux qui dérivent.
+  Pour les SORTIES, règle à deux étages : une valeur fraîche du flux est utilisée
+  telle quelle (gratuit), une valeur marquée `stale` déclenche une relecture
+  on-chain avant de décider (`getMultipleAccounts`, 1 crédit par 100 comptes).
+  Appliqué aux **deux** chemins de sortie — la boucle événementielle lit le flux
+  directement sans passer par `_price_position`. Incident fondateur (entrée
+  enregistrée à 5 941 $ quand la chaîne lisait 13 260 $, faux pic à +121 %,
+  position vendue alors qu'elle montait) : `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
+
 - **Comment aria-core lit le prix / la liquidité / les paires ?**
   → `skills/acp_onchain_scan.py` appelle **DexScreener** directement (`api.dexscreener.com`).
 
