@@ -120,3 +120,103 @@ async def test_store_candles_never_raises_on_db_failure(monkeypatch):
         chain="solana", phase="before", candles=_candles(2),
     )
     assert stored == 0
+
+
+class TestObservationPath:
+    """22/08 -- the late-bonding pocket never honoured the 18/08 convention, so
+    no position had a recorded path. That is what made `liquidity_collapse`
+    (40.6% of the pocket's remaining loss, 87 trades at -63.98%) impossible to
+    re-calibrate: the row keeps the reserve at entry and the last one seen, and
+    nothing in between."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, tmp_path, monkeypatch):
+        from aria_core import shadow_candle_archive as arch
+
+        monkeypatch.setattr(arch, "DB_PATH", str(tmp_path / "shadow.db"))
+        arch._ensured_db_paths.clear()
+        arch._last_observation.clear()
+
+    @pytest.mark.asyncio
+    async def test_the_reserve_is_archived_alongside_the_price(self):
+        from aria_core import shadow_candle_archive as arch
+
+        await arch.store_observation(
+            module="solana_late_bonding", position_id=1, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+        )
+        rows = await arch.get_candles(module="solana_late_bonding", position_id=1)
+
+        assert len(rows) == 1
+        assert rows[0]["reserve_usd"] == 6000.0
+        assert rows[0]["close"] == 0.001
+
+    @pytest.mark.asyncio
+    async def test_a_quiet_position_is_throttled(self):
+        """235 positions at a 2s refresh is ~10M rows/day unthrottled."""
+        from aria_core import shadow_candle_archive as arch
+
+        written = 0
+        for tick in range(10):  # 20 seconds of 2s ticks
+            written += await arch.store_observation(
+                module="solana_late_bonding", position_id=1, pool_address="pool",
+                chain="solana", price_usd=0.001, reserve_usd=6000.0,
+                now_ts=1000.0 + tick * 2,
+            )
+
+        assert written == 2, "the first point, then one per interval"
+
+    @pytest.mark.asyncio
+    async def test_a_collapsing_reserve_is_never_throttled_away(self):
+        """The whole point: a collapse happens between two intervals, and it is
+        the exact event being studied."""
+        from aria_core import shadow_candle_archive as arch
+
+        await arch.store_observation(
+            module="solana_late_bonding", position_id=1, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+        )
+        written = await arch.store_observation(
+            module="solana_late_bonding", position_id=1, pool_address="pool",
+            chain="solana", price_usd=0.0004, reserve_usd=2000.0, now_ts=1002.0,
+        )
+
+        assert written == 1, "a 67% reserve drop must be recorded immediately"
+
+    @pytest.mark.asyncio
+    async def test_the_first_point_of_a_position_is_always_kept(self):
+        """Without a baseline a later drop cannot be measured against anything."""
+        from aria_core import shadow_candle_archive as arch
+
+        assert await arch.store_observation(
+            module="solana_late_bonding", position_id=42, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1.0,
+        ) == 1
+
+    @pytest.mark.asyncio
+    async def test_closing_a_position_releases_its_throttle_state(self):
+        from aria_core import shadow_candle_archive as arch
+
+        await arch.store_observation(
+            module="solana_late_bonding", position_id=7, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1000.0,
+        )
+        assert ("solana_late_bonding", 7) in arch._last_observation
+
+        arch.forget_position(module="solana_late_bonding", position_id=7)
+
+        assert ("solana_late_bonding", 7) not in arch._last_observation
+
+    @pytest.mark.asyncio
+    async def test_archiving_never_breaks_the_caller(self, monkeypatch):
+        """It runs inside a real exit path. A logging failure must never cost a
+        position its stop."""
+        from aria_core import shadow_candle_archive as arch
+
+        monkeypatch.setattr(arch, "DB_PATH", "/nonexistent/dir/shadow.db")
+        arch._ensured_db_paths.clear()
+
+        assert await arch.store_observation(
+            module="solana_late_bonding", position_id=1, pool_address="pool",
+            chain="solana", price_usd=0.001, reserve_usd=6000.0, now_ts=1.0,
+        ) == 0

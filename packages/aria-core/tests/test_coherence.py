@@ -1383,6 +1383,52 @@ def test_the_two_active_pockets_share_the_same_exit_guardrails():
         assert not missing, f"{name} is missing: {missing}"
 
 
+def test_late_bonding_archives_the_path_it_trades():
+    """18/08 standing convention ("je veut les bougies avant et apres le point
+    dachat a chaque futur shadow"), which this pocket alone never honoured --
+    found 22/08 while trying to re-calibrate the collapse exit.
+
+    The cost of the gap was concrete: `liquidity_collapse` carries 40.6% of the
+    pocket's remaining loss (87 trades, -63.98% each, reserve down 65% by the
+    time we sold) and the exit fires at a 50% drop, which looks far too late.
+    Testing a tighter threshold was impossible: the row keeps the reserve at
+    entry and the last one seen, never the path between them.
+
+    Checked as source text because this is a CALL-SITE defect -- the archive
+    module worked perfectly on its own for months while this pocket wrote
+    nothing at all."""
+    import inspect
+
+    from aria_core import solana_late_bonding_shadow as lb
+
+    src = inspect.getsource(lb)
+    assert "shadow_candle_archive.store_observation" in src, (
+        "the pocket must archive each tracking point it observes"
+    )
+    assert "reserve_usd=snapshot.reserve_usd" in src, (
+        "the reserve is the signal for this pocket -- the price alone cannot "
+        "re-calibrate a liquidity-collapse threshold"
+    )
+
+
+def test_late_bonding_liquidity_floor_stays_where_the_data_put_it():
+    """22/08 -- the floor moved 3000 -> 5500$ after sweeping every entry metric
+    on 1609 closures. The reserve is the ONLY entry metric on the row that
+    separates losers from winners, and the only filter tried on this pocket
+    that survives the outlier test (kept side +15.5% without its best two, vs
+    +7.4% unfiltered baseline).
+
+    Pinned because it is deliberately EXPENSIVE: it cuts 9 of the 30 best
+    trades, including the single best (+1709%). That cost was accepted on an
+    explicit operator instruction, so a later session must not quietly lower it
+    back on seeing those winners in the rejection log -- that is precisely the
+    trade being made, not a regression. Raising it needs fresh data, and
+    lowering it needs the operator."""
+    from aria_core import solana_late_bonding_shadow as lb
+
+    assert lb.MIN_LIQUIDITY_USD == 5500.0
+
+
 def test_both_active_pockets_import_the_shared_exit_rule():
     """They must differ on ENTRY only. A local copy of the exit logic would
     make every comparison between them meaningless."""

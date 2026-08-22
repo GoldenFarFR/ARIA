@@ -23,6 +23,7 @@ operator creates one.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -145,6 +146,16 @@ async def get_balance_usd(*, client: httpx.AsyncClient | None = None) -> float |
 # COMMITMENT_CONFIRMED.
 # How many fresh-quote attempts a sell gets before giving up for this pass.
 _SELL_RETRY_ATTEMPTS = 3
+
+# Settling a sell against the chain (see `_settle_exit`). Deliberately short:
+# the swap is already sent, so this delays the REPORT, never the fill. Three
+# polls at 0.25/0.50/0.75s covers the observed lag between `sent` and a visible
+# balance change without turning a 90ms exit into a blocking wait.
+_EXIT_SETTLE_ATTEMPTS = 3
+_EXIT_SETTLE_DELAY_SECONDS = 0.25
+
+# Prefix shared with the swap signer so every real-money line greps together.
+_REAL_MONEY_LOG_PREFIX = jupiter_swap_signer._REAL_MONEY_LOG_PREFIX
 
 BUY_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
 SELL_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
@@ -368,8 +379,53 @@ async def _swap_out(*, mint: str, amount_units: int, slippage_bps: int) -> dict:
             "tx": (result or {}).get("tx") or "",
             "exit_price": exit_price,
             "proceeds_usd": proceeds_usd,
-            "units_sold": amount_units,
+            # 22/08 -- renamed from `units_sold`, which was a claim this
+            # function cannot make. It is what we ASKED to swap; the amount that
+            # actually moved is only knowable from the chain, and `out_amount`
+            # itself comes from the QUOTE, not from the executed transaction.
+            # `execute_real_sell` re-reads the balance and settles the question.
+            "units_requested": amount_units,
+            "quoted": True,
         }
+
+
+async def _settle_exit(mint: str, *, held_before: int, fraction: float) -> dict:
+    """Re-read the chain to find out what the sell ACTUALLY moved.
+
+    22/08, found by the operator on his own wallet: a liquidation reported
+    "32 sold, 0 unsellable" while three tokens were still held, two of them
+    already marked closed in the table. The sell path had been reporting the
+    amount it REQUESTED as the amount sold, so a partial fill closed the row
+    and stranded the remainder -- invisible, because nothing ever compared the
+    claim to the chain.
+
+    Sells run at `COMMITMENT_SENT` for latency, so the balance does not update
+    the instant the swap returns. This polls briefly rather than blocking on
+    finalization: the transaction is already gone, so this delays only the
+    REPORT, never the fill. When the answer is still unclear, it says so --
+    `fully_exited=None` means unknown, and the caller must not treat unknown as
+    done. That distinction is the whole point: claiming a clean exit we cannot
+    see is exactly the failure being fixed.
+    """
+    for attempt in range(_EXIT_SETTLE_ATTEMPTS):
+        await asyncio.sleep(_EXIT_SETTLE_DELAY_SECONDS * (attempt + 1))
+        remaining = await token_balance(mint)
+        if remaining is None:
+            continue
+        if remaining < held_before:
+            units_moved = held_before - remaining
+            return {
+                "units_sold": units_moved,
+                "units_remaining": remaining,
+                # A full exit is only full when nothing is left. Dust below the
+                # token's own smallest meaningful unit still counts as left:
+                # it is what keeps the rent account open.
+                "fully_exited": remaining == 0 if fraction >= 1.0 else True,
+                "partial": fraction >= 1.0 and remaining > 0,
+            }
+    # Balance never moved, or was never readable. Either way we cannot claim it.
+    return {"units_sold": None, "units_remaining": None,
+            "fully_exited": None, "partial": None}
 
 
 async def execute_real_sell(mint: str, fraction: float, *, chain: str = "solana") -> dict | None:
@@ -427,12 +483,23 @@ async def execute_real_sell(mint: str, fraction: float, *, chain: str = "solana"
             if units <= 0:
                 return None
         try:
-            return await _swap_out(
+            fill = await _swap_out(
                 mint=mint, amount_units=units,
                 slippage_bps=solana_trade_pilot.MAX_SLIPPAGE_BPS,
             )
         except Exception as exc:  # noqa: BLE001 -- a failed sell is not a closure
             last_error = exc
+            continue
+        # The swap returned, so real money moved. What is NOT yet established is
+        # how much -- settle that against the chain before anyone closes a row
+        # on the strength of it.
+        fill.update(await _settle_exit(mint, held_before=held, fraction=fraction))
+        if fill.get("partial"):
+            logger.warning(
+                "%s: PARTIAL exit on %s -- %s units still held after tx %s",
+                _REAL_MONEY_LOG_PREFIX, mint, fill.get("units_remaining"), fill.get("tx"),
+            )
+        return fill
     logger.warning(
         "solana_agent_wallet: real sell failed for %s after %d attempts (%s)",
         mint, _SELL_RETRY_ATTEMPTS, last_error,

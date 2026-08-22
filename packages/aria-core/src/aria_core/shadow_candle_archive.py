@@ -102,6 +102,13 @@ async def _ensure_table() -> None:
             ON {TABLE} (module, position_id, phase, candle_ts)
             """
         )
+        # HOT MIGRATION. The table predates this column and holds live rows from
+        # several pockets, so it is added in place rather than by recreating it
+        # -- the standing rule for a new metric is to start accumulating history
+        # immediately, never to wait for a clean slate.
+        existing = {r[1] for r in await db.execute_fetchall(f"PRAGMA table_info({TABLE})")}
+        if "reserve_usd" not in existing:
+            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN reserve_usd REAL")
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -149,6 +156,112 @@ async def store_candles(
     except Exception as exc:  # noqa: BLE001 -- archiving must never break the caller's real exit/entry logic
         logger.info("shadow_candle_archive: store_candles failed for %s#%s (%s)", module, position_id, exc)
         return 0
+
+
+# How often one position may write a tracking point, and how much the reserve
+# must move to write one sooner. Both are needed: the interval alone would miss
+# a collapse that happens between two ticks, and the threshold alone would write
+# nothing at all for a position sitting still.
+#
+# Sizing, measured rather than guessed: the pocket tracks up to ~235 positions
+# at a 2s refresh. Unthrottled that is ~10M rows/day for data whose only use is
+# reconstructing a price path. At 15s, a typical 50-600s position leaves 3-40
+# points, i.e. a few tens of thousands of rows/day -- enough to see the shape of
+# a collapse, small enough to keep.
+OBSERVATION_MIN_INTERVAL_SECONDS = 15.0
+OBSERVATION_RESERVE_MOVE_PCT = 3.0
+
+# position_id -> (last archived unix ts, last archived reserve)
+_last_observation: dict[tuple[str, int], tuple[float, float | None]] = {}
+
+
+def should_record_observation(
+    *, module: str, position_id: int, now_ts: float, reserve_usd: float | None,
+) -> bool:
+    """Whether this tracking point is worth a row.
+
+    Keeps the FIRST point of a position unconditionally: without it a collapse
+    has no baseline to be measured against."""
+    key = (module, position_id)
+    previous = _last_observation.get(key)
+    if previous is None:
+        return True
+    last_ts, last_reserve = previous
+    if now_ts - last_ts >= OBSERVATION_MIN_INTERVAL_SECONDS:
+        return True
+    if reserve_usd is not None and last_reserve:
+        move = abs(reserve_usd - last_reserve) / last_reserve * 100.0
+        if move >= OBSERVATION_RESERVE_MOVE_PCT:
+            return True
+    return False
+
+
+async def store_observation(
+    *,
+    module: str,
+    position_id: int,
+    pool_address: str,
+    chain: str,
+    price_usd: float,
+    reserve_usd: float | None,
+    phase: str = "after",
+    now_ts: float | None = None,
+) -> int:
+    """Archives ONE point of a position's path: price and pool reserve at a time.
+
+    **Why (22/08).** Measured on 1019 closures past the new liquidity floor,
+    `liquidity_collapse` carries 40.6% of all remaining loss -- 87 trades at
+    -63.98% each, where the reserve had fallen 65% by the time we sold, over a
+    median 11 minutes. The exit fires at a 50% reserve drop, which looks far too
+    late, and NOTHING in the schema could confirm it: the row keeps the reserve
+    at entry and the last one seen, never the path between them. Any simulation
+    of a tighter threshold would have been invented.
+
+    This is the 18/08 standing convention (every shadow module archives its
+    path) applied to the pocket that never honoured it, extended with the
+    reserve because for this pocket the pool draining IS the signal.
+
+    A point is stored as a degenerate candle -- open=high=low=close -- so it
+    shares the one table and the `module` column keeps pockets apart, rather
+    than growing a second near-identical schema."""
+    import time
+
+    now_ts = time.time() if now_ts is None else now_ts
+    if not should_record_observation(
+        module=module, position_id=position_id, now_ts=now_ts, reserve_usd=reserve_usd,
+    ):
+        return 0
+    try:
+        await _ensure_table()
+        async with aiosqlite.connect(_db_path()) as db:
+            await db.execute(
+                f"""
+                INSERT OR IGNORE INTO {TABLE} (
+                    module, position_id, pool_address, chain, phase,
+                    candle_ts, open, high, low, close, volume, reserve_usd, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module, position_id, pool_address, chain, phase, int(now_ts),
+                    float(price_usd), float(price_usd), float(price_usd), float(price_usd),
+                    0.0, reserve_usd, datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            await db.commit()
+        _last_observation[(module, position_id)] = (now_ts, reserve_usd)
+        return 1
+    except Exception as exc:  # noqa: BLE001 -- archiving never breaks a real exit
+        logger.info(
+            "shadow_candle_archive: store_observation failed for %s#%s (%s)",
+            module, position_id, exc,
+        )
+        return 0
+
+
+def forget_position(*, module: str, position_id: int) -> None:
+    """Drops a closed position's throttle state so the map cannot grow forever
+    on a process that runs for weeks."""
+    _last_observation.pop((module, position_id), None)
 
 
 async def get_candles(*, module: str, position_id: int, phase: str | None = None) -> list[dict]:

@@ -501,3 +501,79 @@ class TestCancellationRequiresChainProof:
             holdings_fn=holdings, verify_buy_fn=verify, db_path=db
         )
         assert out["cancelled"] == 1
+
+
+class TestAPartialSellNeverClosesTheRow:
+    """22/08, found by the operator against his own wallet.
+
+    A liquidation reported every token sold while three were still held, two of
+    them already marked closed here. The row said the position was gone, the
+    chain said the tokens were still there, and the recorded PnL was fiction.
+
+    A closure is a claim about the chain, so only the chain may authorise it."""
+
+    @pytest.mark.asyncio
+    async def test_leftover_tokens_leave_the_position_open(self, open_position):
+        db, row_id = open_position
+
+        async def partial_seller(mint, fraction, *, chain="solana"):
+            return {"tx": "sig", "exit_price": 1.0, "proceeds_usd": 0.1,
+                    "partial": True, "fully_exited": False,
+                    "units_remaining": 400_000, "units_sold": 600_000}
+
+        row = await _row(db, row_id)
+        outcome = await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db,
+            sell_fn=partial_seller,
+        )
+
+        assert outcome["closed"] == 0
+        assert (await _row(db, row_id))["exit_reason"] is None, (
+            "tokens still held on-chain: the row must stay open so the exit "
+            "rule retries, never be closed on a PnL that did not happen"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_settlement_still_closes(self, open_position):
+        """`None` means the chain could not be read in time, not that the sell
+        failed. Reconciliation re-checks that case every 45s with no deadline;
+        blocking here would leave real exits open forever on a slow RPC."""
+        db, row_id = open_position
+
+        async def unsettled_seller(mint, fraction, *, chain="solana"):
+            return {"tx": "sig", "exit_price": 1.0, "proceeds_usd": 0.1,
+                    "partial": None, "fully_exited": None,
+                    "units_remaining": None, "units_sold": None}
+
+        row = await _row(db, row_id)
+        await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db,
+            sell_fn=unsettled_seller,
+        )
+
+        assert (await _row(db, row_id))["exit_reason"] is not None
+
+    @pytest.mark.asyncio
+    async def test_a_partial_sell_backs_off_like_a_failed_one(self, open_position):
+        """Without a cooldown the pocket would re-attempt the same stranded
+        position on every pass of every loop -- the 847-error outage of 22/08."""
+        db, row_id = open_position
+        calls = {"n": 0}
+
+        async def partial_seller(mint, fraction, *, chain="solana"):
+            calls["n"] += 1
+            return {"tx": "sig", "exit_price": 1.0, "proceeds_usd": 0.1,
+                    "partial": True, "fully_exited": False,
+                    "units_remaining": 400_000, "units_sold": 600_000}
+
+        row = await _row(db, row_id)
+        await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db,
+            sell_fn=partial_seller,
+        )
+        await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db,
+            sell_fn=partial_seller,
+        )
+
+        assert calls["n"] == 1, "the second attempt must be held by the cooldown"

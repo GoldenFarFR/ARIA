@@ -51,7 +51,7 @@ import httpx
 
 from aria_core import db_migrations
 
-from aria_core import creator_reputation, pretrade_rejection_log
+from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive
 from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.services.pumpfun_bonding_ws import (
     RPC_HTTP_DEFAULT,
@@ -70,6 +70,11 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = str(shadow_db_path())
 TABLE = "solana_late_bonding_shadow_log"
+
+# The name this pocket goes by in the shared path archive. Matches the sibling
+# pockets' convention ("solana_support_bounce" etc.) -- one table, the `module`
+# column keeps them apart.
+ARCHIVE_MODULE = "solana_late_bonding"
 
 # 21/08, RAISED 0.40 -> 0.70 on 721 real closures. The band was widened to
 # 0.40 the night before to COLLECT broadly and find out which sub-band works.
@@ -135,9 +140,35 @@ MIN_DISTINCT_BUYERS = 1
 # NOT taken on backtest alone: 5000$ stays one line away if live data
 # confirms it, whereas winners we stopped observing can never be recovered.
 #
+# 22/08 -- RAISED to 5500$. The live data the note above was waiting for came
+# in: 1609 closures, every entry metric on the row swept for a threshold that
+# separates losers from winners. The pool's reserve is the ONLY one that does,
+# and it does so on all three robustness checks at once:
+#
+#     reserve at entry     n     avg    without top2   winners  losses <=-20%
+#     2000 - 3500$        180  -13.2%      -16.5%        33%        58%
+#     3500 - 5450$        370   -2.0%       -9.5%        36%        51%
+#     5450 - 8000$        817  +20.2%      +17.8%        55%        24%
+#     8000 - 12000$       187   +8.6%       +0.2%        43%        17%
+#
+#   - outlier test: kept side +15.5% without its best two, against +7.4% for
+#     the unfiltered baseline -- the first entry filter tried on this pocket
+#     that does not collapse once its top trades are removed;
+#   - temporal stability: holds on each day taken separately (20/08 kept -6.8%
+#     vs cut -49.6%; 21/08 kept +18.1% vs cut -2.0%);
+#   - monotonic across bands, so it is a gradient and not one lucky bucket.
+#
+# The cost is paid knowingly, on the operator's explicit instruction ("meme si
+# sa fait perdre 2 ou 3 trade gagnant je prefere les eviter"): of the 30 best
+# trades, this floor cuts 9, including the single best (+1709%, reserve 4450$).
+# Losses removed still outweigh gains removed by ~2800 points.
+#
+# NO upper bound is set despite the 8000$+ band scoring worse: only 31 closures
+# sit above 12000$, far too few to cut on. Left to accumulate.
+#
 # Also sets the tradable position size: a 3000$ pool tolerates roughly 30$
 # before price impact eats the edge (measured via Jupiter the same day).
-MIN_LIQUIDITY_USD = 3000.0
+MIN_LIQUIDITY_USD = 5500.0
 
 # 21/08 -- CARENCE APRES SORTIE. Le defaut le plus couteux trouve ce jour-la,
 # revele par une capture de l'operateur : CALLOUTS a ete achete et stoppe
@@ -1072,6 +1103,23 @@ async def _apply_exit_check(
                 )
                 await db.commit()
 
+    # 22/08 -- ARCHIVE THE PATH, standing convention since 18/08 that this
+    # pocket alone never honoured. Written BEFORE the exit verdict on purpose:
+    # the point that triggers a close must be in the archive too, otherwise
+    # every path stops one step short of the thing being studied.
+    #
+    # What it unblocks, measured: `liquidity_collapse` carries 40.6% of this
+    # pocket's remaining loss (87 trades, -63.98% each, reserve down 65% by the
+    # time we sold). The exit fires at a 50% reserve drop and looks far too
+    # late -- but the row only ever kept the reserve at entry and the last one
+    # seen, so no tighter threshold could be tested without inventing the data
+    # in between. Self-throttled and failure-swallowing: it must never slow or
+    # break a real exit.
+    await shadow_candle_archive.store_observation(
+        module=ARCHIVE_MODULE, position_id=row["id"], pool_address=row["pool_address"],
+        chain=chain, price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+    )
+
     age = _minutes_since(row["detected_at"])
     graduated = snapshot.dex_id not in (None, "pumpfun")
     if graduated and EXEMPT_GRADUATED_FROM_MAX_HOLD:
@@ -1138,6 +1186,25 @@ async def _apply_exit_check(
                     row["token_address"], SELL_COOLDOWN_SECONDS,
                 )
                 return {"checked": 1, "closed": 0}
+            # 22/08 -- a sell that only moved PART of the holding must not close
+            # the row. Found by the operator against his own wallet: a
+            # liquidation reported every token sold while three were still held,
+            # two of them already marked closed here. The tokens were stranded
+            # and the recorded PnL was fiction, because the sell path reported
+            # what it had REQUESTED rather than what the chain showed.
+            #
+            # Only an explicit False blocks the closure. `None` means the chain
+            # could not be read in time, and treating unknown as failure would
+            # reopen good exits forever -- reconciliation already owns that case
+            # and re-checks it every 45s with no deadline.
+            if fill.get("partial") is True:
+                _mark_sell_failed(row["id"])
+                logger.warning(
+                    "solana_late_bonding_shadow: PARTIAL exit on %s -- %s units still "
+                    "held, row stays open (retry in %.0fs)",
+                    row["token_address"], fill.get("units_remaining"), SELL_COOLDOWN_SECONDS,
+                )
+                return {"checked": 1, "closed": 0}
             # The real proceeds replace the modelled ones: once genuine money
             # has changed hands, a simulated fill is fiction.
             if fill.get("exit_price"):
@@ -1175,7 +1242,14 @@ async def _apply_exit_check(
             ),
         )
         await db.commit()
-    return {"checked": 1, "closed": 1 if result.get("exit_reason") else 0}
+    closed = 1 if result.get("exit_reason") else 0
+    if closed:
+        # The path is written; the throttle state for it is now dead weight on a
+        # process that runs for weeks.
+        shadow_candle_archive.forget_position(
+            module=ARCHIVE_MODULE, position_id=row["id"],
+        )
+    return {"checked": 1, "closed": closed}
 
 
 async def advance_position_by_pool(
