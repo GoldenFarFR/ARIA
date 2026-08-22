@@ -47,6 +47,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+import dataclasses
 from dataclasses import is_dataclass, replace as dataclasses_replace
 
 from types import SimpleNamespace
@@ -939,9 +940,18 @@ async def consider_candidate(
                 # otherwise.
                 overrides = {
                     "price_usd": onchain_price,
-                    "stale": False,
                     "reserve_usd": onchain_reserve or getattr(snapshot, "reserve_usd", None),
                 }
+                # `stale` only exists on the websocket snapshot; PoolSnapshot
+                # (the REST/on-chain shape) has no such field, and passing it
+                # to `replace` raises. 22/08: that raise was swallowed by
+                # consider_candidate's own guard, so 28 candidates in 20
+                # minutes were dropped in silence -- the pocket looked simply
+                # idle rather than broken.
+                if any(f.name == "stale" for f in dataclasses.fields(snapshot)) \
+                        if is_dataclass(snapshot) and not isinstance(snapshot, type) \
+                        else hasattr(snapshot, "stale"):
+                    overrides["stale"] = False
                 if is_dataclass(snapshot) and not isinstance(snapshot, type):
                     snapshot = dataclasses_replace(snapshot, **overrides)
                 else:

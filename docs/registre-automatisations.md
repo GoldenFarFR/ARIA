@@ -200,3 +200,24 @@ est vert.
   meilleurs se qualifient en 81 s de médiane contre 154 s pour les 100 pires.
   **Pas encore validé** : un seul jour distinct, et l'échantillon est trop
   petit pour que « 100 meilleurs » et « 100 pires » ne se recouvrent pas.
+
+### stale-position-watch (22/08) -- ACTIF
+- **Quoi** : `/opt/aria-data/stale-position-watch/run.sh`, cron toutes les 10 min,
+  rapport dans `report.md`. **Silencieux par defaut** : n'ecrit que s'il trouve
+  une position jamais verifiee ou non vue depuis plus de 2 minutes.
+- **Pourquoi** : question operateur -- "il se passe quoi si on atteint 60
+  positions en meme temps ?". Reponse mesuree : **rien ne bloque l'entree**, il
+  n'existe aucun plafond de positions simultanees (pic historique 59). Ce qui
+  est plafonne, c'est la SURVEILLANCE : la boucle de polling verifie 200 lignes
+  par passe et seulement 5 d'entre elles peuvent payer un appel REST par cycle.
+- **Quand ca devient dangereux** : la boucle evenementielle reagit a chaque
+  transaction du websocket et ne sature pas avec le nombre de positions. Le
+  probleme apparait quand une position PERD son flux (token gradue, abonnement
+  tombe) et bascule dans la file REST a 5 par cycle.
+- **Incident fondateur (19/08)** : 80 positions ouvertes, 48 jamais verifiees
+  une seule fois, ~5-6 min avant qu'une position fraiche recoive son PREMIER
+  controle, et une perte reelle est restee sans surveillance au-dela de son stop
+  pendant tout ce temps. Trouve a la main, par aucun garde-fou.
+- **Pourquoi maintenant** : la bande d'entree passee de 70% a 50% elargit la
+  fenetre, donc plus de positions tenues plus longtemps. Le mode de defaillance
+  devient plus probable, pas moins.

@@ -1890,3 +1890,37 @@ async def test_the_climb_before_the_buy_is_archived(_tmp_db, monkeypatch):
     # prices must RISE with progress, and be anchored on the entry price
     assert path[0].close < path[-1].close
     assert all(c.close > 0 for c in path)
+
+
+@pytest.mark.asyncio
+async def test_the_onchain_override_works_on_the_real_snapshot_type(_tmp_db):
+    """The REST snapshot has no `stale` field -- overriding it must not raise.
+
+    22/08, found in production: the on-chain price override passed `stale=False`
+    to `dataclasses.replace`, which raises on `PoolSnapshot` because that shape
+    (unlike the websocket one) has no such field. `consider_candidate` swallows
+    every exception by design, so 28 candidates in 20 minutes were dropped in
+    SILENCE -- the pocket read as idle rather than broken.
+
+    The existing tests all used SimpleNamespace, which accepts any attribute
+    and therefore could never catch this. This one uses the REAL type.
+    """
+    from aria_core.solana_pump_shadow import PoolSnapshot
+
+    async def _real_shape(_client, _pool, _mint, *, chain):
+        return PoolSnapshot(pool_address="poolReal", price_usd=0.002,
+                            reserve_usd=13000.0, available=True, dex_id="pumpfun")
+
+    class _Feed:
+        sol_usd = 200.0
+        def get_snapshot(self, _p):
+            raise RuntimeError("force the REST path")
+
+    row_id = await pocket.consider_candidate(
+        "mintReal", "poolReal", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_real_shape, bonding_ws_feed=_Feed(), db_path=_tmp_db,
+    )
+    assert row_id is not None, (
+        "a real PoolSnapshot must survive the on-chain override -- silently "
+        "dropping it is how 28 candidates vanished"
+    )

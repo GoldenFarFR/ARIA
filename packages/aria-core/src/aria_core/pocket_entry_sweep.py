@@ -99,6 +99,10 @@ OUTCOME_COLUMNS = frozenset({
     # curve-priced entry from a REST-priced one when auditing a suspicious
     # peak -- see the entry's own comment in solana_late_bonding_shadow.
     "entry_price_source",
+    # 22/08 -- the stop level and the fill, as numbers. Outcomes by nature:
+    # they describe how a position CLOSED, so sweeping them for entry deciles
+    # would just rediscover that losing trades exit lower.
+    "stop_level_pct", "fill_level_pct",
     "final_multiplier", "realistic_final_multiplier", "reinforced_final_multiplier",
     "last_price", "last_reserve_usd", "last_checked_at",
     "creator_address", "amm_pool_address", "buy_tx",
