@@ -148,10 +148,25 @@ class TestInventory:
                 return payload
 
         class _Client:
-            async def post(self, *a, **k):
-                return _Resp()
+            """Answers the classic-program call, then an empty Token-2022 one."""
 
-        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
+            def __init__(self):
+                self.calls = 0
+
+            async def post(self, *a, **k):
+                self.calls += 1
+                return _Resp() if self.calls == 1 else _Empty()
+
+        class _Empty:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"result": {"value": []}}
+
+        client = _Client()
+        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=client)
+        assert client.calls == 2, "both token programs must be scanned"
         assert out["totals"]["empty"]["count"] == 1
         assert out["totals"]["frozen"]["count"] == 1
         assert out["reclaimable_lamports"] == 2_039_280
@@ -185,6 +200,53 @@ class TestInventory:
 
         out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
         assert out["accounts"] == []
+
+
+    @pytest.mark.asyncio
+    async def test_token_2022_accounts_are_seen_and_closed_against_their_own_program(self):
+        """22/08: pump.fun mints are Token-2022. Scanning only the classic
+        program reported an empty wallet while three real accounts existed --
+        and a close addressed to the wrong program simply fails."""
+        payload = {
+            "result": {
+                "value": [
+                    {
+                        "pubkey": ACCT,
+                        "account": {
+                            "lamports": 2_074_000,
+                            "data": {"parsed": {"info": {"mint": MINT, **_account(amount=0)}}},
+                        },
+                    }
+                ]
+            }
+        }
+
+        class _Resp:
+            def __init__(self, body):
+                self.body = body
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.body
+
+        class _Client:
+            def __init__(self):
+                self.calls = 0
+
+            async def post(self, *a, **k):
+                self.calls += 1
+                # Nothing on the classic program, everything on Token-2022.
+                return _Resp({"result": {"value": []}} if self.calls == 1 else payload)
+
+        out = await rr.inventory(OWNER, rpc_http_url="http://rpc", client=_Client())
+        assert out["totals"]["empty"]["count"] == 1
+        account = out["accounts"][0]
+        assert account["program_id"] == rr.TOKEN_2022_PROGRAM_ID
+
+        ixs = rr.build_close_instructions(account, OWNER)
+        assert str(ixs[0].program_id) == rr.TOKEN_2022_PROGRAM_ID
 
 
 class TestReclaimRefusals:

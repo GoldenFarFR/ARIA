@@ -52,6 +52,16 @@ logger = logging.getLogger(__name__)
 # from a dependency: two one-byte constants do not justify a new package, and
 # the values are consensus-frozen -- they cannot drift under us.
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+# 22/08, found live: pump.fun mints are Token-2022, NOT the classic program.
+# Scanning only the classic one reported an empty wallet while it really held
+# three Token-2022 accounts -- the operator spotted the token his own wallet
+# app was showing and this module was not. Both must be scanned, and a close
+# must be addressed to the SAME program that owns the account: sending a
+# Token-2022 account's close to the classic program simply fails.
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+TOKEN_PROGRAM_IDS = (TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID)
+
 _IX_BURN = 8
 _IX_CLOSE_ACCOUNT = 9
 
@@ -122,22 +132,27 @@ async def inventory(
     """
     owns = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
+    raw: list[tuple[dict, str]] = []
     try:
-        resp = await client.post(
-            rpc_http_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "getTokenAccountsByOwner",
-                "params": [
-                    owner_pubkey,
-                    {"programId": TOKEN_PROGRAM_ID},
-                    {"encoding": "jsonParsed"},
-                ],
-            },
-        )
-        resp.raise_for_status()
-        raw = ((resp.json() or {}).get("result") or {}).get("value") or []
+        for program_id in TOKEN_PROGRAM_IDS:
+            resp = await client.post(
+                rpc_http_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTokenAccountsByOwner",
+                    "params": [
+                        owner_pubkey,
+                        {"programId": program_id},
+                        {"encoding": "jsonParsed"},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            for entry in ((resp.json() or {}).get("result") or {}).get("value") or []:
+                # The owning program travels with the account: closing it later
+                # must be addressed to the same one.
+                raw.append((entry, program_id))
     except Exception as exc:  # noqa: BLE001 -- an unreadable census is not an empty one
         raise RentRecoveryError(f"could not read token accounts: {exc}") from exc
     finally:
@@ -145,7 +160,7 @@ async def inventory(
             await client.aclose()
 
     accounts: list[dict] = []
-    for entry in raw:
+    for entry, program_id in raw:
         try:
             parsed = entry["account"]["data"]["parsed"]["info"]
             lamports = int(entry["account"]["lamports"])
@@ -170,6 +185,7 @@ async def inventory(
                 "decimals": int((parsed.get("tokenAmount") or {}).get("decimals") or 0),
                 "rent_lamports": lamports,
                 "value_usd": value_usd,
+                "program_id": program_id,
                 "case": _classify(parsed, value_usd=value_usd),
             }
         )
@@ -207,7 +223,9 @@ def build_close_instructions(account: dict, owner_pubkey: str) -> list:
     if case not in ("empty", "dust"):
         raise RentRecoveryError(f"account {account.get('address')} is '{case}', not closable")
 
-    program = Pubkey.from_string(TOKEN_PROGRAM_ID)
+    # The account's own program, never a default: a Token-2022 account closed
+    # against the classic program fails outright.
+    program = Pubkey.from_string(account.get("program_id") or TOKEN_PROGRAM_ID)
     acct = Pubkey.from_string(account["address"])
     owner = Pubkey.from_string(owner_pubkey)
     instructions = []
