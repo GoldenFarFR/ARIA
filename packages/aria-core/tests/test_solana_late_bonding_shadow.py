@@ -15,7 +15,10 @@ import pytest
 from aria_core import creator_reputation, pretrade_rejection_log
 from aria_core import solana_fresh_launch_ws_exit_shadow as ws_exit_shadow
 from aria_core import solana_late_bonding_shadow as pocket
-from aria_core.services.pumpfun_bonding_ws import INITIAL_CURVE_TOKENS
+from aria_core.services.pumpfun_bonding_ws import (
+    INITIAL_CURVE_TOKENS,
+    price_and_reserve_from_curve,
+)
 
 CHAIN = "solana"
 
@@ -38,7 +41,19 @@ def _curve(progress: float, *, complete: bool = False, decimals: int = 6) -> dic
     """A curve dict at the requested progress, built from the same field the
     module derives progress from."""
     total = INITIAL_CURVE_TOKENS * (10 ** decimals)
-    return {"real_token_reserves": int(total * (1.0 - progress)), "complete": complete}
+    left = int(total * (1.0 - progress))
+    # 22/08 -- the virtual reserves too, so the fixture is a curve the entry
+    # path can actually PRICE. Without them `price_and_reserve_from_curve`
+    # returns (None, None) and the on-chain pricing path is never exercised,
+    # which is precisely the path that was missing when position 1772 got its
+    # entry from a stale feed instead of from the chain.
+    return {
+        "real_token_reserves": left,
+        "virtual_token_reserves": left + 30 * (10 ** decimals),
+        "virtual_quote_reserves": int(30 * (10 ** 9) * (1.0 + progress)),
+        "real_quote_reserves": int(85 * (10 ** 9) * progress),
+        "complete": complete,
+    }
 
 
 class _Stream:
@@ -1685,3 +1700,42 @@ async def test_an_entry_is_refused_on_a_stale_price(_tmp_db):
         snapshot_fn=await _snap(True), db_path=_tmp_db,
     )
     assert stale is None, "a stale price must never open a position"
+
+
+@pytest.mark.asyncio
+async def test_the_entry_price_comes_from_the_chain_not_the_feed(_tmp_db):
+    """The curve read on-chain wins over whatever the websocket last heard.
+
+    22/08 -- the resolver already fetches and decodes this exact account to
+    check bonding progress, so the reserves that define the price are in hand
+    at zero extra cost. An account read cannot be stale: it IS the state at
+    that slot. The feed's last-known-state can be older than its own
+    staleness window on a pool subscribed seconds ago, which is how position
+    1772 was recorded at 5941$ while the chain said 13260$ -- and the real
+    quote arriving 1.4s later became a +121% "peak" that never happened.
+    """
+    class _Feed:
+        sol_usd = 200.0
+
+        def get_snapshot(self, _p):
+            raise RuntimeError("must not be needed for the entry price")
+
+    async def _wrong_price(_client, _pool, _mint, *, chain):
+        # what the feed would have said: an order of magnitude off
+        return SimpleNamespace(available=True, price_usd=0.0001,
+                               reserve_usd=13000.0, dex_id="pumpfun", stale=False)
+
+    row_id = await pocket.consider_candidate(
+        "mintChain", "poolChain", trade_stream=_Stream(),
+        resolve_curves_fn=_resolve_ok, snapshot_fn=_wrong_price,
+        bonding_ws_feed=_Feed(), db_path=_tmp_db,
+    )
+    assert row_id is not None
+    row = [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolChain"][0]
+
+    curve = _curve(0.78)
+    expected, _ = price_and_reserve_from_curve(curve, token_decimals=6, sol_usd=200.0)
+    assert expected is not None, "the fixture curve must be priceable"
+    assert row["entry_price"] == pytest.approx(expected, rel=1e-9), (
+        "the entry must be priced from the on-chain curve, not from the feed"
+    )

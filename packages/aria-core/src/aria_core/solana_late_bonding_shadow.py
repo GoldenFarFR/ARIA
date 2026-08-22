@@ -42,9 +42,12 @@ simulate.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+
+from dataclasses import is_dataclass, replace as dataclasses_replace
 
 import aiosqlite
 import httpx
@@ -56,10 +59,12 @@ from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.services.pumpfun_bonding_ws import (
     RPC_HTTP_DEFAULT,
     bonding_progress,
+    price_and_reserve_from_curve,
     resolve_bonding_curves,
 )
 from aria_core.solana_fresh_launch_ws_exit_shadow import evaluate_exit
 from aria_core.solana_pump_shadow import (
+    PoolSnapshot,
     SIMULATED_TRADE_SIZE_USD,
     _apply_price_impact_and_fee,
     _minutes_since,
@@ -853,11 +858,57 @@ async def consider_candidate(
                     await bonding_ws_feed.add_pools([(pool_address, mint)])
                 except Exception:  # noqa: BLE001 -- subscription is an enhancement
                     pass
+            # 22/08 -- price the entry from the curve WE JUST READ ON-CHAIN,
+            # not from whatever the websocket last happened to hear. The
+            # resolver above already fetched and decoded this exact account to
+            # check the bonding progress, so the reserves that define the price
+            # are in hand at this point and cost nothing more. An account read
+            # cannot be stale: it IS the state at that slot.
+            #
+            # This is what the pocket got wrong. Position 1772 was recorded at
+            # a 5941$ implied mcap while the chain said 13260$ at that same
+            # second; the genuine quote arriving 1.4s later was then logged as
+            # a +121% PEAK and its disappearance as a collapse, so the trailing
+            # stop closed a position that was still climbing (the token went on
+            # to 22K, +66% above the true entry). Neither number existed. Both
+            # were the same instant priced twice, by two sources that disagreed.
+            #
+            # The websocket path stays exactly as it was for TRACKING an open
+            # position, where its last-known-state semantics are correct.
+            onchain_price, onchain_reserve = (
+                price_and_reserve_from_curve(
+                    curve, token_decimals=decimals,
+                    sol_usd=getattr(bonding_ws_feed, "sol_usd", None),
+                )
+                if curve and decimals is not None else (None, None)
+            )
             snapshot = await _price_position(
                 {"pool_address": pool_address, "token_address": mint},
                 chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
                 geckoterminal_client=geckoterminal_client,
             )
+            if onchain_price:
+                # Keep the snapshot's other fields (dex_id, availability) and
+                # override only what the chain answers authoritatively. Frozen
+                # dataclasses need `replace`; anything else is copied and
+                # mutated, so a caller passing a plain object is not silently
+                # ignored -- which is exactly how the first version of this
+                # left the entry priced by the feed while the test claimed
+                # otherwise.
+                overrides = {
+                    "price_usd": onchain_price,
+                    "stale": False,
+                    "reserve_usd": onchain_reserve or getattr(snapshot, "reserve_usd", None),
+                }
+                if is_dataclass(snapshot) and not isinstance(snapshot, type):
+                    snapshot = dataclasses_replace(snapshot, **overrides)
+                else:
+                    snapshot = copy.copy(snapshot)
+                    for field_name, value in overrides.items():
+                        try:
+                            setattr(snapshot, field_name, value)
+                        except Exception:  # noqa: BLE001 -- immutable stand-in, keep what we have
+                            pass
             if not snapshot.available or snapshot.price_usd is None:
                 accepted, reason = False, "blocked_no_price"
             elif getattr(snapshot, "stale", False):
@@ -1016,8 +1067,41 @@ async def consider_candidate(
         return None
 
 
+async def _price_from_chain(row: dict, *, http_client, bonding_ws_feed):
+    """Reads this position's bonding curve on-chain and prices it.
+
+    Used only when the feed's own value is stale: an account read cannot be,
+    since it IS the state at that slot. Returns ``None`` rather than a guess
+    whenever anything is missing -- a stale price is bad, a fabricated one is
+    worse.
+    """
+    try:
+        resolved = await resolve_bonding_curves(
+            http_client, [(row["pool_address"], row["token_address"])],
+            rpc_http_url=RPC_HTTP_DEFAULT,
+        )
+    except Exception as exc:  # noqa: BLE001 -- never break an exit check
+        logger.info("solana_late_bonding_shadow: on-chain refresh failed for %s (%s)",
+                    row.get("pool_address"), exc)
+        return None
+    account = resolved.get(row["pool_address"]) if resolved else None
+    curve = getattr(account, "curve", None)
+    decimals = getattr(account, "token_decimals", None)
+    if not curve or decimals is None:
+        return None
+    price, reserve = price_and_reserve_from_curve(
+        curve, token_decimals=decimals, sol_usd=getattr(bonding_ws_feed, "sol_usd", None),
+    )
+    if not price:
+        return None
+    return PoolSnapshot(
+        pool_address=row["pool_address"], price_usd=price, reserve_usd=reserve,
+        available=True, dex_id="pumpfun-onchain",
+    )
+
+
 async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn,
-                          geckoterminal_client=None):
+                          geckoterminal_client=None, http_client=None):
     """Prices one open position, RPC FIRST.
 
     20/08 -- this pocket trades tokens that are BY DEFINITION still on their
@@ -1036,6 +1120,21 @@ async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn
         try:
             snap = bonding_ws_feed.get_snapshot(row["pool_address"])
             if getattr(snap, "available", False) and snap.price_usd is not None:
+                # 22/08 -- a STALE price may not decide an exit. The feed's
+                # last-known-state semantics are right when no trade happened
+                # (see pumpfun_bonding_ws's 19/08 comment), but a stop firing
+                # on a price older than the staleness window sells against a
+                # number nobody is trading at. Two-stage on purpose: the fresh
+                # case stays free, and only the doubtful one pays a read --
+                # `getMultipleAccounts` is 1 credit for up to 100 accounts, so
+                # even a large open book costs a handful per pass, and only
+                # for the positions actually in doubt.
+                if getattr(snap, "stale", False) and http_client is not None:
+                    fresh = await _price_from_chain(
+                        row, http_client=http_client, bonding_ws_feed=bonding_ws_feed,
+                    )
+                    if fresh is not None:
+                        return fresh
                 return snap
         except Exception:  # noqa: BLE001 -- a feed hiccup falls through to REST
             pass
@@ -1474,7 +1573,7 @@ async def _apply_exit_check(
 
 async def advance_position_by_pool(
     pool_address: str, *, chain: str = "solana", bonding_ws_feed=None,
-    snapshot_fn=None, db_path: str | None = None, sell_fn=None,
+    snapshot_fn=None, db_path: str | None = None, sell_fn=None, http_client=None,
 ) -> dict:
     """Evaluates the ONE open position on this pool, right now.
 
@@ -1515,6 +1614,19 @@ async def advance_position_by_pool(
     if not getattr(snapshot, "available", False) or snapshot.price_usd is None:
         # Graduated or not yet pushed: the polling sweep owns this one.
         return {"checked": 0, "closed": 0}
+
+    # 22/08 -- same rule as the polling path, and it matters MORE here: this
+    # loop fires on every websocket trade and closes most positions, so a
+    # stale price deciding an exit does the damage here first. This function
+    # reads the feed DIRECTLY rather than through `_price_position`, so the
+    # guard has to be repeated -- fixing only the other path would have left
+    # the busier one untouched.
+    if getattr(snapshot, "stale", False) and http_client is not None:
+        fresh = await _price_from_chain(
+            row, http_client=http_client, bonding_ws_feed=bonding_ws_feed,
+        )
+        if fresh is not None:
+            snapshot = fresh
 
     return await _apply_exit_check(
         row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
@@ -1708,7 +1820,7 @@ async def advance_exit_by_prices(
 async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
-    max_rest_calls: int | None = None, sell_fn=None,
+    max_rest_calls: int | None = None, sell_fn=None, http_client=None,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
     imported, never reimplemented, so the two pockets differ on ENTRY only and
@@ -1793,7 +1905,7 @@ async def advance_exit_simulation(
             # rule a flattened one.
             snapshot = local_snaps.get(row["id"]) or await _price_position(
                 row, chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
-                geckoterminal_client=geckoterminal_client,
+                geckoterminal_client=geckoterminal_client, http_client=http_client,
             )
         except Exception:  # noqa: BLE001 -- a provider failure is not a verdict
             continue

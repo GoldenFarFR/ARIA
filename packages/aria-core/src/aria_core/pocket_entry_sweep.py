@@ -93,6 +93,12 @@ OUTCOME_COLUMNS = frozenset({
     "entry_price", "realistic_entry_price", "remaining_qty",
     "realized_proceeds", "realistic_realized_proceeds", "peak_price",
     "exit_reason", "exit_detail", "exit_price_source",
+    # 22/08 -- WHICH source priced the entry. Bookkeeping, not a tradable
+    # signal: a candidate is never better or worse because of who quoted it,
+    # so sweeping it for deciles would be meaningless. It exists to tell a
+    # curve-priced entry from a REST-priced one when auditing a suspicious
+    # peak -- see the entry's own comment in solana_late_bonding_shadow.
+    "entry_price_source",
     "final_multiplier", "realistic_final_multiplier", "reinforced_final_multiplier",
     "last_price", "last_reserve_usd", "last_checked_at",
     "creator_address", "amm_pool_address", "buy_tx",

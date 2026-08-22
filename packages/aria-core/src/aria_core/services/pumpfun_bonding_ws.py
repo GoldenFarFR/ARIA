@@ -198,6 +198,41 @@ _SUBSCRIBE_BATCH_SIZE = 40
 _SUBSCRIBE_BATCH_GAP_SECONDS = 1.0
 
 
+
+def price_and_reserve_from_curve(
+    state: dict, *, token_decimals: int, sol_usd: float | None,
+) -> tuple[float | None, float | None]:
+    """USD price and pool reserve for a DECODED bonding-curve account.
+
+    Extracted 22/08 so the entry path can price a candidate from the curve it
+    ALREADY read on-chain, instead of asking the websocket for its last known
+    state. The two are not equivalent: a pool subscribed seconds ago has no
+    recent trades in memory, so its "last known state" can predate the caller
+    by more than the staleness window -- which is how position 1772 was
+    recorded at a 5941$ implied mcap while the chain said 13260$, and the real
+    quote landing 1.4s later was logged as a +121% peak that never happened.
+
+    An on-chain account read cannot be stale: it IS the state at that slot.
+
+    Returns ``(None, None)`` when the inputs cannot produce an honest number,
+    never a fabricated one.
+    """
+    if not state or not sol_usd:
+        return None, None
+    virtual_token = state.get("virtual_token_reserves")
+    virtual_quote = state.get("virtual_quote_reserves")
+    if not virtual_token or virtual_quote is None or virtual_token <= 0:
+        return None, None
+    virtual_token_norm = virtual_token / (10 ** token_decimals)
+    virtual_quote_norm = virtual_quote / (10 ** SOL_DECIMALS)
+    price_usd = (virtual_quote_norm / virtual_token_norm) * sol_usd
+    real_quote = state.get("real_quote_reserves")
+    reserve_usd = None
+    if real_quote is not None:
+        # Same "depth = 2x one side" approximation as everywhere else here.
+        reserve_usd = 2.0 * (real_quote / (10 ** SOL_DECIMALS)) * sol_usd
+    return price_usd, reserve_usd
+
 @dataclass(frozen=True)
 class PumpFunBondingCurveAccount:
     """Fully decoded bonding-curve account for one token -- only ever
@@ -564,6 +599,15 @@ class PumpFunBondingWebSocketFeed:
 
     # --- read side ----------------------------------------------------------
 
+    @property
+    def sol_usd(self) -> float | None:
+        """The calibrated SOL/USD rate, or None while uncalibrated.
+
+        Public because the entry path needs it to price a curve it read
+        itself; reading `_sol_usd` from outside would be the kind of private
+        reach-in that quietly breaks on the next refactor."""
+        return self._sol_usd
+
     def get_snapshot(self, pool_address: str) -> PumpFunBondingLiveSnapshot:
         curve = self._curves.get(pool_address)
         if curve is None:
@@ -633,18 +677,12 @@ class PumpFunBondingWebSocketFeed:
                 error="zero_virtual_token_reserve",
             )
 
-        # Both sides normalized to their real decimals before ratio -- see
-        # module docstring's Price formula section.
-        virtual_token_norm = virtual_token / (10 ** curve.token_decimals)
-        virtual_quote_norm = virtual_quote / (10 ** SOL_DECIMALS)
-        price_sol_per_token = virtual_quote_norm / virtual_token_norm
-        price_usd = price_sol_per_token * self._sol_usd
-
-        real_quote_norm = state["real_quote_reserves"] / (10 ** SOL_DECIMALS)
-        # Same "depth = 2x one side" approximation already documented in
-        # pumpswap_ws.py/solana_pump_shadow.py -- real_quote_reserves is the
-        # actual SOL depositors put in (never the virtual offset).
-        reserve_usd = 2.0 * real_quote_norm * self._sol_usd
+        # One formula for the whole project: the entry path prices from the
+        # curve it read on-chain, this prices from the curve the websocket
+        # pushed, and both go through the same function.
+        price_usd, reserve_usd = price_and_reserve_from_curve(
+            state, token_decimals=curve.token_decimals, sol_usd=self._sol_usd,
+        )
         raw_fields = {
             "virtual_quote_raw": virtual_quote,
             "virtual_token_raw": virtual_token,
