@@ -106,9 +106,15 @@ class TestRealSellIsActuallyCalled:
         assert "real_tx=sig1" in (closed["exit_detail"] or "")
 
     @pytest.mark.asyncio
-    async def test_a_profit_rung_sells_only_its_share(self, open_position):
-        """First rung is 25% at +50%. It must not sell the position."""
+    async def test_a_profit_rung_sells_only_its_share(self, open_position, monkeypatch):
+        """A rung must sell its SHARE, never the whole position.
+
+        22/08: the pocket's own ladder was emptied (operator's call, see
+        PROFIT_LADDER), so this pins the MECHANISM by injecting a ladder rather
+        than depending on the pocket's current setting -- the partial-sell path
+        must keep working for whenever a ladder comes back."""
         db, row_id = open_position
+        monkeypatch.setattr(pocket, "PROFIT_LADDER", ((50.0, 0.25),))
         seller = SellRecorder()
         row = await _row(db, row_id)
 

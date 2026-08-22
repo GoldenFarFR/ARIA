@@ -153,3 +153,37 @@ becoming configs over one `PocketEngine`. Also flagged, and TRUE: today's calibr
 no structural train/holdout split -- the journal would allow imposing one mechanically
 before any parameter change. Multi-hour refactor, needs explicit operator go (same clause
 as #329). Report archived at architect-reports/archived/db2e1b05*.md.
+
+## #353 -- Capter LetsBonk / Raydium LaunchLab (diligence FAITE, code a ecrire)
+
+**Enjeu mesure** : pump.fun ne represente que **45,9 %** des lancements Solana,
+LetsBonk **42,3 %** (BAGS 6,25 %, JUP Studio 1,82 %, Believe 1,52 %). ARIA est
+aveugle sur 54 % du marche. C'est le seul levier identifie qui augmente le
+NOMBRE de candidats sans toucher au PnL par trade -- tous les filtres testes le
+22/08 font l'inverse.
+
+**Ce qui est deja verifie sur la chaine (ne pas refaire)** :
+- LetsBonk n'est pas un launchpad independant : c'est une configuration sur
+  **Raydium LaunchLab**.
+- Programme : `LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj` -- confirme
+  executable, owner BPFLoaderUpgradeable.
+- Config LetsBonk : `FfYek5vEz23cMkWsdJwG2oa6EphsvXSHrGpdALN4g6W1` -- 944
+  octets, possedee par le programme. Permet de distinguer LetsBonk des autres
+  tokens LaunchLab.
+
+**Acces, teste empiriquement le 22/08** :
+- PumpPortal `subscribeNewToken` ne remonte QUE pump.fun -- mesure en direct,
+  15 creations en 40s, 100 % `pool=pump`. Cinq formes d'abonnement essayees
+  (dont `pool: bonk` et `subscribeTokenCreation`), aucune ne remonte bonk.
+- Helius refuse `blockSubscribe`/`logsSubscribe`/`programSubscribe` : **HTTP
+  429** a la connexion (quota ou limite de connexions).
+- **Chainstack accepte les trois** et le debit est negligeable : **0,01 Go/jour**
+  sur `logsSubscribe` filtre sur le programme, contre les 74 Go/jour du
+  `logsSubscribe` pump.fun qui avait fait exploser le budget le 21/08. La
+  contrainte budget redoutee n'existe pas.
+
+**Ce qui reste a faire** : decoder le format de courbe LaunchLab (le decodeur
+actuel est specifique a pump.fun -- `derive_bonding_curve_address` calcule une
+PDA du programme pump.fun, inutilisable ici), puis cabler une seconde source de
+decouverte a cote de PumpPortal. Sans le decodeur, on recevrait les tokens sans
+savoir ou ils en sont sur leur courbe, donc sans pouvoir les trader.

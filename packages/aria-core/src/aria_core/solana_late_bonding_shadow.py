@@ -204,7 +204,33 @@ REENTRY_COOLDOWN_MINUTES = 525600.0  # un an = interdiction de fait
 # wallet is literally the only buyer, which is not a market at all. Everything
 # below that is COLLECTED rather than judged -- `top_buyer_share_at_entry` is
 # recorded, so the real wash-trading cutoff is measurable later.
-MAX_TOP_BUYER_SHARE = 0.95
+#
+# 22/08 -- TIGHTENED 0.95 -> 0.40. The "measurable later" arrived: 1029 closures
+# above the liquidity floor, swept at every level.
+#
+#     ceiling   trades cut   their average   outlier-tested PnL kept
+#     95% (old)      -            -                 +13.49%
+#     50%           13         +13.7%               +13.48%
+#     40%           24          +5.8%               +13.67%
+#     30%           42          +6.6%               +13.86%
+#
+# The 24 trades above 40% return +5.8% against the pocket's +17.85%: cutting
+# them IMPROVES the result rather than costing anything, and five of them are
+# worse than -20%.
+#
+# What settled the level is the winners, not the average. Of the 80 closures at
+# +100% or more, this ceiling keeps 79 -- and NOT ONE of the 31 closures above
+# +200% is cut. The fifteen best trades all sit under 15% concentration, which
+# is the real finding: a token that runs attracts many buyers, so no single one
+# dominates. High concentration marks a token carried by one actor, going
+# nowhere, able to leave whenever it likes.
+#
+# STATED HONESTLY: the PnL gain does NOT survive cross-validation (+0.26 on one
+# day, -0.25 on the next). This is kept for the STRUCTURAL reason -- an actor
+# holding 40%+ of the buy volume can empty the pool at will, which is true
+# regardless of what 1029 trades say -- and it is taken because it costs
+# nothing, not because it earns something.
+MAX_TOP_BUYER_SHARE = 0.40
 
 # 21/08 -- a position whose token GRADUATED is exempt from max_hold.
 # Measured on this pocket's own graduated closures: `trailing_stop` exits
@@ -255,8 +281,73 @@ EXEMPT_GRADUATED_FROM_MAX_HOLD = True
 # The friction caveat matters: at 3% sell friction this advantage halves, at
 # 5% it disappears. Rungs are small fractions of a small position, so real
 # impact should stay well under that -- to be verified on live closures.
-PROFIT_LADDER = ((50.0, 0.25), (100.0, 0.25), (200.0, 0.25))
+# 22/08 -- LADDER DISABLED, operator's explicit call ("branche de facon a rater
+# aucun coureur je veut voir le resultat"). Kept as an empty tuple rather than
+# deleted: the note above is the measured case FOR the ladder and stays
+# readable, and restoring it is one edit.
+#
+# What made him ask: the pocket's 100 best trades were rebuilt from minute
+# candles and every exit rule replayed over the SAME paths -- the first honest
+# comparison possible here, since every earlier one compared two different time
+# periods. The ladder came out among the five worst of 43 variants:
+#
+#     rule                                  outlier-tested (pess / opti)
+#     trailing 13%, whole bag                    +101.7%  /  +85.9%
+#     LADDER 50/100/200 + trailing 13%            +69.8%  /  +63.1%
+#     hard exit at +100%                          +58.6%  /  +55.1%
+#
+# Selling 75% of the position before +200% costs ~32 points on tokens that
+# average +200%. Both intra-minute orderings agree, which is the check that
+# killed three earlier candidates.
+#
+# STATED PLAINLY: that sample is the 100 BEST trades, so it answers "what
+# happens on a runner", never "what happens overall". On the unbiased sample
+# archived today (19 paths) the ladder and the whole bag score IDENTICALLY once
+# their top five are removed (+9.81% both). The gain is real on runners and
+# UNPROVEN in general -- the operator chose to stop cutting them and measure.
+PROFIT_LADDER: tuple[tuple[float, float], ...] = ()
+
+# 22/08 -- WIDENED 5% -> 12%, operator's call ("branche celle qui nous permet
+# davoir 150% en moyenne sur les 100 meilleur et on teste"). It is the pairing
+# that tops the 360-combination sweep on the rebuilt runner paths: trailing 8%
+# with a -12% floor averages +153.7% against +148.1% at -5%.
+#
+# THE COST IS KNOWN AND WAS ACCEPTED, not overlooked. 418 of 1029 closures
+# (41%) never reach the +10% peak that arms the trailing, so they exit on this
+# floor -- widening it costs them 7 points each, about 2.8 points across the
+# whole population, against roughly 1.4 points gained from the ~10% that run.
+# The arithmetic says NEGATIVE by about 1.4 points overall; the operator chose
+# to measure it live rather than trust the estimate, which is fair since the
+# estimate assumes every unarmed trade sinks to the floor and many do not.
+#
+# Also fragile on its own terms: this setting swings 13 points between the two
+# intra-minute orderings, far more than the 6-8 points of the -5% variant. A
+# result that depends that much on an unknowable ordering is a candidate, never
+# a conclusion. Revert is one line.
 FIXED_STOP_PCT = 5.0
+
+# 22/08 -- this pocket's OWN trailing distance, operator-directed: get the best
+# possible average PnL across the 100 best trades. Declared here
+# rather than by editing `solana_fresh_launch_ws_exit_shadow.TRAILING_STOP_PCT`
+# (15.0), which every sibling pocket inherits -- changing a shared default to
+# tune one pocket is how a setting silently spreads.
+#
+# 8% is the best of 360 combinations replayed over the 100 rebuilt runner
+# paths, and it wins under BOTH intra-minute orderings (+106.3% / +93.3%
+# outlier-tested, against +101.7% / +85.9% at 13%). Reinforcement was swept in
+# the same pass and adds exactly NOTHING even on pure winners: buying more at
+# +30% lifts the average cost as much as it lifts the size, and the top twelve
+# configurations all decline it.
+#
+# WHY THIS IS DELIBERATELY OVERFITTED, stated so nobody mistakes it later:
+# the sample IS the 100 best trades. A tight trailing shines there because
+# those tokens climb with shallow pullbacks -- on a choppy one it exits at the
+# first hiccup. On the unbiased sample archived today every distance scored
+# the same once its top five were removed. This is the operator's chosen
+# sequence: maximise the runners first, measure, then attack the losers
+# separately -- so the number is a deliberate bet on one half of the problem,
+# not a validated setting.
+TRAILING_STOP_PCT = 8.0
 
 # Kept for the record: the trailing path is no longer reached by this pocket
 # (`FIXED_STOP_PCT` takes precedence), but the constant stays so the shared
@@ -441,6 +532,10 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("observation_seconds_at_entry", "REAL"),
             ("seconds_tracked_at_entry", "REAL"),
             ("top_buyer_address_at_entry", "TEXT"),
+            ("trades_per_second_at_entry", "REAL"),
+            ("distinct_sellers_at_entry", "INTEGER"),
+            ("trades_total_at_entry", "INTEGER"),
+            ("buy_sol_volume_at_entry", "REAL"),
             # Transactions seen at entry. Meaningful only RELATIVE to size --
             # divide by reserve_usd for an intensity comparable across tokens.
             ("trade_count_at_entry", "INTEGER"),
@@ -556,6 +651,30 @@ async def screen_candidate(
         "top_buyer_share": flow.top_buyer_share if flow else None,
         # WHO the concentration belongs to, not just how much (22/08).
         "top_buyer_address": getattr(flow, "top_buyer_address", None) if flow else None,
+        # 22/08, operator's idea ("meme pas un volume minimum ? ou un ratio
+        # volume/nombre de transaction sur 1 minutes ?"). The pocket had NO
+        # volume column at all -- one of the plainest measures of real interest
+        # in a token, never captured.
+        #
+        # What suggested it: the derived trades-per-second rate separates on the
+        # 18% of closures that happen to carry it (+19.6% / +23.9% / +26.7% by
+        # tercile, monotonic). Same direction as time-to-qualify. Worth having
+        # at full coverage rather than on a fifth of the rows.
+        #
+        # Two sources on purpose, because their coverage differs: the trade
+        # stream knows the SOL that actually changed hands, the bonding snapshot
+        # is present on every candidate. Neither is derived from the other.
+        "buy_sol_volume": getattr(flow, "buy_sol_volume", None) if flow else None,
+        # 22/08, operator: "meme le nombre de unique wallet ?". The flow counts
+        # distinct SELLERS and the pocket never stored it -- so we knew how many
+        # wallets were arriving and never how many were leaving. `sell_pressure`
+        # is derived from it but is a RATIO: a token with 3 buyers and 3 sellers
+        # and one with 300 of each read identically, and they are not the same
+        # token. Both raw counts are kept.
+        "distinct_sellers": getattr(flow, "distinct_sellers", None) if flow else None,
+        # `trades_total`/`trades_per_second` are NOT set here: the screen runs
+        # BEFORE the position is priced, so no snapshot exists yet. They are
+        # filled in right after pricing -- see `_add_snapshot_metrics`.
         "buyer_acceleration": (
             trade_stream.buyer_acceleration(mint) if trade_stream is not None else None
         ),
@@ -631,6 +750,23 @@ def _founder_has_sold(trade_stream, mint: str, creator: str) -> bool:
         return bool(trade_stream.founder_sold(mint, creator))
     except Exception:  # noqa: BLE001 -- an observation never blocks an entry
         return False
+
+
+
+def _add_snapshot_metrics(metrics: dict, snapshot) -> None:
+    """Fills the metrics that only exist once the position has been PRICED.
+
+    22/08 -- the screen runs before pricing, so anything read from the snapshot
+    has to be added afterwards. Written as its own step because the alternative
+    (passing a snapshot that does not exist yet) is exactly how the
+    time-to-qualify metric ended up at 21% coverage earlier today: instrumented
+    against a source that had already let go of the mint."""
+    if snapshot is None:
+        return
+    total = getattr(snapshot, "trades_total", None)
+    seconds = getattr(snapshot, "seconds_tracked", None)
+    metrics["trades_total"] = total
+    metrics["trades_per_second"] = (total / seconds) if (total and seconds) else None
 
 
 async def consider_candidate(
@@ -738,6 +874,8 @@ async def consider_candidate(
         if not accepted or snapshot is None:
             return None
 
+        _add_snapshot_metrics(metrics, snapshot)
+
         if await creator_reputation.is_factory(getattr(account, "creator", None), db_path=db_path):
             return None
 
@@ -794,10 +932,12 @@ async def consider_candidate(
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
                      observation_seconds_at_entry, seconds_tracked_at_entry,
-                     top_buyer_address_at_entry,
+                     top_buyer_address_at_entry, buy_sol_volume_at_entry,
+                     trades_total_at_entry, trades_per_second_at_entry,
+                     distinct_sellers_at_entry,
                      trade_count_at_entry, buy_count_at_entry,
                      round_trip_wallets_at_entry, round_trip_share_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -811,6 +951,10 @@ async def consider_candidate(
                     metrics.get("observation_seconds"),
                     metrics.get("seconds_tracked"),
                     metrics.get("top_buyer_address"),
+                    metrics.get("buy_sol_volume"),
+                    metrics.get("trades_total"),
+                    metrics.get("trades_per_second"),
+                    metrics.get("distinct_sellers"),
                     metrics.get("trade_count"), metrics.get("buy_count"),
                     metrics.get("round_trip_wallets"), metrics.get("round_trip_share"),
                 ),
@@ -1174,6 +1318,9 @@ async def _apply_exit_check(
         window_low=getattr(snapshot, "price_low_since_last_read", None),
         hard_stop_pct=HARD_STOP_PCT,
         profit_ladder=PROFIT_LADDER,
+        # This pocket's own distance, never the shared default -- see
+        # TRAILING_STOP_PCT's own comment for why 8% and why it is a bet.
+        trailing_stop_pct=TRAILING_STOP_PCT,
         fixed_stop_pct=FIXED_STOP_PCT,
     )
     # 22/08, caught live within three minutes of enabling real trading: a

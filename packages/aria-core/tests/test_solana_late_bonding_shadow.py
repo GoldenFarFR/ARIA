@@ -1054,9 +1054,14 @@ async def test_the_exit_rule_sees_the_low_reached_between_reads(_tmp_db):
     row = (await _rows(_tmp_db))[0]
     assert row["exit_reason"] == "fixed_stop"
     # filled AT the stop: the market is above it now, so the crossing was real
-    # and fillable -- not the -30% low, and not the -5% current price.
-    # 21/08 -- fixed stop at -5%, not the former -20% hard stop
-    assert row["realized_proceeds"] == pytest.approx(entry * 0.95)
+    # and fillable -- not the -30% low, and not the current price.
+    #
+    # Written against the CONFIGURED stop rather than a hard-coded 0.95: the
+    # distance is retuned deliberately (5% -> 12% on 22/08), and pinning the
+    # number here would fail on a legitimate change instead of catching a
+    # broken fill. What must hold is that the fill lands ON the stop.
+    expected = entry * (1 - pocket.FIXED_STOP_PCT / 100.0)
+    assert row["realized_proceeds"] == pytest.approx(expected)
 
 
 @pytest.mark.asyncio
