@@ -331,28 +331,33 @@ PROFIT_LADDER: tuple[tuple[float, float], ...] = ()
 # a conclusion. Revert is one line.
 FIXED_STOP_PCT = 5.0
 
-# 22/08 -- this pocket's OWN trailing distance, operator-directed: get the best
-# possible average PnL across the 100 best trades. Declared here
-# rather than by editing `solana_fresh_launch_ws_exit_shadow.TRAILING_STOP_PCT`
-# (15.0), which every sibling pocket inherits -- changing a shared default to
-# tune one pocket is how a setting silently spreads.
+# 22/08 -- BACK TO 15%, the shared default, after three hours of production
+# disproved the 8% bet. Kept as an explicit constant rather than deleted so the
+# next person sees WHY it is not 8.
 #
-# 8% is the best of 360 combinations replayed over the 100 rebuilt runner
-# paths, and it wins under BOTH intra-minute orderings (+106.3% / +93.3%
-# outlier-tested, against +101.7% / +85.9% at 13%). Reinforcement was swept in
-# the same pass and adds exactly NOTHING even on pure winners: buying more at
-# +30% lifts the average cost as much as it lifts the size, and the top twelve
-# configurations all decline it.
+# The bet was: 8% was the best of 360 combinations replayed over the 100 best
+# trades, winning under both intra-minute orderings. It was written down at the
+# time as a deliberate bet on half the problem, not a validated setting,
+# because the sample WAS the winners -- a tight trailing shines on tokens that
+# climb with shallow pullbacks.
 #
-# WHY THIS IS DELIBERATELY OVERFITTED, stated so nobody mistakes it later:
-# the sample IS the 100 best trades. A tight trailing shines there because
-# those tokens climb with shallow pullbacks -- on a choppy one it exits at the
-# first hiccup. On the unbiased sample archived today every distance scored
-# the same once its top five were removed. This is the operator's chosen
-# sequence: maximise the runners first, measure, then attack the losers
-# separately -- so the number is a deliberate bet on one half of the problem,
-# not a validated setting.
-TRAILING_STOP_PCT = 8.0
+# What production said, hour by hour, on the day it shipped:
+#   16h  peak median +37.7%   peaks >+50%: 38.2%   PnL +15.69%
+#   18h  peak median +11.8%   peaks >+50%: 20.6%   PnL +16.98%
+#   19h  peak median  +2.3%   peaks >+50%:  3.7%   PnL  -5.43%   <- 8% live
+#   21h  peak median  +6.6%   peaks >+50%:  0.0%   PnL  -8.76%
+#
+# The PEAKS collapsed, not just the PnL. A peak is the highest price seen
+# BEFORE our exit, so a collapsing peak means we stop observing the rise at
+# all. The market moved the other way that day (22/08 peak median +16.3%
+# against +13.1% on 21/08), so this was the setting, not conditions.
+#
+# The arithmetic, which needed no replay: the trailing arms at +10% and sits
+# `distance` below the peak. At 8%, a +12% peak puts the stop at +3.0% -- any
+# breath ejects the position. At 15%, the same peak puts it at -4.8%, BELOW
+# the fixed stop, so the position simply keeps running until a real move.
+# 8% does not follow a trend, it exits it.
+TRAILING_STOP_PCT = 15.0
 
 # Kept for the record: the trailing path is no longer reached by this pocket
 # (`FIXED_STOP_PCT` takes precedence), but the constant stays so the shared
