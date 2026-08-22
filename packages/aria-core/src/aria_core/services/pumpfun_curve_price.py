@@ -117,6 +117,12 @@ async def fetch_prices(
                 resp.raise_for_status()
                 values = ((resp.json() or {}).get("result") or {}).get("value") or []
             except Exception as exc:  # noqa: BLE001 -- one batch failing is not all
+                if "429" in str(exc):
+                    # Tell the shared resolver, so EVERY caller falls back --
+                    # not just this one.
+                    from aria_core.services import pumpswap_ws
+
+                    pumpswap_ws.note_rpc_http_exhausted()
                 logger.info("pumpfun_curve_price: batch failed (%s)", exc)
                 continue
 

@@ -330,6 +330,10 @@ async def token_balance(mint: str, *, client: httpx.AsyncClient | None = None) -
             total += int((info.get("tokenAmount") or {}).get("amount") or 0)
         return total
     except Exception as exc:  # noqa: BLE001 -- unknown is never zero
+        if "429" in str(exc):
+            from aria_core.services import pumpswap_ws
+
+            pumpswap_ws.note_rpc_http_exhausted()
         logger.info("solana_agent_wallet: token balance unreadable for %s (%s)", mint, exc)
         return None
     finally:

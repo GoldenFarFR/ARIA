@@ -16,6 +16,14 @@ import pytest
 from aria_core import solana_late_bonding_shadow as pocket
 
 
+@pytest.fixture(autouse=True)
+def _clear_sell_cooldown():
+    """The cooldown is process-global by design; tests must not inherit it."""
+    pocket._sell_failed_at.clear()
+    yield
+    pocket._sell_failed_at.clear()
+
+
 class FakeSnapshot:
     """Shape `_apply_exit_check` reads. Mirrors the real feed's fields."""
 
@@ -162,8 +170,11 @@ class TestFailedSellNeverBecomesAClosure:
         assert still["exit_reason"] in (None, "")
 
     @pytest.mark.asyncio
-    async def test_the_retry_on_the_next_pass_succeeds(self, open_position):
-        """A transient failure must not strand the position forever."""
+    async def test_the_retry_succeeds_once_the_cooldown_elapses(self, open_position):
+        """A transient failure must not strand the position forever -- but the
+        retry waits out SELL_COOLDOWN_SECONDS rather than hammering. Retrying
+        on every pass is what produced 847 rate-limit errors on 22/08 and took
+        the pocket down for three hours."""
         db, row_id = open_position
         row = await _row(db, row_id)
 
@@ -172,11 +183,20 @@ class TestFailedSellNeverBecomesAClosure:
             sell_fn=SellRecorder(refuse=True),
         )
         row = await _row(db, row_id)
+
+        # Still inside the cooldown: the wallet must not be touched at all.
+        blocked = SellRecorder()
+        await pocket._apply_exit_check(
+            row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db, sell_fn=blocked,
+        )
+        assert blocked.calls == []
+
+        # Once it elapses, the exit proceeds normally.
+        pocket._sell_failed_at.clear()
         seller = SellRecorder()
         await pocket._apply_exit_check(
             row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db, sell_fn=seller,
         )
-
         assert seller.calls[0]["fraction"] == 1.0
         assert (await _row(db, row_id))["exit_reason"]
 

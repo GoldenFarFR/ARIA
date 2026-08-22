@@ -113,8 +113,48 @@ def solana_rpc_is_dedicated() -> bool:
     return bool(RPC_HTTP_DEFAULT) and bool(RPC_WS_DEFAULT)
 
 
+# 22/08, real outage: Helius' monthly quota ran out and answered 429 to
+# everything. Every caller of require_solana_rpc_http() failed at once --
+# selling, pricing, pool resolution -- and the pocket went three hours without
+# a trade while a fully working second provider sat unused.
+#
+# One provider being exhausted must not be a system-wide failure, so the
+# fallback lives HERE, at the single point every caller already goes through,
+# rather than in each of them. `_rpc_http_exhausted_until` is set by whoever
+# actually sees the 429; nothing here probes on its own.
+_QUOTA_BACKOFF_SECONDS = 600.0
+_rpc_http_exhausted_until = 0.0
+
+
+def note_rpc_http_exhausted() -> None:
+    """Called when the primary endpoint answers 429 on quota."""
+    global _rpc_http_exhausted_until
+    import time as _time
+
+    _rpc_http_exhausted_until = _time.monotonic() + _QUOTA_BACKOFF_SECONDS
+    logger.warning(
+        "pumpswap_ws: primary Solana RPC exhausted, falling back for %.0fs",
+        _QUOTA_BACKOFF_SECONDS,
+    )
+
+
 def require_solana_rpc_http() -> str:
+    """The HTTP endpoint to use right now.
+
+    Prefers the primary, but hands out the polling endpoint while the primary
+    is known exhausted -- a degraded provider is worth more than none.
+    """
+    import os
+    import time as _time
+
+    if _rpc_http_exhausted_until > _time.monotonic():
+        fallback = (os.environ.get("ARIA_SOLANA_RPC_HTTP_POLLING", "") or "").strip()
+        if fallback:
+            return fallback
     if not RPC_HTTP_DEFAULT:
+        fallback = (os.environ.get("ARIA_SOLANA_RPC_HTTP_POLLING", "") or "").strip()
+        if fallback:
+            return fallback
         raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_HTTP"))
     return RPC_HTTP_DEFAULT
 

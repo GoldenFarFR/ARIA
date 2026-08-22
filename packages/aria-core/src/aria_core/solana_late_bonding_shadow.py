@@ -965,6 +965,28 @@ def _reinforced_multiplier(row: dict, exit_multiplier: float | None) -> float | 
     return 1 + gain / deployed
 
 
+# A sell that just failed is not retried for this long. Without it, a position
+# that cannot be exited is retried by every loop on every pass -- which on
+# 22/08 produced 847 rate-limit errors and took the whole pocket down for 3
+# hours, discovery included. The exit is not abandoned, only paced.
+SELL_COOLDOWN_SECONDS = 30.0
+_sell_failed_at: dict[int, float] = {}
+
+
+def _sell_on_cooldown(row_id: int) -> bool:
+    last = _sell_failed_at.get(row_id)
+    return last is not None and (time.monotonic() - last) < SELL_COOLDOWN_SECONDS
+
+
+def _mark_sell_failed(row_id: int) -> None:
+    _sell_failed_at[row_id] = time.monotonic()
+    if len(_sell_failed_at) > 500:
+        cutoff = time.monotonic() - SELL_COOLDOWN_SECONDS * 4
+        for key in [k for k, v in _sell_failed_at.items() if v < cutoff]:
+            _sell_failed_at.pop(key, None)
+
+
+
 async def _apply_exit_check(
     row: dict, snapshot, *, chain: str, db_path: str | None, sell_fn=None,
 ) -> dict:
@@ -1085,18 +1107,27 @@ async def _apply_exit_check(
         if held_before > 0 and held_after < held_before:
             closing = result.get("exit_reason") not in (None, "")
             fraction = 1.0 if closing else (held_before - held_after) / held_before
+            # 22/08, real outage: seven positions that could not be sold were
+            # retried on EVERY pass of EVERY loop. 847 rate-limit errors in
+            # minutes, and the provider then refused everything -- including
+            # discovery, so the pocket stopped trading entirely for 3 hours.
+            # A failing sell must back off, not hammer.
+            if _sell_on_cooldown(row["id"]):
+                return {"checked": 1, "closed": 0}
             try:
                 fill = await sell_fn(row["token_address"], fraction, chain=chain)
             except Exception as exc:  # noqa: BLE001 -- a failed sell is not an exit
+                _mark_sell_failed(row["id"])
                 logger.warning(
-                    "solana_late_bonding_shadow: sell_fn raised for %s (%s) -- position stays open",
-                    row["token_address"], exc,
+                    "solana_late_bonding_shadow: sell_fn raised for %s (%s) -- retry in %.0fs",
+                    row["token_address"], exc, SELL_COOLDOWN_SECONDS,
                 )
                 return {"checked": 1, "closed": 0}
             if not fill:
+                _mark_sell_failed(row["id"])
                 logger.warning(
-                    "solana_late_bonding_shadow: real sell refused for %s -- position stays open",
-                    row["token_address"],
+                    "solana_late_bonding_shadow: real sell refused for %s -- retry in %.0fs",
+                    row["token_address"], SELL_COOLDOWN_SECONDS,
                 )
                 return {"checked": 1, "closed": 0}
             # The real proceeds replace the modelled ones: once genuine money
