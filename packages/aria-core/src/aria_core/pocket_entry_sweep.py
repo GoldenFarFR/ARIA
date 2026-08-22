@@ -110,6 +110,25 @@ MIN_KEPT_ROWS = 100
 MIN_ROWS_FOR_A_VERDICT = 200
 MIN_ROWS_PER_DAY = 15
 
+# Stability across time needs at least two days to mean anything. Without this
+# the check passed on a SINGLE day of data and reported a candidate anyway --
+# caught 22/08 on FRESH-LAUNCH, whose 439 closures all sit on 2026-08-19. A
+# filter fitted to one day describes that day; calling that "temporally stable"
+# is worse than not checking, because it carries a verdict.
+MIN_DISTINCT_DAYS = 2
+
+# Values no real pool or trade can produce. Their presence means the pocket's
+# own recording is broken, and a sweep over broken data produces a confident
+# answer about nothing -- the most dangerous output this module could have.
+#
+# Both ceilings come from defects seen live on 22/08: FRESH-LAUNCH holds five
+# reserves between 1M$ and 1.485 BILLION dollars on freshly launched tokens,
+# and SUPPORT-BOUNCE v1/v2 hold four multipliers around +500,000% -- the same
+# raw-units/decimals confusion that priced a token at 1.6e-11 instead of
+# 1.6e-5 on the real-money path the night before.
+IMPLAUSIBLE_RESERVE_USD = 1_000_000.0
+IMPLAUSIBLE_MULTIPLIER = 100.0
+
 # A candidate must beat the unfiltered baseline by this much AFTER its two best
 # trades are removed. Smaller than this and we are fitting noise: the three
 # filters this module was written to catch all sat under 1 point.
@@ -302,7 +321,7 @@ def _stable_over_time(rows: list[dict], metric: str, cut: float, sense: str) -> 
         tested += 1
         if score(kept).avg_pct <= score(rejected).avg_pct:
             return False
-    return tested >= 1
+    return tested >= MIN_DISTINCT_DAYS
 
 
 def sweep(rows: list[dict], *, metric: str | None = None) -> list[Candidate]:
@@ -350,21 +369,61 @@ def sweep(rows: list[dict], *, metric: str | None = None) -> list[Candidate]:
     return out
 
 
+def data_health(rows: list[dict]) -> dict:
+    """Values the pocket cannot have really observed.
+
+    Checked BEFORE any sweep because a sweep over broken data still returns a
+    confident answer, and a confident answer about corrupted numbers is the
+    most dangerous thing this module could produce. Found the hard way on
+    22/08: the sweep reported a clean candidate on FRESH-LAUNCH while five of
+    its reserves sat above a billion dollars."""
+    absurd_reserve = [
+        r for r in rows
+        if isinstance(r.get("reserve_usd"), (int, float))
+        and float(r["reserve_usd"]) > IMPLAUSIBLE_RESERVE_USD
+    ]
+    absurd_multiplier = [
+        r for r in rows
+        if isinstance(r.get("final_multiplier"), (int, float))
+        and float(r["final_multiplier"]) > IMPLAUSIBLE_MULTIPLIER
+    ]
+    days = {str(r.get("detected_at", ""))[:10] for r in rows if r.get("detected_at")}
+    return {
+        "absurd_reserve": len(absurd_reserve),
+        "absurd_multiplier": len(absurd_multiplier),
+        "distinct_days": len(days),
+        "clean": not absurd_reserve and not absurd_multiplier,
+        "worst_reserve": max(
+            (float(r["reserve_usd"]) for r in absurd_reserve), default=None
+        ),
+        "worst_multiplier": max(
+            (float(r["final_multiplier"]) for r in absurd_multiplier), default=None
+        ),
+    }
+
+
 def build_report(pocket: str, *, metric: str | None = None,
                  db_path: str = DEFAULT_DB, top: int = 10) -> dict:
     rows = load_closures(pocket, db_path=db_path)
     baseline = score(rows)
+    health = data_health(rows)
     candidates = sweep(rows, metric=metric)
     survivors = [c for c in candidates if c.survives]
     return {
         "pocket": pocket,
         "closures": len(rows),
         "baseline": baseline.as_dict(),
+        "data_health": health,
         "metrics_swept": len(entry_metrics(rows)) if metric is None else 1,
         "survivors": [c.as_dict() for c in survivors[:top]],
         "best_rejected": [c.as_dict() for c in candidates if not c.survives][:top],
+        # Corrupted input outranks every other outcome: a filter derived from
+        # impossible numbers must never be presented as a finding, however well
+        # it scores.
         "verdict": (
-            "insufficient" if len(rows) < MIN_ROWS_FOR_A_VERDICT
+            "corrupt_data" if not health["clean"]
+            else "insufficient" if len(rows) < MIN_ROWS_FOR_A_VERDICT
+            else "single_day" if health["distinct_days"] < MIN_DISTINCT_DAYS
             else "no_filter_survives" if not survivors
             else "candidate_found"
         ),
@@ -380,6 +439,30 @@ def _render(report: dict) -> str:
         f"{report['baseline']['severe_loss_pct']:.1f}% de pertes <=-20%",
         f"  verdict : {report['verdict']}",
     ]
+    health = report["data_health"]
+    if not health["clean"]:
+        # Either kind can be absent, so neither worst-value may be formatted
+        # unconditionally.
+        faults = []
+        if health["absurd_reserve"]:
+            faults.append(
+                f"{health['absurd_reserve']} reserve(s) absurde(s) "
+                f"(max {health['worst_reserve']:,.0f}$)"
+            )
+        if health["absurd_multiplier"]:
+            faults.append(
+                f"{health['absurd_multiplier']} multiplicateur(s) absurde(s) "
+                f"(max x{health['worst_multiplier']:,.0f})"
+            )
+        lines.append(
+            f"  !! DONNEES CORROMPUES -- {', '.join(faults)}. "
+            f"Rien ci-dessous n'est fiable."
+        )
+    elif health["distinct_days"] < MIN_DISTINCT_DAYS:
+        lines.append(
+            f"  !! UN SEUL JOUR de donnees ({health['distinct_days']}) -- la "
+            f"stabilite temporelle ne peut pas etre testee."
+        )
     for title, key in (("FILTRES QUI SURVIVENT", "survivors"),
                        ("MEILLEURS RECALES (et pourquoi)", "best_rejected")):
         lines.append(f"\n{title}")

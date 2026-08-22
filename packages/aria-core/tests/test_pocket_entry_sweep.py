@@ -190,3 +190,94 @@ def test_every_registered_pocket_names_a_real_table(pocket):
     finally:
         con.close()
     assert found == 1, f"{pocket} points at a missing table: {sweep.POCKETS[pocket]}"
+
+
+class TestCorruptDataIsRefusedBeforeAnyVerdict:
+    """22/08 -- the sweep reported a clean candidate on FRESH-LAUNCH while five
+    of its reserves sat above a BILLION dollars, and its whole sample came from
+    a single day. Both defects were in the tool, not the data: a confident
+    answer about corrupted numbers is the most dangerous output it can produce."""
+
+    def test_an_impossible_reserve_blocks_the_verdict(self, tmp_path):
+        rows = _real_signal_rows()
+        rows.append(_row("21", 1.0, 1_485_198_596.0))  # the real observed value
+
+        db = _make_db(tmp_path, rows)
+        report = sweep.build_report("late_bonding", db_path=db)
+
+        assert report["verdict"] == "corrupt_data"
+        assert report["data_health"]["absurd_reserve"] == 1
+        assert report["data_health"]["clean"] is False
+
+    def test_an_impossible_multiplier_blocks_the_verdict(self, tmp_path):
+        """SUPPORT-BOUNCE v1/v2 carry multipliers around +500,000% -- the same
+        raw-units confusion that priced a token at 1.6e-11 instead of 1.6e-5."""
+        rows = _real_signal_rows()
+        rows.append(_row("21", 5794.0, 6000.0))
+
+        db = _make_db(tmp_path, rows)
+        report = sweep.build_report("late_bonding", db_path=db)
+
+        assert report["verdict"] == "corrupt_data"
+        assert report["data_health"]["absurd_multiplier"] == 1
+
+    def test_a_single_day_cannot_claim_temporal_stability(self, tmp_path):
+        """A filter fitted to one day describes that day. Reporting it as
+        stable is worse than not checking, because it carries a verdict."""
+        rows = []
+        for i in range(200):
+            rows.append(_row("19", 0.70, 1000.0 + i * 10))
+            rows.append(_row("19", 1.60, 6000.0 + i * 10))
+
+        db = _make_db(tmp_path, rows)
+        report = sweep.build_report("late_bonding", db_path=db)
+
+        assert report["verdict"] == "single_day"
+        assert report["data_health"]["distinct_days"] == 1
+        assert not report["survivors"], "no candidate may survive on one day"
+
+    def test_clean_data_still_reaches_a_verdict(self, tmp_path):
+        """The guard must not swallow the real case it was added around."""
+        db = _make_db(tmp_path, _real_signal_rows())
+        report = sweep.build_report("late_bonding", db_path=db)
+
+        assert report["data_health"]["clean"] is True
+        assert report["verdict"] == "candidate_found"
+
+
+class TestTheReportAlwaysRenders:
+    """A report that crashes while printing is a report nobody reads. Caught
+    live 22/08: the corruption banner formatted BOTH worst-values even when
+    only one kind of fault was present, so the tool died on the exact pockets
+    it had just been taught to flag."""
+
+    @pytest.mark.parametrize("bad_row", [
+        pytest.param(("reserve", 1.0, 1_485_198_596.0), id="reserve_only"),
+        pytest.param(("multiplier", 5794.0, 6000.0), id="multiplier_only"),
+    ])
+    def test_a_single_kind_of_corruption_still_prints(self, tmp_path, bad_row):
+        _, mult, reserve = bad_row
+        rows = _real_signal_rows()
+        rows.append(_row("21", mult, reserve))
+
+        report = sweep.build_report("late_bonding", db_path=_make_db(tmp_path, rows))
+        rendered = sweep._render(report)
+
+        assert "DONNEES CORROMPUES" in rendered
+
+    def test_a_clean_report_prints_without_a_warning(self, tmp_path):
+        report = sweep.build_report(
+            "late_bonding", db_path=_make_db(tmp_path, _real_signal_rows())
+        )
+        rendered = sweep._render(report)
+
+        assert "DONNEES CORROMPUES" not in rendered
+        assert "UN SEUL JOUR" not in rendered
+
+    def test_a_single_day_report_prints_its_warning(self, tmp_path):
+        rows = [_row("19", 1.6, 6000.0 + i) for i in range(120)]
+        rows += [_row("19", 0.7, 1000.0 + i) for i in range(120)]
+
+        report = sweep.build_report("late_bonding", db_path=_make_db(tmp_path, rows))
+
+        assert "UN SEUL JOUR" in sweep._render(report)
