@@ -844,6 +844,7 @@ async def consider_candidate(
             snapshot = await _price_position(
                 {"pool_address": pool_address, "token_address": mint},
                 chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
+                geckoterminal_client=geckoterminal_client,
             )
             if not snapshot.available or snapshot.price_usd is None:
                 accepted, reason = False, "blocked_no_price"
@@ -980,7 +981,8 @@ async def consider_candidate(
         return None
 
 
-async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn):
+async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn,
+                          geckoterminal_client=None):
     """Prices one open position, RPC FIRST.
 
     20/08 -- this pocket trades tokens that are BY DEFINITION still on their
@@ -1013,7 +1015,13 @@ async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn
         except Exception:  # noqa: BLE001
             pass
     fn = snapshot_fn or _snapshot_with_fallback
-    return await fn(None, row["pool_address"], row["token_address"], chain=chain)
+    # 22/08 -- this used to pass a literal None as the client. DexScreener is
+    # tried first and never touches it, so the bug stayed invisible until the
+    # GeckoTerminal fallback was actually needed -- i.e. exactly when the
+    # primary source was already failing. 7838 swallowed AttributeErrors since
+    # 20/08, each one a candidate dropped by a bug rather than by a filter.
+    return await fn(geckoterminal_client, row["pool_address"], row["token_address"],
+                    chain=chain)
 
 
 async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = None) -> None:
@@ -1750,6 +1758,7 @@ async def advance_exit_simulation(
             # rule a flattened one.
             snapshot = local_snaps.get(row["id"]) or await _price_position(
                 row, chain=chain, bonding_ws_feed=bonding_ws_feed, snapshot_fn=snapshot_fn,
+                geckoterminal_client=geckoterminal_client,
             )
         except Exception:  # noqa: BLE001 -- a provider failure is not a verdict
             continue

@@ -1616,3 +1616,38 @@ async def test_a_different_token_is_unaffected(_tmp_db):
         snapshot_fn=_snapshot_ok, db_path=_tmp_db,
     )
     assert other is not None
+
+
+@pytest.mark.asyncio
+async def test_the_rest_fallback_receives_the_real_geckoterminal_client():
+    """The client handed in by the caller must reach the REST cascade.
+
+    22/08 -- it did not: `_price_position` passed a literal None, so the
+    GeckoTerminal fallback inside `_snapshot_with_fallback` raised
+    AttributeError the moment DexScreener came back empty. Because DexScreener
+    is tried FIRST and never touches the client, the bug was invisible on the
+    happy path and only fired when the backup source was actually needed --
+    7838 swallowed failures between 20/08 and 22/08, every one a candidate
+    dropped by a bug rather than by a filter.
+    """
+    seen: list[object] = []
+    sentinel = object()
+
+    async def _rest(client, pool, token, *, chain):
+        seen.append(client)
+        return SimpleNamespace(available=True, price_usd=1e-6,
+                               reserve_usd=9_000.0, dex_id="pumpfun")
+
+    class _NoFeed:
+        def get_snapshot(self, _amm):
+            raise RuntimeError("no websocket value here")
+
+    await pocket._price_position(
+        {"pool_address": "poolA", "token_address": "mintA"},
+        chain="solana", bonding_ws_feed=_NoFeed(), snapshot_fn=_rest,
+        geckoterminal_client=sentinel,
+    )
+    assert seen == [sentinel], (
+        "the caller's GeckoTerminal client must reach the REST cascade, "
+        "otherwise the fallback path calls None.get_pool_snapshot()"
+    )

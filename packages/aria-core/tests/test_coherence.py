@@ -1513,3 +1513,37 @@ def test_solana_rpc_calls_go_through_the_gateway():
         f"Utilise aria_core.services.solana_gateway.call(), ou ajoute le module "
         f"a _SOLANA_RPC_ALLOWLIST avec la raison."
     )
+
+
+def test_no_pocket_hands_a_none_client_to_the_rest_cascade():
+    """A literal None as the REST cascade's client is always a bug.
+
+    22/08 -- `solana_late_bonding_shadow._price_position` did exactly that.
+    DexScreener is tried FIRST and never touches the client, so the happy path
+    stayed green while the GeckoTerminal fallback raised AttributeError the
+    moment the primary source came back empty -- i.e. precisely when the
+    backup was needed. 7838 failures were swallowed between 20/08 and 22/08,
+    each one a candidate dropped by a bug rather than by a filter, and the
+    caller had been passing a perfectly good client all along.
+
+    Checked mechanically rather than by eye: the failure is invisible in
+    normal operation, so nothing else would catch its return.
+    """
+    src = REPO / "packages/aria-core/src/aria_core"
+    offenders: list[str] = []
+    for path in sorted(src.glob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name not in {"_snapshot_with_fallback", "fn"}:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and first.value is None:
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "these calls hand a literal None to the REST snapshot cascade, so the "
+        "GeckoTerminal fallback will raise AttributeError exactly when it is "
+        f"needed: {offenders}"
+    )
