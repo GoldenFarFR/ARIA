@@ -57,13 +57,80 @@ class SwapSimulationError(RuntimeError):
     result: a swap reported as viable when it is not would be acted on."""
 
 
+# Priority fee for latency-sensitive trades (22/08), CALIBRATED, never guessed.
+#
+# The first version of this constant was a flat 100_000 lamports, invented. On
+# a 0.10$ trade that is 20% of the position in fees for a round trip -- while
+# `getRecentPrioritizationFees` showed the network's median, p75 AND p90 all at
+# ZERO. It was paying twenty percent to jump an empty queue.
+#
+# So the fee is read from the chain and sized against it. The floor exists
+# because being marginally above a field paying nothing is what buys inclusion
+# in the next block; the ceiling exists because no latency gain justifies
+# spending a tenth of the position, and a congestion spike must never silently
+# drain the wallet through fees.
+PRIORITY_FEE_FLOOR_LAMPORTS = 5_000
+PRIORITY_FEE_CEILING_LAMPORTS = 20_000
+_PRIORITY_FEE_TTL_SECONDS = 120.0
+_priority_fee_cache: tuple[float, int] | None = None
+
+
+async def recent_priority_fee(
+    *, rpc_http_url: str, client: httpx.AsyncClient | None = None,
+) -> int:
+    """What to pay right now, from the network's own recent fees.
+
+    Takes the 75th percentile of recent blocks -- enough to be ahead of the
+    field without bidding against the top of it -- then clamps to the bounds
+    above. Falls back to the floor when the RPC cannot be read: unknown
+    congestion is not a reason to overpay.
+    """
+    import time
+
+    global _priority_fee_cache
+    now = time.monotonic()
+    if _priority_fee_cache and now - _priority_fee_cache[0] < _PRIORITY_FEE_TTL_SECONDS:
+        return _priority_fee_cache[1]
+
+    fee = PRIORITY_FEE_FLOOR_LAMPORTS
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=10.0)
+    try:
+        resp = await client.post(
+            rpc_http_url,
+            json={"jsonrpc": "2.0", "id": 1,
+                  "method": "getRecentPrioritizationFees", "params": [[]]},
+        )
+        resp.raise_for_status()
+        values = sorted(
+            int(f.get("prioritizationFee") or 0)
+            for f in ((resp.json() or {}).get("result") or [])
+        )
+        if values:
+            observed = values[int(len(values) * 0.75)]
+            fee = max(PRIORITY_FEE_FLOOR_LAMPORTS,
+                      min(observed, PRIORITY_FEE_CEILING_LAMPORTS))
+    except Exception as exc:  # noqa: BLE001 -- unknown congestion, pay the floor
+        logger.info("jupiter_swap_simulation: priority fee unreadable (%s)", exc)
+    finally:
+        if owns:
+            await client.aclose()
+
+    _priority_fee_cache = (now, fee)
+    return fee
+
+
 async def build_swap_transaction(
     quote: dict, user_public_key: str, *, client: httpx.AsyncClient | None = None,
+    priority_fee_lamports: int | None = None,
 ) -> str:
     """Asks Jupiter for the base64 transaction implementing ``quote``.
 
     Takes a PUBLIC key only. This builds an unsigned transaction -- the
     signature is a separate step that this module deliberately cannot perform.
+
+    ``priority_fee_lamports`` buys faster block inclusion. Omitted by default,
+    since it is a real cost that only pays for itself on a racing path.
     """
     if quote.get("slippage_bps_used", MAX_SLIPPAGE_BPS) > MAX_SLIPPAGE_BPS:
         raise SwapSimulationError("quote carries a slippage above the project ceiling")
@@ -85,6 +152,8 @@ async def build_swap_transaction(
         # source of stranded wrapped-SOL accounts.
         "wrapAndUnwrapSol": True,
     }
+    if priority_fee_lamports:
+        payload["prioritizationFeeLamports"] = int(priority_fee_lamports)
     owns = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
     try:

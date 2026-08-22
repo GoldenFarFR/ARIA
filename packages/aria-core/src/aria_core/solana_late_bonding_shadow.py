@@ -296,6 +296,10 @@ RECENT_WINDOW_CLOSURES = 50
 # reports from here; anything older is still queryable, just not averaged in.
 # Move this forward on the NEXT configuration change rather than editing the
 # rows.
+# How far back reconciliation looks. Long enough to catch a swap that took
+# several slots to land, short enough that an old row can never resurrect.
+RECONCILE_WINDOW_MINUTES = 30.0
+
 CONFIG_EPOCH = "2026-08-21T23:37:10+00:00"
 
 # 20/08 -- raised with the widened band. The REAL constraint is the exit
@@ -1167,6 +1171,96 @@ async def advance_position_by_pool(
     return await _apply_exit_check(
         row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
     )
+
+
+async def reconcile_with_chain(
+    *, holdings_fn, chain: str = "solana", db_path: str | None = None,
+) -> dict:
+    """Makes the table agree with the wallet. The safety net that lets both
+    legs skip confirmation (22/08).
+
+    Real trades no longer wait for a Solana slot before returning -- that wait
+    bought nothing on the buy side and only blocked the exit loop on the sell
+    side. Skipping it means the table can briefly disagree with the chain, in
+    exactly two ways, and both are repaired here:
+
+      * a position recorded OPEN whose token is not held  -- the buy never
+        landed. The row is cancelled, not left to be exited later at a price
+        for tokens nobody owns.
+      * a position recorded CLOSED whose token is STILL held -- the sell never
+        landed. The row is REOPENED so the exit rule sells it again on the next
+        pass. This is the FOMO failure of 22/08, which stranded real tokens
+        under a row claiming a clean stop.
+
+    `holdings_fn` returns `{mint: amount}` read from the chain. It is injected
+    rather than imported so this module keeps no wallet dependency -- the
+    pocket must stay runnable with no key at all.
+
+    Never touches a row whose token it cannot resolve: an empty or failed
+    holdings read must reconcile NOTHING rather than cancel every open
+    position at once.
+    """
+    try:
+        holdings = await holdings_fn()
+    except Exception as exc:  # noqa: BLE001 -- an unreadable wallet reconciles nothing
+        logger.warning("solana_late_bonding_shadow: reconcile skipped (%s)", exc)
+        return {"cancelled": 0, "reopened": 0, "skipped": True}
+    if holdings is None:
+        return {"cancelled": 0, "reopened": 0, "skipped": True}
+
+    stats = {"cancelled": 0, "reopened": 0, "skipped": False}
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"""SELECT id, token_address, exit_reason, detected_at
+                FROM {TABLE}
+                WHERE chain = ? AND exit_detail LIKE '%real_tx%'
+                  AND last_checked_at > ?""",
+            (chain, _RECONCILE_WINDOW_START()),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+        for row in rows:
+            held = float(holdings.get(row["token_address"], 0.0) or 0.0)
+            closed = bool(row["exit_reason"])
+
+            if not closed and held <= 0:
+                await db.execute(
+                    f"""UPDATE {TABLE}
+                        SET exit_reason = ?, exit_detail = COALESCE(exit_detail,'') || ?,
+                            remaining_qty = 0.0, final_multiplier = NULL,
+                            realistic_final_multiplier = NULL, last_checked_at = ?
+                        WHERE id = ? AND (exit_reason IS NULL OR exit_reason = '')""",
+                    ("buy_never_landed",
+                     " | cancelled: recorded open, nothing held on-chain", now, row["id"]),
+                )
+                stats["cancelled"] += 1
+                logger.warning(
+                    "solana_late_bonding_shadow: #%s cancelled, buy never landed", row["id"],
+                )
+            elif closed and held > 0:
+                await db.execute(
+                    f"""UPDATE {TABLE}
+                        SET exit_reason = NULL, exit_detail = COALESCE(exit_detail,'') || ?,
+                            remaining_qty = 1.0, final_multiplier = NULL,
+                            realistic_final_multiplier = NULL, ladder_done = 0.0,
+                            last_checked_at = ?
+                        WHERE id = ?""",
+                    (" | reopened: recorded closed but tokens still held", now, row["id"]),
+                )
+                stats["reopened"] += 1
+                logger.warning(
+                    "solana_late_bonding_shadow: #%s reopened, sell never landed", row["id"],
+                )
+        await db.commit()
+    return stats
+
+
+def _RECONCILE_WINDOW_START() -> str:
+    """Only recent rows are reconciled. An old closed position whose token was
+    later airdropped back must not reopen itself years afterwards."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=RECONCILE_WINDOW_MINUTES)).isoformat()
 
 
 async def advance_exit_simulation(

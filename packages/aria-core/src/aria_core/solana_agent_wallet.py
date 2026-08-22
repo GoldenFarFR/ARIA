@@ -29,7 +29,7 @@ import os
 import httpx
 
 from aria_core import solana_trade_pilot
-from aria_core.onchain import jupiter_swap_signer
+from aria_core.onchain import jupiter_swap_signer, jupiter_swap_simulation
 from aria_core.services import jupiter
 from aria_core.services.coingecko import coingecko_client
 from aria_core.services.pumpswap_ws import require_solana_rpc_http
@@ -111,19 +111,108 @@ async def get_balance_usd(*, client: httpx.AsyncClient | None = None) -> float |
             await client.aclose()
 
 
+# --- latency budget (22/08) -------------------------------------------------
+# Measured on the real path: preparing a buy cost 245ms, of which 150ms was a
+# single CoinGecko call for the SOL price -- 61% of the budget for a number
+# that moves by fractions of a percent per minute.
+#
+# The price now comes from JUPITER, not an external aggregator: a SOL->USDC
+# quote IS the dollar price by construction, it comes from the same venue that
+# executes the trade, and it measured 25ms against CoinGecko's 150ms. The
+# shadow pockets already treat this price as a slow-moving calibration
+# (`pumpswap_ws.SOL_USD_CALIBRATION_REFRESH_SECONDS = 240`), so caching it here
+# follows the pattern already established rather than inventing one.
+#
+# Decimals are cached for the process lifetime -- a mint's decimals are
+# immutable, so there is nothing to expire.
+# Neither leg waits for a Solana slot (22/08). A slot is ~400ms, so the
+# operator's 500ms target is only reachable by returning as soon as the chain
+# accepts the transaction.
+#
+# The reason waiting was worth dropping differs per leg, and the difference
+# matters more than the shared constant:
+#   * BUY  -- the wait sat between the decision and the position being
+#     tracked, on a curve that measured -10.5% real against +35% simulated.
+#   * SELL -- the wait changes NOTHING about the price obtained; the swap is
+#     already sent and priced. What it blocked was the exit LOOP: 800ms per
+#     position, so ten positions meant eight seconds during which no other
+#     stop could fire. That, not the fill, is what it cost.
+#
+# This is only safe because `solana_late_bonding_shadow.reconcile_with_chain`
+# repairs both possible disagreements afterwards -- a buy that never landed is
+# cancelled, a sell that never landed REOPENS the position so the exit rule
+# retries. Without that reconciliation running, these must go back to
+# COMMITMENT_CONFIRMED.
+BUY_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
+SELL_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
+
+_SOL_USD_TTL_SECONDS = 60.0
+_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+_USDC_DECIMALS = 6
+_sol_usd_cache: tuple[float, float] | None = None
+_decimals_cache: dict[str, int] = {}
+
+
+async def sol_usd_cached(*, client: httpx.AsyncClient | None = None) -> float | None:
+    """SOL price in dollars, at most `_SOL_USD_TTL_SECONDS` old.
+
+    Jupiter first, CoinGecko only as a fallback. Returns None when neither
+    knows -- the pilot treats that as a refusal, never as a guess.
+    """
+    import time
+
+    global _sol_usd_cache
+    now = time.monotonic()
+    if _sol_usd_cache and now - _sol_usd_cache[0] < _SOL_USD_TTL_SECONDS:
+        return _sol_usd_cache[1]
+
+    value: float | None = None
+    try:
+        # One SOL, priced in USDC. No aggregator, no extra dependency, and the
+        # rate is the one our own trades will actually get.
+        quote = await jupiter.fetch_quote(
+            jupiter.SOL_MINT, _USDC_MINT, 1_000_000_000, slippage_bps=100, client=client,
+        )
+        out = int(quote.get("outAmount") or 0)
+        if out:
+            value = out / (10 ** _USDC_DECIMALS)
+    except Exception as exc:  # noqa: BLE001 -- fall through to the aggregator
+        logger.info("solana_agent_wallet: SOL/USD via Jupiter failed (%s)", exc)
+
+    if value is None:
+        try:
+            price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
+            raw = price.prices.get("solana", {}).get("usd") if price.available else None
+            value = float(raw) if raw else None
+        except Exception as exc:  # noqa: BLE001
+            logger.info("solana_agent_wallet: SOL/USD fallback failed (%s)", exc)
+
+    if value:
+        _sol_usd_cache = (now, float(value))
+        return float(value)
+    # A failed refresh keeps the last known price rather than blocking: a
+    # slightly stale rate is a better basis for sizing than no trade at all,
+    # and the dollar cap is enforced against the real balance regardless.
+    return _sol_usd_cache[1] if _sol_usd_cache else None
+
+
 async def _swap(*, mint: str, amount_in_usd: float, slippage_bps: int) -> dict:
     """Quote then execute. Raises on any problem -- the pilot turns that into a
     logged refusal rather than an exception reaching the pocket."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
-        sol_usd = price.prices.get("solana", {}).get("usd") if price.available else None
+        sol_usd = await sol_usd_cached(client=client)
         if not sol_usd:
             raise RuntimeError("SOL/USD unavailable, refusing to size a real swap blind")
         sol_amount = amount_in_usd / float(sol_usd)
 
         quote = await jupiter.quote_sol_for_token(mint, sol_amount, client=client)
+        # `confirmed`, not `finalized`: this path records a price the quote
+        # already gave and never reads on-chain state afterwards, so the race
+        # that justified `finalized` cannot occur here. Measured cost of the
+        # stricter level: 12-13 seconds on a collapsing bonding curve.
         result = await jupiter_swap_signer.execute_swap(
             quote, key_path(), client=client,
+            commitment=BUY_COMMITMENT,
         )
         status = (result or {}).get("status")
         if status != "ok":
@@ -153,6 +242,9 @@ async def token_decimals(mint: str, *, client: httpx.AsyncClient | None = None) 
     A wrong decimals value silently rescales every price by a power of ten, so
     an unknown one must refuse the trade rather than assume the common 6 or 9.
     """
+    cached = _decimals_cache.get(mint)
+    if cached is not None:
+        return cached
     owns = client is None
     client = client or httpx.AsyncClient(timeout=20.0)
     try:
@@ -167,7 +259,10 @@ async def token_decimals(mint: str, *, client: httpx.AsyncClient | None = None) 
         value = ((resp.json() or {}).get("result") or {}).get("value") or {}
         parsed = ((value.get("data") or {}).get("parsed") or {}).get("info") or {}
         decimals = parsed.get("decimals")
-        return int(decimals) if decimals is not None else None
+        if decimals is None:
+            return None
+        _decimals_cache[mint] = int(decimals)
+        return int(decimals)
     except Exception as exc:  # noqa: BLE001
         logger.info("solana_agent_wallet: decimals unreadable for %s (%s)", mint, exc)
         return None
@@ -246,14 +341,16 @@ async def _swap_out(*, mint: str, amount_units: int, slippage_bps: int) -> dict:
             mint, jupiter.SOL_MINT, amount_units,
             slippage_bps=slippage_bps, client=client,
         )
-        result = await jupiter_swap_signer.execute_swap(quote, key_path(), client=client)
+        result = await jupiter_swap_signer.execute_swap(
+            quote, key_path(), client=client,
+            commitment=SELL_COMMITMENT,
+        )
         status = (result or {}).get("status")
         if status != "ok":
             raise RuntimeError(f"sell status={status!r} (tx={(result or {}).get('tx')})")
 
         lamports_out = float((result or {}).get("out_amount") or 0)
-        price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
-        sol_usd = price.prices.get("solana", {}).get("usd") if price.available else None
+        sol_usd = await sol_usd_cached(client=client)
         proceeds_usd = (lamports_out / 1e9) * float(sol_usd) if sol_usd else None
         # Same raw-units trap as the buy side: `amount_units` is raw, and an
         # exit price per raw unit would not be comparable to the entry price.

@@ -232,3 +232,124 @@ def inspect_source() -> str:
     import inspect
 
     return inspect.getsource(pocket)
+
+
+class TestReconcileWithChain:
+    """The repair path that makes skipping confirmation safe. Untested until
+    now, which is exactly the shape of defect this whole night produced: a
+    mechanism that exists, is trusted, and was never exercised."""
+
+    @staticmethod
+    async def _row(db, row_id):
+        import aiosqlite
+
+        async with aiosqlite.connect(db) as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(f"SELECT * FROM {pocket.TABLE} WHERE id = ?", (row_id,))
+            return dict(await cur.fetchone())
+
+    @staticmethod
+    async def _insert(db, *, mint, closed, real=True):
+        import aiosqlite
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(db) as conn:
+            cur = await conn.execute(
+                f"""INSERT INTO {pocket.TABLE}
+                    (pool_address, token_address, chain, detected_at, entry_price,
+                     reserve_usd, remaining_qty, realized_proceeds, peak_price,
+                     exit_reason, exit_detail, last_checked_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("pool", mint, "solana", now, 1.0, 5000.0, 0.0 if closed else 1.0, 0.0, 1.0,
+                 "fixed_stop" if closed else None,
+                 "real_tx=sig" if real else "simulated", now),
+            )
+            await conn.commit()
+            return cur.lastrowid
+
+    @pytest.mark.asyncio
+    async def test_a_buy_that_never_landed_is_cancelled(self, tmp_path):
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await self._insert(db, mint="ghost", closed=False)
+
+        async def holdings():
+            return {}  # nothing held
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out["cancelled"] == 1
+        assert (await self._row(db, rid))["exit_reason"] == "buy_never_landed"
+
+    @pytest.mark.asyncio
+    async def test_a_sell_that_never_landed_reopens_the_position(self, tmp_path):
+        """The FOMO failure: closed in the table, tokens still in the wallet."""
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await self._insert(db, mint="stranded", closed=True)
+
+        async def holdings():
+            return {"stranded": 7057.0}
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out["reopened"] == 1
+        row = await self._row(db, rid)
+        assert row["exit_reason"] in (None, "")
+        assert row["remaining_qty"] == 1.0
+        assert row["ladder_done"] == 0.0, "rungs must reset or the retry sells nothing"
+
+    @pytest.mark.asyncio
+    async def test_a_consistent_position_is_left_alone(self, tmp_path):
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        open_id = await self._insert(db, mint="held", closed=False)
+        closed_id = await self._insert(db, mint="sold", closed=True)
+
+        async def holdings():
+            return {"held": 100.0}
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out == {"cancelled": 0, "reopened": 0, "skipped": False}
+        assert (await self._row(db, open_id))["exit_reason"] in (None, "")
+        assert (await self._row(db, closed_id))["exit_reason"] == "fixed_stop"
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_wallet_reconciles_NOTHING(self, tmp_path):
+        """The dangerous failure mode: a hiccup must not cancel every position."""
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await self._insert(db, mint="ghost", closed=False)
+
+        async def holdings():
+            raise RuntimeError("rpc down")
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out["skipped"] is True
+        assert out["cancelled"] == 0
+        assert (await self._row(db, rid))["exit_reason"] in (None, "")
+
+    @pytest.mark.asyncio
+    async def test_none_holdings_also_reconciles_nothing(self, tmp_path):
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        await self._insert(db, mint="ghost", closed=False)
+
+        async def holdings():
+            return None
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out["skipped"] is True and out["cancelled"] == 0
+
+    @pytest.mark.asyncio
+    async def test_simulated_rows_are_never_touched(self, tmp_path):
+        """Only rows carrying a real tx are the wallet's business."""
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await self._insert(db, mint="paper", closed=False, real=False)
+
+        async def holdings():
+            return {}
+
+        out = await pocket.reconcile_with_chain(holdings_fn=holdings, db_path=db)
+        assert out["cancelled"] == 0
+        assert (await self._row(db, rid))["exit_reason"] in (None, "")

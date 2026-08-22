@@ -83,7 +83,7 @@ async def test_a_failing_simulation_blocks_the_send_entirely(key_file, monkeypat
     path, _ = key_file
     sent = []
 
-    async def _build(_q, _pub, client=None):
+    async def _build(_q, _pub, client=None, **_kw):
         return base64.b64encode(b"tx").decode()
 
     async def _sim(_tx, rpc_http_url=None, client=None):
@@ -148,3 +148,100 @@ def test_the_module_holds_no_gate_no_cap_and_no_killswitch():
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     for forbidden in ("outgoing_pause", "custody_pause", "wallet_guard"):
         assert forbidden not in names, f"{forbidden} belongs to the wrapper, not here"
+
+
+class TestCommitmentLevel:
+    """22/08: `finalized` cost a MEASURED 12-13s per trade on a paid endpoint --
+    that is the consensus, not the provider. On the trading path, where no
+    on-chain state is read afterwards, it bought a guarantee nothing used while
+    the bonding curve moved underneath."""
+
+    @staticmethod
+    def _client(status):
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"result": {"value": [status]}}
+
+        class _Client:
+            async def post(self, *a, **k):
+                return _Resp()
+
+        return _Client()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_accepts_a_confirmed_status(self):
+        out = await signer._await_finalized(
+            "sig", rpc_http_url="http://rpc",
+            client=self._client({"confirmationStatus": "confirmed", "err": None}),
+            commitment=signer.COMMITMENT_CONFIRMED,
+        )
+        assert out == "ok"
+
+    @pytest.mark.asyncio
+    async def test_finalized_satisfies_a_confirmed_request(self):
+        """A stricter status must never read as 'not there yet'."""
+        out = await signer._await_finalized(
+            "sig", rpc_http_url="http://rpc",
+            client=self._client({"confirmationStatus": "finalized", "err": None}),
+            commitment=signer.COMMITMENT_CONFIRMED,
+        )
+        assert out == "ok"
+
+    @pytest.mark.asyncio
+    async def test_a_chain_error_fails_at_either_level(self):
+        for level in (signer.COMMITMENT_CONFIRMED, signer.COMMITMENT_FINALIZED):
+            out = await signer._await_finalized(
+                "sig", rpc_http_url="http://rpc",
+                client=self._client({"confirmationStatus": "confirmed", "err": "boom"}),
+                commitment=level,
+            )
+            assert out == "failed"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_level_refuses_rather_than_guessing(self):
+        with pytest.raises(signer.SwapSignerError):
+            await signer._await_finalized(
+                "sig", rpc_http_url="http://rpc",
+                client=self._client({"confirmationStatus": "finalized", "err": None}),
+                commitment="processed",
+            )
+
+    def test_finalized_remains_the_default(self):
+        """Callers that read state afterwards must be untouched by this change."""
+        import inspect
+
+        params = inspect.signature(signer.execute_swap).parameters
+        assert params["commitment"].default == signer.COMMITMENT_FINALIZED
+
+    def test_skipping_confirmation_requires_the_reconciler_to_exist(self):
+        """Neither leg waits for a slot, which is ONLY safe while the repair
+        path exists. If reconcile_with_chain is ever removed or renamed, this
+        fails rather than leaving real trades unverified -- the FOMO stranding
+        of 22/08 is precisely what happens without it."""
+        from aria_core import solana_agent_wallet as w
+        from aria_core import solana_late_bonding_shadow as pocket
+        from aria_core.onchain import jupiter_swap_signer as s
+
+        fast = (w.BUY_COMMITMENT == s.COMMITMENT_SENT
+                or w.SELL_COMMITMENT == s.COMMITMENT_SENT)
+        if fast:
+            assert callable(getattr(pocket, "reconcile_with_chain", None)), (
+                "trades skip confirmation but nothing reconciles them with the chain"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sent_returns_without_any_status_call(self):
+        """The whole point: no round trip, no slot wait."""
+
+        class _Client:
+            async def post(self, *a, **k):
+                raise AssertionError("`sent` must not poll for a status")
+
+        out = await signer._await_finalized(
+            "sig", rpc_http_url="http://rpc", client=_Client(),
+            commitment=signer.COMMITMENT_SENT,
+        )
+        assert out == "ok"
