@@ -32,12 +32,18 @@ good cut from an indiscriminate one.
 """
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
 from .paths import shadow_db_path
+
+# One band reject in this many is followed -- see the sampling block in
+# `record_decision` for why a fraction rather than all or nothing.
+BAND_SAMPLE_ONE_IN = 50
 
 TABLE = "fresh_launch_pretrade_gate_log"
 
@@ -206,6 +212,28 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
             and decision.reason.startswith(TRACKED_REJECTS)
             and decision.would_be_entry_price
         )
+        # 22/08 -- a SAMPLE of the band rejects, on the operator's question:
+        # "what if we had bought at 10% of the curve instead of 70%?". The
+        # answer does not exist today -- 22549 band rejects carry zero tracked
+        # outcome -- and the reason it was excluded stands: following all of
+        # them would spend the entire price budget on tokens nobody
+        # considered. A fixed fraction answers the question at 1/50th of that
+        # cost.
+        #
+        # Deterministic on the mint, never random: the same token is always
+        # in or out of the sample, so a restart cannot half-follow one, and
+        # the sample carries no bias toward tokens seen at a particular
+        # moment.
+        if (
+            not trackable
+            and decision.blocked
+            and decision.reason is not None
+            and decision.reason.startswith("blocked_outside_band")
+            and decision.would_be_entry_price
+            and decision.mint
+        ):
+            digest = hashlib.sha256(decision.mint.encode()).digest()
+            trackable = (digest[0] % BAND_SAMPLE_ONE_IN) == 0
         async with aiosqlite.connect(path) as db:
             cur = await db.execute(
                 f"""

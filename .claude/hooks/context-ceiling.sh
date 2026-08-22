@@ -27,10 +27,35 @@ ROOT="${CLAUDE_PROJECT_DIR:-/opt/aria}"
 ETAT="$ROOT/.claude/.context-ceiling-state"
 
 INPUT="$(cat 2>/dev/null || true)"
-PCT="$(printf '%s' "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null || true)"
 
-# Pas de donnee -> silence. Une alerte fondee sur rien serait pire que pas d'alerte.
-[ -n "$PCT" ] || exit 0
+# 22/08 -- plusieurs emplacements essayes, plus un calcul de repli. Le hook
+# lisait UNIQUEMENT `.context_window.used_percentage` et n'a rien ecrit
+# pendant quatre heures pendant que le contexte montait a 65% : le champ
+# n'arrive pas sous ce nom. Un garde-fou qui depend d'un seul nom de champ
+# non documente est un garde-fou qui tombe en silence -- exactement ce qui
+# s'est passe, et exactement ce que l'operateur a du reperer lui-meme.
+PCT="$(printf '%s' "$INPUT" | jq -r '
+    .context_window.used_percentage
+    // .context.used_percentage
+    // .usedPercentage
+    // .context_window.percentage
+    // empty' 2>/dev/null || true)"
+
+# Repli : si seuls les jetons sont fournis, on calcule le pourcentage.
+if [ -z "$PCT" ]; then
+  PCT="$(printf '%s' "$INPUT" | jq -r '
+      (.context_window.used_tokens // .context_window.tokens_used // empty) as $u
+      | (.context_window.max_tokens // .context_window.total_tokens // empty) as $m
+      | if ($u and $m and $m > 0) then (100 * $u / $m) else empty end' 2>/dev/null || true)"
+fi
+
+# Toujours rien -> on trace CE QU'ON A RECU, une fois, pour pouvoir reparer
+# au lieu de deviner une seconde fois.
+if [ -z "$PCT" ]; then
+  TRACE="$ROOT/.claude/.context-ceiling-payload"
+  [ -s "$TRACE" ] || printf '%s' "$INPUT" | head -c 4000 > "$TRACE" 2>/dev/null || true
+  exit 0
+fi
 
 PCT_INT="${PCT%.*}"
 [ -n "$PCT_INT" ] && [ "$PCT_INT" -eq "$PCT_INT" ] 2>/dev/null || exit 0

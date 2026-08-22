@@ -247,3 +247,29 @@ Fail-open sur l'outillage (detect-secrets absent, baseline illisible), fail-
 closed uniquement sur une vraie detection. Verifie dans les deux sens le jour
 meme : laisse passer un arbre propre, bloque avec code 1 sur une cle AWS et un
 token GitHub factices.
+
+## 2026.08.22 — `context-ceiling.sh` durci : il ne lisait qu'un seul nom de champ
+
+**Constat opérateur** : contexte à 65 % (653,9k/1M), aucune alerte. Le fichier
+d'état n'avait pas été écrit depuis 15h44 alors qu'il était 20h05 — donc le hook
+ne recevait pas le pourcentage, sinon il aurait mis à jour ou nettoyé l'état.
+
+**Cause** : il lisait UNIQUEMENT `.context_window.used_percentage`. Ce champ
+n'arrive pas sous ce nom. Un garde-fou qui dépend d'un seul nom de champ non
+documenté tombe en silence — et c'est l'opérateur qui a dû le repérer, pas le
+garde-fou.
+
+**Correction** : quatre emplacements essayés (`context_window.used_percentage`,
+`context.used_percentage`, `usedPercentage`, `context_window.percentage`), plus
+un repli qui calcule le pourcentage à partir des jetons si seuls ceux-ci sont
+fournis. Et si rien ne correspond toujours, le hook écrit UNE FOIS la charge
+utile reçue dans `.claude/.context-ceiling-payload` — pour qu'une prochaine
+réparation se fasse sur la donnée réelle au lieu d'un second nom deviné.
+
+Les quatre formats sont vérifiés par un test direct au moment du changement.
+
+**Piège secondaire, non corrigé volontairement** : l'état ne ré-alerte que par
+tranche croissante (`TRANCHE > DERNIERE`). Après une alerte à 80 %, un contexte
+revenu à 65 % ne réalerte pas tant que l'état n'a pas été nettoyé — ce que fait
+déjà le hook dès qu'il voit une valeur sous 60 %. Ce nettoyage ne pouvait pas
+fonctionner tant que le hook ne lisait aucune valeur.

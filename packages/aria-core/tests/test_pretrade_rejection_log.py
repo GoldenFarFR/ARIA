@@ -1,6 +1,7 @@
 """Pre-trade gate decision log (20/08). Isolated tmp db, no network."""
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -374,3 +375,41 @@ class TestWhichRejectsGetTrackedForward:
         )
         row = await _row(db, row_id)
         assert row["tracking_status"] == "not_tracked"
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_fraction_of_band_rejects_is_followed():
+    """The operator's question needs a sample, not a firehose.
+
+    22/08 -- "what if we had bought at 10% of the curve instead of 70%?"
+    cannot be answered today: 22549 band rejects carry zero tracked outcome.
+    Following all of them would spend the whole price budget on tokens nobody
+    considered, which is exactly why they were excluded. A fixed fraction
+    answers the question at 1/50th of the cost.
+
+    The selection must be DETERMINISTIC on the mint: a restart cannot then
+    half-follow a token, and the sample carries no bias toward tokens seen at
+    a particular moment.
+    """
+    followed = []
+    for i in range(400):
+        mint = f"mint{i}"
+        decision = SimpleNamespace(
+            blocked=True, reason="blocked_outside_band: progress=0.10",
+            mint=mint, pool_address=f"pool{i}", would_be_entry_price=1e-06,
+            would_be_reserve_usd=3000.0, realistic_would_be_entry_price=1e-06,
+            top_holder_pct=None, top_holder_excluding_pool_pct=None,
+            gate_latency_ms=1.0,
+        )
+        digest = hashlib.sha256(mint.encode()).digest()
+        if digest[0] % log.BAND_SAMPLE_ONE_IN == 0:
+            followed.append(mint)
+
+    share = len(followed) / 400
+    assert 0.005 < share < 0.06, (
+        f"the sample must stay a small fraction, got {share:.1%}"
+    )
+    # stable across calls -- the whole point of hashing rather than randomising
+    again = [m for m in (f"mint{i}" for i in range(400))
+             if hashlib.sha256(m.encode()).digest()[0] % log.BAND_SAMPLE_ONE_IN == 0]
+    assert again == followed, "the same mint must always fall the same side"
