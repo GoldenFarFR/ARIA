@@ -196,3 +196,39 @@ class TestSimulationStaysIdentical:
         closed = await _row(db, row_id)
         assert closed["exit_reason"]
         assert "real_tx" not in (closed["exit_detail"] or "")
+
+
+class TestEveryExitPathCarriesTheSellSeam:
+    """22/08, after a real stranding: the sell seam was wired into the polling
+    sweep but NOT into the event-driven path, which then closed a position in
+    the table while the wallet still held all its tokens. A seam present on
+    one of two exit paths is worse than none -- it reads as covered."""
+
+    def test_both_public_exit_entrypoints_accept_sell_fn(self):
+        import inspect
+
+        for name in ("advance_exit_simulation", "advance_position_by_pool"):
+            fn = getattr(pocket, name)
+            assert "sell_fn" in inspect.signature(fn).parameters, (
+                f"{name} can close a position without selling it"
+            )
+
+    def test_apply_exit_check_is_the_only_writer(self):
+        """Keeps the guarantee auditable: one write path means one place where
+        the sell must happen. A second UPDATE elsewhere would silently escape
+        every check above."""
+        import re
+
+        source = inspect_source()
+        writers = [
+            m for m in re.findall(r"UPDATE \{TABLE\} SET remaining_qty", source)
+        ]
+        assert len(writers) == 1, (
+            f"{len(writers)} closure-writing statements found; the sell seam only guards one"
+        )
+
+
+def inspect_source() -> str:
+    import inspect
+
+    return inspect.getsource(pocket)
