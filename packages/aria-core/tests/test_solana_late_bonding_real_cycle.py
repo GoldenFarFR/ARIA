@@ -394,3 +394,90 @@ class TestSellOnlyAppliesToRealPositions:
             row, FakeSnapshot(0.70, low=0.70), chain="solana", db_path=db, sell_fn=seller,
         )
         assert len(seller.calls) == 1 and seller.calls[0]["fraction"] == 1.0
+
+
+class TestCancellationRequiresChainProof:
+    """22/08, found by the operator: 67% of REAL buys were cancelled although
+    their transaction had succeeded on-chain. Absence of tokens does not mean
+    the buy failed -- a position already sold looks identical. Only the chain
+    can say a buy failed."""
+
+    @staticmethod
+    async def _row_for(db, row_id):
+        return await TestReconcileWithChain._row(db, row_id)
+
+    @pytest.mark.asyncio
+    async def test_a_landed_buy_is_never_cancelled(self, tmp_path):
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await TestReconcileWithChain._insert(db, mint="sold", closed=False)
+        import aiosqlite
+
+        async with aiosqlite.connect(db) as conn:
+            await conn.execute(
+                f"UPDATE {pocket.TABLE} SET buy_tx = ? WHERE id = ?", ("sigOK", rid)
+            )
+            await conn.commit()
+
+        async def holdings():
+            return {}          # nothing held: already sold
+
+        async def verify(tx):
+            return True        # but the chain confirms the buy landed
+
+        out = await pocket.reconcile_with_chain(
+            holdings_fn=holdings, verify_buy_fn=verify, db_path=db
+        )
+        assert out["cancelled"] == 0
+        assert (await self._row_for(db, rid))["exit_reason"] in (None, "")
+
+    @pytest.mark.asyncio
+    async def test_an_unverifiable_buy_is_left_alone(self, tmp_path):
+        """Unknown is not failed. An untouched row is recoverable; a wrongly
+        cancelled one is not."""
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await TestReconcileWithChain._insert(db, mint="ghost", closed=False)
+        import aiosqlite
+
+        async with aiosqlite.connect(db) as conn:
+            await conn.execute(
+                f"UPDATE {pocket.TABLE} SET buy_tx = ? WHERE id = ?", ("sig?", rid)
+            )
+            await conn.commit()
+
+        async def holdings():
+            return {}
+
+        async def verify(tx):
+            return None        # RPC hiccup
+
+        out = await pocket.reconcile_with_chain(
+            holdings_fn=holdings, verify_buy_fn=verify, db_path=db
+        )
+        assert out["cancelled"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_buy_the_chain_rejects_is_still_cancelled(self, tmp_path):
+        """The guard must not disable the repair it was added to."""
+        db = str(tmp_path / "r.db")
+        await pocket._ensure_table(db)
+        rid = await TestReconcileWithChain._insert(db, mint="ghost", closed=False)
+        import aiosqlite
+
+        async with aiosqlite.connect(db) as conn:
+            await conn.execute(
+                f"UPDATE {pocket.TABLE} SET buy_tx = ? WHERE id = ?", ("sigKO", rid)
+            )
+            await conn.commit()
+
+        async def holdings():
+            return {}
+
+        async def verify(tx):
+            return False
+
+        out = await pocket.reconcile_with_chain(
+            holdings_fn=holdings, verify_buy_fn=verify, db_path=db
+        )
+        assert out["cancelled"] == 1

@@ -1189,7 +1189,8 @@ async def advance_position_by_pool(
 
 
 async def reconcile_with_chain(
-    *, holdings_fn, chain: str = "solana", db_path: str | None = None,
+    *, holdings_fn, verify_buy_fn=None, chain: str = "solana",
+    db_path: str | None = None,
 ) -> dict:
     """Makes the table agree with the wallet. The safety net that lets both
     legs skip confirmation (22/08).
@@ -1240,6 +1241,24 @@ async def reconcile_with_chain(
         for row in rows:
             held = float(holdings.get(row["token_address"], 0.0) or 0.0)
             closed = bool(row["exit_reason"])
+
+            # 22/08, found by the operator: absence of tokens does NOT mean the
+            # buy failed. A position already sold looks exactly the same, and
+            # 67% of real buys were being cancelled although their transaction
+            # had SUCCEEDED on-chain (verified: the wallet really received the
+            # tokens). Deducing failure from an empty wallet destroyed real
+            # trade history.
+            #
+            # So a buy is only declared failed when the CHAIN says so. When the
+            # transaction is unknown or unverifiable, the row is left alone --
+            # an untouched row is recoverable, a wrongly cancelled one is not.
+            if not closed and held <= 0 and row.get("buy_tx") and verify_buy_fn:
+                try:
+                    landed = await verify_buy_fn(row["buy_tx"])
+                except Exception:  # noqa: BLE001 -- unknown is not failed
+                    landed = None
+                if landed is not False:
+                    continue
 
             if not closed and held <= 0:
                 await db.execute(
