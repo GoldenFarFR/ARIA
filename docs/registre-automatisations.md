@@ -172,3 +172,21 @@ jour) : le hook empeche de POUSSER un secret non audite mais ne couvre qu'un
 workflow sur huit ; ce cron voit les sept autres, apres coup.
 Fail-open sur l'outillage (gh absent, API muette), jamais de bruit quand tout
 est vert.
+
+### runner-frequency-watch (22/08) -- ACTIF
+- **Quoi** : `/opt/aria-data/runner-frequency-watch/run.sh`, cron toutes les 2 h,
+  rapport cumulatif dans `report.md`.
+- **Pourquoi** : toute la décision sur la distance du stop suiveur repose sur un
+  seul inconnu, la FRÉQUENCE des vrais coureurs. Un trailing serré encaisse
+  +2-3 % sur une poussée à +12 % ; un trailing large abandonne ça pour attraper
+  un +50 %. Lequel gagne dépend uniquement de la fréquence du +50 %, et cette
+  fréquence n'avait jamais été mesurée — chaque tentative passée rejouait des
+  parcours TRONQUÉS à la sortie réelle, où un réglage plus large ne peut pas se
+  déclencher et rend donc toujours le même chiffre.
+- **Ce qu'il lit** : le pic réellement atteint sur les positions clôturées. Fiable
+  depuis le 22/08 seulement : l'archivage a gagné un déclencheur sur le PRIX ce
+  jour-là (le déclencheur sur la réserve ne pouvait pas se déclencher quand le
+  prix bougeait à réserve constante), ce qui fait passer une position de 1 point
+  archivé à 8-16.
+- **Seuil de décision** : ~1 coureur sur 5 (20 %) rend un trailing large rentable.
+- **Premier relevé** : 0/20, à reconfirmer au-delà de 200 clôtures.
