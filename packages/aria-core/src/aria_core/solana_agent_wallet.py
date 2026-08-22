@@ -133,8 +133,47 @@ async def _swap(*, mint: str, amount_in_usd: float, slippage_bps: int) -> dict:
             raise RuntimeError(f"swap status={status!r} (tx={(result or {}).get('tx')})")
 
         out_amount = float((result or {}).get("out_amount") or 0)
-        entry_price = (amount_in_usd / out_amount) if out_amount else None
+        # Jupiter returns RAW units. Dividing by them directly yields a price
+        # per raw unit, which for a 6-decimal token is a million times too low
+        # -- found live on the first real automated buy, recorded at 1.6e-11
+        # against a real 1.6e-5. Every downstream comparison against a market
+        # price in dollars-per-token would then be nonsense, so the exit rule
+        # was reading a position that did not exist.
+        decimals = await token_decimals(mint, client=client)
+        if decimals is None:
+            raise RuntimeError(f"decimals unreadable for {mint}, refusing to record a blind price")
+        tokens = out_amount / (10 ** decimals)
+        entry_price = (amount_in_usd / tokens) if tokens else None
         return {"tx_hash": (result or {}).get("tx") or "", "entry_price": entry_price}
+
+
+async def token_decimals(mint: str, *, client: httpx.AsyncClient | None = None) -> int | None:
+    """Decimals of `mint`, or None if unreadable -- never a guessed default.
+
+    A wrong decimals value silently rescales every price by a power of ten, so
+    an unknown one must refuse the trade rather than assume the common 6 or 9.
+    """
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=20.0)
+    try:
+        resp = await client.post(
+            require_solana_rpc_http(),
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+                "params": [mint, {"encoding": "jsonParsed"}],
+            },
+        )
+        resp.raise_for_status()
+        value = ((resp.json() or {}).get("result") or {}).get("value") or {}
+        parsed = ((value.get("data") or {}).get("parsed") or {}).get("info") or {}
+        decimals = parsed.get("decimals")
+        return int(decimals) if decimals is not None else None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("solana_agent_wallet: decimals unreadable for %s (%s)", mint, exc)
+        return None
+    finally:
+        if owns:
+            await client.aclose()
 
 
 async def execute_real_buy(mint: str, pool_address: str, *, chain: str = "solana",
@@ -216,7 +255,13 @@ async def _swap_out(*, mint: str, amount_units: int, slippage_bps: int) -> dict:
         price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
         sol_usd = price.prices.get("solana", {}).get("usd") if price.available else None
         proceeds_usd = (lamports_out / 1e9) * float(sol_usd) if sol_usd else None
-        exit_price = (proceeds_usd / amount_units) if (proceeds_usd and amount_units) else None
+        # Same raw-units trap as the buy side: `amount_units` is raw, and an
+        # exit price per raw unit would not be comparable to the entry price.
+        decimals = await token_decimals(mint, client=client)
+        tokens_sold = (amount_units / (10 ** decimals)) if decimals is not None else None
+        exit_price = (
+            proceeds_usd / tokens_sold if (proceeds_usd and tokens_sold) else None
+        )
         return {
             "tx": (result or {}).get("tx") or "",
             "exit_price": exit_price,
