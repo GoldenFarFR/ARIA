@@ -45,6 +45,7 @@ import base64
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import httpx
@@ -106,6 +107,10 @@ HELIUS_MAX_RPS = 9.0
 # Kept for callers/tests that reason about the primary path.
 MAX_REQUESTS_PER_SECOND = CHAINSTACK_MAX_RPS
 _MIN_INTERVAL_SECONDS = 1.0 / MAX_REQUESTS_PER_SECOND
+
+# How many (timestamp, progress) points are kept per mint. 50 covers the
+# whole pre-entry window at every polling band without growing unbounded.
+PROGRESS_HISTORY_POINTS = 50
 
 
 @dataclass
@@ -185,6 +190,31 @@ class TrackedMint:
     mint: str
     pool_address: str
     progress: float | None = None
+    # 22/08 -- the HIGHEST progress this mint ever reached, kept alongside the
+    # current one. On a bonding curve the price is a deterministic function of
+    # progress, so progress falling back means sellers took ground: the pocket
+    # would be entering ON A PULLBACK rather than at a local top.
+    #
+    # Operator's hypothesis, untestable until now: "enter if we are under 40%
+    # of the recent high, otherwise skip". The pocket archives candles only
+    # AFTER entry (3859 rows, zero before), so nothing recorded what the price
+    # did in the seconds before the buy -- and this tracker kept the current
+    # progress without ever keeping its maximum. One float fixes that.
+    peak_progress: float | None = None
+    # 22/08, operator's standing convention (18/08): "je veut les bougies avant
+    # et apres le point dachat a chaque futur shadow". This pocket honoured only
+    # the AFTER half -- 3859 archived rows, zero before -- so nothing recorded
+    # what the curve did in the minutes preceding a buy, and no question about
+    # the ENTRY POINT could be answered at all.
+    #
+    # Progress rather than price on purpose: on a bonding curve the price IS
+    # `virtual_quote / virtual_token`, a deterministic function of progress, so
+    # this history reconstructs the price path exactly while costing one float
+    # per point. 50 points x 600 mints is under a megabyte.
+    #
+    # Bounded by construction (`maxlen`): an unbounded log on a tracker that
+    # runs for weeks is the memory leak this project already paid for once.
+    progress_history: deque = field(default_factory=lambda: deque(maxlen=PROGRESS_HISTORY_POINTS))
     last_polled_at: float = 0.0
     last_change_at: float = field(default_factory=time.monotonic)
     decimals: int | None = None
@@ -300,6 +330,33 @@ class PumpFunCurveTracker:
         entry = self._tracked.get(mint)
         return entry.progress if entry else None
 
+    def progress_history_of(self, mint: str) -> list[tuple[float, float]]:
+        """The last points of this mint's climb, oldest first.
+
+        Returned as a plain list so a caller can archive it without holding a
+        reference to the tracker's own bounded buffer.
+        """
+        entry = self._tracked.get(mint)
+        return list(entry.progress_history) if entry is not None else []
+
+    def progress_retracement_of(self, mint: str) -> float | None:
+        """How far this mint has fallen BACK from its highest progress, 0-1.
+
+        0.0 means it is at its peak right now; 0.25 means a quarter of the
+        ground it had gained on the curve has been given back. On a bonding
+        curve the price is a deterministic function of progress, so this IS
+        the pullback from the local top, expressed on the only axis that
+        cannot be faked by wash trading.
+
+        Returns None while nothing is known -- never 0.0, which would read as
+        "at its peak" and quietly turn an unmeasured mint into a qualifying
+        one.
+        """
+        entry = self._tracked.get(mint)
+        if entry is None or entry.progress is None or not entry.peak_progress:
+            return None
+        return max(0.0, (entry.peak_progress - entry.progress) / entry.peak_progress)
+
     def due(self, *, now: float | None = None) -> list[TrackedMint]:
         """Mints whose band cadence says they are due for a poll."""
         now = time.monotonic() if now is None else now
@@ -378,6 +435,9 @@ class PumpFunCurveTracker:
                 if new is None:
                     continue
                 previous = entry.progress
+                entry.progress_history.append((now, new))
+                if entry.peak_progress is None or new > entry.peak_progress:
+                    entry.peak_progress = new
                 if previous is None or abs(new - previous) > 1e-9:
                     entry.last_change_at = now
                     entry.progress = new

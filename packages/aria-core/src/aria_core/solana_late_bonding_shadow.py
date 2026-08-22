@@ -49,6 +49,8 @@ from datetime import datetime, timedelta, timezone
 
 from dataclasses import is_dataclass, replace as dataclasses_replace
 
+from types import SimpleNamespace
+
 import aiosqlite
 import httpx
 
@@ -100,7 +102,21 @@ ARCHIVE_MODULE = "solana_late_bonding"
 # real entry UP the curve, which is the right direction, but it means a floor
 # has to be set where the band is already good rather than where it is barely
 # acceptable.
-MIN_BONDING_PROGRESS = 0.70
+# 22/08 -- LOWERED 0.70 -> 0.50, operator's explicit test. Stated plainly
+# because the 21/08 measurement above says the opposite: 40-60% was the WORST
+# band on 721 closures (48.9% rugs, -4.3% PnL) and that is exactly why the
+# floor was raised to 0.70 in the first place.
+#
+# What has changed since, and makes the test worth running rather than a
+# repeat of a known mistake:
+#   * the liquidity floor went 3000$ -> 5500$, validated at +23.34 points on
+#     528 vs 830 same-day closures. Most 40-60% rugs were thin pools; that
+#     floor now cuts them before the band is even reached.
+#   * entries are priced from the CHAIN, not from a websocket that could be
+#     36s stale, so the band's own numbers were partly measured on false
+#     prices.
+# Revert is one line, and the archived epochs make the comparison direct.
+MIN_BONDING_PROGRESS = 0.50
 # 21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed
 # because a curve past 90% can COMPLETE mid-position and migrate its liquidity
 # to the AMM -- treated as a risk to avoid. The data says that is the single
@@ -554,6 +570,12 @@ async def _ensure_table(db_path: str | None = None) -> None:
             # has data, a "peak" on this pocket cannot be told apart from a
             # change of source.
             ("entry_price_source", "TEXT"),
+            ("progress_retracement_at_entry", "REAL"),
+            # 22/08 -- stop level and fill, to the decimal, as NUMBERS.
+            # Both lived only inside `exit_detail` as prose rounded to one
+            # decimal, which cannot be averaged, bucketed or swept.
+            ("stop_level_pct", "REAL"),
+            ("fill_level_pct", "REAL"),
             ("trades_per_second_at_entry", "REAL"),
             ("distinct_sellers_at_entry", "INTEGER"),
             ("trades_total_at_entry", "INTEGER"),
@@ -669,6 +691,21 @@ async def screen_candidate(
         # measurable on all of them.
         "seconds_tracked": (
             curve_tracker.seconds_tracked(mint) if curve_tracker is not None else None
+        ),
+        # 22/08, operator's hypothesis -- how far the curve has fallen BACK
+        # from its own high when we buy. On a bonding curve the price is a
+        # deterministic function of progress, so this is the pullback from the
+        # local top, on the one axis wash trading cannot fake. 0.0 = buying at
+        # the top, 0.25 = a quarter of the ground given back.
+        #
+        # Recorded rather than acted on: the idea is that entering at a local
+        # top is what gets the trailing stop hit immediately, which the 8%
+        # episode made concrete. Nothing filters on it until the data says it
+        # separates winners from losers.
+        "progress_retracement": (
+            curve_tracker.progress_retracement_of(mint)
+            if curve_tracker is not None
+            and hasattr(curve_tracker, "progress_retracement_of") else None
         ),
         "top_buyer_share": flow.top_buyer_share if flow else None,
         # WHO the concentration belongs to, not just how much (22/08).
@@ -1019,13 +1056,13 @@ async def consider_candidate(
                      creator_address, creator_sold_at_entry, sol_velocity_at_entry,
                      sell_pressure_at_entry, sell_pressure_slope_at_entry,
                      observation_seconds_at_entry, seconds_tracked_at_entry,
-                     entry_price_source,
+                     entry_price_source, progress_retracement_at_entry,
                      top_buyer_address_at_entry, buy_sol_volume_at_entry,
                      trades_total_at_entry, trades_per_second_at_entry,
                      distinct_sellers_at_entry,
                      trade_count_at_entry, buy_count_at_entry,
                      round_trip_wallets_at_entry, round_trip_share_at_entry)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pool_address, mint, chain, datetime.now(timezone.utc).isoformat(),
@@ -1042,6 +1079,7 @@ async def consider_candidate(
                     # column's own comment for the +121% that was really a
                     # switch from REST to the curve.
                     getattr(snapshot, "dex_id", None),
+                    metrics.get("progress_retracement"),
                     metrics.get("top_buyer_address"),
                     metrics.get("buy_sol_volume"),
                     metrics.get("trades_total"),
@@ -1052,6 +1090,23 @@ async def consider_candidate(
                 ),
             )
             await db.commit()
+            # 22/08 -- the BEFORE half of the standing convention (18/08):
+            # "je veut les bougies avant et apres le point dachat a chaque
+            # futur shadow". This pocket honoured only the AFTER half -- 3859
+            # archived rows, zero before -- so no question about the ENTRY
+            # POINT could be answered: whether we buy at a local top or on a
+            # pullback was simply not recorded anywhere.
+            #
+            # Reconstructed from the tracker's progress history rather than
+            # from candles we do not have: on a bonding curve the price IS
+            # `virtual_quote / virtual_token`, so progress and price carry the
+            # same information, and the tracker has been watching this mint
+            # since it appeared on the creation feed.
+            asyncio.create_task(_archive_pre_entry_path(
+                cur.lastrowid, mint, pool_address, chain=chain,
+                curve_tracker=curve_tracker, entry_price=entry_price,
+                entry_progress=metrics.get("bonding_progress"),
+            ))
             asyncio.create_task(_enrich_paid_profile(cur.lastrowid, mint, chain=chain, db_path=db_path))
             asyncio.create_task(_enrich_exit_route(cur.lastrowid, mint, db_path=db_path))
             logger.info(
@@ -1196,6 +1251,51 @@ async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = No
             await db.commit()
     except Exception as exc:  # noqa: BLE001 -- an observation never breaks a pocket
         logger.info("solana_late_bonding_shadow: exit-route check failed for %s (%s)", mint, exc)
+
+
+async def _archive_pre_entry_path(
+    row_id: int, mint: str, pool_address: str, *, chain: str,
+    curve_tracker, entry_price: float, entry_progress: float | None,
+) -> None:
+    """Archives the curve's climb BEFORE the buy, as phase="before".
+
+    Prices are derived from progress: on a bonding curve the two are the same
+    information, and the tracker has been sampling progress since the mint
+    appeared on the creation feed. The scale is anchored on the entry, so the
+    stored path is exactly comparable to the "after" rows written by the exit
+    loop -- an absolute price rebuilt from a curve formula would not be.
+
+    Fire-and-forget and fully guarded: archiving never delays or breaks an
+    entry.
+    """
+    if curve_tracker is None or not entry_progress:
+        return
+    try:
+        history = curve_tracker.progress_history_of(mint)
+    except Exception:  # noqa: BLE001 -- a tracker without history is not an error
+        return
+    if len(history) < 2:
+        return
+    candles = []
+    for ts, progress in history:
+        if not progress:
+            continue
+        # progress is monotone in price on the curve, so the ratio to the
+        # entry progress IS the ratio to the entry price
+        price = entry_price * (progress / entry_progress)
+        candles.append(SimpleNamespace(
+            ts=int(ts), open=price, high=price, low=price, close=price, volume=0.0,
+        ))
+    if not candles:
+        return
+    try:
+        await shadow_candle_archive.store_candles(
+            module=ARCHIVE_MODULE, position_id=row_id, pool_address=pool_address,
+            chain=chain, phase="before", candles=candles,
+        )
+    except Exception as exc:  # noqa: BLE001 -- never breaks an entry
+        logger.info("solana_late_bonding_shadow: pre-entry archive failed for %s (%s)",
+                    pool_address, exc)
 
 
 async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana", db_path: str | None = None) -> None:
@@ -1544,7 +1644,8 @@ async def _apply_exit_check(
                 realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                 realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
                 last_checked_at = ?, exit_price_source = ?, exit_detail = ?,
-                reinforced_final_multiplier = ?, ladder_done = ?
+                reinforced_final_multiplier = ?, ladder_done = ?,
+                stop_level_pct = ?, fill_level_pct = ?
             WHERE id = ? AND exit_reason IS NULL
             """,
             (
@@ -1562,6 +1663,7 @@ async def _apply_exit_check(
                 # rung re-fires ~every 10s, selling the whole position at the
                 # first rung price (16 closures stuck at exactly 1.5).
                 result.get("ladder_done") or 0.0,
+                result.get("stop_level_pct"), result.get("fill_level_pct"),
                 row["id"],
             ),
         )

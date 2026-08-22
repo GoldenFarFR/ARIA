@@ -1433,6 +1433,13 @@ def evaluate_exit(
     # is what let a -81.5% close be misread as a stop-loss failure for a day.
     exit_reason: str | None = None
     exit_detail: str | None = None
+    # 22/08, operator's ask -- the stop level and the fill, to the decimal, as
+    # NUMBERS. Both already existed inside `exit_detail`, as prose rounded to
+    # one decimal ("low touched -13.9% vs entry"), which cannot be averaged,
+    # bucketed or swept. The whole slippage question -- a stop set at -5%
+    # filling at -9.6% median -- had to be re-derived by hand every time.
+    stop_level_pct: float | None = None
+    fill_level_pct: float | None = None
     if fixed_stopped:
         stop_price = entry_price * (1 - fixed_stop_pct / 100.0)
         fill_price = min(stop_price, current_price) if current_price > 0 else stop_price
@@ -1440,6 +1447,8 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "fixed_stop"
+        stop_level_pct = (stop_price / entry_price - 1) * 100.0
+        fill_level_pct = (fill_price / entry_price - 1) * 100.0
         exit_detail = (
             f"FIXED_STOP_PCT={fixed_stop_pct:.0f}% | low touched "
             f"{(effective_low / entry_price - 1) * 100:+.1f}% vs entry"
@@ -1460,6 +1469,8 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "hard_stop"
+        stop_level_pct = (stop_price / entry_price - 1) * 100.0
+        fill_level_pct = (fill_price / entry_price - 1) * 100.0
         gapped = fill_price < stop_price
         exit_detail = (
             f"HARD_STOP_PCT={hard_stop_pct:.0f}% | low touched "
@@ -1504,6 +1515,8 @@ def evaluate_exit(
         realized_proceeds += remaining_qty * fill_price
         remaining_qty = 0.0
         exit_reason = "trailing_stop"
+        stop_level_pct = (stop_price / entry_price - 1) * 100.0
+        fill_level_pct = (fill_price / entry_price - 1) * 100.0
         exit_detail = (
             f"TRAILING_STOP_PCT={trail_pct:.0f}% below a peak of "
             f"{(peak_price / entry_price - 1) * 100:+.1f}% | armed at "
@@ -1542,6 +1555,13 @@ def evaluate_exit(
         "realistic_final_multiplier": realistic_final_multiplier,
         "last_price": current_price,
         "last_reserve_usd": reserve_usd,
+        # The stop level and the fill, as numbers rather than prose. Their
+        # difference IS the slippage, which is the pocket's largest measured
+        # leak: a stop set at -5% fills at -9.6% median, and half the time
+        # below -10%. Kept as two values rather than one difference so a
+        # later question ("did the stop level itself drift?") stays answerable.
+        "stop_level_pct": stop_level_pct,
+        "fill_level_pct": fill_level_pct,
         "ladder_done": ladder_done,
     }
 

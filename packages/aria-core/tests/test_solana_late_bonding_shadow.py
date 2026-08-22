@@ -303,9 +303,20 @@ async def test_summary_reports_the_average_entry_progress(_tmp_db):
 async def test_the_collect_wide_phase_is_over_and_recorded():
     """20/08 the band was widened to 0.40 to find out WHICH sub-band works;
     21/08 it answered (rug 48.9% at 40-60% vs 27.0% above 80%) and the floor
-    went back up to 0.70. This test replaces the one that guarded the wide
-    band, so the transition is explicit rather than a silent narrowing."""
-    assert pocket.MIN_BONDING_PROGRESS >= 0.70
+    went back up to 0.70.
+
+    22/08 -- lowered to 0.50 on the operator's explicit test. The 21/08 verdict
+    is NOT retracted: it stands, and this test now guards the floor against
+    drifting below the value deliberately chosen rather than asserting a
+    number the data preferred. What changed since makes the retest worth
+    running: the liquidity floor went 3000$ -> 5500$ (+23.34 points on
+    same-day closures) and most 40-60% rugs were thin pools, so they are cut
+    before the band is reached; and entries now price from the CHAIN, so the
+    band's own numbers were partly measured on stale prices.
+
+    The ceiling is untouched: the headroom above the floor is what absorbs
+    execution latency."""
+    assert pocket.MIN_BONDING_PROGRESS >= 0.50
     assert pocket.MAX_BONDING_PROGRESS >= 0.98
 
 
@@ -541,16 +552,28 @@ async def test_a_graduated_position_is_still_protected_on_the_downside(_tmp_db):
 async def test_the_floor_sits_where_the_data_turns_positive():
     """21/08 -- the collect-wide phase answered: rug risk nearly halves climbing
     the curve (48.9% at 40-60% down to 27.0% above 80%) while the win rate
-    rises (37.0% to 50.0%), and PnL turns positive at 70%. The floor must not
-    drift back below that turn."""
-    assert pocket.MIN_BONDING_PROGRESS >= 0.70
+    rises (37.0% to 50.0%), and PnL turned positive at 70%.
+
+    22/08 -- floor lowered to 0.50 as an explicit, reversible operator test.
+    The 21/08 numbers are not disowned; they were measured before the 5500$
+    liquidity floor and before entries were priced on-chain, and the archived
+    epochs make the comparison direct. The guard stays so the floor cannot
+    drift BELOW the tested value by accident -- 0.40 was never good."""
+    assert pocket.MIN_BONDING_PROGRESS >= 0.50
 
 
 @pytest.mark.asyncio
 async def test_the_worst_band_is_now_refused():
-    """40-60% carried 71% of entries and was the worst band on every axis."""
+    """Below the floor stays refused, whatever the floor currently is.
+
+    21/08: 40-60% carried 71% of entries and was the worst band on every axis.
+    22/08: the floor is a deliberate 0.50 test, so this asserts against the
+    CONSTANT rather than a frozen 0.50 -- otherwise the test would pass while
+    silently guarding nothing the day the floor moves again.
+    """
+    under = max(0.0, pocket.MIN_BONDING_PROGRESS - 0.10)
     ok, reason, _ = await pocket.screen_candidate(
-        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(0.50),
+        "mintA", "poolA", trade_stream=_Stream(), curve=_curve(under),
     )
     assert ok is False and reason.startswith("blocked_outside_band")
 
@@ -1739,3 +1762,131 @@ async def test_the_entry_price_comes_from_the_chain_not_the_feed(_tmp_db):
     assert row["entry_price"] == pytest.approx(expected, rel=1e-9), (
         "the entry must be priced from the on-chain curve, not from the feed"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_entry_records_how_far_the_curve_fell_back(_tmp_db):
+    """Operator's hypothesis, 22/08: buy on a pullback, not at a local top.
+
+    Untestable until now. This pocket archives candles only AFTER entry (3859
+    rows, zero before), so nothing recorded what the price did in the seconds
+    preceding the buy, and the curve tracker kept the CURRENT progress without
+    ever keeping its maximum.
+
+    On a bonding curve the price is a deterministic function of progress, so
+    progress falling back from its own high IS the pullback -- measured on the
+    one axis wash trading cannot fake.
+
+    Recorded, never acted on: nothing filters on this until the data shows it
+    separates winners from losers.
+    """
+    class _Tracker:
+        def seconds_tracked(self, _m): return 90.0
+        def progress_retracement_of(self, _m): return 0.18
+
+    row_id = await pocket.consider_candidate(
+        "mintPull", "poolPull", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_Tracker(), db_path=_tmp_db,
+    )
+    assert row_id is not None
+    row = [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolPull"][0]
+    assert row["progress_retracement_at_entry"] == pytest.approx(0.18)
+
+    # a tracker that cannot answer must leave NULL, never 0.0 -- which would
+    # read as "bought exactly at the peak" and silently qualify an unmeasured
+    # candidate the day a filter is built on this column.
+    class _Blind:
+        def seconds_tracked(self, _m): return None
+
+    other = await pocket.consider_candidate(
+        "mintBlind", "poolBlind", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_Blind(), db_path=_tmp_db,
+    )
+    assert other is not None
+    blind = [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolBlind"][0]
+    assert blind["progress_retracement_at_entry"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_stop_level_and_the_fill_are_stored_as_numbers(_tmp_db):
+    """Operator's ask, 22/08: the stop and the fill, to the decimal, as NUMBERS.
+
+    Both already existed -- inside `exit_detail`, as prose rounded to one
+    decimal ("low touched -13.9% vs entry"). Prose cannot be averaged,
+    bucketed or swept, so the pocket's largest measured leak (a stop set at
+    -5% filling at -9.6% median, below -10% half the time) had to be
+    re-derived by hand from text every single time.
+
+    Their DIFFERENCE is the slippage. Kept as two columns rather than one so a
+    later question -- "did the stop level itself drift?" -- stays answerable.
+    """
+    row_id = await pocket.consider_candidate(
+        "mintStop", "poolStop", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert row_id is not None
+
+    async def _crashed(_client, _pool, _mint, *, chain):
+        # price gapped well below the -5% fixed stop
+        return SimpleNamespace(available=True, price_usd=0.002 * 0.80,
+                               reserve_usd=13000.0, dex_id="pumpfun")
+
+    await pocket.advance_exit_simulation(
+        None, chain="solana", snapshot_fn=_crashed, db_path=_tmp_db,
+    )
+    row = [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolStop"][0]
+    assert row["exit_reason"] is not None, "the position must have closed"
+    assert row["stop_level_pct"] is not None, "the stop level must be stored"
+    assert row["fill_level_pct"] is not None, "the fill must be stored"
+    assert row["stop_level_pct"] == pytest.approx(-pocket.FIXED_STOP_PCT, abs=0.01)
+    # a gap fills BELOW the stop -- that difference is the whole point
+    assert row["fill_level_pct"] < row["stop_level_pct"]
+
+
+@pytest.mark.asyncio
+async def test_the_climb_before_the_buy_is_archived(_tmp_db, monkeypatch):
+    """The BEFORE half of the standing convention (18/08), finally honoured.
+
+    "je veut les bougies avant et apres le point dachat a chaque futur shadow".
+    This pocket wrote only the AFTER half -- 3859 archived rows, zero before --
+    so nothing recorded what the curve did in the minutes preceding a buy, and
+    the only question left worth asking (is the ENTRY POINT the real lever?)
+    could not be answered at all.
+
+    Rebuilt from progress rather than from candles we never had: on a bonding
+    curve the price IS `virtual_quote / virtual_token`, so the two carry the
+    same information, and the tracker has sampled progress since the mint
+    appeared on the creation feed. The scale is anchored on the entry so the
+    stored path is directly comparable to the "after" rows.
+    """
+    stored = {}
+
+    async def _fake_store(*, module, position_id, pool_address, chain, phase, candles):
+        stored[phase] = candles
+        return len(candles)
+
+    monkeypatch.setattr(pocket.shadow_candle_archive, "store_candles", _fake_store)
+
+    class _Tracker:
+        def seconds_tracked(self, _m): return 90.0
+        def progress_retracement_of(self, _m): return 0.10
+        def progress_history_of(self, _m):
+            # climbed 0.60 -> 0.78, i.e. the entry sits at the top of this run
+            return [(100.0 + i, 0.60 + i * 0.02) for i in range(10)]
+
+    row_id = await pocket.consider_candidate(
+        "mintPath", "poolPath", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_Tracker(), db_path=_tmp_db,
+    )
+    assert row_id is not None
+    for _ in range(40):                       # the archive task is fire-and-forget
+        if "before" in stored:
+            break
+        await asyncio.sleep(0.01)
+
+    assert "before" in stored, "the pre-entry path must be archived"
+    path = stored["before"]
+    assert len(path) == 10
+    # prices must RISE with progress, and be anchored on the entry price
+    assert path[0].close < path[-1].close
+    assert all(c.close > 0 for c in path)
