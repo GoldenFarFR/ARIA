@@ -181,18 +181,26 @@ async def store_candles(
 # reconstructing a price path. At 15s, a typical 50-600s position leaves 3-40
 # points, i.e. a few tens of thousands of rows/day -- enough to see the shape of
 # a collapse, small enough to keep.
-# 22/08 -- TEMPORARILY TIGHTENED (15s/3% -> 3s/1%) to settle one question the
-# coarse setting cannot answer: when a stop set at -5% fills at -39.5%, did the
+# 22/08 -- TIGHTENED (15s/3% -> 3s/1%) to settle one question the coarse
+# setting could not answer: when a stop set at -5% fills at -39.5%, did the
 # price WALK down past -5% unobserved, or did it jump in a single transaction?
-# On the one archived case the price went +0.5% -> -39.5% in 7s with NO
-# intermediate point, but at a 3% capture threshold that is also what a fast
-# walk would look like. At 1% a walk leaves a trail and a jump does not.
 #
-# This is the dome's standing "accelerated cadence on a new mechanism" rule:
-# revert to 15s/3% once the question is settled -- the tight setting is roughly
-# 5x the rows and is not meant to run indefinitely.
-OBSERVATION_MIN_INTERVAL_SECONDS = 3.0
-OBSERVATION_RESERVE_MOVE_PCT = 1.0
+# 23/08 -- QUESTION SETTLED, REVERTED to 15s/3%, per the dome's own
+# "accelerated cadence" rule (never run the tight setting indefinitely).
+# Checked the largest stop-vs-fill gaps accumulated overnight (up to -69.5pp)
+# against their own archived candles: the dominant pattern is a JUMP, not a
+# walk -- e.g. position 2580 went 2.31e-05 -> 1.05e-05 (-55%) between two
+# points 734ms apart, position 2586 went from its pre-entry peak straight to
+# a single post-entry point already -88% down, no intermediate step either
+# time. Even 3s/1% cannot resolve a collapse that happens in well under one
+# second between two polls -- the tighter setting was already at its
+# detection ceiling, so the extra ~5x rows bought nothing further. Reverting
+# does not lose anything: the mechanism the tight setting exists to catch
+# (a jump vs a walk) is answered by ANY interval short enough to bracket a
+# multi-second walk, and 15s already does that; only a sub-second jump is
+# invisible either way, a genuine sampling limit, not a threshold choice.
+OBSERVATION_MIN_INTERVAL_SECONDS = 15.0
+OBSERVATION_RESERVE_MOVE_PCT = 3.0
 # 22/08 -- PRICE move, added after a real miss. On a bonding curve the price is
 # `virtual_quote / virtual_token`, so it can move violently while the reserve
 # barely twitches: position 1772 went 0% -> +121% -> 0% in 3.5s and the reserve
