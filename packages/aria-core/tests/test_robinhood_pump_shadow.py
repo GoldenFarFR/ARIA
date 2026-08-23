@@ -1029,11 +1029,33 @@ async def test_record_signals_stores_realistic_entry_price_on_a_deep_pool():
 
 
 @pytest.mark.asyncio
-async def test_record_signals_realistic_entry_price_null_on_a_dust_pool():
+async def test_a_dust_pool_is_now_refused_outright():
+    """23/08 -- this used to assert that a dust pool merely got a NULL realistic
+    entry price, i.e. it was logged and traded on paper anyway. That was the
+    pocket's biggest defect: 52 of 200 closures ran on pools whose mean reserve
+    was $6.40, carrying 38% of the headline PnL on positions nobody could enter
+    or exit. MIN_LIQUIDITY_USD now refuses them at the door, so the invariant
+    became stronger -- no row at all rather than a row with a missing field."""
     pool = _pool(reserve=0.0000002, price_usd=1.0994857292802e-05)
     await shadow.record_signals([pool], chain=CHAIN)
-    rows = await _rows()
-    assert rows[0]["realistic_entry_price"] is None
+    assert await _rows() == [], "a pool below the floor must never be logged"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_reserve_is_refused_fail_closed():
+    """An unmeasurable pool is treated as a bad one, never as a safe one --
+    the pocket's whole defect was the opposite assumption."""
+    pool = _pool(reserve=None, price_usd=1.0)
+    await shadow.record_signals([pool], chain=CHAIN)
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_the_floor_lets_a_pool_exactly_on_it_through():
+    """Boundary: >= and not >, so a pool sitting exactly on the floor trades."""
+    pool = _pool(reserve=shadow.MIN_LIQUIDITY_USD, price_usd=1.0)
+    await shadow.record_signals([pool], chain=CHAIN)
+    assert len(await _rows()) == 1
 
 
 @pytest.mark.asyncio

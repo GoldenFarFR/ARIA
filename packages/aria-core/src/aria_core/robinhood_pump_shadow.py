@@ -176,7 +176,37 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # module's usual "never fabricate, fail-open" doctrine for pure
 # observations): this is a protective filter, not a reported metric, so an
 # unknown age is treated as "too risky to trade", never "assume it's fine".
-MAX_POOL_AGE_MINUTES = 25.0
+# 23/08 -- TIGHTENED 25 -> 6 minutes, on the pocket's own 133 executable
+# closures (17 hours, ONE day -- see the caveat at the end).
+#     age < 6 min   92 trades (69% of volume)  +28.39%/trade  +21.39% w/o top5
+#                   winrate 66.3%, 100% of hours positive, worst hour +7.21%,
+#                   ZERO hour with the pocket idle
+#     age >= 6 min                              far weaker on every measure
+# 25 minutes was never calibrated -- it was a rug-protection window borrowed
+# from the Solana twin (16/08), doing a different job. The freshness of the pool
+# turns out to be this pocket's strongest single signal, and unlike an entry
+# filter searched over many columns it was predicted BEFORE being measured (the
+# operator asked for it: "la tranche a trader est peut etre differente").
+# 5 minutes scores higher still (+35.75%, winrate 74.6%) but keeps only 44% of
+# the volume; 6 keeps 69% for nearly the same edge. Deliberate volume/edge
+# tradeoff, not a tuned optimum -- tuning it on this sample is the overfitting
+# trap.
+# CAVEAT that must travel with this number: ONE day of data. Re-read it once a
+# second day exists.
+MAX_POOL_AGE_MINUTES = 6.0
+
+# 23/08 -- THE POCKET HAD NO LIQUIDITY FLOOR AT ALL, and it was its biggest
+# defect. 52 of 200 closures (26%) ran on pools whose MEAN reserve was $6.40.
+# Its three "best" trades ever -- +879%, +313%, +289% -- sat on pools of $3.52,
+# $20.06 and $17.15, one of them reporting a +85911% peak. That is not profit,
+# it is noise on a pool you can neither enter nor exit, and it carried 38% of
+# the pocket's headline PnL. Removing it is a MEASUREMENT correction, not a
+# performance filter: those points never existed.
+#     no floor       200 trades  +31.10%/trade  winrate 53.7%
+#     >= $4000       123 trades  +25.42%/trade  winrate 61.8%  (+19.27% w/o top5)
+# Set to the same 4000 as the Solana twin, but calibrated HERE and not copied:
+# it is where the winrate peaks while still keeping 61% of the flow.
+MIN_LIQUIDITY_USD = 4000.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -415,6 +445,12 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                 ).total_seconds() / 60.0
                 if pool_age_minutes >= MAX_POOL_AGE_MINUTES:
                     continue  # already past the protection window at detection time
+                # 23/08 -- liquidity floor, see MIN_LIQUIDITY_USD. Placed AFTER
+                # the age check so the cheaper test runs first. fail-CLOSED on an
+                # unknown reserve: this pocket's whole defect was treating an
+                # unmeasurable pool as a tradable one.
+                if pool.reserve_usd is None or pool.reserve_usd < MIN_LIQUIDITY_USD:
+                    continue
                 try:
                     if await is_stock_token(pool.token_address or "", chain):
                         continue  # tokenized equity, not a memecoin -- out of scope for this shadow

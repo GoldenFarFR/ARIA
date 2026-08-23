@@ -433,7 +433,43 @@ FIXED_STOP_PCT: float | None = None
 # 22/08 15h, almost entirely inside the degraded regime, so it has never seen a
 # good one to learn the threshold from.
 REGIME_WINDOW = 30
-REGIME_MIN_MEDIAN_PEAK_PCT = 20.0
+
+# 23/08, SAME DAY, DISARMED (None) -- my own simulation did not match the code
+# I shipped, and the gate measured NEGATIVE in production.
+#
+# THE BUG WAS IN THE SIMULATION, NOT THE IDEA. My replay fed the sensor the peak
+# of EVERY token, including the ones the gate refused. `regime_state()` reads
+# this pocket's own table, which holds only the trades actually TAKEN. Replayed
+# both ways on the same 2426 closures:
+#     no gate at all                      2426 trades  +5.84%/trade  56% hours +
+#     what I simulated (sensor sees all)   888 trades +13.10%/trade  80% hours +
+#     WHAT ACTUALLY RUNS (sensor sees taken only)
+#                                          338 trades  -0.18%/trade  55% hours +
+# A shut gate stops feeding its own sensor: it then reads only its 10% probes, a
+# biased handful. The thermometer ends up locked inside the room it measures. I
+# named that risk when designing it and wrongly assumed the probe flow cancelled
+# it -- it keeps the sensor ALIVE, it does not make it REPRESENTATIVE.
+#
+# WHY IT IS NOT SIMPLY FIXED TODAY. The honest fix is an independent sensor, and
+# `pretrade_rejection_log` already tracks refused candidates forward. But it is
+# sampled through the REST cascade at `max_rows=5` every 300s with an 8s
+# per-call floor, against ~250 live rejects -- so a given reject is re-read
+# almost never. Measured consequence: refused candidates tracked for 90.5 min
+# show a +1.27% mean peak while taken ones tracked 4.6 min show +16.63%. That is
+# a sampling artefact, not a market fact, and calibrating a threshold on it would
+# bake the artefact into the rule. Making that sensor usable means feeding it
+# from the curve WEBSOCKET (the tokens are already subscribed, so the price is a
+# local read) instead of REST -- a real change, not a tweak.
+#
+# ALSO ESTABLISHED, and it matters for whoever rearms this: +20% per trade -- the
+# operator's stated floor -- is reached by NONE of 1154 replayed combinations on
+# this chain. Best robust setting is +13.55%. And a peak threshold is the wrong
+# unit: a 20% median PEAK translates to roughly 15-16% of PnL, so an objective
+# expressed in PnL should be steered by a PnL sensor.
+#
+# None = disarmed, the pocket enters as it did before the gate existed. The
+# machinery below stays wired and tested so rearming is one value.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = None
 
 # One candidate in ten still enters while the gate is shut. Not a compromise on
 # the rule -- the mechanism REQUIRES it: the sensor reads closed positions, so
@@ -497,11 +533,16 @@ async def regime_state(*, db_path: str | None = None) -> dict:
     # fetched newest-first, the pure helper expects oldest-first
     peaks = list(reversed(rows))
     median = regime_median_peak(peaks)
+    disarmed = REGIME_MIN_MEDIAN_PEAK_PCT is None
     return {
         "median_peak_pct": median,
         "samples": len(peaks),
-        "open": median is None or median >= REGIME_MIN_MEDIAN_PEAK_PCT,
+        # Disarmed reads as OPEN, never as shut: a threshold of None means "no
+        # opinion on the regime", and a mechanism with no opinion must not be
+        # the thing that stops the pocket trading.
+        "open": disarmed or median is None or median >= REGIME_MIN_MEDIAN_PEAK_PCT,
         "threshold_pct": REGIME_MIN_MEDIAN_PEAK_PCT,
+        "disarmed": disarmed,
     }
 
 # 22/08 -- BACK TO 15%, the shared default, after three hours of production

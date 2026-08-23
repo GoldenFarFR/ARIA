@@ -1970,11 +1970,13 @@ class TestRegimeGate:
 
     def test_the_median_ignores_a_single_spike(self):
         """The whole point of a median over a mean: 29 dead tokens and one
-        1000% runner is a DEAD market, and an average would call it alive."""
+        1000% runner is a DEAD market, and an average would call it alive.
+
+        Asserted against a literal rather than against the live constant, which
+        is None while the gate is disarmed -- the median's behaviour is a
+        property of the maths, not of the current threshold."""
         peaks = [0.0] * (pocket.REGIME_WINDOW - 1) + [1000.0]
-        median = pocket.regime_median_peak(peaks)
-        assert median == 0.0
-        assert median < pocket.REGIME_MIN_MEDIAN_PEAK_PCT
+        assert pocket.regime_median_peak(peaks) == 0.0
 
     def test_the_probe_lets_exactly_one_in_ten_through(self):
         """Without probes the gate can never reopen -- it reads closed
@@ -1998,7 +2000,7 @@ class TestRegimeGate:
         assert state["median_peak_pct"] is None
 
     @pytest.mark.asyncio
-    async def test_a_cold_market_shuts_the_gate_and_a_hot_one_opens_it(self, _tmp_db):
+    async def test_a_cold_market_shuts_the_gate_and_a_hot_one_opens_it(self, _tmp_db, monkeypatch):
         import aiosqlite
 
         await pocket._ensure_table(_tmp_db)
@@ -2018,14 +2020,35 @@ class TestRegimeGate:
                     )
                 await db.commit()
 
-        await _fill(pocket.REGIME_MIN_MEDIAN_PEAK_PCT - 5.0)
+        # The gate is DISARMED in production (threshold None) since 23/08, so
+        # the rule is exercised against an explicit threshold. Disarming must
+        # not silently delete the mechanism's test coverage -- rearming has to
+        # stay one value away.
+        monkeypatch.setattr(pocket, "REGIME_MIN_MEDIAN_PEAK_PCT", 20.0)
+
+        await _fill(15.0)
         cold = await pocket.regime_state(db_path=_tmp_db)
         assert cold["open"] is False, "a market below the threshold must shut the gate"
         assert cold["samples"] == pocket.REGIME_WINDOW
+        assert cold["disarmed"] is False
 
-        await _fill(pocket.REGIME_MIN_MEDIAN_PEAK_PCT + 5.0)
+        await _fill(25.0)
         hot = await pocket.regime_state(db_path=_tmp_db)
         assert hot["open"] is True, "a market above the threshold must reopen it"
+
+    @pytest.mark.asyncio
+    async def test_a_disarmed_gate_reads_as_open_never_as_shut(self, _tmp_db, monkeypatch):
+        """23/08 -- threshold None means "no opinion on the regime". A mechanism
+        with no opinion must never be the thing that stops the pocket trading.
+
+        This is the state production actually runs in: the gate was disarmed the
+        same day it shipped, because the replay that justified it fed the sensor
+        every token while the real code reads only the trades it TOOK -- +13.10%
+        simulated against -0.18% live."""
+        monkeypatch.setattr(pocket, "REGIME_MIN_MEDIAN_PEAK_PCT", None)
+        state = await pocket.regime_state(db_path=_tmp_db)
+        assert state["open"] is True
+        assert state["disarmed"] is True
 
     def test_the_regime_reject_reason_is_tracked_forward(self):
         """`blocked_regime_closed` must be in TRACKED_REJECTS: these candidates
