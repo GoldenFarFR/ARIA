@@ -7,6 +7,28 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[DEPLOYE] Subject : solana_pump_shadow.py reactivated -- "trade the trend, not the bonding curve" answered with existing code, not a new build
+Date : 2026.08.23 / Probleme : operator question, verbatim: "et si on trade les tendance au lieu du bonding ?" -- prompted after two real
+late_bonding hard_stop losses that night (-61.1%/-82.2%, sudden liquidity collapse, neither RugCheck nor a higher liquidity floor would
+have caught either one per live verification the same evening). `solana_pump_shadow.py` already implements exactly this alternative
+(built 16/08: momentum entry on already-graduated AMM pools, m5 surge >=25%, same scale-out-ladder/trailing-stop exit mechanics as
+Robinhood/Base -- never a bonding-curve read) but was retired from the standalone shadow process on 17/08 during a global cleanup
+("cloture tous les shadow" confusion) -- never on a performance verdict. Only 52 rows were ever collected, over less than 2 hours, and
+the backtest cited in its own docstring (97.6% winrate, 1.68x) ran on 42 BASE signals, never validated on Solana out-of-sample.
+Solution : reactivated `solana_pump_shadow_loop()` in `shadow_persistent.py` (hors git), sourced via `dexpaprika.get_trending_pools
+("solana", ...)` (confirmed live: "solana" is a supported network) instead of the module's original GeckoTerminal path -- deliberately
+avoids adding load to the GeckoTerminal throttle already strained earlier tonight (wallet_scan_queue rate-limit suspension incident).
+Telegram open/close notifications wired via `shadow_notify.notify_pocket` (the module factored out of Robinhood/Base earlier tonight --
+first real reuse of it). Required one small in-repo change: `solana_pump_shadow.py` never had a `TABLE` constant (predates that
+convention, introduced 23/08 for Robinhood/Base) -- added as a named alias for `shadow_notify`'s config to reference, zero behavior
+change to the module's internals (86/86 existing tests still green, 701/701 full suite green). Service restarted, verified clean via
+`journalctl` (no traceback). No verdict yet -- this reactivates DATA COLLECTION on a genuinely out-of-sample Solana test, not a
+conclusion; needs its own real sample (>=100-200 closures, >=2 distinct days, same outlier/stability doctrine as every other pocket)
+before any comparison against late_bonding is trustworthy.
+`packages/aria-core/src/aria_core/solana_pump_shadow.py`, `docs/pocket-parameters.json`, `shadow_persistent.py` (hors git).
+
+------------------------------------------------------------
+
 [DEPLOYE] Subject : shadow_notify.py -- Robinhood/Base's duplicate notifiers factored, regime-gate generalization deliberately deferred
 Date : 2026.08.23 / Probleme : operator request, verbatim: "JE VEUT QUE toute les poche a chaque fois utilise tous les meme reglage
 comme ce genre qui securise ... generaliser larchitecture de base des 3 shadow au maximum et garder les reglage en detail propre a
