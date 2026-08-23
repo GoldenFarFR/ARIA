@@ -188,13 +188,27 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # turns out to be this pocket's strongest single signal, and unlike an entry
 # filter searched over many columns it was predicted BEFORE being measured (the
 # operator asked for it: "la tranche a trader est peut etre differente").
-# 5 minutes scores higher still (+35.75%, winrate 74.6%) but keeps only 44% of
-# the volume; 6 keeps 69% for nearly the same edge. Deliberate volume/edge
-# tradeoff, not a tuned optimum -- tuning it on this sample is the overfitting
-# trap.
+# 23/08, SAME DAY, CORRECTED 6 -> 10 after the operator asked the right
+# question: does 6 minutes strangle the pocket? It does not -- it keeps 65% of
+# the flow -- but it was the WRONG PLACE, and for the exact reason that killed
+# seven findings earlier the same day: it bought a better AVERAGE by shrinking
+# the base. Full sweep, liquidity floor applied throughout:
+#      4 min   28 trades  +54.63%/trade   1530 pts   winrate 96.4%  (11h only)
+#      5 min   60 trades  +35.13%/trade   2108 pts   winrate 73.3%
+#      6 min   93 trades  +28.08%/trade   2611 pts   winrate 65.6%
+#     10 min  130 trades  +24.98%/trade   3248 pts   winrate 64.6%   <- chosen
+#     20 min  137 trades  +25.68%/trade   3518 pts   winrate 62.8%
+# The average falls as the window widens while the TOTAL rises, which is the
+# signature of a filter cutting real gains. What 6 min threw away was measured
+# and it was not noise: 44 trades at +20.62%, winrate 56.8%, liquidity fine --
+# 907 points of genuine profit, above the operator's own +20% floor.
+# 10 recovers 637 of those points, stays at +25% (well clear of the floor) and
+# lifts throughput from ~5.6 to ~7.6 entries/hour. 4 min is tempting and is
+# NOT taken: 28 trades over 11 of 17 hours is a sample to overfit, not to
+# calibrate on.
 # CAVEAT that must travel with this number: ONE day of data. Re-read it once a
 # second day exists.
-MAX_POOL_AGE_MINUTES = 6.0
+MAX_POOL_AGE_MINUTES = 10.0
 
 # 23/08 -- THE POCKET HAD NO LIQUIDITY FLOOR AT ALL, and it was its biggest
 # defect. 52 of 200 closures (26%) ran on pools whose MEAN reserve was $6.40.
