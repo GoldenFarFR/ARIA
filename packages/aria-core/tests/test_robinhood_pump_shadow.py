@@ -1206,7 +1206,7 @@ async def test_every_refusal_is_recorded_so_the_filters_can_be_recalibrated():
     assert await _rows() == [], "neither pool should have been traded"
     raisons = sorted((d.reason or "").split(":")[0] for d in seen)
     assert raisons == ["blocked_pool_age", "blocked_thin_liquidity"], raisons
-    # ce qui permettra de recalibrer doit etre porte par la ligne, pas perdu
+    # what makes recalibration possible must be ON the row, not lost
     for d in seen:
         assert d.pocket == "robinhood_pump"
         assert d.blocked is True
