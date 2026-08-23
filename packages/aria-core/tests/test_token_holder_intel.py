@@ -255,3 +255,61 @@ async def test_list_cross_token_candidates_scoped_to_chain():
     for contract in ("0xTOKEN_A", "0xTOKEN_B", "0xTOKEN_C"):
         await intel.store_holders(contract, "base", [_eoa_holder(_RECURRING_EOA)])
     assert await intel.list_cross_token_candidates(min_token_count=3, chain="solana") == []
+
+
+# ── token_holder_intel_history (23/08, append-only, never overwritten) ──
+
+@pytest.mark.asyncio
+async def test_history_accumulates_across_multiple_store_holders_calls():
+    """The snapshot table REPLACES on every call (test above); the history
+    table must instead keep every extraction -- this is the whole point."""
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xWhale")])
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xWhale")])
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xWhale")])
+    history = await intel.holder_value_history("0xTOKEN", "base", "0xWhale")
+    assert len(history) == 3
+
+
+@pytest.mark.asyncio
+async def test_history_preserves_the_value_at_each_extraction():
+    holder_v1 = _eoa_holder("0xWhale")
+    holder_v1["value"] = "1000"
+    holder_v2 = _eoa_holder("0xWhale")
+    holder_v2["value"] = "5000"
+    await intel.store_holders("0xTOKEN", "base", [holder_v1])
+    await intel.store_holders("0xTOKEN", "base", [holder_v2])
+    history = await intel.holder_value_history("0xTOKEN", "base", "0xWhale")
+    assert [h["value"] for h in history] == ["1000", "5000"]  # oldest first
+
+
+@pytest.mark.asyncio
+async def test_history_does_not_affect_the_current_state_snapshot():
+    """The pre-existing REPLACE behavior of the snapshot table must stay
+    byte-identical -- history is purely additive."""
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xWhale")])
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xOther")])
+    rows = await intel.get_holders("0xTOKEN", "base")
+    assert len(rows) == 1
+    assert rows[0]["holder_address"] == "0xOther"
+
+
+@pytest.mark.asyncio
+async def test_history_scoped_to_the_requested_holder_and_token():
+    await intel.store_holders("0xTOKEN_A", "base", [_eoa_holder("0xWhale")])
+    await intel.store_holders("0xTOKEN_B", "base", [_eoa_holder("0xWhale")])
+    await intel.store_holders("0xTOKEN_A", "base", [_eoa_holder("0xOther")])
+    history = await intel.holder_value_history("0xTOKEN_A", "base", "0xWhale")
+    assert len(history) == 1
+
+
+@pytest.mark.asyncio
+async def test_history_unknown_holder_returns_empty():
+    await intel.store_holders("0xTOKEN", "base", [_eoa_holder("0xWhale")])
+    assert await intel.holder_value_history("0xTOKEN", "base", "0xNeverSeen") == []
+
+
+@pytest.mark.asyncio
+async def test_history_empty_holders_writes_nothing():
+    written = await intel.store_holders("0xTOKEN", "base", [])
+    assert written == 0
+    assert await intel.holder_value_history("0xTOKEN", "base", "0xWhale") == []

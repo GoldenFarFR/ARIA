@@ -4,6 +4,10 @@
 
 > Format : `[STATUT] Sujet` / `Date : AAAA.MM.JJ / Probleme : ...` / `Solution : ... — fichier (hash)`.
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
+[CODE] Subject : `token_holder_intel.py` now appends every extraction to a history table instead of only overwriting the current-state snapshot
+Date : 2026.08.23 / Probleme : the module was documented as "a snapshot, not an append-only journal" -- correct for its original goal, but it meant ARIA could never see a large holder ACCUMULATING between two extractions, only the state right now. Surfaced by the operator's own question about reading the blockchain ahead of a pump/dump ("on pourrait regarder... si on peu lire la blockchain avant un pump ou un dump") -- the legitimate answer researched the same day (no mempool access on Base/Robinhood, see the EVM order-flow research banked in `docs/aria-learning-inbox/`) pointed straight back at this exact gap.
+Solution : new `token_holder_intel_history` table, appended on every `store_holders` call, never replaced/deleted -- the existing snapshot table is completely unchanged (same REPLACE semantics, same consumers). New `holder_value_history(contract, chain, holder_address)` returns every recorded value for one holder, oldest first. Purely observational for now -- nothing reads it yet, no filter/decision built on it (same doctrine as every other freshly-instrumented column in this project: collect first, judge later on a real sample). 29/29 tests green. — `token_holder_intel.py` (uncommitted at write time, see git log for the real hash).
+---
 > Le 15/07 a été un marathon de revue croisée (Gemini/ChatGPT/DeepSeek, 4 IA, 6 rounds, 22+
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.

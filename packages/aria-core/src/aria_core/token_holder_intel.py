@@ -67,15 +67,46 @@ async def _ensure_table() -> None:
         await db.commit()
 
 
+async def _ensure_history_table() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS token_holder_intel_history (
+                contract TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                holder_address TEXT NOT NULL,
+                value TEXT,
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_holder_intel_history_lookup "
+            "ON token_holder_intel_history(contract, chain, holder_address, fetched_at)"
+        )
+        await db.commit()
+
+
 async def store_holders(contract: str, chain: str, holders: list[dict]) -> int:
-    """Replaces the holders snapshot for this (contract, chain) -- a single
-    transaction (DELETE then INSERT), never a partial state visible in
-    between. Returns the number of rows written. Empty ``holders`` writes
+    """Replaces the CURRENT-STATE snapshot for this (contract, chain) -- a
+    single transaction (DELETE then INSERT), never a partial state visible
+    in between. Returns the number of rows written. Empty ``holders`` writes
     nothing and deletes nothing either -- a failed extraction (empty list
-    from dome degradation) must never erase a previous valid snapshot."""
+    from dome degradation) must never erase a previous valid snapshot.
+
+    23/08 -- ALSO appends every row to ``token_holder_intel_history`` (never
+    replaced, never deleted), answering the operator's own question ("on
+    pourrait regarder... si on peu lire la blockchain avant un pump ou un
+    dump") the legitimate way: no mempool access needed, just keeping what
+    this module already extracts instead of overwriting it. The snapshot
+    table above is UNCHANGED (still a pure current-state view -- every
+    existing consumer, ``wallet_cross_token_holdings``/
+    ``list_cross_token_candidates``, keeps reading exactly what it read
+    before); the history table is purely additive, read by nothing yet."""
     if not holders:
         return 0
     await _ensure_table()
+    await _ensure_history_table()
     chain = (chain or "").strip().lower()
     contract = _normalize_contract(contract, chain)
     if not contract or not chain:
@@ -110,8 +141,46 @@ async def store_holders(contract: str, chain: str, holders: list[dict]) -> int:
             """,
             rows,
         )
+        history_rows = [
+            (contract, chain, h.get("holder_address", ""),
+             str(h.get("value")) if h.get("value") is not None else None)
+            for h in holders
+            if h.get("holder_address")
+        ]
+        await db.executemany(
+            """
+            INSERT INTO token_holder_intel_history (
+                contract, chain, holder_address, value, fetched_at
+            ) VALUES (?, ?, ?, ?, datetime('now'))
+            """,
+            history_rows,
+        )
         await db.commit()
     return len(rows)
+
+
+async def holder_value_history(contract: str, chain: str, holder_address: str) -> list[dict]:
+    """Every extraction of this ONE holder's value on this token, oldest
+    first -- the raw material for detecting accumulation/distribution
+    between two extractions. Purely observational: nothing reads this yet,
+    it exists so the data exists once a real use is designed."""
+    await _ensure_history_table()
+    chain = (chain or "").strip().lower()
+    contract = _normalize_contract(contract, chain)
+    holder_address = (holder_address or "").strip()
+    if not contract or not chain or not holder_address:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (
+            await db.execute(
+                "SELECT value, fetched_at FROM token_holder_intel_history "
+                "WHERE contract = ? AND chain = ? AND LOWER(holder_address) = LOWER(?) "
+                "ORDER BY fetched_at ASC",
+                (contract, chain, holder_address),
+            )
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 async def get_holders(contract: str, chain: str) -> list[dict]:
