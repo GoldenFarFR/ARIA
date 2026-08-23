@@ -121,10 +121,11 @@ this module, and never fabricates a value it couldn't really observe."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
+from aria_core import pretrade_rejection_log
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener, rugcheck
@@ -505,6 +506,241 @@ async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: s
     return (await cur.fetchone()) is not None
 
 
+# ---------------------------------------------------------------------------
+# 23/08, operator-directed ("construit ce 30 sur tout le monde") -- same
+# regime gate as solana_late_bonding_shadow.py's REGIME_MIN_MEDIAN_PEAK_PCT
+# (read that module for the full incident history: a first sensor that
+# self-fed on TAKEN trades measured -0.18%/trade in production against
+# +13.10% in a biased simulation, rebuilt as an independent, trade-blind
+# sensor). ``record_regime_candidate``/``regime_state`` mirror that module's
+# functions of the same name field-for-field; ``regime_median_peak`` below is
+# a DUPLICATE of its pure function rather than an import -- THIS module is
+# itself imported BY solana_late_bonding_shadow.py (for
+# ``_snapshot_with_fallback``/``_apply_price_impact_and_fee``), so importing
+# back from it here would be a genuine circular dependency, not a stylistic
+# choice. The function has no state, so duplicating it costs nothing a
+# shared import would have saved.
+#
+# WHY THIS POCKET CANNOT REUSE LATE_BONDING'S TRACKING MECHANISM: that sensor
+# updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory
+# read because the pool is already subscribed to a websocket for an
+# unrelated reason (exit tracking). This pocket -- "SOLANA TENDANCE",
+# already-graduated AMM pools, NOT the bonding curve -- has no such
+# subscription: its only view of the market is the REST ``dexpaprika.
+# get_trending_pools()`` fetch ``solana_pump_shadow_loop`` already performs
+# every SOLANA_PUMP_CADENCE_SECONDS=120s to look for NEW candidates,
+# regardless of whether anything new is found. That fetch returns up to 25
+# pools with a live price EVERY cycle, so ``advance_regime_candidates_from_
+# pools`` below re-reads THAT SAME response for pools already under tracking
+# rather than issuing any REST call of its own -- zero marginal throughput.
+#
+# REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets
+# (robinhood/base/solana_pump) share DexPaprika's own throttle (independent
+# of GeckoTerminal), 1 discovery call/cycle each at 120s cadence, plus
+# ``advance_exit_simulation``'s DexScreener-first snapshot fallback (at most
+# 1-2 calls per OPEN position per cycle, against a DIFFERENT provider's
+# budget). A dedicated per-candidate regime poll on top of that -- up to 25
+# candidates/cycle/pocket, all new REST calls -- would have added real,
+# uncosted load for a signal the discovery fetch already carries for free.
+# Reusing it is strictly better: no new call, no new budget risk, no new
+# failure mode -- exactly the "Pense-Systeme" bar CLAUDE.md sets (never a
+# linear/unbounded resource pattern when a staged, already-paid-for read
+# already exists).
+#
+# HONEST LIMIT (documented, not hidden, same discipline as the sibling
+# module's own comments): a candidate's peak is only updated on cycles where
+# DexPaprika's top-25 "trending" response for this chain STILL carries its
+# pool_address. A token that pumps briefly then drops out of the top 25
+# (illiquid enough, or simply outranked) stops updating -- its logged peak
+# understates the true market peak in that case. This is a conservative
+# (never-inflated) bias: undercounting a hot market's peak only makes the
+# gate MORE cautious, never less, which is the safe direction for a
+# mechanism whose job is to detect when the market has gone cold.
+REGIME_CANDIDATES_TABLE = "solana_pump_regime_candidates_log"
+REGIME_WINDOW = 30
+REGIME_TRACKING_WINDOW_MINUTES = 15.0
+# Provisional, borrowed from late_bonding's own value -- NOT calibrated for
+# this pocket specifically (Doctrine d'Ingestion: a conservative hypothesis
+# beats leaving a promising mechanism idle for lack of fresh data).
+# RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine
+# d'Ingestion's own n>=100 bar) -- this pocket's screened population may
+# differ from late_bonding's in either direction.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
+
+_ensured_regime_candidates_db_paths: set[str] = set()
+
+
+async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
+    path = db_path or _db_path()
+    if path in _ensured_regime_candidates_db_paths:
+        return
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {REGIME_CANDIDATES_TABLE} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pool_address TEXT NOT NULL,
+                mint TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                decided_at TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                reserve_usd REAL,
+                peak_price REAL NOT NULL,
+                last_checked_at TEXT NOT NULL,
+                tracking_status TEXT NOT NULL DEFAULT 'tracking'
+            )
+            """
+        )
+        await db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{REGIME_CANDIDATES_TABLE}_decided "
+            f"ON {REGIME_CANDIDATES_TABLE}(decided_at)"
+        )
+        await db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{REGIME_CANDIDATES_TABLE}_status "
+            f"ON {REGIME_CANDIDATES_TABLE}(tracking_status)"
+        )
+        await db.commit()
+    _ensured_regime_candidates_db_paths.add(path)
+
+
+async def record_regime_candidate(
+    *, pool_address: str, mint: str, chain: str, entry_price: float,
+    reserve_usd: float | None, db_path: str | None = None,
+) -> None:
+    """Logs one candidate that cleared every filter up to the point this
+    pocket would log it as a signal -- REGARDLESS of what the regime gate
+    itself decides below. Same discipline as solana_late_bonding_shadow.py:
+    the sensor's input must never be gated by the gate's own verdict, or a
+    shut gate starves its own sensor (the exact 23/08 incident that forced
+    that module's rebuild). ``entry_price``/``reserve_usd`` come from the
+    SAME discovery fetch already paid for -- no extra network call here.
+    Never raises into the caller: a measurement must not cost a trade."""
+    if not entry_price or entry_price <= 0:
+        return
+    try:
+        await _ensure_regime_candidates_table(db_path)
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(db_path or _db_path()) as db:
+            await db.execute(
+                f"INSERT INTO {REGIME_CANDIDATES_TABLE} "
+                f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
+                f" peak_price, last_checked_at, tracking_status) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'tracking')",
+                (pool_address, mint, chain, now, entry_price, reserve_usd,
+                 entry_price, now),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- a sensor write never breaks a decision
+        logger.info("solana_pump_shadow: record_regime_candidate failed (%s)", exc)
+
+
+async def advance_regime_candidates_from_pools(
+    pools: list[TrendingPool], *, max_rows: int = 200, db_path: str | None = None,
+) -> dict:
+    """Updates each still-tracked candidate's peak using the discovery
+    fetch's OWN response -- see the module-level comment above for why this
+    needs no dedicated network call. ``pools`` must be the exact same list
+    the caller's loop already fetched via ``dexpaprika.get_trending_pools()``
+    this cycle. A candidate whose pool is absent from this cycle's response
+    simply keeps its last known peak (see the "HONEST LIMIT" comment above);
+    it is still closed once REGIME_TRACKING_WINDOW_MINUTES elapses either
+    way, so a candidate that fell out of the trending list cannot track
+    forever. Safe to call on an arbitrarily irregular cadence, same
+    discipline as ``advance_exit_simulation``: all state lives in the row
+    itself."""
+    path = db_path or _db_path()
+    await _ensure_regime_candidates_table(path)
+    stats = {"checked": 0, "updated": 0, "closed": 0}
+    price_by_pool = {
+        p.pool_address: p.price_usd for p in (pools or []) if p.price_usd is not None
+    }
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=REGIME_TRACKING_WINDOW_MINUTES)
+    ).isoformat()
+
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT * FROM {REGIME_CANDIDATES_TABLE} WHERE tracking_status = 'tracking' "
+            f"ORDER BY decided_at LIMIT ?",
+            (max_rows,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    for row in rows:
+        stats["checked"] += 1
+        expired = row["decided_at"] < cutoff
+        price = price_by_pool.get(row["pool_address"])
+        if price is None and not expired:
+            # not in this cycle's trending response and not yet expired --
+            # nothing new to fold in, leave the row untouched.
+            continue
+        new_peak = max(price, row["peak_price"]) if price is not None else row["peak_price"]
+        status = "closed" if expired else "tracking"
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                f"UPDATE {REGIME_CANDIDATES_TABLE} SET peak_price = ?, "
+                f"last_checked_at = ?, tracking_status = ? WHERE id = ?",
+                (new_peak, datetime.now(timezone.utc).isoformat(), status, row["id"]),
+            )
+            await db.commit()
+        stats["updated"] += 1
+        if status == "closed":
+            stats["closed"] += 1
+    return stats
+
+
+def regime_median_peak(peaks: list[float]) -> float | None:
+    """Median peak of the candidates handed in, or None below the window
+    size. Duplicate of solana_late_bonding_shadow.regime_median_peak (see
+    the module-level comment above for why this is a duplicate rather than
+    an import) -- pure, no state, so the rule can be tested without a
+    database. Below REGIME_WINDOW samples it returns None, and the caller
+    treats that as OPEN: a pocket that has just started has no evidence the
+    market is bad, and refusing on absent data would make a fresh epoch
+    unable to ever collect any."""
+    usable = [p for p in peaks if p is not None]
+    if len(usable) < REGIME_WINDOW:
+        return None
+    recent = sorted(usable[-REGIME_WINDOW:])
+    mid = len(recent) // 2
+    if len(recent) % 2:
+        return recent[mid]
+    return (recent[mid - 1] + recent[mid]) / 2.0
+
+
+async def regime_state(*, db_path: str | None = None) -> dict:
+    """Reads the regime from candidates this pocket SCREENED, not from
+    signals it logged -- same fix as solana_late_bonding_shadow.py's own
+    23/08 rebuild. Ordered by ``decided_at``: what is knowable at the
+    instant of a live decision is what has already been seen, regardless of
+    whether it was ultimately logged as a signal."""
+    await _ensure_regime_candidates_table(db_path)
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        cur = await db.execute(
+            f"SELECT (peak_price / entry_price - 1.0) * 100.0 AS peak "
+            f"FROM {REGIME_CANDIDATES_TABLE} "
+            f"WHERE entry_price IS NOT NULL AND entry_price > 0 "
+            f"ORDER BY decided_at DESC LIMIT ?",
+            (REGIME_WINDOW,),
+        )
+        rows = [r[0] for r in await cur.fetchall()]
+    # fetched newest-first, the pure helper expects oldest-first
+    peaks = list(reversed(rows))
+    median = regime_median_peak(peaks)
+    disarmed = REGIME_MIN_MEDIAN_PEAK_PCT is None
+    return {
+        "median_peak_pct": median,
+        "samples": len(peaks),
+        # Disarmed reads as OPEN, never as shut: a threshold of None means
+        # "no opinion on the regime", and a mechanism with no opinion must
+        # not be the thing that stops the pocket trading.
+        "open": disarmed or median is None or median >= REGIME_MIN_MEDIAN_PEAK_PCT,
+        "threshold_pct": REGIME_MIN_MEDIAN_PEAK_PCT,
+        "disarmed": disarmed,
+    }
+
+
 async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") -> int:
     """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
     its 5-minute price change -- pure read+log, see the module's bright-line
@@ -536,6 +772,48 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     continue  # outside the measured age window (see the constants)
                 if await _has_open_signal(db, pool.pool_address, chain):
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
+
+                # 23/08 -- regime gate, see the REGIME_MIN_MEDIAN_PEAK_PCT
+                # block above. This candidate cleared every OTHER filter
+                # (age, dedupe), so it is exactly the population the sensor
+                # needs -- logged UNCONDITIONALLY before the verdict below,
+                # a gate must never decide its own sensor's input. Unlike
+                # robinhood_pump_shadow.py/base_momentum_shadow.py this
+                # module never skips a pool for thin liquidity at this
+                # point (it only nulls ``realistic_entry_price`` further
+                # down), so this is the FIRST rejection this function ever
+                # logs to pretrade_rejection_log -- deliberate, not an
+                # oversight: every other filter here has no `_refuse`
+                # helper to reuse, so this gate builds its own GateDecision
+                # inline rather than introducing one just for this call.
+                await record_regime_candidate(
+                    pool_address=pool.pool_address, mint=pool.token_address or "",
+                    chain=chain, entry_price=pool.price_usd, reserve_usd=pool.reserve_usd,
+                )
+                if not (await regime_state())["open"]:
+                    # Last link on purpose: every cheaper filter has already
+                    # had its say, so this only ever refuses candidates that
+                    # were otherwise GOOD -- it is the market being refused,
+                    # not the token.
+                    try:
+                        tx = pool.transactions_m15 or {}
+                        await pretrade_rejection_log.record_decision(
+                            pretrade_rejection_log.GateDecision(
+                                pocket="solana_pump", chain=chain,
+                                mint=pool.token_address or "",
+                                pool_address=pool.pool_address,
+                                blocked=True, reason="blocked_regime_closed",
+                                top_holder_pct=None, gate_latency_ms=None,
+                                would_be_entry_price=pool.price_usd,
+                                would_be_reserve_usd=pool.reserve_usd,
+                                realistic_would_be_entry_price=None,
+                                buys_observed=tx.get("buys"),
+                                sells_observed=tx.get("sells"),
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001 -- logging never blocks the pocket
+                        logger.info("solana_pump_shadow: rejection log failed (%s)", exc)
+                    continue
 
                 # 16/08, RugCheck SHADOW-ONLY snapshot -- SEE services/
                 # rugcheck.py's module docstring: logged for later

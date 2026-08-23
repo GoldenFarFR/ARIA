@@ -7,6 +7,50 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[ETAT ACTUEL] Subject : shadow_candle_archive throttle reverted 3s/1% -> 15s/3%, the walk-vs-jump question is settled
+Date : 2026.08.23 / Probleme : the 22/08 temporary tightening existed to answer one question: when a shadow position's stop fills far worse than its own set level, did price WALK down past the stop unobserved, or JUMP over it in one transaction? The coarse 15s/3% setting could not distinguish the two; the dome's own "accelerated cadence on a new mechanism" rule says revert once settled, not run the tight setting indefinitely.
+Solution : checked the largest stop-vs-fill gaps accumulated overnight (up to -69.5pp, e.g. position 2586/2580/2556 in solana_late_bonding_shadow_log) against their own shadow_candle_archive rows. Dominant pattern is a JUMP: position 2580 went 2.31e-05 -> 1.05e-05 (-55%) between two archived points 734ms apart; position 2586's single post-entry point already read -88% with no intermediate step from its pre-entry peak. Even 3s/1% cannot resolve a collapse this fast -- the tight setting was already at its sampling ceiling, the extra ~5x rows bought nothing. Reverted to 15s/3% (OBSERVATION_MIN_INTERVAL_SECONDS/OBSERVATION_RESERVE_MOVE_PCT) -- 16/16 tests green, no test depended on the literal tightened values. — shadow_candle_archive.py
+---
+[CODE] Subject : regime gate (median-peak >=30%, same mechanism as solana_late_bonding_shadow.py) generalised to the 3 REST shadow pockets -- robinhood_pump_shadow.py, base_momentum_shadow.py, solana_pump_shadow.py
+Date : 2026.08.23 / Probleme : operator-directed ("construit ce 30 sur tout le monde") -- late_bonding's independent, trade-blind regime
+sensor (candidate cleared every filter -> peak tracked 15min -> median over the last 30 -> new entries refused below the threshold,
+existing positions untouched) needed the same protection on the 3 pockets that have no equivalent guard. Those pockets have NO free
+in-memory feed to track a candidate's peak with, unlike late_bonding's `bonding_ws_feed.get_snapshot()` (a pool already subscribed
+for exit tracking) -- their only market view is the REST `dexpaprika.get_trending_pools()` fetch each loop already runs every
+120s (ROBINHOOD/BASE/SOLANA_PUMP_CADENCE_SECONDS) to look for new candidates. A naive per-candidate REST poll (up to 25/cycle/pocket)
+would have added real, unmeasured load on DexPaprika's shared throttle -- exactly the "brute-force" pattern CLAUDE.md's Doctrine
+d'Ingenierie Systemique forbids.
+Solution : chosen approach is (a) from the task's own menu, not (b) -- `advance_regime_candidates_from_pools(pools)` re-reads the SAME
+`pools` list each loop already fetched for discovery this cycle (matched by `pool_address`, ``price_usd`` already populated), so
+tracking a candidate's peak costs ZERO additional network calls, not merely a bounded/throttled one. Honest tradeoff documented in
+each module: a candidate that drops out of DexPaprika's top-25 "trending" response stops updating and its logged peak understates the
+true market peak -- a conservative (never-inflated) bias, so it only makes the gate MORE cautious, never less. Each pocket gets its
+own `REGIME_CANDIDATES_TABLE` (`robinhood_pump_regime_candidates_log`/`base_momentum_regime_candidates_log`/
+`solana_pump_regime_candidates_log`, never shared), its own `record_regime_candidate`/`regime_state`/
+`advance_regime_candidates_from_pools`, wired into `record_signals` right before the INSERT that would log a new signal -- candidate
+logged UNCONDITIONALLY first (never gated by the gate's own verdict, the exact defect that broke late_bonding's first sensor), then
+refused with `blocked_regime_closed` (already in `pretrade_rejection_log.TRACKED_REJECTS`) if the market reads cold. `regime_median_
+peak` is DUPLICATED (not imported) in all 3 modules rather than reused from `solana_late_bonding_shadow.py`: that module already
+imports FROM `solana_pump_shadow.py` (`_snapshot_with_fallback`/`_apply_price_impact_and_fee`), so a reverse import would be
+circular for that pocket, and the other two follow the same convention for consistency. `REGIME_MIN_MEDIAN_PEAK_PCT = 30.0` on all
+3, explicitly PROVISIONAL/borrowed, not calibrated for these pockets -- mandatory recalibration once each table holds >=100 rows
+(Doctrine d'Ingestion's own n>=100 bar), same footing as every other freshly-armed threshold in this dome. Verified before writing
+any code: grepped every caller of these 3 modules across `packages/aria-core` -- none wire an `execute_fn`/`wallet_guard`/
+`paper_trader`, confirming the shadow-only bright line was safe to build on top of. `advance_regime_candidates_from_pools` wired into
+`shadow_persistent.py` (hors git) right after each loop's existing `dexpaprika.get_trending_pools()` fetch, called even when `pools`
+is empty so time-based expiry still advances. Cold-start protected exactly like late_bonding: `regime_state()` reads OPEN below
+REGIME_WINDOW=30 samples, so record_signals' default behaviour (no seeded regime table) is unchanged -- proven by a dedicated test
+per module. 3 x ~20 new tests (pure-median edge cases, cold/hot regime_state, sensor never starved by a shut gate, disarmed reads
+open, record_signals blocks/allows an entry depending on regime state, peak update from the discovery-fetch reuse with zero network
+calls, expiry after the window including a candidate that fell out of the trending response, max_rows cap on the local DB read) --
+full 267-test suite for the 3 modules green, `docs/pocket-parameters.json` regenerated.
+`packages/aria-core/src/aria_core/robinhood_pump_shadow.py`, `packages/aria-core/src/aria_core/base_momentum_shadow.py`,
+`packages/aria-core/src/aria_core/solana_pump_shadow.py`, `packages/aria-core/tests/test_robinhood_pump_shadow.py`,
+`packages/aria-core/tests/test_base_momentum_shadow.py`, `packages/aria-core/tests/test_solana_pump_shadow.py`,
+`docs/pocket-parameters.json`, `/opt/aria-data/solana-robinhood-shadow/shadow_persistent.py` (hors git).
+
+------------------------------------------------------------
+
 [CODE] Subject : solana_late_bonding_shadow.py -- retracement-gated shadow variant, its own table, wired into the live discovery/exit loops
 Date : 2026.08.23 / Probleme : operator-directed ("ok pars sur le retracement en shadow"), following the finding that every real
 closure carrying `progress_retracement_at_entry` (26 of 44 total, the metric was added mid-flight) sat under 2% retracement -- this

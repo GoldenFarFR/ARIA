@@ -1468,3 +1468,221 @@ async def test_funded_rows_are_tracked_before_unfunded_ones():
     client = FakeClient({"poolFunded": 2.0, "poolUnfunded": 2.0})
     await shadow.evaluate_open_signals(client, chain=CHAIN, limit=1)
     assert client.calls == ["poolFunded"], "une ligne non financee a vole le budget"
+
+
+# ---------------------------------------------------------------- regime gate
+# 23/08 -- same mechanism/threshold as solana_late_bonding_shadow.py's own
+# regime gate, generalised to this pocket (operator: "construit ce 30 sur
+# tout le monde"). See shadow.py's own module-level comment for the full
+# design rationale (why this pocket reuses the discovery fetch instead of a
+# dedicated poll, and why regime_median_peak is duplicated rather than
+# imported -- this module is imported BY solana_late_bonding_shadow.py, so a
+# reverse import would be circular).
+class TestRegimeGate:
+    def test_below_the_window_there_is_no_verdict(self):
+        assert shadow.regime_median_peak([50.0] * (shadow.REGIME_WINDOW - 1)) is None
+        assert shadow.regime_median_peak([]) is None
+
+    def test_the_median_ignores_a_single_spike(self):
+        peaks = [0.0] * (shadow.REGIME_WINDOW - 1) + [1000.0]
+        assert shadow.regime_median_peak(peaks) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_an_empty_pocket_reads_as_open(self):
+        state = await shadow.regime_state()
+        assert state["open"] is True
+        assert state["samples"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_cold_market_shuts_the_gate_and_a_hot_one_opens_it(self, monkeypatch):
+        monkeypatch.setattr(shadow, "REGIME_MIN_MEDIAN_PEAK_PCT", 20.0)
+        await shadow._ensure_regime_candidates_table()
+
+        async def _fill(peak_pct):
+            async with aiosqlite.connect(shadow._db_path()) as db:
+                await db.execute(f"DELETE FROM {shadow.REGIME_CANDIDATES_TABLE}")
+                for i in range(shadow.REGIME_WINDOW):
+                    await db.execute(
+                        f"INSERT INTO {shadow.REGIME_CANDIDATES_TABLE} "
+                        f"(pool_address, mint, chain, decided_at, entry_price, "
+                        f" reserve_usd, peak_price, last_checked_at, tracking_status) "
+                        f"VALUES (?,?,?,?,?,?,?,?,?)",
+                        (f"pool{i}", f"mint{i}", CHAIN, f"2026-08-23T00:{i:02d}:00+00:00",
+                         1.0, 5000.0, 1.0 + peak_pct / 100.0,
+                         f"2026-08-23T00:{i:02d}:00+00:00", "closed"),
+                    )
+                await db.commit()
+
+        await _fill(15.0)
+        cold = await shadow.regime_state()
+        assert cold["open"] is False
+
+        await _fill(25.0)
+        hot = await shadow.regime_state()
+        assert hot["open"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_shut_gate_still_records_new_candidates(self, monkeypatch):
+        """The exact defect late_bonding's first sensor had: a shut gate must
+        not stop feeding its own sensor."""
+        for i in range(shadow.REGIME_WINDOW):
+            await shadow.record_regime_candidate(
+                pool_address=f"cold{i}", mint=f"cold{i}", chain=CHAIN,
+                entry_price=1.0, reserve_usd=5000.0,
+            )
+        monkeypatch.setattr(shadow, "REGIME_MIN_MEDIAN_PEAK_PCT", 999.0)
+        assert (await shadow.regime_state())["open"] is False
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            before = (await (await db.execute(
+                f"SELECT COUNT(*) FROM {shadow.REGIME_CANDIDATES_TABLE}"
+            )).fetchone())[0]
+
+        await shadow.record_regime_candidate(
+            pool_address="poolX", mint="mintX", chain=CHAIN,
+            entry_price=1.0, reserve_usd=5000.0,
+        )
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            after = (await (await db.execute(
+                f"SELECT COUNT(*) FROM {shadow.REGIME_CANDIDATES_TABLE}"
+            )).fetchone())[0]
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_a_disarmed_gate_reads_as_open_never_as_shut(self, monkeypatch):
+        monkeypatch.setattr(shadow, "REGIME_MIN_MEDIAN_PEAK_PCT", None)
+        state = await shadow.regime_state()
+        assert state["open"] is True
+        assert state["disarmed"] is True
+
+    @pytest.mark.asyncio
+    async def test_record_signals_blocks_a_new_entry_when_the_regime_is_shut(self, monkeypatch):
+        """Integration: a candidate clearing every other filter must still
+        be refused (never inserted into the pocket's own log) once the
+        regime gate is shut -- and the refusal must be tracked, even though
+        this pocket has no pre-existing ``_refuse`` helper to reuse."""
+        monkeypatch.setattr(shadow, "REGIME_MIN_MEDIAN_PEAK_PCT", 999.0)
+        for i in range(shadow.REGIME_WINDOW):
+            await shadow.record_regime_candidate(
+                pool_address=f"seed{i}", mint=f"seed{i}", chain=CHAIN,
+                entry_price=1.0, reserve_usd=5000.0,
+            )
+        assert (await shadow.regime_state())["open"] is False
+
+        seen = []
+
+        async def _capture(decision, **_kw):
+            seen.append(decision)
+            return 1
+
+        from aria_core import pretrade_rejection_log
+        original = pretrade_rejection_log.record_decision
+        pretrade_rejection_log.record_decision = _capture
+        try:
+            await shadow.record_signals([_pool(pool_address="poolNew", token_address="tokNew")], chain=CHAIN)
+        finally:
+            pretrade_rejection_log.record_decision = original
+
+        assert await _rows() == [], "the regime gate must block the insert entirely"
+        reasons = [d.reason for d in seen]
+        assert "blocked_regime_closed" in reasons
+
+    @pytest.mark.asyncio
+    async def test_record_signals_still_opens_when_regime_is_disarmed(self, monkeypatch):
+        """Default production posture (REGIME_MIN_MEDIAN_PEAK_PCT=30.0, but a
+        fresh table has < REGIME_WINDOW samples) must leave record_signals
+        behaving exactly as it did before this change -- a candidate that
+        passes every other filter still gets logged."""
+        n = await shadow.record_signals([_pool(pool_address="poolFresh", token_address="tokFresh")], chain=CHAIN)
+        assert n == 1
+        rows = await _rows()
+        assert len(rows) == 1
+        assert rows[0]["pool_address"] == "poolFresh"
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_from_pools_updates_peak_with_no_network_call(self):
+        """The whole point of reusing the discovery fetch: a plain list of
+        already-fetched TrendingPool objects is enough, no client/feed
+        object is even accepted by this function's signature."""
+        await shadow.record_regime_candidate(
+            pool_address="poolY", mint="mintY", chain=CHAIN,
+            entry_price=1.0, reserve_usd=5000.0,
+        )
+        fresh_pools = [_pool(pool_address="poolY", token_address="mintY", price_usd=1.8)]
+        stats = await shadow.advance_regime_candidates_from_pools(fresh_pools)
+        assert stats["checked"] == 1
+        assert stats["updated"] == 1
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT peak_price, tracking_status FROM {shadow.REGIME_CANDIDATES_TABLE}"
+            )
+            row = dict(await cur.fetchone())
+        assert row["peak_price"] == 1.8
+        assert row["tracking_status"] == "tracking"
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_from_pools_expires_after_the_window(self):
+        await shadow._ensure_regime_candidates_table()
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            await db.execute(
+                f"INSERT INTO {shadow.REGIME_CANDIDATES_TABLE} "
+                f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
+                f" peak_price, last_checked_at, tracking_status) "
+                f"VALUES ('poolZ','mintZ','{CHAIN}','2020-01-01T00:00:00+00:00',"
+                f" 1.0, 5000.0, 1.0, '2020-01-01T00:00:00+00:00', 'tracking')"
+            )
+            await db.commit()
+        stats = await shadow.advance_regime_candidates_from_pools([])
+        assert stats["closed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_from_pools_a_pool_dropped_from_trending_still_expires(self):
+        """HONEST LIMIT case: a candidate absent from the current cycle's
+        response must not track forever -- it still closes on schedule, just
+        without a fresher peak."""
+        await shadow._ensure_regime_candidates_table()
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            await db.execute(
+                f"INSERT INTO {shadow.REGIME_CANDIDATES_TABLE} "
+                f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
+                f" peak_price, last_checked_at, tracking_status) "
+                f"VALUES ('poolGone','mintGone','{CHAIN}','2020-01-01T00:00:00+00:00',"
+                f" 1.0, 5000.0, 1.2, '2020-01-01T00:00:00+00:00', 'tracking')"
+            )
+            await db.commit()
+        stats = await shadow.advance_regime_candidates_from_pools(
+            [_pool(pool_address="poolOther", token_address="tokOther", price_usd=2.0)]
+        )
+        assert stats["closed"] == 1
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT peak_price FROM {shadow.REGIME_CANDIDATES_TABLE} WHERE pool_address='poolGone'"
+            )
+            row = dict(await cur.fetchone())
+        assert row["peak_price"] == 1.2, "peak must not move without a real observation"
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_from_pools_respects_max_rows(self):
+        """The debit mechanism: even with more tracked rows than max_rows,
+        this stays a bounded local read (never an unbounded scan)."""
+        for i in range(5):
+            await shadow.record_regime_candidate(
+                pool_address=f"cap{i}", mint=f"cap{i}", chain=CHAIN,
+                entry_price=1.0, reserve_usd=5000.0,
+            )
+        stats = await shadow.advance_regime_candidates_from_pools(
+            [_pool(pool_address=f"cap{i}", token_address=f"cap{i}", price_usd=2.0) for i in range(5)],
+            max_rows=2,
+        )
+        assert stats["checked"] == 2
+
+    def test_the_regime_reject_reason_is_tracked_forward(self):
+        import inspect
+        from aria_core import pretrade_rejection_log
+        source = inspect.getsource(pretrade_rejection_log.record_decision)
+        assert '"blocked_regime_closed"' in source
