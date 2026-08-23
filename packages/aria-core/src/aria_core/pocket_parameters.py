@@ -104,13 +104,26 @@ def extract_parameters(source: str) -> dict:
     lines = source.splitlines()
     params: dict = {}
     for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        # 23/08 -- ANNOTATED assignments count too. `FIXED_STOP_PCT = 5.0` was
+        # read, but the moment the same knob was turned off as
+        # `FIXED_STOP_PCT: float | None = None` it VANISHED from the registry
+        # instead of showing up as disabled. A registry whose whole purpose is
+        # that no setting goes unread must not lose a setting exactly when
+        # someone changes it -- a disabled knob is a knob, and its `why`
+        # comment is the most valuable one there is. `None` was already an
+        # accepted value (`_SCALARS`); only the annotated form was missed.
+        if isinstance(node, ast.AnnAssign):
+            target, value_node = node.target, node.value
+            if value_node is None:  # a bare declaration holds no setting
+                continue
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value_node = node.targets[0], node.value
+        else:
             continue
-        target = node.targets[0]
         if not isinstance(target, ast.Name) or not target.id.isupper():
             continue
         try:
-            value = ast.literal_eval(node.value)
+            value = ast.literal_eval(value_node)
         except (ValueError, SyntaxError):
             continue
         if not _is_tunable(value):

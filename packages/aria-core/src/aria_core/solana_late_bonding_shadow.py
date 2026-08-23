@@ -361,7 +361,47 @@ PROFIT_LADDER: tuple[tuple[float, float], ...] = ()
 # intra-minute orderings, far more than the 6-8 points of the -5% variant. A
 # result that depends that much on an unknowable ordering is a candidate, never
 # a conclusion. Revert is one line.
-FIXED_STOP_PCT = 5.0
+# 23/08 -- DISABLED (None), after 320 closures said the stop was the loss.
+#
+# The pocket lost -2585 points over those closures (-8.05% per trade, 18%
+# winrate). 236 of them exited on this stop for -3216 points. The stop was
+# set at -5% and FILLED at -13.6%: -2085 points of slippage, i.e. 80% of the
+# entire loss. That is not a selection problem, it is this stop.
+#
+# What the stop actually did, reserve-copied rows excluded (53 rows carry
+# last_reserve_usd bit-identical to entry, never re-read -- they cannot say
+# anything about the pool):
+#     16.6% (35)  real pool drain (<-15% reserve), filled at -33.2%
+#                 -> the stop did NOT protect, it arrived far too late
+#     57.8% (122) moderate leak, filled at -7.8%  -> roughly did its job
+#     25.6% (54)  pool INTACT (>-5% reserve), filled at -10.5%, -565 points
+#                 -> ejected on noise, nothing was actually draining
+#
+# And the pocket already knew: see `trailing_distance_for`'s note above --
+# 78% of the >+100% winners pull back past 5% on their way up, NONE past 15%.
+# A -5% stop is aimed exactly at the trades that carry the pocket.
+#
+# TESTED AND DROPPED, so nobody re-runs them: tightening to -2/-3% (+216 pts
+# but the winrate falls 20.4% -> 14.2%, and price crosses -2% and -5% inside
+# the same interval anyway); tightening the trailing (negative, -40 pts at
+# 10%); a +5% take-profit (looked like +1428 pts, refuted -- the replay gave
+# the TP a perfect fill while this same engine slips -8.6 pts on its stop;
+# corrected to +295 pts at best, -40 pts once the 10 best improvements are
+# removed); reading the price more often (the effect reverses sign once
+# holding time is controlled for, so it was survivorship, not cadence).
+#
+# WHAT THIS IS NOT: a measured result. Archived paths stop AT the real exit,
+# so no replay can say what these positions would have done without a stop --
+# every "no stop" replay returns the real fill by construction. This is a
+# live test, and it is one change on one mechanism so it stays attributable.
+# The reference point that motivates it is another pocket, not a replay:
+# robinhood_pump runs with NO fixed stop and returns +33.3% over 106 closures
+# (+17.8% without its five best).
+#
+# The floor does not disappear: HARD_STOP_PCT (-20%) and the shared
+# progressive trailing bands still close a position that genuinely collapses.
+# Revert is one line -- put 5.0 back.
+FIXED_STOP_PCT: float | None = None
 
 # 22/08 -- BACK TO 15%, the shared default, after three hours of production
 # disproved the 8% bet. Kept as an explicit constant rather than deleted so the

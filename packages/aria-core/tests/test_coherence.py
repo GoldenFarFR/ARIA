@@ -1279,6 +1279,32 @@ def test_known_sanitize_untrusted_text_consumers_keep_using_it(rel):
     )
 
 
+def test_a_disabled_pocket_parameter_still_appears_in_the_registry():
+    """A knob turned OFF must stay visible, with its reasoning.
+
+    23/08 -- `FIXED_STOP_PCT = 5.0` was read by the extractor, but disabling it
+    as `FIXED_STOP_PCT: float | None = None` made it DISAPPEAR from the
+    registry: only bare `ast.Assign` was walked, never `ast.AnnAssign`. The
+    registry exists so that no setting goes unread, so losing one exactly when
+    someone changes it is the worst possible moment to lose it -- and the
+    `why` comment on a disabled knob is the most valuable one there is."""
+    from aria_core import pocket_parameters
+
+    params = pocket_parameters.extract_parameters(
+        "# why it is off\n"
+        "ANNOTATED_OFF: float | None = None\n"
+        "PLAIN_ON = 5.0\n"
+        "ANNOTATED_ON: float = 12.0\n"
+        "BARE_DECLARATION: float\n"
+    )
+    assert set(params) == {"ANNOTATED_OFF", "PLAIN_ON", "ANNOTATED_ON"}, (
+        "an annotated constant must be extracted like a plain one, and a bare "
+        "declaration (no value) carries no setting so it must be skipped"
+    )
+    assert params["ANNOTATED_OFF"]["value"] is None
+    assert params["ANNOTATED_OFF"]["why"] == "why it is off"
+
+
 def test_pocket_parameter_registry_matches_the_code():
     """The pocket registry must never drift from the code it describes.
 
