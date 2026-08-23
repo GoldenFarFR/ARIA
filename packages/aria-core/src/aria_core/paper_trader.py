@@ -828,7 +828,7 @@ _POS_FIELDS = (
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
     "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd", "virtual_id",
-    "x20_alert_sent",
+    "x20_alert_sent", "entry_pool_age_seconds",
 )
 
 _ADDED_COLUMNS = [
@@ -1027,6 +1027,15 @@ _ADDED_COLUMNS = [
     # every subsequent management cycle while the price stays above the
     # threshold. 0 by default, meaningless for any other strategy.
     ("x20_alert_sent", "INTEGER NOT NULL DEFAULT 0"),
+    # 23/08 -- operator request: find the best entry-age window on Base. The
+    # question was unanswerable because this pool age was computed for a
+    # wholly separate shadow scan (early_legitimacy_shadow_cycle) but never
+    # surfaced on the real momentum entry path -- see momentum_entry.
+    # evaluate_momentum_entry's own comment (`pool_age_seconds` on its return
+    # dict). None for any position opened before this column existed, or
+    # whenever DexScreener never returned pairCreatedAt for that pool -- never
+    # an invented value.
+    ("entry_pool_age_seconds", "REAL"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -1086,6 +1095,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("virtual_id", "INTEGER"),
     # 08/15 -- kept in parity with _ADDED_COLUMNS above.
     ("x20_alert_sent", "INTEGER NOT NULL DEFAULT 0"),
+    # 23/08 -- kept in parity with _ADDED_COLUMNS above.
+    ("entry_pool_age_seconds", "REAL"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1954,6 +1965,7 @@ async def open_position(
     align_pattern: bool | None = None,
     entry_market_cap_usd: float | None = None,
     virtual_id: int | None = None,
+    entry_pool_age_seconds: float | None = None,
     allow_multiple: bool = False,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
@@ -2194,8 +2206,9 @@ async def open_position(
                conviction_website_corroborated, conviction_posting_cadence,
                liquidity_rotation_score, liquidity_rotation_accelerating,
                liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet,
-               align_ema, align_macd, align_pattern, entry_market_cap_usd, virtual_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               align_ema, align_macd, align_pattern, entry_market_cap_usd, virtual_id,
+               entry_pool_age_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              # 08/05 -- high_water_price starts at the SPOT entry (the
@@ -2230,7 +2243,7 @@ async def open_position(
              None if align_ema is None else int(align_ema),
              None if align_macd is None else int(align_macd),
              None if align_pattern is None else int(align_pattern),
-             entry_market_cap_usd, virtual_id),
+             entry_market_cap_usd, virtual_id, entry_pool_age_seconds),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -3951,6 +3964,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             entry_market_cap_usd=sig.get("market_cap_usd"),
             virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
+            entry_pool_age_seconds=sig.get("pool_age_seconds"),
             strategy="momentum",
             entry_regime=sig.get("regime"),
             rr=sig.get("rr"),
@@ -4917,6 +4931,7 @@ async def _open_new_entries_for_wallet(
             entry_market_cap_usd=sig.get("market_cap_usd"),
             virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
+            entry_pool_age_seconds=sig.get("pool_age_seconds"),
             # 07/20 -- Formula B: the exit discipline applied depends on the
             # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),
             # never an independent flag. "momentum" by default -- unchanged

@@ -4754,6 +4754,23 @@ class TestPoolWithinMaturationGrace:
     def test_exactly_at_the_floor_is_not_within_grace(self):
         assert me._pool_within_maturation_grace(_ms_ago(15.0)) is False
 
+
+# ── pool age surfaced on the real entry path (23/08, operator request) ──
+# "trouve la meilleure fenetre de trading" was unanswerable: pair_created_at
+# was only ever computed for early_legitimacy_shadow_cycle, a wholly
+# separate watchlist scan never touching a real position.
+
+
+class TestPoolAgeSeconds:
+    def test_none_stays_none(self):
+        assert me._pool_age_seconds(None) is None
+
+    def test_zero_stays_none(self):
+        assert me._pool_age_seconds(0) is None
+
+    def test_five_days_old(self):
+        assert me._pool_age_seconds(_ms_ago(5)) == pytest.approx(5 * 86400, rel=0.01)
+
     def test_just_under_the_floor_is_within_grace(self):
         assert me._pool_within_maturation_grace(_ms_ago(14.99)) is True
 

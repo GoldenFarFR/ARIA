@@ -2235,6 +2235,28 @@ async def test_open_position_persists_entry_atr_pct(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_position_persists_entry_pool_age_seconds(tmp_db):
+    """23/08, operator request: find the best entry-age window on Base --
+    unanswerable until this value survives persistence on the real momentum
+    entry path (it was already computed for an unrelated shadow scan)."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, entry_pool_age_seconds=3600.0, wallet="swing",
+    )
+    assert pos["entry_pool_age_seconds"] == pytest.approx(3600.0)
+
+
+@pytest.mark.asyncio
+async def test_open_position_entry_pool_age_seconds_defaults_to_none(tmp_db):
+    """DexScreener not returning pairCreatedAt (~22% of candidates, the same
+    gap that got the hard MAX_POOL_AGE gate removed on 21/07) must read as
+    unknown, never an invented value."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+    assert pos["entry_pool_age_seconds"] is None
+
+
+@pytest.mark.asyncio
 async def test_open_position_persists_golden_pocket_bounds(tmp_db):
     """Item #101 (26/07), demande operateur ("aria doit pouvoir connaitre en
     temps reel toute les valeurs de son golden pocket d'entree et de

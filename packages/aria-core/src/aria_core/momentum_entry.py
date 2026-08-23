@@ -1935,6 +1935,16 @@ def _pool_within_maturation_grace(pair_created_at_ms: int | None) -> bool:
     return 0 <= age_days < _YOUNG_POOL_PROFILE_GRACE_DAYS
 
 
+def _pool_age_seconds(pair_created_at_ms: int | None) -> float | None:
+    """Pool age at the instant of the call, or None if DexScreener never
+    returned ``pairCreatedAt`` for this pool (~22% of candidates, the same
+    gap that got the hard MAX_POOL_AGE gate removed on 21/07 -- see this
+    module's own comment on that removal). Never an invented value."""
+    if not pair_created_at_ms:
+        return None
+    return time.time() - pair_created_at_ms / 1000.0
+
+
 async def _check_project_profile(chain: str, contract: str, pair: PairSnapshot) -> tuple[bool, str]:
     """``(has_profile, reason)`` -- paid DexScreener profile (``project_links``,
     free) OR CoinGecko listing (network, short-circuited if DexScreener already
@@ -5240,6 +5250,15 @@ async def evaluate_momentum_entry(
         # present on every real DexScreener pair (marketCap/fdv fallback),
         # zero extra network call. None if DexScreener didn't provide it.
         "market_cap_usd": best.market_cap_usd,
+        # 23/08 -- pool age at the instant of THIS decision (operator request:
+        # find the best entry-age window). ``best.pair_created_at`` was already
+        # being computed for `early_legitimacy_shadow_cycle` (a wholly separate
+        # watchlist scan) but never surfaced on the real momentum entry path --
+        # this pocket's own `paper_position` rows had no way to answer the
+        # question. None if DexScreener never returned pair_created_at for this
+        # pool (roughly 22% of candidates, the same gap that got the hard
+        # MAX_POOL_AGE gate removed on 21/07) -- never an invented value.
+        "pool_age_seconds": _pool_age_seconds(best.pair_created_at),
         # 19/07 -- ATR as % of the entry price (Gemini cross-review) -- ``None``
         # if not computable (HOLD, insufficient warm-up period) --
         # paper_trader.py falls back to TRAIL_STOP_PCT (fixed percentage) in
