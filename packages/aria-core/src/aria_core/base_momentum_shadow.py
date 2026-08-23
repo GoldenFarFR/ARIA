@@ -179,50 +179,31 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # module's usual "never fabricate, fail-open" doctrine for pure
 # observations): this is a protective filter, not a reported metric, so an
 # unknown age is treated as "too risky to trade", never "assume it's fine".
-# 23/08 -- TIGHTENED 25 -> 6 minutes, on the pocket's own 133 executable
-# closures (17 hours, ONE day -- see the caveat at the end).
-#     age < 6 min   92 trades (69% of volume)  +28.39%/trade  +21.39% w/o top5
-#                   winrate 66.3%, 100% of hours positive, worst hour +7.21%,
-#                   ZERO hour with the pocket idle
-#     age >= 6 min                              far weaker on every measure
-# 25 minutes was never calibrated -- it was a rug-protection window borrowed
-# from the Solana twin (16/08), doing a different job. The freshness of the pool
-# turns out to be this pocket's strongest single signal, and unlike an entry
-# filter searched over many columns it was predicted BEFORE being measured (the
-# operator asked for it: "la tranche a trader est peut etre differente").
-# 23/08, SAME DAY, CORRECTED 6 -> 10 after the operator asked the right
-# question: does 6 minutes strangle the pocket? It does not -- it keeps 65% of
-# the flow -- but it was the WRONG PLACE, and for the exact reason that killed
-# seven findings earlier the same day: it bought a better AVERAGE by shrinking
-# the base. Full sweep, liquidity floor applied throughout:
-#      4 min   28 trades  +54.63%/trade   1530 pts   winrate 96.4%  (11h only)
-#      5 min   60 trades  +35.13%/trade   2108 pts   winrate 73.3%
-#      6 min   93 trades  +28.08%/trade   2611 pts   winrate 65.6%
-#     10 min  130 trades  +24.98%/trade   3248 pts   winrate 64.6%   <- chosen
-#     20 min  137 trades  +25.68%/trade   3518 pts   winrate 62.8%
-# The average falls as the window widens while the TOTAL rises, which is the
-# signature of a filter cutting real gains. What 6 min threw away was measured
-# and it was not noise: 44 trades at +20.62%, winrate 56.8%, liquidity fine --
-# 907 points of genuine profit, above the operator's own +20% floor.
-# 10 recovers 637 of those points, stays at +25% (well clear of the floor) and
-# lifts throughput from ~5.6 to ~7.6 entries/hour. 4 min is tempting and is
-# NOT taken: 28 trades over 11 of 17 hours is a sample to overfit, not to
-# calibrate on.
-# CAVEAT that must travel with this number: ONE day of data. Re-read it once a
-# second day exists.
+# 23/08 -- BORROWED verbatim from robinhood_pump_shadow.py's own MAX_POOL_AGE_
+# MINUTES=10.0, itself the product of a real sweep (4/5/6/10/20-minute bands,
+# 130-137 trades, winrate 62-96%) run on ROBINHOOD's own 133-closure sample --
+# NOT Base's. A prior version of this comment copied that sweep's numbers
+# verbatim, which read as though they described Base -- they never did; Base
+# had zero closures of its own at the time this module was written. Base's own
+# base_momentum_shadow_log currently has too few closures to run the same
+# sweep (see pocket_entry_sweep.py, mandatory pre-trade-metric sweep tool for
+# this exact question) -- re-run it here, on Base's own pool_age_at_entry_
+# minutes column, once >=200 closures across >=2 distinct days exist. Until
+# then this 10-minute figure is a placeholder inherited from a different
+# pocket's market, not a Base-specific calibration.
 MAX_POOL_AGE_MINUTES = 10.0
 
-# 23/08 -- THE POCKET HAD NO LIQUIDITY FLOOR AT ALL, and it was its biggest
-# defect. 52 of 200 closures (26%) ran on pools whose MEAN reserve was $6.40.
-# Its three "best" trades ever -- +879%, +313%, +289% -- sat on pools of $3.52,
-# $20.06 and $17.15, one of them reporting a +85911% peak. That is not profit,
-# it is noise on a pool you can neither enter nor exit, and it carried 38% of
-# the pocket's headline PnL. Removing it is a MEASUREMENT correction, not a
-# performance filter: those points never existed.
-#     no floor       200 trades  +31.10%/trade  winrate 53.7%
-#     >= $4000       123 trades  +25.42%/trade  winrate 61.8%  (+19.27% w/o top5)
-# Set to the same 4000 as the Solana twin, but calibrated HERE and not copied:
-# it is where the winrate peaks while still keeping 61% of the flow.
+# 23/08 -- BORROWED verbatim from robinhood_pump_shadow.py's own MIN_LIQUIDITY_
+# USD=4000.0, itself measured on ROBINHOOD's own 200-closure sample (52 of them
+# on near-zero-liquidity pools, mean reserve $6.40, carrying 38% of that
+# pocket's headline PnL as unexecutable noise) -- NOT Base's. A prior version
+# of this comment copied that measurement verbatim, which read as though it
+# described Base -- it never did; Base had zero closures of its own at the
+# time this module was written. Recalibrate honestly with a no-floor-vs-
+# floored comparison (winrate, PnL, sample size) on Base's own reserve_usd-at-
+# entry column once enough closures exist (see pocket_entry_sweep.py). Until
+# then this $4000 figure is a placeholder inherited from a different pocket's
+# market, not a Base-specific calibration.
 MIN_LIQUIDITY_USD = 4000.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
