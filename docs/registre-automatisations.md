@@ -221,3 +221,26 @@ est vert.
 - **Pourquoi maintenant** : la bande d'entree passee de 70% a 50% elargit la
   fenetre, donc plus de positions tenues plus longtemps. Le mode de defaillance
   devient plus probable, pas moins.
+
+### robinhood_shadow_loop (23/08) -- ACTIF, observation pure
+- **Quoi** : boucle dans `shadow_persistent.py` (hors git), cadence 120 s,
+  source **DexPaprika** (`get_trending_pools("robinhood")`), ecrit dans
+  `robinhood_pump_shadow_log`.
+- **Pourquoi elle etait morte** : le module existait (246 positions archivees)
+  mais n'etait appele nulle part depuis le 17/08. Le blocage etait la SOURCE :
+  il ne connaissait que GeckoTerminal, en suspension automatique pour
+  rate-limit et deja goulot de deux autres poches. Decision operateur : pas de
+  Robinhood sur Gecko.
+- **Piege ecarte** : DexScreener expose Robinhood via `token-profiles` /
+  `token-boosts`, mais ce sont des tokens dont les createurs ont PAYE leur
+  visibilite -- un catalogue publicitaire, pas une decouverte.
+- **Complement de liquidite** : DexPaprika laisse `liquidity_usd = 0` sur ~35 %
+  des pools, et c'est un TROU D'INDEXATION verifie un a un (7/7, liquidites
+  reelles de 10k$ a 34k$). La boucle complete ces pools via DexScreener, sur un
+  budget independant, en respectant `liquidity_unknown` pour ne jamais ecrire
+  un 0 qui serait relu comme "pas de liquidite". Fait AVANT tout filtrage : le
+  sujet n'est pas de filtrer mais de ne pas accumuler des zeros faux, comme le
+  prix perime a contamine les chiffres Solana pendant deux jours.
+- **Aucun reglage Solana copie** : Robinhood Chain n'a pas de courbe de bonding
+  pump.fun, et le plancher de liquidite a ete calibre sur des pools Solana de
+  6-12k$. On collecte d'abord, on calibrera sur du mesure.
