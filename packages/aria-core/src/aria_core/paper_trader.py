@@ -828,7 +828,7 @@ _POS_FIELDS = (
     "liquidity_rotation_score", "liquidity_rotation_accelerating", "liquidity_rotation_volume_ratio",
     "mode", "gp_low", "gp_high", "wallet", "align_ema", "align_macd", "align_pattern",
     "velocity_ref_price", "velocity_ref_price_at", "entry_market_cap_usd", "virtual_id",
-    "x20_alert_sent", "entry_pool_age_seconds",
+    "x20_alert_sent", "entry_pool_age_seconds", "entry_smart_money_score",
 )
 
 _ADDED_COLUMNS = [
@@ -1036,6 +1036,21 @@ _ADDED_COLUMNS = [
     # whenever DexScreener never returned pairCreatedAt for that pool -- never
     # an invented value.
     ("entry_pool_age_seconds", "REAL"),
+    # 23/08 -- pertinence check requested by the operator ("les informations
+    # recoltees par le wallet tracker elle sont pertinente ?"): the dex
+    # composite score's smart-money pillar (`dex_composite_score.
+    # _score_smart_money`, wired into `momentum_entry`'s
+    # `dex_security_breakdown`) was already used to size positions
+    # (`risk_guard.conviction_*`) but never persisted per-position -- no
+    # column existed to cross it against real PnL later. The dedicated
+    # correlation module built for this same question (16/08,
+    # `pocket_smart_money_correlation.py`) never logged a single row before
+    # it was retired with scalping_v8/v9 (18/08) -- swing/vc had zero
+    # evidence either way. Base-chain only for now (same limit as the pillar
+    # itself, `dex_composite_score.compute_dex_composite_score`'s own
+    # docstring: Blockscout-only today) -- NULL on Solana/Robinhood is the
+    # honest "not computed here", never an invented value.
+    ("entry_smart_money_score", "REAL"),
 ]
 
 # 07/19 -- DEDICATED hot migration for paper_position_archive (see _ensure_tables)
@@ -1097,6 +1112,8 @@ _ARCHIVE_ADDED_COLUMNS = [
     ("x20_alert_sent", "INTEGER NOT NULL DEFAULT 0"),
     # 23/08 -- kept in parity with _ADDED_COLUMNS above.
     ("entry_pool_age_seconds", "REAL"),
+    # 23/08 -- kept in parity with _ADDED_COLUMNS above.
+    ("entry_smart_money_score", "REAL"),
 ]
 
 # Hot migration of `paper_state` (#186, 07/15) -- same idempotent pattern as
@@ -1966,6 +1983,7 @@ async def open_position(
     entry_market_cap_usd: float | None = None,
     virtual_id: int | None = None,
     entry_pool_age_seconds: float | None = None,
+    entry_smart_money_score: float | None = None,
     allow_multiple: bool = False,
 ) -> dict | None:
     """Opens a FICTITIOUS position at the real entry price. Refuses if already
@@ -2207,8 +2225,8 @@ async def open_position(
                liquidity_rotation_score, liquidity_rotation_accelerating,
                liquidity_rotation_volume_ratio, mode, gp_low, gp_high, wallet,
                align_ema, align_macd, align_pattern, entry_market_cap_usd, virtual_id,
-               entry_pool_age_seconds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               entry_pool_age_seconds, entry_smart_money_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (contract, symbol or "", alloc, fill_price, qty, target_price, invalidation_price,
              # 08/05 -- high_water_price starts at the SPOT entry (the
@@ -2243,7 +2261,7 @@ async def open_position(
              None if align_ema is None else int(align_ema),
              None if align_macd is None else int(align_macd),
              None if align_pattern is None else int(align_pattern),
-             entry_market_cap_usd, virtual_id, entry_pool_age_seconds),
+             entry_market_cap_usd, virtual_id, entry_pool_age_seconds, entry_smart_money_score),
         )
         await db.commit()
         pid = cur.lastrowid
@@ -3965,6 +3983,7 @@ async def _run_daily_trade_floor_locked(*, notifier=None, now: datetime | None =
             virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             entry_pool_age_seconds=sig.get("pool_age_seconds"),
+            entry_smart_money_score=(sig.get("dex_security_breakdown") or {}).get("score_smart_money"),
             strategy="momentum",
             entry_regime=sig.get("regime"),
             rr=sig.get("rr"),
@@ -4932,6 +4951,7 @@ async def _open_new_entries_for_wallet(
             virtual_id=sig.get("virtual_id"),
             entry_atr_pct=sig.get("entry_atr_pct"),
             entry_pool_age_seconds=sig.get("pool_age_seconds"),
+            entry_smart_money_score=(sig.get("dex_security_breakdown") or {}).get("score_smart_money"),
             # 07/20 -- Formula B: the exit discipline applied depends on the
             # real ENTRY pipeline (see comment on VC_MIN_LIQUIDITY_FLOOR_USD),
             # never an independent flag. "momentum" by default -- unchanged

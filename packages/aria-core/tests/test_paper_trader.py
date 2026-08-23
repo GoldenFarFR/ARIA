@@ -2257,6 +2257,29 @@ async def test_open_position_entry_pool_age_seconds_defaults_to_none(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_open_position_persists_entry_smart_money_score(tmp_db):
+    """23/08, operator request ("les informations recoltees par le wallet
+    tracker elle sont pertinente ?"): the dex composite score's smart-money
+    pillar was already used for sizing (risk_guard.conviction_*) but never
+    persisted per-position -- no way to cross it against real PnL later."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(
+        A, "AAA", 1.0, alloc_usd=50_000, entry_smart_money_score=18.5, wallet="swing",
+    )
+    assert pos["entry_smart_money_score"] == pytest.approx(18.5)
+
+
+@pytest.mark.asyncio
+async def test_open_position_entry_smart_money_score_defaults_to_none(tmp_db):
+    """Non-Base chains (Solana/Robinhood) never compute this pillar --
+    Blockscout-only today, cf. dex_composite_score.compute_dex_composite_score.
+    NULL must read as "not computed here", never an invented value."""
+    await pt.reset_portfolio(1_000_000.0)
+    pos = await pt.open_position(A, "AAA", 1.0, alloc_usd=50_000, wallet="swing")
+    assert pos["entry_smart_money_score"] is None
+
+
+@pytest.mark.asyncio
 async def test_open_position_persists_golden_pocket_bounds(tmp_db):
     """Item #101 (26/07), demande operateur ("aria doit pouvoir connaitre en
     temps reel toute les valeurs de son golden pocket d'entree et de
