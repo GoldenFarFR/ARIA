@@ -5,11 +5,18 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from aria_core import runtime
+from aria_core.log_redaction import install_log_redaction
 from aria_core.paths import configure_data_dir
 from aria_core.integrations import host_hooks
 
 
 def configure(*, data_dir: Path, settings: Any) -> None:
+    # 23/08 -- FIRST, before anything can log. Provider credentials were
+    # reaching the log files through exception messages (httpx puts the full
+    # URL in its errors), 5741 + 58234 occurrences across two files. See
+    # `log_redaction` for why this is one filter rather than 214 call-site
+    # edits.
+    install_log_redaction()
     configure_data_dir(data_dir)
     runtime.configure(settings)
 
