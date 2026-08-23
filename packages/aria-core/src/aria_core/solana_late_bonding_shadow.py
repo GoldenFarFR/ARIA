@@ -690,10 +690,14 @@ async def regime_state(*, db_path: str | None = None) -> dict:
 # 8% does not follow a trend, it exits it.
 TRAILING_STOP_PCT = 15.0
 
-# Kept for the record: the trailing path is no longer reached by this pocket
-# (`FIXED_STOP_PCT` takes precedence), but the constant stays so the shared
-# rule's signature is honoured and FAST-DISCOVERY -- which still runs the
-# trailing at a flat 15% -- remains a live A/B against this design.
+# 23/08 -- this comment used to say the trailing path was unreachable
+# because FIXED_STOP_PCT took precedence; that stopped being true the moment
+# FIXED_STOP_PCT was disabled (see its own comment above) -- the trailing is
+# live again. `hard_stopped` (in the shared `evaluate_exit`) only fires while
+# the peak has never armed the trailing, so the two are not really
+# competing: hard_stop catches positions that never moved, trailing catches
+# the ones that did. FAST-DISCOVERY still runs the trailing at a flat 15%,
+# a live A/B against this pocket's banded distance.
 HARD_STOP_PCT = 20.0
 
 # 21/08 -- this pocket uses the SHARED progressive trailing bands
