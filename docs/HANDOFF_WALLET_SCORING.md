@@ -8,28 +8,29 @@
 > correctifs) — résumé par grand thème ici, pas un correctif par ligne. Détail exact :
 > historique git, commits du 15/07 préfixés #157 à #178.
 
-[DEPLOYE] Sujet    : pertinence du wallet tracker jamais mesuree sur swing/vc -- instrumentation + gate mort ferme
-Date : 2026.08.23 / Probleme : question operateur directe ("les informations recoltees par le
-wallet tracker elle sont pertinente ?"). Audit DB : 94.5% des scans (9260/9795, `wallet_score_log`)
-ressortent avec `composite_percentile` NULL ; `smart_money_leaderboard` reel n'a qu'1 seul wallet
-(seuil de decouverte dynamique = 80.0, ce wallet est a 37.5 -- le gate de convergence multi-wallet
->=2 ne peut structurellement jamais se declencher) ; le seul module qui mesurait explicitement la
-correlation presence-smart-money/PnL reel (`pocket_smart_money_correlation.py`, cree 16/08 pour
-scalping_v8/v9) a 0 ligne enregistree -- jamais tourne avant d'etre supprime le 18/08 avec le
-retrait de v8/v9 (ca544c26). `paper_position` (swing/vc, poches actives) ne stockait aucun champ
-smart-money a l'entree malgre que le pilier composite (`dex_composite_score.score_smart_money`)
-soit deja calcule et deja utilise pour le SIZING (`risk_guard.conviction_*`) -- calcule mais jamais
-persiste, donc jamais croisable avec le PnL apres coup. Second constat : le gate
-`ARIA_POCKET_SMART_MONEY_CORRELATION_ENABLED` restait actif=true en prod alors que son code avait
-disparu du repo depuis le 18/08 -- variable orpheline sans effet.
-Solution : (1) nouvelle colonne `entry_smart_money_score` sur `paper_position`/`paper_position_archive`
-(`_ADDED_COLUMNS`/`_ARCHIVE_ADDED_COLUMNS`/`_POS_FIELDS`), nouveau parametre `open_position(entry_smart_money_score=...)`,
-cable sur les 2 sites d'entree momentum via `(sig.get("dex_security_breakdown") or {}).get("score_smart_money")`
--- NULL honnete sur Solana/Robinhood (le pilier est Blockscout-only, Base uniquement, meme limite
-documentee que `dex_composite_score.compute_dex_composite_score`), jamais une valeur inventee.
-(2) variable `ARIA_POCKET_SMART_MONEY_CORRELATION_ENABLED` retiree de `vanguard/backend/.env` par
-l'operateur (fichier hors Bash, doctrine secrets). 2 nouveaux tests (persistance / defaut None),
-406/406 verts sur `test_paper_trader.py`, 178/178 sur `test_coherence.py`.
+[DEPLOYE] Sujet    : wallet-tracker relevance never measured on swing/vc -- instrumented, dead gate cleared
+Date : 2026.08.23 / Probleme : direct operator question ("les informations recoltees par le
+wallet tracker elle sont pertinente ?"). DB audit: 94.5% of scans (9260/9795, `wallet_score_log`)
+come back with `composite_percentile` NULL; the real `smart_money_leaderboard` holds a single
+wallet (dynamic-discovery threshold = 80.0, that one wallet sits at 37.5 -- the multi-wallet
+convergence gate, >=2, can structurally never fire); the one module that explicitly measured
+smart-money-presence/real-PnL correlation (`pocket_smart_money_correlation.py`, built 16/08 for
+scalping_v8/v9) logged 0 rows -- never ran before being deleted 18/08 alongside v8/v9's retirement
+(ca544c26). `paper_position` (swing/vc, the active pockets) stored no smart-money field at entry
+even though the composite pillar (`dex_composite_score.score_smart_money`) was already computed
+and already used for SIZING (`risk_guard.conviction_*`) -- computed but never persisted, so never
+crossable against real PnL afterward. Second finding: gate
+`ARIA_POCKET_SMART_MONEY_CORRELATION_ENABLED` stayed active=true in prod though its code had been
+gone from the repo since 18/08 -- an orphaned variable with no effect.
+Solution : (1) new `entry_smart_money_score` column on `paper_position`/`paper_position_archive`
+(`_ADDED_COLUMNS`/`_ARCHIVE_ADDED_COLUMNS`/`_POS_FIELDS`), new `open_position(entry_smart_money_score=...)`
+parameter, wired into both momentum entry sites via
+`(sig.get("dex_security_breakdown") or {}).get("score_smart_money")` -- honest NULL on
+Solana/Robinhood (the pillar is Blockscout-only, Base only, same documented limit as
+`dex_composite_score.compute_dex_composite_score`), never an invented value.
+(2) `ARIA_POCKET_SMART_MONEY_CORRELATION_ENABLED` removed from `vanguard/backend/.env` by the
+operator (file off-limits to Bash, secrets doctrine). 2 new tests (persistence / defaults to
+None), 406/406 green on `test_paper_trader.py`, 178/178 on `test_coherence.py`.
 `packages/aria-core/src/aria_core/paper_trader.py`, `packages/aria-core/tests/test_paper_trader.py`,
 `vanguard/backend/.env`.
 
