@@ -109,21 +109,44 @@ ARCHIVE_MODULE = "solana_late_bonding"
 # real entry UP the curve, which is the right direction, but it means a floor
 # has to be set where the band is already good rather than where it is barely
 # acceptable.
+# 23/08 -- RAISED BACK 0.50 -> 0.70. The 22/08 test (see the retained history
+# below) has answered, and the answer confirms the 21/08 measurement it set
+# out to overturn: the SAME liquidity floor that was supposed to protect this
+# band was ALSO lowered 5500$ -> 4000$ the same day (see MIN_LIQUIDITY_USD's
+# own comment) -- so the one thing the test's justification leaned on never
+# actually held. Verified directly on 578 closures (22-23/08, 2 distinct
+# days): raising the floor ALONE, at any level from 4000$ to 10000$, never
+# recovers a positive PnL (-8% to -13% throughout, winrate stuck at 20-23%) --
+# the band itself is the problem, not just its thinnest pools. Concretely
+# costly: hard_stop fills in this band average -33% to -39% (vs -20% nominal,
+# -23.5% once the band clears 80%), on positions that die in well under 5s --
+# a slippage the module's own honest fill rule (min(stop_price, current_price))
+# cannot avoid when a pool this thin drains 50-90% in one transaction.
+# Operator's own stated objective the same day ("je prefere trader moins si le
+# marche le permet pas que trader pour perdre") settles the remaining
+# question: the test has produced its answer, continuing to pay this cost
+# would not be collecting new information, only repeating a known one -- and
+# the regime gate (REGIME_MIN_MEDIAN_PEAK_PCT above) is a DIFFERENT,
+# complementary mechanism (market-wide, not band-specific) that does not
+# substitute for this floor. Decision made under explicit operator mandate
+# ("prends tes responsabilites et fais les meilleurs choix") after the data
+# above was verified, not before.
+#
+# History retained for context -- what the 22/08 test actually tested:
 # 22/08 -- LOWERED 0.70 -> 0.50, operator's explicit test. Stated plainly
 # because the 21/08 measurement above says the opposite: 40-60% was the WORST
 # band on 721 closures (48.9% rugs, -4.3% PnL) and that is exactly why the
 # floor was raised to 0.70 in the first place.
 #
-# What has changed since, and makes the test worth running rather than a
-# repeat of a known mistake:
+# What was believed to have changed, and made the test worth running rather
+# than a repeat of a known mistake:
 #   * the liquidity floor went 3000$ -> 5500$, validated at +23.34 points on
 #     528 vs 830 same-day closures. Most 40-60% rugs were thin pools; that
 #     floor now cuts them before the band is even reached.
 #   * entries are priced from the CHAIN, not from a websocket that could be
 #     36s stale, so the band's own numbers were partly measured on false
 #     prices.
-# Revert is one line, and the archived epochs make the comparison direct.
-MIN_BONDING_PROGRESS = 0.50
+MIN_BONDING_PROGRESS = 0.70
 # 21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed
 # because a curve past 90% can COMPLETE mid-position and migrate its liquidity
 # to the AMM -- treated as a risk to avoid. The data says that is the single
@@ -196,6 +219,18 @@ MIN_DISTINCT_BUYERS = 1
 #
 # Also sets the tradable position size: a 3000$ pool tolerates roughly 30$
 # before price impact eats the edge (measured via Jupiter the same day).
+# 23/08 -- RAISED BACK 4000 -> 5500. The 22/08 test (retained below) has
+# answered: re-verified directly on 578 closures (22-23/08, 2 distinct days)
+# that raising THIS floor alone, at any level from 4000$ to 10000$, never
+# recovers a positive PnL (-8% to -13% throughout) -- confirming this floor
+# was never really tested in isolation, exactly as the note below already
+# suspected ("the two filters overlap, so the band cannot be evaluated while
+# both stand"). MIN_BONDING_PROGRESS raised back to 0.70 the same pass, for
+# the same reason -- see its own comment for the fuller writeup (hard_stop
+# slippage measured, operator's stability-first objective, explicit mandate
+# under which this decision was made).
+#
+# History retained for context -- what the 22/08 test actually tested:
 # 22/08 -- LOWERED 5500 -> 4000, operator's explicit test, and stated plainly
 # because the data above says the opposite: this floor is the ONE entry filter
 # that survived every check this session (+23.34 points measured at CONSTANT
@@ -208,10 +243,9 @@ MIN_DISTINCT_BUYERS = 1
 # after the deploy: `blocked_thin_liquidity` 5, `blocked_outside_band` 3. The
 # two filters overlap, so the 50% band cannot be evaluated while both stand.
 #
-# What we are actually testing is therefore the PAIR (band 50% + floor 4000$),
-# not the floor alone. Revert is one line and the archived epochs make the
-# comparison direct.
-MIN_LIQUIDITY_USD = 4000.0
+# What was actually being tested was therefore the PAIR (band 50% + floor
+# 4000$), not the floor alone.
+MIN_LIQUIDITY_USD = 5500.0
 
 # 21/08 -- CARENCE APRES SORTIE. Le defaut le plus couteux trouve ce jour-la,
 # revele par une capture de l'operateur : CALLOUTS a ete achete et stoppe
