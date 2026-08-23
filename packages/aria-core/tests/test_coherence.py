@@ -247,6 +247,45 @@ def test_agent_wallet_pilot_never_uses_wallet_guard_and_gated_off():
     )
 
 
+def test_solana_trade_pilot_never_uses_wallet_guard():
+    """23/08 -- gap found by a background audit workflow (real capital, $0.10/
+    trade cap, ARIA_SOLANA_TRADE_PILOT_ENABLED): this file had no mechanical
+    guardrail locking its separation from wallet_guard.escalate_spend/
+    resolve_spend, unlike sepolia_autonomous.py and agent_wallet_pilot.py which
+    both already have it -- a future regression here would not have been
+    caught by CI. Same doctrine as those two: this pilot is a NAMED, bounded
+    exception (real cap re-verified against the live balance on every
+    attempt, cf. test_no_caller_can_raise_the_cap in
+    test_solana_trade_pilot.py) and must never fall back on the shared
+    Telegram-escalation guardrail."""
+    path = CORE / "solana_trade_pilot.py"
+    assert path.is_file(), "solana_trade_pilot.py manquant"
+    module = path.read_text(encoding="utf-8")
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "solana_trade_pilot.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
+        "-- exception bornée au pilote $0.10/trade, structurellement séparée du garde-fou partagé."
+    )
+    assert "import wallet_guard" not in module and "from aria_core.wallet_guard" not in module, (
+        "solana_trade_pilot.py ne doit jamais importer wallet_guard.py."
+    )
+
+
+def test_solana_agent_wallet_never_uses_wallet_guard():
+    """23/08 -- same gap, same fix, for the wallet/balance/swap-execution leg
+    of the Solana real-capital pilot (see test_solana_trade_pilot_never_uses_
+    wallet_guard's own docstring for the full incident context)."""
+    path = CORE / "solana_agent_wallet.py"
+    assert path.is_file(), "solana_agent_wallet.py manquant"
+    module = path.read_text(encoding="utf-8")
+    assert "escalate_spend(" not in module and "resolve_spend(" not in module, (
+        "solana_agent_wallet.py ne doit JAMAIS appeler wallet_guard.escalate_spend/resolve_spend "
+        "-- structurellement séparé du garde-fou partagé, même doctrine que solana_trade_pilot.py."
+    )
+    assert "import wallet_guard" not in module and "from aria_core.wallet_guard" not in module, (
+        "solana_agent_wallet.py ne doit jamais importer wallet_guard.py."
+    )
+
+
 def test_agent_wallet_pilot_cycle_registered_in_heartbeat_and_isolated():
     """Boucle de décision autonome du pilote agent-wallet (18/07, "option 2" --
     ARIA décide ET exécute SEULE) : câblée au heartbeat, structurellement séparée
