@@ -201,11 +201,13 @@ si aucun candidat n'a été proposé ce tour (pas d'appel réseau superflu).
 
 ### Constat de départ
 
-`MAX_POSITIONS=15` plafonne uniquement le NOMBRE de positions, pas la corrélation
-entre elles. 10 positions « Base bonding-phase » qui chutent ensemble comptent comme
-diversifiées dans ce compte simple alors qu'elles ne le sont pas — le risque réel du
-portefeuille dépend de combien de capital est concentré sur un même TYPE de pari, pas
-du nombre de lignes.
+`MAX_POSITIONS` (à l'origine 15, drifté depuis avec l'architecture 3-poches du 27/07 —
+`MAX_POSITIONS=30` en legacy single-pocket, `MAX_POSITIONS_VC=5`/`MAX_POSITIONS_SWING=15`/
+`MAX_POSITIONS_SCALPING=None`, vérifié dans `paper_trader.py` le 23/08) plafonne
+uniquement le NOMBRE de positions, pas la corrélation entre elles. 10 positions
+« Base bonding-phase » qui chutent ensemble comptent comme diversifiées dans ce compte
+simple alors qu'elles ne le sont pas — le risque réel du portefeuille dépend de combien
+de capital est concentré sur un même TYPE de pari, pas du nombre de lignes.
 
 ### Catégorie
 
@@ -263,7 +265,9 @@ des candidats** -- ils opèrent sur les positions ouvertes/le portefeuille dans 
 ensemble, jamais sur le `sig` d'un analyzer particulier. Les mécanismes #187
 (re-scan continu, plafond de concentration) dégradent honnêtement pour les positions
 momentum (§2/§3 ci-dessus) plutôt que de planter ou de fabriquer une catégorie/un
-instantané de sécurité inexistants. Voir `docs/pivot-momentum-1m-test.md` §6 pour la
-limite symétrique côté #194 (le `price_lookup` du coupe-circuit ne propage pas encore
-le kwarg `chain` pour les positions non-Base -- dégrade vers `cost_usd`, jamais un prix
-inventé).
+instantané de sécurité inexistants. **23/08 -- corrigé** : `docs/pivot-momentum-1m-test.md`
+§6 documentait une limite symétrique côté #194 (le `price_lookup` du coupe-circuit ne
+propageait pas le kwarg `chain` pour les positions non-Base, dégradant vers `cost_usd`
+plutôt que d'inventer un prix). `portfolio_summary()` reprice désormais réellement ces
+positions via le même patron `using_default_price_lookup` déjà en place dans
+`run_paper_cycle` -- commit `6770dc33`, `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
