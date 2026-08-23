@@ -752,6 +752,16 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_AGENT_WALLET_TRANSFER_ENABLED",
     "ARIA_ALPHAVANTAGE_ENABLED",
     "ARIA_AVATAR_STYLE_ENABLED",
+    # 23/08 -- base_momentum_shadow.py's reserved gate name for a future
+    # heartbeat wiring (NOT wired, NOT read anywhere yet -- named in the
+    # module's own docstring only, as documentation of the intended
+    # convention). Same shadow-only doctrine as ARIA_ROBINHOOD_PUMP_SHADOW_
+    # ENABLED below, on Base instead -- built because the real Base momentum
+    # pipeline (paper_trader.py) has been paused by the operator since 17/08
+    # and the operator wants it to STAY paused while still answering the
+    # entry-age-window question -- pure read+log, never a trigger, never
+    # touching paper_trader/real capital.
+    "ARIA_BASE_MOMENTUM_SHADOW_ENABLED",
     "ARIA_BLOCKRUN_KALSHI_ENABLED",
     "ARIA_BONDING_DISCOVERY_ENABLED",
     "ARIA_BRAIN_ENABLED",

@@ -4,6 +4,57 @@
     "parameters": {},
     "status": "present"
   },
+  "base_momentum_shadow": {
+    "label": "MOMENTUM (Base, shadow-only -- real pipeline paused since 17/08)",
+    "parameters": {
+      "M5_SURGE_THRESHOLD_PCT": {
+        "line": 166,
+        "value": 25.0,
+        "why": "Calibrated threshold from the 16/08 Dune/DexScreener research pass (see module docstring) -- the ONLY entry signal this shadow layer evaluates. Recalibrated same day from the 15min to the 5min window (second Dune pass, same exit methodology, beat 15min on both winrate and avg multiplier)."
+      },
+      "MAX_POOL_AGE_MINUTES": {
+        "line": 213,
+        "value": 10.0,
+        "why": "16/08, operator-requested protection against a token whose liquidity gets pulled shortly after launch (real case observed live this session on the Solana twin module: a ~35min-old pool's LP fully removed, price down -38.6% in 5min). A pool older than this at DETECTION time is never logged as a new signal. An already-open, currently-LOSING position (current price <= entry) is force-closed the moment its real age crosses this line -- see the priority-1 check at the top of ``advance_exit_simulation``'s per-row loop. A still-WINNING position keeps being tracked normally instead (16/08, second pass, operator decision: a real 1000% run shouldn't be cut short just because 25min passed -- the scale-out ladder already banks gains progressively either way). Fail-CLOSED on missing data (unlike this module's usual \"never fabricate, fail-open\" doctrine for pure observations): this is a protective filter, not a reported metric, so an unknown age is treated as \"too risky to trade\", never \"assume it's fine\". 23/08 -- TIGHTENED 25 -> 6 minutes, on the pocket's own 133 executable closures (17 hours, ONE day -- see the caveat at the end). age < 6 min   92 trades (69% of volume)  +28.39%/trade  +21.39% w/o top5 winrate 66.3%, 100% of hours positive, worst hour +7.21%, ZERO hour with the pocket idle age >= 6 min                              far weaker on every measure 25 minutes was never calibrated -- it was a rug-protection window borrowed from the Solana twin (16/08), doing a different job. The freshness of the pool turns out to be this pocket's strongest single signal, and unlike an entry filter searched over many columns it was predicted BEFORE being measured (the operator asked for it: \"la tranche a trader est peut etre differente\"). 23/08, SAME DAY, CORRECTED 6 -> 10 after the operator asked the right question: does 6 minutes strangle the pocket? It does not -- it keeps 65% of the flow -- but it was the WRONG PLACE, and for the exact reason that killed seven findings earlier the same day: it bought a better AVERAGE by shrinking the base. Full sweep, liquidity floor applied throughout: 4 min   28 trades  +54.63%/trade   1530 pts   winrate 96.4%  (11h only) 5 min   60 trades  +35.13%/trade   2108 pts   winrate 73.3% 6 min   93 trades  +28.08%/trade   2611 pts   winrate 65.6% 10 min  130 trades  +24.98%/trade   3248 pts   winrate 64.6%   <- chosen 20 min  137 trades  +25.68%/trade   3518 pts   winrate 62.8% The average falls as the window widens while the TOTAL rises, which is the signature of a filter cutting real gains. What 6 min threw away was measured and it was not noise: 44 trades at +20.62%, winrate 56.8%, liquidity fine -- 907 points of genuine profit, above the operator's own +20% floor. 10 recovers 637 of those points, stays at +25% (well clear of the floor) and lifts throughput from ~5.6 to ~7.6 entries/hour. 4 min is tempting and is NOT taken: 28 trades over 11 of 17 hours is a sample to overfit, not to calibrate on. CAVEAT that must travel with this number: ONE day of data. Re-read it once a second day exists."
+      },
+      "MIN_LIQUIDITY_USD": {
+        "line": 226,
+        "value": 4000.0,
+        "why": "23/08 -- THE POCKET HAD NO LIQUIDITY FLOOR AT ALL, and it was its biggest defect. 52 of 200 closures (26%) ran on pools whose MEAN reserve was $6.40. Its three \"best\" trades ever -- +879%, +313%, +289% -- sat on pools of $3.52, $20.06 and $17.15, one of them reporting a +85911% peak. That is not profit, it is noise on a pool you can neither enter nor exit, and it carried 38% of the pocket's headline PnL. Removing it is a MEASUREMENT correction, not a performance filter: those points never existed. no floor       200 trades  +31.10%/trade  winrate 53.7% >= $4000       123 trades  +25.42%/trade  winrate 61.8%  (+19.27% w/o top5) Set to the same 4000 as the Solana twin, but calibrated HERE and not copied: it is where the winrate peaks while still keeping 61% of the flow."
+      },
+      "SCALE_OUT_SELL_FRACTION": {
+        "line": 237,
+        "value": 0.25,
+        "why": null
+      },
+      "SCALE_OUT_STEP_PCT": {
+        "line": 236,
+        "value": 25.0,
+        "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
+      },
+      "SIMULATED_TRADE_SIZE_USD": {
+        "line": 263,
+        "value": 0.1,
+        "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- mirrors solana_pump_shadow.py's own addition, same session, same real trigger (X17690 on Solana: reserve_usd essentially zero at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price). NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
+      },
+      "TABLE": {
+        "line": 160,
+        "value": "base_momentum_shadow_log",
+        "why": "23/08 -- the table name was written out 18 times and existed as a constant NOWHERE, unlike every sister pocket (`solana_late_bonding_shadow.TABLE`). Found when wiring this pocket's missing Telegram notifications: the caller had nothing to import and would have had to restate the string a 19th time, which is exactly the defect CLAUDE.md names -- a constant redefined locally when it exists elsewhere. Declared here as the single source; the literals below are left as they are (a mechanical 18-site rewrite is a separate change, and this one only needs the name to be importable)."
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 238,
+        "value": 20.0,
+        "why": null
+      },
+      "_SCALE_OUT_DUST_FRACTION": {
+        "line": 247,
+        "value": 0.01,
+        "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
+      }
+    },
+    "status": "present"
+  },
   "candle_staleness_shadow": {
     "label": "OBSERVER -- candle freshness (#261)",
     "parameters": {
