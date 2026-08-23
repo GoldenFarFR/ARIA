@@ -7,6 +7,43 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[CODE] Subject : solana_late_bonding_shadow.py -- retracement-gated shadow variant, its own table, wired into the live discovery/exit loops
+Date : 2026.08.23 / Probleme : operator-directed ("ok pars sur le retracement en shadow"), following the finding that every real
+closure carrying `progress_retracement_at_entry` (26 of 44 total, the metric was added mid-flight) sat under 2% retracement -- this
+pocket has been buying at the exact local top of the bonding curve, never after any pullback, which is a plausible contributor to the
+gap between mean real peak (+16.23%) and mean net captured (-11.74%, cf. the same-day REGIME_MIN_MEDIAN_PEAK_PCT 20%->50% entry
+above/adjacent commit ecfbf0a4). A candidate that has not pulled back far enough from its local high must be refused with its own
+distinct rejection reason, testable purely in shadow against the unfiltered primary pocket as a control -- never a replacement for it.
+Solution : new optional `min_retracement`/`table`/`archive_module` parameters threaded through `consider_candidate`,
+`resolve_migrated_pools`, `_apply_exit_check` and `advance_exit_simulation` (NOT `advance_position_by_pool`/`reconcile_with_chain`,
+unreachable for a shadow-only variant that never trades real capital, nor wired to the event-driven exit loop -- an accepted
+asymmetry, see RETRACEMENT_TABLE's own comment). Default `table=TABLE`/`min_retracement=None` reproduces the primary pocket
+byte-for-byte -- the most important test in the new coverage proves this explicitly, since the primary pocket has real capital wired
+to `execute_fn` in prod and must never regress from an additive default. The variant's own `RETRACEMENT_TABLE`
+("solana_late_bonding_retracement_shadow_log") and `RETRACEMENT_ARCHIVE_MODULE` keep its anti-duplicate check, entry rows and exit
+tracking fully isolated from the primary pocket's rows on the same pool/mint -- same physical `shadow.db`, per the project's one-file
+convention, never a second database. Also fixed a real collision risk found while wiring this: `_apply_exit_check`'s snapshot-archive
+call passed the literal string `"solana_late_bonding"` instead of referencing `ARCHIVE_MODULE`, which would have made the variant's
+snapshots collide with the primary pocket's under the same (module, position_id) key the moment two tables both produced row id 5 --
+now routed through the new `archive_module` parameter. Gate is fail-CLOSED like every other gate in this pocket: a candidate whose
+retracement can't be measured (no curve tracker) is rejected, not passed through. `DEFAULT_MIN_RETRACEMENT = 0.05` is an explicitly
+PROVISIONAL starting point, not calibrated on this sensor -- same standing-hypothesis footing as `REGIME_MIN_MEDIAN_PEAK_PCT`,
+mandatory recalibration once this variant's own table holds a real closure sample. Wired live in `shadow_persistent.py` (hors git,
+the standalone always-on process): `late_bonding_discovery_loop` now makes a SECOND, always-`execute_fn=None` `consider_candidate`
+call per candidate against `RETRACEMENT_TABLE`; `late_bonding_exit_tracking_loop` runs a second `resolve_migrated_pools`/
+`advance_exit_simulation` pass (`sell_fn=None` always) on the same cadence, in its own try/except so a failure there never blocks the
+primary pocket's sweep. No Telegram notifications for this variant (precedent: `solana_variant_shadow.py` also ships without any,
+per that file's own 17/08 comment -- pure background accumulation, not an operator-facing signal yet). 5 new tests
+(default-is-identical-to-primary, insufficient-retracement blocks with `blocked_insufficient_retracement` reason, unknown-retracement
+fails closed, sufficient-retracement lands in the variant's own table, the two tables never cross-contaminate the same pool) -- full
+existing 108-test suite for this module stays green unchanged, `test_coherence.py` green, `docs/pocket-parameters.json` and
+`pocket_entry_sweep.POCKETS` (new `late_bonding_retracement` entry) both regenerated/updated in the same pass.
+`packages/aria-core/src/aria_core/solana_late_bonding_shadow.py`, `packages/aria-core/src/aria_core/pocket_entry_sweep.py`,
+`packages/aria-core/tests/test_solana_late_bonding_shadow.py`, `docs/pocket-parameters.json`,
+`/opt/aria-data/solana-robinhood-shadow/shadow_persistent.py` (hors git).
+
+------------------------------------------------------------
+
 [DEPLOYE] Subject : solana_pump_shadow.py reactivated -- "trade the trend, not the bonding curve" answered with existing code, not a new build
 Date : 2026.08.23 / Probleme : operator question, verbatim: "et si on trade les tendance au lieu du bonding ?" -- prompted after two real
 late_bonding hard_stop losses that night (-61.1%/-82.2%, sudden liquidity collapse, neither RugCheck nor a higher liquidity floor would

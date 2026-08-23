@@ -243,12 +243,20 @@ class TestEveryExitPathCarriesTheSellSeam:
     def test_apply_exit_check_is_the_only_writer(self):
         """Keeps the guarantee auditable: one write path means one place where
         the sell must happen. A second UPDATE elsewhere would silently escape
-        every check above."""
+        every check above.
+
+        23/08 -- the pattern now matches ``{table}`` rather than the literal
+        ``{TABLE}``: the retracement-gated shadow variant parametrized this
+        very statement's table name so its rows never collide with the
+        primary pocket's (see ``solana_late_bonding_shadow.RETRACEMENT_TABLE``).
+        The invariant this test guards is unchanged -- still exactly ONE
+        closure-writing statement in the whole module -- only the f-string's
+        variable name changed."""
         import re
 
         source = inspect_source()
         writers = [
-            m for m in re.findall(r"UPDATE \{TABLE\} SET remaining_qty", source)
+            m for m in re.findall(r"UPDATE \{table\} SET remaining_qty", source)
         ]
         assert len(writers) == 1, (
             f"{len(writers)} closure-writing statements found; the sell seam only guards one"

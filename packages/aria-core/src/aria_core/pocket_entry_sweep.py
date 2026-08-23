@@ -53,6 +53,11 @@ from dataclasses import dataclass, field
 # stops being listed is a visible deletion in review.
 POCKETS = {
     "late_bonding": "solana_late_bonding_shadow_log",
+    # 23/08 -- retracement-gated variant of late_bonding (own table, see
+    # solana_late_bonding_shadow.RETRACEMENT_TABLE). Requires a minimum
+    # pullback from the local curve-progress high before entering; compared
+    # against late_bonding above as the control.
+    "late_bonding_retracement": "solana_late_bonding_retracement_shadow_log",
     "fast_discovery": "solana_fresh_launch_fast_discovery_shadow_log",
     "fresh_launch": "solana_fresh_launch_shadow_log",
     "ws_exit": "solana_fresh_launch_ws_exit_shadow_log",

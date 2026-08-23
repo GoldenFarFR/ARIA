@@ -1821,6 +1821,163 @@ async def test_the_entry_records_how_far_the_curve_fell_back(_tmp_db):
     assert blind["progress_retracement_at_entry"] is None
 
 
+# --- retracement-gated shadow variant (23/08) -----------------------------
+# `min_retracement`/`table`/`archive_module` are all additive, default-None
+# (or default-to-the-primary-constant) parameters on `consider_candidate` /
+# `advance_exit_simulation`. The tests above this section already exercise
+# every call without these parameters and must stay green unchanged -- that
+# full suite passing IS the primary non-regression proof. These tests target
+# the new behaviour specifically: the gate itself, its fail-closed default,
+# and the isolation between the primary pocket's table and the variant's own.
+
+class _RetracementTracker:
+    """Same shape as `_Tracker` above, just named for this section's
+    intent -- returns a fixed `progress_retracement_of` value."""
+
+    def __init__(self, retracement: float):
+        self._retracement = retracement
+
+    def seconds_tracked(self, _m):
+        return 90.0
+
+    def progress_retracement_of(self, _m):
+        return self._retracement
+
+
+@pytest.mark.asyncio
+async def test_without_min_retracement_the_pocket_is_byte_identical_to_before(_tmp_db):
+    """The most important test in this section: a candidate whose retracement
+    is essentially zero (bought at the local top, the exact behaviour this
+    variant exists to test AGAINST) must still be accepted when
+    `min_retracement` is not passed -- the default must never regress the
+    primary pocket, which has real capital wired to `execute_fn` in prod."""
+    row_id = await pocket.consider_candidate(
+        "mintTop", "poolTop", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.0),
+        db_path=_tmp_db,
+    )
+    assert row_id is not None
+    row = (await _rows(_tmp_db))[0]
+    assert row["progress_retracement_at_entry"] == pytest.approx(0.0)
+    # Landed in the PRIMARY table -- omitting `table` must never divert an
+    # entry to the variant's table. Either the variant's table was never
+    # created at all (expected: `_ensure_table` only ever runs against it
+    # when `table=RETRACEMENT_TABLE` is passed explicitly), or it exists and
+    # is empty -- both read as "the default call never touched it".
+    try:
+        async with aiosqlite.connect(_tmp_db) as db:
+            cur = await db.execute(f"SELECT COUNT(*) FROM {pocket.RETRACEMENT_TABLE}")
+            count = (await cur.fetchone())[0]
+        assert count == 0
+    except aiosqlite.OperationalError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_insufficient_retracement_blocks_the_candidate(_tmp_db):
+    """23/08, operator-directed ("ok pars sur le retracement en shadow"):
+    a candidate that has not pulled back far enough from its local high must
+    be refused, with its own distinct reason so it is separable from every
+    other gate in `pretrade_rejection_log`."""
+    row_id = await pocket.consider_candidate(
+        "mintShallow", "poolShallow", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.02),
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert row_id is None
+
+    async with aiosqlite.connect(_tmp_db) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT reason FROM {pretrade_rejection_log.TABLE} WHERE pocket = 'late_bonding'"
+        )
+        reasons = [r["reason"] or "" for r in await cur.fetchall()]
+    assert any("blocked_insufficient_retracement" in r for r in reasons), reasons
+
+
+@pytest.mark.asyncio
+async def test_unknown_retracement_fails_closed_when_the_gate_is_active(_tmp_db):
+    """Fail-CLOSED, same discipline as every other gate in this pocket: a
+    candidate whose retracement could not be measured (no curve tracker at
+    all here) must never be treated as a pass just because `min_retracement`
+    cannot prove it insufficient."""
+    row_id = await pocket.consider_candidate(
+        "mintUnmeasured", "poolUnmeasured", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=None,
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert row_id is None
+    async with aiosqlite.connect(_tmp_db) as db:
+        cur = await db.execute(f"SELECT COUNT(*) FROM {pocket.RETRACEMENT_TABLE}")
+        assert (await cur.fetchone())[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_sufficient_retracement_is_accepted_into_its_own_table(_tmp_db):
+    """Positive case: a real pullback clears the gate and the row lands in the
+    VARIANT's table, not the primary pocket's."""
+    row_id = await pocket.consider_candidate(
+        "mintDip", "poolDip", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert row_id is not None
+    async with aiosqlite.connect(_tmp_db) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(f"SELECT * FROM {pocket.RETRACEMENT_TABLE} WHERE id = ?", (row_id,))
+        row = dict(await cur.fetchone())
+    assert row["pool_address"] == "poolDip"
+    assert row["progress_retracement_at_entry"] == pytest.approx(0.10)
+    # Never landed in the primary table either.
+    assert [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolDip"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_two_tables_never_interact_on_the_same_pool(_tmp_db):
+    """The whole point of the separate table: the primary pocket's
+    anti-duplicate check must never see the variant's row for the SAME
+    pool/mint, and vice versa -- otherwise the second experiment silently
+    starves itself (or the first) of real candidates."""
+    primary_id = await pocket.consider_candidate(
+        "mintBoth", "poolBoth", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db,
+    )
+    variant_id = await pocket.consider_candidate(
+        "mintBoth", "poolBoth", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert primary_id is not None and variant_id is not None
+
+    primary_rows = await _rows(_tmp_db)
+    async with aiosqlite.connect(_tmp_db) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(f"SELECT * FROM {pocket.RETRACEMENT_TABLE}")
+        variant_rows = [dict(r) for r in await cur.fetchall()]
+    assert len(primary_rows) == 1 and len(variant_rows) == 1
+
+    # Closing the VARIANT's position must never touch the primary's open row.
+    async def _crashed(_client, _pool, _mint, *, chain):
+        return SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=9_000.0,
+                               dex_id="pumpfun")
+
+    await pocket.advance_exit_simulation(
+        snapshot_fn=_crashed, db_path=_tmp_db, table=pocket.RETRACEMENT_TABLE,
+    )
+    variant_after = await _rows_from(_tmp_db, pocket.RETRACEMENT_TABLE)
+    primary_after = await _rows(_tmp_db)
+    assert variant_after[0]["exit_reason"] is not None
+    assert primary_after[0]["exit_reason"] is None
+
+
+async def _rows_from(path, table):
+    async with aiosqlite.connect(path) as c:
+        c.row_factory = aiosqlite.Row
+        cur = await c.execute(f"SELECT * FROM {table} ORDER BY id")
+        return [dict(r) for r in await cur.fetchall()]
+
+
 @pytest.mark.asyncio
 async def test_the_stop_level_and_the_fill_are_stored_as_numbers(_tmp_db, monkeypatch):
     """Operator's ask, 22/08: the stop and the fill, to the decimal, as NUMBERS.
