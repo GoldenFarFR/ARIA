@@ -187,3 +187,29 @@ actuel est specifique a pump.fun -- `derive_bonding_curve_address` calcule une
 PDA du programme pump.fun, inutilisable ici), puis cabler une seconde source de
 decouverte a cote de PumpPortal. Sans le decodeur, on recevrait les tokens sans
 savoir ou ils en sont sur leur courbe, donc sans pouvoir les trader.
+
+**Acquis du 23/08 (verifie on-chain, ne pas refaire)** :
+- Le programme du backlog est le BON : trois pools LaunchLab reels lus en direct
+  ont pour owner `LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj`.
+- **Taille du compte : 429 octets**, **discriminateur `f7ede3f5d7c3de46`** --
+  identique sur les trois, donc c'est bien un type de compte unique et stable.
+- **Comment trouver des pools sans plan payant** : `getProgramAccounts` exige
+  un plan superieur chez Chainstack, mais l'API publique DexScreener
+  `search?q=launchlab` rend 30 pools Solana avec `dexId="launchlab"`, dont les
+  adresses de token finissent en `bonk` (donc bien LetsBonk). C'est la voie
+  d'entree pour tout echantillonnage futur.
+- **Le websocket Chainstack ACCEPTE `logsSubscribe` sur ce programme** (id
+  d'abonnement retourne), la ou Helius refuse en HTTP 429. Aucun message recu
+  en 20s de test toutefois -- a reverifier sur une fenetre plus longue avant
+  d'en conclure quoi que ce soit.
+- **Le decodage a l'aveugle NE SUFFIT PAS** : sur 429 octets, la quasi-totalite
+  des u64 sont des morceaux de Pubkey (32 octets = 4 u64 consecutifs proches de
+  2^64). Seuls trois champs sont des nombres plausibles -- offset 8 (=1020),
+  offset 288 (~1.97e17, une supply a 6 decimales) et offset 360 (~397e9
+  lamports, soit 397 SOL). Aucune paire de champs ne reproduit le prix
+  DexScreener de reference (3.298e-08 SOL/token), donc la formule n'est PAS un
+  simple ratio de deux reserves comme chez pump.fun.
+- **Prochaine etape concrete** : recuperer l'IDL officiel depuis le SDK Raydium
+  v2 (`src/raydium/launchpad/`) plutot que continuer a deviner. Deux sources
+  documentees existent aussi cote Shyft (exemples de parsing LaunchLab). Sans
+  l'IDL, chaque offset reste une hypothese non falsifiable.
