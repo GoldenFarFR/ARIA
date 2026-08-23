@@ -476,3 +476,51 @@ def deploy_stub_token(*, private_key: str | None = None, w3=None) -> dict:
         "runtime_matches": deployed_code == runtime,
         "error": None,
     }
+
+
+def read_pilot_state(*, safe_address: str, delegate_address: str, token_address: str, w3=None) -> dict:
+    """Read-only: consolidates everything a future session would otherwise
+    have to reconstruct by hand across three separate modules (this file's
+    own deployment, ``safe_robinhood_wallet``'s allowance reader, a raw
+    ``isModuleEnabled`` call) into one call. Exists so this pilot's real
+    state (which Safe, is the module actually enabled, what does the
+    allowance look like right now) never has to be rediscovered from
+    scratch -- the exact standing gap already flagged for
+    ``shadow_persistent.py`` in ``docs/registre-automatisations.md``, worth
+    avoiding here from day one rather than retrofitting later.
+
+    Never signs, never sends a transaction -- pure aggregation of existing
+    read-only calls, safe to run at any time including on mainnet (the
+    underlying reads have no chain restriction of their own, though this
+    whole module's OTHER functions do)."""
+    from aria_core.onchain.safe_robinhood_wallet import read_allowance
+
+    w3 = _w3(w3)
+    safe = Web3.to_checksum_address(safe_address)
+    module_checker = w3.eth.contract(address=safe, abi=_SAFE_IS_MODULE_ENABLED_ABI)
+
+    try:
+        deployed = len(w3.eth.get_code(safe)) > 0
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Safe unreachable ({exc})", "safe_deployed": None}
+
+    module_enabled = None
+    if deployed:
+        try:
+            module_enabled = module_checker.functions.isModuleEnabled(
+                Web3.to_checksum_address(ALLOWANCE_MODULE_ADDRESS)
+            ).call()
+        except Exception:  # noqa: BLE001 -- best-effort, never blocks the rest of the summary
+            module_enabled = None
+
+    allowance = read_allowance(safe, delegate_address, token_address, w3=w3)
+
+    return {
+        "error": None,
+        "safe_address": safe,
+        "safe_deployed": deployed,
+        "module_enabled": module_enabled,
+        "delegate": Web3.to_checksum_address(delegate_address),
+        "token": Web3.to_checksum_address(token_address),
+        "allowance": allowance,
+    }

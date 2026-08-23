@@ -23,8 +23,10 @@ TESTNET_KEY = "0x" + "11" * 32
 
 
 class _FakeEth:
-    def __init__(self, *, chain_id):
+    def __init__(self, *, chain_id, code_by_address=None, raise_on_get_code=False):
         self.chain_id = chain_id
+        self._code = code_by_address or {}
+        self._raise_on_get_code = raise_on_get_code
 
     def get_block(self, _label):
         return {"timestamp": 1_700_000_000}
@@ -32,13 +34,18 @@ class _FakeEth:
     def get_transaction_count(self, _addr):
         return 0
 
+    def get_code(self, address):
+        if self._raise_on_get_code:
+            raise RuntimeError("RPC unreachable")
+        return self._code.get(Web3.to_checksum_address(address), b"")
+
     def contract(self, *, address=None, abi=None):
         return Web3().eth.contract(address=address, abi=abi)
 
 
 class _FakeW3:
-    def __init__(self, *, chain_id=deploy.ROBINHOOD_TESTNET_CHAIN_ID):
-        self.eth = _FakeEth(chain_id=chain_id)
+    def __init__(self, *, chain_id=deploy.ROBINHOOD_TESTNET_CHAIN_ID, code_by_address=None, raise_on_get_code=False):
+        self.eth = _FakeEth(chain_id=chain_id, code_by_address=code_by_address, raise_on_get_code=raise_on_get_code)
 
 
 # --- chain-id preflight (fail-closed), every public entry point -----------
@@ -198,3 +205,46 @@ def test_stub_token_deploy_code_correctly_wraps_the_runtime():
     assert deploy_code[offset:offset + runtime_len] == runtime
     assert len(preamble) == 11
     assert preamble[4] == 11
+
+
+# --- read_pilot_state: pure aggregation, never signs or sends ---------------
+
+def test_read_pilot_state_reports_not_deployed_without_calling_is_module_enabled(monkeypatch):
+    """A Safe with no code can't sensibly answer isModuleEnabled -- the
+    function must report `module_enabled: None` rather than raise trying to
+    call a contract that isn't there."""
+    from aria_core.onchain import safe_robinhood_wallet as wallet
+
+    monkeypatch.setattr(wallet, "read_allowance", lambda *a, **kw: {"error": None, "amount": 0})
+    w3 = _FakeW3(code_by_address={})  # SAFE has no code
+    result = deploy.read_pilot_state(
+        safe_address=SAFE, delegate_address=DELEGATE, token_address=TOKEN, w3=w3,
+    )
+    assert result["safe_deployed"] is False
+    assert result["module_enabled"] is None
+    assert result["error"] is None
+
+
+def test_read_pilot_state_surfaces_an_unreachable_safe_as_an_error(monkeypatch):
+    from aria_core.onchain import safe_robinhood_wallet as wallet
+
+    monkeypatch.setattr(wallet, "read_allowance", lambda *a, **kw: {"error": None})
+    w3 = _FakeW3(raise_on_get_code=True)
+    result = deploy.read_pilot_state(
+        safe_address=SAFE, delegate_address=DELEGATE, token_address=TOKEN, w3=w3,
+    )
+    assert result["safe_deployed"] is None
+    assert result["error"] is not None
+
+
+def test_read_pilot_state_includes_the_allowance_reader_result(monkeypatch):
+    from aria_core.onchain import safe_robinhood_wallet as wallet
+
+    fake_allowance = {"error": None, "amount": 100, "spent": 100, "remaining": 0}
+    monkeypatch.setattr(wallet, "read_allowance", lambda *a, **kw: fake_allowance)
+    w3 = _FakeW3(code_by_address={Web3.to_checksum_address(SAFE): b"\x60\x00"})
+    result = deploy.read_pilot_state(
+        safe_address=SAFE, delegate_address=DELEGATE, token_address=TOKEN, w3=w3,
+    )
+    assert result["safe_deployed"] is True
+    assert result["allowance"] == fake_allowance
