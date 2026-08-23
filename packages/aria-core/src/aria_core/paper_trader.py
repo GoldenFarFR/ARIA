@@ -2580,13 +2580,29 @@ async def portfolio_summary(*, price_lookup=None, wallet: str = "swing") -> dict
 
     from aria_core.risk_guard import simulated_exit_price
 
+    # 23/08 -- real gap found (docs/pivot-momentum-1m-test.md §6, never fixed
+    # since 15/07): this loop always called ``price_lookup(contract)`` with
+    # no ``chain`` kwarg, so a non-Base position's mark-to-market silently
+    # degraded to ``cost_usd`` -- no crash, but no real repricing either.
+    # At the time only Base was really live; multi-chain paper positions
+    # (Solana/Robinhood) are common now, so this drawdown circuit breaker's
+    # equity read has been quietly wrong for those. Same safe pattern
+    # already used elsewhere in this file (``using_default_price_lookup``,
+    # see ``run_paper_cycle``): only pass ``chain`` when ``price_lookup`` IS
+    # ``_default_price_lookup`` (the one function in this module that
+    # accepts it) -- never assumed for a caller-injected function, which
+    # keeps every existing test/caller byte-identical.
+    using_default_price_lookup = price_lookup is _default_price_lookup
     open_value = 0.0
     unrealized = 0.0
     for p in opens:
         price = None
         if price_lookup is not None:
             try:
-                price = await price_lookup(p["contract"])
+                if using_default_price_lookup:
+                    price = await price_lookup(p["contract"], chain=p.get("chain") or "base")
+                else:
+                    price = await price_lookup(p["contract"])
             except Exception:  # noqa: BLE001 — an unavailable price doesn't stop the snapshot
                 price = None
         if price and price > 0:
