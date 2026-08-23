@@ -7,6 +7,42 @@
 > Pour le processus complet à jour : section "Processus d'achat momentum — réponse de
 > référence" dans CLAUDE.md (toujours à revérifier contre le code avant de la citer).
 
+[DEPLOYE] Subject : shadow_notify.py -- Robinhood/Base's duplicate notifiers factored, regime-gate generalization deliberately deferred
+Date : 2026.08.23 / Probleme : operator request, verbatim: "JE VEUT QUE toute les poche a chaque fois utilise tous les meme reglage
+comme ce genre qui securise ... generaliser larchitecture de base des 3 shadow au maximum et garder les reglage en detail propre a
+chacune", then "cest toi qui choisi le meilleur pour le projet" (explicit delegation). A first background-workflow design draft was
+adversarially reviewed by a second workflow before any code was written -- verdict "NOT safe to hand to an implementer as-is", 3 real
+defects found: (1) it missed that shadow_persistent.py already has a generic per-pocket notify pattern (`_POCKETS`/`_notify_new_opens`,
+used by ws_exit/fast_discovery) and proposed a second, incompatible one instead of reconciling with it -- exactly what CLAUDE.md's
+"1bis. COHERENCE ARCHITECTURALE ABSOLUE" warns against; (2) generalizing tonight's regime-gate (built earlier the same evening for
+solana_late_bonding_shadow, proven live: correctly shut new entries when median_peak_pct fell to 4.76% vs a 20% floor) risked
+reintroducing the exact self-feeding/starvation bug that gate was rebuilt to fix -- its safety depends on a FREE, gate-decision-
+independent price read (Solana's bonding_ws_feed, subscribed for every candidate regardless of verdict), which Robinhood/Base don't
+have (only throttled REST snapshots via _snapshot_with_fallback); (3) the plan's deploy step falsely claimed `./vanguard/deploy.sh`
+would restart the standalone shadow process -- verified false, deploy.sh never touches `aria-shadow-persistent.service` (a real
+systemd unit, Restart=always, no hot-reload) -- following that step as written would have left the live process silently running
+stale code with zero visible symptom.
+Solution : scoped down to what the critique confirmed genuinely safe and useful. (1) `shadow_notify.py` (new, in-repo):
+`PocketNotifyConfig` dataclass + `notify_pocket(cfg, kind, send=...)`, extracted from Robinhood/Base's own dedicated notify functions
+(confirmed ~95% byte-for-byte identical by the audit workflow) -- deliberately NOT applied to `_notify_late_bonding` (single-shot
+exit, no scale-out ladder, structurally different format) and deliberately NOT merged into the existing `_POCKETS` pattern (that
+pattern's own consumers, ws_exit/fast_discovery, have no scale-out ladder either -- forcing the ladder-aware format into it would be
+the same premature homogenization the critique warned against, just in the other direction). `send` is injected (never imports
+`telegram_notify` directly, which lives outside git) so the module is testable in CI. 6 new tests in `test_shadow_notify.py`,
+DELIBERATELY built on two fake pockets with DIFFERENT thresholds (not today's identical Robinhood/Base numbers) so a future
+hardcoded shortcut in the shared body fails a test instead of silently passing -- directly answering the critique's residual-risk
+finding on this exact point. `shadow_persistent.py` (hors git): `_notify_robinhood`/`_notify_base` now two-line wrappers calling
+`shadow_notify.notify_pocket`, ~340 lines of duplicated body deleted; a real bug caught during the edit itself -- `_NOTIFIED_CLOSES_
+MAX` (still read by `_notify_late_bonding`'s own dedup set, never touched by this refactor) got deleted along with the globals it
+used to sit beside, which would have NameError'd on late_bonding's very next close notification; restored as its own line before
+restart. Verified via `systemctl restart` + `journalctl` (clean, no traceback) -- deploy.sh was correctly NOT used for this file.
+(2) Regime-gate generalization NOT done -- `regime_gate.py` extraction deferred until a real free, gate-independent snapshot source
+is identified or built for at least one more pocket; arming a REST-backed version now would risk the exact bias class this session's
+earlier regime-gate rebuild fixed. Recorded here as an explicit decision, not a dropped task.
+`packages/aria-core/src/aria_core/shadow_notify.py`, `packages/aria-core/tests/test_shadow_notify.py`, `shadow_persistent.py` (hors git).
+
+------------------------------------------------------------
+
 [DEPLOYE] Subject : base_momentum_shadow.py -- Telegram buy/sell notifications wired, calibration still blocked on throughput
 Date : 2026.08.23 / Probleme : operator, verbatim: "idem je veut les notif sur telegram achat et vente" -- Solana late-bonding and
 Robinhood already had dedicated open/close Telegram notifiers in `shadow_persistent.py` (`_notify_late_bonding`/`_notify_robinhood`,
