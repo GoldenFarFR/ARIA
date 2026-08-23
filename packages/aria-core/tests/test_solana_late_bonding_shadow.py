@@ -1978,20 +1978,6 @@ class TestRegimeGate:
         peaks = [0.0] * (pocket.REGIME_WINDOW - 1) + [1000.0]
         assert pocket.regime_median_peak(peaks) == 0.0
 
-    def test_the_probe_lets_exactly_one_in_ten_through(self):
-        """Without probes the gate can never reopen -- it reads closed
-        positions, so zero entries freezes the median for ever."""
-        pocket._regime_probe_counter = 0
-        passed = sum(pocket._regime_probe_due() for _ in range(100))
-        assert passed == 10
-
-    def test_the_probe_is_deterministic_not_random(self):
-        """A random control group cannot be audited after the fact."""
-        pocket._regime_probe_counter = 0
-        first = [pocket._regime_probe_due() for _ in range(50)]
-        pocket._regime_probe_counter = 0
-        assert [pocket._regime_probe_due() for _ in range(50)] == first
-
     @pytest.mark.asyncio
     async def test_an_empty_pocket_reads_as_open(self, _tmp_db):
         state = await pocket.regime_state(db_path=_tmp_db)
@@ -2001,22 +1987,26 @@ class TestRegimeGate:
 
     @pytest.mark.asyncio
     async def test_a_cold_market_shuts_the_gate_and_a_hot_one_opens_it(self, _tmp_db, monkeypatch):
+        """23/08 -- rebuilt on the INDEPENDENT candidates table, not the
+        pocket's own trades: this is exactly the fix for the self-feeding bug
+        (a shut gate must keep seeing candidates, since it no longer decides
+        what reaches the sensor)."""
         import aiosqlite
 
-        await pocket._ensure_table(_tmp_db)
+        await pocket._ensure_regime_candidates_table(_tmp_db)
 
         async def _fill(peak_pct):
             async with aiosqlite.connect(_tmp_db) as db:
-                await db.execute(f"DELETE FROM {pocket.TABLE}")
+                await db.execute(f"DELETE FROM {pocket.REGIME_CANDIDATES_TABLE}")
                 for i in range(pocket.REGIME_WINDOW):
                     await db.execute(
-                        f"INSERT INTO {pocket.TABLE} "
-                        f"(pool_address, token_address, chain, detected_at, entry_price, "
-                        f" peak_price, exit_reason, last_checked_at) "
-                        f"VALUES (?,?,?,?,?,?,?,?)",
-                        (f"pool{i}", f"mint{i}", "solana", "2026-08-23T00:00:00+00:00",
-                         1.0, 1.0 + peak_pct / 100.0, "trailing_stop",
-                         f"2026-08-23T00:{i:02d}:00+00:00"),
+                        f"INSERT INTO {pocket.REGIME_CANDIDATES_TABLE} "
+                        f"(pool_address, mint, chain, decided_at, entry_price, "
+                        f" reserve_usd, peak_price, last_checked_at, tracking_status) "
+                        f"VALUES (?,?,?,?,?,?,?,?,?)",
+                        (f"pool{i}", f"mint{i}", "solana", f"2026-08-23T00:{i:02d}:00+00:00",
+                         1.0, 5000.0, 1.0 + peak_pct / 100.0,
+                         f"2026-08-23T00:{i:02d}:00+00:00", "closed"),
                     )
                 await db.commit()
 
@@ -2035,6 +2025,116 @@ class TestRegimeGate:
         await _fill(25.0)
         hot = await pocket.regime_state(db_path=_tmp_db)
         assert hot["open"] is True, "a market above the threshold must reopen it"
+
+    @pytest.mark.asyncio
+    async def test_a_shut_gate_still_records_new_candidates(self, _tmp_db, monkeypatch):
+        """The exact defect that made the first version measure negative in
+        production: a shut gate must NOT stop feeding its own sensor.
+        `record_regime_candidate` must never consult `regime_state` at all."""
+        for i in range(pocket.REGIME_WINDOW):
+            await pocket.record_regime_candidate(
+                pool_address=f"cold{i}", mint=f"cold{i}", chain="solana",
+                entry_price=1.0, reserve_usd=5000.0, db_path=_tmp_db,
+            )
+        monkeypatch.setattr(pocket, "REGIME_MIN_MEDIAN_PEAK_PCT", 999.0)
+        assert (await pocket.regime_state(db_path=_tmp_db))["open"] is False
+
+        import aiosqlite
+        async with aiosqlite.connect(_tmp_db) as db:
+            before = (await (await db.execute(
+                f"SELECT COUNT(*) FROM {pocket.REGIME_CANDIDATES_TABLE}"
+            )).fetchone())[0]
+
+        await pocket.record_regime_candidate(
+            pool_address="poolX", mint="mintX", chain="solana",
+            entry_price=1.0, reserve_usd=5000.0, db_path=_tmp_db,
+        )
+
+        async with aiosqlite.connect(_tmp_db) as db:
+            after = (await (await db.execute(
+                f"SELECT COUNT(*) FROM {pocket.REGIME_CANDIDATES_TABLE}"
+            )).fetchone())[0]
+        assert after == before + 1, "the gate being shut must not starve its own sensor"
+
+    @pytest.mark.asyncio
+    async def test_recording_a_candidate_never_raises(self, _tmp_db):
+        """A measurement must not cost a trade: a bad entry_price is ignored,
+        not propagated."""
+        await pocket.record_regime_candidate(
+            pool_address="poolX", mint="mintX", chain="solana",
+            entry_price=0.0, reserve_usd=5000.0, db_path=_tmp_db,
+        )
+        state = await pocket.regime_state(db_path=_tmp_db)
+        assert state["samples"] == 0
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_tracks_the_peak_forward(self, _tmp_db):
+        """The whole point of the websocket path: a free, local read updates
+        the peak with no network call, and closes tracking once the window
+        elapses -- but the row survives for the median."""
+        import aiosqlite
+
+        class _Snap:
+            price_usd = 1.8
+            price_high_since_last_read = 2.0
+
+        class _Feed:
+            def get_snapshot(self, pool_address):
+                return _Snap()
+
+        await pocket.record_regime_candidate(
+            pool_address="poolY", mint="mintY", chain="solana",
+            entry_price=1.0, reserve_usd=5000.0, db_path=_tmp_db,
+        )
+        stats = await pocket.advance_regime_candidates(
+            bonding_ws_feed=_Feed(), db_path=_tmp_db,
+        )
+        assert stats["checked"] == 1
+        assert stats["updated"] == 1
+
+        async with aiosqlite.connect(_tmp_db) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT peak_price, tracking_status FROM {pocket.REGIME_CANDIDATES_TABLE}"
+            )
+            row = dict(await cur.fetchone())
+        assert row["peak_price"] == 2.0
+        assert row["tracking_status"] == "tracking", "not expired yet, must stay tracking"
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_expires_after_the_window(self, _tmp_db, monkeypatch):
+        import aiosqlite
+
+        class _Snap:
+            price_usd = 1.1
+            price_high_since_last_read = None
+
+        class _Feed:
+            def get_snapshot(self, pool_address):
+                return _Snap()
+
+        async def _insert_old_row():
+            await pocket._ensure_regime_candidates_table(_tmp_db)
+            async with aiosqlite.connect(_tmp_db) as db:
+                await db.execute(
+                    f"INSERT INTO {pocket.REGIME_CANDIDATES_TABLE} "
+                    f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
+                    f" peak_price, last_checked_at, tracking_status) "
+                    f"VALUES ('poolZ','mintZ','solana','2020-01-01T00:00:00+00:00',"
+                    f" 1.0, 5000.0, 1.0, '2020-01-01T00:00:00+00:00', 'tracking')"
+                )
+                await db.commit()
+
+        await _insert_old_row()
+        stats = await pocket.advance_regime_candidates(
+            bonding_ws_feed=_Feed(), db_path=_tmp_db,
+        )
+        assert stats["closed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_is_a_noop_without_a_feed(self, _tmp_db):
+        stats = await pocket.advance_regime_candidates(bonding_ws_feed=None, db_path=_tmp_db)
+        assert stats == {"checked": 0, "updated": 0, "closed": 0}
 
     @pytest.mark.asyncio
     async def test_a_disarmed_gate_reads_as_open_never_as_shut(self, _tmp_db, monkeypatch):

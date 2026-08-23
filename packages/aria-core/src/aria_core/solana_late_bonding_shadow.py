@@ -79,6 +79,12 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(shadow_db_path())
 TABLE = "solana_late_bonding_shadow_log"
 
+# 23/08 -- the independent regime sensor's own table (see REGIME_MIN_MEDIAN_PEAK_PCT
+# below). Deliberately its own name/set, not reusing TABLE/_ensured_db_paths: this
+# sensor must never depend on -- or be confused with -- the pocket's trade log.
+REGIME_CANDIDATES_TABLE = "solana_regime_candidates_log"
+_ensured_regime_candidates_db_paths: set[str] = set()
+
 # The name this pocket goes by in the shared path archive. Matches the sibling
 # pockets' convention ("solana_support_bounce" etc.) -- one table, the `module`
 # column keeps them apart.
@@ -427,77 +433,189 @@ FIXED_STOP_PCT: float | None = None
 # improved every single day of the sample, refusing 100% of the losing one.
 #
 # HONEST LIMIT: this was validated on OUR OWN closures, which is also its
-# weakness -- a shut gate starves its own sensor. That is what PROBE_RATE is
-# for. The passive alternative (`pretrade_rejection_log`, which already tracks
-# refused candidates forward) could NOT be calibrated: that log only starts on
-# 22/08 15h, almost entirely inside the degraded regime, so it has never seen a
-# good one to learn the threshold from.
+# weakness -- a shut gate starves its own sensor if it reads its own trades.
+# See `docs/HANDOFF_PIPELINE_MOMENTUM.md` (23/08 entries) for the full history:
+# first version self-fed on this pocket's own trade table and measured
+# -0.18%/trade in production against +13.10% in a simulation that (wrongly) fed
+# it every screened candidate rather than only the taken ones. Rebuilt below
+# with an independent, trade-blind sensor.
 REGIME_WINDOW = 30
 
-# 23/08, SAME DAY, DISARMED (None) -- my own simulation did not match the code
-# I shipped, and the gate measured NEGATIVE in production.
+# 23/08 -- REBUILT with an INDEPENDENT sensor, after the first version measured
+# -0.18%/trade in production against +13.10% in my own (wrong) simulation. The
+# defect: the sensor read this pocket's OWN trade table, so a shut gate stopped
+# feeding its own input and read only its 10% probes -- a biased handful. The
+# probe existed only to keep that sensor alive; it is REMOVED here, not kept,
+# because the new sensor no longer has that disease.
 #
-# THE BUG WAS IN THE SIMULATION, NOT THE IDEA. My replay fed the sensor the peak
-# of EVERY token, including the ones the gate refused. `regime_state()` reads
-# this pocket's own table, which holds only the trades actually TAKEN. Replayed
-# both ways on the same 2426 closures:
-#     no gate at all                      2426 trades  +5.84%/trade  56% hours +
-#     what I simulated (sensor sees all)   888 trades +13.10%/trade  80% hours +
-#     WHAT ACTUALLY RUNS (sensor sees taken only)
-#                                          338 trades  -0.18%/trade  55% hours +
-# A shut gate stops feeding its own sensor: it then reads only its 10% probes, a
-# biased handful. The thermometer ends up locked inside the room it measures. I
-# named that risk when designing it and wrongly assumed the probe flow cancelled
-# it -- it keeps the sensor ALIVE, it does not make it REPRESENTATIVE.
+# THE FIX: log every candidate that clears every filter up to this gate (bonding
+# band, buyer/wash-trading screen, liquidity floor) into `REGIME_CANDIDATES_TABLE`
+# -- REGARDLESS of what this gate itself decides -- then track its peak forward
+# via `bonding_ws_feed.get_snapshot()`, a LOCAL, FREE, IN-MEMORY read: the pool
+# is already subscribed at this point (`add_pools` runs earlier in
+# `consider_candidate`, before this gate is ever reached), so tracking costs
+# nothing beyond what the entry decision already pays for. No REST, no rate
+# limit, no reason it should ever be starved.
 #
-# WHY IT IS NOT SIMPLY FIXED TODAY. The honest fix is an independent sensor, and
-# `pretrade_rejection_log` already tracks refused candidates forward. But it is
-# sampled through the REST cascade at `max_rows=5` every 300s with an 8s
-# per-call floor, against ~250 live rejects -- so a given reject is re-read
-# almost never. Measured consequence: refused candidates tracked for 90.5 min
-# show a +1.27% mean peak while taken ones tracked 4.6 min show +16.63%. That is
-# a sampling artefact, not a market fact, and calibrating a threshold on it would
-# bake the artefact into the rule. Making that sensor usable means feeding it
-# from the curve WEBSOCKET (the tokens are already subscribed, so the price is a
-# local read) instead of REST -- a real change, not a tweak.
+# This is what made `pretrade_rejection_log` unusable for the same job: it
+# tracks refused candidates through the REST cascade at max_rows=5 every 300s
+# against ~250 live rejects, so a given reject is re-read almost never.
+# Measured: refused candidates tracked 90.5 min showed +1.27% mean peak while
+# taken ones tracked 4.6 min showed +16.63% -- a sampling artefact, not a
+# market fact. The websocket path has no such starvation: every candidate gets
+# read on the SAME cadence the exit-tracking loop already runs at.
+REGIME_TRACKING_WINDOW_MINUTES = 15.0
+
+# 23/08, SAME DAY, RE-ARMED at a PROVISIONAL 20% -- Doctrine d'Ingestion
+# (CLAUDE.md): a conservative temporary hypothesis borrowed from adjacent
+# logic, with an explicit recalibration plan, beats leaving a promising idea
+# idle for lack of fresh data. Left disarmed a few hours earlier the same day
+# (44 closures/3h measured meanwhile: -9.3%/trade, 25% winrate, zero market
+# filter active), operator flagged the live bleed directly.
 #
-# ALSO ESTABLISHED, and it matters for whoever rearms this: +20% per trade -- the
-# operator's stated floor -- is reached by NONE of 1154 replayed combinations on
-# this chain. Best robust setting is +13.55%. And a peak threshold is the wrong
-# unit: a 20% median PEAK translates to roughly 15-16% of PnL, so an objective
-# expressed in PnL should be steered by a PnL sensor.
+# WHY 20% AND WHY IT IS SAFE TO SET NOW, NOT LATER: this exact value was the
+# median-peak threshold found by the causal replay on the OLD, self-feeding
+# sensor (2303 closures, monotonic across 10/15/20%, best hourly stability at
+# 20%) -- unreliable in ABSOLUTE terms (that replay's population was biased
+# toward candidates the gate itself had let through), but a reasonable ORDER
+# OF MAGNITUDE for "the market just turned cold" until the new sensor has its
+# own answer. The mechanism itself makes this safe: `regime_median_peak`
+# returns None below REGIME_WINDOW=30 samples, so `regime_state()` reads OPEN
+# -- i.e. this line has ZERO effect until the rebuilt, independent sensor
+# (REGIME_CANDIDATES_TABLE) has actually accumulated 30 real candidates, at
+# this pocket's measured ~48/hour that is roughly 35-40 minutes, not the
+# hours a from-scratch mechanism would need. No risk of blocking on absent
+# data, cf. the circularity guard tested in `test_below_the_window_there_is_no_verdict`.
 #
-# None = disarmed, the pocket enters as it did before the gate existed. The
-# machinery below stays wired and tested so rearming is one value.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = None
-
-# One candidate in ten still enters while the gate is shut. Not a compromise on
-# the rule -- the mechanism REQUIRES it: the sensor reads closed positions, so
-# with zero entries the median is frozen for ever and the gate never reopens.
-# At the pocket's observed ~35 entries/hour this leaves ~3.5/hour, i.e. the
-# REGIME_WINDOW rebuilds in roughly 8-9 hours. 5% was the first choice and was
-# raised after doing that arithmetic: it would have taken ~17 hours to reopen,
-# long enough to sleep through an entire good day.
-REGIME_PROBE_RATE = 0.10
-
-# Deterministic, NOT random: a counter makes "one in ten" reproducible, so a
-# session can replay exactly which candidates were probes. Random sampling would
-# make the control group unauditable after the fact.
-_regime_probe_counter = 0
+# RECALIBRATION IS MANDATORY, NOT OPTIONAL: revisit this number with the
+# operator once the new sensor holds >=100 rows (Doctrine d'Ingestion's own
+# n>=100 bar) -- the real distribution of SCREENED candidates (including ones
+# the old sensor never saw, since it only recorded taken trades) may differ
+# from 20% in either direction.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 20.0
 
 
-def _regime_probe_due() -> bool:
-    """True for one candidate in ``1/REGIME_PROBE_RATE``, deterministically."""
-    global _regime_probe_counter
-    if REGIME_PROBE_RATE <= 0:
-        return False
-    _regime_probe_counter += 1
-    every = max(1, int(round(1.0 / REGIME_PROBE_RATE)))
-    return _regime_probe_counter % every == 0
+async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
+    path = db_path or _db_path()
+    if path in _ensured_regime_candidates_db_paths:
+        return
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {REGIME_CANDIDATES_TABLE} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pool_address TEXT NOT NULL,
+                mint TEXT NOT NULL,
+                chain TEXT NOT NULL,
+                decided_at TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                reserve_usd REAL,
+                peak_price REAL NOT NULL,
+                last_checked_at TEXT NOT NULL,
+                tracking_status TEXT NOT NULL DEFAULT 'tracking'
+            )
+            """
+        )
+        await db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{REGIME_CANDIDATES_TABLE}_decided "
+            f"ON {REGIME_CANDIDATES_TABLE}(decided_at)"
+        )
+        await db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{REGIME_CANDIDATES_TABLE}_status "
+            f"ON {REGIME_CANDIDATES_TABLE}(tracking_status)"
+        )
+        await db.commit()
+    _ensured_regime_candidates_db_paths.add(path)
+
+
+async def record_regime_candidate(
+    *, pool_address: str, mint: str, chain: str, entry_price: float,
+    reserve_usd: float | None, db_path: str | None = None,
+) -> None:
+    """Logs one candidate that cleared every filter up to the regime gate,
+    independent of what the gate itself will decide. This is the whole fix:
+    the sensor's input can never be gated by the gate's own verdict.
+
+    Called from a point where entry_price is ALREADY computed (the on-chain
+    read that priced the would-be entry) -- this adds one INSERT, no network
+    call. Never raises into the caller: a measurement must not cost a trade."""
+    if not entry_price or entry_price <= 0:
+        return
+    try:
+        await _ensure_regime_candidates_table(db_path)
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(db_path or _db_path()) as db:
+            await db.execute(
+                f"INSERT INTO {REGIME_CANDIDATES_TABLE} "
+                f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
+                f" peak_price, last_checked_at, tracking_status) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'tracking')",
+                (pool_address, mint, chain, now, entry_price, reserve_usd,
+                 entry_price, now),
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 -- a sensor write never breaks a decision
+        logger.info("solana_late_bonding_shadow: record_regime_candidate failed (%s)", exc)
+
+
+async def advance_regime_candidates(
+    *, bonding_ws_feed, max_rows: int = 100, db_path: str | None = None,
+) -> dict:
+    """Reads each still-tracked candidate's CURRENT peak via a LOCAL websocket
+    snapshot -- no network call, the pool was already subscribed when the
+    candidate was screened. Stops tracking (but never deletes) a row once
+    REGIME_TRACKING_WINDOW_MINUTES has elapsed since it was logged; the row
+    stays in the table for the median calculation either way.
+
+    Safe to call on an arbitrarily irregular cadence, same discipline as
+    `advance_exit_simulation`: all state lives in the row itself."""
+    path = db_path or _db_path()
+    await _ensure_regime_candidates_table(path)
+    stats = {"checked": 0, "updated": 0, "closed": 0}
+    if bonding_ws_feed is None:
+        return stats
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=REGIME_TRACKING_WINDOW_MINUTES)
+    ).isoformat()
+
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT * FROM {REGIME_CANDIDATES_TABLE} WHERE tracking_status = 'tracking' "
+            f"ORDER BY decided_at LIMIT ?",
+            (max_rows,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    for row in rows:
+        stats["checked"] += 1
+        try:
+            snap = bonding_ws_feed.get_snapshot(row["pool_address"])
+        except Exception:  # noqa: BLE001 -- a feed hiccup skips this row, never breaks the pass
+            continue
+        price = getattr(snap, "price_usd", None)
+        high = getattr(snap, "price_high_since_last_read", None)
+        candidates = [v for v in (price, high, row["peak_price"]) if v is not None]
+        if not candidates:
+            continue
+        new_peak = max(candidates)
+        expired = row["decided_at"] < cutoff
+        status = "closed" if expired else "tracking"
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                f"UPDATE {REGIME_CANDIDATES_TABLE} SET peak_price = ?, "
+                f"last_checked_at = ?, tracking_status = ? WHERE id = ?",
+                (new_peak, datetime.now(timezone.utc).isoformat(), status, row["id"]),
+            )
+            await db.commit()
+        stats["updated"] += 1
+        if status == "closed":
+            stats["closed"] += 1
+    return stats
 
 
 def regime_median_peak(peaks: list[float]) -> float | None:
-    """Median peak of the closures handed in, or None below the window size.
+    """Median peak of the candidates handed in, or None below the window size.
 
     Pure so the rule can be tested without a database. Below REGIME_WINDOW
     samples it returns None, and the caller treats that as OPEN: a pocket that
@@ -515,18 +633,17 @@ def regime_median_peak(peaks: list[float]) -> float | None:
 
 
 async def regime_state(*, db_path: str | None = None) -> dict:
-    """Read the regime from the pocket's own recent closures.
-
-    Ordered by CLOSING time, not detection time: what is knowable at the instant
-    of the decision is what has already closed.
-    """
-    await _ensure_table(db_path)
+    """Reads the regime from candidates the pocket SCREENED, not from trades it
+    TOOK -- the fix for the 23/08 incident. Ordered by `decided_at`: what is
+    knowable at the instant of a live decision is what has already been seen,
+    regardless of whether it was traded."""
+    await _ensure_regime_candidates_table(db_path)
     async with aiosqlite.connect(db_path or _db_path()) as db:
         cur = await db.execute(
-            f"SELECT (peak_price / entry_price - 1.0) * 100.0 AS peak FROM {TABLE} "
-            f"WHERE exit_reason IS NOT NULL AND peak_price IS NOT NULL "
-            f"AND entry_price IS NOT NULL AND entry_price > 0 "
-            f"ORDER BY last_checked_at DESC LIMIT ?",
+            f"SELECT (peak_price / entry_price - 1.0) * 100.0 AS peak "
+            f"FROM {REGIME_CANDIDATES_TABLE} "
+            f"WHERE entry_price IS NOT NULL AND entry_price > 0 "
+            f"ORDER BY decided_at DESC LIMIT ?",
             (REGIME_WINDOW,),
         )
         rows = [r[0] for r in await cur.fetchall()]
@@ -1185,14 +1302,25 @@ async def consider_candidate(
                 # entries were found on pools holding two dollars, harmless
                 # while simulating and impossible in reality.
                 accepted, reason = False, f"blocked_thin_liquidity: reserve={snapshot.reserve_usd or 0:.0f}"
-            elif not (await regime_state(db_path=db_path))["open"] \
-                    and not _regime_probe_due():
-                # Last link on purpose: every cheaper filter has already had its
-                # say, so this only ever refuses candidates that were otherwise
-                # GOOD. That is the point -- it is the market being refused, not
-                # the token. One in ten still passes as a probe, or the sensor
-                # this rule reads would never refill (see REGIME_PROBE_RATE).
-                accepted, reason = False, "blocked_regime_closed"
+            else:
+                # 23/08 -- every candidate reaching this point cleared the
+                # bonding band, buyer/wash-trading screen, AND the liquidity
+                # floor: exactly the population the regime sensor needs, and
+                # logged UNCONDITIONALLY before the verdict below -- a gate
+                # must never be the thing that decides its own sensor's input,
+                # which is exactly the bug that made the first version of this
+                # gate measure negative in production (see REGIME_WINDOW).
+                await record_regime_candidate(
+                    pool_address=pool_address, mint=mint, chain=chain,
+                    entry_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+                    db_path=db_path,
+                )
+                if not (await regime_state(db_path=db_path))["open"]:
+                    # Last link on purpose: every cheaper filter has already had
+                    # its say, so this only ever refuses candidates that were
+                    # otherwise GOOD -- it is the market being refused, not the
+                    # token.
+                    accepted, reason = False, "blocked_regime_closed"
 
         # Logged on BOTH branches, same discipline as the other pockets: a
         # filter can only be judged against what it let through.
