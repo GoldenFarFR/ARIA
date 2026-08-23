@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 
 import pytest
+
+pytest.importorskip("solders", reason="solders is the optional [agent_wallet] extra")
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 

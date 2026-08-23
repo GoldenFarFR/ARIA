@@ -5,6 +5,8 @@ import base64
 
 import pytest
 
+pytest.importorskip("solders", reason="solders is the optional [agent_wallet] extra")
+
 from aria_core.services import pumpfun_curve_price as cp
 
 MINT = "So11111111111111111111111111111111111111112"
