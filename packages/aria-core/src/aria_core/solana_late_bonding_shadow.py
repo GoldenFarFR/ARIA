@@ -528,6 +528,13 @@ REGIME_WINDOW = 30
 # read on the SAME cadence the exit-tracking loop already runs at.
 REGIME_TRACKING_WINDOW_MINUTES = 15.0
 
+# 23/08, LOWERED 50% -> 30% same day, operator-directed -- no new measurement
+# behind this specific number, unlike the 20% -> 50% move a few hours earlier
+# (which had a concrete capture-gap figure to justify it). Still on the same
+# "conservative hypothesis, explicit recalibration plan" footing: 30% sits
+# between the two prior values, pending the new sensor's own verdict once it
+# holds >=100 rows.
+#
 # 23/08, RAISED 20% -> 50% same day, operator-directed: the gate's threshold
 # measures the market's raw peak, but the pocket never captures the raw peak
 # -- TRAILING_STOP_PCT=15.0 and the liquidity_collapse exit (checked FIRST,
@@ -535,10 +542,10 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # 44 closures this pocket already had: mean REAL peak was +16.23%, mean NET
 # captured was -11.74% -- i.e. a market that clears the OLD 20% bar on
 # average still lands the pocket in the red once its own exit mechanics take
-# their cut. 50% is not itself calibrated on the new sensor (see history
-# below) -- it is the operator's explicit correction for this capture gap,
+# their cut. 50% was not itself calibrated on the new sensor (see history
+# below) -- it was the operator's explicit correction for this capture gap,
 # on the same "conservative temporary hypothesis, explicit recalibration
-# plan" footing as the 20% it replaces.
+# plan" footing as the 20% it replaced.
 #
 # HISTORY -- why 20% was chosen originally (23/08, same day, RE-ARMED at a
 # PROVISIONAL 20%): Doctrine d'Ingestion (CLAUDE.md), a conservative
@@ -572,7 +579,7 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # the old sensor never saw, since it only recorded taken trades) may differ
 # from 50% in either direction, and the capture-gap math above should be
 # re-measured on THIS sensor's own population once it exists.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 50.0
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
 
 
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
