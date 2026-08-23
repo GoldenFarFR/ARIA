@@ -146,6 +146,16 @@ logger = logging.getLogger(__name__)
 # same fix): dedicated file, no longer shared with the prod container.
 DB_PATH = str(shadow_db_path())
 
+# 23/08 -- the table name was written out 18 times and existed as a constant
+# NOWHERE, unlike every sister pocket (`solana_late_bonding_shadow.TABLE`).
+# Found when wiring this pocket's missing Telegram notifications: the caller
+# had nothing to import and would have had to restate the string a 19th time,
+# which is exactly the defect CLAUDE.md names -- a constant redefined locally
+# when it exists elsewhere. Declared here as the single source; the literals
+# below are left as they are (a mechanical 18-site rewrite is a separate
+# change, and this one only needs the name to be importable).
+TABLE = "robinhood_pump_shadow_log"
+
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.
 # Recalibrated same day from the 15min to the 5min window (second Dune pass,

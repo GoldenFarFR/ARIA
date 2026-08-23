@@ -1135,3 +1135,19 @@ async def test_chain_pnl_summary_realistic_counts_row_that_turned_unreachable_mi
     assert result["unreachable_liquidity"] == 0  # it WAS bought
     assert result["total_pnl_units"] == pytest.approx(-1.0)
     assert result["total_pnl_usd"] == pytest.approx(-shadow.SIMULATED_TRADE_SIZE_USD)
+
+
+def test_the_table_name_is_importable_as_a_constant():
+    """23/08 -- the table name existed as a literal 18 times and as a constant
+    nowhere, unlike every sister pocket. Found while wiring this pocket's
+    missing Telegram notifications: the caller had nothing to import and would
+    have had to restate the string a 19th time, which is the exact defect
+    CLAUDE.md names (a constant redefined locally when it exists elsewhere).
+
+    Asserted against the real name rather than against itself, so renaming the
+    table without updating the 18 literals fails here instead of silently
+    splitting the module in two."""
+    from aria_core import robinhood_pump_shadow as pocket
+
+    assert pocket.TABLE == "robinhood_pump_shadow_log"
+    assert "robinhood_pump_shadow_log" in pocket.DB_PATH or pocket.DB_PATH.endswith(".db")
