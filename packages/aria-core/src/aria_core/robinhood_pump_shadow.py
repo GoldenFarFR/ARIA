@@ -128,6 +128,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import pretrade_rejection_log
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener
@@ -443,13 +444,42 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                 pool_age_minutes = (
                     datetime.now(timezone.utc) - pool.pool_created_at
                 ).total_seconds() / 60.0
+                # 23/08 -- EVERY refusal is logged from here down, where the pool
+                # is priced and measurable. Without it the two filters tightened
+                # today (age 25 -> 6 min, and the brand-new liquidity floor)
+                # could never be recalibrated: what they reject vanishes without
+                # trace, and a filter whose rejects are invisible can only be
+                # trusted, never checked. Same registry as the Solana pockets.
+                async def _refuse(_reason: str, _pool=pool) -> None:
+                    try:
+                        tx = _pool.transactions_m15 or {}
+                        await pretrade_rejection_log.record_decision(
+                            pretrade_rejection_log.GateDecision(
+                                pocket="robinhood_pump", chain=chain,
+                                mint=_pool.token_address or "",
+                                pool_address=_pool.pool_address,
+                                blocked=True, reason=_reason,
+                                top_holder_pct=None, gate_latency_ms=None,
+                                would_be_entry_price=_pool.price_usd,
+                                would_be_reserve_usd=_pool.reserve_usd,
+                                realistic_would_be_entry_price=None,
+                                buys_observed=tx.get("buys"),
+                                sells_observed=tx.get("sells"),
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001 -- logging never blocks the pocket
+                        logger.info("robinhood_pump_shadow: rejection log failed (%s)", exc)
+
                 if pool_age_minutes >= MAX_POOL_AGE_MINUTES:
-                    continue  # already past the protection window at detection time
+                    # already past the protection window at detection time
+                    await _refuse(f"blocked_pool_age: {pool_age_minutes:.1f}min")
+                    continue
                 # 23/08 -- liquidity floor, see MIN_LIQUIDITY_USD. Placed AFTER
                 # the age check so the cheaper test runs first. fail-CLOSED on an
                 # unknown reserve: this pocket's whole defect was treating an
                 # unmeasurable pool as a tradable one.
                 if pool.reserve_usd is None or pool.reserve_usd < MIN_LIQUIDITY_USD:
+                    await _refuse(f"blocked_thin_liquidity: reserve={pool.reserve_usd or 0:.0f}")
                     continue
                 try:
                     if await is_stock_token(pool.token_address or "", chain):

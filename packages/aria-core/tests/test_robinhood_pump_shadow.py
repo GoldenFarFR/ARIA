@@ -1173,3 +1173,42 @@ def test_the_table_name_is_importable_as_a_constant():
 
     assert pocket.TABLE == "robinhood_pump_shadow_log"
     assert "robinhood_pump_shadow_log" in pocket.DB_PATH or pocket.DB_PATH.endswith(".db")
+
+
+@pytest.mark.asyncio
+async def test_every_refusal_is_recorded_so_the_filters_can_be_recalibrated():
+    """23/08 -- the two filters tightened that day (age 25 -> 6 min, and the
+    brand-new liquidity floor) reject candidates that used to be traded. If a
+    rejection leaves no trace, the filter can only ever be trusted, never
+    checked -- and Robinhood was logging nothing at all, unlike its Solana
+    siblings. Operator caught it: "tu enregistre large les données pour
+    calibrée ou tu la deja fait ?". No, it did not."""
+    from aria_core import pretrade_rejection_log
+
+    seen = []
+
+    async def _capture(decision, **_kw):
+        seen.append(decision)
+        return 1
+
+    original = pretrade_rejection_log.record_decision
+    pretrade_rejection_log.record_decision = _capture
+    try:
+        trop_vieux = _pool(pool_address="poolOld", token_address="tokOld",
+                           pool_created_at=datetime.now(timezone.utc)
+                           - timedelta(minutes=shadow.MAX_POOL_AGE_MINUTES + 5))
+        trop_mince = _pool(pool_address="poolThin", token_address="tokThin",
+                           reserve=shadow.MIN_LIQUIDITY_USD - 1)
+        await shadow.record_signals([trop_vieux, trop_mince], chain=CHAIN)
+    finally:
+        pretrade_rejection_log.record_decision = original
+
+    assert await _rows() == [], "neither pool should have been traded"
+    raisons = sorted((d.reason or "").split(":")[0] for d in seen)
+    assert raisons == ["blocked_pool_age", "blocked_thin_liquidity"], raisons
+    # ce qui permettra de recalibrer doit etre porte par la ligne, pas perdu
+    for d in seen:
+        assert d.pocket == "robinhood_pump"
+        assert d.blocked is True
+        assert d.would_be_entry_price is not None, "sans prix, le rejet est inexploitable"
+        assert d.pool_address
