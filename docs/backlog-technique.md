@@ -213,3 +213,45 @@ savoir ou ils en sont sur leur courbe, donc sans pouvoir les trader.
   v2 (`src/raydium/launchpad/`) plutot que continuer a deviner. Deux sources
   documentees existent aussi cote Shyft (exemples de parsing LaunchLab). Sans
   l'IDL, chaque offset reste une hypothese non falsifiable.
+
+
+## #354 -- Robinhood Chain : fournisseur de decouverte TROUVE (23/08, code a ecrire)
+
+**Le blocage etait la source, pas le module.** `robinhood_pump_shadow.py` existe
+et fonctionne (246 positions archivees) mais n'etait appele nulle part depuis le
+17/08. Sa seule source cablee etait GeckoTerminal -- dont le client est en
+suspension automatique pour rate-limit soutenu et qui est deja le goulot de deux
+autres poches. Decision operateur : pas de Robinhood sur Gecko.
+
+**Piege ecarte** : DexScreener expose bien Robinhood (`token-profiles`,
+`token-boosts`) mais ce sont des tokens dont les createurs ont PAYE leur
+visibilite. Ce n'est pas une decouverte, c'est un catalogue publicitaire --
+trader dessus reviendrait a ne voir que ce qu'on nous montre.
+
+**Fournisseur retenu : DexPaprika**, verifie en direct le 23/08 :
+- Reseau `robinhood` couvert : **394,6 M$ de volume 24h, 2 728 859 transactions,
+  16 548 pools indexes**. Decouverte NEUTRE, pas un catalogue.
+- Endpoint : `GET /networks/robinhood/pools/search`
+  (`?limit=N&order_by=created_at&sort=desc`). ATTENTION : l'ancien
+  `/networks/{n}/pools` rend **HTTP 410 endpoint removed** -- ne pas le cabler.
+- `order_by` valides : `volume_usd_24h`, `volume_usd_7d`, `volume_usd_30d`,
+  `liquidity_usd`, `txns_24h`, `created_at`, `price_usd`, `price_change_*`
+  (`volume_usd` seul rend un 400).
+- Reponse : `{"results": [...], "has_next_page", "next_cursor", "query"}`.
+- **Tous les champs dont le module a besoin sont presents** : `id`,
+  `price_usd`, `liquidity_usd`, `volume_usd_24h`, `transactions_24h`,
+  `created_at`, `price_change_percentage_5m`, `price_change_percentage_1h`.
+- Le client `services/dexpaprika.py` existe deja, sa cle est configuree
+  (`DEXPAPRIKA_API_KEY`) et son budget est INDEPENDANT de GeckoTerminal. Sans
+  cle, l'API rend `payment_required` -- passer par `_auth_headers()`.
+
+**Ce qui reste a faire** : un adaptateur `results -> TrendingPool` (le module
+attend ce type), puis une boucle d'observation. Les reglages de la poche
+late-bonding ne sont PAS transposables : Robinhood Chain n'a aucune courbe de
+bonding pump.fun, et le plancher de liquidite a ete calibre sur des pools
+Solana de 6-12k$. Collecter d'abord, calibrer sur du mesure.
+
+**Observation a verifier** : les 8 pools les plus recents etaient tous
+Uniswap V4, plusieurs avec `liquidity_usd = 0` malgre un volume 24h reel --
+comprendre si c'est un defaut d'indexation ou de vrais pools sans liquidite
+avant de filtrer dessus.
