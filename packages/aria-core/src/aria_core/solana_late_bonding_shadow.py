@@ -403,6 +403,107 @@ PROFIT_LADDER: tuple[tuple[float, float], ...] = ()
 # Revert is one line -- put 5.0 back.
 FIXED_STOP_PCT: float | None = None
 
+# 23/08 -- MARKET-REGIME GATE. Operator's direction, verbatim: "je préfère
+# trader moins si le marché le permet pas que trader pour perdre mon objectif
+# c'est de tenir un +20% minimum toute l'année, visée la stabilité et avoir la
+# possibilité de capter ceux qui pump fort".
+#
+# It gates on the REGIME, never on the token: when the market is hot everything
+# passes, so the rare runners that carry the whole result are not filtered out.
+# What it refuses is a market where nothing climbs any more.
+#
+# Measured causally on 2303 closures over 4 days (each decision uses only the
+# closures already known at that instant, no future data):
+#     no gate            2303 trades  +6.60%/trade   58% of hours positive
+#     median peak >=10%  1240 trades +10.38%/trade   73%
+#     median peak >=15%   956 trades +13.39%/trade   77%
+#     median peak >=20%   718 trades +16.21%/trade   93%   <- chosen
+#     median peak >=25%   499 trades +17.13%/trade   88%
+#     median peak >=30%   297 trades +18.71%/trade   89%
+# 20% is not the highest average -- it is the point where the hourly standard
+# deviation is LOWEST (17.8% against 19.5-22.2% everywhere else) and the share
+# of positive hours is HIGHEST. That is the operator's stated criterion, so it
+# is the one that decides. It holds without the top 5 trades (+12.54%) and it
+# improved every single day of the sample, refusing 100% of the losing one.
+#
+# HONEST LIMIT: this was validated on OUR OWN closures, which is also its
+# weakness -- a shut gate starves its own sensor. That is what PROBE_RATE is
+# for. The passive alternative (`pretrade_rejection_log`, which already tracks
+# refused candidates forward) could NOT be calibrated: that log only starts on
+# 22/08 15h, almost entirely inside the degraded regime, so it has never seen a
+# good one to learn the threshold from.
+REGIME_WINDOW = 30
+REGIME_MIN_MEDIAN_PEAK_PCT = 20.0
+
+# One candidate in ten still enters while the gate is shut. Not a compromise on
+# the rule -- the mechanism REQUIRES it: the sensor reads closed positions, so
+# with zero entries the median is frozen for ever and the gate never reopens.
+# At the pocket's observed ~35 entries/hour this leaves ~3.5/hour, i.e. the
+# REGIME_WINDOW rebuilds in roughly 8-9 hours. 5% was the first choice and was
+# raised after doing that arithmetic: it would have taken ~17 hours to reopen,
+# long enough to sleep through an entire good day.
+REGIME_PROBE_RATE = 0.10
+
+# Deterministic, NOT random: a counter makes "one in ten" reproducible, so a
+# session can replay exactly which candidates were probes. Random sampling would
+# make the control group unauditable after the fact.
+_regime_probe_counter = 0
+
+
+def _regime_probe_due() -> bool:
+    """True for one candidate in ``1/REGIME_PROBE_RATE``, deterministically."""
+    global _regime_probe_counter
+    if REGIME_PROBE_RATE <= 0:
+        return False
+    _regime_probe_counter += 1
+    every = max(1, int(round(1.0 / REGIME_PROBE_RATE)))
+    return _regime_probe_counter % every == 0
+
+
+def regime_median_peak(peaks: list[float]) -> float | None:
+    """Median peak of the closures handed in, or None below the window size.
+
+    Pure so the rule can be tested without a database. Below REGIME_WINDOW
+    samples it returns None, and the caller treats that as OPEN: a pocket that
+    has just started has no evidence the market is bad, and refusing on absent
+    data would make a fresh epoch unable to ever collect any.
+    """
+    usable = [p for p in peaks if p is not None]
+    if len(usable) < REGIME_WINDOW:
+        return None
+    recent = sorted(usable[-REGIME_WINDOW:])
+    mid = len(recent) // 2
+    if len(recent) % 2:
+        return recent[mid]
+    return (recent[mid - 1] + recent[mid]) / 2.0
+
+
+async def regime_state(*, db_path: str | None = None) -> dict:
+    """Read the regime from the pocket's own recent closures.
+
+    Ordered by CLOSING time, not detection time: what is knowable at the instant
+    of the decision is what has already closed.
+    """
+    await _ensure_table(db_path)
+    async with aiosqlite.connect(db_path or _db_path()) as db:
+        cur = await db.execute(
+            f"SELECT (peak_price / entry_price - 1.0) * 100.0 AS peak FROM {TABLE} "
+            f"WHERE exit_reason IS NOT NULL AND peak_price IS NOT NULL "
+            f"AND entry_price IS NOT NULL AND entry_price > 0 "
+            f"ORDER BY last_checked_at DESC LIMIT ?",
+            (REGIME_WINDOW,),
+        )
+        rows = [r[0] for r in await cur.fetchall()]
+    # fetched newest-first, the pure helper expects oldest-first
+    peaks = list(reversed(rows))
+    median = regime_median_peak(peaks)
+    return {
+        "median_peak_pct": median,
+        "samples": len(peaks),
+        "open": median is None or median >= REGIME_MIN_MEDIAN_PEAK_PCT,
+        "threshold_pct": REGIME_MIN_MEDIAN_PEAK_PCT,
+    }
+
 # 22/08 -- BACK TO 15%, the shared default, after three hours of production
 # disproved the 8% bet. Kept as an explicit constant rather than deleted so the
 # next person sees WHY it is not 8.
@@ -1043,6 +1144,14 @@ async def consider_candidate(
                 # entries were found on pools holding two dollars, harmless
                 # while simulating and impossible in reality.
                 accepted, reason = False, f"blocked_thin_liquidity: reserve={snapshot.reserve_usd or 0:.0f}"
+            elif not (await regime_state(db_path=db_path))["open"] \
+                    and not _regime_probe_due():
+                # Last link on purpose: every cheaper filter has already had its
+                # say, so this only ever refuses candidates that were otherwise
+                # GOOD. That is the point -- it is the market being refused, not
+                # the token. One in ten still passes as a probe, or the sensor
+                # this rule reads would never refill (see REGIME_PROBE_RATE).
+                accepted, reason = False, "blocked_regime_closed"
 
         # Logged on BOTH branches, same discipline as the other pockets: a
         # filter can only be judged against what it let through.

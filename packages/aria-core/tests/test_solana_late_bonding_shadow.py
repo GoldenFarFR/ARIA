@@ -1943,3 +1943,98 @@ async def test_the_onchain_override_works_on_the_real_snapshot_type(_tmp_db):
         "a real PoolSnapshot must survive the on-chain override -- silently "
         "dropping it is how 28 candidates vanished"
     )
+
+
+# ---------------------------------------------------------------- regime gate
+# 23/08 -- operator's direction: "je préfère trader moins si le marché le permet
+# pas que trader pour perdre". The gate refuses the MARKET, never the token, so
+# the rare runners that carry the whole result are never filtered out.
+
+
+class TestRegimeGate:
+    def test_below_the_window_there_is_no_verdict(self):
+        """A fresh epoch must be OPEN, not shut.
+
+        The failure this guards against is circular: refusing on absent data
+        would stop the pocket from ever collecting the data that lets it decide.
+        """
+        assert pocket.regime_median_peak([50.0] * (pocket.REGIME_WINDOW - 1)) is None
+        assert pocket.regime_median_peak([]) is None
+
+    def test_the_median_is_taken_on_the_most_recent_window_only(self):
+        """Old closures must not keep a dead market open (or a live one shut)."""
+        old_boom = [500.0] * pocket.REGIME_WINDOW
+        recent_bust = [1.0] * pocket.REGIME_WINDOW
+        assert pocket.regime_median_peak(old_boom + recent_bust) == 1.0
+        assert pocket.regime_median_peak(recent_bust + old_boom) == 500.0
+
+    def test_the_median_ignores_a_single_spike(self):
+        """The whole point of a median over a mean: 29 dead tokens and one
+        1000% runner is a DEAD market, and an average would call it alive."""
+        peaks = [0.0] * (pocket.REGIME_WINDOW - 1) + [1000.0]
+        median = pocket.regime_median_peak(peaks)
+        assert median == 0.0
+        assert median < pocket.REGIME_MIN_MEDIAN_PEAK_PCT
+
+    def test_the_probe_lets_exactly_one_in_ten_through(self):
+        """Without probes the gate can never reopen -- it reads closed
+        positions, so zero entries freezes the median for ever."""
+        pocket._regime_probe_counter = 0
+        passed = sum(pocket._regime_probe_due() for _ in range(100))
+        assert passed == 10
+
+    def test_the_probe_is_deterministic_not_random(self):
+        """A random control group cannot be audited after the fact."""
+        pocket._regime_probe_counter = 0
+        first = [pocket._regime_probe_due() for _ in range(50)]
+        pocket._regime_probe_counter = 0
+        assert [pocket._regime_probe_due() for _ in range(50)] == first
+
+    @pytest.mark.asyncio
+    async def test_an_empty_pocket_reads_as_open(self, _tmp_db):
+        state = await pocket.regime_state(db_path=_tmp_db)
+        assert state["open"] is True
+        assert state["samples"] == 0
+        assert state["median_peak_pct"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_cold_market_shuts_the_gate_and_a_hot_one_opens_it(self, _tmp_db):
+        import aiosqlite
+
+        await pocket._ensure_table(_tmp_db)
+
+        async def _fill(peak_pct):
+            async with aiosqlite.connect(_tmp_db) as db:
+                await db.execute(f"DELETE FROM {pocket.TABLE}")
+                for i in range(pocket.REGIME_WINDOW):
+                    await db.execute(
+                        f"INSERT INTO {pocket.TABLE} "
+                        f"(pool_address, token_address, chain, detected_at, entry_price, "
+                        f" peak_price, exit_reason, last_checked_at) "
+                        f"VALUES (?,?,?,?,?,?,?,?)",
+                        (f"pool{i}", f"mint{i}", "solana", "2026-08-23T00:00:00+00:00",
+                         1.0, 1.0 + peak_pct / 100.0, "trailing_stop",
+                         f"2026-08-23T00:{i:02d}:00+00:00"),
+                    )
+                await db.commit()
+
+        await _fill(pocket.REGIME_MIN_MEDIAN_PEAK_PCT - 5.0)
+        cold = await pocket.regime_state(db_path=_tmp_db)
+        assert cold["open"] is False, "a market below the threshold must shut the gate"
+        assert cold["samples"] == pocket.REGIME_WINDOW
+
+        await _fill(pocket.REGIME_MIN_MEDIAN_PEAK_PCT + 5.0)
+        hot = await pocket.regime_state(db_path=_tmp_db)
+        assert hot["open"] is True, "a market above the threshold must reopen it"
+
+    def test_the_regime_reject_reason_is_tracked_forward(self):
+        """`blocked_regime_closed` must be in TRACKED_REJECTS: these candidates
+        passed every other filter, so their forward path IS the measurement of
+        whether refusing them was right. Untracked, the gate could never be
+        proven wrong."""
+        import inspect
+
+        from aria_core import pretrade_rejection_log
+
+        source = inspect.getsource(pretrade_rejection_log.record_decision)
+        assert '"blocked_regime_closed"' in source

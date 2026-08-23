@@ -201,6 +201,12 @@ async def record_decision(decision: GateDecision, *, db_path: str | None = None)
             "blocked_wash_trading",       # the concentration ceiling
             "blocked_no_sell_route",
             "blocked_creator",
+            # 23/08 -- the regime gate. Tracked for a reason the others do not
+            # have: these candidates passed EVERY other filter and were refused
+            # only because the market was judged cold, so their forward path is
+            # the direct measurement of whether that judgement was right. It is
+            # the gate's own control group.
+            "blocked_regime_closed",
             # 22/08 -- how much a stale entry price was really costing. This
             # one is tracked to answer a question the refusal itself creates:
             # are we now dropping candidates that would have run?
