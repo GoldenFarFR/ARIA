@@ -145,6 +145,15 @@ logger = logging.getLogger(__name__)
 # the contention entirely.
 DB_PATH = str(shadow_db_path())
 
+# 23/08 -- named alias for the table this module has always used, added so
+# external callers (shadow_notify.py's PocketNotifyConfig, which expects
+# `module.TABLE`, matching robinhood_pump_shadow.py/base_momentum_shadow.py's
+# own convention) can reference it without duplicating the literal. Every
+# internal query in this module still spells the name out directly --
+# deliberately not touched here, zero behavior change to a module with an
+# existing green test suite.
+TABLE = "solana_pump_shadow_log"
+
 # Calibrated threshold from the 16/08 Dune/DexScreener research pass (see
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.
 # Recalibrated same day from the 15min to the 5min window (second Dune pass,

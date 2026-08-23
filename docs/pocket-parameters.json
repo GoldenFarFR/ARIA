@@ -608,62 +608,67 @@
     "label": "PUMP (Solana)",
     "parameters": {
       "DEX_FEE_PCT": {
-        "line": 308,
+        "line": 317,
         "value": 1.25,
         "why": "Pump.fun bonding-curve fee (1.25% = 0.30% creator + 0.95% protocol), the conservative/higher rate applicable to the very young tokens this shadow overwhelmingly captures -- graduated PumpSwap pools fall to 0.25-0.30%. Sourced 17/08 (blocmates.com/uwuu.ai PumpSwap fee breakdown), never assumed from memory."
       },
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 245,
+        "line": 254,
         "value": 50.0,
         "why": null
       },
       "M5_ENTRY_CAP_PCT": {
-        "line": 276,
+        "line": 285,
         "value": null,
         "why": "3. M5_ENTRY_CAP_PCT -- operator's own idea (\"si une bougie a deja fait +25% on entre pas\"), measured on the same sample and confirmed, with one important nuance: the cap is nearly WORTHLESS on its own (m5<60% alone gives -43.3% vs -47.4% unfiltered) but strong in COMBINATION with the liquidity floor, where it cuts the stranded rate by almost 3x: reserve>=10k, no cap  -> 50 rows, -21.4%, 35% stranded reserve>=10k, m5<60%  -> 29 rows,  -8.6%, 25% stranded reserve>=10k, m5<40%  -> 12 rows,  +0.0%, 20% stranded Reading: an entry that has ALREADY run hundreds of percent in 5 minutes is buying the top of a launch spike, and those are precisely the pools that drain. The raw sample contains m5 values up to +80917% (7 rows past +1000%), i.e. tokens whose price started at essentially zero. Set to 60 rather than the best-scoring 40 on purpose: 40 leaves only 12 rows out of 156 (~8%), far too thin to reach a 150-closure out-of-sample test in reasonable time. 60 keeps ~19% of the flow while capturing most of the effect -- a deliberate volume/selectivity tradeoff, not a tuned optimum (tuning it on this sample is exactly the overfitting trap). NOTE the operator asked for this cap on the 15-MINUTE window; that is currently impossible to test: discovery runs on DexPaprika, whose search endpoint has no m15/m30 field at all (documented in services/dexpaprika.py), so `m15_pct` is NULL on all 278 archived rows. GeckoTerminal DOES expose m15 (verified live 17/08) -- switching discovery, or enriching it, is the prerequisite for ever testing the 15min variant. **17/08, DISABLED for the age-window run (operator decision).** Testing the age window and the momentum cap at the same time would make the result unattributable -- and the cap was rejecting a large share of the flow (observed live: +75.7%, +63.9%, +49.6% all refused), starving a test that already needs 150 closures. ``None`` = no cap; restore a float to re-arm it once the age tranches have been read."
       },
       "M5_SURGE_THRESHOLD_PCT": {
-        "line": 152,
+        "line": 161,
         "value": 25.0,
         "why": "Calibrated threshold from the 16/08 Dune/DexScreener research pass (see module docstring) -- the ONLY entry signal this shadow layer evaluates. Recalibrated same day from the 15min to the 5min window (second Dune pass, same exit methodology, beat 15min on both winrate and avg multiplier)."
       },
       "MAX_POOL_AGE_MINUTES": {
-        "line": 168,
+        "line": 177,
         "value": 240.0,
         "why": "16/08, operator-requested protection against a token whose liquidity gets pulled shortly after launch (real case observed live this session: a ~35min-old pool's LP fully removed, price down -38.6% in 5min). A pool older than this at DETECTION time is never logged as a new signal. An already-open, currently-LOSING position (current price <= entry) is force-closed the moment its real age crosses this line -- see the priority-1 check at the top of ``advance_exit_simulation``'s per-row loop. A still-WINNING position keeps being tracked normally instead (16/08, second pass, operator decision: a real 1000% run shouldn't be cut short just because 25min passed -- the scale-out ladder already banks gains progressively either way). Fail-CLOSED on missing data (unlike this module's usual \"never fabricate, fail-open\" doctrine for pure observations): this is a protective filter, not a reported metric, so an unknown age is treated as \"too risky to trade\", never \"assume it's fine\"."
       },
       "MIN_POOL_AGE_MINUTES": {
-        "line": 194,
+        "line": 203,
         "value": 20.0,
         "why": "17/08, operator-directed age-window test (\"faisons un test tranche par tranche met 20 a 120 minutes\"), upper bound widened same day 120->240 (operator: \"agrandi la fenetre 20-120 a 20-240 sur solana\") to keep measuring further into the 120-240min range instead of cutting it off -- nothing in the archived sample yet says where the stranded-rate curve flattens past 120min, so the window stays open until it does. Robinhood is untouched (paused, its own separate calibration -- see ENABLED_CHAINS below). Rationale, and it is HIS hypothesis confirmed by the archive rather than a guess: the stranded rate falls sharply with pool age at entry -- 0-5min -> 73% stranded (-70.4%), 5-10min -> 61% (-59.4%), 10-15min -> 31% (-29.1%), 20-26min -> 0% (+5.1%, only 4 rows). Reading: in the first minutes you are buying mid-launch, while the deployer can still drain the pool; a pool that has SURVIVED a while has already had time to rug and did not.  The old MAX_POOL_AGE_MINUTES=25 was therefore cutting on exactly the wrong side -- it FORCED entries into the most dangerous window and made anything past 25min unobservable (median observed age was 7.8min). Now inverted into a real window: a MINIMUM age to skip the launch chaos, a MAXIMUM raised to 120min so the 20-120 range can finally be measured tranche by tranche. Both remain fail-CLOSED on unknown age.  Explicitly a MEASUREMENT window, not a validated setting: the 20-26min tranche that motivated it holds only 4 rows, and NOTHING is known past 25min because the old cap hid it. This run exists to produce that data."
       },
       "MIN_RESERVE_USD_AT_ENTRY": {
-        "line": 244,
+        "line": 253,
         "value": 10000.0,
         "why": "--- 17/08, LIQUIDITY-FIRST REVISION (operator-directed) ------------------ Root cause found by splitting the real 156-position sample by outcome after the survivorship-bias fix: positions that managed to EXIT cleanly were collectively PROFITABLE (+0.37$ over 64 rows), while positions that became unsellable mid-flight lost -7.91$ over 80 rows -- i.e. 96% of the total loss came from being STUCK, not from bad entries or a bad stop. The exit rule was never the problem; not getting out was.  Two levers, in the order they matter:  1. MIN_RESERVE_USD_AT_ENTRY -- the stranded rate is strongly monotone in entry liquidity, measured on the same sample: <2k$ -> 65-72% stranded, 2-5k$ -> 74%, 5-10k$ -> 42%, 10-25k$ -> 34%, >25k$ -> 36%. Entering below ~10k$ is close to a coin flip on whether the position can ever be closed at all. NOTE this is a real behavioural change to the shadow: it no longer FUNDS every signal it sees. Sourcing itself stays unfiltered (every candidate is still logged, per this module's own doctrine) -- what changes is that a too-thin pool is recorded with ``realistic_entry_price`` left NULL, i.e. observed but never bought, exactly like a pool already too shallow to fill the trade size. 2. LIQUIDITY_COLLAPSE_EXIT_PCT -- the entry filter alone is NOT enough (35% of >=10k$ positions still ended stranded, still -26% overall), because what traps a position is liquidity draining WHILE it is held, not its depth at entry. The pool's current reserve is already fetched every single cycle for the price-impact maths and was simply never compared against the entry value. Now it is: a reserve that has fallen past this fraction of its entry level closes the position IMMEDIATELY at the current price, without waiting for the price stop -- the whole point being to sell while a buyer still exists.  Both are deliberately EXPRESSED AS CONSTANTS rather than hardcoded, and both are UNVALIDATED out-of-sample: they were derived from the very sample that revealed them (textbook overfitting risk, cf. this project's own anti-overfitting doctrine). The 17/08 shadow reset exists precisely to test them on independent data before anything is promoted further."
       },
       "SCALE_OUT_SELL_FRACTION": {
-        "line": 205,
+        "line": 214,
         "value": 0.25,
         "why": null
       },
       "SCALE_OUT_STEP_PCT": {
-        "line": 204,
+        "line": 213,
         "value": 25.0,
         "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
       },
       "SIMULATED_TRADE_SIZE_USD": {
-        "line": 302,
+        "line": 311,
         "value": 0.1,
         "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- after observing X17690 live (reserve_usd=$0.0000002 at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price -- fantasy on a pool with essentially zero depth). This parallel calculation estimates what a REAL trade of SIMULATED_TRADE_SIZE_USD would have actually captured, using a constant-product AMM approximation. NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- this feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
       },
+      "TABLE": {
+        "line": 155,
+        "value": "solana_pump_shadow_log",
+        "why": "23/08 -- named alias for the table this module has always used, added so external callers (shadow_notify.py's PocketNotifyConfig, which expects `module.TABLE`, matching robinhood_pump_shadow.py/base_momentum_shadow.py's own convention) can reference it without duplicating the literal. Every internal query in this module still spells the name out directly -- deliberately not touched here, zero behavior change to a module with an existing green test suite."
+      },
       "TRAILING_STOP_PCT": {
-        "line": 206,
+        "line": 215,
         "value": 20.0,
         "why": null
       },
       "_SCALE_OUT_DUST_FRACTION": {
-        "line": 284,
+        "line": 293,
         "value": 0.01,
         "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
       }
