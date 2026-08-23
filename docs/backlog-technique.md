@@ -251,7 +251,26 @@ late-bonding ne sont PAS transposables : Robinhood Chain n'a aucune courbe de
 bonding pump.fun, et le plancher de liquidite a ete calibre sur des pools
 Solana de 6-12k$. Collecter d'abord, calibrer sur du mesure.
 
-**Observation a verifier** : les 8 pools les plus recents etaient tous
-Uniswap V4, plusieurs avec `liquidity_usd = 0` malgre un volume 24h reel --
-comprendre si c'est un defaut d'indexation ou de vrais pools sans liquidite
-avant de filtrer dessus.
+**VERIFIE le 23/08 : c'est un TROU D'INDEXATION, pas des pools vides.** Sur 20
+pools DexPaprika, 7 (35 %) rendent `liquidity_usd = 0`. Confrontes un a un a
+DexScreener : **7 trous sur 7, zero pool reellement vide**, avec des liquidites
+reelles de 10 324 $ a 34 126 $. Exemple : IFM a 0 $ chez DexPaprika contre
+57 094 $ chez DexScreener, avec 146 509 $ de volume 24h et 83 transactions en
+5 min -- un pool tres vivant.
+
+Quand DexPaprika renseigne le champ, il est JUSTE (BRKA 7 904 $ vs 7 244 $,
+AI 86 203 $ vs 85 126 $, MTH 34 $ vs 36 $). Ce n'est donc pas une erreur de
+mesure mais un champ absent sur un tiers des pools.
+
+**Consequence, a ne pas oublier avant de poser le moindre filtre** : sur ce
+fournisseur, `liquidity_usd = 0` signifie NON RENSEIGNE, jamais "pas de
+liquidite". Un plancher naif ecarterait 35 % du flux a tort -- exactement le
+piege qui a fait passer `sol_velocity` pour un signal cote Solana alors que
+c'etait un artefact de selection (la colonne manquait sur la moitie des
+entrees, et le groupe qui l'avait etait deja meilleur de 14,49 points).
+
+Deux options le moment venu : laisser passer les non-renseignes (prudent, mais
+35 % du flux sans controle de profondeur), ou completer avec DexScreener sur
+les seuls pools a zero -- meme schema que la cascade de prix cote Solana,
+source principale puis complement ciblé sur ce qui manque, budgets
+independants.
