@@ -79,6 +79,34 @@ logger = logging.getLogger(__name__)
 DB_PATH = str(shadow_db_path())
 TABLE = "solana_late_bonding_shadow_log"
 
+# 23/08, operator-directed -- retracement-gated shadow variant. Every entry
+# so far bought at the local curve-progress top: 26/26 real closures carrying
+# `progress_retracement_at_entry` sat under 2% retracement (44 total
+# closures, only 26 have the metric -- it was added mid-flight). This variant
+# requires a minimum pullback from the local high before entering, tested
+# purely in shadow against the unfiltered pocket above as the control.
+#
+# Own TABLE (same shadow.db, same schema, different name) rather than a
+# second database file: every other shadow module in this project shares one
+# physical db (`shadow_db_path()`), and `pocket_entry_sweep.POCKETS` /
+# `sqlite3 -readonly` tooling assume that single file. `table`/
+# `archive_module` parameters are threaded through `consider_candidate`,
+# `resolve_migrated_pools`, `_apply_exit_check` and `advance_exit_simulation`
+# so this variant's anti-duplicate check, entry write and exit tracking never
+# read or write the primary pocket's rows -- see each parameter's own
+# docstring. NOT threaded through `advance_position_by_pool` (event-driven
+# exit, wired to the websocket's `on_update` hook) or `reconcile_with_chain`
+# (real-capital wallet reconciliation): this variant never trades real
+# capital and is only ever advanced by the periodic exit-tracking loop, so
+# neither path is reachable for its rows regardless.
+RETRACEMENT_TABLE = "solana_late_bonding_retracement_shadow_log"
+RETRACEMENT_ARCHIVE_MODULE = "solana_late_bonding_retracement"
+# Provisional, arbitrary starting point -- NOT calibrated (standing doctrine:
+# never present an uncalibrated threshold as final). Recalibrate once this
+# variant has accumulated a real closure sample -- see
+# docs/HANDOFF_PIPELINE_MOMENTUM.md (23/08 entry).
+DEFAULT_MIN_RETRACEMENT = 0.05
+
 # 23/08 -- the independent regime sensor's own table (see REGIME_MIN_MEDIAN_PEAK_PCT
 # below). Deliberately its own name/set, not reusing TABLE/_ensured_db_paths: this
 # sensor must never depend on -- or be confused with -- the pocket's trade log.
@@ -500,33 +528,51 @@ REGIME_WINDOW = 30
 # read on the SAME cadence the exit-tracking loop already runs at.
 REGIME_TRACKING_WINDOW_MINUTES = 15.0
 
-# 23/08, SAME DAY, RE-ARMED at a PROVISIONAL 20% -- Doctrine d'Ingestion
-# (CLAUDE.md): a conservative temporary hypothesis borrowed from adjacent
-# logic, with an explicit recalibration plan, beats leaving a promising idea
-# idle for lack of fresh data. Left disarmed a few hours earlier the same day
-# (44 closures/3h measured meanwhile: -9.3%/trade, 25% winrate, zero market
-# filter active), operator flagged the live bleed directly.
+# 23/08, RAISED 20% -> 50% same day, operator-directed: the gate's threshold
+# measures the market's raw peak, but the pocket never captures the raw peak
+# -- TRAILING_STOP_PCT=15.0 and the liquidity_collapse exit (checked FIRST,
+# see its own comment above) both sell before the top. Measured on the same
+# 44 closures this pocket already had: mean REAL peak was +16.23%, mean NET
+# captured was -11.74% -- i.e. a market that clears the OLD 20% bar on
+# average still lands the pocket in the red once its own exit mechanics take
+# their cut. 50% is not itself calibrated on the new sensor (see history
+# below) -- it is the operator's explicit correction for this capture gap,
+# on the same "conservative temporary hypothesis, explicit recalibration
+# plan" footing as the 20% it replaces.
 #
-# WHY 20% AND WHY IT IS SAFE TO SET NOW, NOT LATER: this exact value was the
-# median-peak threshold found by the causal replay on the OLD, self-feeding
-# sensor (2303 closures, monotonic across 10/15/20%, best hourly stability at
-# 20%) -- unreliable in ABSOLUTE terms (that replay's population was biased
-# toward candidates the gate itself had let through), but a reasonable ORDER
-# OF MAGNITUDE for "the market just turned cold" until the new sensor has its
-# own answer. The mechanism itself makes this safe: `regime_median_peak`
+# HISTORY -- why 20% was chosen originally (23/08, same day, RE-ARMED at a
+# PROVISIONAL 20%): Doctrine d'Ingestion (CLAUDE.md), a conservative
+# temporary hypothesis borrowed from adjacent logic, with an explicit
+# recalibration plan, beats leaving a promising idea idle for lack of fresh
+# data. Left disarmed a few hours earlier the same day (44 closures/3h
+# measured meanwhile: -9.3%/trade, 25% winrate, zero market filter active),
+# operator flagged the live bleed directly. 20% itself was the median-peak
+# threshold found by the causal replay on the OLD, self-feeding sensor (2303
+# closures, monotonic across 10/15/20%, best hourly stability at 20%) --
+# unreliable in ABSOLUTE terms (that replay's population was biased toward
+# candidates the gate itself had let through), but a reasonable ORDER OF
+# MAGNITUDE for "the market just turned cold" until the new sensor had its
+# own answer.
+#
+# The mechanism itself makes any value here safe to set: `regime_median_peak`
 # returns None below REGIME_WINDOW=30 samples, so `regime_state()` reads OPEN
 # -- i.e. this line has ZERO effect until the rebuilt, independent sensor
 # (REGIME_CANDIDATES_TABLE) has actually accumulated 30 real candidates, at
 # this pocket's measured ~48/hour that is roughly 35-40 minutes, not the
 # hours a from-scratch mechanism would need. No risk of blocking on absent
 # data, cf. the circularity guard tested in `test_below_the_window_there_is_no_verdict`.
+# At 50%, expect the gate to stay shut far more often than at 20% -- the
+# market rarely holds a 30-candidate median peak that high, so this pocket
+# may trade much less. That is the intended effect given the capture gap
+# above, not a side effect to walk back without new evidence.
 #
 # RECALIBRATION IS MANDATORY, NOT OPTIONAL: revisit this number with the
 # operator once the new sensor holds >=100 rows (Doctrine d'Ingestion's own
 # n>=100 bar) -- the real distribution of SCREENED candidates (including ones
 # the old sensor never saw, since it only recorded taken trades) may differ
-# from 20% in either direction.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 20.0
+# from 50% in either direction, and the capture-gap math above should be
+# re-measured on THIS sensor's own population once it exists.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 50.0
 
 
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
@@ -810,21 +856,26 @@ RECONCILE_WINDOW_MINUTES = 30.0
 # sweep's own `limit` is raised in step below so widening collection cannot
 # quietly re-create that failure.
 MAX_CONCURRENT_TRACKED = 60
-_ensured_db_paths: set[str] = set()
+# Keyed by (path, table): the retracement variant shares the same physical
+# db_path as the primary pocket but a different table, so a path-only cache
+# would mark the second table "ensured" the moment the first one is (and its
+# CREATE TABLE would then never run).
+_ensured_db_paths: set[tuple[str, str]] = set()
 
 
 def _db_path() -> str:
     return DB_PATH
 
 
-async def _ensure_table(db_path: str | None = None) -> None:
+async def _ensure_table(db_path: str | None = None, *, table: str = TABLE) -> None:
     path = db_path or _db_path()
-    if path in _ensured_db_paths:
+    key = (path, table)
+    if key in _ensured_db_paths:
         return
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {TABLE} (
+            CREATE TABLE IF NOT EXISTS {table} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 pool_address TEXT NOT NULL,
                 token_address TEXT NOT NULL,
@@ -870,22 +921,22 @@ async def _ensure_table(db_path: str | None = None) -> None:
         )
         # Same index discipline as the sibling pockets: the two columns every
         # read path filters on.
-        await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_open ON {TABLE}(exit_reason, last_checked_at)")
-        await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_pool ON {TABLE}(pool_address)")
+        await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_open ON {table}(exit_reason, last_checked_at)")
+        await db.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_pool ON {table}(pool_address)")
         # Hot idempotent ALTER, same pattern as everywhere else here -- start
         # accumulating on the live table rather than waiting for a rebuild.
         await ensure_wal(db)
-        cur = await db.execute(f"PRAGMA table_info({TABLE})")
+        cur = await db.execute(f"PRAGMA table_info({table})")
         existing = {r[1] for r in await cur.fetchall()}
         if "has_paid_profile" not in existing:
-            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN has_paid_profile INTEGER")
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN has_paid_profile INTEGER")
         if "exit_detail" not in existing:
-            await db.execute(f"ALTER TABLE {TABLE} ADD COLUMN exit_detail TEXT")
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN exit_detail TEXT")
         # 21/08 -- founding-cohort columns, hot-ALTERed like the rest so the
         # live table starts accumulating immediately.
         # Concurrency-safe: this table is opened by BOTH the API container and
         # the standalone shadow process, so read-then-ALTER is a genuine race.
-        await db_migrations.ensure_columns(db, TABLE, (
+        await db_migrations.ensure_columns(db, table, (
             ("founding_tracked_at_entry", "INTEGER"),
             ("founding_exited_at_entry", "INTEGER"),
             ("founding_exit_ratio_at_entry", "REAL"),
@@ -956,17 +1007,17 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("buy_tx", "TEXT"),
         ))
         await db.commit()
-    _ensured_db_paths.add(path)
+    _ensured_db_paths.add(key)
 
 
-async def _in_reentry_cooldown(db, token_address: str, chain: str) -> bool:
+async def _in_reentry_cooldown(db, token_address: str, chain: str, *, table: str = TABLE) -> bool:
     """Ce token nous a-t-il ejectes recemment ?
 
     Porte sur le TOKEN et non sur le pool : un meme token peut etre vu via
     plusieurs adresses au cours de sa vie (courbe puis AMM apres graduation),
     et la carence doit suivre le sous-jacent, pas l'enveloppe."""
     cur = await db.execute(
-        f"SELECT 1 FROM {TABLE} WHERE token_address = ? AND chain = ? "
+        f"SELECT 1 FROM {table} WHERE token_address = ? AND chain = ? "
         f"AND exit_reason IS NOT NULL AND last_checked_at >= ? LIMIT 1",
         (token_address, chain,
          (datetime.now(timezone.utc) - timedelta(minutes=REENTRY_COOLDOWN_MINUTES)).isoformat()),
@@ -974,9 +1025,9 @@ async def _in_reentry_cooldown(db, token_address: str, chain: str) -> bool:
     return await cur.fetchone() is not None
 
 
-async def _has_open_signal(db, pool_address: str, chain: str) -> bool:
+async def _has_open_signal(db, pool_address: str, chain: str, *, table: str = TABLE) -> bool:
     cur = await db.execute(
-        f"SELECT 1 FROM {TABLE} WHERE pool_address = ? AND chain = ? AND exit_reason IS NULL LIMIT 1",
+        f"SELECT 1 FROM {table} WHERE pool_address = ? AND chain = ? AND exit_reason IS NULL LIMIT 1",
         (pool_address, chain),
     )
     return await cur.fetchone() is not None
@@ -1187,6 +1238,8 @@ async def consider_candidate(
     bonding_ws_feed=None,
     resolve_curves_fn=None, snapshot_fn=None, db_path: str | None = None,
     execute_fn=None, curve_tracker=None,
+    table: str = TABLE, archive_module: str = ARCHIVE_MODULE,
+    min_retracement: float | None = None,
 ) -> int | None:
     """Screens one mint and, if it passes, records an entry.
     Returns the new row id, or ``None``. Never raises into the caller.
@@ -1207,13 +1260,31 @@ async def consider_candidate(
     built on this table.
 
     Default ``None`` keeps the pocket in pure simulation, byte-identical to
-    its behaviour before this parameter existed."""
+    its behaviour before this parameter existed.
+
+    ``table``/``archive_module`` -- 23/08, the seam for the retracement-gated
+    shadow variant (see ``RETRACEMENT_TABLE``). Default is the primary
+    pocket's own table/archive name, so a caller not passing these gets
+    behaviour byte-identical to before they existed. NEVER combine a non-default
+    ``table`` with a real ``execute_fn``: the retracement variant this seam
+    exists for is pure shadow, always ``execute_fn=None``.
+
+    ``min_retracement`` -- 23/08, operator-directed ("ok pars sur le
+    retracement en shadow"). When set, a candidate must ALSO show at least
+    this much pullback from its local curve-progress high
+    (``metrics["progress_retracement"]``, see ``screen_candidate``) to be
+    accepted. Fail-CLOSED: an unknown retracement (``None``) never qualifies
+    while this is active -- a missing measurement is never treated as a pass.
+    Checked right after ``screen_candidate`` and before the position is
+    priced, so a rejection here costs no RPC/snapshot call. Default ``None``
+    disables the check entirely, byte-identical to before this parameter
+    existed."""
     try:
-        await _ensure_table(db_path)
+        await _ensure_table(db_path, table=table)
         async with aiosqlite.connect(db_path or _db_path()) as db:
-            if await _has_open_signal(db, pool_address, chain):
+            if await _has_open_signal(db, pool_address, chain, table=table):
                 return None
-            if await _in_reentry_cooldown(db, mint, chain):
+            if await _in_reentry_cooldown(db, mint, chain, table=table):
                 return None
 
         resolver = resolve_curves_fn or resolve_bonding_curves
@@ -1236,6 +1307,18 @@ async def consider_candidate(
             mint, pool_address, trade_stream=trade_stream, curve=curve,
             token_decimals=decimals, curve_tracker=curve_tracker,
         )
+
+        # 23/08 -- the retracement gate, checked BEFORE pricing so a rejection
+        # here costs no RPC/snapshot call (funnel doctrine: cheapest filter
+        # first). Fail-CLOSED: an unmeasured retracement never qualifies while
+        # `min_retracement` is active, same discipline as every other gate in
+        # this function -- a missing measurement is a block, never a pass.
+        if accepted and min_retracement is not None:
+            retracement = metrics.get("progress_retracement")
+            if retracement is None or retracement < min_retracement:
+                accepted, reason = (
+                    False, f"blocked_insufficient_retracement: retracement={retracement}",
+                )
 
         snapshot = None
         if accepted:
@@ -1428,7 +1511,7 @@ async def consider_candidate(
         async with aiosqlite.connect(db_path or _db_path()) as db:
             cur = await db.execute(
                 f"""
-                INSERT INTO {TABLE}
+                INSERT INTO {table}
                     (pool_address, token_address, chain, detected_at, entry_price, reserve_usd,
                      bonding_progress_at_entry, distinct_buyers_at_entry, top_buyer_share_at_entry,
                      buyer_acceleration_at_entry, peak_price, realistic_entry_price, buy_tx,
@@ -1487,9 +1570,14 @@ async def consider_candidate(
                 cur.lastrowid, mint, pool_address, chain=chain,
                 curve_tracker=curve_tracker, entry_price=entry_price,
                 entry_progress=metrics.get("bonding_progress"),
+                archive_module=archive_module,
             ))
-            asyncio.create_task(_enrich_paid_profile(cur.lastrowid, mint, chain=chain, db_path=db_path))
-            asyncio.create_task(_enrich_exit_route(cur.lastrowid, mint, db_path=db_path))
+            asyncio.create_task(_enrich_paid_profile(
+                cur.lastrowid, mint, chain=chain, db_path=db_path, table=table,
+            ))
+            asyncio.create_task(_enrich_exit_route(
+                cur.lastrowid, mint, db_path=db_path, table=table,
+            ))
             logger.info(
                 "solana_late_bonding_shadow: ENTRY %s progress=%.2f buyers=%s",
                 pool_address, metrics.get("bonding_progress") or -1, metrics.get("distinct_buyers"),
@@ -1599,7 +1687,7 @@ async def _price_position(row: dict, *, chain: str, bonding_ws_feed, snapshot_fn
                     chain=chain)
 
 
-async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = None) -> None:
+async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = None, table: str = TABLE) -> None:
     """Fire-and-forget: can this token actually be SOLD, and at what cost.
 
     21/08, operator's design -- "on va trader des token legerement dangereux
@@ -1624,7 +1712,7 @@ async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = No
         sellable = out.get("sellable")
         async with aiosqlite.connect(db_path or _db_path()) as db:
             await db.execute(
-                f"UPDATE {TABLE} SET sellable_at_entry = ?, roundtrip_loss_pct_at_entry = ? "
+                f"UPDATE {table} SET sellable_at_entry = ?, roundtrip_loss_pct_at_entry = ? "
                 f"WHERE id = ?",
                 (None if sellable is None else int(sellable),
                  out.get("roundtrip_loss_pct"), row_id),
@@ -1637,6 +1725,7 @@ async def _enrich_exit_route(row_id: int, mint: str, *, db_path: str | None = No
 async def _archive_pre_entry_path(
     row_id: int, mint: str, pool_address: str, *, chain: str,
     curve_tracker, entry_price: float, entry_progress: float | None,
+    archive_module: str = ARCHIVE_MODULE,
 ) -> None:
     """Archives the curve's climb BEFORE the buy, as phase="before".
 
@@ -1671,7 +1760,7 @@ async def _archive_pre_entry_path(
         return
     try:
         await shadow_candle_archive.store_candles(
-            module=ARCHIVE_MODULE, position_id=row_id, pool_address=pool_address,
+            module=archive_module, position_id=row_id, pool_address=pool_address,
             chain=chain, phase="before", candles=candles,
         )
     except Exception as exc:  # noqa: BLE001 -- never breaks an entry
@@ -1679,7 +1768,10 @@ async def _archive_pre_entry_path(
                     pool_address, exc)
 
 
-async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana", db_path: str | None = None) -> None:
+async def _enrich_paid_profile(
+    row_id: int, mint: str, *, chain: str = "solana", db_path: str | None = None,
+    table: str = TABLE,
+) -> None:
     """Fire-and-forget: records whether the token has a PAID DexScreener profile.
 
     21/08 -- operator's own idea, and it measured as the strongest single signal
@@ -1707,7 +1799,7 @@ async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana",
         has_profile = any(getattr(p, "project_links", None) for p in (pairs or []))
         async with aiosqlite.connect(db_path or _db_path()) as db:
             await db.execute(
-                f"UPDATE {TABLE} SET has_paid_profile = ? WHERE id = ?",
+                f"UPDATE {table} SET has_paid_profile = ? WHERE id = ?",
                 (1 if has_profile else 0, row_id),
             )
             await db.commit()
@@ -1718,6 +1810,7 @@ async def _enrich_paid_profile(row_id: int, mint: str, *, chain: str = "solana",
 async def resolve_migrated_pools(
     http_client, *, chain: str = "solana", bonding_ws_feed=None, pumpswap_feed=None,
     limit: int = 10, db_path: str | None = None, find_pool_fn=None,
+    table: str = TABLE,
 ) -> int:
     """Finds the AMM pool of every open position whose curve has completed, so
     it keeps being priced on the RPC instead of falling back to REST.
@@ -1730,11 +1823,11 @@ async def resolve_migrated_pools(
     from aria_core.services.pumpswap_ws import find_pool_for_mint
 
     find = find_pool_fn or find_pool_for_mint
-    await _ensure_table(db_path)
+    await _ensure_table(db_path, table=table)
     async with aiosqlite.connect(db_path or _db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            f"SELECT id, pool_address, token_address FROM {TABLE} "
+            f"SELECT id, pool_address, token_address FROM {table} "
             f"WHERE chain = ? AND exit_reason IS NULL AND amm_pool_address IS NULL LIMIT ?",
             (chain, limit),
         )
@@ -1759,7 +1852,7 @@ async def resolve_migrated_pools(
             continue
         async with aiosqlite.connect(db_path or _db_path()) as db:
             await db.execute(
-                f"UPDATE {TABLE} SET amm_pool_address = ? WHERE id = ?", (pool, row["id"]),
+                f"UPDATE {table} SET amm_pool_address = ? WHERE id = ?", (pool, row["id"]),
             )
             await db.commit()
         if pumpswap_feed is not None:
@@ -1824,6 +1917,7 @@ def _mark_sell_failed(row_id: int) -> None:
 
 async def _apply_exit_check(
     row: dict, snapshot, *, chain: str, db_path: str | None, sell_fn=None,
+    table: str = TABLE, archive_module: str = ARCHIVE_MODULE,
 ) -> dict:
     """Archives the path, runs the SHARED exit rule and persists the outcome
     for ONE position.
@@ -1859,7 +1953,13 @@ async def _apply_exit_check(
         from aria_core import shadow_snapshot_archive
 
         await shadow_snapshot_archive.store_snapshot(
-            module="solana_late_bonding", position_id=row["id"],
+            # 23/08 -- was the literal string "solana_late_bonding" (a
+            # duplicate of ARCHIVE_MODULE's own value, not a reference to it).
+            # Switched to the parameter so the retracement variant's snapshots
+            # land under its own module name instead of colliding with the
+            # primary pocket's on the same (module, position_id) key -- two
+            # different tables can both produce row id 5.
+            module=archive_module, position_id=row["id"],
             pool_address=row["pool_address"], chain=chain,
             price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
             dex_id=snapshot.dex_id,
@@ -1893,7 +1993,7 @@ async def _apply_exit_check(
             row["reinforce_price"] = trigger
             async with aiosqlite.connect(db_path or _db_path()) as db:
                 await db.execute(
-                    f"UPDATE {TABLE} SET reinforce_price = ?, reinforce_at = ? "
+                    f"UPDATE {table} SET reinforce_price = ?, reinforce_at = ? "
                     f"WHERE id = ? AND reinforce_price IS NULL",
                     (trigger, datetime.now(timezone.utc).isoformat(), row["id"]),
                 )
@@ -1912,7 +2012,7 @@ async def _apply_exit_check(
     # in between. Self-throttled and failure-swallowing: it must never slow or
     # break a real exit.
     await shadow_candle_archive.store_observation(
-        module=ARCHIVE_MODULE, position_id=row["id"], pool_address=row["pool_address"],
+        module=archive_module, position_id=row["id"], pool_address=row["pool_address"],
         chain=chain, price_usd=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
         # 22/08 -- the snapshot itself, for its RAW curve fields and its own
         # timestamp. A live closure showed price -18.4% with the reserve
@@ -2021,7 +2121,7 @@ async def _apply_exit_check(
     async with aiosqlite.connect(db_path or _db_path()) as db:
         await db.execute(
             f"""
-            UPDATE {TABLE} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
+            UPDATE {table} SET remaining_qty = ?, realized_proceeds = ?, peak_price = ?,
                 realistic_realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                 realistic_final_multiplier = ?, last_price = ?, last_reserve_usd = ?,
                 last_checked_at = ?, exit_price_source = ?, exit_detail = ?,
@@ -2054,7 +2154,7 @@ async def _apply_exit_check(
         # The path is written; the throttle state for it is now dead weight on a
         # process that runs for weeks.
         shadow_candle_archive.forget_position(
-            module=ARCHIVE_MODULE, position_id=row["id"],
+            module=archive_module, position_id=row["id"],
         )
     return {"checked": 1, "closed": closed}
 
@@ -2309,16 +2409,21 @@ async def advance_exit_simulation(
     geckoterminal_client=None, *, chain: str = "solana", limit: int = 200,
     snapshot_fn=None, bonding_ws_feed=None, db_path: str | None = None,
     max_rest_calls: int | None = None, sell_fn=None, http_client=None,
+    table: str = TABLE, archive_module: str = ARCHIVE_MODULE,
 ) -> dict:
     """Advances every open position using the SAME exit rule as WS-EXIT --
     imported, never reimplemented, so the two pockets differ on ENTRY only and
-    stay comparable."""
+    stay comparable.
+
+    ``table``/``archive_module`` -- 23/08, same seam as ``consider_candidate``
+    (see ``RETRACEMENT_TABLE``). Default reproduces the primary pocket's
+    behaviour exactly."""
     stats = {"checked": 0, "closed": 0}
-    await _ensure_table(db_path)
+    await _ensure_table(db_path, table=table)
     async with aiosqlite.connect(db_path or _db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            f"SELECT * FROM {TABLE} WHERE chain = ? AND exit_reason IS NULL "
+            f"SELECT * FROM {table} WHERE chain = ? AND exit_reason IS NULL "
             # Never-checked rows first, exactly the ordering defect fixed on the
             # sibling pockets the same day (a fresh row sorted to the BACK).
             f"ORDER BY (last_checked_at IS NOT NULL) ASC, "
@@ -2402,6 +2507,7 @@ async def advance_exit_simulation(
 
         outcome = await _apply_exit_check(
             row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
+            table=table, archive_module=archive_module,
         )
         stats["closed"] += outcome["closed"]
     return stats
