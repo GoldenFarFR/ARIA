@@ -128,24 +128,46 @@ def exit_text(cfg: PocketNotifyConfig) -> str:
 
 async def aggregate(cfg: PocketNotifyConfig) -> str:
     """Recent-first, cumulative-second, debit last -- same reading order
-    across every pocket using this notifier."""
+    across every pocket using this notifier.
+
+    **23/08, real bug found live** (operator flagged a $306-liquidity open on
+    ``solana_pump_shadow``, "SOLANA TENDANCE"): a pool too thin to ever be
+    really filled (``reserve_usd`` below the pocket's own fill floor) is
+    marked by leaving ``realistic_entry_price``/``realistic_final_multiplier``
+    NULL -- "this trade could never have actually happened", not "no slippage
+    to report". The previous query used ``COALESCE(realistic_final_multiplier,
+    final_multiplier)``, silently falling back to the NOMINAL (unfillable)
+    price for exactly those rows -- i.e. counting fictional trades as real
+    ones. All three pockets sharing this notifier turned out to carry this
+    same NULL pattern, not just the one that surfaced it -- checked live on
+    every one before assuming otherwise:
+      - solana_pump_shadow: 93 closures, 74 (80%) never fillable (nominal
+        avg -5.0%) vs 19 that were (realistic avg +0.9%) -- the -4.8%
+        cumulative this notifier reported was almost entirely an artifact.
+      - robinhood_pump_shadow: 40 closures, 11 (28%) never fillable (nominal
+        avg +12.7%) vs 29 that were (realistic avg +52.1%) -- the OLD query
+        underrated this pocket's real performance, not just overrated one.
+      - base_momentum_shadow: 7 closures (too few to read anything into --
+        noted for completeness, not a verdict), 6 never fillable.
+    Fixed by scoring ONLY rows with a real ``realistic_final_multiplier``."""
     m = cfg.module
     try:
         async with aiosqlite.connect(m.DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 f"SELECT COUNT(*) n, "
-                f"       AVG((COALESCE(realistic_final_multiplier, final_multiplier)-1)*100) pnl, "
-                f"       SUM(COALESCE(realistic_final_multiplier, final_multiplier) > 1) wins "
-                f"FROM {m.TABLE} WHERE exit_reason IS NOT NULL AND final_multiplier IS NOT NULL"
+                f"       AVG((realistic_final_multiplier-1)*100) pnl, "
+                f"       SUM(realistic_final_multiplier > 1) wins "
+                f"FROM {m.TABLE} WHERE exit_reason IS NOT NULL "
+                f"AND realistic_final_multiplier IS NOT NULL"
             )
             cum = dict(await cur.fetchone())
             cur = await db.execute(
                 f"SELECT COUNT(*) n, "
-                f"       AVG((COALESCE(realistic_final_multiplier, final_multiplier)-1)*100) pnl, "
-                f"       SUM(COALESCE(realistic_final_multiplier, final_multiplier) > 1) wins "
+                f"       AVG((realistic_final_multiplier-1)*100) pnl, "
+                f"       SUM(realistic_final_multiplier > 1) wins "
                 f"FROM (SELECT * FROM {m.TABLE} WHERE exit_reason IS NOT NULL "
-                f"      AND final_multiplier IS NOT NULL ORDER BY id DESC LIMIT 30)"
+                f"      AND realistic_final_multiplier IS NOT NULL ORDER BY id DESC LIMIT 30)"
             )
             rec = dict(await cur.fetchone())
             cur = await db.execute(f"SELECT COUNT(*) n FROM {m.TABLE} WHERE exit_reason IS NULL")
@@ -239,8 +261,19 @@ async def notify_pocket(cfg: PocketNotifyConfig, kind: str, *, send: NotifySendF
                 if len(state.notified_closes) > _NOTIFIED_CLOSES_MAX:
                     for old_id in sorted(state.notified_closes)[:100]:
                         state.notified_closes.discard(old_id)
-                mult = row.get("realistic_final_multiplier") or row.get("final_multiplier")
-                pnl = f"{(mult-1)*100:+.1f}%" if mult is not None else "n/a"
+                # 23/08 -- same "nominal vs never-fillable" distinction as
+                # ``aggregate`` above, but this is a SINGLE trade's own
+                # notification, not a statistic to filter out -- a closure
+                # still gets reported, just labeled honestly rather than
+                # silently passed off as an executable result.
+                realistic_mult = row.get("realistic_final_multiplier")
+                nominal_mult = row.get("final_multiplier")
+                if realistic_mult is not None:
+                    pnl = f"{(realistic_mult-1)*100:+.1f}%"
+                elif nominal_mult is not None:
+                    pnl = f"{(nominal_mult-1)*100:+.1f}% (nominal, jamais executable)"
+                else:
+                    pnl = "n/a"
                 vente = row.get("realistic_realized_proceeds") or row.get("realized_proceeds")
                 vente_txt = f"${vente:.10g}" if vente else "n/a"
                 pal_txt = ""

@@ -173,3 +173,74 @@ async def test_notify_failure_never_raises(tmp_path):
     rec = _Recorder()
     await shadow_notify.notify_pocket(cfg, "open", send=rec.send)
     assert rec.messages == []
+
+
+@pytest.mark.asyncio
+async def test_close_label_marks_a_never_fillable_pnl_as_nominal(tmp_path):
+    """23/08, real bug: a pool too thin to ever be filled leaves
+    ``realistic_final_multiplier`` NULL -- previously silently reported as if
+    it were a real, executable result. Must now be labeled, not hidden."""
+    m = _fake_module(tmp_path, "f")
+    await _init_db(m.DB_PATH)
+    cfg = shadow_notify.PocketNotifyConfig(key="f", label="F", module=m, dexscreener_chain_slug="f")
+    now = datetime.now(timezone.utc)
+    await _insert_row(
+        m.DB_PATH, pool_address="p1", symbol="AAA", entry_price=1.0,
+        detected_at=(now - timedelta(minutes=5)).isoformat(),
+        exit_reason="trailing_stop", final_multiplier=0.8,
+        realized_proceeds=80.0, last_checked_at=now.isoformat(),
+    )
+    rec = _Recorder()
+    await shadow_notify.notify_pocket(cfg, "close", send=rec.send)
+    assert "-20.0% (nominal, jamais executable)" in rec.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_close_label_reports_a_real_fillable_pnl_without_the_nominal_tag(tmp_path):
+    m = _fake_module(tmp_path, "g")
+    await _init_db(m.DB_PATH)
+    cfg = shadow_notify.PocketNotifyConfig(key="g", label="G", module=m, dexscreener_chain_slug="g")
+    now = datetime.now(timezone.utc)
+    await _insert_row(
+        m.DB_PATH, pool_address="p1", symbol="AAA", entry_price=1.0,
+        detected_at=(now - timedelta(minutes=5)).isoformat(),
+        exit_reason="trailing_stop", final_multiplier=0.8, realistic_final_multiplier=0.85,
+        realized_proceeds=80.0, realistic_realized_proceeds=85.0, last_checked_at=now.isoformat(),
+    )
+    rec = _Recorder()
+    await shadow_notify.notify_pocket(cfg, "close", send=rec.send)
+    assert "PnL: -15.0%" in rec.messages[0]
+    assert "nominal" not in rec.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_aggregate_excludes_never_fillable_rows_from_pnl_and_winrate(tmp_path):
+    """23/08, real bug found live (operator flagged a $306-liquidity open on
+    solana_pump_shadow): the old query used
+    COALESCE(realistic_final_multiplier, final_multiplier), silently mixing
+    fictional never-fillable trades into the real winrate/PnL. A row with a
+    real realistic_final_multiplier must be the ONLY thing scored."""
+    m = _fake_module(tmp_path, "h")
+    await _init_db(m.DB_PATH)
+    now = datetime.now(timezone.utc)
+    # One real, fillable win (+50% realistic) ...
+    await _insert_row(
+        m.DB_PATH, pool_address="p1", symbol="WIN", entry_price=1.0,
+        detected_at=now.isoformat(), exit_reason="trailing_stop",
+        final_multiplier=1.5, realistic_final_multiplier=1.5,
+        realized_proceeds=150.0, realistic_realized_proceeds=150.0,
+        last_checked_at=now.isoformat(),
+    )
+    # ... and one never-fillable "loss" (-90% nominal) that must NOT drag the
+    # aggregate down, since it could never have actually been traded.
+    await _insert_row(
+        m.DB_PATH, pool_address="p2", symbol="NEVERFILL", entry_price=1.0,
+        detected_at=now.isoformat(), exit_reason="trailing_stop",
+        final_multiplier=0.1, realistic_final_multiplier=None,
+        realized_proceeds=10.0, last_checked_at=now.isoformat(),
+    )
+    cfg = shadow_notify.PocketNotifyConfig(key="h", label="H", module=m, dexscreener_chain_slug="h")
+    text = await shadow_notify.aggregate(cfg)
+    assert "1 dernieres: winrate 100%, PnL +50.0%" in text
+    assert "Cumul: 1 clot., winrate 100%" in text
+    assert "PnL +50.0%" in text
