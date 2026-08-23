@@ -209,7 +209,36 @@ savoir ou ils en sont sur leur courbe, donc sans pouvoir les trader.
   lamports, soit 397 SOL). Aucune paire de champs ne reproduit le prix
   DexScreener de reference (3.298e-08 SOL/token), donc la formule n'est PAS un
   simple ratio de deux reserves comme chez pump.fun.
-- **Prochaine etape concrete** : recuperer l'IDL officiel depuis le SDK Raydium
+- **DECODEUR FAIT le 23/08** (`services/launchlab_curve.py`, 4 tests) : la
+  structure vient de `src/raydium/launchpad/layout.ts` du SDK Raydium v2, qui
+  declare les champs dans l'ordre. Formule validee a **0,0 % d'ecart sur trois
+  pools reels** : `(virtualB + realB) / (virtualA - realA)`, chaque cote
+  normalise par ses propres decimales. Ce n'est PAS la formule pump.fun (ratio
+  de deux reserves virtuelles) -- ici les montants REELS deplacent les
+  virtuels, ce qui explique pourquoi la recherche par force brute ne pouvait
+  pas la trouver.
+  Offsets : status 17, decimalsA 18, decimalsB 19, supply 21, totalSellA 29,
+  virtualA 37, virtualB 45, realA 53, realB 61, totalFundRaisingB 69.
+  Progression mesuree cote QUOTE (`realB / totalFundRaisingB`), car c'est ce
+  qui declenche la migration -- pas les tokens vendus, qui derivent avec la
+  forme de la courbe.
+
+- **CE QUI RESTE BLOQUE : la DECOUVERTE des nouveaux pools.** Trois voies
+  testees le 23/08, trois impasses :
+  1. `logsSubscribe` sur le programme via Chainstack : l'abonnement est
+     ACCEPTE (id retourne) mais **zero message en 100 s** sur deux essais.
+     Helius refuse en HTTP 429. A creuser : le filtre `mentions` ne capte
+     peut-etre pas ce type d'activite, ou il faut `programSubscribe`.
+  2. DexScreener `search?q=launchlab` : rend bien 30 pools, mais **trop
+     tardivement** -- le plus recent a 44 min, la mediane 5 h. Inutilisable
+     pour une poche qui entre a 50-98,5 % de courbe et tient 3 min.
+  3. `getProgramAccounts` : **refuse par les deux endpoints** (plan payant
+     requis), donc pas d'enumeration directe.
+  Piste suivante : tester `programSubscribe` plutot que `logsSubscribe`, ou
+  trouver un fournisseur qui expose les creations LaunchLab en flux (PumpPortal
+  ne remonte que pump.fun, verifie 15/15).
+
+- **Ancienne prochaine etape (FAITE)** : recuperer l'IDL officiel depuis le SDK Raydium
   v2 (`src/raydium/launchpad/`) plutot que continuer a deviner. Deux sources
   documentees existent aussi cote Shyft (exemples de parsing LaunchLab). Sans
   l'IDL, chaque offset reste une hypothese non falsifiable.
