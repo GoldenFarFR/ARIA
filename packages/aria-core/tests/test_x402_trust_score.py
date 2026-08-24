@@ -16,7 +16,14 @@ OTHER_TOKEN = "0xOtherToken00000000000000000000000000002"
 PAYER_A = "0xPayerA00000000000000000000000000000001"
 PAYER_B = "0xPayerB00000000000000000000000000000002"
 
-NOW = datetime(2026, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
+# Anchored to real wall-clock time (24/08 fix) -- a hardcoded date silently
+# broke every test in this file once real time crossed the default 30-day
+# lookback window past the original fixed date (24/07 -> 24/08 = 31 days),
+# with no test failure until that exact crossing. Same failure class as any
+# "NOW = <fixed date>" constant compared against `datetime.now()` in
+# production code -- relative deltas (`stale = NOW - timedelta(...)`) stay
+# correct either way, only the anchor itself needs to track real time.
+NOW = datetime.now(timezone.utc)
 
 
 def _iso(dt: datetime) -> str:
