@@ -453,7 +453,98 @@ async def test_resubscribe_includes_pool_manager_address_for_v4_pools():
         pool_id_hex="0xpoolid",
     )
     await feed._resubscribe()
-    _, kwargs_or_args = feed._w3.eth.subscribe.call_args
     call_args = feed._w3.eth.subscribe.call_args
     filter_arg = call_args[0][1]
     assert m.POOL_MANAGER_ADDRESS in filter_arg["address"]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_restricts_v4_filter_to_tracked_pool_ids():
+    """24/08 real incident: the PoolManager is a SINGLETON shared by every
+    v4 pool on the chain -- an address-only filter received every swap on
+    every v4 pool on Base, not just the tracked ones, discarded only after
+    being received and billed (measured live: a real Alchemy CU spike).
+    topics[1] must carry the tracked poolIds so the RPC node itself does
+    the filtering, never this module after the fact."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_v4")
+    feed._pools["0xpoolid"] = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0xpoolid",
+    )
+    await feed._resubscribe()
+    filter_arg = feed._w3.eth.subscribe.call_args[0][1]
+    assert filter_arg["topics"] == [[m._V4_SWAP_TOPIC], ["0xpoolid"]]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_issues_two_separate_subscriptions_for_v2v3_and_v4():
+    """A v2/v3 pool's own address filter would be broken by a shared
+    topics[1] restriction meant for v4's poolId -- eth_subscribe's topics
+    list is positional across every address in the SAME filter, so v2/v3
+    and v4 cannot share one subscription once v4 gets a topics[1] filter."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(side_effect=["sub_v2v3", "sub_v4"])
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    feed._pools["0xpoolid"] = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0xpoolid",
+    )
+    await feed._resubscribe()
+    assert feed._w3.eth.subscribe.call_count == 2
+    v2v3_filter = feed._w3.eth.subscribe.call_args_list[0][0][1]
+    v4_filter = feed._w3.eth.subscribe.call_args_list[1][0][1]
+    assert v2v3_filter["address"] == ["0xv3pool"]
+    assert v4_filter["address"] == [m.POOL_MANAGER_ADDRESS]
+    assert feed._active_sub_ids == ["sub_v2v3", "sub_v4"]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_closes_previous_subscriptions_before_reissuing():
+    """24/08 real incident: no unsubscribe was ever called, so every
+    add_pool()/remove_pool() left the PREVIOUS subscription alive alongside
+    the new one -- ~100 pools added one at a time (the early-discovery
+    experiment) left ~100 overlapping subscriptions, each separately
+    re-delivering every matching event. This is the fix's core assertion."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(side_effect=["sub1", "sub2"])
+    feed._w3.eth.unsubscribe = AsyncMock(return_value=True)
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    assert feed._active_sub_ids == ["sub1"]
+
+    feed._pools["0xv3pool2"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    feed._w3.eth.unsubscribe.assert_called_once_with("sub1")
+    assert feed._active_sub_ids == ["sub2"]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_never_raises_when_unsubscribe_fails():
+    """A subscription id from a connection that already dropped is
+    meaningless to unsubscribe -- best-effort, never blocks re-subscribing."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_new")
+    feed._w3.eth.unsubscribe = AsyncMock(side_effect=RuntimeError("stale subscription"))
+    feed._active_sub_ids = ["sub_stale"]
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()  # must not raise
+    assert feed._active_sub_ids == ["sub_new"]

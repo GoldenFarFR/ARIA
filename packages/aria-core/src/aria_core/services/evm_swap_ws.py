@@ -226,6 +226,16 @@ class EVMSwapWebSocketFeed:
         self._task: asyncio.Task | None = None
         self._stopped = False
         self._connected = False
+        # 24/08 real incident: _resubscribe() created a fresh "logs"
+        # subscription on every add_pool()/remove_pool() WITHOUT ever closing
+        # the previous one (the docstring claimed "unsubscribes and
+        # resubscribes fresh" -- never actually implemented). Adding ~100
+        # pools one at a time, as the early-discovery experiment did, left
+        # ~100 overlapping subscriptions alive on the same connection, each
+        # separately re-delivering every matching event -- a combinatorial
+        # multiplier on top of the v4 fan-out bug below. Track the active
+        # subscription ids so a resubscribe can close them first.
+        self._active_sub_ids: list[str] = []
 
     # -- lifecycle -----------------------------------------------------
 
@@ -369,6 +379,11 @@ class EVMSwapWebSocketFeed:
                 async with AsyncWeb3(WebSocketProvider(self._ws_url)) as w3:
                     self._w3 = w3
                     self._connected = True
+                    # A fresh connection invalidates every subscription id
+                    # from the previous one -- _resubscribe()'s unsubscribe
+                    # pass would otherwise try (harmlessly, but pointlessly)
+                    # to close ids that no longer exist on this new socket.
+                    self._active_sub_ids = []
                     backoff = _RECONNECT_MIN_SECONDS
                     logger.info("evm_swap_ws[%s]: connected", self.chain)
                     # Real bug found live 24/08: web3.py's process_subscriptions()
@@ -399,22 +414,49 @@ class EVMSwapWebSocketFeed:
             backoff = min(backoff * 2, _RECONNECT_MAX_SECONDS)
 
     async def _resubscribe(self) -> str | None:
-        """Re-issues the logs subscription with the current pool set. A real
-        RPC ``eth_subscribe`` filter is static once created -- there is no
-        "add address to an existing filter" call, so a pool-set change
-        unsubscribes and resubscribes fresh. Cheap and infrequent (pool
-        open/close events, not a per-tick cost)."""
+        """Re-issues the logs subscription(s) with the current pool set. A
+        real RPC ``eth_subscribe`` filter is static once created -- there is
+        no "add address to an existing filter" call, so a pool-set change
+        closes every previous subscription first (24/08 fix -- see
+        ``_active_sub_ids``'s own docstring for the incident this closes).
+
+        v2/v3 and v4 are issued as TWO SEPARATE subscriptions, never merged
+        into one filter (24/08 fix, real incident): v4 pools all share the
+        one PoolManager contract address, so an address-only filter cannot
+        distinguish "this pocket's tracked pools" from "every v4 pool on the
+        whole chain" -- v4 is Base's single busiest DEX by pool-creation
+        rate (see this module's own docstring), so that filter received
+        every swap on every v4 pool on Base, not just the tracked ones,
+        discarded only AFTER being received and billed. The eth_subscribe
+        filter's ``topics`` list is positional (topics[1] applies to every
+        address in the filter alike), so v4's poolId restriction cannot
+        share a filter with v2/v3's addresses without also breaking their
+        matching -- hence two subscriptions."""
         if self._w3 is None:
             return None
+        for sub_id in self._active_sub_ids:
+            try:
+                await self._w3.eth.unsubscribe(sub_id)
+            except Exception as exc:  # noqa: BLE001 -- best-effort, a dead socket cannot leak
+                logger.info("evm_swap_ws[%s]: unsubscribe(%s) failed (%s)", self.chain, sub_id, exc)
+        self._active_sub_ids = []
+
         v4_pool_ids = [p.pool_id_hex for p in self._pools.values() if p.family == "v4" and p.pool_id_hex]
         v2v3_addresses = [addr for addr, p in self._pools.items() if p.family in ("v2", "v3")]
-        topics_filter = [[_SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V3_SWAP_TOPIC, _V4_SWAP_TOPIC]]
-        addresses = list(v2v3_addresses)
+
+        if v2v3_addresses:
+            sub_id = await self._w3.eth.subscribe(
+                "logs",
+                {"address": v2v3_addresses, "topics": [[_SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V3_SWAP_TOPIC]]},
+            )
+            self._active_sub_ids.append(sub_id)
         if v4_pool_ids:
-            addresses.append(POOL_MANAGER_ADDRESS)
-        if not addresses:
-            return None
-        return await self._w3.eth.subscribe("logs", {"address": addresses, "topics": topics_filter})
+            sub_id = await self._w3.eth.subscribe(
+                "logs",
+                {"address": [POOL_MANAGER_ADDRESS], "topics": [[_V4_SWAP_TOPIC], v4_pool_ids]},
+            )
+            self._active_sub_ids.append(sub_id)
+        return self._active_sub_ids[-1] if self._active_sub_ids else None
 
     def _handle_notification(self, payload) -> None:
         try:
