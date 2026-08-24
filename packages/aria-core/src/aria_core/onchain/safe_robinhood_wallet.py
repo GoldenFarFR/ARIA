@@ -44,11 +44,20 @@ default (every caller in this dome still passes only
 anything else, mainnet included). Actually spending real capital here still
 needs its own separate, explicit operator decision on top of this: per
 CLAUDE.md's own three named prerequisites (mainnet contract deployment --
-DONE; the AllowanceModule v0.1.1-vs-v1.0.0 version decision -- OPEN, cf.
-``docs/aria-learning-inbox/2026-08-24-diligence-ecosystem-account-abstraction-
-erc4337.md``; wallet_guard/kill-switch wiring -- the testnet rehearsal cycle
-below IS that wiring, proven on worthless funds first), each one a distinct
-action, never grouped under a single "ok".
+DONE; the AllowanceModule v0.1.1-vs-v1.0.0 version decision -- RESOLVED 24/08,
+there is no separate v1.0.0 AllowanceModule CONTRACT at all -- verified live
+against both the official ``safe-fndn/safe-modules`` registry (only v0.1.0/
+v0.1.1 ever shipped) and Candide's own deployments page
+(docs.candide.dev/wallet/technical-reference/deployments/, which lists no
+Allowance Module of any kind, and no Robinhood Chain coverage for ANY of its
+modules). Candide's own "v1.0.0" documentation is their SDK/wrapper version,
+not a new contract -- this dome calls the Safe module directly (no Candide
+dependency), so it never applied here regardless. v0.1.1 (already in place,
+``ALLOWANCE_MODULE_ADDRESS`` below) stands confirmed as the only real option,
+Ackee's incremental audit remains the best available; wallet_guard/kill-switch
+wiring -- the testnet rehearsal cycle below IS that wiring, proven on
+worthless funds first), each one a distinct action, never grouped under a
+single "ok".
 """
 from __future__ import annotations
 
