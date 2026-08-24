@@ -6,6 +6,8 @@ Public presence: X [@Aria_ZHC](https://x.com/Aria_ZHC) · Telegram [@Aria_ZHC_Bo
 
 **Private ops** (infra, credentials, deployment access): [`GoldenFarFR/aria-ops`](https://github.com/GoldenFarFR/aria-ops) — restricted.
 
+This is a research project. The real ARIA (the accounts and site linked above) is operated solely by GoldenFarFR. Running this code yourself creates your own independent instance, with your own keys and your own capital — not a fork of any real trading activity, and not affiliated with the accounts above.
+
 ## Thesis
 
 The moat is **proven analysis**, not blind execution. Target allocation is 85% long/mid-term conviction picks on early Base builders, 15% short-term momentum trading. Proof precedes promise: every strategy runs on a fully-tracked paper portfolio, judged against explicit weekly targets, before it is ever trusted with real funds.
