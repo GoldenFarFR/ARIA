@@ -59,9 +59,21 @@ SAFE_SINGLETON_V141_ADDRESS = "0x41675C099F32341bf84BFc5382aF534df5C7461a"
 # bytes). The version is no longer an assumption: a real ``eth_call`` to
 # ``VERSION()`` on the testnet returned "0.1.1" and ``NAME()`` returned
 # "Allowance Module" (17/08, step-1 wiring session).
-# NOTE (diligence finding, still unresolved): the only audit report found
-# covers v0.1.0 (Oct 2020) — no report identified yet for the 0.1.1 now
-# confirmed on-chain here. Flag this again before any mainnet use.
+# NOTE (23/08, corrects a real drift): the 17/08 diligence claimed "no audit
+# report found for 0.1.1" -- WRONG, found and read in full 23/08. Ackee
+# Blockchain Security audited the exact two changes that make up 0.1.1 (PR
+# safe-fndn/safe-modules#493, report "Safe -- Allowance module", rev 1.1,
+# 09.09.2024): the EIP-712 transfer-typehash fix (rev 1.0, 1 engineer-day,
+# scope limited to the changed typehash) and the resetTimeMin
+# divide-by-zero guard, which Ackee's own review FOUND (not merely
+# "suggested in passing") and classified Low; rev 1.1 confirms both fixed.
+# Real nuance to keep: this is an INCREMENTAL, narrowly-scoped audit of the
+# 0.1.0->0.1.1 diff (leaning on the original 0.1.0 audit for the rest of the
+# contract), not a fresh full-contract audit -- meaningfully better than
+# "unaudited" but short of a complete re-review. Same module, same two
+# addresses, independently confirmed used by Candide's own Allowance plugin
+# (docs.candide.dev/wallet/plugins/allowance), citing the identical two
+# audits -- this is an adopted industry pattern, not an ARIA-only choice.
 ALLOWANCE_MODULE_ADDRESS = "0xAA46724893dedD72658219405185Fb0Fc91e091C"
 
 # Read-only slice of the real AllowanceModule ABI, fetched 17/08 from the
