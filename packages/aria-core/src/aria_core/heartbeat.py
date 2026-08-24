@@ -748,7 +748,7 @@ def _sync_x_curiosity_enabled() -> None:
                 # Internal $1M simulation: OFF by default. The operator starts the
                 # proof run (20 days) by setting ARIA_PAPER_TRADING_ENABLED=1 in
                 # .env (deliberate LLM cost). No real money, no outward-facing surface.
-                # Item #64 (08/03): also honors the runtime /off toggle
+                # Item #64 (08/03): also honors the runtime /offpaper toggle
                 # (paper_pause) -- a manual debugging pause, distinct from the env
                 # var, flips instantly without a redeploy.
                 from aria_core import paper_pause

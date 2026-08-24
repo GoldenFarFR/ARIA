@@ -4494,19 +4494,20 @@ async def _open_new_entries_for_wallet(
         if opened >= max_new:
             break
         # 04/08 -- real bug found live (operator: "je vien de faire /off et sa
-        # sa tourne encore"): every caller (momentum_websocket._drain_new_
-        # candidates, heartbeat._tick's own 5 checks) only checks paper_pause.
-        # is_paused() ONCE, before starting a cycle -- a cycle already past
-        # that check when /off flips keeps creating positions for its ENTIRE
-        # candidate batch. Confirmed live: 3 scalping_v6 limit orders created
-        # 2m44s-4m20s AFTER /off was recorded, while a slow-provider circuit
-        # breaker (CoinMarketCap/DexPaprika, 180s cooldown each) was
-        # stretching that single cycle well past what "instant" implies.
+        # sa tourne encore" -- command since renamed /offpaper, 24/08): every
+        # caller (momentum_websocket._drain_new_candidates, heartbeat._tick's
+        # own 5 checks) only checks paper_pause.is_paused() ONCE, before
+        # starting a cycle -- a cycle already past that check when /offpaper
+        # flips keeps creating positions for its ENTIRE candidate batch.
+        # Confirmed live: 3 scalping_v6 limit orders created 2m44s-4m20s
+        # AFTER /offpaper was recorded, while a slow-provider circuit breaker
+        # (CoinMarketCap/DexPaprika, 180s cooldown each) was stretching that
+        # single cycle well past what "instant" implies.
         # Re-checked HERE, inside the per-candidate loop -- the ONE choke
         # point every caller (websocket drain, periodic heartbeat, gate ON or
-        # OFF) already converges through -- makes /off genuinely immediate
-        # regardless of how long the surrounding cycle takes, without adding
-        # a new check to each individual caller.
+        # OFF) already converges through -- makes /offpaper genuinely
+        # immediate regardless of how long the surrounding cycle takes,
+        # without adding a new check to each individual caller.
         if paper_pause.is_paused():
             break
         # Item #101 (26/07), operator explicit decision: no position-count cap

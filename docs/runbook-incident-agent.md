@@ -28,8 +28,11 @@ non-dev, is simple: **its actions stop matching what you asked**. Examples:
 
 ## Emergency checklist — 4 steps, no dev skills needed
 
-1. **Telegram: send `/stop`** (cuts outgoing payments) **and `/off`** (cuts the whole
-   paper-trading buy/sell chain, APIs included).
+1. **Telegram: send `/stop`** (cuts outgoing payments), **`/offpaper`** (cuts the
+   whole paper-trading buy/sell chain, APIs included), **`/offx`** (cuts X
+   posting/replies/likes/profile sync), and **`/offshadow`** (cuts every loop of
+   the standalone shadow process, APIs/RPC included) — four independent
+   switches, send all four for a full stop.
 2. **Close the Claude Code terminal** (or shut the PC down). A stopped agent does
    nothing more — instant and always safe. You never need to "repair" a misbehaving
    agent live: you stop it first, always.

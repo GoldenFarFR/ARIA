@@ -178,7 +178,7 @@ def _paper_trading_enabled() -> bool:
     """Explicitly re-checked before every trigger -- this path bypasses
     ``heartbeat._tick()``, which normally does this check for
     ``paper_trade_cycle``. Item #64 (08/03): also honors the runtime
-    ``/off`` toggle (``paper_pause``) -- distinct from
+    ``/offpaper`` toggle (``paper_pause``) -- distinct from
     ``ARIA_PAPER_TRADING_ENABLED`` (env var, needs a redeploy), this one
     flips instantly for a manual debugging pause."""
     from aria_core import paper_pause
@@ -383,14 +383,14 @@ class MomentumWebsocketListener:
             return
         # Item #64 (08/03), operator feedback: distinguish the two sources
         # _paper_trading_enabled() combines -- the env var (needs a redeploy)
-        # vs the runtime /off toggle (instant) -- rather than one ambiguous
-        # log line always naming the env var even when /off was the real
+        # vs the runtime /offpaper toggle (instant) -- rather than one ambiguous
+        # log line always naming the env var even when /offpaper was the real
         # cause. Checked explicitly here, ahead of the combined helper, same
         # pattern as the outgoing_pause check right below.
         from aria_core import paper_pause
 
         if paper_pause.is_paused():
-            logger.info("momentum_websocket: paper trading paused via /off, drain skipped")
+            logger.info("momentum_websocket: paper trading paused via /offpaper, drain skipped")
             return
         if not _paper_trading_enabled():
             logger.info("momentum_websocket: ARIA_PAPER_TRADING_ENABLED disabled, drain skipped")

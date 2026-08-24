@@ -2569,8 +2569,12 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("llmspend", "Dépense LLM du mois en $ (Haiku/Sonnet, par point d'appel) — owner-only"),
     ("mobileinvite", "Génère un code d'invitation à usage unique pour lier l'app mobile à Privy"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
-    ("off", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
-    ("on", "▶️ Reprend le paper trading après /off"),
+    ("offpaper", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
+    ("offshadow", "⏸ Pause de toutes les boucles shadow (process standalone), instantané"),
+    ("offx", "⏸ Pause des interactions X (tweets/réponses/likes/profil), instantané"),
+    ("onpaper", "▶️ Reprend le paper trading après /offpaper"),
+    ("onshadow", "▶️ Reprend les boucles shadow après /offshadow"),
+    ("onx", "▶️ Reprend X après /offx"),
     ("order", "Liste les ordres limite en cours (pending/watching), par poche"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
     ("polymarket", "Portefeuille papier Polymarket (équité, positions ouvertes, dernières résolutions)"),
@@ -3540,9 +3544,10 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
 
 
-async def _handle_paper_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/off -- Item #64 (08/03): runtime pause of ALL paper-trading scanning/
-    sourcing (every pocket), instant, no redeploy.
+async def _handle_offpaper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/offpaper -- Item #64 (08/03), renamed 24/08 for consistency with
+    /offx: runtime pause of ALL paper-trading scanning/sourcing (every
+    pocket), instant, no redeploy.
     Owner-only, same gate as /stop. Structurally distinct from /stop
     (outgoing_pause/custody_pause, real-money-only, per Item #62's own split
     -- this NEVER touches those, it exists purely to silence data-provider
@@ -3552,16 +3557,16 @@ async def _handle_paper_off(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     from aria_core import paper_pause
 
     user = update.effective_user
-    paper_pause.pause(by=user.id if user else None, reason="Pause manuelle /off (owner)")
+    paper_pause.pause(by=user.id if user else None, reason="Pause manuelle /offpaper (owner)")
     await _reply(
         update.message,
         "⏸ Paper trading en pause -- scan/sourcing des poches actives suspendu.\n"
-        "N'affecte ni /stop ni le capital réel (aucun lien). Envoie /on pour reprendre.",
+        "N'affecte ni /stop ni le capital réel (aucun lien). Envoie /onpaper pour reprendre.",
     )
 
 
-async def _handle_paper_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/on -- lifts the /off pause. Owner-only."""
+async def _handle_onpaper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/onpaper -- lifts the /offpaper pause. Owner-only."""
     if not await _owner_only(update):
         return
     from aria_core import paper_pause
@@ -3572,6 +3577,78 @@ async def _handle_paper_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     paper_pause.resume(by=user.id if user else None)
     await _reply(update.message, "▶️ Paper trading reprend -- scan/sourcing des 4 poches réactivé.")
+
+
+async def _handle_offshadow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/offshadow -- 24/08, operator request: cancels every loop of the
+    standalone shadow process (shadow_persistent.py, systemd service
+    aria-shadow-persistent, outside this repo/container) as one upstream
+    breaker ("comme un schema electrique") instead of per-loop checks --
+    the exact gap that let curve_tracker_shadow_loop keep spending
+    Chainstack credits earlier the same day. Owner-only, same gate as
+    /stop. Structurally distinct from /stop/custody (also read by the same
+    supervisor, never touched here) and from /offpaper/offx (unrelated
+    processes)."""
+    if not await _owner_only(update):
+        return
+    from aria_core import shadow_pause
+
+    user = update.effective_user
+    shadow_pause.pause(by=user.id if user else None, reason="Pause manuelle /offshadow (owner)")
+    await _reply(
+        update.message,
+        "⏸ Shadow en pause -- toutes les boucles du process standalone annulées "
+        "(plus aucun appel API/RPC en vol).\n"
+        "N'affecte ni /stop ni /offpaper ni /offx (aucun lien). Envoie /onshadow pour reprendre.",
+    )
+
+
+async def _handle_onshadow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/onshadow -- lifts the /offshadow pause. Owner-only."""
+    if not await _owner_only(update):
+        return
+    from aria_core import shadow_pause
+
+    if not shadow_pause.is_paused():
+        await _reply(update.message, "▶️ Shadow n'était pas en pause -- rien à reprendre.")
+        return
+    user = update.effective_user
+    shadow_pause.resume(by=user.id if user else None)
+    await _reply(update.message, "▶️ Shadow reprend -- toutes les boucles relancées.")
+
+
+async def _handle_offx(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/offx -- 24/08, operator request: independent pause of X interactions
+    (tweets, replies, likes, profile sync) only. Owner-only, same gate as
+    /stop. Structurally distinct from /stop (outgoing_pause, real-money AND
+    X) and from /offpaper (paper_pause, scanning only) -- see x_pause.py's
+    own docstring for the full three-way split. Lets the operator silence X
+    without also freezing real-capital paths, and vice versa."""
+    if not await _owner_only(update):
+        return
+    from aria_core import x_pause
+
+    user = update.effective_user
+    x_pause.pause(by=user.id if user else None, reason="Pause manuelle /offx (owner)")
+    await _reply(
+        update.message,
+        "⏸ X en pause -- tweets, réponses/likes, sync de profil suspendus.\n"
+        "N'affecte ni /stop ni /offpaper (aucun lien). Envoie /onx pour reprendre.",
+    )
+
+
+async def _handle_onx(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/onx -- lifts the /offx pause. Owner-only."""
+    if not await _owner_only(update):
+        return
+    from aria_core import x_pause
+
+    if not x_pause.is_paused():
+        await _reply(update.message, "▶️ X n'était pas en pause -- rien à reprendre.")
+        return
+    user = update.effective_user
+    x_pause.resume(by=user.id if user else None)
+    await _reply(update.message, "▶️ X reprend -- tweets/réponses/likes/sync de profil réactivés.")
 
 
 _DEFAULT_OPERATOR_MOBILE_USERNAME = "operator"
@@ -3713,8 +3790,12 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
-    app.add_handler(CommandHandler("off", _handle_paper_off))
-    app.add_handler(CommandHandler("on", _handle_paper_on))
+    app.add_handler(CommandHandler("offpaper", _handle_offpaper))
+    app.add_handler(CommandHandler("onpaper", _handle_onpaper))
+    app.add_handler(CommandHandler("offx", _handle_offx))
+    app.add_handler(CommandHandler("onx", _handle_onx))
+    app.add_handler(CommandHandler("offshadow", _handle_offshadow))
+    app.add_handler(CommandHandler("onshadow", _handle_onshadow))
     app.add_handler(CommandHandler("mobileinvite", _handle_mobile_invite))
     app.add_handler(CommandHandler("unlockmobile", _handle_unlock_mobile))
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
