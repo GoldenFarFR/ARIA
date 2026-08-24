@@ -585,43 +585,41 @@ async def build_status_report(user_id: int | str | None) -> str:
         else "coupée — bearer only" if is_x_read_configured()
         else "off"
     )
-    # 24/08 -- operator request: each line states BOTH commands (off/on) and
-    # a single two-word verdict ("on actif"/"off actif") instead of the
-    # previous free-text rendering -- scannable at a glance across all 5
-    # flags without reading each line's prose. The unreadable/fail-open/
-    # fail-closed case stays its own explicit branch (never silently folded
-    # into "off actif") -- that distinction is a real safety signal, not
-    # decoration.
+    # 24/08 -- operator request: each line leads with a single glyph (✅ on /
+    # ✖ off) instead of prose -- scannable at a glance across all 5 flags.
+    # The unreadable/fail-open/fail-closed case stays its own explicit ⚠️
+    # branch, never silently folded into ✖ -- that distinction is a real
+    # safety signal, not decoration.
     def _verdict(pause_status: dict, unreadable_text: str) -> str:
         if not pause_status["readable"]:
-            return unreadable_text
-        return "off actif" if pause_status["paused"] else "on actif"
+            return f"⚠️ {unreadable_text}"
+        return "✖" if pause_status["paused"] else "✅"
 
     from aria_core import paper_pause, shadow_pause, x_pause
 
     pst = outgoing_pause.pause_status()
-    sorties = _verdict(pst, "⚠️ illisible (fail-closed, dépenses gelées)")
+    sorties = _verdict(pst, "illisible (fail-closed, dépenses gelées)")
     # Item #62 (08/03): reported separately from the manual /stop flag above
     # -- custody_pause never touches paper trading, only real-money paths.
     # No manual /off.../on... pair -- this flag only ever arms automatically
     # (agent_wallet_monitor.py's outflow detector), never via a command.
     cpst = custody_pause.pause_status()
-    custody = _verdict(cpst, "⚠️ illisible (fail-closed, dépenses réelles gelées)")
+    custody = _verdict(cpst, "illisible (fail-closed, dépenses réelles gelées)")
     ppst = paper_pause.pause_status()
-    paper = _verdict(ppst, "⚠️ illisible (fail-OPEN, trading papier continue)")
+    paper = _verdict(ppst, "illisible (fail-OPEN, trading papier continue)")
     xpst = x_pause.pause_status()
-    x_flag = _verdict(xpst, "⚠️ illisible (fail-CLOSED, X bloqué)")
+    x_flag = _verdict(xpst, "illisible (fail-CLOSED, X bloqué)")
     spst = shadow_pause.pause_status()
-    shadow = _verdict(spst, "⚠️ illisible (fail-OPEN, poches papier continuent)")
+    shadow = _verdict(spst, "illisible (fail-OPEN, poches papier continuent)")
     return (
         f"ARIA — Status (opérateur)\n"
         f"Build commit: {commit}\n"
         f"Your ID: {user_id if user_id else '?'} — admin ✅\n"
-        f"Sorties capital réel (/stop · /resume): {sorties}\n"
-        f"Custody wallet agent (auto, pas de commande): {custody}\n"
-        f"Paper trading 1M$ (/offpaper · /onpaper): {paper}\n"
-        f"X posts/replies (/offx · /onx): {x_flag}\n"
-        f"Poches shadow (/offshadow · /onshadow): {shadow}\n"
+        f"{sorties} Sorties capital réel (/stop · /resume)\n"
+        f"{custody} Custody wallet agent (auto, pas de commande)\n"
+        f"{paper} Paper trading 1M$ (/offpaper · /onpaper)\n"
+        f"{x_flag} X posts/replies (/offx · /onx)\n"
+        f"{shadow} Poches shadow (/offshadow · /onshadow)\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
