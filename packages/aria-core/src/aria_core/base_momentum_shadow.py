@@ -163,7 +163,18 @@ TABLE = "base_momentum_shadow_log"
 # module docstring) -- the ONLY entry signal this shadow layer evaluates.
 # Recalibrated same day from the 15min to the 5min window (second Dune pass,
 # same exit methodology, beat 15min on both winrate and avg multiplier).
-M5_SURGE_THRESHOLD_PCT = 25.0
+#
+# 24/08, LOWERED 25% -> 1%, operator-directed ("on va viser large... pour
+# cumulée des donnees") -- Base's own regime-candidates population showed a
+# real liquidity signal (scams clustered $9-19K, real gains $22K+, see
+# MIN_LIQUIDITY_USD below) but on only 4 winning trades, far short of the
+# n>=100 the Doctrine d'Ingestion bar requires for a real verdict. Widening
+# this gate to 1% lets far more candidates through so the pocket can
+# accumulate that sample fast; liquidity (below) and pool age (see
+# MAX_POOL_AGE_MINUTES) are now the operative filters, not this one.
+# Explicit recalibration plan: revisit once base_momentum_shadow_log clears
+# n>=100 real closures.
+M5_SURGE_THRESHOLD_PCT = 1.0
 
 # 16/08, operator-requested protection against a token whose liquidity gets
 # pulled shortly after launch (real case observed live this session on the
@@ -191,20 +202,31 @@ M5_SURGE_THRESHOLD_PCT = 25.0
 # minutes column, once >=200 closures across >=2 distinct days exist. Until
 # then this 10-minute figure is a placeholder inherited from a different
 # pocket's market, not a Base-specific calibration.
-MAX_POOL_AGE_MINUTES = 10.0
+#
+# 24/08, RAISED 10 -> 120min, operator-directed, same "viser large... pour
+# cumulee des donnees" pass as M5_SURGE_THRESHOLD_PCT/REGIME_MIN_MEDIAN_
+# PEAK_PCT above -- liquidity and surge% do the real filtering now, this is
+# widened rather than disarmed to keep a finite, loggable figure. Widens
+# BOTH effects this constant controls, not just discovery: a losing
+# position now also stays open (force-close deferred) up to 120min instead
+# of 10 -- see this constant's own docstring above on the
+# force-close-on-crossing behavior. Same explicit recalibration plan:
+# re-run pocket_entry_sweep once Base clears its own n>=200 bar.
+MAX_POOL_AGE_MINUTES = 120.0
 
-# 23/08 -- BORROWED verbatim from robinhood_pump_shadow.py's own MIN_LIQUIDITY_
-# USD=4000.0, itself measured on ROBINHOOD's own 200-closure sample (52 of them
-# on near-zero-liquidity pools, mean reserve $6.40, carrying 38% of that
-# pocket's headline PnL as unexecutable noise) -- NOT Base's. A prior version
-# of this comment copied that measurement verbatim, which read as though it
-# described Base -- it never did; Base had zero closures of its own at the
-# time this module was written. Recalibrate honestly with a no-floor-vs-
-# floored comparison (winrate, PnL, sample size) on Base's own reserve_usd-at-
-# entry column once enough closures exist (see pocket_entry_sweep.py). Until
-# then this $4000 figure is a placeholder inherited from a different pocket's
-# market, not a Base-specific calibration.
-MIN_LIQUIDITY_USD = 4000.0
+# 24/08, LOWERED 4000 -> 1000, operator-directed ("viser large... pour
+# cumulee des donnees", same pass as M5_SURGE_THRESHOLD_PCT/
+# REGIME_MIN_MEDIAN_PEAK_PCT/MAX_POOL_AGE_MINUTES above). Own standalone
+# value for THIS chain only -- no longer tied to any other pocket's figure
+# (operator instruction: one constant per blockchain, never a shared/
+# borrowed number). Matches the discovery-side floor already active in
+# shadow_persistent.py's base_shadow_loop() (dexpaprika.get_trending_pools
+# min_liquidity_usd=1000.0), so a candidate cleared at discovery is never
+# rejected again here at trade time. Recalibrate on Base's own reserve_usd-
+# at-entry column once base_momentum_shadow_log clears n>=100 real closures
+# (see pocket_entry_sweep.py) -- until then this is a deliberately wide
+# starting floor, not a profitability-calibrated one.
+MIN_LIQUIDITY_USD = 1000.0
 
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
@@ -482,8 +504,20 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # replay behind the number). This pocket's own table held only 49 rows at
 # the time -- still below the n>=100 bar above, so this move is BORROWED
 # consistency, not an independent verdict from this pocket's own population.
-# Re-verify once this table clears 100 rows.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 25.0
+#
+# 24/08, DISARMED (25% -> None) same day, operator-directed: this gate
+# measures the market's RAW peak (never adjusted for whether it was really
+# sellable, see solana_late_bonding_shadow.py's 24/08 rug-vs-regime finding
+# -- Base's own scams cluster $9-19K liquidity, real gains $22K+, so a
+# scam's inflated peak can still open/hold this gate open even though it was
+# never capturable). Disarming it here is deliberate, not an oversight: the
+# operative filters are now M5_SURGE_THRESHOLD_PCT (above) and
+# MIN_LIQUIDITY_USD (below) -- "les criteres sont fixes ailleurs". None, not
+# 0.0: `disarmed = REGIME_MIN_MEDIAN_PEAK_PCT is None` is the only value that
+# guarantees ALWAYS open (0.0 could still block on a rare negative median).
+# Re-arm once base_momentum_shadow_log clears n>=100 real closures and its
+# own peak-vs-liquidity relationship can be measured directly.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = None
 
 _ensured_regime_candidates_db_paths: set[str] = set()
 
