@@ -109,7 +109,7 @@ async def test_record_signals_logs_pool_above_threshold():
 
 @pytest.mark.asyncio
 async def test_record_signals_ignores_pool_below_threshold():
-    logged = await shadow.record_signals([_pool(m5=24.9)], chain=CHAIN)
+    logged = await shadow.record_signals([_pool(m5=shadow.M5_SURGE_THRESHOLD_PCT - 0.1)], chain=CHAIN)
     assert logged == 0
     assert await _rows() == []
 
@@ -617,7 +617,10 @@ async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
 
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_force_closes_a_losing_position():
-    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
+    await _insert_open_row(
+        pool_address="poolA", entry_price=1.0, minutes_ago=10.0,
+        pool_age_minutes=shadow.MAX_POOL_AGE_MINUTES + 1.0,
+    )
     client = FakeClient({"poolA": 0.95})  # below entry -- losing, no rung/stop/max-hold triggered on its own
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
     assert counts["closed_age_limit"] == 1
