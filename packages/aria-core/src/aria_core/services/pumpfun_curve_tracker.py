@@ -91,18 +91,19 @@ MAX_ACCOUNTS_PER_CALL = 100
 # throttle targets ~90% of it -- the project norm is to use most of the real
 # sustained rate and never to guess it.
 #
-#   Chainstack Developer : 25 req/s is the GENERAL per-plan figure shown on
+#   Chainstack Growth    : 250 req/s is the GENERAL per-plan figure shown on
 #                          the node dashboard, but Solana Mainnet has its own,
-#                          much lower ceiling: 5 req/s (docs.chainstack.com/
+#                          much lower ceiling: 50 req/s (docs.chainstack.com/
 #                          docs/limits, confirmed live 2026.08.24 -- see
 #                          docs/HANDOFF_CHAINSTACK.md section 3.B).
 #                          getMultipleAccounts has no per-method override, so
-#                          it falls under this 5 req/s Solana ceiling, not the
-#                          general 25. Throttled to 4.5 (90% of 5, not of 25 --
-#                          this module ran at 22 for 3 days, ~4.4x the real
-#                          cap, before the mismatch between the dashboard's
-#                          general figure and the chain-specific limit was
-#                          caught).
+#                          it falls under this 50 req/s Solana ceiling, not
+#                          the general 250. Throttled to 45 (90% of 50).
+#                          24/08 -- raised from 4.5 (90% of the Developer
+#                          plan's 5 req/s ceiling) after the operator upgraded
+#                          to Growth; re-verify both this constant and the
+#                          real plan tier before trusting either number, they
+#                          move together but neither implies the other.
 #   Helius Free          : 10 req/s, from their published plan. Throttled to 9.
 #
 # Two SEPARATE throttles on purpose: a shared one would pace the fast provider
@@ -113,7 +114,7 @@ MAX_ACCOUNTS_PER_CALL = 100
 # all. With 588 mints tracked the poll fired its batches back to back, drew
 # 429s, and candidate evaluation collapsed from 34 to 18 detections/hour. The
 # symptom read as "fewer trades"; the cause was a missing rate limit.
-CHAINSTACK_MAX_RPS = 4.5
+CHAINSTACK_MAX_RPS = 45.0
 HELIUS_MAX_RPS = 9.0
 
 # Kept for callers/tests that reason about the primary path.

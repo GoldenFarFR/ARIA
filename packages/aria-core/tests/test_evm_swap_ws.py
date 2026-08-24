@@ -434,12 +434,59 @@ async def test_resubscribe_returns_none_without_a_connection():
 
 
 @pytest.mark.asyncio
-async def test_resubscribe_returns_none_with_zero_pools():
+async def test_resubscribe_opens_newheads_keepalive_with_zero_pools():
+    """24/08 fix: with no real pool tracked, process_subscriptions() would
+    exit immediately without SOME active subscription -- newHeads is billed
+    1 RU/push same as any other subscription, so it must still be opened
+    here rather than left as a separate always-on call (the pre-fix
+    behaviour, which cost real money on fast chains like Robinhood Chain's
+    100ms block time even once real pools were tracked)."""
     feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
     feed._w3 = MagicMock()
-    feed._w3.eth.subscribe = AsyncMock(return_value="sub1")
-    assert await feed._resubscribe() is None
-    feed._w3.eth.subscribe.assert_not_called()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_newheads")
+    assert await feed._resubscribe() == "sub_newheads"
+    feed._w3.eth.subscribe.assert_called_once_with("newHeads")
+    assert feed._newheads_sub_id == "sub_newheads"
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_closes_newheads_keepalive_once_a_real_pool_is_tracked():
+    """The keepalive is pure waste once a real logs subscription exists to
+    keep the generator alive on its own -- must be closed, not left running
+    alongside it."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(side_effect=["sub_newheads", "sub_v3"])
+    feed._w3.eth.unsubscribe = AsyncMock(return_value=True)
+    await feed._resubscribe()  # zero pools -- opens the keepalive
+    assert feed._newheads_sub_id == "sub_newheads"
+
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    feed._w3.eth.unsubscribe.assert_called_once_with("sub_newheads")
+    assert feed._newheads_sub_id is None
+    assert feed._active_sub_ids == ["sub_v3"]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_reopens_newheads_keepalive_after_last_pool_removed():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(side_effect=["sub_v3", "sub_newheads2"])
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    assert feed._newheads_sub_id is None
+
+    feed._pools.pop("0xv3pool")
+    await feed._resubscribe()
+    assert feed._newheads_sub_id == "sub_newheads2"
+    assert feed._active_sub_ids == []
 
 
 @pytest.mark.asyncio

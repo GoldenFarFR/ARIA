@@ -57,24 +57,28 @@ class Priority(IntEnum):
     LOW = 2       # price refresh, reconciliation
 
 
-# 24/08 CORRECTION -- 25 rps is Chainstack's GENERAL per-plan dashboard figure,
-# not the real ceiling. Solana Mainnet has its own, much lower cap: 5 req/s
-# (docs.chainstack.com/docs/limits, confirmed live 2026.08.24, see
-# pumpfun_curve_tracker.py's CHAINSTACK_MAX_RPS and docs/HANDOFF_CHAINSTACK.md
-# section 3.B). This shared budget ran at 22.5 (90% of the wrong 25) for days
-# while already wired into REAL-CAPITAL callers (solana_agent_wallet.py,
-# jupiter_swap_signer.py, jupiter_swap_simulation.py, solana_rent_recovery.py)
-# -- found live only because a separate module's late-bonding shadow pocket,
-# newly reconnected the same day, started drawing 429s from Chainstack the
-# moment its own polling resumed. Calibrated to 90% of the real, VERIFIED
-# limit per the dome rule -- never a guessed number, and sourced here next to
-# the constant so a future reader can re-check it.
-DEFAULT_RATE_PER_SECOND = 4.5
+# 24/08 CORRECTION -- 25 rps was Chainstack's GENERAL per-plan dashboard
+# figure on the Developer tier, not the real ceiling. Solana Mainnet has its
+# own, much lower cap: 5 req/s on Developer (docs.chainstack.com/docs/limits,
+# confirmed live 2026.08.24, see pumpfun_curve_tracker.py's CHAINSTACK_MAX_RPS
+# and docs/HANDOFF_CHAINSTACK.md section 3.B). This shared budget ran at 22.5
+# (90% of the wrong 25) for days while already wired into REAL-CAPITAL callers
+# (solana_agent_wallet.py, jupiter_swap_signer.py, jupiter_swap_simulation.py,
+# solana_rent_recovery.py) -- found live only because a separate module's
+# late-bonding shadow pocket, newly reconnected the same day, started drawing
+# 429s from Chainstack the moment its own polling resumed.
+#
+# 24/08 UPDATE -- operator upgraded the Chainstack account from Developer to
+# Growth ($49/mo) the same day. Solana Mainnet's own ceiling on Growth is 50
+# req/s (confirmed live, same source), so this raises to 90% of 50. Re-verify
+# both this constant and the real plan tier before trusting either, they move
+# together but neither implies the other -- never guess it.
+DEFAULT_RATE_PER_SECOND = 45.0
 
 # Burst allowance. One second's worth: enough to absorb the simultaneous wake-up
 # of every loop, not enough to spend a quiet minute in one shot -- which would
 # be refused by the provider regardless of what this module thinks.
-DEFAULT_BURST = 4.5
+DEFAULT_BURST = 45.0
 
 # How long a LOW-priority caller waits before giving up. Deliberately short: it
 # exists to skip a momentary contention, not to queue.

@@ -236,6 +236,11 @@ class EVMSwapWebSocketFeed:
         # multiplier on top of the v4 fan-out bug below. Track the active
         # subscription ids so a resubscribe can close them first.
         self._active_sub_ids: list[str] = []
+        # 24/08 -- separate from _active_sub_ids (logs subscriptions, closed
+        # and reissued together on every pool-set change). newHeads is a
+        # keepalive ONLY: see _resubscribe()'s docstring for why it must be
+        # open exactly while _active_sub_ids is empty, never otherwise.
+        self._newheads_sub_id: str | None = None
 
     # -- lifecycle -----------------------------------------------------
 
@@ -384,6 +389,7 @@ class EVMSwapWebSocketFeed:
                     # pass would otherwise try (harmlessly, but pointlessly)
                     # to close ids that no longer exist on this new socket.
                     self._active_sub_ids = []
+                    self._newheads_sub_id = None
                     backoff = _RECONNECT_MIN_SECONDS
                     logger.info("evm_swap_ws[%s]: connected", self.chain)
                     # Real bug found live 24/08: web3.py's process_subscriptions()
@@ -391,11 +397,9 @@ class EVMSwapWebSocketFeed:
                     # subscription the moment it starts iterating -- add_pool()
                     # racing in from the outside to create the real logs
                     # subscription arrives too late, the socket has already
-                    # closed. A permanent newHeads subscription (ignored by
-                    # _handle_notification, which only acts on log topics) keeps
-                    # the generator alive across pool add/remove churn, including
-                    # the empty-pools startup window.
-                    await w3.eth.subscribe("newHeads")
+                    # closed. _resubscribe() itself opens a newHeads keepalive
+                    # for exactly this empty-pools window (see its docstring),
+                    # so a single call here covers the cold start too.
                     await self._resubscribe()
                     async for payload in w3.socket.process_subscriptions():
                         if self._stopped:
@@ -419,6 +423,12 @@ class EVMSwapWebSocketFeed:
         no "add address to an existing filter" call, so a pool-set change
         closes every previous subscription first (24/08 fix -- see
         ``_active_sub_ids``'s own docstring for the incident this closes).
+
+        Also owns the ``newHeads`` keepalive (24/08 fix): open only while
+        ``_active_sub_ids`` is empty (a real logs subscription keeps
+        ``process_subscriptions()`` alive on its own, so the keepalive would
+        be pure waste on top of it), closed the moment a real pool is
+        tracked, reopened if the pool set ever empties out again.
 
         v2/v3 and v4 are issued as TWO SEPARATE subscriptions, never merged
         into one filter (24/08 fix, real incident): v4 pools all share the
@@ -456,7 +466,26 @@ class EVMSwapWebSocketFeed:
                 {"address": [POOL_MANAGER_ADDRESS], "topics": [[_V4_SWAP_TOPIC], v4_pool_ids]},
             )
             self._active_sub_ids.append(sub_id)
-        return self._active_sub_ids[-1] if self._active_sub_ids else None
+
+        # 24/08 -- newHeads is billed 1 RU per push, same as any other
+        # subscription (docs.chainstack.com/docs/request-units, confirmed
+        # live), so it must be open ONLY while no real logs subscription
+        # exists to keep process_subscriptions() alive on its own. Left
+        # permanently open (the pre-fix behaviour), a fast chain costs real
+        # money for nothing: Robinhood Chain's 100ms block time alone would
+        # be ~864k RU/day just for this keepalive, on top of every real Sync/
+        # Swap event this module actually wants.
+        if self._active_sub_ids:
+            if self._newheads_sub_id is not None:
+                try:
+                    await self._w3.eth.unsubscribe(self._newheads_sub_id)
+                except Exception as exc:  # noqa: BLE001 -- best-effort, a dead socket cannot leak
+                    logger.info("evm_swap_ws[%s]: unsubscribe(newHeads) failed (%s)", self.chain, exc)
+                self._newheads_sub_id = None
+        elif self._newheads_sub_id is None:
+            self._newheads_sub_id = await self._w3.eth.subscribe("newHeads")
+
+        return self._active_sub_ids[-1] if self._active_sub_ids else self._newheads_sub_id
 
     def _handle_notification(self, payload) -> None:
         try:

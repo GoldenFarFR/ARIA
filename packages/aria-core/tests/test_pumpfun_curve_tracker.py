@@ -337,11 +337,12 @@ def test_batches_are_paced_apart(monkeypatch):
 
 
 def test_the_rate_is_below_the_provider_cap():
-    # Chainstack Solana Mainnet Developer plan: 5 req/s specifically (not the
-    # general 25 req/s tier, confirmed live 24/08 -- see docs/HANDOFF_CHAINSTACK.md
-    # section 3.B). The norm is ~90% of the real rate, never the ceiling itself.
-    assert tracker.MAX_REQUESTS_PER_SECOND < 5.0
-    assert tracker.MAX_REQUESTS_PER_SECOND >= 4.0
+    # Chainstack Solana Mainnet Growth plan: 50 req/s specifically (not the
+    # general 250 req/s tier, confirmed live 24/08 -- see docs/HANDOFF_CHAINSTACK.md
+    # section 3.B; was 5 req/s pre-upgrade on the Developer plan). The norm is
+    # ~90% of the real rate, never the ceiling itself.
+    assert tracker.MAX_REQUESTS_PER_SECOND < 50.0
+    assert tracker.MAX_REQUESTS_PER_SECOND >= 40.0
 
 
 # --- provider cascade (2026.08.21, RPS figure corrected 24/08) --------------
@@ -415,17 +416,19 @@ def test_a_failure_never_disables_a_provider(monkeypatch):
 
 def test_each_provider_keeps_its_own_pace():
     # A shared throttle would silently average the two rates together instead
-    # of respecting each provider's own real cap. Since the 24/08 Solana
-    # Mainnet correction, Chainstack (5 req/s real cap) is actually SLOWER
-    # than Helius (10 req/s) here -- the point of this test is that each
-    # endpoint's pacing stays independently correct either way, not that
-    # Chainstack is faster.
+    # of respecting each provider's own real cap. 24/08: Chainstack's real
+    # Solana Mainnet cap moved from 5 req/s (Developer plan) to 50 req/s
+    # (Growth plan, operator upgraded the same day) -- Chainstack is now
+    # FASTER than Helius (10 req/s) here, the reverse of the pre-upgrade
+    # ordering. The point of this test is that each endpoint's pacing stays
+    # independently correct either way, not which provider happens to be
+    # faster.
     t = _two_provider_tracker()
     assert t._endpoints[0].max_rps == tracker.CHAINSTACK_MAX_RPS
     assert t._endpoints[1].max_rps == tracker.HELIUS_MAX_RPS
-    assert t._endpoints[0].min_interval > t._endpoints[1].min_interval
-    assert tracker.HELIUS_MAX_RPS < 10.0     # under the published Helius cap
-    assert tracker.CHAINSTACK_MAX_RPS < 5.0  # under the real Solana Mainnet cap (5 req/s)
+    assert t._endpoints[0].min_interval < t._endpoints[1].min_interval
+    assert tracker.HELIUS_MAX_RPS < 10.0      # under the published Helius cap
+    assert tracker.CHAINSTACK_MAX_RPS < 50.0  # under the real Solana Mainnet cap (50 req/s, Growth)
 
 
 def test_a_single_provider_still_works_alone(monkeypatch):
