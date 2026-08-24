@@ -148,6 +148,7 @@ def test_get_snapshot_weth_quote_leaves_price_usd_none():
     assert snap.available is True
     assert snap.price_usd is None
     assert snap.price_quote == pytest.approx(0.0005)
+    assert snap.quote_is_weth is True
 
 
 def test_get_snapshot_window_excludes_stale_ticks():
@@ -357,6 +358,7 @@ async def test_add_pool_v2v3_registers_and_is_idempotent():
     contract = MagicMock()
     contract.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
     contract.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=18)
     fake_w3.eth.contract.return_value = contract
     fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
     feed._w3 = fake_w3
@@ -370,6 +372,82 @@ async def test_add_pool_v2v3_registers_and_is_idempotent():
     ok_again = await feed.add_pool("0xpool", dex_id="uniswap_v3", token_address="0xtoken0")
     assert ok_again is True
     fake_w3.eth.contract.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_pool_v2v3_fetches_real_decimals_when_not_overridden():
+    """24/08 real gap: the previous 18/18 default silently mispriced any pool
+    where the tracked token isn't 18-decimal (the near-universal convention,
+    but never guaranteed for a fresh meme token) -- decimals are now fetched
+    on-chain per side, matching whichever token is token0 vs token1."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+    contract.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+
+    def _fake_contract(address, abi):
+        c = MagicMock()
+        decimals_map = {"0xtoken0": 6, "0xtoken1": 18, "0xpool": None}
+        if address in ("0xtoken0", "0xtoken1"):
+            c.functions.decimals.return_value.call = AsyncMock(return_value=decimals_map[address])
+        else:
+            c.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+            c.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+        return c
+
+    fake_w3.eth.contract.side_effect = _fake_contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool("0xpool", dex_id="uniswap_v3", token_address="0xtoken0")
+    assert ok is True
+    assert feed._pools["0xpool"].decimals0 == 6
+    assert feed._pools["0xpool"].decimals1 == 18
+
+
+@pytest.mark.asyncio
+async def test_add_pool_v2v3_defaults_to_18_when_decimals_call_fails():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+
+    def _fake_contract(address, abi):
+        c = MagicMock()
+        if address in ("0xtoken0", "0xtoken1"):
+            c.functions.decimals.return_value.call = AsyncMock(side_effect=RuntimeError("no decimals()"))
+        else:
+            c.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+            c.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+        return c
+
+    fake_w3.eth.contract.side_effect = _fake_contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool("0xpool", dex_id="uniswap_v3", token_address="0xtoken0")
+    assert ok is True
+    assert feed._pools["0xpool"].decimals0 == 18
+    assert feed._pools["0xpool"].decimals1 == 18
+
+
+@pytest.mark.asyncio
+async def test_add_pool_v2v3_explicit_decimals_skip_the_rpc_call():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+    contract.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+    fake_w3.eth.contract.return_value = contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool(
+        "0xpool", dex_id="uniswap_v3", token_address="0xtoken0", decimals0=6, decimals1=18,
+    )
+    assert ok is True
+    assert feed._pools["0xpool"].decimals0 == 6
+    assert feed._pools["0xpool"].decimals1 == 18
+    contract.functions.decimals.assert_not_called()
 
 
 @pytest.mark.asyncio

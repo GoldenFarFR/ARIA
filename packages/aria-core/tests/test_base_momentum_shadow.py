@@ -201,6 +201,182 @@ async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     assert logged == 0  # fails closed, never raises into the caller
 
 
+# --- _snapshot_from_ws / ws_feed wiring (24/08, evm_swap_ws.py integration) -
+
+class FakeWsFeed:
+    """Minimal double for EVMSwapWebSocketFeed's interface actually used by
+    base_momentum_shadow.py -- _pools (membership check), add_pool/
+    remove_pool (lifecycle), get_snapshot (price read). Never the real
+    class: that one needs a live websocket connection to verify anything,
+    out of scope for a pure unit test."""
+
+    def __init__(self):
+        self._pools: dict[str, object] = {}
+        self._snapshots: dict[str, object] = {}
+        self.add_pool_calls: list[tuple[str, str, str]] = []
+        self.remove_pool_calls: list[str] = []
+
+    async def add_pool(self, pool_address, *, dex_id, token_address):
+        self.add_pool_calls.append((pool_address, dex_id, token_address))
+        self._pools[pool_address.lower()] = True
+        return True
+
+    async def remove_pool(self, pool_address):
+        self.remove_pool_calls.append(pool_address)
+        self._pools.pop(pool_address.lower(), None)
+
+    def get_snapshot(self, pool_address):
+        return _FakeWsSnapshot(available=False)
+
+
+@dataclasses.dataclass
+class _FakeWsSnapshot:
+    available: bool
+    price_usd: float | None = None
+    price_quote: float | None = None
+    reserve_usd: float | None = None
+    quote_is_weth: bool = False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_from_ws_used_when_available_and_price_resolved(monkeypatch):
+    ws_feed = FakeWsFeed()
+    ws_feed._pools["poola"] = True
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(
+        available=True, price_usd=4.2, reserve_usd=5000.0,
+    )
+    client = FakeClient({"poolA": 99.0})  # would prove wrong if this got used instead
+    snapshot = await shadow._snapshot_with_fallback(
+        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+    )
+    assert snapshot.available is True
+    assert snapshot.price_usd == 4.2
+    assert snapshot.reserve_usd == 5000.0
+    assert client.calls == []  # REST cascade never reached
+
+
+@pytest.mark.asyncio
+async def test_snapshot_from_ws_weth_quote_resolved_via_doppler(monkeypatch):
+    ws_feed = FakeWsFeed()
+    ws_feed._pools["poola"] = True
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(
+        available=True, price_usd=None, price_quote=0.001, quote_is_weth=True,
+    )
+
+    async def fake_eth_usd_rate():
+        return 3000.0
+
+    monkeypatch.setattr(shadow.doppler, "eth_usd_rate", fake_eth_usd_rate)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(
+        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+    )
+    assert snapshot.available is True
+    assert snapshot.price_usd == pytest.approx(3.0)  # 0.001 * 3000
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_from_ws_falls_back_to_rest_when_pool_not_tracked(monkeypatch):
+    ws_feed = FakeWsFeed()  # empty -- pool never added
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(
+        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+    )
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5  # DexScreener answered, WS had nothing
+
+
+@pytest.mark.asyncio
+async def test_snapshot_from_ws_falls_back_when_usd_leg_unresolved(monkeypatch):
+    """WS is tracking the pool but its quote leg is neither WETH nor a known
+    stable (e.g. paired against another meme token) -- price_usd stays
+    unresolvable, must fall through to REST rather than return a useless
+    available=True/price_usd=None snapshot."""
+    ws_feed = FakeWsFeed()
+    ws_feed._pools["poola"] = True
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(
+        available=True, price_usd=None, price_quote=42.0, quote_is_weth=False,
+    )
+
+    async def fake_fetch_token_pairs(contract, *, chain="base"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(
+        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+    )
+    assert snapshot.price_usd == 3.5  # fell through to DexScreener
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_calls_add_pool_when_dex_id_known():
+    await _insert_open_row(
+        pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
+    )
+    ws_feed = FakeWsFeed()
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(available=False)
+    client = FakeClient({"poolA": 1.0})  # stays open (no move) -- REST fallback still answers
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert ws_feed.add_pool_calls == [("poolA", "uniswap_v3", "tokA")]
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_never_calls_add_pool_when_dex_id_unknown():
+    await _insert_open_row(pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0)
+    ws_feed = FakeWsFeed()
+    client = FakeClient({"poolA": 1.0})
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert ws_feed.add_pool_calls == []
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_calls_remove_pool_on_close():
+    await _insert_open_row(
+        pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
+    )
+    ws_feed = FakeWsFeed()
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(available=False)
+    client = FakeClient({"poolA": 1000.0})  # far past enough rungs to fully close
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert counts["closed_scale_out_complete"] == 1
+    assert ws_feed.remove_pool_calls == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_never_calls_remove_pool_while_still_open():
+    await _insert_open_row(
+        pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
+    )
+    ws_feed = FakeWsFeed()
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(available=False)
+    client = FakeClient({"poolA": 1.0})  # no move -- stays open
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert ws_feed.remove_pool_calls == []
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_ws_add_pool_failure_never_blocks_the_row():
+    await _insert_open_row(
+        pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
+    )
+    ws_feed = FakeWsFeed()
+
+    async def _raising_add_pool(*args, **kwargs):
+        raise RuntimeError("rpc down")
+
+    ws_feed.add_pool = _raising_add_pool
+    client = FakeClient({"poolA": 2.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert counts["scale_out_fills"] == 3  # REST cascade still ran, unaffected
+
+
 # --- _snapshot_with_fallback (16/08 API cascade) ---------------------------
 
 @pytest.mark.asyncio
@@ -333,7 +509,7 @@ async def test_snapshot_fallback_skips_dexscreener_without_a_token_address(monke
 
 async def _insert_open_row(
     *, pool_address="poolA", entry_price=1.0, minutes_ago=20.0, pool_age_minutes=None,
-    realistic_entry_price=_SENTINEL_USE_ENTRY_PRICE,
+    realistic_entry_price=_SENTINEL_USE_ENTRY_PRICE, token_address=None, dex_id=None,
 ):
     detected_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     pool_created_at = (
@@ -350,11 +526,12 @@ async def _insert_open_row(
         await db.execute(
             """
             INSERT INTO base_momentum_shadow_log
-                (pool_address, chain, status, detected_at, entry_price, pool_created_at,
-                 realistic_entry_price)
-            VALUES (?, ?, 'open', ?, ?, ?, ?)
+                (pool_address, token_address, chain, status, detected_at, entry_price, pool_created_at,
+                 realistic_entry_price, dex_id)
+            VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
             """,
-            (pool_address, CHAIN, detected_at, entry_price, pool_created_at, realistic_entry_price),
+            (pool_address, token_address, CHAIN, detected_at, entry_price, pool_created_at,
+             realistic_entry_price, dex_id),
         )
         await db.commit()
 

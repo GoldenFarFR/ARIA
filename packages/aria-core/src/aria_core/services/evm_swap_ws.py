@@ -185,6 +185,12 @@ class EVMSwapSnapshot:
     # polling caller between reads, but exact from the feed's own side)
     cumulative_volume_quote: float = 0.0  # sum of |amount_quote| since add_pool()
     distinct_traders_count: int = 0  # v3/v4 only, 0 for v2 (see _TrackedPool)
+    # 24/08 -- lets a caller resolve price_usd itself when the quote leg is
+    # WETH (price_usd stays None here per the honesty rule above, this flag
+    # is the caller's cue to multiply price_quote by doppler.eth_usd_rate()
+    # rather than silently treating an unresolved WETH-quoted pool the same
+    # as a genuinely un-priceable one).
+    quote_is_weth: bool = False
 
 
 @dataclass
@@ -272,12 +278,22 @@ class EVMSwapWebSocketFeed:
 
     async def add_pool(
         self, pool_address: str, *, dex_id: str, token_address: str,
-        decimals0: int = 18, decimals1: int = 18,
+        decimals0: int | None = None, decimals1: int | None = None,
     ) -> bool:
         """Registers a pool for live tracking. Returns ``False`` (no error
         raised) when the dex_id is not covered or the on-chain verification
         fails -- the caller's cue to stay on its REST fallback, never a
-        reason to interrupt its own cycle."""
+        reason to interrupt its own cycle.
+
+        ``decimals0``/``decimals1`` are optional overrides -- 24/08, real gap
+        found while wiring this into base_momentum_shadow.py: the previous
+        18/18 default silently mispriced any pool where the tracked token
+        (a fresh, unpredictable meme token) does NOT use the near-universal
+        18-decimal convention, by a power-of-10 factor. Left unset, both
+        sides are now fetched on-chain (this module's own "never trust a
+        decode blindly" doctrine, already applied to token0/token1
+        ordering) -- pass an explicit value only to skip that RPC round-trip
+        when the caller already knows it for certain."""
         family = self.dex_family(dex_id)
         if family is None:
             return False
@@ -293,9 +309,21 @@ class EVMSwapWebSocketFeed:
             logger.info("evm_swap_ws[%s]: add_pool verify failed for %s (%s)", self.chain, pool_address, exc)
             return False
 
+    async def _fetch_decimals(self, token_address: str) -> int:
+        """Real ERC20 decimals() call -- falls back to 18 (the near-universal
+        convention) only on failure, never blocks add_pool over it."""
+        try:
+            checksum = self._w3.to_checksum_address(token_address)
+            contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_DECIMALS_ABI)
+            return int(await contract.functions.decimals().call())
+        except Exception as exc:  # noqa: BLE001 -- best-effort, 18 is the safe fallback
+            logger.info("evm_swap_ws[%s]: decimals() failed for %s, defaulting to 18 (%s)",
+                        self.chain, token_address, exc)
+            return 18
+
     async def _add_pool_v2v3(
         self, pool_address: str, token_address: str, dex_id: str, family: str,
-        decimals0: int, decimals1: int,
+        decimals0: int | None, decimals1: int | None,
     ) -> bool:
         key = pool_address.lower()
         if key in self._pools:
@@ -313,6 +341,10 @@ class EVMSwapWebSocketFeed:
             return False
         token_is_currency0 = tracked_token == token0
         quote = token1 if token_is_currency0 else token0
+        if decimals0 is None:
+            decimals0 = await self._fetch_decimals(token0)
+        if decimals1 is None:
+            decimals1 = await self._fetch_decimals(token1)
         self._pools[key] = _TrackedPool(
             dex_id=dex_id, family=family, token_is_currency0=token_is_currency0,
             decimals0=decimals0, decimals1=decimals1,
@@ -322,7 +354,8 @@ class EVMSwapWebSocketFeed:
         return True
 
     async def _add_pool_v4(
-        self, pool_id_hex: str, token_address: str, dex_id: str, decimals0: int, decimals1: int,
+        self, pool_id_hex: str, token_address: str, dex_id: str,
+        decimals0: int | None, decimals1: int | None,
     ) -> bool:
         # v4 pools carry no separate contract to introspect token0/token1
         # from -- the caller (which already resolved this pool via
@@ -332,10 +365,16 @@ class EVMSwapWebSocketFeed:
         key = pool_id_hex.lower()
         if key in self._pools:
             return True
+        # v4 has no shared PoolManager contract to introspect either side
+        # from -- unlike v2/v3, decimals are NOT auto-fetched here, same
+        # trust-the-caller posture this function already applies to
+        # token_is_currency0 (see comment above). Falls back to 18/18 when
+        # unset, same as before this module's v2/v3 auto-fetch was added.
         self._pools[key] = _TrackedPool(
             dex_id=dex_id, family="v4",
             token_is_currency0=token_address == "currency0",
-            decimals0=decimals0, decimals1=decimals1,
+            decimals0=decimals0 if decimals0 is not None else 18,
+            decimals1=decimals1 if decimals1 is not None else 18,
             quote_is_weth=False, quote_is_stable=False, pool_id_hex=pool_id_hex,
         )
         await self._resubscribe()
@@ -370,6 +409,7 @@ class EVMSwapWebSocketFeed:
             reserve_usd=pool.last_reserve_usd, raw_liquidity=pool.last_raw_liquidity,
             swap_count=pool.swap_count, cumulative_volume_quote=pool.cumulative_volume_quote,
             distinct_traders_count=len(pool.distinct_traders),
+            quote_is_weth=pool.quote_is_weth,
         )
 
     # -- websocket loop ----------------------------------------------------
@@ -626,4 +666,8 @@ class EVMSwapWebSocketFeed:
 _MINIMAL_TOKEN01_ABI = [
     {"constant": True, "inputs": [], "name": "token0", "outputs": [{"name": "", "type": "address"}], "type": "function"},
     {"constant": True, "inputs": [], "name": "token1", "outputs": [{"name": "", "type": "address"}], "type": "function"},
+]
+
+_MINIMAL_DECIMALS_ABI = [
+    {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
 ]
