@@ -50,6 +50,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from aria_core.services.solana_rpc_budget import Priority
+from aria_core.services import solana_rpc_budget
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
     require_solana_rpc_http,
@@ -413,6 +415,19 @@ class PumpFunCurveTracker:
                 if wait > 0:
                     self.throttled_waits += 1
                     await asyncio.sleep(wait)
+                # 24/08 fix -- this endpoint's own min_interval (ep.max_rps)
+                # paces THIS caller alone. consider_candidate (shadow entry
+                # screening) hits the same Chainstack endpoint independently,
+                # each throttle honouring its own 4.5 rps -- together up to
+                # ~9 rps against a real 5 rps ceiling. Found live: candidates
+                # kept failing with 429 even after consider_candidate was
+                # routed through the shared budget, because this loop never
+                # was. "primary" is Chainstack (the endpoint the shared
+                # budget is calibrated for); "fallback" is Helius, a
+                # different provider with its own separate rate, never
+                # gated here.
+                if ep.name == "primary":
+                    await solana_rpc_budget.acquire(Priority.NORMAL)
                 ep.last_call_at = time.monotonic()
                 try:
                     accounts = await _rpc_get_multiple_accounts(
