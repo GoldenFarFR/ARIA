@@ -618,7 +618,7 @@ async def build_status_report(user_id: int | str | None) -> str:
         f"ARIA — Status (opérateur)\n"
         f"Build commit: {commit}\n"
         f"Your ID: {user_id if user_id else '?'} — admin ✅\n"
-        f"{sorties} Sorties capital réel (/stop · /resume)\n"
+        f"{sorties} Sorties capital réel (/offreal · /onreal)\n"
         f"{custody} Custody wallet agent (auto, pas de commande)\n"
         f"{paper} Paper trading 1M$ (/offpaper · /onpaper)\n"
         f"{x_flag} X posts/replies (/offx · /onx)\n"

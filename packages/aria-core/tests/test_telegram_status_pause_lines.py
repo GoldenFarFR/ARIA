@@ -73,7 +73,7 @@ async def test_status_shows_all_five_pause_flags_when_nothing_armed(monkeypatch)
     await telegram_bot._handle_status(update, FakeContext())
 
     text = update.message.replies[0]
-    assert "✅ Sorties capital réel (/stop · /resume)" in text
+    assert "✅ Sorties capital réel (/offreal · /onreal)" in text
     assert "✅ Custody wallet agent (auto, pas de commande)" in text
     assert "✅ Paper trading 1M$ (/offpaper · /onpaper)" in text
     assert "✅ X posts/replies (/offx · /onx)" in text
@@ -92,6 +92,6 @@ async def test_status_shows_shadow_pause_armed(monkeypatch):
     text = update.message.replies[0]
     assert "❌ Poches shadow (/offshadow · /onshadow)" in text
     # the other 4 flags are untouched by arming shadow alone
-    assert "✅ Sorties capital réel (/stop · /resume)" in text
+    assert "✅ Sorties capital réel (/offreal · /onreal)" in text
     assert "✅ X posts/replies (/offx · /onx)" in text
     assert "✅ Paper trading 1M$ (/offpaper · /onpaper)" in text
