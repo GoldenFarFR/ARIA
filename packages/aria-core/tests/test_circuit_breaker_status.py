@@ -80,7 +80,7 @@ async def test_sustained_outage_false_after_a_single_isolated_open():
     dexscreener._record_outcome(ok=False)
     dexscreener._record_outcome(ok=False)
     dexscreener._record_outcome(ok=False)
-    await asyncio.sleep(0.05)
+    await asyncio.gather(*cbl._background_tasks)
     status = await cbs.get_circuit_status()
     assert status["dexscreener"]["opened_count_last_hour"] == 1
     assert status["dexscreener"]["sustained_outage"] is False
@@ -88,24 +88,30 @@ async def test_sustained_outage_false_after_a_single_isolated_open():
 
 @pytest.mark.asyncio
 async def test_sustained_outage_true_after_repeated_reopens_within_the_window():
+    """24/08 real CI flake, same root cause as circuit_breaker_log's own
+    nowait test (34ef1b09): a fixed 0.05s sleep after each transition
+    assumed the background nowait() write always lands within that window --
+    under CI load it sometimes did not, losing an "opened" event (assert
+    2 == 3). Awaiting the module's own _background_tasks set is
+    deterministic regardless of scheduler load."""
     for _ in range(2):
         dexscreener._record_outcome(ok=False)
         dexscreener._record_outcome(ok=False)
         dexscreener._record_outcome(ok=False)
-        await asyncio.sleep(0.05)
+        await asyncio.gather(*cbl._background_tasks)
         # Resets consecutive_failures to 0 -- enough for the NEXT triple-failure
         # to cross the threshold again and log a fresh "opened" (dexscreener's
         # own _record_outcome doesn't clear _circuit_open_until on success, but
         # that's a pre-existing quirk of the breaker itself, not something this
         # test needs to assert on).
         dexscreener._record_outcome(ok=True)
-        await asyncio.sleep(0.05)
+        await asyncio.gather(*cbl._background_tasks)
     # Re-open a third time so the CURRENT state is "open" (sustained_outage
     # requires both: currently open AND reopened >= threshold in the window).
     dexscreener._record_outcome(ok=False)
     dexscreener._record_outcome(ok=False)
     dexscreener._record_outcome(ok=False)
-    await asyncio.sleep(0.05)
+    await asyncio.gather(*cbl._background_tasks)
 
     status = await cbs.get_circuit_status()
     assert status["dexscreener"]["opened_count_last_hour"] == 3
