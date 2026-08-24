@@ -29,8 +29,6 @@ import logging
 
 import httpx
 
-from solders.pubkey import Pubkey
-
 from aria_core.services import solana_gateway
 from aria_core.services.solana_rpc_budget import Priority
 
@@ -54,6 +52,8 @@ _LAMPORTS = 1_000_000_000
 
 def curve_address(mint: str) -> str:
     """The bonding-curve account for `mint`, derived not looked up."""
+    from solders.pubkey import Pubkey  # deferred: solders is the optional [agent_wallet] extra
+
     program = Pubkey.from_string(PUMPFUN_PROGRAM_ID)
     pda, _ = Pubkey.find_program_address(
         [b"bonding-curve", bytes(Pubkey.from_string(mint))], program
