@@ -136,12 +136,16 @@ class TestTimeout:
 
 class TestCalibration:
     def test_the_default_rate_stays_under_the_verified_limit(self):
-        """Chainstack's free tier is 25 rps; the dome calibrates to ~90%.
+        """25 rps is Chainstack's GENERAL per-plan dashboard figure, not the
+        real ceiling -- Solana Mainnet's own cap is 5 rps (confirmed live
+        2026.08.24, see pumpfun_curve_tracker.py's CHAINSTACK_MAX_RPS). This
+        budget ran at 22.5 (90% of the wrong number) for days while already
+        wired into real-capital callers before the mismatch was caught.
         Guards the invariant, not the number -- raising it past the real
         ceiling is what produced the outage this module exists to fix."""
         from aria_core.services import solana_rpc_budget as mod
 
-        assert mod.DEFAULT_RATE_PER_SECOND <= 25.0 * 0.95
+        assert mod.DEFAULT_RATE_PER_SECOND <= 5.0 * 0.95
 
     def test_there_is_a_single_shared_instance(self):
         """A second instance is the same bug as a second throttle."""

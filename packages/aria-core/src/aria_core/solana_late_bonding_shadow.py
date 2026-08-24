@@ -59,6 +59,8 @@ from aria_core import db_migrations
 
 from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive
 from aria_core.paths import ensure_wal, shadow_db_path
+from aria_core.services.solana_rpc_budget import Priority
+from aria_core.services import solana_rpc_budget
 from aria_core.services.pumpfun_bonding_ws import (
     RPC_HTTP_DEFAULT,
     bonding_progress,
@@ -1298,6 +1300,14 @@ async def consider_candidate(
         client = http_client or httpx.AsyncClient(timeout=15.0)
         owns_client = http_client is None
         try:
+            # 24/08 fix -- this call and pumpfun_curve_tracker's own batched
+            # polling both hit Chainstack's real 5 req/s Solana ceiling with
+            # no coordination between them: the tracker had its own throttle,
+            # this call had none. Found live the moment the tracker's polling
+            # resumed (24/08 shadow_pause fix) -- every candidate started
+            # failing with 429. Routed through the shared budget so the two
+            # callers share the one real limit instead of adding past it.
+            await solana_rpc_budget.acquire(Priority.NORMAL)
             resolved = await resolver(client, [(pool_address, mint)], rpc_http_url=RPC_HTTP_DEFAULT)
         finally:
             if owns_client:

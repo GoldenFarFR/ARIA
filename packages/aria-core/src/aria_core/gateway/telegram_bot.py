@@ -545,13 +545,16 @@ async def _handle_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
-async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _admin_check_reply(update):
-        return
+async def build_status_report(user_id: int | str | None) -> str:
+    """24/08 -- extracted from ``_handle_status`` so the SAME report (build
+    commit, all 5 pause flags, LLM/GitHub/X config) can be pushed
+    periodically by the heartbeat (``status_digest_cycle``, operator
+    request: "un suivi continu") without a second, drifting copy of this
+    text. ``user_id`` is display-only ("Your ID: ..."); the heartbeat cycle
+    passes the owner's own id, same as a manual /status would show them."""
     from aria_core.llm import is_llm_configured, is_llm_provider_configured
     from aria_core.skills.github_skill import github_configured, github_unlimited_access
 
-    user = update.effective_user
     import os
     commit = (os.getenv("GIT_COMMIT") or "")[:12] or "unknown"
     hb = aria_heartbeat.get_status()
@@ -598,13 +601,44 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         custody = f"⏸ EN PAUSE {custody_pause.since_label()}"
     else:
         custody = "actives ▶️"
-    await _reply(
-        update.message,
+    # 24/08 -- the /off split (paper/x/shadow, independent of /stop) shipped
+    # this same day but /status was never updated to show the 3 new flags,
+    # so an operator checking "what's armed" here saw only 2 of 5 -- the
+    # exact blind spot that made the shadow-pocket bug (curve tracker gated
+    # on the wrong flag) invisible from this command. Same
+    # readable/paused/active three-way rendering as sorties/custody above.
+    from aria_core import paper_pause, shadow_pause, x_pause
+
+    ppst = paper_pause.pause_status()
+    if not ppst["readable"]:
+        paper = "⚠️ état illisible — fail-OPEN, trading papier continue"
+    elif ppst["paused"]:
+        paper = f"⏸ EN PAUSE {paper_pause.since_label()}"
+    else:
+        paper = "actives ▶️"
+    xpst = x_pause.pause_status()
+    if not xpst["readable"]:
+        x_flag = "⚠️ état illisible — fail-CLOSED, X bloqué"
+    elif xpst["paused"]:
+        x_flag = f"⏸ EN PAUSE {x_pause.since_label()}"
+    else:
+        x_flag = "actives ▶️"
+    spst = shadow_pause.pause_status()
+    if not spst["readable"]:
+        shadow = "⚠️ état illisible — fail-OPEN, poches papier continuent"
+    elif spst["paused"]:
+        shadow = f"⏸ EN PAUSE {shadow_pause.since_label()}"
+    else:
+        shadow = "actives ▶️"
+    return (
         f"ARIA — Status (opérateur)\n"
         f"Build commit: {commit}\n"
-        f"Your ID: {user.id if user else '?'} — admin ✅\n"
-        f"Sorties (tweets/X/dépenses/jobs): {sorties}\n"
+        f"Your ID: {user_id if user_id else '?'} — admin ✅\n"
+        f"Sorties (capital réel, /stop): {sorties}\n"
         f"Custody (dépenses réelles wallet agent): {custody}\n"
+        f"Paper trading 1M$ (/offpaper): {paper}\n"
+        f"X posts/replies (/offx): {x_flag}\n"
+        f"Poches shadow (/offshadow): {shadow}\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
@@ -616,8 +650,16 @@ async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Public grounded: {'on' if settings.aria_grounded_mode else 'off'}\n"
         f"Telegram chat: founder LLM (opinion OK)\n"
         f"Proactive ideas: {'on' if settings.aria_proactive_ideas else 'off'}\n"
-        f"Access gate: {'on' if settings.access_code_enabled else 'off'}",
+        f"Access gate: {'on' if settings.access_code_enabled else 'off'}"
     )
+
+
+async def _handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _admin_check_reply(update):
+        return
+    user = update.effective_user
+    report = await build_status_report(user.id if user else None)
+    await _reply(update.message, report)
 
 
 async def _feedback_reply() -> str:

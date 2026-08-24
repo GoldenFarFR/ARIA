@@ -690,6 +690,19 @@ HEARTBEAT_TASKS = [
         interval_minutes=60,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="status_digest_cycle",
+        name="Digest /status periodique",
+        description="Operator request 24/08 (\"un suivi continu\"): pushes the SAME report "
+        "as a manual /status (build commit, all 5 pause flags, LLM/GitHub/X config) to the "
+        "owner every 4h, unprompted -- so an armed kill-switch or a blind spot like the "
+        "24/08 shadow-pocket bug (curve tracker gated on the wrong flag, invisible from "
+        "/status until that command's 3 new lines were added the same day) surfaces on its "
+        "own instead of waiting for the operator to think to check. Reuses "
+        "telegram_bot.build_status_report, never a second copy of that text.",
+        interval_minutes=240,
+        enabled=True,
+    ),
 ]
 
 
@@ -2156,6 +2169,20 @@ class AriaHeartbeat:
                     f"(cache={result['cached_before']:.5f}$, réel={result['scanned']:.5f}$) "
                     "-- auto-corrigée",
                 )
+
+        elif task_id == "status_digest_cycle":
+            from aria_core.gateway.telegram_bot import build_status_report
+
+            # Same owner-resolution fallback as telegram_bot.is_owner(): a bare
+            # settings.owner_chat_id can raise (only set via env, not always
+            # present) -- this line is display-only ("Your ID: ..."), never
+            # worth crashing the digest over.
+            owner_id = (
+                getattr(settings, "owner_chat_id", None)
+                or (settings.admin_ids[0] if settings.admin_ids else None)
+            )
+            report = await build_status_report(owner_id)
+            await self._notify_telegram(report)
 
         elif task_id == "wallet_scan_queue_cycle":
             from aria_core.services.wallet_scan_queue import run_wallet_scan_queue_cycle
