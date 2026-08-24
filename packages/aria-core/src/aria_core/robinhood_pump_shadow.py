@@ -237,6 +237,28 @@ SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) posit
 TRAILING_STOP_PCT = 20.0  # close the rest if price falls 20% below the running high since entry
 MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibrated rule's own max-hold
 
+# 24/08, operator-directed diligence finding: MIN_LIQUIDITY_USD only guards
+# the ENTRY -- nothing here protected an already-open position against the
+# pool's reserve collapsing mid-life. Full-population diligence (n=116,
+# 2026-08-23->24) found 45/116 closes (38.8%) got stranded under a realistic
+# price-impact simulation even though their ENTRY reserve averaged $19-22k,
+# well above the $4000 floor -- the pool dies AFTER entry, not at it. Same
+# safety net as solana_support_bounce_shadow.py's own LIQUIDITY_COLLAPSE_
+# EXIT_PCT, same value, BORROWED not independently calibrated (Doctrine
+# d'Ingestion: a conservative hypothesis beats leaving a measured gap
+# unguarded) -- this pocket has zero prior closes under this rule to
+# calibrate its own threshold from. RECALIBRATE once this pocket accumulates
+# >=100 liquidity_collapse closes of its own.
+# Honest residual (never to be glossed over): unlike the Solana twin's single
+# "not is_pumpswap" exclusion, this check can silently never fire for a v3/v4
+# pool being priced via the EVM websocket feed (evm_swap_ws.py's own
+# EVMSwapSnapshot.reserve_usd is populated for v2 only -- concentrated
+# liquidity has no single "total reserve" figure, never fabricated here
+# either). It still fires normally whenever the REST fallback (DexPaprika/
+# GeckoTerminal, which DO report a reserve figure for v3/v4) is the live
+# source for a given check -- a real but partial gap, not a fabricated fix.
+LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
+
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
@@ -346,6 +368,11 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # network call to re-discover it -- same addition as base_momentum_
     # shadow.py's own twin column, same day.
     ("dex_id", "TEXT"),
+    # 24/08 -- the reserve_usd read at each exit-simulation pass, so
+    # LIQUIDITY_COLLAPSE_EXIT_PCT's own trigger is auditable after the fact
+    # (same pattern as solana_support_bounce_shadow.py's twin column). NULL
+    # until this row's first exit-simulation pass after this column existed.
+    ("last_reserve_usd", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -676,7 +703,9 @@ async def regime_state(*, db_path: str | None = None) -> dict:
     }
 
 
-async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood") -> int:
+async def record_signals(
+    pools: list[TrendingPool], *, chain: str = "robinhood", client: GeckoTerminalClient | None = None,
+) -> int:
     """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
     its 5-minute price change -- pure read+log, see the module's bright-line
     doctrine. Excludes any pool whose base token is a registered Robinhood
@@ -686,7 +715,9 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
     registry failure here must never break whatever fetched ``pools`` in the
     first place. Returns the number of NEW rows logged (0 on failure or when
     nothing qualifies)."""
+    client = client or geckoterminal_client
     logged = 0
+    _rows_for_candle_archive: list[tuple[int, TrendingPool]] = []
     try:
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
@@ -784,7 +815,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                     pool.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
                     reserve_usd=pool.reserve_usd, side="buy",
                 )
-                await db.execute(
+                cur = await db.execute(
                     """
                     INSERT INTO robinhood_pump_shadow_log (
                         pool_address, token_address, chain, symbol, status,
@@ -808,8 +839,42 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                         pool.dex_id,
                     ),
                 )
+                new_id = cur.lastrowid
                 logged += 1
+                _rows_for_candle_archive.append((new_id, pool))
             await db.commit()
+
+        # 24/08, standing convention since 18/08 (every shadow module wires
+        # shadow_candle_archive) -- archives the "before" candles each entry
+        # decision was actually based on. Deliberately done AFTER the
+        # ``async with aiosqlite.connect`` block above has already closed
+        # (not inside the loop that produced ``_rows_for_candle_archive``):
+        # a network call made while that connection is still open would be
+        # exactly the "connection-hold-time" anti-pattern
+        # solana_support_bounce_shadow.py's own record_signals already had to
+        # fix once (17/08) -- this module's entry signal needs no OHLCV call
+        # for its own logic (unlike that twin), so this fetch is NOT a free
+        # by-product here, only ever run once the DB connection is free.
+        # Best-effort: a fetch/archive failure here never un-logs the signal
+        # row already committed above.
+        for new_id, pool in _rows_for_candle_archive:
+            try:
+                before_ohlcv: OHLCVResult = await client.get_ohlcv(
+                    pool.pool_address, network=chain, mode="scalping_5m",
+                )
+                if before_ohlcv.available and before_ohlcv.candles:
+                    from aria_core import shadow_candle_archive
+
+                    await shadow_candle_archive.store_candles(
+                        module="robinhood_pump", position_id=new_id,
+                        pool_address=pool.pool_address, chain=chain, phase="before",
+                        candles=before_ohlcv.candles,
+                    )
+            except Exception as exc:  # noqa: BLE001 -- archiving must never break the signal log
+                logger.info(
+                    "robinhood_pump_shadow: before-candle archive failed for %s (%s)",
+                    pool.pool_address, exc,
+                )
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never break the caller
         logger.info("robinhood_pump_shadow: record_signals failed (%s)", exc)
     return logged
@@ -1159,6 +1224,7 @@ async def advance_exit_simulation(
     counts = {
         "checked": 0, "scale_out_fills": 0, "closed_scale_out_complete": 0,
         "closed_trailing_stop": 0, "closed_max_hold": 0, "closed_age_limit": 0,
+        "closed_liquidity_collapse": 0,
     }
     try:
         await _ensure_table()
@@ -1239,6 +1305,27 @@ async def advance_exit_simulation(
                     window_high = max(c.high for c in new_candles)
                     window_low = min(c.low for c in new_candles)
                     window_volume_usd = (window_volume_usd or 0.0) + sum(c.volume for c in new_candles)
+                    # 24/08, standing convention since 18/08 (every shadow
+                    # module wires shadow_candle_archive): zero extra network
+                    # cost, these candles were already fetched above for the
+                    # window high/low. Lets a future session actually
+                    # re-simulate TRAILING_STOP_PCT/LIQUIDITY_COLLAPSE_EXIT_PCT
+                    # at alternate values against the real price path, closing
+                    # the exact gap this pocket's own exit diligence (24/08)
+                    # flagged as blocking any honest re-simulation.
+                    try:
+                        from aria_core import shadow_candle_archive
+
+                        await shadow_candle_archive.store_candles(
+                            module="robinhood_pump", position_id=row["id"],
+                            pool_address=row["pool_address"], chain=chain, phase="after",
+                            candles=new_candles,
+                        )
+                    except Exception as exc:  # noqa: BLE001 -- archiving must never break the batch
+                        logger.info(
+                            "robinhood_pump_shadow: after-candle archive failed for %s (%s)",
+                            row["pool_address"], exc,
+                        )
 
             # Fold the window with the literal current spot -- covers both a
             # closed candle the ladder hasn't reached yet AND a fresh tick
@@ -1273,6 +1360,22 @@ async def advance_exit_simulation(
                 realistic_realized_proceeds += qty_fraction * impacted
 
             peak_price = max(peak_price, effective_high)
+
+            # 24/08 -- liquidity_collapse, top priority, checked BEFORE even
+            # MAX_POOL_AGE_MINUTES (see LIQUIDITY_COLLAPSE_EXIT_PCT's own
+            # docstring): unrelated to price or age, this protects against an
+            # unsellable pool -- a reserve that has already lost more than
+            # half its entry depth is the clearest signal here that waiting
+            # for the age/scale-out/trailing-stop machinery to catch up only
+            # risks a worse fill later, never a better one. Fail-open on an
+            # unknown/missing reserve reading (never fabricated), same
+            # doctrine as every other observation in this module.
+            entry_reserve = row.get("reserve_usd")
+            liquidity_collapsed = (
+                entry_reserve is not None and entry_reserve > 0
+                and snapshot.reserve_usd is not None
+                and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
+            )
 
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
             # BEFORE the scale-out ladder. **16/08, second pass, operator
@@ -1314,7 +1417,12 @@ async def advance_exit_simulation(
 
             fills_this_cycle = 0
             exit_reason: str | None = None
-            if age_limit_exceeded:
+            if liquidity_collapsed:
+                _realistic_sell(remaining_qty, current_price)
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "liquidity_collapse"
+            elif age_limit_exceeded:
                 _realistic_sell(remaining_qty, current_price)
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
@@ -1360,7 +1468,8 @@ async def advance_exit_simulation(
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
-                        last_checked_at = ?, last_price = ?, window_volume_usd = ?
+                        last_checked_at = ?, last_price = ?, window_volume_usd = ?,
+                        last_reserve_usd = ?
                     WHERE id = ?
                     """,
                     (
@@ -1368,7 +1477,7 @@ async def advance_exit_simulation(
                         realized_proceeds, exit_reason, final_multiplier,
                         realistic_realized_proceeds, realistic_final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
-                        window_volume_usd, row["id"],
+                        window_volume_usd, snapshot.reserve_usd, row["id"],
                     ),
                 )
                 await db.commit()
@@ -1395,6 +1504,8 @@ async def advance_exit_simulation(
                 counts["closed_max_hold"] += 1
             elif exit_reason == "age_limit":
                 counts["closed_age_limit"] += 1
+            elif exit_reason == "liquidity_collapse":
+                counts["closed_liquidity_collapse"] += 1
     except Exception as exc:  # noqa: BLE001 -- shadow simulation must never raise into a caller
         logger.info("robinhood_pump_shadow: advance_exit_simulation failed (%s)", exc)
     return counts
@@ -1418,7 +1529,7 @@ async def run_cycle(
     result = await client.get_trending_pools(network=network, duration=duration)
     logged = 0
     if result.available:
-        logged = await record_signals(result.pools, chain=network)
+        logged = await record_signals(result.pools, chain=network, client=client)
     else:
         logger.info("robinhood_pump_shadow: get_trending_pools unavailable (%s)", result.error)
     measured = await evaluate_open_signals(client, chain=network)
