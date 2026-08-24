@@ -131,7 +131,8 @@ import aiosqlite
 from aria_core import pretrade_rejection_log
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
-from aria_core.services import dexpaprika, dexscreener
+from aria_core.services import dexpaprika, dexscreener, doppler
+from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -338,6 +339,13 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # filter/gate anything yet. NULL means no candle with volume data has
     # been observed yet -- never fabricated as 0.
     ("window_volume_usd", "REAL"),
+    # 24/08 -- the DEX family (uniswap_v2/v3/v4/aerodrome/...) already came
+    # back on the same dexpaprika.get_trending_pools() response used at
+    # signal time (see TrendingPool.dex_id), just never stored. Needed to
+    # call evm_swap_ws.add_pool() at exit-tracking time without a redundant
+    # network call to re-discover it -- same addition as base_momentum_
+    # shadow.py's own twin column, same day.
+    ("dex_id", "TEXT"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -784,8 +792,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                         m5_pct, m15_pct, m30_pct, h1_pct, h6_pct, h24_pct,
                         buyers_m15, sellers_m15, volume_usd_m15, reserve_usd,
                         remaining_qty, realized_proceeds, peak_price, next_scale_level,
-                        pool_created_at, realistic_entry_price
-                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?)
+                        pool_created_at, realistic_entry_price, dex_id
+                    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0, ?, ?, ?, ?, ?)
                     """,
                     (
                         pool.pool_address, pool.token_address, chain, pool.symbol,
@@ -797,6 +805,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "robinhood")
                         pool.volume_usd_m15, pool.reserve_usd,
                         pool.price_usd, first_scale_level,
                         pool.pool_created_at.isoformat(), realistic_entry_price,
+                        pool.dex_id,
                     ),
                 )
                 logged += 1
@@ -827,8 +836,37 @@ def _epoch_of(iso_ts: str | None) -> float | None:
         return None
 
 
+async def _snapshot_from_ws(
+    ws_feed: EVMSwapWebSocketFeed, pool_address: str, *, dex_id: str | None,
+) -> PoolSnapshot | None:
+    """24/08 -- direct on-chain Sync/Swap feed, tried BEFORE the REST
+    cascade: the price the chain itself just settled, pushed the moment the
+    block lands, no aggregator indexing delay in between (same latency
+    argument already proven on Solana via pumpswap_ws.py, and now on Base's
+    twin module the same day). Returns None (never a fabricated snapshot)
+    when the pool isn't tracked yet (the caller is expected to have already
+    called ``add_pool`` -- see ``advance_exit_simulation``), hasn't ticked
+    yet, or its USD leg can't be resolved -- the caller's cue to fall
+    through to the existing REST cascade unchanged."""
+    ws_snap = ws_feed.get_snapshot(pool_address)
+    if not ws_snap.available:
+        return None
+    price_usd = ws_snap.price_usd
+    if price_usd is None and ws_snap.quote_is_weth and ws_snap.price_quote is not None:
+        eth_rate = await doppler.eth_usd_rate()
+        if eth_rate is not None:
+            price_usd = ws_snap.price_quote * eth_rate
+    if price_usd is None:
+        return None  # quote leg not resolvable to USD -- honest fallback to REST
+    return PoolSnapshot(
+        pool_address=pool_address, price_usd=price_usd,
+        reserve_usd=ws_snap.reserve_usd, available=True, dex_id=dex_id,
+    )
+
+
 async def _snapshot_with_fallback(
     client: GeckoTerminalClient, pool_address: str, token_address: str | None, *, chain: str,
+    ws_feed: EVMSwapWebSocketFeed | None = None, dex_id: str | None = None,
 ) -> PoolSnapshot:
     """DexScreener FIRST for the spot price, GeckoTerminal as fallback --
     16/08, operator-directed "API cascade" doctrine, inverted same day once
@@ -846,7 +884,19 @@ async def _snapshot_with_fallback(
     GeckoTerminal attempt across many consecutive cycles, leaving its
     exit-sim permanently unchecked. Never a third silent fabrication: both
     sources failing still returns ``available=False``, same "never fabricate
-    a price" doctrine as the rest of this module."""
+    a price" doctrine as the rest of this module.
+
+    **24/08 -- ``ws_feed`` tried FIRST, ahead of DexScreener**, when given:
+    direct on-chain price, no aggregator indexing delay (see
+    ``_snapshot_from_ws``). Falls through to this same DexScreener/
+    GeckoTerminal cascade unchanged whenever the WS feed isn't tracking this
+    pool yet, hasn't ticked, or can't resolve USD -- the WS path is a
+    latency upgrade layered on top, never a replacement that could leave a
+    pool unpriced."""
+    if ws_feed is not None:
+        ws_snapshot = await _snapshot_from_ws(ws_feed, pool_address, dex_id=dex_id)
+        if ws_snapshot is not None:
+            return ws_snapshot
     if token_address:
         try:
             pairs = await dexscreener.fetch_token_pairs(token_address, chain=chain)
@@ -1003,6 +1053,7 @@ async def evaluate_open_signals(
 
 async def advance_exit_simulation(
     client: GeckoTerminalClient | None = None, *, chain: str = "robinhood", limit: int = 50,
+    ws_feed: EVMSwapWebSocketFeed | None = None,
 ) -> dict[str, int]:
     """Stateful, incremental simulation of the CALIBRATED exit rule itself
     (25%-of-remaining scale-out ladder every +25% rung above entry, -20%
@@ -1128,9 +1179,21 @@ async def advance_exit_simulation(
             if not entry_price:
                 continue
 
+            if ws_feed is not None and row.get("dex_id") and row["pool_address"].lower() not in ws_feed._pools:
+                try:
+                    await ws_feed.add_pool(
+                        row["pool_address"], dex_id=row["dex_id"], token_address=row["token_address"] or "",
+                    )
+                except Exception as exc:  # noqa: BLE001 -- best-effort, REST cascade still covers this pool
+                    logger.info(
+                        "robinhood_pump_shadow: ws_feed.add_pool failed for %s (%s)",
+                        row["pool_address"], exc,
+                    )
+
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
                     client, row["pool_address"], row["token_address"], chain=chain,
+                    ws_feed=ws_feed, dex_id=row.get("dex_id"),
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
@@ -1309,6 +1372,20 @@ async def advance_exit_simulation(
                     ),
                 )
                 await db.commit()
+
+            if exit_reason and ws_feed is not None:
+                # 24/08 -- sheds the subscription the moment a position
+                # closes, same doctrine as the Solana bonding/PumpSwap feed's
+                # own remove_pools and base_momentum_shadow.py's twin (216-
+                # pool leak incident, 19/08). Cheap no-op if this pool was
+                # never WS-tracked.
+                try:
+                    await ws_feed.remove_pool(row["pool_address"])
+                except Exception as exc:  # noqa: BLE001 -- best-effort cleanup, never blocks a close
+                    logger.info(
+                        "robinhood_pump_shadow: ws_feed.remove_pool failed for %s (%s)",
+                        row["pool_address"], exc,
+                    )
 
             if exit_reason == "scale_out_complete":
                 counts["closed_scale_out_complete"] += 1

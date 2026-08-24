@@ -10,7 +10,23 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from aria_core.services import chainstack_ru_budget
 from aria_core.services import evm_swap_ws as m
+
+
+@pytest.fixture(autouse=True)
+def _isolated_chainstack_ru_budget_db(tmp_path, monkeypatch):
+    """24/08 -- add_pool() now calls chainstack_ru_budget.can_spend() and
+    _handle_notification() calls record_usage_fast(); without this, every
+    test in this file touched the real dev DB and shared in-memory state
+    with whatever else imported the module (same isolation gap already
+    fixed in test_chainstack_ru_budget.py's own fixture)."""
+    monkeypatch.setattr(chainstack_ru_budget, "aria_db_path", lambda: tmp_path / "chainstack_ru_budget_test.db")
+    chainstack_ru_budget._pending_units.clear()
+    chainstack_ru_budget._read_cache.clear()
+    yield
+    chainstack_ru_budget._pending_units.clear()
+    chainstack_ru_budget._read_cache.clear()
 
 
 # --- topic0: recomputed independently, never trusted from a memorized value -
@@ -489,6 +505,53 @@ async def test_add_pool_v4_trusts_caller_supplied_currency_side():
     assert ok is True
     assert feed._pools["0xabc123"].token_is_currency0 is True
     assert feed._pools["0xabc123"].family == "v4"
+
+
+# --- add_pool / _handle_notification: daily RU budget (24/08) --------------
+
+@pytest.mark.asyncio
+async def test_add_pool_refuses_when_daily_budget_exhausted():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    ok = await feed.add_pool("0xabc123", dex_id="uniswap_v4", token_address="currency0")
+    assert ok is False
+    assert "0xabc123" not in feed._pools
+
+
+@pytest.mark.asyncio
+async def test_add_pool_unaffected_by_a_different_chains_exhausted_budget():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    chainstack_ru_budget.record_usage_fast("robinhood", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    ok = await feed.add_pool("0xabc123", dex_id="uniswap_v4", token_address="currency0")
+    assert ok is True  # base's own budget is untouched
+
+
+@pytest.mark.asyncio
+async def test_handle_notification_counts_one_ru_per_push_including_newheads():
+    """24/08 -- every push is billed 1 RU regardless of content, confirmed
+    live (see evm_swap_ws.py's own newHeads-keepalive fix docstring) --
+    counted before the topics filter so newHeads itself (no topics) is
+    counted too, not just decoded Sync/Swap events."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._handle_notification({"result": {"number": "0x123"}})  # newHeads-shaped: no topics
+    feed._handle_notification({"result": {"topics": []}})
+    status = await chainstack_ru_budget.daily_status("base")
+    assert status["used_units"] == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_notification_never_counts_an_empty_payload():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._handle_notification({})  # no "result" key at all
+    feed._handle_notification(None)
+    status = await chainstack_ru_budget.daily_status("base")
+    assert status["used_units"] == 0
 
 
 @pytest.mark.asyncio

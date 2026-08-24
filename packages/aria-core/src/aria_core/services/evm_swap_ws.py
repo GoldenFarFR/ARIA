@@ -75,6 +75,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from aria_core.services import chainstack_ru_budget
 from aria_core.services.doppler import POOL_MANAGER_ADDRESS, price_from_sqrt_price_x96
 
 logger = logging.getLogger(__name__)
@@ -299,6 +300,14 @@ class EVMSwapWebSocketFeed:
             return False
         if self._w3 is None:
             return False  # not connected yet -- caller retries next cycle
+        # 24/08 -- refuses to grow the subscription further once this
+        # chain's daily RU budget is spent (chainstack_ru_budget.py). Does
+        # NOT unsubscribe already-tracked pools -- a push already arriving
+        # is already billed regardless (see _handle_notification's own
+        # comment) -- this only stops the leak from getting worse. The
+        # caller's REST fallback still prices this pool normally.
+        if not await chainstack_ru_budget.can_spend(self.chain):
+            return False
         try:
             if family == "v4":
                 return await self._add_pool_v4(pool_address, token_address, dex_id, decimals0, decimals1)
@@ -532,6 +541,15 @@ class EVMSwapWebSocketFeed:
             result = payload.get("result") if isinstance(payload, dict) else None
             if not result:
                 return
+            # 24/08 -- every push is billed 1 RU regardless of content
+            # (confirmed live, see evm_swap_ws.py's own newHeads-keepalive
+            # fix), including newHeads itself -- counted here, before the
+            # topics filter below, so the keepalive's real cost is tracked
+            # too. Visibility only for now (chainstack_ru_budget.py's own
+            # docstring): unlike Solana's poll_due(), a push already arrived
+            # and was already billed by the time this runs, there is no
+            # "skip this one" lever here.
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
             topics = result.get("topics") or []
             if not topics:
                 return

@@ -52,6 +52,7 @@ import httpx
 
 from aria_core.services.solana_rpc_budget import Priority
 from aria_core.services import solana_rpc_budget
+from aria_core.services import chainstack_ru_budget
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
     require_solana_rpc_http,
@@ -428,6 +429,15 @@ class PumpFunCurveTracker:
                 # different provider with its own separate rate, never
                 # gated here.
                 if ep.name == "primary":
+                    # 24/08 -- daily RU budget, separate from the per-second
+                    # RPS throttle above: a chain that stays under 45 rps all
+                    # day can still blow through the shared Growth quota (see
+                    # chainstack_ru_budget.py, built after Solana alone hit
+                    # 575,978 units in a single day). Exhausted -> skip
+                    # straight to the next endpoint (Helius fallback), never
+                    # a hard stop -- this budget is Chainstack-specific.
+                    if not await chainstack_ru_budget.can_spend("solana"):
+                        continue
                     await solana_rpc_budget.acquire(Priority.NORMAL)
                 ep.last_call_at = time.monotonic()
                 try:
@@ -435,6 +445,8 @@ class PumpFunCurveTracker:
                         http_client, ep.url, [e.pool_address for e in chunk])
                     ep.calls += 1
                     self.credits_spent += 1  # 1 credit per CALL, not per account
+                    if ep.name == "primary":
+                        chainstack_ru_budget.record_usage_fast("solana", 1)
                     break
                 except Exception as exc:  # noqa: BLE001 -- fall through to the next provider
                     ep.failures += 1

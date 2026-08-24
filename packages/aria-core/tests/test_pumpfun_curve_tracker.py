@@ -13,6 +13,7 @@ import asyncio
 
 import pytest
 
+from aria_core.services import chainstack_ru_budget
 from aria_core.services import pumpfun_curve_tracker as tracker
 from aria_core.services.pumpfun_curve_tracker import (
     HANDOVER_PROGRESS,
@@ -22,6 +23,21 @@ from aria_core.services.pumpfun_curve_tracker import (
     band_for,
     decode_curve_progress,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_chainstack_ru_budget_db(tmp_path, monkeypatch):
+    """24/08 -- poll_due()'s primary-endpoint path now calls
+    chainstack_ru_budget.can_spend()/record_usage_fast(); without this, every
+    test in this file touched the real dev DB and shared in-memory state
+    with whatever else imported the module (same isolation gap already
+    fixed in test_chainstack_ru_budget.py's own fixture)."""
+    monkeypatch.setattr(chainstack_ru_budget, "aria_db_path", lambda: tmp_path / "chainstack_ru_budget_test.db")
+    chainstack_ru_budget._pending_units.clear()
+    chainstack_ru_budget._read_cache.clear()
+    yield
+    chainstack_ru_budget._pending_units.clear()
+    chainstack_ru_budget._read_cache.clear()
 
 
 def _curve_bytes(progress: float, *, decimals: int = 6, complete: bool = False) -> bytes:
