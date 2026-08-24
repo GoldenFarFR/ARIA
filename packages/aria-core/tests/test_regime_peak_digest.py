@@ -75,6 +75,27 @@ async def test_build_regime_peak_digest_covers_all_three_chains(monkeypatch):
     assert "Base" in text and "pas assez de données" in text
 
 
+async def test_build_regime_peak_digest_handles_a_disarmed_threshold_with_a_real_median(monkeypatch):
+    """24/08 real incident: base_momentum_shadow's REGIME_MIN_MEDIAN_PEAK_PCT
+    can be None (disarmed) while its own sensor still has a real median --
+    f"{None:.0f}" crashed the whole heartbeat tick every cycle on deploy.
+    Locks in the fix, never a hand-typed threshold value."""
+    async def _fake_state(median, threshold, is_open, samples):
+        return {"median_peak_pct": median, "threshold_pct": threshold, "open": is_open, "samples": samples}
+
+    import aria_core.solana_late_bonding_shadow as solana_mod
+    import aria_core.robinhood_pump_shadow as rh_mod
+    import aria_core.base_momentum_shadow as base_mod
+
+    monkeypatch.setattr(solana_mod, "regime_state", lambda: _fake_state(14.2, 25.0, False, 30))
+    monkeypatch.setattr(rh_mod, "regime_state", lambda: _fake_state(30.0, 25.0, True, 54))
+    monkeypatch.setattr(base_mod, "regime_state", lambda: _fake_state(26.5, None, True, 3266))
+
+    text = await digest.build_regime_peak_digest()  # must not raise
+
+    assert "Base" in text and "26.5%" in text and "désarmé" in text
+
+
 async def test_build_regime_peak_digest_shows_a_trend_after_multiple_cycles(monkeypatch):
     values = iter([10.0, 14.2, 17.6, 25.4])
 

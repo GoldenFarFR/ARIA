@@ -110,13 +110,18 @@ def _format_chain_line(label: str, state: dict, trend: list[float]) -> str:
     threshold = state.get("threshold_pct")
     is_open = state.get("open")
     samples = state.get("samples", 0)
+    # 24/08 real incident: base_momentum_shadow's threshold_pct can be None
+    # (disarmed) while median_peak_pct is still a real number -- the sensor
+    # keeps accumulating even when the gate has no opinion. f"{None:.0f}"
+    # crashed the whole heartbeat tick every cycle until this was caught.
+    threshold_str = f"{threshold:.0f}%" if threshold is not None else "désarmé"
 
     if median is None:
-        return f"{label} : pas assez de données ({samples} échantillons, seuil {threshold}%)"
+        return f"{label} : pas assez de données ({samples} échantillons, seuil {threshold_str})"
 
     glyph = "✅" if is_open else "🔒"
     trend_str = "->".join(f"{v:.1f}" for v in trend) if trend else f"{median:.1f}"
-    return f"{glyph} {label} : {median:.1f}% (seuil {threshold:.0f}%) — tendance {trend_str}"
+    return f"{glyph} {label} : {median:.1f}% (seuil {threshold_str}) — tendance {trend_str}"
 
 
 async def build_regime_peak_digest(*, db_path: str | None = None) -> str:
