@@ -65,4 +65,12 @@ regexes = [
   # variable name plus hex-like suffix trips the generic-api-key detector.
   # Matched by the distinctive fake value itself, never a real secret.
   '''THIS_MUST_NEVER_APPEAR_IN_LOGS''',
+  # 24/08, onchain/robinhood_pilot_cycle.py: the deployed stub ERC-20 test
+  # token's contract address on Robinhood Chain testnet (46630) -- an
+  # on-chain PUBLIC address (proven live 23/08, cf. docs/HANDOFF_AGENT_
+  # WALLET.md), never a private key, same false-positive class as every
+  # other on-chain-address entry above. Flagged only because it's assigned
+  # to a constant literally named TOKEN_ADDRESS, tripping the generic-api-key
+  # detector on entropy + naming.
+  '''0xde4fFDd94BFEe476F10E079D4cd66918c4131d0c''',
 ]

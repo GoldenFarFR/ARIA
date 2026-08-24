@@ -25,28 +25,44 @@ Re-run ``verify_contracts_deployed()`` before trusting these addresses again
 in a future session; a redeploy or address change would break this silently
 otherwise.
 
-Chain ID is LOCKED to the TESTNET (46630) for this whole module — there is no
-mainnet code path here at all yet. Mainnet (4663) is a deliberate future
-step, gated behind its own explicit operator validation and its own CLAUDE.md
-paragraph, exactly like the CDP pilot before it.
+STEPS 1-4 DONE (17/08 -> 23/08): (1) read-only ABI wiring, (2) Safe creation +
+module activation on testnet (``safe_robinhood_deploy.py``), (3) EIP-712
+allowance-transfer signing/execution by the agent key
+(``safe_robinhood_signer.py``), (4) real end-to-end testnet cycle proven live
+23/08 (owner sets an allowance, agent key spends within it, an over-limit
+spend rejected on-chain with a real revert) -- see
+``docs/HANDOFF_AGENT_WALLET.md``.
 
-STEP 1 DONE (17/08): AllowanceModule ABI + web3.py wiring to read a live
-allowance state -- see ``_ALLOWANCE_MODULE_VIEW_ABI`` and the ``read_*``
-functions below. Still zero signing, zero private key.
-
-NOT built yet, in order: (2) Safe creation + module activation on testnet via
-``safe-eth-py``, (3) EIP-712 allowance-transfer signing/execution by the
-agent key, (4) real end-to-end testnet cycle (owner sets an allowance, agent
-key spends within it, an over-limit spend is rejected on-chain), (5) only
-after (4) is proven and reviewed: a mainnet proposal.
+Step (5), "mainnet proposal": the CONTRACT itself already lives on mainnet
+(4663) -- re-verified live 24/08 via ``eth_getCode``, same CREATE2 address,
+14908 bytes matching testnet exactly, ``eth_chainId`` confirmed 0x1237.
+``ROBINHOOD_MAINNET_CHAIN_ID`` below and ``require_expected_chain()`` are the
+SEAM that makes pointing this dome's write path at mainnet a one-parameter
+change instead of a rewrite the day it's authorized -- they change NOTHING by
+default (every caller in this dome still passes only
+``ROBINHOOD_TESTNET_CHAIN_ID``, so a chain-id preflight still raises on
+anything else, mainnet included). Actually spending real capital here still
+needs its own separate, explicit operator decision on top of this: per
+CLAUDE.md's own three named prerequisites (mainnet contract deployment --
+DONE; the AllowanceModule v0.1.1-vs-v1.0.0 version decision -- OPEN, cf.
+``docs/aria-learning-inbox/2026-08-24-diligence-ecosystem-account-abstraction-
+erc4337.md``; wallet_guard/kill-switch wiring -- the testnet rehearsal cycle
+below IS that wiring, proven on worthless funds first), each one a distinct
+action, never grouped under a single "ok".
 """
 from __future__ import annotations
 
 import os
 
-# Locked — this module never touches mainnet (4663). See module docstring.
 ROBINHOOD_TESTNET_CHAIN_ID = 46630
 _DEFAULT_TESTNET_RPC_URL = "https://rpc.testnet.chain.robinhood.com"
+
+# Mainnet chain id (4663) -- NOT a default anywhere in this dome, listed here
+# only so ``require_expected_chain`` has a real, named alternative to accept
+# the day an explicit operator decision opts a caller into it (see module
+# docstring, step 5). Re-verified live 24/08 (``eth_chainId`` -> 0x1237).
+ROBINHOOD_MAINNET_CHAIN_ID = 4663
+_DEFAULT_MAINNET_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 
 # Safe v1.4.1 canonical singleton — same CREATE2 address as most EVM chains
 # (safe-global/safe-deployments registry). Re-verified live 17/08: real
@@ -158,6 +174,28 @@ _DELEGATE_PAGE_SIZE = 50
 
 def _rpc_url() -> str:
     return (os.environ.get("ARIA_SAFE_ROBINHOOD_TESTNET_RPC_URL", "") or "").strip() or _DEFAULT_TESTNET_RPC_URL
+
+
+def require_expected_chain(w3, allowed_chain_ids=frozenset({ROBINHOOD_TESTNET_CHAIN_ID})) -> None:
+    """Shared fail-closed chain-id preflight -- the ONE place every write-path
+    module in this dome (``safe_robinhood_deploy.py``, ``safe_robinhood_
+    signer.py``, ``safe_robinhood_simulation.py``) now calls instead of each
+    keeping its own copy (was a real duplication -- 3 near-identical private
+    ``_require_testnet`` functions, cf. CLAUDE.md's architectural-coherence
+    doctrine against restating a default that exists elsewhere).
+
+    ``allowed_chain_ids`` defaults to testnet ONLY -- every caller in this
+    dome still passes nothing today, so behavior is unchanged. It exists as a
+    parameter (not a second hardcoded constant) so mainnet
+    (``ROBINHOOD_MAINNET_CHAIN_ID``) can be opted into explicitly, ONE caller
+    at a time, the day it's authorized -- never implicitly, never for every
+    caller at once."""
+    chain_id = w3.eth.chain_id
+    if chain_id not in allowed_chain_ids:
+        raise RuntimeError(
+            f"refus: chaine {chain_id} pas dans les chaines autorisees {sorted(allowed_chain_ids)} "
+            "-- preflight fail-closed"
+        )
 
 
 def verify_contracts_deployed(*, w3=None) -> dict:

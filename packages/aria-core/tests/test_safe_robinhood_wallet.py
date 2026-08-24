@@ -273,3 +273,35 @@ def test_read_allowance_tokens_happy_path_and_failure():
     )
     assert ko["error"] is not None
     assert ko["tokens"] is None
+
+
+# --- require_expected_chain (24/08, shared preflight, dome-wide seam) -------
+
+def test_require_expected_chain_accepts_testnet_by_default():
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_TESTNET_CHAIN_ID, code_by_address={})
+    srw.require_expected_chain(w3)  # must not raise
+
+
+def test_require_expected_chain_refuses_mainnet_by_default():
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_MAINNET_CHAIN_ID, code_by_address={})
+    try:
+        srw.require_expected_chain(w3)
+        assert False, "should have raised"
+    except RuntimeError as exc:
+        assert "refus" in str(exc)
+
+
+def test_require_expected_chain_accepts_mainnet_only_when_explicitly_passed():
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_MAINNET_CHAIN_ID, code_by_address={})
+    srw.require_expected_chain(w3, allowed_chain_ids={srw.ROBINHOOD_MAINNET_CHAIN_ID})  # no raise
+
+
+def test_require_expected_chain_refuses_an_unrelated_chain_even_when_widened():
+    w3 = _FakeW3(chain_id=1, code_by_address={})  # Ethereum mainnet, never a valid target here
+    try:
+        srw.require_expected_chain(
+            w3, allowed_chain_ids={srw.ROBINHOOD_TESTNET_CHAIN_ID, srw.ROBINHOOD_MAINNET_CHAIN_ID},
+        )
+        assert False, "should have raised"
+    except RuntimeError as exc:
+        assert "refus" in str(exc)

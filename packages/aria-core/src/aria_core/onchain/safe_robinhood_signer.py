@@ -1,9 +1,13 @@
 """ARIA's homemade agent wallet, Robinhood Chain leg — REAL signing module
 (18/08). Promotes the one-off script proven live in the "FIRST REAL on-chain
 cycle" milestone (``docs/HANDOFF_AGENT_WALLET.md``) into committed, tested
-code. Still strictly testnet-only (chain 46630, see
-``safe_robinhood_wallet.ROBINHOOD_TESTNET_CHAIN_ID``) — no mainnet code path
-exists anywhere in this module.
+code. Defaults to testnet ONLY (chain 46630, see
+``safe_robinhood_wallet.ROBINHOOD_TESTNET_CHAIN_ID``) — every caller today
+still passes nothing, so behavior is unchanged. ``allowed_chain_ids`` exists
+(24/08) purely as the seam that makes opting a specific future caller into
+mainnet a one-parameter change instead of a rewrite — see
+``safe_robinhood_wallet.require_expected_chain`` docstring; no caller anywhere
+in this dome passes mainnet today.
 
 Reuses, never reimplements, the EIP-712 digest logic already proven
 byte-for-byte against the real deployed contract in
@@ -43,6 +47,7 @@ from aria_core.onchain.safe_robinhood_wallet import (
     ROBINHOOD_TESTNET_CHAIN_ID,
     _rpc_url,
     read_allowance,
+    require_expected_chain,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,29 +109,19 @@ def _w3(w3=None):
     return w3 if w3 is not None else Web3(Web3.HTTPProvider(_rpc_url(), request_kwargs={"timeout": 20}))
 
 
-def _require_testnet(w3) -> None:
-    """Same fail-closed chain preflight as ``safe_robinhood_simulation.py`` —
-    an RPC repointed at mainnet (4663) by config drift must raise, never
-    silently send a real transaction against real balances."""
-    chain_id = w3.eth.chain_id
-    if chain_id != ROBINHOOD_TESTNET_CHAIN_ID:
-        raise RuntimeError(
-            f"refus: chaine {chain_id} != testnet {ROBINHOOD_TESTNET_CHAIN_ID} "
-            "-- ce module n'envoie que sur le testnet"
-        )
-
-
 async def send_allowance_transfer(
     *,
     safe: str,
     token: str,
     to: str,
     amount: int,
-    delegate_key_path: str,
+    delegate_key_path: str | None = None,
+    account=None,
     payment_token: str = ZERO_ADDRESS,
     payment: int = 0,
     w3=None,
     wait_for_receipt: bool = True,
+    allowed_chain_ids=frozenset({ROBINHOOD_TESTNET_CHAIN_ID}),
 ) -> dict:
     """Sends a REAL, signed ``executeAllowanceTransfer`` — the production
     equivalent of the one-off script already proven live (18/08 HANDOFF
@@ -143,14 +138,30 @@ async def send_allowance_transfer(
     receipt status (a mined transaction can still revert; a truthy
     ``tx_hash`` alone would be a false positive).
 
+    Exactly ONE of ``delegate_key_path`` (reads a ``{"address",
+    "private_key"}`` JSON file, the original mechanism) or ``account`` (an
+    already-loaded ``eth_account.LocalAccount`` — e.g. from
+    ``safe_robinhood_deploy.deployer_account()``, which reads the same
+    testnet-only env var this dome already uses, 24/08) must be provided.
+    Passing both or neither is a caller bug, never silently resolved by
+    picking one — this dome never guesses which key material to trust.
+
     Declared ``async`` purely to match the injectable ``send_fn`` interface
     used across the dome (``agent_wallet_pilot.py``'s ``swap_fn``/
     ``transfer_fn``) — web3.py's HTTP provider is synchronous, so this
     function never actually yields control mid-call."""
     w3 = _w3(w3)
-    _require_testnet(w3)
+    require_expected_chain(w3, allowed_chain_ids)
 
-    address, account = _load_delegate_key(delegate_key_path)
+    if (delegate_key_path is None) == (account is None):
+        return {
+            "error": "fournir exactement un de delegate_key_path OU account, jamais les deux ni aucun",
+            "tx_hash": None,
+        }
+    if account is not None:
+        address = Web3.to_checksum_address(account.address)
+    else:
+        address, account = _load_delegate_key(delegate_key_path)
 
     live = read_allowance(safe, address, token, w3=w3)
     if live.get("error"):

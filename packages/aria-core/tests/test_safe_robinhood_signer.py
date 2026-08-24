@@ -205,7 +205,7 @@ async def test_send_allowance_transfer_refuses_wrong_chain(monkeypatch, delegate
         signer, "read_allowance", lambda *a, **kw: _live_allowance(remaining=1_000_000)
     )
     w3 = _FakeW3(chain_id=4663)  # mainnet -- must be refused
-    with pytest.raises(RuntimeError, match="testnet"):
+    with pytest.raises(RuntimeError, match="refus"):
         await signer.send_allowance_transfer(
             safe=SAFE, token=TOKEN, to=TO, amount=1,
             delegate_key_path=delegate_key_file, w3=w3,
@@ -224,6 +224,44 @@ async def test_send_allowance_transfer_reports_send_failure(monkeypatch, delegat
     )
     assert result["error"] is not None
     assert result["tx_hash"] is None
+
+
+@pytest.mark.asyncio
+async def test_send_allowance_transfer_accepts_an_injected_account_instead_of_a_key_file(monkeypatch):
+    """24/08 -- the heartbeat rehearsal cycle injects an already-loaded
+    account (from ``safe_robinhood_deploy.deployer_account()``, itself
+    reading this dome's existing testnet-only env var) rather than writing a
+    second copy of the same key material to a JSON file on disk."""
+    monkeypatch.setattr(
+        signer, "read_allowance", lambda *a, **kw: _live_allowance(remaining=1_000_000)
+    )
+    account = Account.create()
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_TESTNET_CHAIN_ID)
+    result = await signer.send_allowance_transfer(
+        safe=SAFE, token=TOKEN, to=TO, amount=500_000, account=account, w3=w3,
+    )
+    assert result["error"] is None
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_send_allowance_transfer_rejects_both_account_and_key_path(delegate_key_file):
+    account = Account.create()
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_TESTNET_CHAIN_ID)
+    result = await signer.send_allowance_transfer(
+        safe=SAFE, token=TOKEN, to=TO, amount=1,
+        delegate_key_path=delegate_key_file, account=account, w3=w3,
+    )
+    assert result["error"] is not None
+    assert "exactement un" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_send_allowance_transfer_rejects_neither_account_nor_key_path():
+    w3 = _FakeW3(chain_id=srw.ROBINHOOD_TESTNET_CHAIN_ID)
+    result = await signer.send_allowance_transfer(safe=SAFE, token=TOKEN, to=TO, amount=1, w3=w3)
+    assert result["error"] is not None
+    assert "exactement un" in result["error"]
 
 
 @pytest.mark.asyncio

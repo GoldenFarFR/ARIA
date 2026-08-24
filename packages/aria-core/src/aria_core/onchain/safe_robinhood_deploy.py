@@ -52,6 +52,7 @@ from aria_core.onchain.safe_robinhood_wallet import (
     ALLOWANCE_MODULE_ADDRESS,
     ROBINHOOD_TESTNET_CHAIN_ID,
     _rpc_url,
+    require_expected_chain,
 )
 
 _ENV_KEY_NAME = "ARIA_ROBINHOOD_DEPLOYER_PRIVATE_KEY"
@@ -137,16 +138,13 @@ def _w3(w3=None):
 
 
 def _require_testnet(w3) -> None:
-    """Fail-closed chain preflight, identical doctrine to the simulation
-    module -- runs on EVERY public entry point here, before any signing or
-    broadcasting. An RPC repointed at mainnet (4663) must raise, never
-    silently sign/send a real transaction there."""
-    chain_id = w3.eth.chain_id
-    if chain_id != ROBINHOOD_TESTNET_CHAIN_ID:
-        raise RuntimeError(
-            f"refus: chaine {chain_id} != testnet {ROBINHOOD_TESTNET_CHAIN_ID} "
-            "-- ce module n'envoie des transactions reelles que sur le testnet"
-        )
+    """Thin alias over the dome-shared ``require_expected_chain`` (24/08 —
+    was a third near-identical copy of this same preflight, deduplicated).
+    Kept as a distinct name here (rather than inlining the shared call at
+    all 6 sites) so this module's own deploy-only entry points stay
+    testnet-only by construction until a deliberate future change opts a
+    specific one into ``allowed_chain_ids={ROBINHOOD_MAINNET_CHAIN_ID}``."""
+    require_expected_chain(w3)
 
 
 def deployer_account(*, private_key: str | None = None):

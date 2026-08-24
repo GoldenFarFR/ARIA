@@ -35,6 +35,7 @@ _TASK_TIMEOUT_SECONDS = 300
 # CYCLE resolves independently against the SAME task_id's burn-in state.
 _BURN_IN_NOMINAL_INTERVAL_MINUTES = {
     "polymarket_paper_cycle": 720,
+    "robinhood_testnet_rehearsal_cycle": 240,
 }
 
 HEARTBEAT_TASKS = [
@@ -471,6 +472,13 @@ HEARTBEAT_TASKS = [
         name="Autonomous Sepolia rehearsal",
         description="Decides AND executes ALONE on Base Sepolia (testnet, no real value) -- no Telegram click. Kelly sizing on real calibration, autonomous on-chain anchoring, full telemetry (latency/hesitation/errors). Chain_id locked to 84532; mainnet keeps human validation.",
         interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="robinhood_testnet_rehearsal_cycle",
+        name="Robinhood Chain testnet rehearsal (Safe+AllowanceModule, no real value)",
+        description="Continuously rehearses the homemade agent-wallet's Robinhood leg (gate -> kill-switch -> on-chain cap -> signing -> logging, via homemade_agent_wallet.attempt_transfer) on testnet 46630 -- worthless funds, closed-loop transfer back to the delegate itself. This IS the 'wallet_guard/kill-switch wiring' prerequisite CLAUDE.md names before any real Robinhood pilot -- proven repeatedly here before ever touching mainnet. Gate ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED, burn-in accelerated cadence (24/08).",
+        interval_minutes=20,
         enabled=False,
     ),
     HeartbeatTask(
@@ -935,6 +943,12 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.agent_wallet_pilot import agent_wallet_pilot_enabled
 
                 task.enabled = agent_wallet_pilot_enabled()
+            if task.id == "robinhood_testnet_rehearsal_cycle":
+                from aria_core.onchain.robinhood_pilot_cycle import (
+                    robinhood_testnet_rehearsal_enabled,
+                )
+
+                task.enabled = robinhood_testnet_rehearsal_enabled()
             if task.id == "relay_conversation_cycle":
                 from aria_core.relay_chat import relay_autoreply_enabled
 
@@ -1901,6 +1915,17 @@ class AriaHeartbeat:
                     "agent_wallet_pilot",
                     f"[pilot RÉEL] {result.get('symbol', '?')} -> {outcome} "
                     f"({result.get('amount_usd', 0):.2f}$)",
+                )
+
+        elif task_id == "robinhood_testnet_rehearsal_cycle":
+            from aria_core.onchain import robinhood_pilot_cycle
+
+            result = await robinhood_pilot_cycle.run_robinhood_testnet_rehearsal_cycle()
+            outcome = result.get("outcome")
+            if outcome in ("failed", "blocked"):
+                append_memory(
+                    "robinhood_testnet_rehearsal",
+                    f"[rehearsal testnet] -> {outcome} ({result.get('reason', '')})",
                 )
                 alert = agent_wallet_pilot_cycle.format_agent_wallet_swap_alert(result)
                 if alert:

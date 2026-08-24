@@ -837,9 +837,11 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED",
     "ARIA_GOPLUS_WATCHLIST_ENABLED",
     # 18/08 -- homemade_agent_wallet.py's guardrail wrapper (Safe+
-    # AllowanceModule/Squads v4, testnet/devnet only). OFF by default, no
-    # production/heartbeat caller anywhere -- distinct from
-    # ARIA_AGENT_WALLET_PILOT_ENABLED (the Coinbase CDP pilot).
+    # AllowanceModule/Squads v4, testnet/devnet only). OFF by default --
+    # distinct from ARIA_AGENT_WALLET_PILOT_ENABLED (the Coinbase CDP pilot).
+    # 24/08: now HAS one heartbeat caller (robinhood_testnet_rehearsal_cycle,
+    # cf. ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED below) -- still testnet
+    # only, still zero real value moved, this gate itself unchanged.
     "ARIA_HOMEMADE_AGENT_WALLET_ENABLED",
     "ARIA_KNOWLEDGE_INBOX_ENABLED",
     "ARIA_LLM_ANTHROPIC_ROUTING_ENABLED",
@@ -873,6 +875,13 @@ _KNOWN_ENABLED_GATES = {
     # of the "+25%/15min take the train" strategy, excluding known Stock
     # Tokens (#309), pure read+log, never a trigger, never real/paper capital.
     "ARIA_ROBINHOOD_PUMP_SHADOW_ENABLED",
+    # 24/08 -- robinhood_pilot_cycle.py's heartbeat rehearsal cycle (testnet
+    # 46630 only, zero real value, closed-loop transfer to the delegate
+    # itself). Rehearses the wallet_guard/kill-switch wiring CLAUDE.md names
+    # as a real prerequisite before any Robinhood real-capital pilot -- OFF
+    # by default, distinct from ARIA_HOMEMADE_AGENT_WALLET_ENABLED (the
+    # shared guardrail wrapper this cycle also goes through).
+    "ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED",
     "ARIA_SEPOLIA_AUTONOMOUS_ENABLED",
     "ARIA_SEPOLIA_SWAP_ENABLED",
     "ARIA_SEPOLIA_WALLET_ENABLED",

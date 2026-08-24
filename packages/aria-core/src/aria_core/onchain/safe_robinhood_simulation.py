@@ -61,6 +61,7 @@ from aria_core.onchain.safe_robinhood_wallet import (
     ALLOWANCE_MODULE_ADDRESS,
     ROBINHOOD_TESTNET_CHAIN_ID,
     _rpc_url,
+    require_expected_chain,
 )
 
 # Safe v1.4.1 canonical CREATE2 addresses (safe-global/safe-deployments).
@@ -170,15 +171,9 @@ def _w3(w3=None):
 
 
 def _require_testnet(w3) -> None:
-    """Fail-closed chain preflight. Runs on every public entry point: an RPC
-    repointed at mainnet (4663) -- by config drift or a hostile env var --
-    must raise, never silently simulate against real balances."""
-    chain_id = w3.eth.chain_id
-    if chain_id != ROBINHOOD_TESTNET_CHAIN_ID:
-        raise RuntimeError(
-            f"refus: chaine {chain_id} != testnet {ROBINHOOD_TESTNET_CHAIN_ID} "
-            "-- ce module ne simule que sur le testnet"
-        )
+    """Thin alias over the dome-shared ``require_expected_chain`` (24/08 --
+    deduplicated, was a third near-identical copy of this preflight)."""
+    require_expected_chain(w3)
 
 
 def verify_safe_stack_deployed(*, w3=None) -> dict:
