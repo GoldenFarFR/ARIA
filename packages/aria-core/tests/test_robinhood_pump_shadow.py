@@ -1331,7 +1331,7 @@ class TestRegimeGate:
 
     @pytest.mark.asyncio
     async def test_record_signals_still_opens_when_regime_is_disarmed(self, monkeypatch):
-        """Default production posture (REGIME_MIN_MEDIAN_PEAK_PCT=30.0, but a
+        """Default production posture (REGIME_MIN_MEDIAN_PEAK_PCT=25.0, but a
         fresh table has < REGIME_WINDOW samples) must leave record_signals
         behaving exactly as it did before this change -- a candidate that
         passes every other filter still gets logged."""

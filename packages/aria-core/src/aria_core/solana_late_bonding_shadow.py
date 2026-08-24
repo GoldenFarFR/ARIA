@@ -581,7 +581,17 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # the old sensor never saw, since it only recorded taken trades) may differ
 # from 50% in either direction, and the capture-gap math above should be
 # re-measured on THIS sensor's own population once it exists.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
+#
+# 24/08, LOWERED 30% -> 25%, operator-directed, on THIS sensor's own
+# population (3266 rows, well above the n>=100 bar above). Causal replay: the
+# candidates that clear ONLY a 20-30% median (never 30%) -- n=804 -- show a
+# 34.41% mean peak / 20.37% median peak, 87.8% positive, close to the profile
+# of candidates the 30% bar already lets through (36.97% mean / 24.29%
+# median). 30% was reading as needlessly strict against its own population,
+# not just against intuition. Still the RAW peak, not net-of-trailing-stop
+# capture (see the capture-gap math above) -- a lower bar widens the gate,
+# it does not change what the exit mechanics keep.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 25.0
 
 
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:

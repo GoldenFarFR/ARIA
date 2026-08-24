@@ -703,6 +703,20 @@ HEARTBEAT_TASKS = [
         interval_minutes=240,
         enabled=True,
     ),
+    HeartbeatTask(
+        id="regime_peak_digest_cycle",
+        name="Digest pic de marche (3 poches shadow)",
+        description="Operator request 24/08, same day the operator lowered "
+        "REGIME_MIN_MEDIAN_PEAK_PCT 30%->25% on all three shadow pockets "
+        "(solana_late_bonding_shadow/robinhood_pump_shadow/base_momentum_shadow): "
+        "a standing readout every 30min of each chain's own regime_state() -- "
+        "median peak, threshold, open/closed, and a 3-point trend -- so a closed "
+        "gate is a fact on a schedule, not something that only surfaces after "
+        "someone asks why a pocket isn't trading. Reuses each module's own "
+        "regime_state(), never a second copy of the median logic.",
+        interval_minutes=30,
+        enabled=True,
+    ),
 ]
 
 
@@ -2183,6 +2197,12 @@ class AriaHeartbeat:
             )
             report = await build_status_report(owner_id)
             await self._notify_telegram(report)
+
+        elif task_id == "regime_peak_digest_cycle":
+            from aria_core.regime_peak_digest import build_regime_peak_digest
+
+            digest = await build_regime_peak_digest()
+            await self._notify_telegram(digest)
 
         elif task_id == "wallet_scan_queue_cycle":
             from aria_core.services.wallet_scan_queue import run_wallet_scan_queue_cycle

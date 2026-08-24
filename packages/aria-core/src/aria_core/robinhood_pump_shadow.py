@@ -485,7 +485,14 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine
 # d'Ingestion's own n>=100 bar) -- this pocket's screened population may
 # differ from late_bonding's in either direction.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
+#
+# 24/08, LOWERED 30% -> 25%, operator-directed, kept in lockstep with
+# late_bonding's own recalibration (see that module's comment for the causal
+# replay behind the number). This pocket's own table held only 54 rows at
+# the time -- still below the n>=100 bar above, so this move is BORROWED
+# consistency, not an independent verdict from this pocket's own population.
+# Re-verify once this table clears 100 rows.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 25.0
 
 _ensured_regime_candidates_db_paths: set[str] = set()
 
