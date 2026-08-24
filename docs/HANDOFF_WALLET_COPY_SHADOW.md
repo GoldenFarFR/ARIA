@@ -37,3 +37,36 @@ Date : 2026.08.10 / Problem : auditing live data found 8 open shadow positions (
 Solution : `_MIN_POOL_LIQUIDITY_USD_FOR_PRICE = 1,000$` floor added to `_current_price_usd()` -- a pool below it degrades to `None` (same honest fallback as no pool found at all), preventing future dust prices from being captured on open OR close. `_PLAUSIBLE_PRICE_RATIO_BOUNDS = (0.001, 1000.0)` mechanical safety net added in `summary()` -- excludes any entry/exit or entry/mark ratio outside this range from the aggregate (this pipeline's largest real documented pumps are on the order of x10-x50, never anywhere near x1000), protecting against both the 6 already-recorded artifacts and any future edge case the liquidity floor alone doesn't catch. Not a retroactive DB cleanup (the poisoned rows stay in the table for traceability) -- `summary()`'s filter is what keeps them out of the reported numbers going forward. — `wallet_copy_shadow.py`, `test_wallet_copy_shadow.py` (3 new tests: liquidity floor rejects/accepts, plausibility filter excludes an artifact while keeping a real x3 gain).
 
 **Clean numbers, recomputed same day** (8 tracked wallets confirmed -- an earlier count of "10" cited in conversation this session was a miscounted `grep`, corrected here): CLOSED (realized) P&L is flat-to-slightly-negative on every wallet with any closed trades (gmgn_0x8d_b74d -$868, gmgn_antpositions -$27, others $0/no losses recorded yet) -- but UNREALIZED (still-open) latent P&L is strongly positive on several: gmgn_0x8d_b74d +$8,168 (on top of its own -$868 realized loss), gmgn_antpositions +$4,487, gmgn_alexwong +$1,001, thokani +$1,062. Consistent with the pattern already noted 2026.08.08 in this same file (swing pocket: 0% closed win rate but a real +35.7% latent position) and with the operator's own live hypothesis this session ("peut-etre que pour etre performant c'est un winrate vers 35% mais plus de benefice avec des positions qui laissent tenir") -- these wallets' realized track record looks unremarkable/negative in isolation, their real edge (if any) is in what they let run, not yet closed at observation time. Not a validated conclusion (unrealized can still reverse before a real close) -- a signal to keep watching, not to act on.
+
+------------------------------------------------------------
+
+[CODE] Sujet    : source dynamique leaderboard -> tracking wallet_copy_shadow (item #146) (déplacé ici 24/08, mal classé dans `docs/HANDOFF_WALLET_SCORING.md`)
+Date : 2026.08.14 / Probleme : `wallet_copy_shadow.py` (forward-test de copie sur ledgers
+fictifs indépendants) ne trackait QUE 8 wallets statiques codés en dur (`TRACKED_WALLETS`) --
+aucune connexion avec `smart_money_leaderboard.py`, le classement dynamique alimenté en continu
+par le funnel de découverte (#147/#148/#149/#152). Un wallet qui grimpe au leaderboard en cours
+de route n'entrait jamais automatiquement dans le forward-test de copie. Objectif opérateur :
+préparer une future poche v11 (scalping, pas encore conçue) en accumulant dès maintenant des
+observations de copie sur les wallets qui s'avèrent réellement performants, pas seulement les 8
+choisis manuellement le 08/08.
+Solution : nouvelle table `wallet_copy_shadow_dynamic_candidates` (wallet_address PRIMARY KEY,
+added_at, composite_percentile_at_add) + `discover_leaderboard_candidates()` (lit
+`smart_money_leaderboard` en SQL brut, exclut les wallets déjà dans `TRACKED_WALLETS` ou déjà
+suivis dynamiquement, insère les nouveaux, best-effort -- ne lève jamais). Seuil
+`LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0` (première calibration arbitraire, le leaderboard
+réel n'a aujourd'hui qu'1 seul wallet à 37.5% -- personne n'entrera tant que le funnel n'aura pas
+fait grossir la population, seuil à revisiter une fois plus de données réelles). `run_scan_cycle`
+et `summary()` fusionnent désormais `{**TRACKED_WALLETS, **_dynamic_tracked_wallets()}` -- les 8
+wallets statiques restent inchangés et distincts (`tier="leaderboard_dynamic"` vs
+`"verified_all_time"`/`"gmgn_smart_money_30d"`/`"frontrunner"`, doctrine "kept honest, never
+blended" déjà en place dans ce module). Nouveau sous-gate `ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED`
+(défaut OFF) câblé dans `heartbeat.py`, appelé avant `run_scan_cycle()` dans le cycle
+`wallet_copy_shadow_cycle` existant -- n'active rien tant que l'opérateur ne confirme pas.
+Enregistré dans `_KNOWN_ENABLED_GATES` (test_coherence.py). 6 nouveaux tests (seuil, pas de
+doublon avec les statiques, idempotence, dégradation gracieuse si table absente, inclusion dans
+le scan, remontée dans `summary()`) -- 22/22 verts sur `test_wallet_copy_shadow.py`, suite
+complète en cours de vérification.
+`packages/aria-core/src/aria_core/wallet_copy_shadow.py`,
+`packages/aria-core/src/aria_core/heartbeat.py`,
+`packages/aria-core/tests/test_wallet_copy_shadow.py`,
+`packages/aria-core/tests/test_coherence.py`.

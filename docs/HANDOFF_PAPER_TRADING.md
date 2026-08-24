@@ -6,13 +6,6 @@
 > `[STATUT]` : DEPLOYE / CODE (testé, pas déployé) / CONFIG (pas de commit) / ETAT ACTUEL.
 > Protocole actif à jour : section "Protocole d'entraînement hebdomadaire" dans CLAUDE.md.
 
-[DEPLOYE] Sujet  : contrefactuel des rejets recalibre avant activation (jamais active) -- ancien plafond sous-dimensionne ~5x
-Date : 2026.08.02 / Probleme : evaluation demandee avant toute activation de `ARIA_COUNTERFACTUAL_TRACKER_ENABLED` (OFF depuis toujours, 11 527 rejets en attente depuis le 20/07, jamais un seul revisite). Plafond code par defaut (`run_revisit_cycle(limit=20)`, jamais surcharge dans `heartbeat.py`) x 8 cycles/jour (180min) = 160/jour de capacite -- contre un debit d'entree reel mesure de ~823/jour en moyenne sur 14 jours, avec une tendance recente EN ACCELERATION (341 -> 1282 -> 2529+ sur les 3 derniers jours, coincidant avec 2 gates d'entree assouplis les 30-31/07). A ce rythme le retard ne se serait JAMAIS resorbe (croissance nette d'environ 663 lignes/jour), et un rattrapage brutal du stock en un seul passage aurait monopolise le verrou de debit partage DexScreener (le meme que le pipeline momentum utilise pour les prix reels) pendant ~82 minutes d'affilee -- contraire a la doctrine "sequencer plutot que paralleliser" deja actee.
-Solution : `HEARTBEAT_REVISIT_LIMIT = 300` (nouveau, remplace le defaut de 20 pour l'appel heartbeat -- ~2.9x la moyenne 14 jours, au-dessus de tout jour COMPLET observe dans la fenetre, avec marge deliberee pour la tendance recente en acceleration) + `_MAX_LIMIT_PER_CYCLE = 500` (plafond dur defensif independant de l'appelant, ~9.3min de verrou partage au pire cas, protege contre une future erreur de calibration x10/x100). Le gate reste OFF -- ce correctif prepare une activation future sure, ne l'active PAS lui-meme (decision operateur separee, pas encore prise). A RECALIBRER une fois quelques jours de donnees reelles observees post-activation (methode de verification deja documentee en commentaire dans le code).
-`counterfactual_tracker.py`/`heartbeat.py`/`tests/test_counterfactual_tracker.py` -- tests de non-regression sur le plafonnement (`limit` toujours clampe a `_MAX_LIMIT_PER_CYCLE` quel que soit l'appelant).
-
-------------------------------------------------------------
-
 [DEPLOYE] Sujet  : coupe-circuits automatiques de risque supprimés (paper uniquement) -- decision operateur explicite, incident vecu en direct
 Date : 2026.08.02 / Probleme : l'operateur a observe en direct une alerte Telegram reelle ("coupe-circuit portefeuille SCALPING_V3 toujours ARME, 5 pertes consecutives") pendant cette meme session, puis a juge le mecanisme sans valeur pour le test papier en cours : "les coupe circuit ne servent à rien à paper test puisque on améliore et reconstruit en temps réel". Distinct des 2 constats de securite trouves plus tot le meme jour par un audit (concentration holders contournable -- corrige separement ci-dessus ; coupe-circuit dilue par la fusion en 6 poches scalping -- devenu caduc par cette decision).
 Solution : nouveau `risk_guard.paper_risk_circuit_breakers_disabled()` (`ARIA_PAPER_RISK_CIRCUIT_BREAKERS_DISABLED`, OFF par defaut -- fail-closed, meme doctrine que tout gate du fichier). Scope precis, deliberement etroit : coupe l'ARMEMENT du coupe-circuit dur par poche (drawdown -20%/5 pertes consecutives, `evaluate_portfolio_risk`), le blocage d'un etat deja arme (`blocks_new_entries`, y compris un etat arme AVANT l'activation du gate -- le cas reel scalping_v3), le rappel horaire Telegram (`should_send_pocket_reminder`), et le cooldown de re-entree par contrat (`paper_trader.py`, `SCALPING_MAX_CONSECUTIVE_LOSSES_PER_CONTRACT`/`MAX_CONSECUTIVE_LOSSES_PER_CONTRACT`). Ne touche JAMAIS `outgoing_pause` (le vrai kill-switch manuel `/stop`, une decision humaine, pas automatique) ni aucun garde-fou anti-scam (honeypot/liste noire/concentration holders/plancher de liquidite) -- le raisonnement de l'operateur ("on ameliore en temps reel") s'applique a la gestion du risque de portefeuille, jamais a la detection de fraude. Le palier SOUPLE (-10% a -20%, alerte + sizing reduit, ne bloque jamais) reste volontairement intact -- ce n'est pas un "coupe-circuit" au sens ou l'operateur l'entend (rien n'est coupe). A REVISITER OBLIGATOIREMENT avant toute transition vers du capital reel -- la regle absolue CLAUDE.md de validation humaine sur mainnet s'applique integralement et sans exception, ce gate ne concerne que le capital 100% fictif du test papier.
@@ -83,12 +76,6 @@ Solution : nouveau `_render_closed_compact()` (même densité/lien collé que la
 
 ------------------------------------------------------------
 
-[CODE] Sujet    : Sealed Ledger v0 (#214) — registre de trades scellé cryptographiquement, ISOLÉ
-Date : 2026.07.19  /  Probleme : —
-Solution : registre append-only (chaînage SHA-256, JSON canonique, PnL toujours recalculé sur le VWAP des prix d'exécution réels, jamais le prix de décision), proposé et conçu par ARIA elle-même en conversation. Livré en version ISOLÉE (`sealed_ledger.py`/`sealed_ledger_export.py`, jamais câblée au paper-trading réel — décision opérateur explicite pour ce premier tour), preuve exécutée et vérifiée bout en bout sur 4 trades fictifs explicitement marqués comme tels (`PROOF-v0-hand-filled-not-a-real-ARIA-decision`). Reste ouvert : câbler ce registre sur `paper_trader.py`, endpoint API public, décision Postgres vs SQLite — aucun feu vert opérateur encore donné au-delà du v0 isolé.
-
-------------------------------------------------------------
-
 [DEPLOYE] Sujet    : reset_portfolio() effacait l'historique sans archive (DROP brut)
 Date : 2026.07.24 / Probleme : audit 5-agents -- reset_portfolio() (reset manuel, ex. apres un incident forçant un redémarrage hors cycle, cf. CNX le 22/07) faisait un DROP TABLE direct sans jamais archiver dans paper_position_archive au préalable, contrairement à run_weekly_reset() qui archive toujours avant de vider -- confirmé en base : le Cycle #2 (18-22/07) n'a laissé aucune trace archivée après le reset manuel du 22/07.
 Solution : reset_portfolio() archive désormais tout le contenu de paper_position (ouvert ET clôturé) sous le cycle_number courant avant le DROP, même doctrine non-destructive que run_weekly_reset -- paper_trader.py, tests dédiés (cf. historique git 24/07)
@@ -146,12 +133,6 @@ Solution : pnl_usd final = P&L de la dernière tranche + realized_pnl_partial d�
 [CONFIG] Sujet    : Correction manuelle du capital paper-trading après le gain fictif PLAZM/ESHARE
 Date : 2026.07.19  /  Probleme : le bug de mislabeling quote-token (cf. HANDOFF_PIPELINE_MOMENTUM) avait figé equity_high_water_mark à ~12,5M$ (faux pic), bloquant déjà toutes les nouvelles entrées en prod via le coupe-circuit dur de risk_guard (faux drawdown de -61%).
 Solution : correction en 3 volets, uniquement sur les DONNÉES de la position concernée (aucun changement de code) — sauvegarde de aria.db prise avant écriture ; pnl_usd/pnl_pct/realized_pnl_partial de la position remis à 0 (jamais supprimée, annotation dans close_notes) ; equity_high_water_mark réinitialisé à 1 000 000$ ; risk_guard.resume_new_entries() appelé. Capital vérifié après coup : 997 685$ (-0,23%), coupe-circuit levé — cf. historique git 19/07 (/opt/aria-data/backups/).
-
-------------------------------------------------------------
-
-[DEPLOYE] Sujet    : Scorecard objective de readiness capital réel (/feuvert)
-Date : 2026.07.10  /  Probleme : question directe opérateur ("tu ferais confiance à ARIA pour 100k$ ?") sans outil pour y répondre objectivement plutôt que par avis subjectif.
-Solution : skills/real_money_readiness.py calcule les cases du barème docs/protocole-argent-reel.md depuis le vrai journal vc_predictions (integrity/robustness/sample_size/benchmark/risk/judge/lawyer) ; commande /feuvert Telegram admin-only — real_money_readiness.py (cf. historique git 10/07)
 
 ------------------------------------------------------------
 

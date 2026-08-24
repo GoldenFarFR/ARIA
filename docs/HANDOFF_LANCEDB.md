@@ -99,6 +99,12 @@ Source : forcepoint.com/blog/x-labs/persistent-memory-poisoning-ai-agents, vecto
 
 ## Historique détaillé (entrées datées)
 
+[DEPLOYE] Sujet    : Aucun garde anti-injection sur l'écriture en mémoire vectorielle (memory poisoning) (déplacé ici 24/08, était mal classé dans `docs/HANDOFF_SECURITE.md` -- complémentaire à #166 ci-dessous : celui-ci détecte l'injection dans le CONTENU écrit, #166 trace la PROVENANCE/TTL de l'écriture elle-même)
+Date : 2026.07.18 / Probleme : audit du chemin d'écriture LanceDB a trouvé deux trous - cybercentry_insight.py écrivait directement sans aucun triage (0 appelant en prod mais aucune garantie pour demain) ; le triage Groq existant (x_insight_relevance.py) vérifiait pertinence et véracité mais jamais l'injection de prompt spécifiquement.
+Solution : lancedb_store.contains_injection_marker() - garde regex FR+EN posée à la couche de PERSISTANCE elle-même (store()), protège tout appelant présent ET futur sans les modifier individuellement ; x_insight_relevance.py gagne un 5e critère INJECTION dans le même prompt Groq (aucun nouvel appel LLM), prime sur PERTINENT/FAIT si détecté - lancedb_store.py / x_insight_relevance.py (cf. historique git 18/07, #206)
+
+------------------------------------------------------------
+
 [CODE] Sujet : 2e source d'écriture LanceDB -- calibration_ledger comme type "lesson" (#169)
 Date : 2026.08.14 / Probleme : un seul appelant écrivait réellement dans LanceDB depuis sa
 création (`conviction_research.py`), les 4 autres types du schéma (`insight`/`lesson`/

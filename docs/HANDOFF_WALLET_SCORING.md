@@ -40,39 +40,6 @@ None), 406/406 green on `test_paper_trader.py`, 178/178 on `test_coherence.py`.
 
 ------------------------------------------------------------
 
-[CODE] Sujet    : source dynamique leaderboard -> tracking wallet_copy_shadow (item #146)
-Date : 2026.08.14 / Probleme : `wallet_copy_shadow.py` (forward-test de copie sur ledgers
-fictifs indépendants) ne trackait QUE 8 wallets statiques codés en dur (`TRACKED_WALLETS`) --
-aucune connexion avec `smart_money_leaderboard.py`, le classement dynamique alimenté en continu
-par le funnel de découverte (#147/#148/#149/#152). Un wallet qui grimpe au leaderboard en cours
-de route n'entrait jamais automatiquement dans le forward-test de copie. Objectif opérateur :
-préparer une future poche v11 (scalping, pas encore conçue) en accumulant dès maintenant des
-observations de copie sur les wallets qui s'avèrent réellement performants, pas seulement les 8
-choisis manuellement le 08/08.
-Solution : nouvelle table `wallet_copy_shadow_dynamic_candidates` (wallet_address PRIMARY KEY,
-added_at, composite_percentile_at_add) + `discover_leaderboard_candidates()` (lit
-`smart_money_leaderboard` en SQL brut, exclut les wallets déjà dans `TRACKED_WALLETS` ou déjà
-suivis dynamiquement, insère les nouveaux, best-effort -- ne lève jamais). Seuil
-`LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0` (première calibration arbitraire, le leaderboard
-réel n'a aujourd'hui qu'1 seul wallet à 37.5% -- personne n'entrera tant que le funnel n'aura pas
-fait grossir la population, seuil à revisiter une fois plus de données réelles). `run_scan_cycle`
-et `summary()` fusionnent désormais `{**TRACKED_WALLETS, **_dynamic_tracked_wallets()}` -- les 8
-wallets statiques restent inchangés et distincts (`tier="leaderboard_dynamic"` vs
-`"verified_all_time"`/`"gmgn_smart_money_30d"`/`"frontrunner"`, doctrine "kept honest, never
-blended" déjà en place dans ce module). Nouveau sous-gate `ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED`
-(défaut OFF) câblé dans `heartbeat.py`, appelé avant `run_scan_cycle()` dans le cycle
-`wallet_copy_shadow_cycle` existant -- n'active rien tant que l'opérateur ne confirme pas.
-Enregistré dans `_KNOWN_ENABLED_GATES` (test_coherence.py). 6 nouveaux tests (seuil, pas de
-doublon avec les statiques, idempotence, dégradation gracieuse si table absente, inclusion dans
-le scan, remontée dans `summary()`) -- 22/22 verts sur `test_wallet_copy_shadow.py`, suite
-complète en cours de vérification.
-`packages/aria-core/src/aria_core/wallet_copy_shadow.py`,
-`packages/aria-core/src/aria_core/heartbeat.py`,
-`packages/aria-core/tests/test_wallet_copy_shadow.py`,
-`packages/aria-core/tests/test_coherence.py`.
-
-------------------------------------------------------------
-
 [CODE] Sujet    : source #149 (trades sur positions swing/vc) ne trouvait JAMAIS aucun candidat -- mauvaise colonne lue (item #151)
 Date : 2026.08.14 / Probleme : en poursuivant #151 (le log par-source déployé plus tôt aujourd'hui
 montrait `trade_candidates=0` sur chaque cycle observé) -- diagnostic direct DB confirmé : 14
@@ -306,12 +273,6 @@ Solution : new `BACKGROUND_QUEUE_MAX_TOKENS_PER_WALLET = 10` passed as `score_wa
 [CODE] Subject  : Wallet identity enrichment -- Farcaster reverse-lookup + Basenames forward resolution, in-house instead of paying Neynar
 Date : 2026.07.24 / Problem : operator asked whether a wallet address could surface a name/ENS/linked X account, and separately whether paying Neynar via x402 for this was worthwhile. Real diligence done before writing any code: a live authenticated Dune query confirmed `dune.neynar.dataset_farcaster_verifications`'s real schema (the verified address lives inside a JSON-encoded `claim` VARCHAR column, not a direct column -- `json_extract_scalar(claim, '$.address')` needed). A live, unauthenticated call to `api.warpcast.com/v2/user?fid=<fid>` then confirmed Warpcast's own `connectedAccounts` field already exposes a linked X account for FREE (platform=="x") -- Neynar was NOT needed for this signal at all, closing that question with a working free alternative rather than a subscription decision.
 Solution : two new orchestrated pieces, zero new paid surface. (1) `dune.get_farcaster_fid_by_address()` (new query builder + function in `services/dune.py`, same anti-injection EVM-format validation as `build_addresses_stats_query`) reverse-resolves an address to a Farcaster fid via the already-paid/calibrated Dune client. (2) `farcaster.get_profile_by_fid()` (new function in `services/farcaster.py`, same free no-key Warpcast client as `verify_profile()`) resolves that fid to a full profile including the linked X account. (3) New `services/farcaster_reverse.py` orchestrates both into a single `reverse_lookup_address()` -- dome doctrine throughout, no verified Farcaster account for an address is a normal outcome, never an error. Separately, Basenames FORWARD resolution (name -> address) was built as `services/basenames.py` -- the REVERSE direction (address -> name) already existed for free via `Blockscout.get_address_info().ens_domain_name`, already wired into `smart_money.py`'s `display_name` for /walletscore and /topwallets, so only the missing forward direction was built. Real architecture bug found and fixed while validating end-to-end (never assumed from memory or a single web fetch): a name's resolver is NOT always the well-known default L2Resolver proxy -- a real round-trip test against "jesse.base.eth" (independently cross-checked via Blockscout's own `ens_domain_name` field) returned an all-zero address when calling the default resolver directly, and only resolved correctly once `Registry.resolver(node)` was queried FIRST to find this name's actual (custom) resolver. Both the Registry (`0xb94704422c2a1e396835a571837aa5ae53285a95`) and the default resolver proxy addresses were independently verified via Blockscout's own contract-verification API before use, never trusted from a single web-fetched doc. `services/dune.py` / `services/farcaster.py` / `services/farcaster_reverse.py` (new) / `services/basenames.py` (new) -- 8 new Dune tests, 6 new Farcaster tests, 6 new farcaster_reverse tests, 8 new basenames tests (namehash validated against the published EIP-137 test vector), full suite to confirm, `test_coherence.py` green.
-
-------------------------------------------------------------
-
-[CODE] Subject  : GeckoTerminal's two independent throttle locks unified (throughput audit finding)
-Date : 2026.07.24 / Problem : a full throughput-smoothing audit (workflow, 3 agents) confirmed `services/geckoterminal.py`'s `GeckoTerminalClient` owns its own throttle (`_lock`/`_throttle`, ~2.222s/call, used by `resolve_primary_pool`/`get_pool_created_at`), while `GeckoTerminalClient.get_ohlcv` lazily delegates to `services/ohlcv.py`'s module-level `ohlcv_client` -- which had its OWN, completely independent `asyncio.Lock` (`min_interval=2.2`), never coordinated with the first one via `wait_for_shared_rate_limit()` (the 21/07 fix that already unified vanguard/backend's client with this one). Confirmed live in the exact hot path the operator cares about: `smart_money.py`'s per-token loop calls BOTH `gecko.resolve_primary_pool(...)` and `gecko.get_ohlcv(...)` on the SAME external GeckoTerminal account, paced by two genuinely separate timers.
-Solution : `OHLCVClient.__init__` gained an opt-in `use_shared_throttle: bool = False` parameter (default False -- the 7 existing test-constructed instances with `min_interval=0.0` keep working completely unmodified, never touching the shared limiter). When `True`, `_throttle()` calls `geckoterminal.wait_for_shared_rate_limit()` (lazy import inside the method, never at module load -- no circular-import risk even though `geckoterminal.py` itself lazily imports `ohlcv.py` back). Only the ONE real-production singleton, `services/ohlcv.py`'s module-level `ohlcv_client`, opts in (`OHLCVClient(use_shared_throttle=True)`) -- a simpler, safer design than injecting a throttle callback, since the import failure surface only exists at first real use, never at import time. `services/ohlcv.py` -- 3 new tests (`test_ohlcv_client.py`: default instance keeps its own lock, opt-in calls the shared limiter, the module singleton itself has the flag set), full suite green, `test_coherence.py` green.
 
 ------------------------------------------------------------
 
