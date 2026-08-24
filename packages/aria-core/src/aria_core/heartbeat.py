@@ -1954,9 +1954,6 @@ class AriaHeartbeat:
                     "robinhood_testnet_rehearsal",
                     f"[rehearsal testnet] -> {outcome} ({result.get('reason', '')})",
                 )
-                alert = agent_wallet_pilot_cycle.format_agent_wallet_swap_alert(result)
-                if alert:
-                    await self._notify_telegram(alert)
 
         elif task_id == "relay_conversation_cycle":
             from aria_core.relay_conversation import run_relay_conversation_cycle
