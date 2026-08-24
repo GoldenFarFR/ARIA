@@ -56,12 +56,17 @@ async def test_last_event_per_service_returns_most_recent_per_service():
 
 @pytest.mark.asyncio
 async def test_count_opened_since_only_counts_opened_events_in_window():
+    """24/08 real CI flake: a fixed 0.05s sleep after each nowait() write
+    assumed the background task always lands within that window -- under
+    CI load (this suite runs 5000+ tests before it) it sometimes does not,
+    losing an event. Awaiting the module's own _background_tasks set is
+    deterministic regardless of scheduler load."""
     cbl.record_transition_nowait("dexscreener", "opened", consecutive_failures=3, cooldown_seconds=180.0)
-    await asyncio.sleep(0.05)
+    await asyncio.gather(*cbl._background_tasks)
     cbl.record_transition_nowait("dexscreener", "closed", consecutive_failures=0, cooldown_seconds=0.0)
-    await asyncio.sleep(0.05)
+    await asyncio.gather(*cbl._background_tasks)
     cbl.record_transition_nowait("dexscreener", "opened", consecutive_failures=3, cooldown_seconds=180.0)
-    await asyncio.sleep(0.05)
+    await asyncio.gather(*cbl._background_tasks)
 
     count = await cbl.count_opened_since("dexscreener", "2000-01-01T00:00:00+00:00")
     assert count == 2
