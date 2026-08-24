@@ -1,24 +1,27 @@
 """X (Twitter) interaction kill-switch -- ``/offx`` and ``/onx`` on Telegram.
 
-Operator request (24/08): ``/stop`` (``outgoing_pause``) is the absolute
-real-capital kill-switch and must stay armed as long as the operator wants
-X interactions blocked -- but keeping it armed also freezes paper trading
-(``paper_pause`` already has its own independent ``/offpaper``/``/onpaper``
-pair for that leg). There was no equivalent independent lever for X: the
-operator could not silence tweets/likes/profile-sync without also freezing
-real-capital paths, or resume real-capital paths without also reopening X.
+Operator request (24/08): no independent lever existed for X -- silencing
+tweets/likes/profile-sync meant arming ``/stop`` (``outgoing_pause``),
+which also blocks real capital, or the operator had no way to touch X
+alone at all.
 
-This module is the third, independent pause. All three deliberately never
-touch each other's state file:
-- ``outgoing_pause`` (``/stop``/``/resume``) -- real capital AND X, the
-  absolute kill-switch, "kill-switch, tested -- do not recode" per CLAUDE.md.
+Four independent pauses now exist, none of which ever touch each other's
+state file:
+- ``outgoing_pause`` (``/stop``/``/resume``, also aliased ``/offreal``/
+  ``/onreal``) -- real capital ONLY, unchanged historical scope,
+  "kill-switch, tested -- do not recode" per CLAUDE.md.
 - ``paper_pause`` (``/offpaper``/``/onpaper``) -- paper-trading scanning
   only, fails OPEN (guards zero capital).
 - this module (``/offx``/``/onx``) -- X interactions only.
+- ``shadow_pause`` (``/offshadow``/``/onshadow``) -- the standalone shadow
+  process only.
 
-Every X-writing call site already checks ``outgoing_pause.is_paused()``
-first (the absolute switch always wins); this module's ``is_paused()`` is
-checked ALONGSIDE it, never instead of it, at the exact same call sites.
+Every X-writing call site checks ONLY this module, never ``outgoing_pause``
+directly. ``/off`` (the grouped shortcut, see ``telegram_bot._handle_off``)
+and the automatic macro circuit breaker in ``risk_guard.py`` both arm this
+module alongside the other three, so a full stop still blocks X -- but
+``/onx`` can genuinely lift X on its own afterward, even if ``/stop``/
+``/off`` stay armed for real capital.
 
 Fails CLOSED on an unreadable/corrupted state, same doctrine as
 ``custody_pause.py`` (not ``paper_pause.py``'s fail-open): a tweet/like/

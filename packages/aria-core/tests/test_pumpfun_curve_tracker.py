@@ -337,16 +337,20 @@ def test_batches_are_paced_apart(monkeypatch):
 
 
 def test_the_rate_is_below_the_provider_cap():
-    # Chainstack Developer plan: 25 req/s, enforced with 429. The norm is ~90%
-    # of the real rate, never the ceiling itself.
-    assert tracker.MAX_REQUESTS_PER_SECOND < 25.0
-    assert tracker.MAX_REQUESTS_PER_SECOND >= 20.0
+    # Chainstack Solana Mainnet Developer plan: 5 req/s specifically (not the
+    # general 25 req/s tier, confirmed live 24/08 -- see docs/HANDOFF_CHAINSTACK.md
+    # section 3.B). The norm is ~90% of the real rate, never the ceiling itself.
+    assert tracker.MAX_REQUESTS_PER_SECOND < 5.0
+    assert tracker.MAX_REQUESTS_PER_SECOND >= 4.0
 
 
-# --- provider cascade (2026.08.21) -------------------------------------------
+# --- provider cascade (2026.08.21, RPS figure corrected 24/08) --------------
 # Chainstack primary, Helius fallback. Chainstack wins on measured facts: 3M
-# units/month vs 1M, 25 req/s vs 10, and a flat 1 unit per call instead of a
-# per-megabyte streaming rate. The fallback matters because a failed batch is
+# units/month vs 1M, and a flat 1 unit per call instead of a per-megabyte
+# streaming rate -- despite a slower real Solana Mainnet cap (5 req/s vs
+# Helius's 10, corrected 24/08 from an earlier 25 req/s figure that mixed up
+# Chainstack's general-plan rate with its Solana-specific one, see
+# docs/HANDOFF_CHAINSTACK.md section 3.B). The fallback matters because a failed batch is
 # not neutral -- its mints go unmeasured for that round.
 
 
@@ -410,13 +414,18 @@ def test_a_failure_never_disables_a_provider(monkeypatch):
 
 
 def test_each_provider_keeps_its_own_pace():
-    # A shared throttle would drag Chainstack down to Helius's slower limit.
+    # A shared throttle would silently average the two rates together instead
+    # of respecting each provider's own real cap. Since the 24/08 Solana
+    # Mainnet correction, Chainstack (5 req/s real cap) is actually SLOWER
+    # than Helius (10 req/s) here -- the point of this test is that each
+    # endpoint's pacing stays independently correct either way, not that
+    # Chainstack is faster.
     t = _two_provider_tracker()
     assert t._endpoints[0].max_rps == tracker.CHAINSTACK_MAX_RPS
     assert t._endpoints[1].max_rps == tracker.HELIUS_MAX_RPS
-    assert t._endpoints[0].min_interval < t._endpoints[1].min_interval
+    assert t._endpoints[0].min_interval > t._endpoints[1].min_interval
     assert tracker.HELIUS_MAX_RPS < 10.0     # under the published Helius cap
-    assert tracker.CHAINSTACK_MAX_RPS < 25.0  # under the published Chainstack cap
+    assert tracker.CHAINSTACK_MAX_RPS < 5.0  # under the real Solana Mainnet cap (5 req/s)
 
 
 def test_a_single_provider_still_works_alone(monkeypatch):

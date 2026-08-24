@@ -971,6 +971,41 @@ class TestMacroReminder:
         assert "RAPPEL" in text
         assert "/resume" in text
 
+    @pytest.mark.asyncio
+    async def test_macro_trigger_arms_all_four_pause_categories(self, tmp_db):
+        """24/08 -- same grouped-shortcut principle as the manual /off
+        handler: a correlated crash severe enough to trip this breaker must
+        cut paper/X/shadow too, not just leave outgoing_pause armed while
+        the shadow process keeps spending API/RPC credits on candidates it
+        can never act on."""
+        from aria_core import paper_pause, shadow_pause, x_pause
+
+        await pt.reset_portfolio(1_000_000.0, wallet="scalping")
+        await pt.reset_portfolio(1_000_000.0, wallet="swing")
+        await pt.reset_portfolio(1_000_000.0, wallet="vc")
+
+        async def price_lookup(contract):
+            return 1.0
+
+        await risk_guard.evaluate_macro_risk(price_lookup=price_lookup)
+
+        import json as _json
+
+        macro_file = tmp_db / "risk_guard_state_macro.json"
+        data = _json.loads(macro_file.read_text(encoding="utf-8"))
+        data["high_water_mark"] = 10_000_000.0
+        macro_file.write_text(_json.dumps(data), encoding="utf-8")
+
+        assert paper_pause.is_paused() is False
+        assert x_pause.is_paused() is False
+        assert shadow_pause.is_paused() is False
+
+        state = await risk_guard.evaluate_macro_risk(price_lookup=price_lookup)
+        assert state.newly_triggered is True
+        assert paper_pause.is_paused() is True
+        assert x_pause.is_paused() is True
+        assert shadow_pause.is_paused() is True
+
 
 # ── 3. evaluate_portfolio_risk (intégration paper_trader) ──────────────────
 

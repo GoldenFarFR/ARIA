@@ -14,9 +14,21 @@ Structurally separate from `wallet_guard.py` — same principle as
 guard-rail that protects everything that will one day touch real capital at
 larger scale. Append-only: no UPDATE/DELETE function here (same doctrine as
 `aria_directives.py::aria_directive_log`).
+
+24/08 -- hash-chained (research lead from a GitHub exploration of the
+ai-agents topic, HKUDS/Vibe-Trading's audit ledger pattern): every row's
+`record_hash` is a sha256 of its own fields PLUS the previous row's
+`record_hash`, same principle as a blockchain. A plain SQLite table has no
+tamper evidence -- a row edited or deleted after the fact (a compromised
+server, or a bug) leaves no trace. With the chain, editing ANY historical
+row breaks its hash, which breaks every row after it -- `verify_chain_
+integrity()` detects this and says exactly where. This is the append-only
+journal for the pilot that will one day move real capital, so it is the
+one table in this project worth this cost.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -24,6 +36,11 @@ import aiosqlite
 from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
+
+# Genesis prev_hash for the first row of the chain -- conventional all-zero
+# value, same as a blockchain's genesis block, never a real sha256 output
+# (which can't be all zeros in practice) so it's unambiguous in the data.
+_GENESIS_HASH = "0" * 64
 
 _COLUMNS = [
     "id",
@@ -42,7 +59,41 @@ _COLUMNS = [
     "to_address",
     "implied_cost_pct",
     "cost_note",
+    "prev_hash",
+    "record_hash",
 ]
+
+
+def _compute_record_hash(
+    prev_hash: str,
+    *,
+    wallet_product: str,
+    chain: str,
+    action_type: str,
+    token_in: str,
+    token_out: str,
+    amount_in: float,
+    amount_out: float,
+    slippage_bps: int,
+    tx_hash: str,
+    status: str,
+    reason: str,
+    created_at: str,
+    to_address: str,
+    implied_cost_pct: float | None,
+    cost_note: str,
+) -> str:
+    """Deterministic sha256 over every field that matters PLUS the previous
+    row's hash -- the chain link. Field order is fixed and must never change
+    without a migration note, or every historical hash stops verifying."""
+    canonical = "|".join(
+        str(x) for x in (
+            prev_hash, wallet_product, chain, action_type, token_in, token_out,
+            amount_in, amount_out, slippage_bps, tx_hash, status, reason,
+            created_at, to_address, implied_cost_pct, cost_note,
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 async def _ensure_table() -> None:
@@ -88,6 +139,16 @@ async def _ensure_table() -> None:
             await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN implied_cost_pct REAL")
         if "cost_note" not in cols:
             await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN cost_note TEXT NOT NULL DEFAULT ''")
+        # 24/08 -- hash chain. Rows written BEFORE this migration get '' in
+        # both columns (there is no real chain to retroactively attach them
+        # to) -- the first row written AFTER this migration becomes the new
+        # chain's genesis, same as an empty table would. verify_chain_
+        # integrity() treats a pre-migration '' record_hash as expected, not
+        # a break, and starts real verification from the first chained row.
+        if "prev_hash" not in cols:
+            await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''")
+        if "record_hash" not in cols:
+            await db.execute("ALTER TABLE agent_wallet_tx_log ADD COLUMN record_hash TEXT NOT NULL DEFAULT ''")
         await db.commit()
 
 
@@ -122,21 +183,93 @@ async def record_transaction(
     await _ensure_table()
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
+        # SELECT then INSERT on the SAME connection, no commit in between --
+        # SQLite serializes writers on the file lock, so a concurrent
+        # record_transaction() call cannot read this same "last hash" and
+        # fork the chain; it blocks until this transaction commits.
+        last = await (
+            await db.execute("SELECT record_hash FROM agent_wallet_tx_log ORDER BY id DESC LIMIT 1")
+        ).fetchone()
+        prev_hash = (last[0] if last else "") or _GENESIS_HASH
+        record_hash = _compute_record_hash(
+            prev_hash,
+            wallet_product=wallet_product, chain=chain, action_type=action_type,
+            token_in=token_in, token_out=token_out, amount_in=amount_in,
+            amount_out=amount_out, slippage_bps=slippage_bps, tx_hash=tx_hash,
+            status=status, reason=reason, created_at=now, to_address=to_address,
+            implied_cost_pct=implied_cost_pct, cost_note=cost_note,
+        )
         await db.execute(
             """
             INSERT INTO agent_wallet_tx_log
                 (wallet_product, chain, action_type, token_in, token_out,
                  amount_in, amount_out, slippage_bps, tx_hash, status, reason,
-                 created_at, to_address, implied_cost_pct, cost_note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, to_address, implied_cost_pct, cost_note,
+                 prev_hash, record_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 wallet_product, chain, action_type, token_in, token_out,
                 amount_in, amount_out, slippage_bps, tx_hash, status, reason, now,
-                to_address, implied_cost_pct, cost_note,
+                to_address, implied_cost_pct, cost_note, prev_hash, record_hash,
             ),
         )
         await db.commit()
+
+
+async def verify_chain_integrity() -> dict:
+    """Re-walks the whole journal in insertion order and recomputes every
+    hash -- returns {"intact": bool, "checked": int, "broken_at_id": int|None,
+    "detail": str}. A pre-migration row (both hash columns '') is expected
+    and skipped, never counted as a break -- the real chain only starts at
+    the first row written after the 24/08 migration. Any row after that
+    point whose stored hash doesn't match a fresh recomputation, or whose
+    prev_hash doesn't match the previous row's record_hash, means something
+    edited this append-only table outside of record_transaction()."""
+    await _ensure_table()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await (
+            await db.execute(
+                "SELECT id, wallet_product, chain, action_type, token_in, token_out, "
+                "amount_in, amount_out, slippage_bps, tx_hash, status, reason, "
+                "created_at, to_address, implied_cost_pct, cost_note, prev_hash, record_hash "
+                "FROM agent_wallet_tx_log ORDER BY id ASC"
+            )
+        ).fetchall()
+
+    expected_prev = _GENESIS_HASH
+    checked = 0
+    for row in rows:
+        (row_id, wallet_product, chain, action_type, token_in, token_out,
+         amount_in, amount_out, slippage_bps, tx_hash, status, reason,
+         created_at, to_address, implied_cost_pct, cost_note,
+         prev_hash, record_hash) = row
+
+        if not record_hash:
+            # Pre-migration row -- no chain to verify, doesn't reset expected_prev.
+            continue
+
+        if prev_hash != expected_prev:
+            return {
+                "intact": False, "checked": checked, "broken_at_id": row_id,
+                "detail": f"row {row_id}: prev_hash does not match the previous row's record_hash",
+            }
+        recomputed = _compute_record_hash(
+            prev_hash, wallet_product=wallet_product, chain=chain, action_type=action_type,
+            token_in=token_in, token_out=token_out, amount_in=amount_in,
+            amount_out=amount_out, slippage_bps=slippage_bps, tx_hash=tx_hash,
+            status=status, reason=reason, created_at=created_at, to_address=to_address,
+            implied_cost_pct=implied_cost_pct, cost_note=cost_note,
+        )
+        if recomputed != record_hash:
+            return {
+                "intact": False, "checked": checked, "broken_at_id": row_id,
+                "detail": f"row {row_id}: stored hash does not match its own fields -- edited after the fact",
+            }
+        expected_prev = record_hash
+        checked += 1
+
+    return {"intact": True, "checked": checked, "broken_at_id": None, "detail": ""}
 
 
 async def list_aria_bought_tokens_still_held() -> set[str]:

@@ -1291,7 +1291,7 @@ async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
     resumes (``/resume``/``/start``), this breaker is free to re-arm on a
     LATER, independent correlated crash -- never permanently "used up" by a
     single historical trigger."""
-    from aria_core import outgoing_pause, paper_trader
+    from aria_core import outgoing_pause, paper_pause, paper_trader, shadow_pause, x_pause
 
     total_equity = 0.0
     # 08/01 -- all_reporting_wallets() (not all_pocket_wallets()): the MACRO
@@ -1331,14 +1331,21 @@ async def evaluate_macro_risk(*, price_lookup=None) -> MacroRiskState:
     })
 
     if newly_triggered:
-        outgoing_pause.pause(
-            by="macro_circuit_breaker",
-            reason=(
-                f"coupe-circuit MACRO : drawdown {drawdown_pct:.1%} sur l'équité combinée des "
-                f"3 poches (scalping+swing+vc) depuis le plus haut ({hwm:,.0f} $) -- krach "
-                "corrélé, toutes les poches arrêtées par sécurité."
-            ),
+        reason = (
+            f"coupe-circuit MACRO : drawdown {drawdown_pct:.1%} sur l'équité combinée des "
+            f"3 poches (scalping+swing+vc) depuis le plus haut ({hwm:,.0f} $) -- krach "
+            "corrélé, toutes les poches arrêtées par sécurité."
         )
+        # 24/08 -- same grouped-shortcut principle as the manual /stop
+        # handler: any trigger of outgoing_pause, automatic or manual, arms
+        # the other three independent switches too, so nothing downstream of
+        # THIS breaker keeps spending API/RPC credits while it thinks
+        # everything stopped (the exact gap the shadow process had earlier
+        # the same day). Each stays individually liftable afterward.
+        outgoing_pause.pause(by="macro_circuit_breaker", reason=reason)
+        paper_pause.pause(by="macro_circuit_breaker", reason=reason)
+        x_pause.pause(by="macro_circuit_breaker", reason=reason)
+        shadow_pause.pause(by="macro_circuit_breaker", reason=reason)
 
     blocked = outgoing_pause.is_paused()
 

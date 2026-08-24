@@ -95,3 +95,40 @@ def test_like_tweet_honors_x_pause(tmp_path):
     x_pause.pause(by="owner")
     assert x_engagement._like_tweet_sync("u1", "t1") is False
     x_pause.resume(by="owner")
+
+
+def test_reply_tweet_honors_x_pause(tmp_path):
+    configure_data_dir(tmp_path)
+    import asyncio
+
+    from aria_core.gateway import x_twitter
+
+    x_pause.pause(by="owner")
+    reply_id, notice = asyncio.run(
+        x_twitter.reply_to_tweet("salut", in_reply_to_tweet_id="123")
+    )
+    assert reply_id is None
+    assert "pause" in notice.lower()
+    x_pause.resume(by="owner")
+
+
+def test_profile_writes_honor_x_pause(tmp_path):
+    """Moved from test_outgoing_pause.py (24/08): these three writes only
+    ever honored outgoing_pause by coincidence (no X credentials in test ->
+    they fail regardless of pause state) -- x_pause is the real, sole gate
+    now (see x_twitter.py call sites)."""
+    configure_data_dir(tmp_path)
+    import asyncio
+    from pathlib import Path
+
+    from aria_core.gateway.x_twitter import (
+        apply_profile_banner,
+        apply_profile_image,
+        apply_x_profile_fields,
+    )
+
+    x_pause.pause(by="owner")
+    assert asyncio.run(apply_profile_image(Path("x.png"))) is False
+    assert asyncio.run(apply_x_profile_fields({"name": "X"})) is False
+    assert asyncio.run(apply_profile_banner(Path("x.png"))) is False
+    x_pause.resume(by="owner")

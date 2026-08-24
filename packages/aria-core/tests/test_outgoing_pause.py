@@ -87,17 +87,6 @@ def test_blocked_notice_reminds_pause_and_since(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_post_tweet_blocked_when_paused(tmp_path):
-    configure_data_dir(tmp_path)
-    from aria_core.gateway.x_twitter import post_tweet
-
-    outgoing_pause.pause(by=1)
-    result, note = await post_tweet("hello world")
-    assert result is None
-    assert "pause" in note.lower()
-
-
-@pytest.mark.asyncio
 async def test_profile_writes_blocked_when_paused(tmp_path):
     """Kill-switch total : les écritures de profil X manuelles sont gelées en pause."""
     configure_data_dir(tmp_path)
@@ -113,17 +102,6 @@ async def test_profile_writes_blocked_when_paused(tmp_path):
     assert await apply_profile_image(Path("x.png")) is False
     assert await apply_x_profile_fields({"name": "X"}) is False
     assert await apply_profile_banner(Path("x.png")) is False
-
-
-@pytest.mark.asyncio
-async def test_reply_blocked_when_paused(tmp_path):
-    configure_data_dir(tmp_path)
-    from aria_core.gateway.x_twitter import reply_to_tweet
-
-    outgoing_pause.pause(by=1)
-    reply_id, note = await reply_to_tweet("salut", in_reply_to_tweet_id="123")
-    assert reply_id is None
-    assert "pause" in note.lower()
 
 
 @pytest.mark.asyncio

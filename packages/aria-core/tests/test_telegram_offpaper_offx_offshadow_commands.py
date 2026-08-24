@@ -130,3 +130,83 @@ async def test_onshadow_when_not_paused_is_a_no_op(monkeypatch):
     update = FakeUpdate(OWNER_ID)
     await telegram_bot._handle_onshadow(update, FakeContext())
     assert "n'était pas en pause" in update.message.replies[0]
+
+
+# --- /off, /on (grouped shortcut, distinct from /stop) ---------------------
+
+
+@pytest.mark.asyncio
+async def test_off_arms_all_four_categories(monkeypatch):
+    from aria_core import outgoing_pause
+
+    _set_owner(monkeypatch)
+    await telegram_bot._handle_off(FakeUpdate(OWNER_ID), FakeContext())
+    assert outgoing_pause.is_paused() is True
+    assert paper_pause.is_paused() is True
+    assert x_pause.is_paused() is True
+    assert shadow_pause.is_paused() is True
+
+
+@pytest.mark.asyncio
+async def test_stop_alone_never_arms_the_other_three(monkeypatch):
+    """/stop stays real-capital-only -- the whole point of separating it
+    from /off."""
+    _set_owner(monkeypatch)
+    await telegram_bot._handle_stop(FakeUpdate(OWNER_ID), FakeContext())
+    assert paper_pause.is_paused() is False
+    assert x_pause.is_paused() is False
+    assert shadow_pause.is_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_on_lifts_all_four_categories(monkeypatch):
+    from aria_core import outgoing_pause
+
+    _set_owner(monkeypatch)
+    await telegram_bot._handle_off(FakeUpdate(OWNER_ID), FakeContext())
+    await telegram_bot._handle_on(FakeUpdate(OWNER_ID), FakeContext())
+    assert outgoing_pause.is_paused() is False
+    assert paper_pause.is_paused() is False
+    assert x_pause.is_paused() is False
+    assert shadow_pause.is_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_onshadow_alone_lifts_shadow_even_while_off_stays_armed(monkeypatch):
+    """The exact behavior the operator asked for: a single category can be
+    resumed independently even while the grouped shortcut is still armed."""
+    from aria_core import outgoing_pause
+
+    _set_owner(monkeypatch)
+    await telegram_bot._handle_off(FakeUpdate(OWNER_ID), FakeContext())
+    await telegram_bot._handle_onshadow(FakeUpdate(OWNER_ID), FakeContext())
+    assert shadow_pause.is_paused() is False
+    assert outgoing_pause.is_paused() is True  # real capital stays blocked
+    assert paper_pause.is_paused() is True
+    assert x_pause.is_paused() is True
+
+
+@pytest.mark.asyncio
+async def test_off_rejects_non_owner(monkeypatch):
+    _set_owner(monkeypatch)
+    await telegram_bot._handle_off(FakeUpdate(OTHER_ID), FakeContext())
+    assert paper_pause.is_paused() is False
+    assert x_pause.is_paused() is False
+    assert shadow_pause.is_paused() is False
+
+
+# --- /offreal, /onreal (pure aliases of /stop, /resume) ---------------------
+
+
+@pytest.mark.asyncio
+async def test_offreal_arms_only_real_capital(monkeypatch):
+    from aria_core import outgoing_pause
+
+    _set_owner(monkeypatch)
+    # /offreal is registered as the exact same handler function as /stop --
+    # calling _handle_stop directly is equivalent to what /offreal does.
+    await telegram_bot._handle_stop(FakeUpdate(OWNER_ID), FakeContext())
+    assert outgoing_pause.is_paused() is True
+    assert paper_pause.is_paused() is False
+    assert x_pause.is_paused() is False
+    assert shadow_pause.is_paused() is False

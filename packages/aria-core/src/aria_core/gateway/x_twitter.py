@@ -10,7 +10,7 @@ import httpx
 
 from urllib.parse import quote
 
-from aria_core import outgoing_pause, x_pause
+from aria_core import x_pause
 from aria_core.exchanges import ExchangeStatus, create_exchange
 from aria_core.identity import official_x_at, official_x_handle
 from aria_core.runtime import settings
@@ -131,8 +131,11 @@ def _post_tweet_sync(
     from aria_core.x_text import fit_x_tweet
 
     # Backstop kill-switch: no path (even future) publishes to X during a pause.
-    if outgoing_pause.is_paused():
-        raise RuntimeError(outgoing_pause.blocked_notice("La publication sur X"))
+    # 24/08 -- x_pause only, not outgoing_pause: /stop stays real-capital-only
+    # (see telegram_bot._handle_stop), the grouped /off shortcut arms x_pause
+    # alongside the other three categories (see telegram_bot._handle_off),
+    # and /onx lifts X independently even while /off/other categories stay
+    # armed. Checking outgoing_pause here too would break that independence.
     if x_pause.is_paused():
         raise RuntimeError(x_pause.blocked_notice("La publication sur X"))
     body = fit_x_tweet(text.strip())
@@ -210,9 +213,6 @@ def _update_profile_image_sync(image_path: Path) -> dict[str, Any]:
 
 async def apply_profile_image(image_path: Path) -> bool:
     """Sync @Aria_ZHC profile photo on X (OAuth 1.0a, Read+Write)."""
-    if outgoing_pause.is_paused():
-        logger.info("X profile image sync bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
-        return False
     if x_pause.is_paused():
         logger.info("X profile image sync bloqué — X en pause (%s)", x_pause.since_label())
         return False
@@ -299,9 +299,6 @@ async def fetch_x_profile_fields() -> dict[str, str]:
 
 async def apply_x_profile_fields(profile: dict[str, str]) -> bool:
     """Applies name, bio, site, location on @Aria_ZHC."""
-    if outgoing_pause.is_paused():
-        logger.info("X profile text sync bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
-        return False
     if x_pause.is_paused():
         logger.info("X profile text sync bloqué — X en pause (%s)", x_pause.since_label())
         return False
@@ -366,9 +363,6 @@ async def get_profile_banner_status() -> dict[str, Any]:
 
 async def apply_profile_banner(image_path: Path) -> bool:
     """Sync header banner for @Aria_ZHC (OAuth 1.0a, Read+Write)."""
-    if outgoing_pause.is_paused():
-        logger.info("X profile banner sync bloqué — ARIA en pause (%s)", outgoing_pause.since_label())
-        return False
     if x_pause.is_paused():
         logger.info("X profile banner sync bloqué — X en pause (%s)", x_pause.since_label())
         return False
@@ -598,8 +592,6 @@ async def post_tweet(
     media_paths: list[Path] | Path | str | None = None,
 ) -> tuple[Any, str]:
     """Post to @Aria_ZHC when OAuth user context keys are configured."""
-    if outgoing_pause.is_paused():
-        return None, outgoing_pause.blocked_notice("La publication d'un tweet")
     if x_pause.is_paused():
         return None, x_pause.blocked_notice("La publication d'un tweet")
     from aria_core.handle_registry import resolve_handles_in_text
@@ -686,8 +678,6 @@ async def reply_to_tweet(
     force: bool = False,
 ) -> tuple[str | None, str]:
     """Reply on X thread when X_ALLOW_REPLIES=true (~0,015 $)."""
-    if outgoing_pause.is_paused():
-        return None, outgoing_pause.blocked_notice("La réponse sur X")
     if x_pause.is_paused():
         return None, x_pause.blocked_notice("La réponse sur X")
     from aria_core.handle_registry import resolve_handles_in_text

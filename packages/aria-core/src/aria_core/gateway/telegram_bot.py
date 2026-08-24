@@ -14,7 +14,6 @@ from aria_core.brain import aria_brain
 from aria_core.exchanges import get_all as get_all_exchanges
 from aria_core.exchanges import record_reply
 from aria_core.heartbeat import aria_heartbeat
-from aria_core.locale import LANG_EN
 from aria_core.holding import holding_name
 from aria_core.narrative import (
     telegram_admin_start,
@@ -2559,7 +2558,7 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("feedback", "Bilan paper-trading (départ / PnL / résultat)"),
     ("feuvert", "Scorecard avant argent réel (8 cases)"),
     ("funnel", "Cumul du funnel de rejet momentum (48h par défaut)"),
-    ("github", "Réparer/éditer une réponse showcase PR"),
+    ("github", "Gère un dépôt showcase (status/list/create/delete/repair)"),
     ("goplusqueue", "État de la file d'attente honeypot GoPlus (2000 slots)"),
     ("handles", "Registre des handles X (add/remove/alias/pack)"),
     ("issue", "Clôture une thèse avec son résultat"),
@@ -2569,10 +2568,14 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("llmspend", "Dépense LLM du mois en $ (Haiku/Sonnet, par point d'appel) — owner-only"),
     ("mobileinvite", "Génère un code d'invitation à usage unique pour lier l'app mobile à Privy"),
     ("mode", "Mode de trading du test Milly (standard/scalping) -- affiche ou bascule"),
+    ("off", "⏸ Coupe TOUT d'un coup -- capital réel + paper + X + shadow"),
     ("offpaper", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
+    ("offreal", "⏸ Alias de /stop (capital réel uniquement)"),
     ("offshadow", "⏸ Pause de toutes les boucles shadow (process standalone), instantané"),
     ("offx", "⏸ Pause des interactions X (tweets/réponses/likes/profil), instantané"),
+    ("on", "▶️ Relève TOUT d'un coup -- capital réel + paper + X + shadow"),
     ("onpaper", "▶️ Reprend le paper trading après /offpaper"),
+    ("onreal", "▶️ Alias de /resume (capital réel uniquement)"),
     ("onshadow", "▶️ Reprend les boucles shadow après /offshadow"),
     ("onx", "▶️ Reprend X après /offx"),
     ("order", "Liste les ordres limite en cours (pending/watching), par poche"),
@@ -2580,21 +2583,21 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("polymarket", "Portefeuille papier Polymarket (équité, positions ouvertes, dernières résolutions)"),
     ("regime", "Win-rate/PnL des trades clôturés par régime macro (Peur/Neutre/Euphorie)"),
     ("repertoire", "Gère le répertoire de projets (list, delete, archive)"),
-    ("resume", "▶️ Reprendre les actions sortantes"),
+    ("resume", "▶️ Reprendre les actions sortantes (capital réel uniquement -- /on pour tout relever)"),
     ("riskresume", "▶️ Lever le coupe-circuit portefeuille (drawdown/5 pertes)"),
     ("runwayapi", "Runway budget des 6 providers API consolidés (resource_budget.py)"),
     ("scan", "Scan rapide de risque on-chain d'un contrat"),
     ("sentiment", "Dernière lecture de sentiment marché"),
     ("start", "Message de bienvenue / lever la pause"),
     ("status", "État système (santé, capacités actives)"),
-    ("stop", "⏸ Pause immédiate des actions sortantes (kill-switch)"),
+    ("stop", "⏸ Pause immédiate des actions sortantes, capital réel uniquement (kill-switch) -- /off pour tout couper"),
     ("test_spend", "Test wallet_guard (aucune dépense réelle)"),
     ("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
     ("theses", "Liste des thèses encore ouvertes"),
     ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
-    ("walletqueue", "Ajoute un wallet à la file de fond (progressif)"),
+    ("walletqueue", "Ajoute un wallet à la file de fond (progressif), ou affiche le statut de la file sans argument"),
     ("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
     ("watchlist", "Top candidats du pool screené"),
     ("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
@@ -3511,7 +3514,12 @@ async def _handle_theses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/stop — kill-switch: immediate pause of all outgoing actions (owner only)."""
+    """/stop — kill-switch: immediate pause of all outgoing actions (owner only).
+
+    Pure real-capital switch, unchanged historical scope (outgoing_pause
+    only) -- also aliased as /offreal. For a grouped shortcut that arms
+    real capital + paper + X + shadow all at once, use /off instead (see
+    _handle_off)."""
     if not await _owner_only(update):
         return
     user = update.effective_user
@@ -3523,12 +3531,17 @@ async def _handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         update.message,
         "⏸ ARIA en pause — tweets, réponses/likes X, dépenses ACP et jobs planifiés suspendus.\n"
         "Tes commandes manuelles sont aussi bloquées le temps de la pause.\n"
-        "Envoie /start (ou /resume) pour reprendre.",
+        "Envoie /start (ou /resume) pour reprendre. Pour tout couper d'un coup "
+        "(capital + paper + X + shadow), utilise /off à la place.",
     )
 
 
 async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/resume — lifts the kill-switch (owner only). Explicit alias of /start while paused."""
+    """/resume — lifts the kill-switch (owner only). Explicit alias of /start while paused.
+
+    Pure real-capital switch, also aliased as /onreal. For a grouped
+    shortcut that lifts real capital + paper + X + shadow all at once, use
+    /on instead (see _handle_on)."""
     if not await _owner_only(update):
         return
     # Item #62 (08/03): same both-flags lift as /start, see its own comment.
@@ -3542,6 +3555,58 @@ async def _handle_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         event_type="lifted", by=user.id if user else None, reason="Reprise manuelle /resume (owner)",
     )
     await _reply(update.message, "▶️ ARIA reprend — actions sortantes réactivées.")
+
+
+async def _handle_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/off -- 24/08, operator decision: a GROUPED SHORTCUT that arms all
+    four independent switches at once (real capital, paper, X, shadow) for
+    a fast full stop. Distinct from /stop (real capital only, unchanged
+    historical scope, never recoded). Each category stays independently
+    liftable afterward -- /onpaper, /onx, /onshadow, /onreal (or /on for
+    all four at once) work regardless of what armed them."""
+    if not await _owner_only(update):
+        return
+    from aria_core import paper_pause, shadow_pause, x_pause
+
+    user = update.effective_user
+    outgoing_pause.pause(by=user.id if user else None)
+    paper_pause.pause(by=user.id if user else None, reason="Groupe via /off (owner)")
+    x_pause.pause(by=user.id if user else None, reason="Groupe via /off (owner)")
+    shadow_pause.pause(by=user.id if user else None, reason="Groupe via /off (owner)")
+    await _record_kill_incident(
+        event_type="armed", by=user.id if user else None, reason="Pause groupée /off (owner)",
+    )
+    await _reply(
+        update.message,
+        "⏸ Tout coupé d'un coup — capital réel, paper trading, X et shadow.\n"
+        "Envoie /on pour tout relever, ou /onpaper, /onx, /onshadow, /onreal "
+        "pour réactiver une seule catégorie.",
+    )
+
+
+async def _handle_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/on -- lifts every switch /off arms, all at once. Owner-only."""
+    if not await _owner_only(update):
+        return
+    from aria_core import paper_pause, shadow_pause, x_pause
+
+    any_paused = (
+        outgoing_pause.is_paused() or custody_pause.is_paused()
+        or paper_pause.is_paused() or x_pause.is_paused() or shadow_pause.is_paused()
+    )
+    if not any_paused:
+        await _reply(update.message, "▶️ Rien n'était en pause — rien à reprendre.")
+        return
+    user = update.effective_user
+    outgoing_pause.resume(by=user.id if user else None)
+    custody_pause.resume(by=user.id if user else None)
+    paper_pause.resume(by=user.id if user else None)
+    x_pause.resume(by=user.id if user else None)
+    shadow_pause.resume(by=user.id if user else None)
+    await _record_kill_incident(
+        event_type="lifted", by=user.id if user else None, reason="Reprise groupée /on (owner)",
+    )
+    await _reply(update.message, "▶️ Tout reprend — capital réel, paper trading, X et shadow réactivés.")
 
 
 async def _handle_offpaper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3772,7 +3837,6 @@ async def _handle_risk_resume(update: Update, context: ContextTypes.DEFAULT_TYPE
 def _register_handlers(app: Application) -> None:
     from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-    # Minimal commands only (user request)
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("whoami", _handle_whoami))
     app.add_handler(CommandHandler("status", _handle_status))
@@ -3790,6 +3854,16 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("x402trending", _handle_x402_trending))
     app.add_handler(CommandHandler("stop", _handle_stop))
     app.add_handler(CommandHandler("resume", _handle_resume))
+    # 24/08 -- pure naming aliases, same handlers, so /offreal and /onreal
+    # slot into the off*/on* pattern for real capital exactly like the other
+    # three categories. No new logic: outgoing_pause.py itself is never
+    # touched (CLAUDE.md: "kill-switch, tested -- do not recode").
+    app.add_handler(CommandHandler("offreal", _handle_stop))
+    app.add_handler(CommandHandler("onreal", _handle_resume))
+    # Grouped shortcut, all four categories at once -- distinct from /stop
+    # (real capital only). See _handle_off's own docstring.
+    app.add_handler(CommandHandler("off", _handle_off))
+    app.add_handler(CommandHandler("on", _handle_on))
     app.add_handler(CommandHandler("offpaper", _handle_offpaper))
     app.add_handler(CommandHandler("onpaper", _handle_onpaper))
     app.add_handler(CommandHandler("offx", _handle_offx))

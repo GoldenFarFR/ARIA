@@ -13,6 +13,14 @@ that split is the whole point of Item #62's existence). This module exists purel
 to silence data-provider load during manual debugging, never a financial safety
 mechanism -- there is nothing to "block" here, only scanning/sourcing to skip.
 
+24/08 update: ``/off`` (the grouped shortcut, distinct from ``/stop`` which
+stays real-capital-only) arms this module too, alongside the other three
+independent switches (see ``telegram_bot._handle_off``) -- but that is
+``/off`` REACHING OUT to this module, never this module reaching into
+``outgoing_pause``. Every check here still reads ONLY ``paper_pause``, so
+``/onpaper`` genuinely resumes paper trading even while ``/stop``/``/off``
+stay armed for real capital.
+
 Near-exact structural copy of ``custody_pause.py`` (own JSON state file, same
 read/write/fail-*-open* semantics -- see ``is_paused`` for why this one fails
 OPEN, the opposite of custody_pause's fail-closed doctrine).

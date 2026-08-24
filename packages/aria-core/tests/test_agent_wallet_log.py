@@ -318,3 +318,97 @@ async def test_list_aria_bought_tokens_still_held_ignores_unsolicited_dust():
     assert held == {_TOKEN_A.lower()}
     assert _TOKEN_B.lower() not in held
     assert await awl.recent_failed_swap("0xLegacy", within_minutes=60) is False
+
+
+# ── hash chain (24/08, tamper-evidence lead from GitHub research) ──────────
+
+
+@pytest.mark.asyncio
+async def test_first_row_chains_from_genesis():
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x1")
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        row = await (await db.execute("SELECT prev_hash, record_hash FROM agent_wallet_tx_log")).fetchone()
+    assert row[0] == awl._GENESIS_HASH
+    assert row[1] and row[1] != awl._GENESIS_HASH
+
+
+@pytest.mark.asyncio
+async def test_each_row_chains_to_the_previous_ones_hash():
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x1")
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x2")
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        rows = await (
+            await db.execute("SELECT prev_hash, record_hash FROM agent_wallet_tx_log ORDER BY id ASC")
+        ).fetchall()
+    assert rows[1][0] == rows[0][1]  # row 2's prev_hash == row 1's record_hash
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_integrity_clean_on_untouched_journal():
+    for i in range(3):
+        await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash=f"0x{i}")
+    result = await awl.verify_chain_integrity()
+    assert result == {"intact": True, "checked": 3, "broken_at_id": None, "detail": ""}
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_integrity_empty_journal_is_intact():
+    assert await awl.verify_chain_integrity() == {
+        "intact": True, "checked": 0, "broken_at_id": None, "detail": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_integrity_detects_a_field_edited_after_the_fact():
+    """The whole point: a row silently modified (e.g. amount_out changed by
+    someone with DB access) must be caught, not silently accepted."""
+    await awl.record_transaction(
+        wallet_product="p", action_type="swap", status="ok", tx_hash="0x1", amount_out=1.0,
+    )
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x2")
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        await db.execute("UPDATE agent_wallet_tx_log SET amount_out = 999.0 WHERE tx_hash = '0x1'")
+        await db.commit()
+    result = await awl.verify_chain_integrity()
+    assert result["intact"] is False
+    assert result["broken_at_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_integrity_detects_a_deleted_row():
+    """Deleting a middle row breaks the chain at the row right after it --
+    its prev_hash no longer matches anything in the (now shorter) table."""
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x1")
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x2")
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x3")
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        await db.execute("DELETE FROM agent_wallet_tx_log WHERE tx_hash = '0x2'")
+        await db.commit()
+    result = await awl.verify_chain_integrity()
+    assert result["intact"] is False
+    assert result["broken_at_id"] == 3
+
+
+@pytest.mark.asyncio
+async def test_verify_chain_integrity_skips_pre_migration_rows_without_flagging_them():
+    """A row written before this feature existed has '' in both hash
+    columns -- that's expected, not a break, and the real chain starts
+    fresh at the next row."""
+    async with aiosqlite.connect(awl.DB_PATH) as db:
+        await db.execute(
+            "CREATE TABLE agent_wallet_tx_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "wallet_product TEXT NOT NULL, chain TEXT NOT NULL DEFAULT '', "
+            "action_type TEXT NOT NULL, token_in TEXT NOT NULL DEFAULT '', "
+            "token_out TEXT NOT NULL DEFAULT '', amount_in REAL NOT NULL DEFAULT 0, "
+            "amount_out REAL NOT NULL DEFAULT 0, slippage_bps INTEGER NOT NULL DEFAULT 0, "
+            "tx_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, "
+            "reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)"
+        )
+        await db.execute(
+            "INSERT INTO agent_wallet_tx_log (wallet_product, action_type, status, created_at) "
+            "VALUES ('p', 'swap', 'ok', '2026-01-01T00:00:00+00:00')"
+        )
+        await db.commit()
+    await awl.record_transaction(wallet_product="p", action_type="swap", status="ok", tx_hash="0x1")
+    result = await awl.verify_chain_integrity()
+    assert result == {"intact": True, "checked": 1, "broken_at_id": None, "detail": ""}
