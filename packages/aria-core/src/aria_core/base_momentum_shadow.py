@@ -164,8 +164,8 @@ TABLE = "base_momentum_shadow_log"
 # Recalibrated same day from the 15min to the 5min window (second Dune pass,
 # same exit methodology, beat 15min on both winrate and avg multiplier).
 #
-# 24/08, LOWERED 25% -> 1%, operator-directed ("on va viser large... pour
-# cumulée des donnees") -- Base's own regime-candidates population showed a
+# 24/08, LOWERED 25% -> 1%, operator-directed ("on va viser large... pour cumulee des donnees") --
+# Base's own regime-candidates population showed a
 # real liquidity signal (scams clustered $9-19K, real gains $22K+, see
 # MIN_LIQUIDITY_USD below) but on only 4 winning trades, far short of the
 # n>=100 the Doctrine d'Ingestion bar requires for a real verdict. Widening
