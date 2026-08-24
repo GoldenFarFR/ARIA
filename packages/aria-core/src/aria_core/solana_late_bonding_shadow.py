@@ -582,16 +582,15 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # from 50% in either direction, and the capture-gap math above should be
 # re-measured on THIS sensor's own population once it exists.
 #
-# 24/08, LOWERED 30% -> 25%, operator-directed, on THIS sensor's own
-# population (3266 rows, well above the n>=100 bar above). Causal replay: the
-# candidates that clear ONLY a 20-30% median (never 30%) -- n=804 -- show a
-# 34.41% mean peak / 20.37% median peak, 87.8% positive, close to the profile
-# of candidates the 30% bar already lets through (36.97% mean / 24.29%
-# median). 30% was reading as needlessly strict against its own population,
-# not just against intuition. Still the RAW peak, not net-of-trailing-stop
-# capture (see the capture-gap math above) -- a lower bar widens the gate,
-# it does not change what the exit mechanics keep.
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 25.0
+# 24/08, RAISED 25% -> 40%, operator-directed same day (a few hours after
+# the 30->25 lowering just above -- the causal-replay case for 25% stands on
+# its own population, but the operator chose to tighten past the original
+# 30% bar rather than wait for a fresh replay). Kept the 25% note rather
+# than deleting it: the 20-30% band's causal case (n=804, 87.8% positive) is
+# still real data, just not the bar currently enforced. Solana-only change --
+# robinhood_pump_shadow.py's own REGIME_MIN_MEDIAN_PEAK_PCT stays at 25.0,
+# operator-directed ("les autres tu touche pas").
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 40.0
 
 
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
