@@ -90,7 +90,7 @@ async def test_status_shows_shadow_pause_armed(monkeypatch):
     await telegram_bot._handle_status(update, FakeContext())
 
     text = update.message.replies[0]
-    assert "✖ Poches shadow (/offshadow · /onshadow)" in text
+    assert "❌ Poches shadow (/offshadow · /onshadow)" in text
     # the other 4 flags are untouched by arming shadow alone
     assert "✅ Sorties capital réel (/stop · /resume)" in text
     assert "✅ X posts/replies (/offx · /onx)" in text

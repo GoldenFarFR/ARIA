@@ -593,7 +593,10 @@ async def build_status_report(user_id: int | str | None) -> str:
     def _verdict(pause_status: dict, unreadable_text: str) -> str:
         if not pause_status["readable"]:
             return f"⚠️ {unreadable_text}"
-        return "✖" if pause_status["paused"] else "✅"
+        # ❌ (Cross Mark emoji), not ✖ (Heavy Multiplication X) -- the latter
+        # renders in the theme's text colour, not red, on most clients.
+        # Operator feedback 24/08: the off state needs to actually READ red.
+        return "❌" if pause_status["paused"] else "✅"
 
     from aria_core import paper_pause, shadow_pause, x_pause
 
