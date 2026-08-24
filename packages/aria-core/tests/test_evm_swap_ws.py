@@ -5,6 +5,7 @@ implicitly by the module's own defensive try/except, same posture as
 pumpswap_ws.py). Same rigor as every other service test in this dome."""
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -552,6 +553,120 @@ async def test_handle_notification_never_counts_an_empty_payload():
     feed._handle_notification(None)
     status = await chainstack_ru_budget.daily_status("base")
     assert status["used_units"] == 0
+
+
+# --- mid-day circuit breaker (24/08) ----------------------------------
+
+@pytest.mark.asyncio
+async def test_breaker_opens_and_unsubscribes_when_budget_exhausted():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._pools["0xpool"] = _pool()
+    feed._active_sub_ids = ["sub1"]
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+
+    await feed._check_budget_circuit_breaker()
+
+    assert feed.breaker_open is True
+    assert "0xpool" not in feed._pools
+    assert "0xpool" in feed._evicted_pools
+    fake_w3.eth.unsubscribe.assert_awaited_with("sub1")
+
+
+@pytest.mark.asyncio
+async def test_breaker_is_a_noop_with_nothing_tracked():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    await feed._check_budget_circuit_breaker()
+    assert feed.breaker_open is False  # nothing to evict, never flips on for no reason
+
+
+@pytest.mark.asyncio
+async def test_breaker_closes_and_restores_pools_once_budget_resets():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._breaker_open = True
+    feed._evicted_pools = {"0xpool": _pool()}
+
+    await feed._check_budget_circuit_breaker()  # budget was never spent in this test -- can_spend is True
+
+    assert feed.breaker_open is False
+    assert "0xpool" in feed._pools
+    assert feed._evicted_pools == {}
+    fake_w3.eth.subscribe.assert_awaited()  # real re-subscription issued, not just a memory move
+
+
+@pytest.mark.asyncio
+async def test_breaker_never_reverifies_a_restored_pool_on_chain():
+    """Restoring must reuse the ALREADY-VERIFIED _TrackedPool as-is -- no
+    fresh token0()/token1()/decimals() RPC round-trip, which would both
+    waste real RU and defeat the point of a budget guardrail."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    fake_w3.eth.contract = MagicMock(side_effect=AssertionError("must not re-verify on-chain"))
+    feed._w3 = fake_w3
+    original = _pool(decimals0=9, decimals1=6)
+    feed._breaker_open = True
+    feed._evicted_pools = {"0xpool": original}
+
+    await feed._check_budget_circuit_breaker()
+
+    assert feed._pools["0xpool"] is original
+
+
+@pytest.mark.asyncio
+async def test_breaker_open_then_close_is_idempotent_without_flapping():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._pools["0xpool"] = _pool()
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+
+    await feed._check_budget_circuit_breaker()
+    assert feed.breaker_open is True
+    subscribe_calls_after_open = fake_w3.eth.subscribe.await_count
+
+    await feed._check_budget_circuit_breaker()  # still exhausted -- must not re-evict/re-open
+    assert feed.breaker_open is True
+    assert fake_w3.eth.subscribe.await_count == subscribe_calls_after_open  # no redundant churn
+
+
+@pytest.mark.asyncio
+async def test_remove_pool_drops_an_evicted_pool_without_resubscribing():
+    """A position closing while the breaker is open must not sit in
+    _evicted_pools to be pointlessly re-subscribed once the budget resets,
+    and closing an already-unsubscribed pool needs no real _resubscribe()
+    call (nothing was subscribed for it in the first place)."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    feed._breaker_open = True
+    feed._evicted_pools = {"0xpool": _pool()}
+
+    await feed.remove_pool("0xpool")
+
+    assert "0xpool" not in feed._evicted_pools
+    fake_w3.eth.subscribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_and_stop_manage_the_breaker_task_lifecycle():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._run = AsyncMock(side_effect=asyncio.CancelledError)  # never actually connect
+    await feed.start()
+    assert feed._breaker_task is not None
+    await feed.stop()
+    assert feed._breaker_task is None
 
 
 @pytest.mark.asyncio

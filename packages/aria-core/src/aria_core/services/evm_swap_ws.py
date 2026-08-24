@@ -91,6 +91,20 @@ _TICK_HISTORY_SECONDS = 600.0
 _RECONNECT_MIN_SECONDS = 1.0
 _RECONNECT_MAX_SECONDS = 30.0
 
+# 24/08 -- mid-day circuit breaker cadence. add_pool()'s own can_spend()
+# check only stops the leak from GROWING (refuses new pools); it never
+# touches pools already subscribed before the cap was hit, because a push
+# already arriving is already billed by the time _handle_notification runs
+# (see its own comment) -- there is no "skip this one" lever on the hot
+# path. This separate, cheap ticker is the real stop: it unsubscribes every
+# already-tracked pool the moment the daily cap is reached, and re-subscribes
+# them automatically once the next calendar day resets the budget. 30s, not
+# on every notification: can_spend() already carries its own 5s read cache
+# (chainstack_ru_budget.py), so this costs nothing extra to poll this
+# often, and 30s is fast enough that a breached cap is caught within a
+# single digit number of pushes' worth of overrun, never a whole day.
+_BREAKER_CHECK_INTERVAL_SECONDS = 30.0
+
 _KNOWN_USD_STABLES = frozenset({
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base, bridged)
@@ -231,8 +245,16 @@ class EVMSwapWebSocketFeed:
         self._pools: dict[str, _TrackedPool] = {}  # key: lowercase pool_address (v4: poolId hex)
         self._w3 = None  # AsyncWeb3, connected lazily by _run
         self._task: asyncio.Task | None = None
+        self._breaker_task: asyncio.Task | None = None
         self._stopped = False
         self._connected = False
+        # 24/08 -- mid-day circuit breaker state. When the daily RU budget is
+        # exhausted, every currently-tracked pool moves from _pools into
+        # here (unsubscribed, in-memory state kept so restoring it later
+        # needs no fresh on-chain verification/RPC calls -- these pools were
+        # already verified once). Moves back the moment the budget resets.
+        self._breaker_open = False
+        self._evicted_pools: dict[str, _TrackedPool] = {}
         # 24/08 real incident: _resubscribe() created a fresh "logs"
         # subscription on every add_pool()/remove_pool() WITHOUT ever closing
         # the previous one (the docstring claimed "unsubscribes and
@@ -256,6 +278,7 @@ class EVMSwapWebSocketFeed:
             return
         self._stopped = False
         self._task = asyncio.create_task(self._run())
+        self._breaker_task = asyncio.create_task(self._breaker_loop())
 
     async def stop(self) -> None:
         self._stopped = True
@@ -266,11 +289,53 @@ class EVMSwapWebSocketFeed:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 -- best-effort shutdown
                 pass
             self._task = None
+        if self._breaker_task is not None:
+            self._breaker_task.cancel()
+            try:
+                await self._breaker_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 -- best-effort shutdown
+                pass
+            self._breaker_task = None
         self._connected = False
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def breaker_open(self) -> bool:
+        return self._breaker_open
+
+    async def _breaker_loop(self) -> None:
+        while not self._stopped:
+            try:
+                await self._check_budget_circuit_breaker()
+            except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
+                logger.info("evm_swap_ws[%s]: breaker check failed (%s)", self.chain, exc)
+            await asyncio.sleep(_BREAKER_CHECK_INTERVAL_SECONDS)
+
+    async def _check_budget_circuit_breaker(self) -> None:
+        spendable = await chainstack_ru_budget.can_spend(self.chain)
+        if not spendable and self._pools and not self._breaker_open:
+            self._breaker_open = True
+            self._evicted_pools = self._pools
+            self._pools = {}
+            await self._resubscribe()
+            logger.warning(
+                "evm_swap_ws[%s]: CIRCUIT BREAKER OPEN -- daily RU budget exhausted, "
+                "unsubscribed %d pool(s), REST fallback takes over until the daily reset",
+                self.chain, len(self._evicted_pools),
+            )
+        elif spendable and self._breaker_open:
+            restored = len(self._evicted_pools)
+            self._pools = self._evicted_pools
+            self._evicted_pools = {}
+            self._breaker_open = False
+            await self._resubscribe()
+            logger.warning(
+                "evm_swap_ws[%s]: CIRCUIT BREAKER CLOSED -- budget reset, restored %d pool(s)",
+                self.chain, restored,
+            )
 
     # -- subscription management ---------------------------------------
 
@@ -391,7 +456,12 @@ class EVMSwapWebSocketFeed:
 
     async def remove_pool(self, pool_address_or_id: str) -> None:
         key = pool_address_or_id.lower()
-        if self._pools.pop(key, None) is not None:
+        removed_active = self._pools.pop(key, None) is not None
+        # 24/08 -- also drop it from the breaker's evicted set: a position
+        # that closes while the circuit breaker is open must not sit around
+        # to be pointlessly re-subscribed once the budget resets.
+        self._evicted_pools.pop(key, None)
+        if removed_active:
             await self._resubscribe()
 
     # -- snapshot --------------------------------------------------------
