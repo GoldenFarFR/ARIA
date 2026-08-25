@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-25
 
-**Status**: In progress (closes when no further bug/improvement is found, same doctrine as `001-audit-code-sans`)
+**Status**: Closed 25/08 -- all 3 tasks resolved (T001 caps calibrated+alerted, T002 measured and deliberately not built, T003 negative cache), no further bug/improvement found. Reopen (new T-number) if a future finding surfaces.
 
 **Input**: Operator-directed chantier (25/08), grown out of the Chainstack RU per-chain calibration conversation: "il faut filtrer la decouverte on peut ? volume minimum, liquidite mini, et tous ?" -> "oui commence un spec sur la decouverte pour respecter les budget".
 
