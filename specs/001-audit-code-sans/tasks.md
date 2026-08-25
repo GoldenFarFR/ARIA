@@ -36,15 +36,43 @@ whether it ever produced its expected output.
 checkbox flips only once the query/command has actually run and the number is
 written in.
 
-- [ ] T002 [P] [US1] x402 seller (`ARIA_X402_SELLER_ENABLED`/`_MAINNET`) --
+- [X] T002 [P] [US1] x402 seller (`ARIA_X402_SELLER_ENABLED`/`_MAINNET`) --
   count real third-party sales since 05/08 excluding the known operator
   smoke-test payer address, and confirm Bazaar/`.well-known` listing status
   live (not from HANDOFF memory). Cross-check against `docs/HANDOFF_X402.md`'s
   existing "2 sales, same payer" note -- confirm or update it.
-- [ ] T003 [P] [US1] CabalSpy sourcing (`ARIA_CABALSPY_SOURCING_ENABLED`) --
+  **VERDICT: NEVER DELIVERED.** `x402_revenue_log` (full table, 25/08):
+  exactly 2 rows, ever -- `b20_safety` and `wallet_score`, both
+  `0x8e71C3e9396ded76AdA6EA56cD3c315C3D67D79b`, both 05/08 (`2026-08-05
+  T07:17:31` and `T10:22:30`, same day, 3h apart -- reads as one operator
+  smoke-test session, not two distinct real payers). Zero sales in the 20
+  days since. WebSearch (25/08) confirms zero trace of
+  `walletscore`/`b20score`/`ariavanguardzhc` on x402 Bazaar's ~112 listed
+  APIs -- endpoints remain technically live but undiscoverable, exactly as
+  HANDOFF_X402.md already stated (confirmed, not stale). Recommendation:
+  operator decision needed -- either invest in real discoverability (Bazaar
+  listing, backlog #297) or pause the mainnet gate until a discovery path
+  exists; not acted on here (real-capital-adjacent, FR-004).
+- [X] T003 [P] [US1] CabalSpy sourcing (`ARIA_CABALSPY_SOURCING_ENABLED`) --
   confirm live whether its consumer path is genuinely dead now that
   `ARIA_WALLET_SCORING_ENABLED=false` (verified this session), and if so
   whether CabalSpy itself is still making live calls into nothing.
+  **VERDICT: ORPHANED SINCE THE WALLET-SCORING REMOVAL, running silently.**
+  `cabalspy_kol_wallets` holds 1183 rows, ALL with the identical `sourced_at`
+  timestamp `2026-08-20T16:07:01` -- one single full sync, never repeated
+  since (`cabalspy_sourcing_state.last_full_sync_at` confirms the same date).
+  Yet `heartbeat_state.json` shows `cabalspy_candidate_sourcing_cycle` ran
+  again TODAY (`2026-08-25T11:11:10`) -- the cycle is still live and still
+  spending its API budget every day, producing nothing new (no new rows since
+  20/08) into a table `grep -rn catalogued_wallets` finds ZERO real callers
+  for outside `cabalspy_candidate_sourcing.py` itself (only 2 stray comments
+  in `paper_trader.py`/`services/cabalspy.py` mention the intended consumer).
+  `wallet_scoring_chain_ranking_refresh` last ran 13/08 -- before this
+  session's removal, so the pipe was already closed at that end even before
+  today. Recommendation: pause `ARIA_CABALSPY_SOURCING_ENABLED` until a real
+  consumer exists (same shape as the wallet-scoring lesson, caught in 5 days
+  instead of months) -- not flipped here, needs operator "ok" per this
+  audit's own read-only design.
 - [ ] T004 [P] [US1] Polymarket paper trading (`ARIA_POLYMARKET_PAPER_ENABLED`)
   -- `heartbeat_state.json` last_runs for `polymarket_paper_cycle`, plus a
   `COUNT(*)` aggregate (grouped by week) on the real paper-bet table. CLAUDE.md
