@@ -224,19 +224,70 @@ written in.
 **Goal**: confirm or refute each P2 suspicion in `audit-scope.md` with real
 evidence (a grep for callers, a live gate read), never left as a guess.
 
-- [ ] T009 [P] [US2] `ARIA_WALLET_SCAN_QUEUE_ENABLED` /
+- [X] T009 [P] [US2] `ARIA_WALLET_SCAN_QUEUE_ENABLED` /
   `ARIA_WALLET_CANDIDATE_SOURCING_ENABLED` / `ARIA_SMART_MONEY_LEADERBOARD_ENABLED`
   -- grep for real callers outside their own tests; confirm whether the
   wallet-scoring removal already orphaned them or they still have a live path.
-- [ ] T010 [P] [US2] `ARIA_DAILY_TRADE_FLOOR_ENABLED` -- find its owner
+  **VERDICT: CONFIRMED fully orphaned.** Repo-wide grep (code, tests, docs,
+  CLAUDE.md) finds these 3 names ONLY in historical `.env.bak*` files
+  (never read by any process) and in the frozen 22/07 snapshot doc
+  (`docs/codex-aria-2026-07-22.md`, explicitly not an authority past its
+  date). Zero references in any live source file. Yet all 3 remain SET in
+  the real container env (`false`, confirmed live this session). Pure
+  leftover config -- nothing reads them, nothing would notice if they were
+  removed. Recommendation: drop these 3 vars from the prod `.env` on the
+  next deploy (pure cleanup, no behavior change since nothing reads them) --
+  not done here per this audit's read-only design, flagged as a concrete
+  next step instead.
+- [X] T010 [P] [US2] `ARIA_DAILY_TRADE_FLOOR_ENABLED` -- find its owner
   module and stated purpose (none found yet in CLAUDE.md/HANDOFF search this
   session); report if genuinely undocumented.
-- [ ] T011 [P] [US2] `ARIA_SCALPING_ONLY_SOURCING_ENABLED` -- confirm whether
+  **VERDICT: FALSE ALARM -- this audit's own P2 suspicion was wrong,
+  corrected here.** `audit-scope.md`'s "no HANDOFF reference found yet" was
+  a provisional guess never actually checked; `docs/HANDOFF_PAPER_TRADING.md`
+  and `docs/HANDOFF_PIPELINE_MOMENTUM.md` both document this mechanism
+  extensively (`paper_trader.run_daily_trade_floor_cycle`, a diagnostic
+  floor that force-opens small tagged trades when behind the daily pace,
+  relaxed-gate momentum path, multiple real bugs already found/fixed on it
+  historically). Gate is OFF by default (confirmed live), last real run
+  28/07 -- consistent with a mechanism used for a specific diagnostic test
+  window (Item #100, 24h aggressive test) rather than abandonment. Not
+  orphaned, not undocumented, not never-delivered -- it delivered exactly
+  what it was built for during its test window and is now correctly idle.
+  No action needed.
+- [X] T011 [P] [US2] `ARIA_SCALPING_ONLY_SOURCING_ENABLED` -- confirm whether
   any live code path still reads this flag after the 18/08 v1-v9 retirement,
   or if it's a dead switch.
-- [ ] T012 [P] [US2] `ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED` -- what has
+  **VERDICT: CONFIRMED dead code, already deliberately retired (not a new
+  finding, but now cross-checked).** `docs/HANDOFF_PIPELINE_MOMENTUM.md`'s
+  18/08 entry documents the removal explicitly: "`scalping_only_sourcing_enabled()`
+  removed as dead code since no wallet can ever start with 'scalping' in the
+  active roster anymore", and `test_coherence.py`'s gate registry was
+  cleaned of this name in the same commit. Repo-wide grep confirms zero
+  live callers -- the only remaining trace is the env var itself, still SET
+  in the real container (`false`, confirmed live), same leftover-config
+  shape as T009. Recommendation: same cleanup, drop it from the prod
+  `.env` on the next deploy alongside the T009 batch.
+- [X] T012 [P] [US2] `ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED` -- what has
   it actually produced since being armed (testnet transactions, rehearsal
   logs), against the 23/08 CLAUDE.md note that infra is testnet-only so far.
+  **VERDICT: not orphaned/buggy -- correctly fail-closed on its PARENT
+  gate, every attempt properly logged (unlike the T008 Sepolia finding).**
+  `agent_wallet_tx_log` (full table, chain=`robinhood_testnet`): 4 attempts,
+  24/08 22:31 through 25/08 10:36 (~4 ticks in 12h, consistent with the
+  60min periodic-allowance cadence), ALL status `blocked`, reason
+  identical every time: `"ARIA_HOMEMADE_AGENT_WALLET_ENABLED désactivé
+  (fail-closed par défaut)"` -- this module's own gate is ON, but the
+  shared wrapper gate it also goes through is OFF, exactly as its own
+  docstring says it should behave. This is the opposite of T008: same
+  "never succeeded yet" shape, but here every attempt left a clean,
+  explicit trace, so nothing was hidden. This module is only 1 day old
+  (created 24/08) -- too early to call it never-delivered; its actual
+  purpose (rehearsing continuous unattended operation) hasn't been tested
+  even once yet because the parent gate cuts it off before reaching that
+  logic. Recommendation: if burn-in rehearsal is still wanted, enable
+  `ARIA_HOMEMADE_AGENT_WALLET_ENABLED` -- operator decision, not acted on
+  here (real-capital-adjacent path, FR-004).
 
 **Checkpoint**: every P2 row has a caller-count/gate-age verdict, not a guess.
 
