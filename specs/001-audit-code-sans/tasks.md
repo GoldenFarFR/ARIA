@@ -159,14 +159,62 @@ written in.
   self-identified as not-yet-useful, exactly the kind of honest negative
   result this whole audit is looking for elsewhere. Keep running as a
   falsifiability check, don't wire its output into real decisions yet.
-- [ ] T007 [P] [US1] `candle_staleness_shadow.py` (#261) -- age of the oldest
+- [X] T007 [P] [US1] `candle_staleness_shadow.py` (#261) -- age of the oldest
   row + row count in its shadow table; state explicitly whether enough
   history exists to calibrate a real threshold yet, per its own stated
   shadow-until-calibrated design.
-- [ ] T008 [P] [US1] Sepolia autonomous pilot
+  **VERDICT: plenty of data, but the promised analysis was never written --
+  a different failure mode than the others found so far.** Full table:
+  37,717 observations, active 10/08-25/08 (15 days, still logging today),
+  all 5 modes covered (scalping/scalping_15m/scalping_30m/scalping_5m/
+  standard). Full-table would_flag distribution: 32,907 clean, 3,686
+  flagged (10.1% of the 36,593 judgeable rows) -- 15 days and 37k rows is
+  clearly enough volume to calibrate a real threshold statistically. BUT
+  `list_recent()`'s own docstring says data is collected "for the future
+  forward-validation pass" -- that pass does not exist anywhere in the
+  module (only `record_observation`/`list_recent`/`flagged_rate`, the last
+  being a raw flag-rate on the last N rows, never a correlation against a
+  real bad outcome). So this isn't "not enough data yet" (the stated
+  shadow-until-calibrated condition) -- it's "enough data sitting unanalyzed
+  since 10/08." Recommendation: write the forward-validation pass (does
+  would_flag=1 correlate with a real bad entry price vs. a benign fetch-jitter
+  case, e.g. cross-referencing `wick_filter_shadow`/`ath_shadow` on the same
+  contract+timestamp) before this can honestly graduate past shadow mode --
+  not done here, out of this audit's read-only scope, but now a concrete,
+  scoped next step instead of an open-ended "someday."
+- [X] T008 [P] [US1] Sepolia autonomous pilot
   (`ARIA_SEPOLIA_AUTONOMOUS_ENABLED`/`_SWAP_ENABLED`) -- count real
   successful vs failed testnet swaps to date; state whether the "proven
   pipeline before mainnet" bar has ever actually been cleared once.
+  **VERDICT: NEVER DELIVERED, and the cause was a silent logging gap, not
+  just an unmet bar.** `sepolia_autonomous_log` (full table): 0 rows, ever
+  -- yet `heartbeat_state.json` shows `sepolia_autonomous_cycle` ran again
+  today (25/08). Root cause (live-verified, no secret displayed):
+  `anchor_enabled()` is False and `ledger_address()` is empty, so every
+  cycle hits `skipped_no_ledger` and returns immediately -- the swap step
+  further down is never even reached. `ARIA_SEPOLIA_AUTONOMOUS_ENABLED=true`
+  and `ARIA_SEPOLIA_SWAP_ENABLED=true` are both live, so the mechanism
+  reads as active, but the anchor prerequisite it needs was never wired.
+  **CONFIRMED bug, fixed live**: `run_autonomous_cycle`'s own docstring
+  promises "Logs EVERY round -- BUY, HOLD, ERROR, SKIP -- never only the
+  successes", but the `skipped_no_ledger` branch returned BEFORE ever
+  calling `_insert_log` -- the exact silent-failure shape this audit exists
+  to find, this time in a code path instead of a data pipeline. Fixed:
+  `skipped_no_ledger` now writes a real log row (unlike
+  `skipped_paused`/`skipped_disabled`, left untouched -- those are stable,
+  intentional OFF states where logging every cycle would be pure noise).
+  1 new regression test (25 total in the module, all pass). Recommendation:
+  wire `ARIA_ONCHAIN_ANCHOR_ENABLED`/`ARIA_LEDGER_ADDRESS` (or explicitly
+  decide the anchor step is out of scope for this rehearsal) before this
+  pilot can honestly claim any testnet swap was ever exercised.
+
+  **Incidental security note**: while checking this gate live, a `docker
+  exec ... env | grep -i SEPOLIA` accidentally printed
+  `ARIA_SEPOLIA_PRIVATE_KEY` in clear text to the terminal -- a violation
+  of the project's absolute "never display a secret via Bash" rule, even
+  though this is a testnet-only key with no real funds. Not recopied,
+  stored, or reused; flagged to the operator live with a rotation
+  recommendation as a precaution.
 
 **Checkpoint**: every P1 row in `audit-scope.md` carries a real verdict
 (delivered / never delivered / regressed) with its evidence.

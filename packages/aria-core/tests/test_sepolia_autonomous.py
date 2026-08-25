@@ -109,6 +109,29 @@ async def test_skips_when_no_ledger_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_skipped_no_ledger_is_logged_not_silent(monkeypatch):
+    """Regression test for the bug found live during audit 001-audit-code-sans
+    (T008, 25/08): a missing ledger is a configuration gap, not a deliberate
+    pause -- the cycle ran daily for weeks in prod and never wrote a single
+    row to sepolia_autonomous_log, because this exact early-return used to
+    skip past _insert_log entirely. Unlike skipped_paused/skipped_disabled
+    (a stable, intentional OFF state -- logging those every cycle would be
+    pure noise), this one must always leave a trace."""
+    import aiosqlite
+
+    monkeypatch.delenv("ARIA_LEDGER_ADDRESS", raising=False)
+    result = await sa.run_autonomous_cycle(candidates=["0xAAA"])
+    assert result["outcome"] == "skipped_no_ledger"
+
+    async with aiosqlite.connect(sa.DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT outcome, decision FROM sepolia_autonomous_log ORDER BY id DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+    assert row == ("skipped_no_ledger", "SKIP")
+
+
+@pytest.mark.asyncio
 async def test_never_touches_wallet_guard_escalation(monkeypatch):
     """Le chemin autonome ne doit JAMAIS passer par escalate_spend — sinon ce ne serait
     plus autonome, et le garde-fou Telegram partagé serait contourné en silence."""

@@ -294,6 +294,15 @@ async def run_autonomous_cycle(
 
     contract_ledger = ledger_address()
     if not anchor_enabled() or not contract_ledger:
+        # Unlike skipped_paused/skipped_disabled (a deliberate, stable OFF
+        # state -- logging every cycle there is pure noise), a missing
+        # ledger while this cycle is otherwise ENABLED is a configuration
+        # gap, not an intentional pause -- exactly the silent-failure shape
+        # this audit (001-audit-code-sans, T008, 25/08) found live: the
+        # cycle ran daily for weeks and never wrote a single row, because
+        # every attempt returned here before ever reaching _insert_log.
+        async with aiosqlite.connect(DB_PATH) as db:
+            await _insert_log(db, cycle_at=_now(), decision="SKIP", outcome="skipped_no_ledger")
         return {"outcome": "skipped_no_ledger"}
 
     async with aiosqlite.connect(DB_PATH) as db:
