@@ -413,6 +413,19 @@ async def _resolve_base_token(
     return base_id, symbol, created_at
 
 
+# 25/08 -- specs/005-discovery-budget T003, real waste found live: the same
+# Solana pool address got re-queried against this exact endpoint across
+# MULTIPLE DAYS (23/08->25/08), DexPaprika returning a 404 every single time
+# (a pool it will never index, e.g. a bonding-curve address that never
+# migrated). Free (no RU/financial cost, unlike Chainstack), but a real,
+# fixable waste under the "never brute-force" doctrine -- no reason to keep
+# re-asking a source that has already told us "no" repeatedly. Negative-only:
+# a transient failure (timeout/5xx/429, never surfaced as this specific 404
+# message) is NOT cached, only a confirmed "this pool doesn't exist here".
+_NEGATIVE_CACHE_TTL_SECONDS = 3600.0
+_reserve_404_cache: dict[str, float] = {}
+
+
 async def get_pool_reserve_usd(pool_address: str, *, network: str = "solana") -> float | None:
     """18/08, real-liquidity backfill for the shadow modules' realistic-exit
     simulation: a THIRD independent reserve source (after DexScreener's own
@@ -427,9 +440,16 @@ async def get_pool_reserve_usd(pool_address: str, *, network: str = "solana") ->
     from a different, earlier point in the pipeline, and this is deliberately
     a RARE fallback path, not a hot one). Returns ``None`` -- never a
     fabricated number -- on any failure or a missing/non-numeric field."""
+    cache_key = f"{network}:{pool_address}"
+    cached_at = _reserve_404_cache.get(cache_key)
+    if cached_at is not None and (time.monotonic() - cached_at) < _NEGATIVE_CACHE_TTL_SECONDS:
+        return None
     data, error = await _get_json(f"/networks/{network}/pools/{pool_address}", params={})
     if error is not None or not isinstance(data, dict):
+        if error and "404" in error:
+            _reserve_404_cache[cache_key] = time.monotonic()
         return None
+    _reserve_404_cache.pop(cache_key, None)
     liquidity_usd = data.get("liquidity_usd")
     return float(liquidity_usd) if isinstance(liquidity_usd, (int, float)) else None
 

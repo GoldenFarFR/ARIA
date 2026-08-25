@@ -71,10 +71,12 @@ def _reset_circuit_breaker():
     dp._key_marked_invalid = False
     dp._circuit_fail_count = 0
     dp._circuit_cooldown_until = 0.0
+    dp._reserve_404_cache.clear()
     yield
     dp._key_marked_invalid = False
     dp._circuit_fail_count = 0
     dp._circuit_cooldown_until = 0.0
+    dp._reserve_404_cache.clear()
 
 
 # ── _compute_start -- the ONE thing that must never regress (26/07 diligence:
@@ -514,6 +516,62 @@ async def test_get_pool_reserve_usd_none_on_error(monkeypatch):
     reserve = await dp.get_pool_reserve_usd("poolA", network="solana")
 
     assert reserve is None
+
+
+# --- specs/005-discovery-budget T003: negative cache on a confirmed 404 ----
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_caches_a_confirmed_404(monkeypatch):
+    """A pool DexPaprika will never index (e.g. a bonding-curve address that
+    never migrated) must not be re-queried on every single call -- real waste
+    found live across multiple days (23/08->25/08) on the same pool address."""
+    calls = {"n": 0}
+
+    async def _fake_get_json(path, *, params):
+        calls["n"] += 1
+        return None, f"{dp.UNAVAILABLE} (404 Not Found)"
+
+    monkeypatch.setattr(dp, "_get_json", _fake_get_json)
+
+    first = await dp.get_pool_reserve_usd("deadPool", network="solana")
+    second = await dp.get_pool_reserve_usd("deadPool", network="solana")
+
+    assert first is None
+    assert second is None
+    assert calls["n"] == 1  # second call served from the negative cache, no real request
+
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_negative_cache_is_per_pool(monkeypatch):
+    async def _fake_get_json(path, *, params):
+        if "deadPool" in path:
+            return None, f"{dp.UNAVAILABLE} (404 Not Found)"
+        return {"liquidity_usd": 500.0}, None
+
+    monkeypatch.setattr(dp, "_get_json", _fake_get_json)
+
+    await dp.get_pool_reserve_usd("deadPool", network="solana")
+    reserve = await dp.get_pool_reserve_usd("liveePool", network="solana")
+
+    assert reserve == pytest.approx(500.0)  # unaffected by the other pool's cached 404
+
+
+@pytest.mark.asyncio
+async def test_get_pool_reserve_usd_does_not_cache_transient_errors(monkeypatch):
+    """A rate-limit/timeout/server error is never confused with a confirmed
+    404 -- only a real "this pool doesn't exist" answer is cached."""
+    calls = {"n": 0}
+
+    async def _fake_get_json(path, *, params):
+        calls["n"] += 1
+        return None, f"{dp.UNAVAILABLE} (rate limit)"
+
+    monkeypatch.setattr(dp, "_get_json", _fake_get_json)
+
+    await dp.get_pool_reserve_usd("poolA", network="solana")
+    await dp.get_pool_reserve_usd("poolA", network="solana")
+
+    assert calls["n"] == 2  # both calls went through, nothing cached
 
 
 # ── consecutive-outage circuit breaker (system_issues #125b, 18/08) ────────────────
