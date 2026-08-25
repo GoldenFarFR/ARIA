@@ -315,15 +315,29 @@ class EVMSwapWebSocketFeed:
             await asyncio.sleep(_BREAKER_CHECK_INTERVAL_SECONDS)
 
     async def _check_budget_circuit_breaker(self) -> None:
+        """25/08, real bug found live (a 295k/200k daily overshoot on
+        Robinhood the breaker never once caught -- ``CIRCUIT BREAKER OPEN``
+        never appeared in production logs despite ``can_spend`` reading
+        False for hours): the original ``and self._pools`` guard meant the
+        breaker only ever fired while at least one pool was actively
+        tracked. The newHeads keepalive (see ``_resubscribe()``'s own
+        docstring) runs precisely when ``_pools`` is EMPTY -- exactly the
+        state this guard skipped -- so on a fast chain like Robinhood
+        (~100ms blocks, ~36k RU/hour for the keepalive alone) the single
+        biggest cost was never something this breaker could touch. Now opens
+        on ``not spendable`` alone, evicting whatever pools exist (zero, one,
+        or many) and letting ``_resubscribe()`` -- itself updated to respect
+        ``_breaker_open`` -- close the keepalive too instead of reopening it."""
         spendable = await chainstack_ru_budget.can_spend(self.chain)
-        if not spendable and self._pools and not self._breaker_open:
+        if not spendable and not self._breaker_open:
             self._breaker_open = True
             self._evicted_pools = self._pools
             self._pools = {}
             await self._resubscribe()
             logger.warning(
                 "evm_swap_ws[%s]: CIRCUIT BREAKER OPEN -- daily RU budget exhausted, "
-                "unsubscribed %d pool(s), REST fallback takes over until the daily reset",
+                "unsubscribed %d pool(s) and the newHeads keepalive, REST fallback "
+                "takes over until the daily reset",
                 self.chain, len(self._evicted_pools),
             )
         elif spendable and self._breaker_open:
@@ -549,6 +563,14 @@ class EVMSwapWebSocketFeed:
         be pure waste on top of it), closed the moment a real pool is
         tracked, reopened if the pool set ever empties out again.
 
+        **25/08 addition**: also closed (and never reopened) while
+        ``_breaker_open`` -- the circuit breaker's whole point is to stop
+        spending RU once the daily budget is exhausted, so reopening the
+        keepalive the moment ``_pools`` empties out (which is exactly what
+        eviction does) would silently undo it. See
+        ``_check_budget_circuit_breaker``'s own docstring for the real
+        incident this closes.
+
         v2/v3 and v4 are issued as TWO SEPARATE subscriptions, never merged
         into one filter (24/08 fix, real incident): v4 pools all share the
         one PoolManager contract address, so an address-only filter cannot
@@ -594,7 +616,7 @@ class EVMSwapWebSocketFeed:
         # money for nothing: Robinhood Chain's 100ms block time alone would
         # be ~864k RU/day just for this keepalive, on top of every real Sync/
         # Swap event this module actually wants.
-        if self._active_sub_ids:
+        if self._active_sub_ids or self._breaker_open:
             if self._newheads_sub_id is not None:
                 try:
                     await self._w3.eth.unsubscribe(self._newheads_sub_id)

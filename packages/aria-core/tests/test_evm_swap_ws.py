@@ -577,11 +577,58 @@ async def test_breaker_opens_and_unsubscribes_when_budget_exhausted():
 
 
 @pytest.mark.asyncio
-async def test_breaker_is_a_noop_with_nothing_tracked():
+async def test_breaker_opens_even_with_nothing_tracked():
+    """25/08, real bug found live: the original guard (`and self._pools`)
+    meant the breaker never opened while nothing was tracked -- exactly the
+    state the newHeads keepalive runs in (see _resubscribe()'s docstring).
+    A 295k/200k daily overshoot on Robinhood in production never once
+    triggered "CIRCUIT BREAKER OPEN" because of this. The breaker must open
+    on budget exhaustion alone, whether or not there is a pool to evict --
+    its job now includes shutting the keepalive off too."""
     feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
     chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
     await feed._check_budget_circuit_breaker()
-    assert feed.breaker_open is False  # nothing to evict, never flips on for no reason
+    assert feed.breaker_open is True
+
+
+@pytest.mark.asyncio
+async def test_breaker_closes_the_newheads_keepalive_with_nothing_else_tracked():
+    """25/08, the actual real-world case: nothing tracked, only the newHeads
+    keepalive open -- the single largest cost on a fast chain (Robinhood,
+    ~100ms blocks, ~36k RU/hour for this alone). The breaker must unsubscribe
+    it, not just leave it running because there was no pool to evict."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="newheads-sub")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._newheads_sub_id = "newheads-sub"  # already open, nothing else tracked
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+
+    await feed._check_budget_circuit_breaker()
+
+    assert feed.breaker_open is True
+    assert feed._newheads_sub_id is None
+    fake_w3.eth.unsubscribe.assert_awaited_with("newheads-sub")
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_never_reopens_newheads_while_breaker_is_open():
+    """Twin of the test above, from _resubscribe()'s own side: even when
+    called directly (e.g. add_pool()/remove_pool() racing the breaker check),
+    it must never reopen the keepalive it just closed -- that would silently
+    undo the breaker the next time anything touches the pool set."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="newheads-sub")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._breaker_open = True
+
+    await feed._resubscribe()
+
+    fake_w3.eth.subscribe.assert_not_awaited()
+    assert feed._newheads_sub_id is None
 
 
 @pytest.mark.asyncio
