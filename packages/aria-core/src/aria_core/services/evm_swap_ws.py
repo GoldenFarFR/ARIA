@@ -105,6 +105,14 @@ _RECONNECT_MAX_SECONDS = 30.0
 # single digit number of pushes' worth of overrun, never a whole day.
 _BREAKER_CHECK_INTERVAL_SECONDS = 30.0
 
+# 25/08 -- proactive counterpart to the budget breaker: closes the newHeads
+# keepalive once _pools has sat empty this long, rather than waiting for the
+# daily RU cap to already be blown. Short enough to matter (on Robinhood's
+# ~100ms blocks, even 2 minutes idle is ~72k RU that this now avoids
+# entirely), long enough that a position closing and a new one opening
+# moments later doesn't flap the keepalive open/closed for no real saving.
+_IDLE_NEWHEADS_CLOSE_SECONDS = 120.0
+
 _KNOWN_USD_STABLES = frozenset({
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base, bridged)
@@ -255,6 +263,16 @@ class EVMSwapWebSocketFeed:
         # already verified once). Moves back the moment the budget resets.
         self._breaker_open = False
         self._evicted_pools: dict[str, _TrackedPool] = {}
+        # 25/08 -- proactive twin of the budget breaker above. That one only
+        # ever reacts AFTER the daily cap is already blown; this tracks how
+        # long _pools has sat empty so the newHeads keepalive can be closed
+        # BEFORE it ever costs anything, regardless of the budget. Confirmed
+        # safe to close mid-flight (see _run()'s own comment): web3.py's
+        # process_subscriptions() only exits early if there is nothing to
+        # listen to the MOMENT it starts iterating, never because a
+        # subscription active at that time is later torn down -- so this
+        # never risks the reconnect-storm the keepalive was built to avoid.
+        self._pools_empty_since: float | None = time.monotonic()
         # 24/08 real incident: _resubscribe() created a fresh "logs"
         # subscription on every add_pool()/remove_pool() WITHOUT ever closing
         # the previous one (the docstring claimed "unsubscribes and
@@ -312,7 +330,23 @@ class EVMSwapWebSocketFeed:
                 await self._check_budget_circuit_breaker()
             except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
                 logger.info("evm_swap_ws[%s]: breaker check failed (%s)", self.chain, exc)
+            try:
+                await self._check_idle_newheads()
+            except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
+                logger.info("evm_swap_ws[%s]: idle newHeads check failed (%s)", self.chain, exc)
             await asyncio.sleep(_BREAKER_CHECK_INTERVAL_SECONDS)
+
+    async def _check_idle_newheads(self) -> None:
+        """25/08 -- _resubscribe() only ever re-evaluates idle_too_long when
+        add_pool()/remove_pool() calls it; with nothing happening at all
+        (the exact idle state this exists for), nothing would ever trigger
+        that re-evaluation on its own. This periodic check is what actually
+        closes the keepalive once the idle window elapses, proactively,
+        never waiting for the daily budget to blow first."""
+        if self._newheads_sub_id is None or self._pools_empty_since is None:
+            return  # nothing open to close, or not idle at all right now
+        if time.monotonic() - self._pools_empty_since >= _IDLE_NEWHEADS_CLOSE_SECONDS:
+            await self._resubscribe()
 
     async def _check_budget_circuit_breaker(self) -> None:
         """25/08, real bug found live (a 295k/200k daily overshoot on
@@ -608,6 +642,18 @@ class EVMSwapWebSocketFeed:
             )
             self._active_sub_ids.append(sub_id)
 
+        # 25/08 -- tracks how long _pools has sat empty (see
+        # _pools_empty_since's own docstring) -- feeds the proactive idle
+        # check below, independent of whether the daily budget is blown.
+        if self._pools:
+            self._pools_empty_since = None
+        elif self._pools_empty_since is None:
+            self._pools_empty_since = time.monotonic()
+        idle_too_long = (
+            self._pools_empty_since is not None
+            and time.monotonic() - self._pools_empty_since >= _IDLE_NEWHEADS_CLOSE_SECONDS
+        )
+
         # 24/08 -- newHeads is billed 1 RU per push, same as any other
         # subscription (docs.chainstack.com/docs/request-units, confirmed
         # live), so it must be open ONLY while no real logs subscription
@@ -615,8 +661,11 @@ class EVMSwapWebSocketFeed:
         # permanently open (the pre-fix behaviour), a fast chain costs real
         # money for nothing: Robinhood Chain's 100ms block time alone would
         # be ~864k RU/day just for this keepalive, on top of every real Sync/
-        # Swap event this module actually wants.
-        if self._active_sub_ids or self._breaker_open:
+        # Swap event this module actually wants. 25/08 -- also closed (and
+        # never reopened) once idle_too_long, proactively, rather than
+        # waiting for the daily cap to already be blown (see
+        # _IDLE_NEWHEADS_CLOSE_SECONDS's own docstring).
+        if self._active_sub_ids or self._breaker_open or idle_too_long:
             if self._newheads_sub_id is not None:
                 try:
                     await self._w3.eth.unsubscribe(self._newheads_sub_id)

@@ -898,3 +898,82 @@ async def test_resubscribe_never_raises_when_unsubscribe_fails():
     )
     await feed._resubscribe()  # must not raise
     assert feed._active_sub_ids == ["sub_new"]
+
+
+# --- proactive idle newHeads close (25/08) ----------------------------
+
+@pytest.mark.asyncio
+async def test_check_idle_newheads_is_a_noop_when_newheads_not_open():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.unsubscribe = AsyncMock()
+    feed._pools_empty_since = time.monotonic() - 1000.0  # idle for ages
+    await feed._check_idle_newheads()
+    feed._w3.eth.unsubscribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_idle_newheads_is_a_noop_before_the_window_elapses():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.unsubscribe = AsyncMock()
+    feed._newheads_sub_id = "newheads-sub"
+    feed._pools_empty_since = time.monotonic() - 10.0  # well under the 120s window
+    await feed._check_idle_newheads()
+    feed._w3.eth.unsubscribe.assert_not_awaited()
+    assert feed._newheads_sub_id == "newheads-sub"
+
+
+@pytest.mark.asyncio
+async def test_check_idle_newheads_closes_the_keepalive_once_the_window_elapses():
+    """25/08, the actual point of this feature: proactively shut the
+    keepalive off once nothing has been tracked for _IDLE_NEWHEADS_CLOSE_
+    SECONDS, without ever needing the daily RU budget to be exhausted first."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="newheads-sub")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._newheads_sub_id = "newheads-sub"
+    feed._pools_empty_since = time.monotonic() - (m._IDLE_NEWHEADS_CLOSE_SECONDS + 5.0)
+
+    await feed._check_idle_newheads()
+
+    fake_w3.eth.unsubscribe.assert_awaited_with("newheads-sub")
+    assert feed._newheads_sub_id is None
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_reopens_newheads_promptly_once_pools_go_idle_but_recent():
+    """A pool closing must not instantly cut the keepalive -- only after the
+    full idle window elapses (see the two tests above). Right after going
+    idle, _resubscribe() must still (re)open it normally."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="newheads-sub")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+
+    await feed._resubscribe()  # pools already empty, freshly so
+
+    fake_w3.eth.subscribe.assert_awaited_with("newHeads")
+    assert feed._newheads_sub_id == "newheads-sub"
+    assert feed._pools_empty_since is not None
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_clears_idle_tracking_once_a_pool_is_tracked_again():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    fake_w3.eth.unsubscribe = AsyncMock()
+    feed._w3 = fake_w3
+    feed._pools_empty_since = time.monotonic() - 500.0  # was idle a while
+    feed._pools["0xv3pool"] = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+
+    await feed._resubscribe()
+
+    assert feed._pools_empty_since is None
