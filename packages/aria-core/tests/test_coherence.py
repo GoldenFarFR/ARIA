@@ -1642,3 +1642,35 @@ def test_no_pocket_hands_a_none_client_to_the_rest_cascade():
         "GeckoTerminal fallback will raise AttributeError exactly when it is "
         f"needed: {offenders}"
     )
+
+
+def test_constitution_is_in_sync_with_claude_md():
+    """The spec-kit constitution is GENERATED from CLAUDE.md, never hand-written
+    (25/08). This test is the whole reason that design holds: without it, the two
+    would drift silently -- this project already has three documented cases of a
+    gate described one way in CLAUDE.md while live the other way in prod. A stale
+    constitution is worse than no constitution: spec-kit's `plan`/`converge`
+    commands read it as their gate, so a drifted copy would approve or block
+    real-capital-adjacent work against a rule that no longer exists.
+
+    Fix on failure: `python3 scripts/generate-constitution.py`, in the SAME
+    commit as the CLAUDE.md change that caused it.
+    """
+    import importlib.util
+
+    script = REPO / "scripts" / "generate-constitution.py"
+    assert script.is_file(), "scripts/generate-constitution.py is missing"
+
+    spec = importlib.util.spec_from_file_location("_gen_constitution", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    expected = module.build_constitution(_read("CLAUDE.md"))
+    actual = _read(".specify/memory/constitution.md")
+
+    assert actual == expected, (
+        "`.specify/memory/constitution.md` is out of sync with CLAUDE.md. "
+        "It is a GENERATED file -- run `python3 scripts/generate-constitution.py` "
+        "and commit the result alongside the CLAUDE.md change. Never edit the "
+        "constitution by hand: the next regeneration discards the edit."
+    )
