@@ -1,0 +1,142 @@
+# Tasks: Audit -- what was built but never delivered its expected result
+
+**Input**: Design documents from `specs/001-audit-code-sans/` (spec.md, plan.md, research.md, audit-scope.md, quickstart.md)
+
+**Tests**: not applicable -- this feature is read-only analysis, not code. Each
+task's "test" IS the real measurement it records (FR-001); there is no
+separate test suite to write.
+
+**State discipline (SC-004)**: this file is the durable progress record. Check
+a box only after the real measurement has been taken and its evidence written
+inline -- never mark done from a plan alone, and never lose progress to a
+context compaction by keeping state only in conversation.
+
+## Phase 1: Setup
+
+No new project/dependencies -- this session's environment (sqlite3 -readonly
+access to `/opt/aria-data/aria.db`, `docker inspect`/`docker exec aria-api`,
+the git checkout itself) already covers everything class 1-5 measurements in
+research.md need.
+
+- [X] T001 Confirm read access: `sqlite3 -readonly` against the prod DB and
+  `docker inspect aria-api` both work from this session. (Done implicitly
+  this session -- both used already for the kill-switch/system_issues check.)
+
+## Phase 2: Foundational
+
+No blocking infrastructure -- each component below is audited independently,
+per its class in research.md. Nothing here gates the user stories.
+
+## Phase 3: User Story 1 -- Find components that never delivered (Priority: P1) 🎯
+
+**Goal**: for each P1 candidate in `audit-scope.md`, get a real measurement of
+whether it ever produced its expected output.
+
+**Independent Test**: each task below is independently verifiable -- its
+checkbox flips only once the query/command has actually run and the number is
+written in.
+
+- [ ] T002 [P] [US1] x402 seller (`ARIA_X402_SELLER_ENABLED`/`_MAINNET`) --
+  count real third-party sales since 05/08 excluding the known operator
+  smoke-test payer address, and confirm Bazaar/`.well-known` listing status
+  live (not from HANDOFF memory). Cross-check against `docs/HANDOFF_X402.md`'s
+  existing "2 sales, same payer" note -- confirm or update it.
+- [ ] T003 [P] [US1] CabalSpy sourcing (`ARIA_CABALSPY_SOURCING_ENABLED`) --
+  confirm live whether its consumer path is genuinely dead now that
+  `ARIA_WALLET_SCORING_ENABLED=false` (verified this session), and if so
+  whether CabalSpy itself is still making live calls into nothing.
+- [ ] T004 [P] [US1] Polymarket paper trading (`ARIA_POLYMARKET_PAPER_ENABLED`)
+  -- `heartbeat_state.json` last_runs for `polymarket_paper_cycle`, plus a
+  `COUNT(*)` aggregate (grouped by week) on the real paper-bet table. CLAUDE.md
+  flags this cadence/volume as never actually verified -- this closes that gap.
+- [ ] T005 [P] [US1] `agent_wallet_copy_shadow`
+  (`ARIA_WALLET_COPY_SHADOW_ENABLED`) -- aggregate over the full fictitious
+  ledger history for the 8 tracked wallets: has any wallet ever cleared a
+  confirmed-outperformance verdict, or is it logs-only to date?
+- [ ] T006 [P] [US1] Farcaster / GitHub / web signal cascade -- aggregate
+  `signal_cascade_triage_queue` for candidates that ever cleared real
+  convergence (`convergence_count` threshold), not just cycle-pass counts
+  already covered by `signal-cascade-watch`.
+- [ ] T007 [P] [US1] `candle_staleness_shadow.py` (#261) -- age of the oldest
+  row + row count in its shadow table; state explicitly whether enough
+  history exists to calibrate a real threshold yet, per its own stated
+  shadow-until-calibrated design.
+- [ ] T008 [P] [US1] Sepolia autonomous pilot
+  (`ARIA_SEPOLIA_AUTONOMOUS_ENABLED`/`_SWAP_ENABLED`) -- count real
+  successful vs failed testnet swaps to date; state whether the "proven
+  pipeline before mainnet" bar has ever actually been cleared once.
+
+**Checkpoint**: every P1 row in `audit-scope.md` carries a real verdict
+(delivered / never delivered / regressed) with its evidence.
+
+## Phase 4: User Story 2 -- Find orphan code and stale gates (Priority: P2)
+
+**Goal**: confirm or refute each P2 suspicion in `audit-scope.md` with real
+evidence (a grep for callers, a live gate read), never left as a guess.
+
+- [ ] T009 [P] [US2] `ARIA_WALLET_SCAN_QUEUE_ENABLED` /
+  `ARIA_WALLET_CANDIDATE_SOURCING_ENABLED` / `ARIA_SMART_MONEY_LEADERBOARD_ENABLED`
+  -- grep for real callers outside their own tests; confirm whether the
+  wallet-scoring removal already orphaned them or they still have a live path.
+- [ ] T010 [P] [US2] `ARIA_DAILY_TRADE_FLOOR_ENABLED` -- find its owner
+  module and stated purpose (none found yet in CLAUDE.md/HANDOFF search this
+  session); report if genuinely undocumented.
+- [ ] T011 [P] [US2] `ARIA_SCALPING_ONLY_SOURCING_ENABLED` -- confirm whether
+  any live code path still reads this flag after the 18/08 v1-v9 retirement,
+  or if it's a dead switch.
+- [ ] T012 [P] [US2] `ARIA_ROBINHOOD_TESTNET_REHEARSAL_ENABLED` -- what has
+  it actually produced since being armed (testnet transactions, rehearsal
+  logs), against the 23/08 CLAUDE.md note that infra is testnet-only so far.
+
+**Checkpoint**: every P2 row has a caller-count/gate-age verdict, not a guess.
+
+## Phase 5: User Story 3 -- Give every survivor a success criterion (Priority: P3)
+
+**Goal**: every component that survives P1/P2 with a "keep" verdict gets a
+measurable success criterion and the place it's checked -- written from the
+real measurement just taken, not guessed in advance of it.
+
+- [ ] T013 [US3] For every component marked KEEP in T002-T012, write its
+  success criterion (metric + query/check location) directly into
+  `docs/HANDOFF_AUDIT_LIVRAISON.md` alongside its verdict. Depends on
+  T002-T012 being resolved first -- no criteria to backfill before then.
+
+## Phase 6: Polish
+
+- [ ] T014 Write `docs/HANDOFF_AUDIT_LIVRAISON.md` (one `[STATUS] Subject /
+  Date / Probleme / Solution` entry per audited component, per the CLAUDE.md
+  HANDOFF format) and add it to CLAUDE.md's "Index des HANDOFF" in the SAME
+  commit (test_handoff_file_indexed_in_claude_md enforces this).
+- [ ] T015 For any live discrepancy found during T002-T012 (gate state vs
+  documented state, a dead process, an orphaned consumer), open a
+  `system_issues` entry so it survives past this audit's own report, per
+  FR-003's reuse-existing-mechanisms requirement.
+- [ ] T016 Run `quickstart.md`'s resume/extend steps once against a component
+  NOT in the original scope, to confirm the method actually generalizes
+  before calling this feature done.
+
+---
+
+## Dependencies & Execution Order
+
+- Phase 1/2: trivial, no real blocking work.
+- Phase 3 (US1) and Phase 4 (US2) have no dependency on each other -- both can
+  run in parallel, and every task within each phase is independent (different
+  component, different query) -- all marked [P].
+- Phase 5 (US3) depends on Phase 3+4 verdicts existing (T013 cannot start
+  before at least one KEEP verdict lands).
+- Phase 6 depends on Phase 5 (the HANDOFF should carry criteria, not just
+  verdicts).
+
+## Parallel Example
+
+```
+# All of Phase 3 can be delegated/run independently:
+Task: "x402 seller real-sales count -- T002"
+Task: "CabalSpy consumer-liveness check -- T003"
+Task: "Polymarket paper cadence/volume -- T004"
+Task: "agent_wallet_copy_shadow verdict-ever-cleared check -- T005"
+Task: "signal cascade real-convergence count -- T006"
+Task: "candle_staleness_shadow calibration-readiness check -- T007"
+Task: "Sepolia pilot real swap success/failure count -- T008"
+```
