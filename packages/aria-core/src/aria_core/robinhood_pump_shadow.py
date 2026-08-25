@@ -130,6 +130,7 @@ import aiosqlite
 
 from aria_core import pretrade_rejection_log, shadow_discovery_only
 from aria_core.momentum_entry import _best_pair
+from aria_core.paper_trader import _advance_high_water
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener, doppler
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
@@ -237,6 +238,14 @@ SCALE_OUT_STEP_PCT = 25.0  # each new rung is +25% above the PREVIOUS rung, cumu
 SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) position at each rung crossed
 TRAILING_STOP_PCT = 20.0  # close the rest if price falls 20% below the running high since entry
 MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibrated rule's own max-hold
+
+# 25/08 -- specs/004-shadow-robinhood T003, see the peak-ratchet comment
+# below for the full rationale. A candidate high more than this many times
+# the last CONFIRMED peak, in a SINGLE cycle, must hold for
+# paper_trader.HIGH_WATER_CONFIRMATION_SECONDS before it's trusted -- a
+# genuine pump always ratchets gradually cycle over cycle, never jumps this
+# far in one leap (the 2 confirmed artifacts were 20.6x/856x in one cycle).
+_PEAK_JUMP_SUSPECT_RATIO = 10.0
 
 # 24/08, operator-directed diligence finding: MIN_LIQUIDITY_USD only guards
 # the ENTRY -- nothing here protected an already-open position against the
@@ -374,6 +383,20 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # (same pattern as solana_support_bounce_shadow.py's twin column). NULL
     # until this row's first exit-simulation pass after this column existed.
     ("last_reserve_usd", "REAL"),
+    # 25/08 -- real bug confirmed live (specs/004-shadow-robinhood, T001):
+    # 2 of the top-20 closed trades had a stored peak_price far above their
+    # pool's real historical high (verified against GeckoTerminal OHLCV,
+    # up to 856x inflated on the #1-ranked trade), each anchoring a
+    # trailing-stop sell at a price that never existed. A single abnormal
+    # instantaneous reading (the same class of bug paper_trader.py's
+    # _advance_high_water already fixed for the real $1M portfolio, 07/19)
+    # could freeze a fictitious peak here too, on a single spot/OHLCV read
+    # this module never independently confirmed. Reused verbatim rather
+    # than re-invented: a candidate high must hold for
+    # HIGH_WATER_CONFIRMATION_SECONDS before it ratchets peak_price -- see
+    # _advance_high_water's own docstring for the full mechanics.
+    ("pending_peak_price", "REAL"),
+    ("pending_peak_since", "TEXT"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -1353,7 +1376,9 @@ async def advance_exit_simulation(
             effective_high = max(window_high, current_price)
             effective_low = min(window_low, current_price)
 
-            peak_price = row["peak_price"] or entry_price
+            confirmed_peak_price = row["peak_price"] or entry_price
+            pending_peak_price = row.get("pending_peak_price")
+            pending_peak_since = row.get("pending_peak_since")
             next_scale_level = row["next_scale_level"] or (entry_price * (1 + SCALE_OUT_STEP_PCT / 100.0))
             remaining_qty = row["remaining_qty"] if row["remaining_qty"] is not None else 1.0
             realized_proceeds = row["realized_proceeds"] or 0.0
@@ -1379,7 +1404,27 @@ async def advance_exit_simulation(
                     return
                 realistic_realized_proceeds += qty_fraction * impacted
 
-            peak_price = max(peak_price, effective_high)
+            # 25/08 -- confirmation ratchet on SUSPECT jumps only
+            # (specs/004-shadow-robinhood, T003): the 2 confirmed price
+            # artifacts (20.6x/856x above the pool's real historical high,
+            # each anchoring a fictitious trailing-stop sell) both jumped far
+            # past the last confirmed peak in a SINGLE cycle -- a genuine
+            # pump, however extreme its eventual multiple, always ratchets
+            # peak_price gradually cycle over cycle, never in one leap past
+            # _PEAK_JUMP_SUSPECT_RATIO. A normal cycle keeps the original
+            # instant max() (unchanged behavior); only a leap this large
+            # routes through paper_trader._advance_high_water's confirmation
+            # gate (same mechanism already protecting the real $1M
+            # portfolio from this exact bug class, never a re-invented
+            # copy) before it's trusted enough to ratchet.
+            if confirmed_peak_price > 0 and effective_high > confirmed_peak_price * _PEAK_JUMP_SUSPECT_RATIO:
+                peak_price, pending_peak_price, pending_peak_since = _advance_high_water(
+                    confirmed_peak_price, pending_peak_price, pending_peak_since,
+                    effective_high, datetime.now(timezone.utc),
+                )
+            else:
+                peak_price = max(confirmed_peak_price, effective_high)
+                pending_peak_price, pending_peak_since = None, None
 
             # 24/08 -- liquidity_collapse, top priority, checked BEFORE even
             # MAX_POOL_AGE_MINUTES (see LIQUIDITY_COLLAPSE_EXIT_PCT's own
@@ -1485,7 +1530,8 @@ async def advance_exit_simulation(
                 await db.execute(
                     """
                     UPDATE robinhood_pump_shadow_log SET
-                        peak_price = ?, next_scale_level = ?, remaining_qty = ?,
+                        peak_price = ?, pending_peak_price = ?, pending_peak_since = ?,
+                        next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
                         last_checked_at = ?, last_price = ?, window_volume_usd = ?,
@@ -1493,7 +1539,8 @@ async def advance_exit_simulation(
                     WHERE id = ?
                     """,
                     (
-                        peak_price, next_scale_level, remaining_qty,
+                        peak_price, pending_peak_price, pending_peak_since,
+                        next_scale_level, remaining_qty,
                         realized_proceeds, exit_reason, final_multiplier,
                         realistic_realized_proceeds, realistic_final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,

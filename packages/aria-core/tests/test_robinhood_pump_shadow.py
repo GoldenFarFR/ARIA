@@ -832,6 +832,69 @@ async def test_advance_exit_trailing_stop_triggers():
     assert rows[0]["final_multiplier"] == pytest.approx(1.0925)
 
 
+# --- peak-jump confirmation guardrail (25/08, specs/004-shadow-robinhood T003) ---
+
+@pytest.mark.asyncio
+async def test_advance_exit_suspect_peak_jump_does_not_ratchet_instantly():
+    """A single-cycle jump past _PEAK_JUMP_SUSPECT_RATIO (real artifacts
+    found 25/08: 20.6x/856x) must NOT freeze peak_price immediately -- it
+    stays a pending candidacy until confirmed."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    # 15x the entry in one cycle -- well past the suspect ratio.
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.0)  # unchanged, never trusted on one read
+    assert rows[0]["pending_peak_price"] == pytest.approx(15.0)
+    assert rows[0]["pending_peak_since"] is not None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_suspect_peak_jump_confirms_once_it_holds():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    # Simulate the confirmation window having elapsed since the candidacy opened.
+    from datetime import datetime, timedelta, timezone as tz
+
+    stale_since = (datetime.now(tz.utc) - timedelta(seconds=200)).isoformat()
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "UPDATE robinhood_pump_shadow_log SET pending_peak_since = ?", (stale_since,)
+        )
+        await db.commit()
+    # Same price still held -- candidacy confirms this cycle.
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(15.0)
+    assert rows[0]["pending_peak_price"] is None
+    assert rows[0]["pending_peak_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_suspect_peak_jump_abandoned_if_it_falls_back():
+    """The same protection paper_trader.py already relies on: if price falls
+    back below the last CONFIRMED peak before the candidacy holds long
+    enough, it's abandoned entirely -- proof it wasn't sustained."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 0.9}), chain=CHAIN)
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(1.0)
+    assert rows[0]["pending_peak_price"] is None
+    assert rows[0]["pending_peak_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_normal_jump_still_ratchets_instantly():
+    """A jump well under _PEAK_JUMP_SUSPECT_RATIO keeps the original
+    unchanged behavior -- never delayed, no pending candidacy created."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    await shadow.advance_exit_simulation(FakeClient({"poolA": 3.0}), chain=CHAIN)  # 3x, well under 10x
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(3.0)
+    assert rows[0]["pending_peak_price"] is None
+    assert rows[0]["pending_peak_since"] is None
+
+
 @pytest.mark.asyncio
 async def test_advance_exit_max_hold_triggers():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=125.0)
