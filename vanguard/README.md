@@ -6,8 +6,8 @@ Code source dans le monorepo **GoldenFarFR/ARIA** (sous-dossier vanguard/). Le s
 
 | Surface | URL | Déploiement |
 |---------|-----|-------------|
-| Vitrine | [ariavanguardzhc.com](https://ariavanguardzhc.com) | Render static (depuis ARIA/vanguard dans le monorepo) |
-| API ARIA | [api.ariavanguardzhc.com](https://api.ariavanguardzhc.com) | Render Docker (`aria-api`) |
+| Vitrine | [ariavanguardzhc.com](https://ariavanguardzhc.com) | Build statique via `deploy-vitrine.sh`, servi par nginx sur le VPS |
+| API ARIA | [api.ariavanguardzhc.com](https://api.ariavanguardzhc.com) | Docker `aria-api` (`deploy.sh`) sur le VPS, blue-green derrière nginx |
 
 L'ancien repo `dexpulse` est **déprécié** — tout vit ici.
 
@@ -39,14 +39,22 @@ cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload
 cd product-frontend && npm ci && npm run dev
 ```
 
-## Deploy (Render)
+## Deploy (VPS Docker + nginx, migré depuis Render — README obsolète corrigé 25/08)
 
-1. Connecter `GoldenFarFR/ARIA` (branche main, dossier vanguard/ comme rootDir dans render)
-2. Appliquer `render.yaml` ou configurer les 2 services manuellement
-3. Domaines custom :
-   - Static : `ariavanguardzhc.com`, `www.ariavanguardzhc.com`
-   - API : `api.ariavanguardzhc.com`
-4. Secrets : coffre local + `operator\sync-render.ps1`
+Deux scripts indépendants, à lancer séparément si les deux surfaces changent :
+
+1. **API** : `./deploy.sh` — build Docker, lance le nouveau conteneur sur le port
+   standby (8000⟷8001 en alternance), health-check AVANT bascule, ancien
+   conteneur retiré seulement une fois le trafic réel confirmé à travers nginx
+   (rollback quasi instantané, cf. `docs/deploy-rollback-blue-green.md`).
+2. **Vitrine** : `./deploy-vitrine.sh` — build statique, même garde-fou double
+   (heuristique de contenu + marqueur de build), `.old`/`.failed` conservés en
+   cas d'échec.
+
+Binding backend strictement `127.0.0.1:8000/8001` (jamais public), nginx comme
+front TLS via `/etc/nginx/conf.d/aria-api-upstream.conf` (hors repo). Secrets
+dans `.env` backend (jamais un fichier séparé). Détail complet : section
+« Deployment » de `CLAUDE.md`.
 
 ## Environment
 

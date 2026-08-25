@@ -1,6 +1,16 @@
 # Intégration Dune Analytics — plan de recherche (15/07, PAS ENCORE construit)
 
-> **Statut : PLAN SEULEMENT.** Rien de ce document n'est codé. Recherche faite à la
+> **Relecture 25/08 (file-staleness-watch) : statut de tête périmé.** Le corps de
+> ce document (§7bis et suivants) montre `services/dune.py` déjà construit et
+> vérifié en direct le 15/07 — le "PLAN SEULEMENT" ci-dessous ne décrit que
+> l'intention de départ, avant la construction relatée plus bas dans ce MÊME
+> fichier. **État à jour et suivi continu : `docs/HANDOFF_DUNE.md`** (déjà
+> indexé dans `CLAUDE.md`) — couvre les mêmes bugs/correctifs que ce document
+> de façon plus compacte. Gardé tel quel comme trace complète du raisonnement
+> et des tests live d'origine (coûts réels, valeurs aberrantes trouvées),
+> jamais réécrit rétroactivement.
+>
+> **Statut original (15/07, périmé) : PLAN SEULEMENT.** Rien de ce document n'est codé. Recherche faite à la
 > demande opérateur (« regarde s'il n'y a pas d'autre chose à extraire comme donnée
 > au-delà des wallets » + « fais une recherche élargie »), à construire plus tard.
 

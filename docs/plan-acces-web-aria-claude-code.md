@@ -5,6 +5,15 @@
 > les diagnostique, explique pourquoi chaque tentative a échoué, et fixe la
 > direction à prendre — pour que la prochaine session (VPS ou cloud) n'ait pas à
 > redécouvrir la même chose.
+>
+> **Relecture 25/08 (file-staleness-watch) : les rôles "Principal/Secondaire/
+> Research" et le "commandement transféré vers une session VPS" (§3-4) décrivent
+> le protocole multi-VPS dispatch, retiré depuis le 03/08 (décision opérateur
+> explicite, une seule machine/session désormais — cf. `CLAUDE.md`). Le contenu
+> technique (WebFetch bloqué par Cloudflare, port actif via
+> `aria-api-upstream.conf`, endpoints `/api/aria/diagnostics/*`) reste correct et
+> utile si une future session CLOUD sans accès VPS direct doit un jour consulter
+> l'état d'ARIA — sans objet pour une session qui tourne déjà sur le VPS.**
 
 ## 1. Constat — trois pannes différentes, pas une seule
 

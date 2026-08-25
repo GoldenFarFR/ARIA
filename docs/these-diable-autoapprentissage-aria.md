@@ -136,12 +136,15 @@ toute tentative d'injection de prompt dans du contenu qui atterrirait dans cette
 mémoire est filtrée à la source, avant même d'être stockée. Le diable en hériterait
 automatiquement, sans rien reconstruire.
 
-**Point honnête à noter** : cette mémoire vectorielle est actuellement désactivée en
-comportement (le drapeau `aria_vector_memory` est à `False` par défaut — l'infrastructure
-est déployée, son activation réelle a été volontairement différée en attendant une
-décision séparée). Construire le diable dessus suppose soit d'activer ce drapeau soit de
-lui donner un gate propre et indépendant — un point à trancher, pas un obstacle
-bloquant.
+**Point honnête à noter, corrigé 25/08 (file-staleness-watch)** : au moment de
+l'écriture, cette mémoire vectorielle était désactivée en comportement (le
+drapeau `aria_vector_memory` à `False` par défaut). **État réel vérifié
+aujourd'hui : `ARIA_VECTOR_MEMORY=true` en prod** — la mémoire vectorielle
+LanceDB est active (cf. `docs/HANDOFF_LANCEDB.md`), plus dormante comme décrit
+ici. Reste néanmoins à vérifier avant de construire le diable dessus : que le
+type `lesson` est bien utilisable tel quel côté trading (rien trouvé dans le
+code aujourd'hui qui l'exploite pour ça — ni le module "diable trading" décrit
+plus bas, ni `knowledge/trade_lessons.yaml`, n'existent encore).
 
 ### Étage 2 — le fichier de leçons actives (le petit ensemble qu'elle relit vraiment, à chaque trade)
 

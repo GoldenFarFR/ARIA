@@ -1,5 +1,18 @@
 # Pilote agent-wallet réel ~10-15$ — EXCEPTION NOMMÉE (16/07)
 
+> **Relecture 25/08 (file-staleness-watch) : ce document est un PLAN HISTORIQUE
+> (16-18/07), figé au moment de sa conception — le corps (§1-§7) garde ses
+> questions "encore ouvertes" et son plafond "10-15$" tels qu'écrits à l'époque,
+> jamais mis à jour depuis. **État réel vérifié aujourd'hui** : le pilote tourne
+> en prod depuis le 18/07 (`agent_wallet_pilot.py`), toutes les bornes du §3 sont
+> câblées et testées, la question du §4 est tranchée (le modèle "plafond + swap
+> uniquement, kill-switch vérifié à chaque tentative" a été validé par
+> l'opérateur), et le plafond réel est **10-25$** (révisé depuis, pas 10-15$) —
+> cf. `CLAUDE.md` (section Mécanismes de trading automatique actifs) et
+> `docs/HANDOFF_AGENT_WALLET.md`/`docs/HANDOFF_COINBASE_CDP.md` pour l'état
+> technique à jour. Gardé tel quel comme trace du raisonnement d'origine, ne
+> pas citer §1-§7 comme état présent.**
+
 > **Statut : §4 tranché par l'opérateur (16/07, explicite et répété).** Le modèle
 > "plafond dur + wallet isolé + swap uniquement, vérifié après coup" est accepté
 > pour CE pilote précisément borné — exécution réelle sans clic Telegram par
