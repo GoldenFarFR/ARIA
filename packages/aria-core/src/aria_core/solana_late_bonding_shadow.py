@@ -57,7 +57,7 @@ import httpx
 
 from aria_core import db_migrations
 
-from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive
+from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive, shadow_discovery_only
 from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.skills import chain_liquidity_regime
 from aria_core.services.solana_rpc_budget import Priority
@@ -1478,6 +1478,12 @@ async def consider_candidate(
                     chain_regime = await chain_liquidity_regime.latest_regime(chain)
                     if chain_regime and chain_regime["regime"] == chain_liquidity_regime.REGIME_TOXIC_SPIKE:
                         accepted, reason = False, f"blocked_regime_defillama: {chain_regime['detail']}"
+                    elif shadow_discovery_only.is_discovery_only():
+                        # 25/08 -- last link on purpose, same reasoning as the
+                        # regime gates above. See shadow_discovery_only.py's
+                        # module docstring -- discovery/rejection-logging/
+                        # regime-candidate tracking above are all unaffected.
+                        accepted, reason = False, "blocked_discovery_only"
 
         # Logged on BOTH branches, same discipline as the other pockets: a
         # filter can only be judged against what it let through.

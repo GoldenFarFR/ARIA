@@ -1642,6 +1642,33 @@ class TestRegimeGate:
         assert any(r and r.startswith("blocked_regime_defillama") for r in reasons)
 
     @pytest.mark.asyncio
+    async def test_record_signals_blocks_when_discovery_only_armed(self, monkeypatch):
+        """25/08 -- /offshadowtrades must block the insert while still
+        letting discovery/rejection-logging/regime-candidate tracking run
+        normally (unlike /offshadow, which cuts every loop wholesale)."""
+        from aria_core import shadow_discovery_only
+
+        monkeypatch.setattr(shadow_discovery_only, "is_discovery_only", lambda: True)
+
+        seen = []
+
+        async def _capture(decision, **_kw):
+            seen.append(decision)
+            return 1
+
+        from aria_core import pretrade_rejection_log
+        original = pretrade_rejection_log.record_decision
+        pretrade_rejection_log.record_decision = _capture
+        try:
+            await shadow.record_signals([_pool(pool_address="poolDiscoveryOnly", token_address="tokDiscoveryOnly")], chain=CHAIN)
+        finally:
+            pretrade_rejection_log.record_decision = original
+
+        assert await _rows() == [], "discovery-only must block the insert entirely"
+        reasons = [d.reason for d in seen]
+        assert "blocked_discovery_only" in reasons
+
+    @pytest.mark.asyncio
     async def test_record_signals_opens_when_defillama_regime_is_absent_or_calm(self, monkeypatch):
         """Fail-open doctrine: no reading yet, or a calm/healthy reading, must
         never be the thing that stops the pocket trading."""

@@ -2329,6 +2329,38 @@ class TestRegimeGate:
         assert rows == []
 
     @pytest.mark.asyncio
+    async def test_consider_candidate_blocks_when_discovery_only_armed(self, _tmp_db, monkeypatch):
+        """25/08 -- /offshadowtrades must block the insert while still
+        letting discovery/rejection-logging/regime-candidate tracking run
+        normally (unlike /offshadow, which cuts every loop wholesale)."""
+        from aria_core import shadow_discovery_only
+
+        monkeypatch.setattr(shadow_discovery_only, "is_discovery_only", lambda: True)
+
+        seen = []
+
+        async def _capture(decision, **_kw):
+            seen.append(decision)
+            return 1
+
+        from aria_core import pretrade_rejection_log
+        original = pretrade_rejection_log.record_decision
+        pretrade_rejection_log.record_decision = _capture
+        try:
+            got = await pocket.consider_candidate(
+                "mintDiscoveryOnly", "poolDiscoveryOnly", trade_stream=_Stream(),
+                resolve_curves_fn=_resolve_ok, snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+            )
+        finally:
+            pretrade_rejection_log.record_decision = original
+
+        assert got is None
+        rows = await _rows(_tmp_db)
+        assert rows == []
+        reasons = [d.reason for d in seen]
+        assert "blocked_discovery_only" in reasons
+
+    @pytest.mark.asyncio
     async def test_recording_a_candidate_never_raises(self, _tmp_db):
         """A measurement must not cost a trade: a bad entry_price is ignored,
         not propagated."""

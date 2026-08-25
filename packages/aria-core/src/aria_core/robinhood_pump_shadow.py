@@ -128,7 +128,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from aria_core import pretrade_rejection_log
+from aria_core import pretrade_rejection_log, shadow_discovery_only
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener, doppler
@@ -814,6 +814,14 @@ async def record_signals(
                 chain_regime = await chain_liquidity_regime.latest_regime(chain)
                 if chain_regime and chain_regime["regime"] == chain_liquidity_regime.REGIME_TOXIC_SPIKE:
                     await _refuse(f"blocked_regime_defillama: {chain_regime['detail']}")
+                    continue
+
+                # 25/08 -- last link on purpose, same reasoning as the regime
+                # gates above. See shadow_discovery_only.py's module docstring --
+                # discovery/rejection-logging/regime-candidate tracking above
+                # this line are all unaffected.
+                if shadow_discovery_only.is_discovery_only():
+                    await _refuse("blocked_discovery_only")
                     continue
 
                 transactions_m15 = pool.transactions_m15 or {}

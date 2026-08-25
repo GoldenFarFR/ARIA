@@ -588,7 +588,7 @@ async def build_status_report(user_id: int | str | None) -> str:
         # Operator feedback 24/08: the off state needs to actually READ red.
         return "❌" if pause_status["paused"] else "✅"
 
-    from aria_core import paper_pause, shadow_pause, x_pause
+    from aria_core import paper_pause, shadow_discovery_only, shadow_pause, x_pause
 
     pst = outgoing_pause.pause_status()
     sorties = _verdict(pst, "illisible (fail-closed, dépenses gelées)")
@@ -604,6 +604,11 @@ async def build_status_report(user_id: int | str | None) -> str:
     x_flag = _verdict(xpst, "illisible (fail-CLOSED, X bloqué)")
     spst = shadow_pause.pause_status()
     shadow = _verdict(spst, "illisible (fail-OPEN, poches papier continuent)")
+    sdost = shadow_discovery_only.status()
+    shadow_trades = _verdict(
+        {"readable": sdost["readable"], "paused": sdost["discovery_only"]},
+        "illisible (fail-OPEN, nouvelles positions shadow autorisées)",
+    )
     return (
         f"ARIA — Status (opérateur)\n"
         f"Build commit: {commit}\n"
@@ -613,6 +618,7 @@ async def build_status_report(user_id: int | str | None) -> str:
         f"{paper} Paper trading 1M$ (/offpaper · /onpaper)\n"
         f"{x_flag} X posts/replies (/offx · /onx)\n"
         f"{shadow} Poches shadow (/offshadow · /onshadow)\n"
+        f"{shadow_trades} Nouvelles positions shadow (/offshadowtrades · /onshadowtrades)\n"
         f"Heartbeat: {last_str}\n"
         f"Telegram: {get_mode()} ✅\n"
         f"X {x_at()}: post {x_post} · read {x_read}\n"
@@ -2565,11 +2571,13 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("offpaper", "⏸ Pause du paper trading (scan/sourcing des 4 poches), instantané"),
     ("offreal", "⏸ Alias de /stop (capital réel uniquement)"),
     ("offshadow", "⏸ Pause de toutes les boucles shadow (process standalone), instantané"),
+    ("offshadowtrades", "⏸ Bloque les NOUVELLES positions shadow -- découverte/rejets continuent"),
     ("offx", "⏸ Pause des interactions X (tweets/réponses/likes/profil), instantané"),
     ("on", "▶️ Relève TOUT d'un coup -- capital réel + paper + X + shadow"),
     ("onpaper", "▶️ Reprend le paper trading après /offpaper"),
     ("onreal", "▶️ Alias de /resume (capital réel uniquement)"),
     ("onshadow", "▶️ Reprend les boucles shadow après /offshadow"),
+    ("onshadowtrades", "▶️ Réautorise les nouvelles positions shadow après /offshadowtrades"),
     ("onx", "▶️ Reprend X après /offx"),
     ("order", "Liste les ordres limite en cours (pending/watching), par poche"),
     ("performance", "Bilan winrate/PnL/espérance segmenté par facteur (conviction, R/R, RVOL...)"),
@@ -3500,6 +3508,44 @@ async def _handle_onshadow(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _reply(update.message, "▶️ Shadow reprend -- toutes les boucles relancées.")
 
 
+async def _handle_offshadowtrades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/offshadowtrades -- 25/08, operator request: the 3 shadow pockets
+    (base_momentum, robinhood_pump, solana_late_bonding) keep discovering
+    candidates and logging rejections/regime-candidate data, but never open
+    a NEW position -- scoped narrower than /offshadow, which cancels every
+    loop wholesale. Used while a pocket's entry/exit thresholds are known
+    to be poor and a recalibration is in progress: no point accumulating
+    more closures under a known-bad config, but the discovery signal itself
+    (including the DefiLlama chain-regime backtest data) stays useful.
+    Owner-only, same gate as /stop."""
+    if not await _owner_only(update):
+        return
+    from aria_core import shadow_discovery_only
+
+    user = update.effective_user
+    shadow_discovery_only.arm(by=user.id if user else None, reason="Pause manuelle /offshadowtrades (owner)")
+    await _reply(
+        update.message,
+        "⏸ Nouvelles positions shadow bloquées -- découverte/rejets/régime-candidats "
+        "continuent normalement, seule l'ouverture d'une position est coupée.\n"
+        "N'affecte ni /stop ni /offshadow ni /offpaper (aucun lien). Envoie /onshadowtrades pour reprendre.",
+    )
+
+
+async def _handle_onshadowtrades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/onshadowtrades -- lifts the /offshadowtrades pause. Owner-only."""
+    if not await _owner_only(update):
+        return
+    from aria_core import shadow_discovery_only
+
+    if not shadow_discovery_only.is_discovery_only():
+        await _reply(update.message, "▶️ Les positions shadow n'étaient pas bloquées -- rien à reprendre.")
+        return
+    user = update.effective_user
+    shadow_discovery_only.disarm(by=user.id if user else None)
+    await _reply(update.message, "▶️ Nouvelles positions shadow réautorisées.")
+
+
 async def _handle_offx(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/offx -- 24/08, operator request: independent pause of X interactions
     (tweets, replies, likes, profile sync) only. Owner-only, same gate as
@@ -3688,6 +3734,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("onx", _handle_onx))
     app.add_handler(CommandHandler("offshadow", _handle_offshadow))
     app.add_handler(CommandHandler("onshadow", _handle_onshadow))
+    app.add_handler(CommandHandler("offshadowtrades", _handle_offshadowtrades))
+    app.add_handler(CommandHandler("onshadowtrades", _handle_onshadowtrades))
     app.add_handler(CommandHandler("mobileinvite", _handle_mobile_invite))
     app.add_handler(CommandHandler("unlockmobile", _handle_unlock_mobile))
     app.add_handler(CommandHandler("riskresume", _handle_risk_resume))
