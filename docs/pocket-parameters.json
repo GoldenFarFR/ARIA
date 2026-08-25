@@ -83,10 +83,20 @@
   "candle_staleness_shadow": {
     "label": "OBSERVER -- candle freshness (#261)",
     "parameters": {
+      "FORWARD_LINK_WINDOW_MINUTES": {
+        "line": 176,
+        "value": 30.0,
+        "why": "25/08, audit 001-audit-code-sans (T007): 37,717 observations had accumulated with a 10.1% flag rate, but the forward-validation pass this module's own docstring/list_recent() promised (\"for the future forward- validation pass\") had never been written -- enough volume to calibrate, zero analysis done. This closes that gap: does a flagged observation (would_flag=1, a candle series suspected stale at the moment a real momentum decision was being evaluated) actually precede a WORSE real outcome than a clean one, or is it just noise?  Link method: record_observation() fires from momentum_entry._fetch_candles on every real candle fetch feeding a momentum decision -- the same (contract, chain) a paper_position opens on shortly after, if the candidate clears every other gate. FORWARD_LINK_WINDOW_MINUTES bounds how soon after the observation a position must have opened to count as the SAME decision (too wide a window would link an observation to an unrelated later re-entry on the same token)."
+      },
       "STALENESS_SHADOW_MULTIPLIER": {
         "line": 52,
         "value": 5.0,
         "why": "Candidate threshold under shadow evaluation -- NOT yet validated against real observations. Reasoned starting point, not a guess pulled from nowhere: the existing scalping continuity gate already uses 4.0x the median candle interval to flag \"too old\" for TRADING SILENCE (`_SCALPING_MAX_CANDLE_GAP_MULTIPLIER`, momentum_entry.py); staleness-to- NOW deserves a bit more slack than that (normal fetch/processing latency alone eats into it, and this applies to every mode, not just scalping's tight cadence) -- 5.0x chosen as a deliberately slightly wider starting candidate, to be tightened or loosened once shadow data accumulates."
+      },
+      "_MIN_SAMPLES_PER_BUCKET": {
+        "line": 180,
+        "value": 5,
+        "why": "Same statistical guardrail as every other bucket-comparison in this project (never conclude on a raw average -- retest minus the top 1-2)."
       }
     },
     "status": "present"
