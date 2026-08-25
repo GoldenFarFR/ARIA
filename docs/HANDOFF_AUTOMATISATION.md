@@ -13,9 +13,9 @@ fichier garde le "comment on en est arrivé là" et les leçons apprises en rout
 
 ------------------------------------------------------------
 
-[CONFIG] Sujet : goplus-security-watch rejugeait des sujets deja traites -- dedoublonnage par tweet_id seul insuffisant
-Date : 2026.08.25 / Probleme : operateur a signale 6 doublons le meme jour (issues #227-231) -- meme sujet de fond (ClickFix/PowerShell, address poisoning, wallet rotation, increaseAllowance, Google 2FA cloud-sync) deja documente le 18/08 dans docs/HANDOFF_SECURITE.md/HANDOFF_COINBASE_CDP.md, mais un NOUVEAU tweet_id (GoPlus republie periodiquement les memes alertes generiques) echappait totalement au dedoublonnage de l'etape 1 du prompt (qui ne compare que des tweet_id deja vus, jamais des sujets deja resolus).
-Solution : nouvelle etape 3bis dans verdict_prompt.txt -- avant tout verdict TRAITER, grep les HANDOFF de securite pertinents avec les mots-cles du sujet ; si deja documente, verdict NON avec pointeur explicite vers l'entree existante, jamais un TRAITER qui redemande un travail deja fait. Fichier hors repo git (VPS uniquement, edite en place, meme doctrine que shadow_persistent.py) -- /opt/aria-data/goplus-security-watch/verdict_prompt.txt.
+[CONFIG] Subject: goplus-security-watch re-flagged already-handled topics -- tweet_id-only dedup insufficient
+Date: 2026.08.25 / Probleme: operator reported 6 duplicates the same day (issues #227-231) -- same underlying topic (ClickFix/PowerShell, address poisoning, wallet rotation, increaseAllowance, Google 2FA cloud-sync) already documented 18/08 in docs/HANDOFF_SECURITE.md/HANDOFF_COINBASE_CDP.md, but a NEW tweet_id (GoPlus periodically republishes the same generic alerts) fully escaped step 1's dedup (which only compares already-seen tweet_id, never already-resolved topics).
+Solution: new step 3bis in verdict_prompt.txt -- before any TRAITER verdict, grep the relevant security HANDOFF files for the topic's keywords; if already documented, verdict NON with an explicit pointer to the existing entry, never a TRAITER that re-requests already-done work. File outside the git repo (VPS only, edited in place, same doctrine as shadow_persistent.py) -- /opt/aria-data/goplus-security-watch/verdict_prompt.txt.
 
 ------------------------------------------------------------
 
