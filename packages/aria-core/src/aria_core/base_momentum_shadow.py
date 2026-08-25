@@ -721,7 +721,9 @@ async def regime_state(*, db_path: str | None = None) -> dict:
     }
 
 
-async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> int:
+async def record_signals(
+    pools: list[TrendingPool], *, chain: str = "base", entry_mode: str = "m5_surge",
+) -> int:
     """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
     its 5-minute price change -- pure read+log, see the module's bright-line
     doctrine. Also stores ``pool_age_at_entry_minutes`` (the exact figure
@@ -729,7 +731,12 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
     from the same ``pool_created_at`` DexPaprika already returns -- no extra
     network call. Best-effort: a DB failure here must never break whatever
     fetched ``pools`` in the first place. Returns the number of NEW rows
-    logged (0 on failure or when nothing qualifies)."""
+    logged (0 on failure or when nothing qualifies).
+
+    ``entry_mode`` (25/08, specs/006-onchain-dayzero-entry): default
+    ``"m5_surge"`` is unchanged. ``"day_zero"`` bypasses the m5 check for
+    freshly-created pools with no price history -- same reasoning as
+    ``robinhood_pump_shadow.record_signals``'s own docstring."""
     logged = 0
     _rows_for_candle_archive: list[tuple[int, TrendingPool]] = []
     try:
@@ -737,6 +744,8 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
                 m5 = pool.price_change_pct.get("m5")
+                if entry_mode == "day_zero":
+                    m5 = M5_SURGE_THRESHOLD_PCT
                 if m5 is None or m5 < M5_SURGE_THRESHOLD_PCT:
                     continue
                 if pool.price_usd is None:

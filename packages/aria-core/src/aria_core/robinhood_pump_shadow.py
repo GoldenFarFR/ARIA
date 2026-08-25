@@ -729,6 +729,7 @@ async def regime_state(*, db_path: str | None = None) -> dict:
 
 async def record_signals(
     pools: list[TrendingPool], *, chain: str = "robinhood", client: GeckoTerminalClient | None = None,
+    entry_mode: str = "m5_surge",
 ) -> int:
     """Logs one shadow row per pool crossing ``M5_SURGE_THRESHOLD_PCT`` on
     its 5-minute price change -- pure read+log, see the module's bright-line
@@ -738,7 +739,14 @@ async def record_signals(
     never a tokenized equity (see module docstring). Best-effort: a DB or
     registry failure here must never break whatever fetched ``pools`` in the
     first place. Returns the number of NEW rows logged (0 on failure or when
-    nothing qualifies)."""
+    nothing qualifies).
+
+    ``entry_mode`` (25/08, specs/006-onchain-dayzero-entry): default
+    ``"m5_surge"`` is the ORIGINAL, unchanged behaviour (requires the 5-minute
+    surge below). ``"day_zero"`` skips the m5 check entirely -- used by the
+    on-chain discovery feed, whose candidates are freshly-created pools with
+    no price history to surge on. Every OTHER filter (age/liquidity/RWA/
+    regime/discovery-only) still applies identically regardless of mode."""
     client = client or geckoterminal_client
     logged = 0
     _rows_for_candle_archive: list[tuple[int, TrendingPool]] = []
@@ -747,6 +755,8 @@ async def record_signals(
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
                 m5 = pool.price_change_pct.get("m5")
+                if entry_mode == "day_zero":
+                    m5 = M5_SURGE_THRESHOLD_PCT  # bypass, see docstring above
                 if m5 is None or m5 < M5_SURGE_THRESHOLD_PCT:
                     continue
                 if pool.price_usd is None:

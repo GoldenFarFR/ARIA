@@ -171,20 +171,26 @@ async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: s
 
 
 async def record_signals(
-    pools: list[TrendingPool], *, chain: str = "robinhood",
+    pools: list[TrendingPool], *, chain: str = "robinhood", entry_mode: str = "m5_surge",
 ) -> int:
     """Same entry filters as ``robinhood_pump_shadow.record_signals`` (age,
     liquidity floor, RWA exclusion, chain regime, discovery-only gate),
     reused verbatim -- the two modules must agree on WHAT counts as a
     signal, only WHAT THEY DO with it once opened differs. Called with the
     SAME already-fetched ``pools`` list v1's own discovery loop uses, never a
-    second ``get_trending_pools``/``get_trending_pools``-equivalent call."""
+    second ``get_trending_pools``/``get_trending_pools``-equivalent call.
+
+    ``entry_mode`` (25/08, specs/006-onchain-dayzero-entry): see
+    ``robinhood_pump_shadow.record_signals``'s own docstring -- same bypass,
+    same reasoning."""
     logged = 0
     try:
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
             for pool in pools:
                 m5 = pool.price_change_pct.get("m5")
+                if entry_mode == "day_zero":
+                    m5 = M5_SURGE_THRESHOLD_PCT
                 if m5 is None or m5 < M5_SURGE_THRESHOLD_PCT:
                     continue
                 if pool.price_usd is None:
