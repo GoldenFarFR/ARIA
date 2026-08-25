@@ -69,7 +69,9 @@ async def test_record_evaluation_opens_position_on_fresh_30pct_dip():
     rows = await _rows()
     assert len(rows) == 1
     assert rows[0]["status"] == "open"
-    assert rows[0]["entry_price"] == 69.0
+    # Entry pays the real DEX swap fee (25/08 realism fix) -- never the raw
+    # candle close, same doctrine as every other pocket's fill simulation.
+    assert rows[0]["entry_price"] == pytest.approx(shadow._realistic_fill_price_candle(69.0))
     assert rows[0]["entry_var_24h_pct"] == pytest.approx(-31.0)
     assert await _episode_state() is True
 
@@ -93,7 +95,8 @@ async def test_record_evaluation_never_reopens_mid_episode():
     await shadow.record_evaluation(CONTRACT, CHAIN, symbol="TOK", candles_1h=_hourly_series(closes_b))
     rows = await _rows()
     assert len(rows) == 1
-    assert rows[0]["entry_price"] == 69.0  # first signal wins, untouched
+    # first signal wins, untouched
+    assert rows[0]["entry_price"] == pytest.approx(shadow._realistic_fill_price_candle(69.0))
 
 
 @pytest.mark.asyncio
@@ -109,7 +112,7 @@ async def test_record_evaluation_rearms_after_recovery_above_threshold():
     await shadow.record_evaluation(CONTRACT, CHAIN, symbol="TOK", candles_1h=_hourly_series(closes_c))
     rows = await _rows()
     assert len(rows) == 2
-    assert rows[1]["entry_price"] == 68.0
+    assert rows[1]["entry_price"] == pytest.approx(shadow._realistic_fill_price_candle(68.0))
 
 
 # --- stop-loss / timeout --------------------------------------------------
@@ -126,7 +129,16 @@ async def test_stop_loss_closes_position_at_minus_5pct():
     assert len(rows) == 1
     assert rows[0]["status"] == "closed"
     assert rows[0]["close_reason"] == "stop_loss_5pct"
-    assert rows[0]["pnl_pct"] == pytest.approx(-6.0, abs=0.01)
+    # -6% raw, but the realistic fee on BOTH legs (25/08 fix) makes the real
+    # realized loss slightly worse -- computed via the module's own helpers,
+    # never a duplicated fee constant here.
+    expected_pnl_pct = (
+        shadow._realistic_exit_price_candle(64.86)
+        / shadow._realistic_fill_price_candle(69.0)
+        - 1.0
+    ) * 100.0
+    assert rows[0]["pnl_pct"] == pytest.approx(expected_pnl_pct, abs=0.01)
+    assert rows[0]["pnl_pct"] < -6.0  # strictly worse than the naive figure
 
 
 @pytest.mark.asyncio
@@ -168,3 +180,26 @@ async def test_summary_aggregates_open_closed_and_winrate():
     assert summary["closed"] == 1
     assert summary["wins"] == 0
     assert summary["distinct_tokens"] == 2
+
+
+# --- realistic fee model (25/08) --------------------------------------------
+
+def test_realistic_fill_price_is_above_the_raw_close():
+    assert shadow._realistic_fill_price_candle(100.0) > 100.0
+
+
+def test_realistic_exit_price_is_below_the_raw_close():
+    assert shadow._realistic_exit_price_candle(100.0) < 100.0
+
+
+def test_realistic_prices_use_the_shared_fee_constant():
+    """Never a duplicated fee figure -- same source of truth as every other
+    pocket's fill/exit simulation (risk_guard.DEX_SWAP_FEE_PCT)."""
+    from aria_core import risk_guard
+
+    assert shadow._realistic_fill_price_candle(100.0) == pytest.approx(
+        100.0 * (1.0 + risk_guard.DEX_SWAP_FEE_PCT)
+    )
+    assert shadow._realistic_exit_price_candle(100.0) == pytest.approx(
+        100.0 * (1.0 - risk_guard.DEX_SWAP_FEE_PCT)
+    )

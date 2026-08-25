@@ -119,6 +119,26 @@ def _hours_since(iso_ts: str | None) -> float | None:
     return (datetime.now(timezone.utc) - then).total_seconds() / 3600.0
 
 
+# 25/08, operator request ("met toi en condition reel... les frais"): both
+# entry and exit used the raw candle close, as if a real swap on this token
+# would cost nothing. Reuses risk_guard.DEX_SWAP_FEE_PCT (same source of
+# truth as every other pocket's fee model, never a second guessed figure)
+# rather than inventing a parallel constant here. No price-impact term --
+# this module only has OHLC candles (candle_history), no live pool
+# liquidity, without adding the extra network call the module deliberately
+# avoids (see module docstring "Zero extra network call").
+def _realistic_fill_price_candle(close: float) -> float:
+    from aria_core import risk_guard
+
+    return close * (1.0 + risk_guard.DEX_SWAP_FEE_PCT)
+
+
+def _realistic_exit_price_candle(close: float) -> float:
+    from aria_core import risk_guard
+
+    return close * (1.0 - risk_guard.DEX_SWAP_FEE_PCT)
+
+
 async def record_evaluation(
     contract: str, chain: str, *, symbol: str | None, candles_1h: list[Candle],
 ) -> None:
@@ -161,7 +181,16 @@ async def _advance_open_position(
     entry_price = row["entry_price"]
     if not entry_price:
         return
-    pnl_pct = (last_close / entry_price - 1.0) * 100.0
+    # 25/08, operator request ("met toi en condition reel... les frais"):
+    # this pocket reads candles already collected by candle_history (no
+    # live liquidity figure available without an extra network call this
+    # module deliberately avoids -- see module docstring), so the
+    # price-impact half of the project's realism model doesn't apply here.
+    # The real protocol swap fee does, on both legs -- entry_price (below,
+    # at open) already pays it; the exit side is charged here so the stop
+    # fires on the price actually realizable, not the raw candle close.
+    realistic_exit = _realistic_exit_price_candle(last_close)
+    pnl_pct = (realistic_exit / entry_price - 1.0) * 100.0
     age_hours = _hours_since(row["opened_at"]) or 0.0
     close_reason: str | None = None
     if pnl_pct <= STOP_LOSS_PCT:
@@ -175,7 +204,7 @@ async def _advance_open_position(
         UPDATE dip_recovery_shadow SET status = 'closed', closed_at = ?,
             exit_price = ?, close_reason = ?, pnl_pct = ? WHERE id = ?
         """,
-        (datetime.now(timezone.utc).isoformat(), last_close, close_reason, pnl_pct, row["id"]),
+        (datetime.now(timezone.utc).isoformat(), realistic_exit, close_reason, pnl_pct, row["id"]),
     )
     await db.commit()
 
@@ -212,8 +241,8 @@ async def _advance_episode_state(
             ) VALUES (?, ?, ?, 'open', ?, ?, ?)
             """,
             (
-                contract, chain or "base", symbol, last_close, var_24h_pct,
-                datetime.now(timezone.utc).isoformat(),
+                contract, chain or "base", symbol, _realistic_fill_price_candle(last_close),
+                var_24h_pct, datetime.now(timezone.utc).isoformat(),
             ),
         )
     await db.execute(
