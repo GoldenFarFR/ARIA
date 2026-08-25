@@ -508,6 +508,7 @@ from scratch.
 - `docs/HANDOFF_RESOURCE_BUDGET.md` — garde-fous budget/quota des providers API tiers (CoinMarketCap, CoinGecko, Mobula, Dune, Firecrawl, Tavily, Blockscout, GoPlus, TwitterAPI.io), consolidation `resource_budget.py` (#302).
 - `docs/HANDOFF_LANCEDB.md` — mémoire vectorielle sémantique (recherche par sens, pas mot-clé), extra `[vector]` du Dockerfile, bonnes pratiques LanceDB sourcées, risque memory-poisoning ASI06.
 - `docs/HANDOFF_CHAINSTACK.md` — Chainstack RPC provider (Solana polling, planned Robinhood Chain), pricing/RU billing model, RPS limits, node add-ons (Yellowstone gRPC, Warp, Unlimited Node), MCP-server tooling.
+- `docs/HANDOFF_DEFILLAMA.md` — DefiLlama market-data (free API vs Pro vs LlamaAI), verified TVL/DEX-volume-by-chain endpoints, candidate cross-check for the regime indicator.
 - **This list must stay up to date**: any new `docs/HANDOFF_*.md` file created (a new
   component never touched before) gets added here in the SAME commit — a HANDOFF not
   indexed here is as invisible as a HANDOFF that doesn't exist.
