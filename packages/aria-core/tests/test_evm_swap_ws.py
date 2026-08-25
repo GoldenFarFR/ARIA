@@ -809,6 +809,27 @@ async def test_resubscribe_includes_pool_manager_address_for_v4_pools():
 
 
 @pytest.mark.asyncio
+async def test_resubscribe_uses_robinhoods_own_pool_manager_address_not_bases():
+    """25/08 real bug fix: v4 subscriptions on Robinhood must use Robinhood's
+    OWN PoolManager, never Base's (doppler.POOL_MANAGER_ADDRESS is explicitly
+    Base-only per its own docstring) -- the pre-fix code always used the Base
+    constant regardless of ``self.chain``, silently pointing every Robinhood
+    v4 subscription at the wrong contract."""
+    feed = m.EVMSwapWebSocketFeed(chain="robinhood", ws_url="wss://test.invalid", chain_id=4663)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_v4")
+    feed._pools["0xpoolid"] = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0xpoolid",
+    )
+    await feed._resubscribe()
+    filter_arg = feed._w3.eth.subscribe.call_args[0][1]
+    assert filter_arg["address"] == [m._POOL_MANAGER_BY_CHAIN["robinhood"]]
+    assert filter_arg["address"] != [m.POOL_MANAGER_ADDRESS]
+
+
+@pytest.mark.asyncio
 async def test_resubscribe_restricts_v4_filter_to_tracked_pool_ids():
     """24/08 real incident: the PoolManager is a SINGLETON shared by every
     v4 pool on the chain -- an address-only filter received every swap on

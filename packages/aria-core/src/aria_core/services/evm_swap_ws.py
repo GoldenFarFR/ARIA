@@ -149,6 +149,21 @@ _V4_SWAP_TOPIC = _topic0(
     "Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"
 )
 
+# 25/08, real bug found live: this module always subscribed to Base's own
+# PoolManager (``POOL_MANAGER_ADDRESS``, imported from doppler.py, itself
+# explicitly documented as "Canonical Base addresses" -- never intended for
+# any other chain) regardless of ``self.chain``. On Robinhood this silently
+# pointed every v4 subscription at the WRONG contract -- no v4 Swap event was
+# ever received for a Robinhood v4 pool, degrading (fail-open, no crash) to
+# the REST fallback for every such position. Robinhood's own PoolManager
+# address below was verified live against the official Uniswap developer
+# docs and confirmed by actually receiving real Initialize/Swap events on it
+# (specs/005-discovery-budget T002's measurement, 25/08).
+_POOL_MANAGER_BY_CHAIN: dict[str, str] = {
+    "base": POOL_MANAGER_ADDRESS,
+    "robinhood": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+}
+
 # dex_id (as DexPaprika/GeckoTerminal report it) -> decode family. Anything
 # not listed here is honestly uncovered, never guessed into a family.
 _DEX_FAMILY: dict[str, str] = {
@@ -389,6 +404,13 @@ class EVMSwapWebSocketFeed:
 
     def dex_family(self, dex_id: str | None) -> str | None:
         return _DEX_FAMILY.get(dex_id or "")
+
+    def _pool_manager_address(self) -> str:
+        """Per-chain PoolManager -- see ``_POOL_MANAGER_BY_CHAIN``'s own
+        docstring for the real bug this replaces. Falls back to Base's
+        address for an unrecognized chain, the historical (buggy but at
+        least consistent) behaviour, rather than raising."""
+        return _POOL_MANAGER_BY_CHAIN.get(self.chain, POOL_MANAGER_ADDRESS)
 
     async def add_pool(
         self, pool_address: str, *, dex_id: str, token_address: str,
@@ -638,7 +660,7 @@ class EVMSwapWebSocketFeed:
         if v4_pool_ids:
             sub_id = await self._w3.eth.subscribe(
                 "logs",
-                {"address": [POOL_MANAGER_ADDRESS], "topics": [[_V4_SWAP_TOPIC], v4_pool_ids]},
+                {"address": [self._pool_manager_address()], "topics": [[_V4_SWAP_TOPIC], v4_pool_ids]},
             )
             self._active_sub_ids.append(sub_id)
 
