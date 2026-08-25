@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-25
 
-**Status**: In progress (closes when no further bug/improvement is found, same doctrine as `001-audit-code-sans`/`005-discovery-budget`)
+**Status**: Closed 25/08 -- Phase 1 (EVM Base+Robinhood) built, tested, deployed, live (24h RU measurement window running). Phase 2 (Solana Raydium+Meteora) measured and decided NOT to build: no per-instruction log filter exists at the Solana RPC layer, so a direct subscription would reproduce the 21/08 programSubscribe-firehose incident this dome already replaced once.
 
 **Input**: Operator-directed (25/08), following `005-discovery-budget`'s conclusion that a direct WS subscription brings zero gain to the CURRENT m5-surge pipeline: "moi je veut passer par le rpc et supprimer dexpaprika et toutes les autres merde, le rpc permet detre plus rapide quand le contrat apparait... on a vue que les budget le permette" -- confirmed scope via clarifying question: full replacement of Base+Robinhood discovery, not a parallel variant. Widened same day: "pour les 3 blockchains je veut le meme systeme par rpc avec les candidat dex pool bien branché" -- same PRINCIPLE (native RPC subscription, never a third-party aggregator) across Base, Robinhood AND Solana, but the IMPLEMENTATION necessarily differs per chain (Solana has no EVM-style topic0/factory logs).
 
