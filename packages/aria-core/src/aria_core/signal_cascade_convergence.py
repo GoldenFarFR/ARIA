@@ -418,6 +418,23 @@ async def falsifiability_report() -> dict:
         )
         rows = await cursor.fetchall()
 
+    def _avg(vals: list[float]) -> float | None:
+        return sum(vals) / len(vals) if vals else None
+
+    def _avg_no_top2(vals: list[float]) -> float | None:
+        # Project-wide statistical guardrail (CLAUDE.md "Permanent norms"):
+        # any bucket presented as profitable must be retested without its
+        # best trade AND without its two best -- a single outlier here (a
+        # +1,609,067% forward return, one rejected candidate) inflated the
+        # raw rejected-bucket average to 38340% (25/08 audit finding,
+        # 001-audit-code-sans T006), while the true no-outlier gap was
+        # 21-29% vs 7-10%. Same doctrine as the rest of the project applied
+        # to this bucket for the first time.
+        if len(vals) <= 2:
+            return None
+        trimmed = sorted(vals, reverse=True)[2:]
+        return sum(trimmed) / len(trimmed)
+
     def _bucket(window: str) -> dict:
         by_status: dict[str, list[float]] = {"validated": [], "rejected": []}
         for status, entry, after_24h, after_7d in rows:
@@ -427,20 +444,29 @@ async def falsifiability_report() -> dict:
             by_status[status].append((after / entry - 1.0) * 100.0)
         n_validated, n_rejected = len(by_status["validated"]), len(by_status["rejected"])
         enough = n_validated >= _MIN_SAMPLES_PER_SIDE and n_rejected >= _MIN_SAMPLES_PER_SIDE
-        avg_validated = sum(by_status["validated"]) / n_validated if n_validated else None
-        avg_rejected = sum(by_status["rejected"]) / n_rejected if n_rejected else None
+        avg_validated = _avg(by_status["validated"])
+        avg_rejected = _avg(by_status["rejected"])
+        avg_validated_no_top2 = _avg_no_top2(by_status["validated"])
+        avg_rejected_no_top2 = _avg_no_top2(by_status["rejected"])
+        # The verdict is decided on the outlier-resistant figures, never the
+        # raw average -- a single extreme forward return must never flip
+        # "useful criterion" vs "not better than chance" on its own.
+        verdict_validated = avg_validated_no_top2 if avg_validated_no_top2 is not None else avg_validated
+        verdict_rejected = avg_rejected_no_top2 if avg_rejected_no_top2 is not None else avg_rejected
         return {
             "n_validated": n_validated, "n_rejected": n_rejected,
             "avg_return_validated_pct": round(avg_validated, 2) if avg_validated is not None else None,
             "avg_return_rejected_pct": round(avg_rejected, 2) if avg_rejected is not None else None,
+            "avg_return_validated_pct_no_top2": round(avg_validated_no_top2, 2) if avg_validated_no_top2 is not None else None,
+            "avg_return_rejected_pct_no_top2": round(avg_rejected_no_top2, 2) if avg_rejected_no_top2 is not None else None,
             "enough_data": enough,
             "verdict": (
                 (
                     "critère utile -- les validés surperforment"
-                    if avg_validated > avg_rejected else
+                    if verdict_validated > verdict_rejected else
                     "critère sans valeur -- pas mieux que le hasard, NE PAS transmettre à ARIA"
                 )
-                if enough and avg_validated is not None and avg_rejected is not None
+                if enough and verdict_validated is not None and verdict_rejected is not None
                 else f"pas assez de données (min {_MIN_SAMPLES_PER_SIDE}/côté requis)"
             ),
         }

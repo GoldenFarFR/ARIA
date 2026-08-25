@@ -237,6 +237,54 @@ async def test_falsifiability_report_detects_validated_outperforming(monkeypatch
     assert "critère utile" in bucket["verdict"]
 
 
+@pytest.mark.asyncio
+async def test_falsifiability_verdict_resists_a_single_rejected_outlier(monkeypatch):
+    """Regression test for the bug found live during audit 001-audit-code-sans
+    (T006, 25/08): a single +1,609,067% forward return on ONE rejected
+    candidate inflated the raw rejected-bucket average to 38340%, making the
+    rejected bucket look like it beat validated -- a pure outlier artifact,
+    not a real signal. The project's own statistical guardrail (never
+    conclude on a bucket without retesting minus its top 1-2) must apply
+    here exactly like everywhere else: validated tokens doubling modestly
+    should still read as the useful criterion even when one rejected token
+    happens to have mooned."""
+    validated_contracts = [f"0x{i:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+    rejected_contracts = [f"0x{i + 100:040x}" for i in range(scc._MIN_SAMPLES_PER_SIDE)]
+
+    for contract in validated_contracts:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "validated", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+
+    for contract in rejected_contracts:
+        await scc.record_source_signal(contract, "base", "github", "positive", detail="x")
+        await _decide_at_price(monkeypatch, contract, "base", "rejected", "raisonnement", 1.0)
+        await _age_decision(scc.DB_PATH, contract, "base", days_ago=1.1)
+
+    outlier_contract = rejected_contracts[0]
+
+    # Validated: modest +100% each. Rejected: -50% each, except ONE outlier
+    # that moons +1,000,000% -- the exact shape of the real 25/08 finding.
+    async def _fake_price(contract, chain):
+        if contract in validated_contracts:
+            return 2.0
+        if contract == outlier_contract:
+            return 10_001.0
+        return 0.5
+
+    monkeypatch.setattr(scc, "_current_price_usd", _fake_price)
+    report = await scc.falsifiability_report()
+    bucket = report["window_24h"]
+
+    assert bucket["enough_data"] is True
+    # The raw average is dominated by the outlier and looks like rejected wins.
+    assert bucket["avg_return_rejected_pct"] > bucket["avg_return_validated_pct"]
+    # But the outlier-resistant figures (and therefore the verdict) must not
+    # be fooled by it.
+    assert bucket["avg_return_validated_pct_no_top2"] > bucket["avg_return_rejected_pct_no_top2"]
+    assert "critère utile" in bucket["verdict"]
+
+
 # ---- falsifiability watch cycle (heartbeat wrapper) --------------------
 
 async def _seed_enough_samples_for_24h(monkeypatch) -> None:

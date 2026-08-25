@@ -129,10 +129,36 @@ written in.
   wire a consumption path (Telegram command or a periodic report) before
   this becomes a second "ran for months, nobody ever looked" case -- or
   state explicitly it's an intentional data-collection-only phase for now.
-- [ ] T006 [P] [US1] Farcaster / GitHub / web signal cascade -- aggregate
+- [X] T006 [P] [US1] Farcaster / GitHub / web signal cascade -- aggregate
   `signal_cascade_triage_queue` for candidates that ever cleared real
   convergence (`convergence_count` threshold), not just cycle-pass counts
   already covered by `signal-cascade-watch`.
+  **VERDICT: DELIVERED a real result -- and the result is the triage
+  criterion itself doesn't work.** Full table: 189 candidates, active
+  09/08-25/08 (16 days), all 4 sources still running today. Convergence:
+  130 single-source, 57 at 2 sources, only 2 at full 3-source convergence
+  (1% of all candidates). `falsifiability_report()` (called live) already
+  does the thing this audit exists to check for every other component --
+  it measures whether the triage decision (validated/rejected) actually
+  predicts forward return, and its own native verdict was "critère sans
+  valeur -- pas mieux que le hasard, NE PAS transmettre à ARIA" on both
+  24h and 7d windows. **Second real bug found and fixed**: that native
+  verdict was computed on the RAW average, which the project's own
+  statistical guardrail (never conclude without retesting minus top-1/2)
+  would have caught -- one rejected candidate's +1,609,067% forward return
+  inflated the rejected-bucket 7d average to 38340% (vs validated's 16.8%),
+  making rejected look like it beat validated purely from that single
+  outlier. Recomputed without it: rejected's real 7d average is ~21-29%,
+  validated's is ~7-10% -- rejected genuinely still edges validated even
+  outlier-free, so the mechanism's own "not better than chance, don't wire
+  it up" conclusion HOLDS, but for the right statistical reason now instead
+  of an inflated one. Fixed live: `falsifiability_report()` now computes
+  `avg_return_*_pct_no_top2` and decides its verdict on THAT, never the raw
+  average (1 new regression test, 30 total in the module, all pass).
+  Recommendation: no action needed on the mechanism itself -- it correctly
+  self-identified as not-yet-useful, exactly the kind of honest negative
+  result this whole audit is looking for elsewhere. Keep running as a
+  falsifiability check, don't wire its output into real decisions yet.
 - [ ] T007 [P] [US1] `candle_staleness_shadow.py` (#261) -- age of the oldest
   row + row count in its shadow table; state explicitly whether enough
   history exists to calibrate a real threshold yet, per its own stated
