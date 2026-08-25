@@ -56,6 +56,20 @@
 # next push naturally absorbs the missed diff instead of a second push
 # silently starting a fresh, smaller-than-2000 window. Reaching the
 # threshold -> normal call, marker advances to HEAD.
+# 25/08 -- PAUSE OPERATEUR EXPLICITE, jamais un retrait silencieux : solde de
+# credit API Anthropic DIRECT (compte facture separement, distinct de
+# l'abonnement Claude Code) epuise, HTTP 400 "credit balance too low" sur
+# Fable 5 ET sur la condensation Haiku (meme cle, meme compte). Decision
+# operateur en toutes lettres : "je ne refinancerai pas l'api tu peut arreter
+# de passer par la condensation et l'avocat, peut etre plus tard je le
+# remettrai" -- donc PAS de retry, PAS de contournement (ex. re-router sur un
+# autre modele), juste une pause visible et reversible. Repasser a "false" des
+# que l'operateur confirme la reactivation (recharge de credit ou remplacement
+# de compte). Le cumul de lignes continue d'etre trace ci-dessous (le marker
+# n'avance jamais pendant la pause) pour que la reactivation couvre tout le
+# diff accumule entre-temps, jamais seulement le dernier push.
+DEVILS_ADVOCATE_PAUSED=true
+
 set -uo pipefail
 
 REPO_DIR="/opt/aria"
@@ -149,6 +163,13 @@ if [ "$CUMULATIVE_LINES" -lt "$BATCH_THRESHOLD_LINES" ]; then
   echo "🛡️  Avocat du Diable : ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12} -- sous le seuil, aucun appel paye." >&2
   exit 0
 fi
+
+if [ "$DEVILS_ADVOCATE_PAUSED" = "true" ]; then
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- push main ${MAIN_REMOTE_SHA}..${MAIN_LOCAL_SHA} -- PAUSED (decision operateur 25/08, credit API Anthropic direct epuise) -- ${CUMULATIVE_LINES} lignes cumulees depuis ${BASE_SHA:0:12} en attente de reactivation ===" >> "$REVIEW_LOG"
+  echo "🛡️  Avocat du Diable : EN PAUSE (decision operateur, 25/08 -- credit API epuise, pas de recharge pour l'instant) -- ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees en attente, marker non avance." >&2
+  exit 0
+fi
+
 echo "🛡️  Avocat du Diable : ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} lignes cumulees depuis ${BASE_SHA:0:12} -- seuil atteint, revue Fable 5 declenchee en arriere-plan." >&2
 
 # Tout le travail reel est detache -- le push aboutit immediatement, sans
