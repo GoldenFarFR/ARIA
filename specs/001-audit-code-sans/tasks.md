@@ -73,14 +73,62 @@ written in.
   consumer exists (same shape as the wallet-scoring lesson, caught in 5 days
   instead of months) -- not flipped here, needs operator "ok" per this
   audit's own read-only design.
-- [ ] T004 [P] [US1] Polymarket paper trading (`ARIA_POLYMARKET_PAPER_ENABLED`)
+- [X] T004 [P] [US1] Polymarket paper trading (`ARIA_POLYMARKET_PAPER_ENABLED`)
   -- `heartbeat_state.json` last_runs for `polymarket_paper_cycle`, plus a
   `COUNT(*)` aggregate (grouped by week) on the real paper-bet table. CLAUDE.md
   flags this cadence/volume as never actually verified -- this closes that gap.
-- [ ] T005 [P] [US1] `agent_wallet_copy_shadow`
+  **VERDICT: DELIVERED, but at a real, now-quantified low volume.** Cycle ran
+  again today (25/08). Full table (9 rows, ever): first bet 30/07, last
+  22/08 -- ~9 real paper positions across ~3.5 weeks, only 3 distinct
+  markets touched, against 426 rows in `polymarket_judgment_log` (a ~2.1%
+  judgment-to-bet conversion rate). 3 positions closed with a real,
+  code-verified P&L (`pnl_usd = payout - size_usd`, all 3 winners at +100%
+  of stake -- consistent with a ~0.5 entry price, not a placeholder-price
+  bug recurrence of the 03/08 fix). 6 positions still open. This closes
+  CLAUDE.md's "never actually verified" gap: the real cadence is roughly
+  2-3 bets/week, consistent with the design's high selectivity bar
+  (win_probability>=0.85 + 3-vote convergence), not a stalled mechanism.
+- [X] T005 [P] [US1] `agent_wallet_copy_shadow`
   (`ARIA_WALLET_COPY_SHADOW_ENABLED`) -- aggregate over the full fictitious
   ledger history for the 8 tracked wallets: has any wallet ever cleared a
   confirmed-outperformance verdict, or is it logs-only to date?
+  **VERDICT: DELIVERED (mechanism works), but the signal is mostly
+  unconfirmed latent PnL, not yet a real "outperformance" verdict.** Full
+  table: 562 positions, 8 wallets, active 08/08-25/08 (17 days), 151 closed
+  / 411 still open. `wallet_copy_shadow.summary()` (called live) does
+  produce a real per-wallet ranking with sourced external evidence
+  (fomoscan/GMGN/Lookonchain), not just logs. BUT the real net realized PnL
+  across all 8 wallets' 151 closures is only ~+$933 total, while unrealized
+  (open-position) PnL ranges up to +$176k on a single wallet
+  (`gmgn_antpositions`) -- the entire "this wallet is worth copying" signal
+  today rests on marks against still-open positions, not confirmed exits.
+  Same class of risk the project's own norm already names ("a system's own
+  data can never validate that system's own prices" -- unrealized marks are
+  exactly that). **CONFIRMED real bug, same survivorship-bias shape as the
+  17/08 wallet-scoring PnL incident**: `summary()` (code read directly,
+  `wallet_copy_shadow.py:486-497`) only counts a closed position toward
+  `realized_pnl_usd`/`closed_positions` when `exit_price_usd` is non-null
+  AND its ratio to entry falls inside `_PLAUSIBLE_PRICE_RATIO_BOUNDS` --
+  every other closed row (including the 64/151 = 42% with no exit price at
+  all, presumably dried-up pools/failed price lookups) is silently dropped
+  from the count and the PnL sum, never counted as a loss. The wallets
+  showing `realized_pnl_usd: 0.0` with real `closed_positions` history (e.g.
+  `wrld_sol`, `songz`) may be understating real losing exits this way --
+  needs re-verification including the excluded 64 rows before trusting any
+  "0.0 realized" reading. **FIXED live during this audit**
+  (`wallet_copy_shadow.py`, `summary()`): no-exit-price closures now surface
+  as `closed_unknown_exit_count` (still excluded from `realized_pnl_usd` --
+  never fabricate a fill price -- but no longer silently invisible), 2 new
+  regression tests added (18 total, all pass). **Second real gap, unrelated
+  to the PnL bug**: `summary()` has ZERO consumers anywhere in the codebase
+  outside its own tests -- `heartbeat.py`'s `wallet_copy_shadow_cycle` only
+  calls `run_scan_cycle()` (the scanner), never `summary()`; no Telegram
+  command or API endpoint calls it either. The mechanism computes a real,
+  sourced per-wallet verdict but the operator has no way to see it short of
+  a session running it by hand, as this audit just did. Recommendation:
+  wire a consumption path (Telegram command or a periodic report) before
+  this becomes a second "ran for months, nobody ever looked" case -- or
+  state explicitly it's an intentional data-collection-only phase for now.
 - [ ] T006 [P] [US1] Farcaster / GitHub / web signal cascade -- aggregate
   `signal_cascade_triage_queue` for candidates that ever cleared real
   convergence (`convergence_count` threshold), not just cycle-pass counts

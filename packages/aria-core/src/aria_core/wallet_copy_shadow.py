@@ -485,15 +485,28 @@ async def summary() -> dict[str, dict]:
             rows = await cursor.fetchall()
             closed_pnl_usd = 0.0
             closed_count = 0
+            closed_unknown_exit_count = 0
             open_latent_pnl_usd = 0.0
             open_count = 0
             lo, hi = _PLAUSIBLE_PRICE_RATIO_BOUNDS
             for status, entry, exit_, mark in rows:
                 if not entry or entry <= 0:
                     continue
-                if status == "closed" and exit_:
-                    if not (lo <= exit_ / entry <= hi):
-                        continue  # dust/spam-price artifact, cf. _MIN_POOL_LIQUIDITY_USD_FOR_PRICE
+                if status == "closed":
+                    if not exit_ or not (lo <= exit_ / entry <= hi):
+                        # No exit price at all (audit 001-audit-code-sans,
+                        # T005, 25/08: 42% of real closures on this table
+                        # had none, presumably dried-up pools/failed price
+                        # lookups) OR a dust/spam-price artifact -- either
+                        # way we cannot invent a fill price (project norm:
+                        # never fabricate a data point), so this closure is
+                        # excluded from realized_pnl_usd. It MUST still be
+                        # counted somewhere instead of vanishing silently --
+                        # a wallet whose losing exits are disproportionately
+                        # price-unknown would otherwise read as far better
+                        # than its real closed-trade history.
+                        closed_unknown_exit_count += 1
+                        continue
                     closed_pnl_usd += POSITION_SIZE_USD * (exit_ / entry - 1.0)
                     closed_count += 1
                 elif status == "open":
@@ -509,6 +522,7 @@ async def summary() -> dict[str, dict]:
                 "last_transfer_at": last_transfer_at,
                 "closed_positions": closed_count,
                 "realized_pnl_usd": round(closed_pnl_usd, 2),
+                "closed_unknown_exit_count": closed_unknown_exit_count,
                 "open_positions": open_count,
                 "unrealized_pnl_usd": round(open_latent_pnl_usd, 2),
             }

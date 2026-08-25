@@ -260,6 +260,42 @@ async def test_summary_excludes_implausible_price_ratio_artifacts():
     entry = result[WALLET]
     assert entry["closed_positions"] == 1
     assert entry["realized_pnl_usd"] == pytest.approx(2_000.0)
+    # Excluded from the PnL sum, but must still be counted somewhere --
+    # audit 001-audit-code-sans T005 (25/08) found the prior code dropped
+    # this kind of row silently, understating a wallet's real losing-exit
+    # rate.
+    assert entry["closed_unknown_exit_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_closed_position_with_no_exit_price_separately():
+    """A position closed on-chain (real exit tx) but with no price ever
+    resolved (dried-up pool, failed lookup) must not vanish from the
+    summary -- it cannot be invented into realized_pnl_usd (no fabricated
+    data point), but it must be visible via closed_unknown_exit_count so a
+    wallet's real losing-exit rate isn't understated. Regression test for
+    the bug found live during audit 001-audit-code-sans, T005 (25/08): 64 of
+    151 real closures on the prod table had no exit price and were silently
+    excluded from both the count and the PnL."""
+    await wcs._ensure_tables()
+    import aiosqlite
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO wallet_copy_shadow_position "
+            "(wallet_address, wallet_label, contract, entry_tx_hash, entry_price_usd, "
+            " entry_at, status, exit_tx_hash, exit_price_usd, exit_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'closed', ?, NULL, ?)",
+            (WALLET, META["label"], TOKEN, "0xentry", 1.0,
+             "2026-08-08T12:00:00Z", "0xnopriceexit", "2026-08-09T12:00:00Z"),
+        )
+        await db.commit()
+
+    result = await wcs.summary()
+    entry = result[WALLET]
+    assert entry["closed_positions"] == 0
+    assert entry["realized_pnl_usd"] == pytest.approx(0.0)
+    assert entry["closed_unknown_exit_count"] == 1
 
 
 
