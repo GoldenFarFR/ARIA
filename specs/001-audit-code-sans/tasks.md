@@ -297,24 +297,91 @@ evidence (a grep for callers, a live gate read), never left as a guess.
 measurable success criterion and the place it's checked -- written from the
 real measurement just taken, not guessed in advance of it.
 
-- [ ] T013 [US3] For every component marked KEEP in T002-T012, write its
+- [X] T013 [US3] For every component marked KEEP in T002-T012, write its
   success criterion (metric + query/check location) directly into
   `docs/HANDOFF_AUDIT_LIVRAISON.md` alongside its verdict. Depends on
   T002-T012 being resolved first -- no criteria to backfill before then.
 
+  Criteria (component -> measurable bar -> where to check):
+  - **Polymarket paper (T004, KEEP as-is)**: no new criterion needed --
+    already meets its design bar (win_probability>=0.85, 3-vote convergence,
+    real closed P&L). Re-check quarterly: `COUNT(*) GROUP BY strftime('%Y-%m', opened_at)`
+    on `polymarket_paper_position` should keep showing >=1 bet/week; a
+    silent drop to zero for 2+ weeks would itself be a new finding.
+  - **wallet_copy_shadow (T005, KEEP + wire a consumer)**: a wallet counts
+    as a real "worth copying" verdict only once `closed_positions >= 10`
+    AND `realized_pnl_usd > 0` AND `closed_unknown_exit_count` is under 20%
+    of its total closures (else the sample is too thin or too tainted by
+    unknown exits to trust) -- check via `wallet_copy_shadow.summary()`.
+    Separately: wire the already-fixed `summary()` into a Telegram command
+    or periodic report before the next audit pass, or this becomes a repeat
+    of the same "nobody ever looked" finding.
+  - **signal cascade falsifiability (T006, KEEP as an observer, don't wire
+    to real filtering)**: only promote the triage criterion to an actual
+    filter if `avg_return_validated_pct_no_top2 > avg_return_rejected_pct_no_top2`
+    holds on BOTH the 24h and 7d windows simultaneously, with
+    `enough_data=true` on both -- check via `signal_cascade_convergence.falsifiability_report()`.
+    Currently false on both windows even outlier-free; re-check monthly as
+    the sample (189 candidates so far) grows.
+  - **candle_staleness_shadow (T007, criterion IS the missing analysis)**:
+    graduate past shadow mode only once a forward-validation function
+    exists AND shows `would_flag=1` observations correlate with a real bad
+    outcome (cross-referenced against `wick_filter_shadow`/`ath_shadow` on
+    the same contract+timestamp) at a rate meaningfully above the flagged
+    rows' base rate (10.1%, full-table). No such function exists yet --
+    writing it is the next concrete step, not measuring against it today.
+  - **Sepolia autonomous pilot (T008, criterion is unmet, decision needed)**:
+    the "proven pipeline before mainnet" bar requires
+    `sepolia_autonomous_log` to show at least one real `outcome='ok'` swap
+    -- currently impossible until `ARIA_ONCHAIN_ANCHOR_ENABLED`/
+    `ARIA_LEDGER_ADDRESS` are wired (or the anchor step is explicitly
+    descoped from this rehearsal). Operator decision, not this audit's call.
+  - **Robinhood testnet rehearsal (T012, KEEP, needs its parent gate)**:
+    "proves it keeps working under continuous operation" requires at least
+    10 consecutive `status='ok'` rows in `agent_wallet_tx_log` (chain=
+    `robinhood_testnet`) once `ARIA_HOMEMADE_AGENT_WALLET_ENABLED` is armed
+    -- currently 0/4 attempts have even reached that logic (all blocked
+    upstream).
+  - **daily_trade_floor (T010, KEEP, already proved its point)**: no new
+    criterion -- it already delivered its diagnostic purpose during its
+    24h test window (Item #100, late July). Re-arm only for a new,
+    explicitly scoped test, not as a standing mechanism.
+
 ## Phase 6: Polish
 
-- [ ] T014 Write `docs/HANDOFF_AUDIT_LIVRAISON.md` (one `[STATUS] Subject /
+- [X] T014 Write `docs/HANDOFF_AUDIT_LIVRAISON.md` (one `[STATUS] Subject /
   Date / Probleme / Solution` entry per audited component, per the CLAUDE.md
   HANDOFF format) and add it to CLAUDE.md's "Index des HANDOFF" in the SAME
   commit (test_handoff_file_indexed_in_claude_md enforces this).
-- [ ] T015 For any live discrepancy found during T002-T012 (gate state vs
+  Done -- 11 entries + 1 incidental security note, `test_handoff_entries_use_valid_status_and_required_fields`
+  and `test_handoff_file_indexed_in_claude_md` both green.
+- [X] T015 For any live discrepancy found during T002-T012 (gate state vs
   documented state, a dead process, an orphaned consumer), open a
   `system_issues` entry so it survives past this audit's own report, per
   FR-003's reuse-existing-mechanisms requirement.
-- [ ] T016 Run `quickstart.md`'s resume/extend steps once against a component
+  Done -- 4 issues opened for the still-live, actionable divergences (bugs
+  already fixed in-commit don't need one, the commit itself is the trace):
+  #244 (CabalSpy orphaned consumer, high), #245 (x402 no third-party sale,
+  warning), #246 (3 orphaned wallet-scoring env vars, info), #247
+  (dip_recovery_shadow never enabled, info -- found during T016).
+- [X] T016 Run `quickstart.md`'s resume/extend steps once against a component
   NOT in the original scope, to confirm the method actually generalizes
   before calling this feature done.
+  **Done -- tested against `dip_recovery_shadow` (13/08, not in the original
+  scope).** Followed quickstart.md's steps: found its class (shadow observer,
+  same as candle_staleness_shadow), read its stated purpose in
+  `heartbeat.py` (operator-proposed -30%/24h dip-buy signal, shadow-tested
+  before ever building a live pocket), measured live (`summary()`: 0
+  everywhere; `dip_recovery_shadow`/`dip_recovery_shadow_episode_state`: 0
+  rows both; `heartbeat_state.json`: no `dip_recovery_shadow_cycle` entry at
+  all, ever; `ARIA_DIP_RECOVERY_SHADOW_ENABLED` unset in the real
+  container). **VERDICT: never delivered -- but a THIRD distinct shape from
+  the ones found in P1/P2**: not a bug, not orphaned-after-a-retirement,
+  not blocked by a parent gate -- built 13/08, wired into the heartbeat
+  scheduler, and its own dedicated gate has simply never been turned on
+  since. The method generalized cleanly to a component outside the original
+  scope without any adjustment. Added to `audit-scope.md` as evidence this
+  audit's scope is a floor, not a ceiling.
 
 ---
 

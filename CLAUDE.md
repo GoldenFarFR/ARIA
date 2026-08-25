@@ -510,6 +510,7 @@ from scratch.
 - `docs/HANDOFF_LANCEDB.md` — mémoire vectorielle sémantique (recherche par sens, pas mot-clé), extra `[vector]` du Dockerfile, bonnes pratiques LanceDB sourcées, risque memory-poisoning ASI06.
 - `docs/HANDOFF_CHAINSTACK.md` — Chainstack RPC provider (Solana polling, planned Robinhood Chain), pricing/RU billing model, RPS limits, node add-ons (Yellowstone gRPC, Warp, Unlimited Node), MCP-server tooling.
 - `docs/HANDOFF_DEFILLAMA.md` — DefiLlama market-data (free API vs Pro vs LlamaAI), verified TVL/DEX-volume-by-chain endpoints, candidate cross-check for the regime indicator.
+- `docs/HANDOFF_AUDIT_LIVRAISON.md` — audit of components that never delivered their expected result (seeded by the wallet-scoring lesson, `specs/001-audit-code-sans/`), 11 components checked, 3 real bugs found and fixed.
 - **This list must stay up to date**: any new `docs/HANDOFF_*.md` file created (a new
   component never touched before) gets added here in the SAME commit — a HANDOFF not
   indexed here is as invisible as a HANDOFF that doesn't exist.

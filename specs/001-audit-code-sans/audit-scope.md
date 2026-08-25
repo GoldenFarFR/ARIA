@@ -39,6 +39,12 @@ verdict from P1/P2 -- not scoped item by item here, since the criterion
 should be written knowing the real measurement just taken, not guessed in
 advance.
 
+## Generalization check (T016, outside the original scope)
+
+| Component | Expected output (per doc) | Class | Verdict |
+|---|---|---|---|
+| `dip_recovery_shadow` (13/08) | shadow-log an operator-proposed -30%/24h dip-buy signal, enough data to eventually judge it | 1 | Never delivered -- built and wired into the heartbeat scheduler, but `ARIA_DIP_RECOVERY_SHADOW_ENABLED` has never been turned on: 0 rows in both its tables, no entry ever in `heartbeat_state.json`. Neither a bug nor a post-retirement orphan -- simply never activated. |
+
 ## Explicitly out of scope for this pass
 
 - Guardrail files and real-capital paths themselves (FR-004) -- reported if
