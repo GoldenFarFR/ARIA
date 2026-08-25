@@ -1674,3 +1674,96 @@ def test_constitution_is_in_sync_with_claude_md():
         "and commit the result alongside the CLAUDE.md change. Never edit the "
         "constitution by hand: the next regeneration discards the edit."
     )
+
+
+def test_no_ghost_specs():
+    """A `specs/<NNN>-<name>/` chantier folder must not rot (25/08).
+
+    Why this is mechanical and not a discipline: an abandoned spec with
+    unchecked boxes is documentation that LIES -- a future session reads it,
+    believes work is pending on something dropped weeks ago, and acts on it.
+    That is precisely the drift that grew CLAUDE.md to ~200KB before the
+    July cleanup, reappearing in a new location.
+
+    Rules (operator-validated, 25/08):
+      - unchecked `- [ ]` boxes + untouched for >7 days  -> FAIL
+      - unless tagged `Status: ABANDONED` (final) or `Status: PAUSED`
+      - `PAUSED` needs an explicit resume date and expires after 30 days,
+        otherwise it is just an infinite postponement that voids the test.
+
+    Dates come from GIT, never file mtime: mtime is reset by any clone or
+    checkout, so an mtime-based test would silently pass forever in CI --
+    the exact failure mode this test exists to prevent.
+    """
+    import re
+    import subprocess
+    from datetime import datetime, timedelta, timezone
+
+    specs_root = REPO / "specs"
+    if not specs_root.is_dir():
+        return  # no chantier folder yet -- nothing to rot
+
+    STALE_AFTER = timedelta(days=7)
+    PAUSED_MAX = timedelta(days=30)
+    now = datetime.now(timezone.utc)
+    offenders: list[str] = []
+
+    for md in sorted(specs_root.rglob("*.md")):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        if not re.search(r"^\s*[-*]\s*\[ \]", text, re.MULTILINE):
+            continue  # nothing unchecked -> nothing to chase
+
+        rel = md.relative_to(REPO)
+        if re.search(r"^\s*Status:\s*ABANDONED\b", text, re.MULTILINE | re.IGNORECASE):
+            continue
+
+        try:
+            out = subprocess.run(
+                ["git", "log", "-1", "--format=%cI", "--", str(rel)],
+                cwd=REPO, capture_output=True, text=True, timeout=15,
+            ).stdout.strip()
+            last_touched = datetime.fromisoformat(out) if out else None
+        except (subprocess.SubprocessError, ValueError):
+            last_touched = None
+        if last_touched is None:
+            continue  # never committed yet (work in progress) -- not a ghost
+
+        paused = re.search(
+            r"^\s*Status:\s*PAUSED\b[^\n]*?(\d{4}-\d{2}-\d{2})",
+            text, re.MULTILINE | re.IGNORECASE,
+        )
+        if paused:
+            if now - last_touched > PAUSED_MAX:
+                offenders.append(
+                    f"{rel}: PAUSED for more than 30 days -- decide: finish it or "
+                    "mark `Status: ABANDONED`"
+                )
+            else:
+                try:
+                    resume = datetime.fromisoformat(paused.group(1)).replace(tzinfo=timezone.utc)
+                    if now > resume + PAUSED_MAX:
+                        offenders.append(f"{rel}: PAUSED resume date {paused.group(1)} long past")
+                except ValueError:
+                    offenders.append(f"{rel}: PAUSED has an unparseable resume date")
+            continue
+
+        if re.search(r"^\s*Status:\s*PAUSED\b", text, re.MULTILINE | re.IGNORECASE):
+            offenders.append(
+                f"{rel}: `Status: PAUSED` without a resume date (format: "
+                "`Status: PAUSED (resume: YYYY-MM-DD)`) -- an unbounded pause is "
+                "just an infinite postponement"
+            )
+            continue
+
+        if now - last_touched > STALE_AFTER:
+            days = (now - last_touched).days
+            offenders.append(
+                f"{rel}: unchecked tasks, untouched for {days} days"
+            )
+
+    assert not offenders, (
+        "ghost spec(s) found -- a spec with pending work that nobody is doing is "
+        "documentation that lies to the next session. Finish it, or tag it "
+        "`Status: ABANDONED`, or `Status: PAUSED (resume: YYYY-MM-DD)`:\n  "
+        + "\n  ".join(offenders)
+    )
