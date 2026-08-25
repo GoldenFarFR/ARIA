@@ -440,6 +440,9 @@ async def test_feed_start_subscribes_and_applies_a_real_notification(monkeypatch
             await asyncio.sleep(0.02)
         assert snap is not None and snap.available is True
         assert snap.price_usd == pytest.approx(2.0 * 150.0)
+        # specs/007-solana-chainstack-wss T003 -- real push-rate counters.
+        assert feed.notification_count == 2
+        assert feed.pool_count == 1
     finally:
         await feed.stop()
 

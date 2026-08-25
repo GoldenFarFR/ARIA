@@ -533,6 +533,28 @@ class PumpSwapWebSocketFeed:
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
 
+        # 25/08, specs/007-solana-chainstack-wss T003 -- real push-rate
+        # measurement before any provider migration (never guessed, same
+        # doctrine as every other throughput number in this dome). This
+        # feed's own accountNotification volume determines whether moving it
+        # to Chainstack (1 RU/push, same billing as Base/Robinhood's WS
+        # feeds -- confirmed live via Chainstack's own docs) leaves real
+        # headroom under Solana's 175k/day cap, already shared with
+        # pumpfun_curve_tracker.py's polling.
+        self._notification_count: int = 0
+
+    @property
+    def notification_count(self) -> int:
+        """Cumulative real accountNotification count since this feed
+        started -- see ``_notification_count``'s own docstring. A caller
+        logs this periodically (delta over a known interval) to measure the
+        real push rate, never guessed."""
+        return self._notification_count
+
+    @property
+    def pool_count(self) -> int:
+        return len(self._pools)
+
     # --- pool management ------------------------------------------------
 
     async def add_pools(self, pool_addresses: list[str]) -> int:
@@ -845,6 +867,7 @@ class PumpSwapWebSocketFeed:
                 continue
             if msg.get("method") != "accountNotification":
                 continue
+            self._notification_count += 1
             self._apply_notification(msg, self._sub_id_to_account)
 
     async def _run_loop(self) -> None:

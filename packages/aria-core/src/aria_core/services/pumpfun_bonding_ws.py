@@ -600,6 +600,20 @@ class PumpFunBondingWebSocketFeed:
     # --- read side ----------------------------------------------------------
 
     @property
+    def notification_count(self) -> int:
+        """25/08, specs/007-solana-chainstack-wss T004 -- real push-rate
+        measurement before any provider migration, same doctrine as every
+        other throughput number in this dome. Sums the per-pool trade-flow
+        counters already tracked (``_trades_total``) rather than adding a
+        second counter -- every accountNotification IS a trade for a bonding
+        curve (see ``_handle_account_notification``'s own comment)."""
+        return sum(self._trades_total.values())
+
+    @property
+    def pool_count(self) -> int:
+        return len(self._curves)
+
+    @property
     def sol_usd(self) -> float | None:
         """The calibrated SOL/USD rate, or None while uncalibrated.
 

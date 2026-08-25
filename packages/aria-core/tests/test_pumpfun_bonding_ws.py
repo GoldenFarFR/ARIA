@@ -49,6 +49,10 @@ def test_a_rising_quote_reserve_counts_as_a_buy():
 
     assert feed._buys_since_read.get("poolA") == 1
     assert feed._sells_since_read.get("poolA", 0) == 0
+    # specs/007-solana-chainstack-wss T004 -- real push-rate counter (sums
+    # _trades_total, so this test's direct _apply_notification calls already
+    # exercise it -- pool_count is add_pools-driven, tested separately).
+    assert feed.notification_count == 2
 
 
 def test_a_falling_quote_reserve_counts_as_a_sell():
@@ -69,6 +73,13 @@ def test_the_very_first_notification_is_not_counted_as_a_direction():
     assert feed._buys_since_read.get("poolA", 0) == 0
     assert feed._sells_since_read.get("poolA", 0) == 0
     assert feed._trades_total.get("poolA") == 1  # still counted as activity
+
+
+def test_pool_count_reflects_tracked_curves():
+    feed, _ids = _feed_with()
+    feed._curves["poolA"] = object()
+    feed._curves["poolB"] = object()
+    assert feed.pool_count == 2
 
 
 def test_counters_are_dropped_when_a_pool_is_unsubscribed():
