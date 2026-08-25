@@ -133,6 +133,7 @@ from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener, doppler
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
+from aria_core.skills import chain_liquidity_regime
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
     OHLCVResult,
@@ -802,6 +803,17 @@ async def record_signals(
                     # were otherwise GOOD -- it is the market being refused,
                     # not the token.
                     await _refuse("blocked_regime_closed")
+                    continue
+
+                # 25/08 -- exogenous confirmation, see
+                # skills/chain_liquidity_regime.py's module docstring. Same
+                # reasoning as base_momentum_shadow.py's own 25/08 addition:
+                # the gate above is ENDOGENOUS and blind right after a reset,
+                # this one reads DefiLlama's real chain TVL/volume instead.
+                # Fail-open on anything but a CONFIRMED toxic spike.
+                chain_regime = await chain_liquidity_regime.latest_regime(chain)
+                if chain_regime and chain_regime["regime"] == chain_liquidity_regime.REGIME_TOXIC_SPIKE:
+                    await _refuse(f"blocked_regime_defillama: {chain_regime['detail']}")
                     continue
 
                 transactions_m15 = pool.transactions_m15 or {}

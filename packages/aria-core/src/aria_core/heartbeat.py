@@ -127,7 +127,9 @@ HEARTBEAT_TASKS = [
                     "EVM chains scanned by /walletscore, among the 13 "
                     "confirmed Blockscout x GeckoTerminal (#157, 07/14).",
         interval_minutes=43200,  # ~30 days -- explicit operator decision (monthly, not daily)
-        enabled=True,  # read-only, graceful degradation if DefiLlama unavailable -- low risk
+        # 25/08 -- forced OFF (operator decision, "debranche tout" on the
+        # wallet-scoring mechanism this ranking exists only to feed).
+        enabled=False,
     ),
     HeartbeatTask(
         id="tweet_schedule",
@@ -563,6 +565,13 @@ HEARTBEAT_TASKS = [
         name="Sentiment de marche continu",
         description="Rafraichit SANS expiration la lecture de sentiment (RSI/Bollinger/momentum/retracement, deterministe, aucun LLM) des paires principales (BTC, ETH) -- vocabulaire aligne sur le Wall St Cheat Sheet, regroupe en regimes mesurables. Ecrase toujours la derniere lecture (aucun cache perime) ; une paire en echec de fetch n'interrompt pas les autres. Gate OFF par defaut.",
         interval_minutes=60,
+        enabled=False,
+    ),
+    HeartbeatTask(
+        id="chain_liquidity_regime_cycle",
+        name="Regime de liquidite par chaine (DefiLlama, exogene)",
+        description="Rafraichit SANS expiration, pour Base/Robinhood/Solana, un signal de regime EXOGENE (TVL+volume DefiLlama vs EWMA 30j, confirmation TVL 3-7j) complementaire au regime ENDOGENE de chaque poche shadow (ses propres pics recents) -- utile des le jour 1 apres un reset, contrairement au signal endogene qui doit d'abord reaccumuler des candidats. Fail-open : seul un pic confirme TOXIQUE bloque une entree, jamais une donnee absente/insuffisante. Gate OFF par defaut.",
+        interval_minutes=180,
         enabled=False,
     ),
     HeartbeatTask(
@@ -1012,6 +1021,10 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.skills.market_alerts import market_alerts_enabled
 
                 task.enabled = market_alerts_enabled()
+            if task.id == "chain_liquidity_regime_cycle":
+                from aria_core.skills.chain_liquidity_regime import chain_liquidity_regime_enabled
+
+                task.enabled = chain_liquidity_regime_enabled()
             if task.id == "bonding_discovery_cycle":
                 from aria_core.skills.bonding_absorber import bonding_discovery_enabled
 
@@ -1145,7 +1158,7 @@ def heartbeat_pulse() -> dict:
     safe_keys = (
         "vc_crawl", "vc_weekly_forecast", "vc_radar_x", "vc_thesis_review", "paper_trade_cycle",
         "momentum_discovery_cycle", "paper_weekly_review_cycle", "market_sentiment_cycle",
-        "market_alerts_cycle",
+        "market_alerts_cycle", "chain_liquidity_regime_cycle",
     )
     cycles = {k: state[k] for k in safe_keys if state.get(k)}
     return {"alive": last_tick is not None, "last_tick": last_tick, "cycles": cycles}
@@ -2091,6 +2104,17 @@ class AriaHeartbeat:
                     f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
                     + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
                 )
+
+        elif task_id == "chain_liquidity_regime_cycle":
+            from aria_core.skills import chain_liquidity_regime
+
+            for chain in ("base", "robinhood", "solana"):
+                reading = await chain_liquidity_regime.run_chain_regime_cycle(chain)
+                if reading.regime != chain_liquidity_regime.REGIME_INSUFFICIENT:
+                    append_memory(
+                        "chain_liquidity_regime",
+                        f"[regime {chain}] {reading.regime} -- {reading.detail}",
+                    )
 
         elif task_id == "market_alerts_cycle":
             from aria_core.skills.market_alerts import run_market_alerts_cycle

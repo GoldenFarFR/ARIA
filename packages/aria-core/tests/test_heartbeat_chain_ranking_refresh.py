@@ -11,8 +11,10 @@ def _task(task_id: str) -> heartbeat.HeartbeatTask:
     return match[0]
 
 
-def test_chain_ranking_refresh_registered_monthly_and_enabled():
+def test_chain_ranking_refresh_registered_monthly():
+    """25/08 -- forced OFF (operator decision, "débranche tout" on the
+    wallet-scoring mechanism this ranking exists only to feed)."""
     task = _task("wallet_scoring_chain_ranking_refresh")
 
     assert task.interval_minutes == 43200
-    assert task.enabled is True
+    assert task.enabled is False

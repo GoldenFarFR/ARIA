@@ -135,6 +135,7 @@ from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.risk_guard import DEX_SWAP_FEE_PCT as _BASE_DEX_SWAP_FEE_FRACTION
 from aria_core.services import dexpaprika, dexscreener, doppler
+from aria_core.skills import chain_liquidity_regime
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.services.geckoterminal import (
     GeckoTerminalClient,
@@ -807,6 +808,22 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
                     # were otherwise GOOD -- it is the market being refused,
                     # not the token.
                     await _refuse("blocked_regime_closed")
+                    continue
+
+                # 25/08 -- exogenous confirmation, see
+                # skills/chain_liquidity_regime.py's module docstring. The
+                # gate above is ENDOGENOUS (this pocket's own recent peaks) --
+                # blind right after a reset until REGIME_WINDOW fresh
+                # candidates re-accumulate. This reads DefiLlama's real
+                # TVL/volume for the chain, independent of anything this
+                # pocket has screened, so it has an opinion from day one.
+                # Fail-open on anything but a CONFIRMED toxic spike (no
+                # reading yet / calm / healthy inflow all read as OPEN) --
+                # same doctrine as the gate above: no opinion must never be
+                # the thing that stops the pocket trading.
+                chain_regime = await chain_liquidity_regime.latest_regime(chain)
+                if chain_regime and chain_regime["regime"] == chain_liquidity_regime.REGIME_TOXIC_SPIKE:
+                    await _refuse(f"blocked_regime_defillama: {chain_regime['detail']}")
                     continue
 
                 transactions_m15 = pool.transactions_m15 or {}

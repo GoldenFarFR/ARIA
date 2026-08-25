@@ -1632,6 +1632,33 @@ class TestRegimeGate:
         assert "blocked_regime_closed" in reasons
 
     @pytest.mark.asyncio
+    async def test_record_signals_blocks_on_a_confirmed_toxic_defillama_regime(self, monkeypatch):
+        """25/08 -- the exogenous check must block even when the endogenous
+        gate above has no opinion yet (fresh table, < REGIME_WINDOW samples)."""
+        async def _toxic(_chain):
+            return {"regime": "pic_toxique", "detail": "volume 2.10x son EWMA 30j MAIS TVL -15.0%"}
+
+        monkeypatch.setattr(shadow.chain_liquidity_regime, "latest_regime", _toxic)
+
+        seen = []
+
+        async def _capture(decision, **_kw):
+            seen.append(decision)
+            return 1
+
+        from aria_core import pretrade_rejection_log
+        original = pretrade_rejection_log.record_decision
+        pretrade_rejection_log.record_decision = _capture
+        try:
+            await shadow.record_signals([_pool(pool_address="poolToxic", token_address="tokToxic")], chain=CHAIN)
+        finally:
+            pretrade_rejection_log.record_decision = original
+
+        assert await _rows() == [], "a confirmed toxic exogenous regime must block the insert entirely"
+        reasons = [d.reason for d in seen]
+        assert any(r and r.startswith("blocked_regime_defillama") for r in reasons)
+
+    @pytest.mark.asyncio
     async def test_record_signals_still_opens_when_regime_is_disarmed(self, monkeypatch):
         """Default production posture (REGIME_MIN_MEDIAN_PEAK_PCT=25.0, but a
         fresh table has < REGIME_WINDOW samples) must leave record_signals

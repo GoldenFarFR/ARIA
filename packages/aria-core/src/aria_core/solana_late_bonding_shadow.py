@@ -59,6 +59,7 @@ from aria_core import db_migrations
 
 from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive
 from aria_core.paths import ensure_wal, shadow_db_path
+from aria_core.skills import chain_liquidity_regime
 from aria_core.services.solana_rpc_budget import Priority
 from aria_core.services import solana_rpc_budget
 from aria_core.services.pumpfun_bonding_ws import (
@@ -1468,6 +1469,15 @@ async def consider_candidate(
                     # otherwise GOOD -- it is the market being refused, not the
                     # token.
                     accepted, reason = False, "blocked_regime_closed"
+                else:
+                    # 25/08 -- exogenous confirmation, see
+                    # skills/chain_liquidity_regime.py's module docstring. The
+                    # gate above is ENDOGENOUS and blind right after a reset,
+                    # this one reads DefiLlama's real chain TVL/volume instead.
+                    # Fail-open on anything but a CONFIRMED toxic spike.
+                    chain_regime = await chain_liquidity_regime.latest_regime(chain)
+                    if chain_regime and chain_regime["regime"] == chain_liquidity_regime.REGIME_TOXIC_SPIKE:
+                        accepted, reason = False, f"blocked_regime_defillama: {chain_regime['detail']}"
 
         # Logged on BOTH branches, same discipline as the other pockets: a
         # filter can only be judged against what it let through.

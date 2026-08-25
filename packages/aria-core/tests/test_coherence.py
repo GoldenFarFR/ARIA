@@ -810,6 +810,11 @@ _KNOWN_ENABLED_GATES = {
     # pocket wired to it yet. OFF by default.
     "ARIA_CANDLE_HISTORY_WATCHLIST_ENABLED",
     "ARIA_CANONICAL_FACTS_SYNC_ENABLED",
+    # 25/08 -- chain_liquidity_regime.py: exogenous chain-level regime gate
+    # (DefiLlama TVL/DEX-volume EWMA), feeds base/robinhood/solana shadow
+    # pockets' accept/reject alongside their existing endogenous regime_state().
+    # OFF by default, standalone read+log heartbeat cycle.
+    "ARIA_CHAIN_LIQUIDITY_REGIME_ENABLED",
     "ARIA_CLAUDE_MENTOR_ENABLED",
     "ARIA_CODE_PROPOSAL_ENABLED",
     "ARIA_CONVICTION_RESEARCH_ENABLED",

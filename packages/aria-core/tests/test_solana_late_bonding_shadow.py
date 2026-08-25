@@ -2311,6 +2311,24 @@ class TestRegimeGate:
         assert after == before + 1, "the gate being shut must not starve its own sensor"
 
     @pytest.mark.asyncio
+    async def test_consider_candidate_blocks_on_a_confirmed_toxic_defillama_regime(self, _tmp_db, monkeypatch):
+        """25/08 -- the exogenous check must block even when the endogenous
+        gate above has no opinion yet (fresh table, < REGIME_WINDOW samples)."""
+        async def _toxic(_chain):
+            return {"regime": "pic_toxique", "detail": "volume 2.10x son EWMA 30j MAIS TVL -15.0%"}
+
+        monkeypatch.setattr(pocket.chain_liquidity_regime, "latest_regime", _toxic)
+
+        got = await pocket.consider_candidate(
+            "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+            snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+        )
+
+        assert got is None
+        rows = await _rows(_tmp_db)
+        assert rows == []
+
+    @pytest.mark.asyncio
     async def test_recording_a_candidate_never_raises(self, _tmp_db):
         """A measurement must not cost a trade: a bad entry_price is ignored,
         not propagated."""
