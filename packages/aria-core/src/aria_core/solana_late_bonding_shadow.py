@@ -2164,7 +2164,9 @@ async def _apply_exit_check(
                 result.get("exit_detail"),
                 _reinforced_multiplier(
                     row,
-                    result.get("realistic_final_multiplier") or result.get("final_multiplier"),
+                    result.get("realistic_final_multiplier")
+                    if result.get("realistic_final_multiplier") is not None
+                    else result.get("final_multiplier"),
                 ),
                 # Without this the rung marker never survives the call and every
                 # rung re-fires ~every 10s, selling the whole position at the

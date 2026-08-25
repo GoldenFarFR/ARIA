@@ -131,7 +131,9 @@ def replay_one(entry: dict, path: list[dict], **params) -> tuple[str, float, boo
             continue
         state["peak_price"] = result["peak_price"]
         if result.get("exit_reason"):
-            mult = result.get("realistic_final_multiplier") or result.get("final_multiplier")
+            mult = result.get("realistic_final_multiplier")
+            if mult is None:
+                mult = result.get("final_multiplier")
             if mult is None:
                 return None
             return result["exit_reason"], (mult - 1) * 100, False

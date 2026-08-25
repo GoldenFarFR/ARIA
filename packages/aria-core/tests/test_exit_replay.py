@@ -92,6 +92,30 @@ async def test_the_sweep_ranks_by_the_outlier_tested_figure(db):
     assert ranked == sorted(ranked, reverse=True)
 
 
+def test_a_zero_realistic_multiplier_is_not_overwritten_by_the_fallback(monkeypatch):
+    """0.0 is a legitimate total-loss multiplier, not an absent value -- the
+    former `or` fallback treated it as falsy and silently substituted the
+    (higher) simulated multiplier instead, hiding the real loss."""
+    def fake_evaluate_exit(state, **kwargs):
+        return {
+            "peak_price": state["entry_price"],
+            "exit_reason": "trailing_stop",
+            "realistic_final_multiplier": 0.0,
+            "final_multiplier": 0.8,
+        }
+
+    monkeypatch.setattr(exit_replay, "evaluate_exit", fake_evaluate_exit)
+
+    entry = {"entry_price": 1.0, "realistic_entry_price": 1.0}
+    path = [{"price_usd": 1.0}, {"price_usd": 0.0}, {"price_usd": 0.0}]
+
+    got = exit_replay.replay_one(entry, path)
+
+    assert got is not None
+    _, pnl_pct, _ = got
+    assert pnl_pct == pytest.approx(-100.0)
+
+
 @pytest.mark.asyncio
 async def test_the_replay_uses_the_production_rule_itself():
     """A replay measuring a copy of the rule measures nothing about the rule."""

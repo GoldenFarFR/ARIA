@@ -1535,6 +1535,47 @@ async def test_a_position_crossing_and_closing_in_one_check_still_counts(_tmp_db
     assert row["reinforced_final_multiplier"] is not None
 
 
+@pytest.mark.asyncio
+async def test_a_zero_realistic_multiplier_is_not_overwritten_by_the_fallback(_tmp_db, monkeypatch):
+    """0.0 is a legitimate total-loss multiplier, not an absent value -- the
+    former `or` fallback treated it as falsy and silently substituted the
+    (higher) simulated multiplier into the reinforced PnL, hiding the real
+    loss on the exact trades reinforcement would have hurt most."""
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    entry = (await _rows(_tmp_db))[0]["entry_price"]
+
+    def _fake_evaluate_exit(row, **kwargs):
+        return {
+            "peak_price": row["entry_price"],
+            "exit_reason": "trailing_stop",
+            "remaining_qty": 0.0,
+            "realized_proceeds": 0.0,
+            "realistic_realized_proceeds": 0.0,
+            "realistic_final_multiplier": 0.0,
+            "final_multiplier": 0.8,
+        }
+
+    monkeypatch.setattr(pocket, "evaluate_exit", _fake_evaluate_exit)
+
+    class _SpikeThenTotalLoss:
+        def get_snapshot(self, _pool):
+            return SimpleNamespace(available=True, price_usd=0.0,
+                                   reserve_usd=0.0, dex_id="pumpfun",
+                                   price_high_since_last_read=entry * 1.60,
+                                   price_low_since_last_read=0.0)
+
+    await pocket.advance_exit_simulation(bonding_ws_feed=_SpikeThenTotalLoss(), db_path=_tmp_db)
+    row = (await _rows(_tmp_db))[0]
+    assert row["reinforce_price"] == pytest.approx(entry * 1.30)
+    assert row["exit_reason"] == "trailing_stop"
+    # The realistic multiplier was 0.0 (total loss) -- the reinforced PnL
+    # must reflect that, not the simulated 0.8 the buggy `or` fallback used.
+    assert row["reinforced_final_multiplier"] == pytest.approx(0.0, abs=1e-9)
+
+
 # --- real-execution seam (21/08) ---
 
 @pytest.mark.asyncio
