@@ -12,6 +12,7 @@ from aria_core import fresh_launch_segment_forward_test as fwd
 
 TABLE = fwd.POCKET_TABLES["fast_discovery"]
 SINCE = "2026-08-20T20:00:00+00:00"
+_SENTINEL_USE_MULTIPLIER = object()
 
 
 @pytest.fixture
@@ -23,7 +24,8 @@ async def db_path(tmp_path):
             CREATE TABLE {TABLE} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 detected_at TEXT, reserve_usd REAL, rugcheck_top_holder_pct REAL,
-                exit_reason TEXT, final_multiplier REAL, realistic_final_multiplier REAL
+                exit_reason TEXT, final_multiplier REAL, realistic_final_multiplier REAL,
+                realistic_entry_price REAL, realistic_realized_proceeds REAL
             )
             """
         )
@@ -33,17 +35,32 @@ async def db_path(tmp_path):
 
 async def _insert(
     path, *, reserve_usd=8000.0, top_holder=50.0, multiplier=1.2,
-    detected_at=None, exit_reason="trailing_stop", realistic=None,
+    detected_at=None, exit_reason="trailing_stop", realistic=_SENTINEL_USE_MULTIPLIER,
+    # 25/08 -- fillable at entry by default (matches every other shadow
+    # module's own test convention), so pre-existing tests that never asked
+    # about realistic_entry_price keep being counted the way they were before
+    # this column existed. Pass None explicitly to test the never-fillable
+    # (entry itself unreachable) exclusion path instead.
+    realistic_entry_price=1.0, realistic_realized_proceeds=None,
 ):
     if detected_at is None:
         detected_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    if realistic is _SENTINEL_USE_MULTIPLIER:
+        # Default: no distinct realistic reading -- mirrors the nominal
+        # multiplier, same doctrine as the other shadow test files'
+        # realistic_entry_price sentinel. A test exercising the
+        # nominal-vs-realistic distinction (or the stranded/never-fillable
+        # paths) passes `realistic=` explicitly.
+        realistic = multiplier
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""INSERT INTO {TABLE}
                 (detected_at, reserve_usd, rugcheck_top_holder_pct, exit_reason,
-                 final_multiplier, realistic_final_multiplier)
-                VALUES (?, ?, ?, ?, ?, ?)""",
-            (detected_at, reserve_usd, top_holder, exit_reason, multiplier, realistic),
+                 final_multiplier, realistic_final_multiplier, realistic_entry_price,
+                 realistic_realized_proceeds)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (detected_at, reserve_usd, top_holder, exit_reason, multiplier, realistic,
+             realistic_entry_price, realistic_realized_proceeds),
         )
         await db.commit()
 
@@ -93,6 +110,35 @@ async def test_realistic_multiplier_wins_over_the_nominal_one(db_path):
     report = await fwd.build_report(since=SINCE, db_path=db_path)
 
     assert report.segment.avg_pnl_pct == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_a_stranded_mid_hold_position_counts_as_a_real_loss_not_the_nominal(db_path):
+    """25/08, real bug found live (twin of shadow_notify.py's 23/08 fix and
+    solana_late_bonding_shadow.summary()'s 25/08 fix): a position genuinely
+    bought (realistic_entry_price NOT NULL) but stranded mid-hold by a
+    liquidity collapse (realistic_final_multiplier NULL) used to fall back to
+    the nominal final_multiplier via COALESCE -- crediting a candidate filter
+    with an edge that was really just diluted rug exposure scored at an
+    optimistic price. Must score the real salvaged-vs-entry loss instead."""
+    await _insert(db_path, multiplier=5.0, realistic=None, realistic_entry_price=1.0)
+
+    report = await fwd.build_report(since=SINCE, db_path=db_path)
+
+    assert report.segment.n == 1
+    assert report.segment.avg_pnl_pct == pytest.approx(-100.0)
+
+
+@pytest.mark.asyncio
+async def test_a_position_never_fillable_at_entry_stays_excluded(db_path):
+    """Twin of the test above -- an entry that was never genuinely fillable
+    (realistic_entry_price NULL, too thin from the start) must stay excluded:
+    this trade never really happened, unlike a stranded mid-hold position."""
+    await _insert(db_path, multiplier=0.1, realistic=None, realistic_entry_price=None)
+
+    report = await fwd.build_report(since=SINCE, db_path=db_path)
+
+    assert report.segment.n == 0
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 import aiosqlite
 
 from .paths import shadow_db_path
+from .shadow_notify import _EFFECTIVE_REALISTIC_MULT_SQL
 
 # Frozen at the instant the hypothesis was formed -- see the module docstring
 # on why the in-sample closures must be excluded from the verdict.
@@ -113,7 +114,22 @@ class ForwardTestReport:
 def _stats_sql(table: str, *, segment: bool) -> str:
     """`top_holder IS NULL` counts as OUTSIDE the segment on purpose: an
     unenriched row is not evidence the token was clean, and a forward test
-    that quietly credits itself with unknowns proves nothing."""
+    that quietly credits itself with unknowns proves nothing.
+
+    **25/08, real bug found live** (twin of shadow_notify.py's own 23/08 fix
+    and solana_late_bonding_shadow.summary()'s 25/08 fix): this used to read
+    ``COALESCE(realistic_final_multiplier, final_multiplier)``, which falls
+    back to the non-realistic multiplier for a position that was genuinely
+    bought (``realistic_entry_price`` NOT NULL) but then got stranded by a
+    mid-hold liquidity collapse -- a real rug scored at whatever optimistic
+    spot price the last tick showed instead of the salvaged-vs-entry loss it
+    actually was. A forward test comparing a candidate filter against a
+    control group on this biased number could credit a filter with an edge
+    that is really just diluted rug exposure. ``_EFFECTIVE_REALISTIC_MULT_SQL``
+    (imported from shadow_notify.py, the single source of this expression)
+    scores a stranded row's real salvaged proceeds instead; a row never
+    fillable at entry at all (``realistic_entry_price`` NULL) still correctly
+    stays excluded."""
     if segment:
         holder_clause = "rugcheck_top_holder_pct IS NOT NULL AND rugcheck_top_holder_pct < ?"
         reserve_clause = "reserve_usd >= ?"
@@ -122,11 +138,11 @@ def _stats_sql(table: str, *, segment: bool) -> str:
         reserve_clause = "(reserve_usd IS NULL OR reserve_usd < ?)"
     joiner = " AND " if segment else " OR "
     return f"""
-        SELECT COALESCE(realistic_final_multiplier, final_multiplier) - 1.0 AS pnl
+        SELECT {_EFFECTIVE_REALISTIC_MULT_SQL} - 1.0 AS pnl
         FROM {table}
         WHERE exit_reason IS NOT NULL AND exit_reason <> ''
           AND detected_at >= ?
-          AND COALESCE(realistic_final_multiplier, final_multiplier) IS NOT NULL
+          AND {_EFFECTIVE_REALISTIC_MULT_SQL} IS NOT NULL
           AND ({reserve_clause}{joiner}{holder_clause})
     """
 

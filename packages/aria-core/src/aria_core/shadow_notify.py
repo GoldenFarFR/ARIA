@@ -126,6 +126,15 @@ def exit_text(cfg: PocketNotifyConfig) -> str:
             f"| trailing -{m.TRAILING_STOP_PCT:.0f}%")
 
 
+_EFFECTIVE_REALISTIC_MULT_SQL = (
+    "CASE "
+    "WHEN realistic_final_multiplier IS NOT NULL THEN realistic_final_multiplier "
+    "WHEN realistic_entry_price IS NOT NULL "
+    "THEN COALESCE(realistic_realized_proceeds, 0.0) / realistic_entry_price "
+    "ELSE NULL END"
+)
+
+
 async def aggregate(cfg: PocketNotifyConfig) -> str:
     """Recent-first, cumulative-second, debit last -- same reading order
     across every pocket using this notifier.
@@ -149,25 +158,50 @@ async def aggregate(cfg: PocketNotifyConfig) -> str:
         underrated this pocket's real performance, not just overrated one.
       - base_momentum_shadow: 7 closures (too few to read anything into --
         noted for completeness, not a verdict), 6 never fillable.
-    Fixed by scoring ONLY rows with a real ``realistic_final_multiplier``."""
+    Fixed (that day) by scoring ONLY rows with a real ``realistic_final_multiplier``.
+
+    **25/08, second real bug found -- the 23/08 fix went one step too far.**
+    Operator question ("are rugs counted as a total loss?") triggered a
+    cross-pocket recheck: excluding every ``realistic_final_multiplier IS
+    NULL`` row conflates TWO different situations that must not share one
+    filter. (a) ``realistic_entry_price IS NULL`` -- the position was never
+    genuinely fillable even at entry (too thin from the start): correctly
+    excluded, this trade never happened. (b) ``realistic_entry_price IS NOT
+    NULL`` (a real, fillable entry) but ``realistic_final_multiplier IS NULL``
+    -- the position WAS entered for real and its pool THEN dried up mid-hold
+    (the exact liquidity-collapse case this session's diligence measured).
+    Case (b) is a genuine loss of deployed capital, not a fictional trade --
+    silently dropping it from the average is the textbook survivorship bias
+    already fixed once elsewhere (17/08, see ``chain_pnl_summary_realistic``'s
+    own ``stranded`` handling in robinhood_pump_shadow.py/base_momentum_
+    shadow.py). Verified live across all three tables sharing this notifier
+    before assuming the shape of the fix: base_momentum_shadow_log had 135 of
+    168 closures (80.4%) silently dropped this way, robinhood_pump_shadow_log
+    45 of 116 (38.8%), solana_pump_shadow_log 13 of 242 (5.4%) -- Base's
+    headline PnL was being computed from barely a fifth of its real closures.
+    Now scores case (b) rows using the SAME salvaged-proceeds formula as
+    ``chain_pnl_summary_realistic`` (``realistic_realized_proceeds /
+    realistic_entry_price``, 0 proceeds if nothing was ever sold -> -100%),
+    via ``_EFFECTIVE_REALISTIC_MULT_SQL`` -- case (a) stays excluded exactly
+    as the 23/08 fix intended."""
     m = cfg.module
     try:
         async with aiosqlite.connect(m.DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 f"SELECT COUNT(*) n, "
-                f"       AVG((realistic_final_multiplier-1)*100) pnl, "
-                f"       SUM(realistic_final_multiplier > 1) wins "
+                f"       AVG(({_EFFECTIVE_REALISTIC_MULT_SQL}-1)*100) pnl, "
+                f"       SUM({_EFFECTIVE_REALISTIC_MULT_SQL} > 1) wins "
                 f"FROM {m.TABLE} WHERE exit_reason IS NOT NULL "
-                f"AND realistic_final_multiplier IS NOT NULL"
+                f"AND realistic_entry_price IS NOT NULL"
             )
             cum = dict(await cur.fetchone())
             cur = await db.execute(
                 f"SELECT COUNT(*) n, "
-                f"       AVG((realistic_final_multiplier-1)*100) pnl, "
-                f"       SUM(realistic_final_multiplier > 1) wins "
+                f"       AVG(({_EFFECTIVE_REALISTIC_MULT_SQL}-1)*100) pnl, "
+                f"       SUM({_EFFECTIVE_REALISTIC_MULT_SQL} > 1) wins "
                 f"FROM (SELECT * FROM {m.TABLE} WHERE exit_reason IS NOT NULL "
-                f"      AND realistic_final_multiplier IS NOT NULL ORDER BY id DESC LIMIT 30)"
+                f"      AND realistic_entry_price IS NOT NULL ORDER BY id DESC LIMIT 30)"
             )
             rec = dict(await cur.fetchone())
             cur = await db.execute(f"SELECT COUNT(*) n FROM {m.TABLE} WHERE exit_reason IS NULL")

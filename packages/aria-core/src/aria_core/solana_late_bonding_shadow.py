@@ -2539,18 +2539,44 @@ async def advance_exit_simulation(
     return stats
 
 
+_EFFECTIVE_REALISTIC_MULT_SQL = (
+    "CASE "
+    "WHEN realistic_final_multiplier IS NOT NULL THEN realistic_final_multiplier "
+    "WHEN realistic_entry_price IS NOT NULL "
+    "THEN COALESCE(realistic_realized_proceeds, 0.0) / realistic_entry_price "
+    "ELSE NULL END"
+)
+
+
 async def summary(*, chain: str = "solana", since: str | None = None, db_path: str | None = None) -> dict:
     """Same shape as the sibling pockets' own summary, so the comparative
     report can treat all three identically.
 
     Reports from ``CONFIG_EPOCH`` by default -- closures from an earlier
     configuration are still in the table but are not averaged in. Pass
-    ``since`` explicitly to read any other window, including the full history."""
+    ``since`` explicitly to read any other window, including the full history.
+
+    **25/08, real bug found live** (operator question: "are rugs counted as a
+    total loss?" -- cross-pocket recheck of shadow_notify.py's own 23/08 fix
+    surfaced this twin). The old query used ``COALESCE(realistic_final_
+    multiplier, final_multiplier)``: a position that was genuinely bought
+    (``realistic_entry_price`` NOT NULL) but whose pool then dried up mid-hold
+    (``realistic_final_multiplier`` NULL, this pocket's own dominant
+    ``liquidity_collapse`` exit path) silently fell back to the NON-realistic,
+    zero-friction ``final_multiplier`` -- i.e. a real rug reported at whatever
+    optimistic price the last spot tick showed, not the salvaged-vs-entry loss
+    it actually was. ``_EFFECTIVE_REALISTIC_MULT_SQL`` now mirrors
+    ``chain_pnl_summary_realistic``'s own ``stranded`` handling in
+    robinhood_pump_shadow.py/base_momentum_shadow.py: a stranded row scores
+    ``realistic_realized_proceeds / realistic_entry_price`` (0 proceeds if
+    nothing was ever sold -> -100%), while a row whose ENTRY itself was never
+    fillable (``realistic_entry_price`` NULL -- this trade could never have
+    happened at all) stays excluded exactly as before."""
     await _ensure_table(db_path)
     async with aiosqlite.connect(db_path or _db_path()) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            f"SELECT COALESCE(realistic_final_multiplier, final_multiplier) AS m, "
+            f"SELECT {_EFFECTIVE_REALISTIC_MULT_SQL} AS m, "
             f"bonding_progress_at_entry AS p FROM {TABLE} "
             f"WHERE chain = ? AND exit_reason IS NOT NULL AND detected_at >= ? "
             f"ORDER BY last_checked_at ASC", (chain, since or CONFIG_EPOCH),
@@ -2589,10 +2615,10 @@ async def summary(*, chain: str = "solana", since: str | None = None, db_path: s
         # The 24h PnL spans configurations by construction, so it is a
         # THROUGHPUT-scale reading, never the figure to judge a setting on.
         cur = await db.execute(
-            f"SELECT AVG(COALESCE(realistic_final_multiplier, final_multiplier)) AS m, "
+            f"SELECT AVG({_EFFECTIVE_REALISTIC_MULT_SQL}) AS m, "
             f"COUNT(*) AS n FROM {TABLE} WHERE chain = ? AND exit_reason IS NOT NULL "
             f"AND last_checked_at >= replace(datetime('now','-24 hours'),' ','T') "
-            f"AND COALESCE(realistic_final_multiplier, final_multiplier) IS NOT NULL", (chain,),
+            f"AND {_EFFECTIVE_REALISTIC_MULT_SQL} IS NOT NULL", (chain,),
         )
         row24 = await cur.fetchone()
         avg_24h = (row24["m"] - 1) * 100 if row24["m"] is not None else None

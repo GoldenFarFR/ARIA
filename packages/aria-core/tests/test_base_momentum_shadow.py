@@ -66,9 +66,11 @@ class FakeClient:
     def __init__(
         self, price_by_pool: dict[str, float | None],
         ohlcv_by_pool: dict[str, OHLCVResult] | None = None,
+        reserve_by_pool: dict[str, float] | None = None,
     ):
         self._prices = price_by_pool
         self._ohlcv = dict(ohlcv_by_pool or {})
+        self._reserves = dict(reserve_by_pool or {})
         self.calls: list[str] = []
         self.ohlcv_calls: list[str] = []
 
@@ -77,7 +79,8 @@ class FakeClient:
         price = self._prices.get(pool_address)
         if price is None:
             return PoolSnapshot(pool_address=pool_address, available=False, error="unavailable")
-        return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=1000.0, available=True)
+        reserve = self._reserves.get(pool_address, 1000.0)
+        return PoolSnapshot(pool_address=pool_address, price_usd=price, reserve_usd=reserve, available=True)
 
     async def get_ohlcv(self, pool_address, *, network="base", mode="standard", **_kwargs):
         self.ohlcv_calls.append(pool_address)
@@ -510,6 +513,7 @@ async def test_snapshot_fallback_skips_dexscreener_without_a_token_address(monke
 async def _insert_open_row(
     *, pool_address="poolA", entry_price=1.0, minutes_ago=20.0, pool_age_minutes=None,
     realistic_entry_price=_SENTINEL_USE_ENTRY_PRICE, token_address=None, dex_id=None,
+    reserve_usd=None,
 ):
     detected_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     pool_created_at = (
@@ -527,11 +531,11 @@ async def _insert_open_row(
             """
             INSERT INTO base_momentum_shadow_log
                 (pool_address, token_address, chain, status, detected_at, entry_price, pool_created_at,
-                 realistic_entry_price, dex_id)
-            VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
+                 realistic_entry_price, dex_id, reserve_usd)
+            VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
             """,
             (pool_address, token_address, CHAIN, detected_at, entry_price, pool_created_at,
-             realistic_entry_price, dex_id),
+             realistic_entry_price, dex_id, reserve_usd),
         )
         await db.commit()
 
@@ -826,6 +830,56 @@ async def test_advance_exit_age_limit_ignored_when_age_unknown():
     assert counts["closed_age_limit"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_liquidity_collapse_force_closes_a_position():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=100000.0)
+    # Reserve fell to 40% of entry -- past the 50% LIQUIDITY_COLLAPSE_EXIT_PCT threshold.
+    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 40000.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 1
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "liquidity_collapse"
+    assert rows[0]["remaining_qty"] == 0.0
+    assert rows[0]["last_reserve_usd"] == pytest.approx(40000.0)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_liquidity_collapse_ignored_when_above_threshold():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=100000.0)
+    # Reserve down to 60% of entry -- still above the 50% threshold, not a collapse.
+    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 60000.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["last_reserve_usd"] == pytest.approx(60000.0)
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_liquidity_collapse_ignored_when_entry_reserve_unknown():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=None)
+    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 1.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_liquidity_collapse_takes_priority_over_age_limit():
+    await _insert_open_row(
+        pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0,
+        reserve_usd=100000.0,
+    )
+    # Losing (triggers age_limit on its own) AND reserve collapsed -- collapse must win.
+    client = FakeClient({"poolA": 0.95}, reserve_by_pool={"poolA": 10000.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["closed_liquidity_collapse"] == 1
+    assert counts["closed_age_limit"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] == "liquidity_collapse"
 
 
 @pytest.mark.asyncio

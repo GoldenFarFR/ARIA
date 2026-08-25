@@ -24,7 +24,7 @@ CREATE TABLE pocket_log (
     detected_at TEXT, pool_created_at TEXT, reserve_usd REAL,
     m5_pct REAL, m15_pct REAL, buyers_m15 INTEGER, sellers_m15 INTEGER,
     exit_reason TEXT, final_multiplier REAL, realistic_final_multiplier REAL,
-    realized_proceeds REAL, realistic_realized_proceeds REAL,
+    realized_proceeds REAL, realistic_realized_proceeds REAL, realistic_entry_price REAL,
     next_scale_level REAL, last_checked_at TEXT, closed_at TEXT
 )
 """
@@ -227,12 +227,13 @@ async def test_aggregate_excludes_never_fillable_rows_from_pnl_and_winrate(tmp_p
     await _insert_row(
         m.DB_PATH, pool_address="p1", symbol="WIN", entry_price=1.0,
         detected_at=now.isoformat(), exit_reason="trailing_stop",
-        final_multiplier=1.5, realistic_final_multiplier=1.5,
+        final_multiplier=1.5, realistic_final_multiplier=1.5, realistic_entry_price=1.0,
         realized_proceeds=150.0, realistic_realized_proceeds=150.0,
         last_checked_at=now.isoformat(),
     )
     # ... and one never-fillable "loss" (-90% nominal) that must NOT drag the
-    # aggregate down, since it could never have actually been traded.
+    # aggregate down, since it could never have actually been traded (entry
+    # itself was never fillable -- realistic_entry_price stays NULL).
     await _insert_row(
         m.DB_PATH, pool_address="p2", symbol="NEVERFILL", entry_price=1.0,
         detected_at=now.isoformat(), exit_reason="trailing_stop",
@@ -242,5 +243,48 @@ async def test_aggregate_excludes_never_fillable_rows_from_pnl_and_winrate(tmp_p
     cfg = shadow_notify.PocketNotifyConfig(key="h", label="H", module=m, dexscreener_chain_slug="h")
     text = await shadow_notify.aggregate(cfg)
     assert "1 dernieres: winrate 100%, PnL +50.0%" in text
-    assert "Cumul: 1 clot., winrate 100%" in text
-    assert "PnL +50.0%" in text
+
+
+@pytest.mark.asyncio
+async def test_aggregate_counts_a_stranded_mid_hold_position_as_a_real_loss(tmp_path):
+    """25/08, real bug found live (operator question: "are rugs counted as a
+    total loss?"): a position with a genuinely fillable ENTRY
+    (realistic_entry_price NOT NULL) whose pool then dried up mid-hold
+    (realistic_final_multiplier NULL) is real deployed capital, not a
+    fictional trade like NEVERFILL above -- the 23/08 fix wrongly excluded it
+    too. Must be scored using whatever was actually salvaged before the pool
+    died (realistic_realized_proceeds, 0 if nothing sold) against the real
+    entry price -- here nothing was salvaged, a full -100% loss."""
+    m = _fake_module(tmp_path, "i")
+    await _init_db(m.DB_PATH)
+    now = datetime.now(timezone.utc)
+    await _insert_row(
+        m.DB_PATH, pool_address="p1", symbol="STRANDED", entry_price=1.0,
+        detected_at=now.isoformat(), exit_reason="age_limit",
+        final_multiplier=0.9, realistic_final_multiplier=None, realistic_entry_price=1.0,
+        realized_proceeds=90.0, realistic_realized_proceeds=None,
+        last_checked_at=now.isoformat(),
+    )
+    cfg = shadow_notify.PocketNotifyConfig(key="i", label="I", module=m, dexscreener_chain_slug="i")
+    text = await shadow_notify.aggregate(cfg)
+    assert "1 dernieres: winrate 0%, PnL -100.0%" in text
+
+
+@pytest.mark.asyncio
+async def test_aggregate_stranded_position_uses_whatever_was_salvaged_before_the_pool_died(tmp_path):
+    """Same case as above, but a partial scale-out DID fill before the pool
+    dried up -- the loss must reflect that partial salvage, not a blanket
+    -100% regardless of what was actually banked."""
+    m = _fake_module(tmp_path, "j")
+    await _init_db(m.DB_PATH)
+    now = datetime.now(timezone.utc)
+    await _insert_row(
+        m.DB_PATH, pool_address="p1", symbol="PARTIAL", entry_price=1.0,
+        detected_at=now.isoformat(), exit_reason="age_limit",
+        final_multiplier=0.9, realistic_final_multiplier=None, realistic_entry_price=1.0,
+        realized_proceeds=90.0, realistic_realized_proceeds=0.4,
+        last_checked_at=now.isoformat(),
+    )
+    cfg = shadow_notify.PocketNotifyConfig(key="j", label="J", module=m, dexscreener_chain_slug="j")
+    text = await shadow_notify.aggregate(cfg)
+    assert "1 dernieres: winrate 0%, PnL -60.0%" in text

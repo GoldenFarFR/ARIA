@@ -242,6 +242,21 @@ SCALE_OUT_SELL_FRACTION = 0.25  # sell 25% of the REMAINING (not original) posit
 TRAILING_STOP_PCT = 20.0  # close the rest if price falls 20% below the running high since entry
 MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibrated rule's own max-hold
 
+# 25/08 -- twin of robinhood_pump_shadow.py's own addition the day before
+# (24/08), found missing here by a cross-pocket recheck triggered by the
+# operator's question ("are rugs counted as a total loss?"). Nothing
+# protected an already-open Base position against its pool's reserve
+# collapsing mid-hold -- only entry-time MIN_LIQUIDITY_USD existed. Same
+# value, BORROWED not independently calibrated for Base's own market
+# (Doctrine d'Ingestion: a conservative hypothesis beats leaving a measured
+# gap unguarded) -- this pocket has zero prior closes under this rule to
+# calibrate its own threshold from. RECALIBRATE once this pocket accumulates
+# >=100 liquidity_collapse closes of its own. Honest residual (never to be
+# glossed over, same as the Robinhood twin): can silently never fire for a
+# v3/v4 pool priced via evm_swap_ws (reserve_usd only populated for v2) --
+# fires normally via the REST fallback (DexScreener/GeckoTerminal) instead.
+LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
+
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
@@ -360,6 +375,10 @@ _ADDED_COLUMNS: list[tuple[str, str]] = [
     # network call to re-discover it -- doctrine of ingesting a data point
     # that's already in hand rather than re-fetching or going without.
     ("dex_id", "TEXT"),
+    # 25/08 -- the reserve_usd read at each exit-simulation pass, so
+    # LIQUIDITY_COLLAPSE_EXIT_PCT's own trigger point stays visible on the row
+    # afterward (same pattern as robinhood_pump_shadow.py's twin column).
+    ("last_reserve_usd", "REAL"),
 ]
 
 _ensured_db_paths: set[str] = set()
@@ -1174,6 +1193,7 @@ async def advance_exit_simulation(
     counts = {
         "checked": 0, "scale_out_fills": 0, "closed_scale_out_complete": 0,
         "closed_trailing_stop": 0, "closed_max_hold": 0, "closed_age_limit": 0,
+        "closed_liquidity_collapse": 0,
     }
     try:
         await _ensure_table()
@@ -1289,6 +1309,22 @@ async def advance_exit_simulation(
 
             peak_price = max(peak_price, effective_high)
 
+            # 25/08 -- liquidity_collapse, top priority, checked BEFORE even
+            # MAX_POOL_AGE_MINUTES (see LIQUIDITY_COLLAPSE_EXIT_PCT's own
+            # docstring): unrelated to price or age, this protects against an
+            # unsellable pool -- a reserve that has already lost more than
+            # half its entry depth is the clearest signal here that waiting
+            # for the age/scale-out/trailing-stop machinery to catch up only
+            # risks a worse fill later, never a better one. Fail-open on an
+            # unknown/missing reserve reading (never fabricated), same
+            # doctrine as every other observation in this module.
+            entry_reserve = row.get("reserve_usd")
+            liquidity_collapsed = (
+                entry_reserve is not None and entry_reserve > 0
+                and snapshot.reserve_usd is not None
+                and snapshot.reserve_usd < entry_reserve * (1 - LIQUIDITY_COLLAPSE_EXIT_PCT / 100.0)
+            )
+
             # MAX_POOL_AGE_MINUTES protection, top priority (16/08) -- checked
             # BEFORE the scale-out ladder. **16/08, second pass, operator
             # decision**: only force-closes a position that is NOT currently
@@ -1329,7 +1365,12 @@ async def advance_exit_simulation(
 
             fills_this_cycle = 0
             exit_reason: str | None = None
-            if age_limit_exceeded:
+            if liquidity_collapsed:
+                _realistic_sell(remaining_qty, current_price)
+                realized_proceeds += remaining_qty * current_price
+                remaining_qty = 0.0
+                exit_reason = "liquidity_collapse"
+            elif age_limit_exceeded:
                 _realistic_sell(remaining_qty, current_price)
                 realized_proceeds += remaining_qty * current_price
                 remaining_qty = 0.0
@@ -1375,7 +1416,8 @@ async def advance_exit_simulation(
                         peak_price = ?, next_scale_level = ?, remaining_qty = ?,
                         realized_proceeds = ?, exit_reason = ?, final_multiplier = ?,
                         realistic_realized_proceeds = ?, realistic_final_multiplier = ?,
-                        last_checked_at = ?, last_price = ?, window_volume_usd = ?
+                        last_checked_at = ?, last_price = ?, window_volume_usd = ?,
+                        last_reserve_usd = ?
                     WHERE id = ?
                     """,
                     (
@@ -1383,7 +1425,7 @@ async def advance_exit_simulation(
                         realized_proceeds, exit_reason, final_multiplier,
                         realistic_realized_proceeds, realistic_final_multiplier,
                         datetime.now(timezone.utc).isoformat(), current_price,
-                        window_volume_usd, row["id"],
+                        window_volume_usd, snapshot.reserve_usd, row["id"],
                     ),
                 )
                 await db.commit()
@@ -1411,6 +1453,8 @@ async def advance_exit_simulation(
                 counts["closed_max_hold"] += 1
             elif exit_reason == "age_limit":
                 counts["closed_age_limit"] += 1
+            elif exit_reason == "liquidity_collapse":
+                counts["closed_liquidity_collapse"] += 1
     except Exception as exc:  # noqa: BLE001 -- shadow simulation must never raise into a caller
         logger.info("base_momentum_shadow: advance_exit_simulation failed (%s)", exc)
     return counts

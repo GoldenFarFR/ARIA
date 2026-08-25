@@ -7,6 +7,11 @@
   "base_momentum_shadow": {
     "label": "MOMENTUM (Base, shadow-only -- real pipeline paused since 17/08)",
     "parameters": {
+      "LIQUIDITY_COLLAPSE_EXIT_PCT": {
+        "line": 258,
+        "value": 50.0,
+        "why": "25/08 -- twin of robinhood_pump_shadow.py's own addition the day before (24/08), found missing here by a cross-pocket recheck triggered by the operator's question (\"are rugs counted as a total loss?\"). Nothing protected an already-open Base position against its pool's reserve collapsing mid-hold -- only entry-time MIN_LIQUIDITY_USD existed. Same value, BORROWED not independently calibrated for Base's own market (Doctrine d'Ingestion: a conservative hypothesis beats leaving a measured gap unguarded) -- this pocket has zero prior closes under this rule to calibrate its own threshold from. RECALIBRATE once this pocket accumulates >=100 liquidity_collapse closes of its own. Honest residual (never to be glossed over, same as the Robinhood twin): can silently never fire for a v3/v4 pool priced via evm_swap_ws (reserve_usd only populated for v2) -- fires normally via the REST fallback (DexScreener/GeckoTerminal) instead."
+      },
       "M5_SURGE_THRESHOLD_PCT": {
         "line": 178,
         "value": 1.0,
@@ -23,22 +28,22 @@
         "why": "24/08, LOWERED 4000 -> 1000, operator-directed (\"viser large... pour cumulee des donnees\", same pass as M5_SURGE_THRESHOLD_PCT/ REGIME_MIN_MEDIAN_PEAK_PCT/MAX_POOL_AGE_MINUTES above). Own standalone value for THIS chain only -- no longer tied to any other pocket's figure (operator instruction: one constant per blockchain, never a shared/ borrowed number). Matches the discovery-side floor already active in shadow_persistent.py's base_shadow_loop() (dexpaprika.get_trending_pools min_liquidity_usd=1000.0), so a candidate cleared at discovery is never rejected again here at trade time. Recalibrate on Base's own reserve_usd- at-entry column once base_momentum_shadow_log clears n>=100 real closures (see pocket_entry_sweep.py) -- until then this is a deliberately wide starting floor, not a profitability-calibrated one."
       },
       "REGIME_CANDIDATES_TABLE": {
-        "line": 500,
+        "line": 519,
         "value": "base_momentum_regime_candidates_log",
         "why": "--------------------------------------------------------------------------- 23/08, operator-directed (\"construit ce 30 sur tout le monde\") -- same regime gate as solana_late_bonding_shadow.py's REGIME_MIN_MEDIAN_PEAK_PCT (read that module for the full incident history: a first sensor that self-fed on TAKEN trades measured -0.18%/trade in production against +13.10% in a biased simulation, rebuilt as an independent, trade-blind sensor). ``record_regime_candidate``/``regime_state`` mirror that module's functions of the same name field-for-field; ``regime_median_peak`` below is a DUPLICATE of its pure function rather than an import -- solana_pump_ shadow.py (this pocket's sibling) is itself imported BY solana_late_ bonding_shadow.py, so a shared import risks a circular dependency the moment one of these REST pockets is reused the same way. The function has no state, so duplicating it costs nothing a shared import would have saved.  WHY THIS POCKET CANNOT REUSE LATE_BONDING'S TRACKING MECHANISM: that sensor updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory read because the pool is already subscribed to a websocket for an unrelated reason (exit tracking). This pocket has no such subscription -- its only view of the market is the REST ``dexpaprika.get_trending_pools()`` fetch ``base_shadow_loop`` already performs every BASE_CADENCE_SECONDS=120s to look for NEW candidates, regardless of whether anything new is found. That fetch returns up to 25 pools with a live price EVERY cycle, so ``advance_regime_candidates_from_pools`` below re-reads THAT SAME response for pools already under tracking rather than issuing any REST call of its own -- zero marginal throughput.  REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets (robinhood/base/solana_pump) share DexPaprika's own throttle (independent of GeckoTerminal), 1 discovery call/cycle each at 120s cadence, plus ``advance_exit_simulation``'s DexScreener-first snapshot fallback (at most 1-2 calls per OPEN position per cycle, against a DIFFERENT provider's budget). A dedicated per-candidate regime poll on top of that -- up to 25 candidates/cycle/pocket, all new REST calls -- would have added real, uncosted load for a signal the discovery fetch already carries for free. Reusing it is strictly better: no new call, no new budget risk, no new failure mode -- exactly the \"Pense-Systeme\" bar CLAUDE.md sets (never a linear/unbounded resource pattern when a staged, already-paid-for read already exists).  HONEST LIMIT (documented, not hidden, same discipline as the sibling module's own comments): a candidate's peak is only updated on cycles where DexPaprika's top-25 \"trending\" response for this chain STILL carries its pool_address. A token that pumps briefly then drops out of the top 25 (illiquid enough, or simply outranked) stops updating -- its logged peak understates the true market peak in that case. This is a conservative (never-inflated) bias: undercounting a hot market's peak only makes the gate MORE cautious, never less, which is the safe direction for a mechanism whose job is to detect when the market has gone cold."
       },
       "REGIME_MIN_MEDIAN_PEAK_PCT": {
-        "line": 528,
+        "line": 547,
         "value": null,
         "why": "Provisional, borrowed from late_bonding's own value -- NOT calibrated for this pocket specifically (Doctrine d'Ingestion: a conservative hypothesis beats leaving a promising mechanism idle for lack of fresh data). RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine d'Ingestion's own n>=100 bar) -- this pocket's screened population may differ from late_bonding's in either direction.  24/08, LOWERED 30% -> 25%, operator-directed, kept in lockstep with late_bonding's own recalibration (see that module's comment for the causal replay behind the number). This pocket's own table held only 49 rows at the time -- still below the n>=100 bar above, so this move is BORROWED consistency, not an independent verdict from this pocket's own population.  24/08, DISARMED (25% -> None) same day, operator-directed: this gate measures the market's RAW peak (never adjusted for whether it was really sellable, see solana_late_bonding_shadow.py's 24/08 rug-vs-regime finding -- Base's own scams cluster $9-19K liquidity, real gains $22K+, so a scam's inflated peak can still open/hold this gate open even though it was never capturable). Disarming it here is deliberate, not an oversight: the operative filters are now M5_SURGE_THRESHOLD_PCT (above) and MIN_LIQUIDITY_USD (below) -- \"les criteres sont fixes ailleurs\". None, not 0.0: `disarmed = REGIME_MIN_MEDIAN_PEAK_PCT is None` is the only value that guarantees ALWAYS open (0.0 could still block on a rare negative median). Re-arm once base_momentum_shadow_log clears n>=100 real closures and its own peak-vs-liquidity relationship can be measured directly."
       },
       "REGIME_TRACKING_WINDOW_MINUTES": {
-        "line": 502,
+        "line": 521,
         "value": 15.0,
         "why": null
       },
       "REGIME_WINDOW": {
-        "line": 501,
+        "line": 520,
         "value": 30,
         "why": null
       },
@@ -53,7 +58,7 @@
         "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
       },
       "SIMULATED_TRADE_SIZE_USD": {
-        "line": 267,
+        "line": 282,
         "value": 0.1,
         "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- mirrors solana_pump_shadow.py's own addition, same session, same real trigger (X17690 on Solana: reserve_usd essentially zero at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price). NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
       },
@@ -68,7 +73,7 @@
         "why": null
       },
       "_SCALE_OUT_DUST_FRACTION": {
-        "line": 251,
+        "line": 266,
         "value": 0.01,
         "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
       }
@@ -660,6 +665,11 @@
         "line": 789,
         "value": 15.0,
         "why": "22/08 -- BACK TO 15%, the shared default, after three hours of production disproved the 8% bet. Kept as an explicit constant rather than deleted so the next person sees WHY it is not 8.  The bet was: 8% was the best of 360 combinations replayed over the 100 best trades, winning under both intra-minute orderings. It was written down at the time as a deliberate bet on half the problem, not a validated setting, because the sample WAS the winners -- a tight trailing shines on tokens that climb with shallow pullbacks.  What production said, hour by hour, on the day it shipped: 16h  peak median +37.7%   peaks >+50%: 38.2%   PnL +15.69% 18h  peak median +11.8%   peaks >+50%: 20.6%   PnL +16.98% 19h  peak median  +2.3%   peaks >+50%:  3.7%   PnL  -5.43%   <- 8% live 21h  peak median  +6.6%   peaks >+50%:  0.0%   PnL  -8.76%  The PEAKS collapsed, not just the PnL. A peak is the highest price seen BEFORE our exit, so a collapsing peak means we stop observing the rise at all. The market moved the other way that day (22/08 peak median +16.3% against +13.1% on 21/08), so this was the setting, not conditions.  The arithmetic, which needed no replay: the trailing arms at +10% and sits `distance` below the peak. At 8%, a +12% peak puts the stop at +3.0% -- any breath ejects the position. At 15%, the same peak puts it at -4.8%, BELOW the fixed stop, so the position simply keeps running until a real move. 8% does not follow a trend, it exits it."
+      },
+      "_EFFECTIVE_REALISTIC_MULT_SQL": {
+        "line": 2542,
+        "value": "CASE WHEN realistic_final_multiplier IS NOT NULL THEN realistic_final_multiplier WHEN realistic_entry_price IS NOT NULL THEN COALESCE(realistic_realized_proceeds, 0.0) / realistic_entry_price ELSE NULL END",
+        "why": null
       }
     },
     "status": "present"

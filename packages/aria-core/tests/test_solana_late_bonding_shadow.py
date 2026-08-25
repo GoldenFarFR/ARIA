@@ -311,6 +311,62 @@ async def test_summary_reports_the_average_entry_progress(_tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_summary_counts_a_stranded_mid_hold_position_as_a_real_loss(_tmp_db):
+    """25/08, real bug found live (operator question: "are rugs counted as a
+    total loss?"). The old query used COALESCE(realistic_final_multiplier,
+    final_multiplier): a position genuinely bought (realistic_entry_price NOT
+    NULL) but stranded mid-hold by a liquidity collapse
+    (realistic_final_multiplier NULL, this pocket's own dominant exit path)
+    fell back to the non-realistic final_multiplier -- a real rug reported at
+    whatever optimistic nominal price the last spot tick showed, instead of
+    the salvaged-vs-entry loss it actually was (here: nothing salvaged, a
+    real -100%, not the nominal final_multiplier=5.0 the old query would have
+    reported)."""
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(_tmp_db) as db:
+        await db.execute(
+            f"INSERT INTO {pocket.TABLE} "
+            "(pool_address, token_address, chain, detected_at, entry_price, "
+            " realistic_entry_price, realistic_realized_proceeds, realistic_final_multiplier, "
+            " final_multiplier, exit_reason, last_checked_at) "
+            "VALUES (?, ?, 'solana', ?, 1.0, 1.0, NULL, NULL, 5.0, 'liquidity_collapse', ?)",
+            ("poolA", "mintA", now.isoformat(), now.isoformat()),
+        )
+        await db.commit()
+    out = await pocket.summary(
+        since=(datetime.fromisoformat(pocket.CONFIG_EPOCH) - timedelta(days=1)).isoformat(),
+        db_path=_tmp_db,
+    )
+    assert out["completed"] == 1
+    assert out["avg_pnl_pct"] == pytest.approx(-100.0)
+
+
+@pytest.mark.asyncio
+async def test_summary_still_excludes_a_position_never_fillable_at_entry(_tmp_db):
+    """Twin of the test above -- a position whose entry itself was never
+    genuinely fillable (realistic_entry_price NULL, too thin from the start)
+    must stay excluded exactly as before this fix: this trade never really
+    happened, unlike a stranded mid-hold position."""
+    now = datetime.now(timezone.utc)
+    async with aiosqlite.connect(_tmp_db) as db:
+        await db.execute(
+            f"INSERT INTO {pocket.TABLE} "
+            "(pool_address, token_address, chain, detected_at, entry_price, "
+            " realistic_entry_price, realistic_final_multiplier, "
+            " final_multiplier, exit_reason, last_checked_at) "
+            "VALUES (?, ?, 'solana', ?, 1.0, NULL, NULL, 0.1, 'trailing_stop', ?)",
+            ("poolA", "mintA", now.isoformat(), now.isoformat()),
+        )
+        await db.commit()
+    out = await pocket.summary(
+        since=(datetime.fromisoformat(pocket.CONFIG_EPOCH) - timedelta(days=1)).isoformat(),
+        db_path=_tmp_db,
+    )
+    assert out["completed"] == 1  # still counted as a completed row...
+    assert out["avg_pnl_pct"] is None  # ...but never scored, mults stays empty
+
+
+@pytest.mark.asyncio
 async def test_the_collect_wide_phase_is_over_and_recorded():
     """20/08 the band was widened to 0.40 to find out WHICH sub-band works;
     21/08 it answered (rug 48.9% at 40-60% vs 27.0% above 80%) and the floor
