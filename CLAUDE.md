@@ -103,7 +103,7 @@ stakes, not applied everywhere by default.
 ## 1bis. COHÉRENCE ARCHITECTURALE ABSOLUE (20/08, gravé après incident réel)
 - **Intégration native et réutilisation systématique** : INTERDIT de générer du code générique ou des configurations par défaut (fallbacks). Tout nouveau composant, script, test ou refactoring doit OBLIGATOIREMENT réutiliser la stack existante — variables d'environnement, singletons de configuration, clients réseau, schémas de base, logger centralisé, constantes de throttle déjà calibrées. Avant de coder, vérifier les patterns déjà établis dans le projet : jamais réinventer la roue, jamais introduire d'élément hors-standard.
 - **Zéro supposition, zéro simplification** : ne jamais simplifier un composant sous prétexte d'aller plus vite. Si une brique existe (scoring, cache, verrous, RPC dédié, circuit breaker, budget), elle est câblée DÈS LA PREMIÈRE ITÉRATION, pas « plus tard ».
-- **Incident fondateur** : `services/pumpfun_trade_stream.py` a été livré avec son propre `RPC_WS_DEFAULT = "wss://api.mainnet-beta.solana.com"` au lieu d'importer celui du dôme. Résultat : la souscription Solana la PLUS VOLUMINEUSE d'ARIA (~6650 trades/100s mesurés en direct) tournait sur l'endpoint public aux limites par IP les plus serrées, pendant que le websocket Helius PAYANT déjà configuré dans `ARIA_SOLANA_RPC_WS` restait inutilisé pour elle. Repéré par l'opérateur, par aucun garde-fou.
+- **Incident fondateur (20/08)** : un client dupliquait localement une constante d'endpoint RPC déjà définie ailleurs, avec un vrai coût mesuré. Historique complet : `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entrées 2107-2108).
 - **Test mécanique de la règle** : une constante d'endpoint//throttle/chemin de base redéfinie localement alors qu'elle existe ailleurs dans `aria_core` est un défaut, même si le code marche. Le réflexe correct est `from aria_core... import <CONSTANTE>`, jamais une valeur restatée — restater un défaut est exactement comment le plus gros consommateur finit sur l'endpoint le plus faible.
 
 ## 2. Exploration Systématique Hors-Frontières
@@ -143,12 +143,9 @@ stakes, not applied everywhere by default.
 ## 3. Recherche active de l'astuce d'efficacité
 - Ne jamais se contenter de la première idée fonctionnelle. Se demander activement : **« existe-t-il une manière de diviser par 10 le coût, la latence ou la complexité tout en gardant le même résultat ? »**
 
-**Incident fondateur (21/08)** : `pumpfun_trade_stream.py` écoutait TOUT le programme pump.fun en
-`logsSubscribe` — 74 Go/jour mesurés, dont 74,7 % d'octets ne contenant aucun trade décodable, soit
-~1,48 M de crédits Helius par jour contre un forfait de 1 M par mois. La souscription ciblée par mint
-sur la MÊME connexion unique (120 acceptées en direct) descend à 11,3 Go/jour pour strictement le même
-signal. Le réflexe manquant était l'étape 1 : filtrer côté serveur avant de payer le transport.
-Détail : `docs/HANDOFF_RESOURCE_BUDGET.md`.
+**Incident fondateur (21/08)** : filtrer côté serveur avant de payer le transport (étape 1 manquante) a
+fait chuter une souscription Solana de 74 Go/jour à 11,3 Go/jour pour le même signal. Détail chiffré et
+historique complet : `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.21) et `docs/HANDOFF_RESOURCE_BUDGET.md`.
 
 
 ## Profil opérateur
@@ -243,10 +240,9 @@ progress: below 30% every 60s, 30-50% every 20s, 50-70% every 10s. Above 70% the
 own targeted trade subscription takes over, PRE-ARMED at `PRE_ARM_PROGRESS=0.45` so
 `distinct_buyers` is populated when `consider_candidate` reads it.
 
-**Why it matters, measured not assumed**: program-wide `logsSubscribe` carried 74 GB/day,
-74.7% of it holding no decodable trade, i.e. ~1.69M Helius credits/day against a 1M/month
-plan. The replacement produces 48 qualified candidates/hour against the pocket's real 53
-detections/hour.
+**Why it matters, measured not assumed** (full incident figures: see the 1bis/resource-optimization
+doctrine sections above, never restated twice to avoid drift): the replacement produces 48 qualified
+candidates/hour against the pocket's real 53 detections/hour.
 
 **Two providers, split by billing model** — this is the point, not redundancy: Helius bills
 1 credit per CALL but 20 credits per MB STREAMED; Chainstack bills 1 unit per call flat,
