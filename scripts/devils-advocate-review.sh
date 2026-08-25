@@ -56,18 +56,18 @@
 # next push naturally absorbs the missed diff instead of a second push
 # silently starting a fresh, smaller-than-2000 window. Reaching the
 # threshold -> normal call, marker advances to HEAD.
-# 25/08 -- PAUSE OPERATEUR EXPLICITE, jamais un retrait silencieux : solde de
-# credit API Anthropic DIRECT (compte facture separement, distinct de
-# l'abonnement Claude Code) epuise, HTTP 400 "credit balance too low" sur
-# Fable 5 ET sur la condensation Haiku (meme cle, meme compte). Decision
-# operateur en toutes lettres : "je ne refinancerai pas l'api tu peut arreter
-# de passer par la condensation et l'avocat, peut etre plus tard je le
-# remettrai" -- donc PAS de retry, PAS de contournement (ex. re-router sur un
-# autre modele), juste une pause visible et reversible. Repasser a "false" des
-# que l'operateur confirme la reactivation (recharge de credit ou remplacement
-# de compte). Le cumul de lignes continue d'etre trace ci-dessous (le marker
-# n'avance jamais pendant la pause) pour que la reactivation couvre tout le
-# diff accumule entre-temps, jamais seulement le dernier push.
+# 25/08 -- EXPLICIT OPERATOR PAUSE, never a silent removal: the direct
+# Anthropic API account (billed separately, distinct from the Claude Code
+# subscription) ran out of credit -- HTTP 400 "credit balance too low" on
+# both Fable 5 and the Haiku condense pass (same key, same account).
+# Operator, verbatim: "je ne refinancerai pas l'api tu peut arreter de passer
+# par la condensation et l'avocat, peut etre plus tard je le remettrai" --
+# so no retry, no workaround (e.g. re-routing to another model), just a
+# visible, reversible pause. Flip back to "false" once the operator confirms
+# reactivation (credit recharge or a replacement account). The cumulative
+# line count keeps being tracked below (the marker never advances while
+# paused) so reactivation covers the whole accumulated diff, never just the
+# next push.
 DEVILS_ADVOCATE_PAUSED=true
 
 set -uo pipefail
