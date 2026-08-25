@@ -192,6 +192,30 @@ CREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (
     last_transfer_at TEXT
 )
 """
+_CONFIDENCE_STATE_DDL = """
+CREATE TABLE IF NOT EXISTS wallet_copy_confidence_state (
+    wallet_address TEXT PRIMARY KEY,
+    notified_at TEXT NOT NULL
+)
+"""
+
+# Audit 001-audit-code-sans (25/08) found summary() has ZERO consumers
+# anywhere -- a real, sourced per-wallet signal that nobody could ever see
+# short of running it by hand. These bounds decide when a wallet's REALIZED
+# track record (never latent/unrealized -- see the same audit's finding on
+# how thin the realized side still is) is solid enough to surface, same
+# spirit as signal_cascade_convergence's falsifiability watch: log once,
+# never spam every cycle.
+#
+# Operator-set bar (25/08, same day): "+25% minimum pour 1000 trade sur
+# chacun d'eux" -- a deliberately long-horizon confirmation bar, not
+# something expected to fire soon at the current pace (~70 closed positions/
+# wallet after 17 days). A shadow/paper calibration, never a real-capital
+# edge (CLAUDE.md's public-repo restriction on strategy parameters doesn't
+# apply here -- this bounds a fictional-ledger watch, not real capital).
+CONFIDENCE_MIN_CLOSED_POSITIONS = 1000
+CONFIDENCE_MIN_RETURN_PCT = 25.0
+CONFIDENCE_MAX_UNKNOWN_EXIT_RATIO = 0.20
 
 # 14/08 (#146) -- this module used to also dynamically source wallets off
 # the real smart_money_leaderboard (wallet_copy_shadow_dynamic_candidates,
@@ -210,6 +234,7 @@ async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_POSITION_DDL)
         await db.execute(_CURSOR_DDL)
+        await db.execute(_CONFIDENCE_STATE_DDL)
         # Hot migration (08/08): last_transfer_at added after this table was
         # first deployed -- a prod DB that already ran a cycle needs it added
         # in place, same pattern as paper_trader.py's _ADDED_COLUMNS.
@@ -527,3 +552,67 @@ async def summary() -> dict[str, dict]:
                 "unrealized_pnl_usd": round(open_latent_pnl_usd, 2),
             }
     return out
+
+
+async def run_confidence_watch_cycle() -> dict:
+    """Heartbeat wrapper (gate ``ARIA_WALLET_COPY_CONFIDENCE_WATCH_ENABLED``).
+    Surfaces ``summary()``'s real signal at WARNING level the FIRST time a
+    wallet clears a REALIZED (never latent) confidence bar -- never repeats
+    for an already-notified wallet (state in
+    ``wallet_copy_confidence_state``), same doctrine as
+    ``signal_cascade_convergence.run_falsifiability_watch_cycle``. Without
+    this, the audit found ``summary()`` had zero consumers anywhere: a real
+    signal computed every cycle, visible to nobody.
+
+    Bar (operator-set 25/08, "+25% minimum pour 1000 trade sur chacun
+    d'eux"): ``closed_positions >= CONFIDENCE_MIN_CLOSED_POSITIONS`` (1000)
+    AND the REALIZED return on total stake deployed
+    (``realized_pnl_usd / (closed_positions * POSITION_SIZE_USD)``) is
+    ``>= CONFIDENCE_MIN_RETURN_PCT`` (25%) AND the unknown-exit-price ratio
+    (excluded from realized_pnl_usd -- see ``summary()`` -- but must not be
+    ignored when judging confidence) is below
+    ``CONFIDENCE_MAX_UNKNOWN_EXIT_RATIO``. Never uses ``unrealized_pnl_usd``
+    -- a latent mark on a still-open position is exactly the kind of
+    unconfirmed price this project's norms warn against trusting.
+    Best-effort: never raises into the heartbeat."""
+    try:
+        report = await summary()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute("SELECT wallet_address FROM wallet_copy_confidence_state")
+            already_notified = {row[0] for row in await cursor.fetchall()}
+            for wallet, stats in report.items():
+                if wallet in already_notified:
+                    continue
+                closed = stats["closed_positions"]
+                unknown = stats["closed_unknown_exit_count"]
+                total_resolved = closed + unknown
+                unknown_ratio = (unknown / total_resolved) if total_resolved else None
+                return_pct = (
+                    (stats["realized_pnl_usd"] / (closed * POSITION_SIZE_USD)) * 100.0
+                    if closed else None
+                )
+                cleared = (
+                    closed >= CONFIDENCE_MIN_CLOSED_POSITIONS
+                    and return_pct is not None
+                    and return_pct >= CONFIDENCE_MIN_RETURN_PCT
+                    and unknown_ratio is not None
+                    and unknown_ratio < CONFIDENCE_MAX_UNKNOWN_EXIT_RATIO
+                )
+                if not cleared:
+                    continue
+                logger.warning(
+                    "wallet_copy_shadow confidence [%s/%s]: %d closed, realized return %.1f%%, "
+                    "unknown-exit ratio %.0f%% -- real signal worth a manual look",
+                    stats["label"], wallet[:10], closed, return_pct,
+                    unknown_ratio * 100.0,
+                )
+                await db.execute(
+                    "INSERT INTO wallet_copy_confidence_state (wallet_address, notified_at) "
+                    "VALUES (?, ?) ON CONFLICT(wallet_address) DO NOTHING",
+                    (wallet, datetime.now(timezone.utc).isoformat()),
+                )
+            await db.commit()
+        return report
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never blocking the heartbeat
+        logger.info("wallet_copy_shadow: confidence watch cycle failed (%s)", exc)
+        return {}

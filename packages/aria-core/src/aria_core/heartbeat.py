@@ -354,6 +354,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="wallet_copy_confidence_watch_cycle",
+        name="Wallet-copy shadow -- realized-confidence watch",
+        description="25/08, audit 001-audit-code-sans finding: wallet_copy_shadow.summary() had ZERO consumers anywhere -- a real, sourced per-wallet signal computed every cycle, visible to nobody short of a session running it by hand. This cycle surfaces the verdict at WARNING level the FIRST time a tracked wallet clears a REALIZED confidence bar (>=10 closed positions, positive realized_pnl_usd, unknown-exit-price ratio below 20% -- never the latent/unrealized side, same doctrine as signal_cascade_convergence's falsifiability watch: log once, never repeat for an already-notified wallet, state in wallet_copy_confidence_state). Daily cadence -- the bar depends on accumulated closures, not something that changes meaningfully more often. Never a trigger, never touches a real/paper trade. Dedicated gate ARIA_WALLET_COPY_CONFIDENCE_WATCH_ENABLED, OFF by default, independent of ARIA_WALLET_COPY_SHADOW_ENABLED so the watch can be toggled on its own.",
+        interval_minutes=1440,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="vector_memory_maintenance_cycle",
         name="Vector memory maintenance -- TTL purge + LanceDB compaction",
         description="14/08 (#166/#167): LanceDB OSS (the version used here) does NO automatic background maintenance -- fragments/old internal versions only ever accumulate unless something calls optimize() periodically, the pattern LanceDB's own docs recommend. Weekly pass over aria_cognitive_vectors: applies each entry_type's declared retention_days (schema.yaml, was never enforced before #166) via purge_expired_entries(), then compacts small fragments and prunes old versions via table.optimize() (30-day retention window, deliberately generous for this mechanism's first weeks -- see lancedb_store.py comment). Never touches an entry with no written_at (age unknown, fail-safe). Dedicated gate ARIA_VECTOR_MEMORY_MAINTENANCE_ENABLED, OFF by default -- standalone maintenance, independent of the momentum/paper-trading pipeline.",
@@ -882,6 +889,14 @@ def _sync_x_curiosity_enabled() -> None:
                 # flag only.
                 task.enabled = os.environ.get(
                     "ARIA_WALLET_COPY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "wallet_copy_confidence_watch_cycle":
+                # 25/08 -- own dedicated flag, independent of
+                # ARIA_WALLET_COPY_SHADOW_ENABLED (this cycle only reads
+                # summary() over whatever data already exists, never
+                # touches sourcing/scanning).
+                task.enabled = os.environ.get(
+                    "ARIA_WALLET_COPY_CONFIDENCE_WATCH_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "vector_memory_maintenance_cycle":
                 # 14/08 -- standalone maintenance cycle (TTL purge +
@@ -1695,6 +1710,14 @@ class AriaHeartbeat:
                     "wallet_copy_shadow_cycle: +%s ouvertes / +%s fermées sur %s wallets suivis",
                     opened, closed, len(results),
                 )
+
+        elif task_id == "wallet_copy_confidence_watch_cycle":
+            from aria_core import wallet_copy_shadow
+
+            await wallet_copy_shadow.run_confidence_watch_cycle()
+            # No routine log here -- run_confidence_watch_cycle already logs
+            # at WARNING the first time a wallet clears the confidence bar,
+            # never repeating for an already-notified wallet.
 
         elif task_id == "vector_memory_maintenance_cycle":
             from aria_core.memory.vector.lancedb_store import run_vector_maintenance

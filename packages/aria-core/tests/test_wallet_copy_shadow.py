@@ -319,3 +319,86 @@ async def test_run_scan_cycle_only_scans_static_wallets(monkeypatch):
     await wcs.run_scan_cycle()
 
     assert set(scanned) == set(wcs.TRACKED_WALLETS.keys())
+
+
+async def _insert_closed_position(wallet, contract, entry, exit_price, idx):
+    import aiosqlite
+
+    await wcs._ensure_tables()
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO wallet_copy_shadow_position "
+            "(wallet_address, wallet_label, contract, entry_tx_hash, entry_price_usd, "
+            " entry_at, status, exit_tx_hash, exit_price_usd, exit_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?)",
+            (
+                wallet, META["label"], f"0x{idx:040x}", f"0xentry{idx}", entry,
+                "2026-08-08T12:00:00Z", f"0xexit{idx}", exit_price, "2026-08-09T12:00:00Z",
+            ),
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_confidence_watch_notifies_once_when_bar_cleared(caplog):
+    """Regression test for the audit 001-audit-code-sans finding (T005,
+    25/08): summary() had zero consumers -- a real signal nobody could see.
+    A wallet clearing the realized confidence bar must be logged exactly
+    once, never repeated on the next cycle."""
+    import logging
+
+    for i in range(wcs.CONFIDENCE_MIN_CLOSED_POSITIONS):
+        await _insert_closed_position(WALLET, TOKEN, 1.0, 2.0, i)
+
+    with caplog.at_level(logging.WARNING):
+        report = await wcs.run_confidence_watch_cycle()
+    assert any("confidence" in r.message for r in caplog.records)
+    assert report[WALLET]["closed_positions"] == wcs.CONFIDENCE_MIN_CLOSED_POSITIONS
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        await wcs.run_confidence_watch_cycle()
+    assert not any("confidence" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_confidence_watch_never_fires_below_min_closed(caplog):
+    import logging
+
+    for i in range(wcs.CONFIDENCE_MIN_CLOSED_POSITIONS - 1):
+        await _insert_closed_position(WALLET, TOKEN, 1.0, 2.0, i)
+
+    with caplog.at_level(logging.WARNING):
+        await wcs.run_confidence_watch_cycle()
+    assert not any("confidence" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_confidence_watch_never_fires_on_high_unknown_exit_ratio(caplog):
+    """Even with enough closed_positions and positive realized PnL, a high
+    ratio of no-exit-price closures (excluded from the PnL count but real
+    losing exits) must block the confidence signal."""
+    import logging
+
+    for i in range(wcs.CONFIDENCE_MIN_CLOSED_POSITIONS):
+        await _insert_closed_position(WALLET, TOKEN, 1.0, 2.0, i)
+    # Enough unknown-exit closures to push the ratio above the threshold.
+    n_unknown = wcs.CONFIDENCE_MIN_CLOSED_POSITIONS * 2
+    for i in range(1000, 1000 + n_unknown):
+        await _insert_closed_position(WALLET, TOKEN, 1.0, None, i)
+
+    with caplog.at_level(logging.WARNING):
+        await wcs.run_confidence_watch_cycle()
+    assert not any("confidence" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_confidence_watch_never_fires_on_negative_realized_pnl(caplog):
+    import logging
+
+    for i in range(wcs.CONFIDENCE_MIN_CLOSED_POSITIONS):
+        await _insert_closed_position(WALLET, TOKEN, 1.0, 0.5, i)
+
+    with caplog.at_level(logging.WARNING):
+        await wcs.run_confidence_watch_cycle()
+    assert not any("confidence" in r.message for r in caplog.records)

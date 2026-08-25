@@ -955,6 +955,11 @@ _KNOWN_ENABLED_GATES = {
     # ledgers fictifs indépendants, jamais un trigger réel (jamais de capital
     # réel, jamais fusionné avec le test 1M$). OFF par défaut.
     "ARIA_WALLET_COPY_SHADOW_ENABLED",
+    # 25/08, audit 001-audit-code-sans -- summary() had zero consumers, this
+    # watch cycle surfaces its realized-confidence verdict once per wallet.
+    # Independent of ARIA_WALLET_COPY_SHADOW_ENABLED (reads whatever data
+    # already exists, never touches sourcing). OFF by default.
+    "ARIA_WALLET_COPY_CONFIDENCE_WATCH_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",
     # 14/08 -- watchlist_refill_cycle (momentum_entry.run_watchlist_refill_cycle):
     # pure-discovery honeypot-check-only pass over discover_momentum_candidates(),

@@ -966,6 +966,21 @@
   "wallet_copy_shadow": {
     "label": "WALLET-COPY (8 verified Base wallets)",
     "parameters": {
+      "CONFIDENCE_MAX_UNKNOWN_EXIT_RATIO": {
+        "line": 218,
+        "value": 0.2,
+        "why": null
+      },
+      "CONFIDENCE_MIN_CLOSED_POSITIONS": {
+        "line": 216,
+        "value": 1000,
+        "why": "Audit 001-audit-code-sans (25/08) found summary() has ZERO consumers anywhere -- a real, sourced per-wallet signal that nobody could ever see short of running it by hand. These bounds decide when a wallet's REALIZED track record (never latent/unrealized -- see the same audit's finding on how thin the realized side still is) is solid enough to surface, same spirit as signal_cascade_convergence's falsifiability watch: log once, never spam every cycle.  Operator-set bar (25/08, same day): \"+25% minimum pour 1000 trade sur chacun d'eux\" -- a deliberately long-horizon confirmation bar, not something expected to fire soon at the current pace (~70 closed positions/ wallet after 17 days). A shadow/paper calibration, never a real-capital edge (CLAUDE.md's public-repo restriction on strategy parameters doesn't apply here -- this bounds a fictional-ledger watch, not real capital)."
+      },
+      "CONFIDENCE_MIN_RETURN_PCT": {
+        "line": 217,
+        "value": 25.0,
+        "why": null
+      },
       "INACTIVITY_THRESHOLD_DAYS": {
         "line": 67,
         "value": 14,
@@ -975,6 +990,11 @@
         "line": 57,
         "value": 1000.0,
         "why": "Fictional stake per detected buy -- never real capital, purely a common yardstick so every copied wallet is compared on equal footing regardless of the source wallet's own real position sizing."
+      },
+      "_CONFIDENCE_STATE_DDL": {
+        "line": 195,
+        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_confidence_state (\n    wallet_address TEXT PRIMARY KEY,\n    notified_at TEXT NOT NULL\n)\n",
+        "why": null
       },
       "_CURSOR_DDL": {
         "line": 187,
