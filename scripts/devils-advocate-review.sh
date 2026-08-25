@@ -195,6 +195,7 @@ echo "🛡️  Avocat du Diable : ${CUMULATIVE_LINES}/${BATCH_THRESHOLD_LINES} l
   RESPONSE_CONTENT=""
   FINISH_REASON="inconnu"
   COST_LINE="0 0 0.000000"
+  read -r IN_TOKENS OUT_TOKENS COST_USD <<< "$COST_LINE"
   if [ "$HTTP_STATUS" = "200" ]; then
     RESPONSE_CONTENT=$(echo "$RAW_RESPONSE" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n\n")' 2>/dev/null)
     STOP_REASON=$(echo "$RAW_RESPONSE" | jq -r '.stop_reason // "inconnu"' 2>/dev/null)
