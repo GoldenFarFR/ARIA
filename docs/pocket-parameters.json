@@ -341,6 +341,37 @@
     },
     "status": "present"
   },
+  "robinhood_pump_v2_shadow": {
+    "label": "PUMP v2 (Robinhood Chain, aggressive scale-out)",
+    "parameters": {
+      "MAX_HOLD_MINUTES": {
+        "line": 101,
+        "value": 120,
+        "why": null
+      },
+      "SCALE_OUT_SELL_FRACTION": {
+        "line": 99,
+        "value": 0.5,
+        "why": null
+      },
+      "SCALE_OUT_STEP_PCT": {
+        "line": 98,
+        "value": 15.0,
+        "why": "The ONE variable under test in this module -- everything else (entry filters, trailing stop, max-hold, liquidity floor) is reused verbatim from v1 above, imported rather than restated."
+      },
+      "TABLE": {
+        "line": 93,
+        "value": "robinhood_pump_v2_shadow_log",
+        "why": null
+      },
+      "TRAILING_STOP_PCT": {
+        "line": 100,
+        "value": 20.0,
+        "why": null
+      }
+    },
+    "status": "present"
+  },
   "solana_fresh_launch_fast_discovery_shadow": {
     "label": "FAST-DISCOVERY (control pocket)",
     "parameters": {
