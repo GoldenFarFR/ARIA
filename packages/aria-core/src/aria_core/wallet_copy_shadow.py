@@ -363,22 +363,61 @@ async def _mark_open_position(wallet: str, contract: str, price_usd: float) -> N
         await db.commit()
 
 
+# 25/08, operator request ("met toi en condition reel... les rug, les frais,
+# le FOMO"): every entry/exit/mark used to be the raw DexScreener spot price,
+# as if a $1,000 order could always fill at the exact quoted price with zero
+# slippage -- the same over-optimism bug the project's other pockets already
+# fixed (risk_guard.py's 07/22 item #18, robinhood_pump_shadow/
+# base_momentum_shadow's realistic_final_multiplier work). Reuses
+# risk_guard.simulated_fill_price/simulated_exit_price (same price-impact
+# model + real DEX_SWAP_FEE_PCT, never a second diverging calculation) rather
+# than inventing a parallel realism model for this pocket alone.
+def _realistic_fill_price(spot: float | None, liquidity_usd: float | None) -> float | None:
+    if spot is None:
+        return None
+    from aria_core import risk_guard
+
+    return risk_guard.simulated_fill_price(spot, POSITION_SIZE_USD, liquidity_usd, apply_swap_fee=True)
+
+
+def _realistic_exit_price(spot: float | None, liquidity_usd: float | None) -> float | None:
+    if spot is None:
+        return None
+    from aria_core import risk_guard
+
+    return risk_guard.simulated_exit_price(spot, POSITION_SIZE_USD, liquidity_usd, apply_swap_fee=True)
+
+
 async def _current_price_usd(contract: str) -> float | None:
     """Best-effort spot price -- never a guess, ``None`` if no liquid pair is
-    found (same degradation as every other pair lookup in this codebase)."""
+    found (same degradation as every other pair lookup in this codebase).
+    Kept for backward compatibility (tests, any external caller); internal
+    callers needing a realistic fill/exit price use
+    ``_current_price_and_liquidity_usd`` below instead."""
+    price, _liquidity = await _current_price_and_liquidity_usd(contract)
+    return price
+
+
+async def _current_price_and_liquidity_usd(contract: str) -> tuple[float | None, float | None]:
+    """Spot price AND the same pool's real liquidity, in one lookup -- the
+    liquidity is needed to simulate a REAL fill/exit price (swap fee + price
+    impact, ``risk_guard.simulated_fill_price``/``simulated_exit_price``),
+    never a guess, ``(None, None)`` if no liquid pair is found."""
     try:
         from aria_core.services.dexscreener import fetch_token_pairs
 
         pairs = await fetch_token_pairs(contract, chain="base")
         if not pairs:
-            return None
+            return None, None
         best = max(pairs, key=lambda p: p.liquidity_usd or 0.0)
-        if (best.liquidity_usd or 0.0) < _MIN_POOL_LIQUIDITY_USD_FOR_PRICE:
-            return None
-        return best.price_usd if best.price_usd and best.price_usd > 0 else None
+        liquidity = best.liquidity_usd or 0.0
+        if liquidity < _MIN_POOL_LIQUIDITY_USD_FOR_PRICE:
+            return None, None
+        price = best.price_usd if best.price_usd and best.price_usd > 0 else None
+        return price, (liquidity if price is not None else None)
     except Exception as exc:  # noqa: BLE001 -- shadow, never blocking
         logger.info("wallet_copy_shadow: price lookup failed for %s (%s)", contract, exc)
-        return None
+        return None, None
 
 
 async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
@@ -425,11 +464,13 @@ async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
             is_buy = (t.to_address or "").lower() == wallet_l
             is_sell = (t.from_address or "").lower() == wallet_l
             if is_buy and not await _open_position_exists(wallet, contract):
-                price = await _current_price_usd(contract)
+                spot, liquidity = await _current_price_and_liquidity_usd(contract)
+                price = _realistic_fill_price(spot, liquidity)
                 await _open_position(wallet, label, contract, t.token_symbol, t.tx_hash, price)
                 opened += 1
             elif is_sell and await _open_position_exists(wallet, contract):
-                price = await _current_price_usd(contract)
+                spot, liquidity = await _current_price_and_liquidity_usd(contract)
+                price = _realistic_exit_price(spot, liquidity)
                 await _close_open_position(wallet, contract, t.tx_hash, price)
                 closed += 1
 
@@ -456,7 +497,8 @@ async def refresh_open_marks(wallet: str) -> None:
             )
             contracts = [r[0] for r in await cursor.fetchall()]
         for contract in contracts:
-            price = await _current_price_usd(contract)
+            spot, liquidity = await _current_price_and_liquidity_usd(contract)
+            price = _realistic_exit_price(spot, liquidity)
             if price is not None:
                 await _mark_open_position(wallet, contract, price)
     except Exception as exc:  # noqa: BLE001 -- shadow, never blocking

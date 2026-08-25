@@ -40,10 +40,16 @@ def _mock_transfers(monkeypatch, transfers, *, available=True, error=None):
 
 
 def _mock_price(monkeypatch, price):
+    """Mocks the spot-price lookup AND bypasses the realistic fill/exit
+    model (fee + price-impact, added 25/08) so tests exercising the
+    open/close/cursor LOGIC keep using an exact price -- the realism model
+    itself has its own dedicated tests below."""
     async def _fake(contract):
-        return price
+        return price, 10_000_000.0  # arbitrarily deep pool -- impact negligible
 
-    monkeypatch.setattr(wcs, "_current_price_usd", _fake)
+    monkeypatch.setattr(wcs, "_current_price_and_liquidity_usd", _fake)
+    monkeypatch.setattr(wcs, "_realistic_fill_price", lambda spot, liquidity: spot)
+    monkeypatch.setattr(wcs, "_realistic_exit_price", lambda spot, liquidity: spot)
 
 
 @pytest.mark.asyncio
@@ -225,6 +231,60 @@ async def test_current_price_accepts_a_pool_above_liquidity_floor(monkeypatch):
     monkeypatch.setattr(ds, "fetch_token_pairs", _fake_pairs)
     price = await wcs._current_price_usd(TOKEN)
     assert price == 0.05
+
+
+def test_realistic_fill_price_is_worse_than_spot_for_a_buy():
+    """25/08, operator request ("met toi en condition reel... les frais"):
+    a buy must fill ABOVE spot (fee + price impact both push the paid price
+    up), never at the exact quoted price -- the bug this fix closes."""
+    fill = wcs._realistic_fill_price(1.0, 50_000.0)
+    assert fill > 1.0
+
+
+def test_realistic_exit_price_is_worse_than_spot_for_a_sell():
+    exit_price = wcs._realistic_exit_price(1.0, 50_000.0)
+    assert exit_price < 1.0
+
+
+def test_realistic_prices_degrade_more_on_a_thinner_pool():
+    """Price impact is size-dependent -- the SAME $1,000 order must move the
+    price more on a thin pool than on a deep one, never a flat fee alone."""
+    fill_thin = wcs._realistic_fill_price(1.0, 2_000.0)
+    fill_deep = wcs._realistic_fill_price(1.0, 5_000_000.0)
+    assert fill_thin > fill_deep > 1.0
+
+
+def test_realistic_price_passes_through_none_spot():
+    assert wcs._realistic_fill_price(None, 50_000.0) is None
+    assert wcs._realistic_exit_price(None, 50_000.0) is None
+
+
+@pytest.mark.asyncio
+async def test_scan_wallet_realized_pnl_is_worse_than_naive_spot_to_spot(monkeypatch):
+    """End-to-end regression: without the fee/impact model, a spot 1.0 -> 2.0
+    round trip would show exactly +100% (POSITION_SIZE_USD). With it, on a
+    real (finite) pool, the fee and impact on BOTH legs must eat into that,
+    so the realized return comes in below the naive figure -- catches a
+    future regression where scan_wallet stops calling the realistic helpers."""
+    from aria_core.services import dexscreener as ds
+
+    def _pairs_at(price):
+        async def _fake(contract, *, chain="base"):
+            return [ds.PairSnapshot(liquidity_usd=50_000.0, price_usd=price)]
+        return _fake
+
+    monkeypatch.setattr(ds, "fetch_token_pairs", _pairs_at(1.0))
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    await wcs.scan_wallet(WALLET, META)
+
+    monkeypatch.setattr(ds, "fetch_token_pairs", _pairs_at(2.0))
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xsell1", from_address=WALLET)])
+    await wcs.scan_wallet(WALLET, META)
+
+    stats = (await wcs.summary())[WALLET]
+    assert stats["closed_positions"] == 1
+    naive_pnl = wcs.POSITION_SIZE_USD * (2.0 / 1.0 - 1.0)  # +100%, no fee/impact
+    assert stats["realized_pnl_usd"] < naive_pnl
 
 
 @pytest.mark.asyncio
