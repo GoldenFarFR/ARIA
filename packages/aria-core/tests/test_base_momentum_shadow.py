@@ -12,6 +12,7 @@ import aiosqlite
 import pytest
 
 from aria_core import base_momentum_shadow as shadow
+from aria_core import shadow_candle_archive
 from aria_core.services.dexscreener import PairSnapshot
 from aria_core.services.geckoterminal import OHLCVResult, PoolSnapshot, TrendingPool
 from aria_core.skills.ta_levels import Candle
@@ -202,6 +203,49 @@ async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     shadow._ensured_db_paths.clear()
     logged = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged == 0  # fails closed, never raises into the caller
+
+
+# --- shadow_candle_archive wiring (25/08 -- this module never had it, ------
+# unlike its robinhood_pump/solana_late_bonding twins) ----------------------
+
+@pytest.mark.asyncio
+async def test_record_signals_archives_before_candles(monkeypatch):
+    captured = []
+
+    async def fake_store_candles(**kwargs):
+        captured.append(kwargs)
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+    ohlcv = OHLCVResult(candles=[_candle(1000.0, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True)
+    monkeypatch.setattr(shadow, "geckoterminal_client", FakeClient({}, ohlcv_by_pool={"poolA": ohlcv}))
+
+    logged = await shadow.record_signals([_pool(pool_address="poolA", m5=30.0)], chain=CHAIN)
+
+    assert logged == 1
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["module"] == "base_momentum"
+    assert call["phase"] == "before"
+    assert call["pool_address"] == "poolA"
+    assert call["chain"] == CHAIN
+    assert call["candles"] == ohlcv.candles
+    rows = await _rows()
+    assert call["position_id"] == rows[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_record_signals_before_candle_archive_failure_never_blocks_logging(monkeypatch):
+    async def fake_store_candles(**_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+    ohlcv = OHLCVResult(candles=[_candle(1000.0, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True)
+    monkeypatch.setattr(shadow, "geckoterminal_client", FakeClient({}, ohlcv_by_pool={"poolA": ohlcv}))
+
+    logged = await shadow.record_signals([_pool(pool_address="poolA", m5=30.0)], chain=CHAIN)
+
+    assert logged == 1  # the row is still logged despite the archive call raising
 
 
 # --- _snapshot_from_ws / ws_feed wiring (24/08, evm_swap_ws.py integration) -
@@ -909,6 +953,56 @@ async def test_advance_exit_never_raises_on_db_failure(monkeypatch):
 
 def _candle(ts: float, *, open_: float, high: float, low: float, close: float, volume: float = 0.0) -> Candle:
     return Candle(ts=int(ts), open=open_, high=high, low=low, close=close, volume=volume)
+
+
+# --- shadow_candle_archive wiring, "after" phase (25/08) --------------------
+
+@pytest.mark.asyncio
+async def test_advance_exit_archives_after_candles(monkeypatch):
+    captured = []
+
+    async def fake_store_candles(**kwargs):
+        captured.append(kwargs)
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    detected_epoch = shadow._epoch_of((await _rows())[0]["detected_at"])
+    ohlcv = OHLCVResult(
+        candles=[_candle(detected_epoch + 60, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True,
+    )
+    client = FakeClient({"poolA": 1.05}, ohlcv_by_pool={"poolA": ohlcv})
+
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["module"] == "base_momentum"
+    assert call["phase"] == "after"
+    assert call["pool_address"] == "poolA"
+    assert call["chain"] == CHAIN
+    assert call["candles"] == ohlcv.candles
+    rows = await _rows()
+    assert call["position_id"] == rows[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_after_candle_archive_failure_never_blocks_the_close(monkeypatch):
+    async def fake_store_candles(**_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=125.0)
+    detected_epoch = shadow._epoch_of((await _rows())[0]["detected_at"])
+    ohlcv = OHLCVResult(
+        candles=[_candle(detected_epoch + 60, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True,
+    )
+    client = FakeClient({"poolA": 1.05}, ohlcv_by_pool={"poolA": ohlcv})
+
+    await shadow.advance_exit_simulation(client, chain=CHAIN)
+
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is not None  # some close still happens despite the archive call raising
 
 
 # --- advance_exit_simulation: 16/08 OHLCV-window fix (real bug repro) ----

@@ -730,6 +730,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
     fetched ``pools`` in the first place. Returns the number of NEW rows
     logged (0 on failure or when nothing qualifies)."""
     logged = 0
+    _rows_for_candle_archive: list[tuple[int, TrendingPool]] = []
     try:
         await _ensure_table()
         async with aiosqlite.connect(_db_path()) as db:
@@ -819,7 +820,7 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
                     pool.price_usd, trade_size_usd=SIMULATED_TRADE_SIZE_USD,
                     reserve_usd=pool.reserve_usd, side="buy",
                 )
-                await db.execute(
+                cur = await db.execute(
                     """
                     INSERT INTO base_momentum_shadow_log (
                         pool_address, token_address, chain, symbol, status,
@@ -843,8 +844,42 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "base") -> i
                         pool.dex_id,
                     ),
                 )
+                new_id = cur.lastrowid
                 logged += 1
+                _rows_for_candle_archive.append((new_id, pool))
             await db.commit()
+
+        # 25/08 -- this module never wired shadow_candle_archive despite the
+        # 18/08 standing convention (every shadow module archives before/after
+        # candles), unlike its robinhood_pump/solana_late_bonding twins. Real
+        # gap: Base's own price path around entry was never stored, only the
+        # entry/peak/exit snapshots -- found while diagnosing why Base's
+        # realistic PnL kept worsening (-65% to -76% over three straight
+        # days) with no candle history to actually inspect it against. Same
+        # pattern as robinhood_pump_shadow's own fix: deliberately run AFTER
+        # the ``async with aiosqlite.connect`` block above has already
+        # closed, never inside that loop -- a network call while the
+        # connection is held open is the anti-pattern this mirrors away from.
+        # Best-effort: a fetch/archive failure here never un-logs the signal
+        # row already committed above.
+        for new_id, pool in _rows_for_candle_archive:
+            try:
+                before_ohlcv: OHLCVResult = await geckoterminal_client.get_ohlcv(
+                    pool.pool_address, network=chain, mode="scalping_5m",
+                )
+                if before_ohlcv.available and before_ohlcv.candles:
+                    from aria_core import shadow_candle_archive
+
+                    await shadow_candle_archive.store_candles(
+                        module="base_momentum", position_id=new_id,
+                        pool_address=pool.pool_address, chain=chain, phase="before",
+                        candles=before_ohlcv.candles,
+                    )
+            except Exception as exc:  # noqa: BLE001 -- archiving must never break the signal log
+                logger.info(
+                    "base_momentum_shadow: before-candle archive failed for %s (%s)",
+                    pool.pool_address, exc,
+                )
     except Exception as exc:  # noqa: BLE001 -- shadow logging must never break the caller
         logger.info("base_momentum_shadow: record_signals failed (%s)", exc)
     return logged
@@ -1274,6 +1309,26 @@ async def advance_exit_simulation(
                     window_high = max(c.high for c in new_candles)
                     window_low = min(c.low for c in new_candles)
                     window_volume_usd = (window_volume_usd or 0.0) + sum(c.volume for c in new_candles)
+                    # 25/08, same standing convention as the "before" archive
+                    # above -- zero extra network cost, these candles were
+                    # already fetched for the window high/low. Closes the gap
+                    # this module never had: a future recalibration can now
+                    # actually re-simulate LIQUIDITY_COLLAPSE_EXIT_PCT/TRAILING
+                    # constants against Base's real price path, not just the
+                    # entry/peak/exit snapshots.
+                    try:
+                        from aria_core import shadow_candle_archive
+
+                        await shadow_candle_archive.store_candles(
+                            module="base_momentum", position_id=row["id"],
+                            pool_address=row["pool_address"], chain=chain, phase="after",
+                            candles=new_candles,
+                        )
+                    except Exception as exc:  # noqa: BLE001 -- archiving must never break the batch
+                        logger.info(
+                            "base_momentum_shadow: after-candle archive failed for %s (%s)",
+                            row["pool_address"], exc,
+                        )
 
             # Fold the window with the literal current spot -- covers both a
             # closed candle the ladder hasn't reached yet AND a fresh tick
