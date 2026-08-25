@@ -1,12 +1,12 @@
 """CabalSpy client -- multi-chain labelled KOL/Smart Money/Whale wallets
-(07/23, explicit operator decision: candidate source for wallet-scoring,
-complementing `wallet_candidate_sourcing.py`).
+(07/23, explicit operator decision). Originally a candidate source for the
+wallet-scoring pipeline (`wallet_candidate_sourcing.py`); that pipeline was
+retired entirely 25/08 (operator decision) -- this client now only feeds
+`skills/cabalspy_candidate_sourcing.py`'s read-only KOL directory
+(`cabalspy_kol_wallets`), never a trading signal.
 
-ASSUMED policy change: `wallet_candidate_sourcing.py` had a "zero new
-external dependency" doctrine (Nansen/Zerion already ruled out for this
-reason). CabalSpy is adopted here on explicit operator decision after
-real verification -- Free tier confirmed (0$/month, 10,000 credits, 5 req/s,
-no credit card, `cabalspy.xyz/pricing`, operator screenshot 07/23).
+Free tier confirmed (0$/month, 10,000 credits, 5 req/s, no credit card,
+`cabalspy.xyz/pricing`, operator screenshot 07/23).
 
 Verified under real conditions (07/23, direct curl by the operator, key
 never handled by this session):

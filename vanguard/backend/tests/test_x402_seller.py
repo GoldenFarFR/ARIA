@@ -41,12 +41,14 @@ def test_mount_x402_seller_wires_correctly_when_gate_on(monkeypatch):
     mount_x402_seller(app)  # must not raise
 
 
-def test_mount_x402_seller_declares_bazaar_discovery_on_both_routes(monkeypatch):
-    """07/08, operator go-ahead: both live paid routes must carry a real
+def test_mount_x402_seller_declares_bazaar_discovery_on_live_routes(monkeypatch):
+    """07/08, operator go-ahead: every live paid route must carry a real
     Bazaar discovery extension, or the CDP facilitator never catalogs/indexes
-    them -- the whole point of listing (see docs/HANDOFF_X402.md, "no
+    it -- the whole point of listing (see docs/HANDOFF_X402.md, "no
     discoverability" gap). Locks the invariant rather than trusting the wiring
-    stays correct after a future refactor."""
+    stays correct after a future refactor. 25/08 -- walletscore removed along
+    with the entire wallet-scoring mechanism (operator decision), b20score is
+    now the only live route."""
     from fastapi import FastAPI
 
     from app.x402_seller import mount_x402_seller
@@ -55,11 +57,11 @@ def test_mount_x402_seller_declares_bazaar_discovery_on_both_routes(monkeypatch)
     app = FastAPI()
     mount_x402_seller(app)
     routes = app.user_middleware[0].kwargs["routes"]
-    for path in ("GET /api/x402/walletscore", "GET /api/x402/b20score"):
-        extensions = routes[path].extensions
-        assert extensions is not None and "bazaar" in extensions, (
-            f"{path} is missing its Bazaar discovery extension -- undiscoverable by real payers"
-        )
+    path = "GET /api/x402/b20score"
+    extensions = routes[path].extensions
+    assert extensions is not None and "bazaar" in extensions, (
+        f"{path} is missing its Bazaar discovery extension -- undiscoverable by real payers"
+    )
 
 
 def test_x402_prefix_exempted_from_privy_session_gate():
@@ -77,53 +79,8 @@ async def test_route_not_mounted_when_gate_off():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.get("/api/x402/walletscore", params={"address": "0x" + "1" * 40})
+        res = await client.get("/api/x402/b20score", params={"contract": "0x" + "1" * 40})
     assert res.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_exists_reflects_scored_state(monkeypatch):
-    from app.api.routes import x402_signals
-
-    async def fake_score(address: str):
-        return 82.5 if address == "0xscored" else None
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-
-    scored = await x402_signals.x402_wallet_score_exists(address="0xscored")
-    assert scored == {"wallet": "0xscored", "scored": True}
-
-    unscored = await x402_signals.x402_wallet_score_exists(address="0xneverscored")
-    assert unscored == {"wallet": "0xneverscored", "scored": False}
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_returns_404_when_never_scored(monkeypatch):
-    from fastapi import HTTPException
-
-    from app.api.routes import x402_signals
-
-    async def fake_score(address: str):
-        return None
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await x402_signals.x402_wallet_score(address="0xneverscored")
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_returns_composite_percentile(monkeypatch):
-    from app.api.routes import x402_signals
-
-    async def fake_score(address: str):
-        return 91.2
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-
-    result = await x402_signals.x402_wallet_score(address="0xSCORED")
-    assert result == {"wallet": "0xscored", "composite_percentile": 91.2}
 
 
 # ── record_sale wiring (26/07) -- record_sale() existed since 07/24 but was ──
@@ -154,7 +111,7 @@ async def test_record_sale_noop_when_request_is_none(monkeypatch):
         raise AssertionError("record_sale should never be called without a request")
 
     monkeypatch.setattr(ledger_module, "record_sale", fail_if_called)
-    await x402_signals._record_sale_if_paid(None, "wallet_score")
+    await x402_signals._record_sale_if_paid(None, "b20_safety")
 
 
 @pytest.mark.asyncio
@@ -167,7 +124,7 @@ async def test_record_sale_noop_when_no_payment_payload(monkeypatch):
         raise AssertionError("record_sale should never be called without a payment")
 
     monkeypatch.setattr(ledger_module, "record_sale", fail_if_called)
-    await x402_signals._record_sale_if_paid(_FakeRequest(payment_payload=None), "wallet_score")
+    await x402_signals._record_sale_if_paid(_FakeRequest(payment_payload=None), "b20_safety")
 
 
 @pytest.mark.asyncio
@@ -179,11 +136,11 @@ async def test_record_sale_calls_ledger_with_payer_and_catalog_price(monkeypatch
     monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
 
     request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyerAddress"))
-    await x402_signals._record_sale_if_paid(request, "wallet_score")
+    await x402_signals._record_sale_if_paid(request, "b20_safety")
 
     sales = await ledger.list_sales()
     assert len(sales) == 1
-    assert sales[0]["product"] == "wallet_score"
+    assert sales[0]["product"] == "b20_safety"
     assert sales[0]["payer_address"] == "0xBuyerAddress"
     assert sales[0]["amount_usd"] == pytest.approx(0.10)
     assert sales[0]["status"] == "ok"
@@ -200,7 +157,7 @@ async def test_record_sale_failure_never_raises(monkeypatch):
 
     monkeypatch.setattr(ledger_module, "record_sale", raising)
     request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
-    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise
+    await x402_signals._record_sale_if_paid(request, "b20_safety")  # must not raise
 
 
 @pytest.mark.asyncio
@@ -245,7 +202,7 @@ async def test_record_sale_notify_failure_never_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(telegram_bot_module, "send_message", raising_send)
 
     request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
-    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise
+    await x402_signals._record_sale_if_paid(request, "b20_safety")  # must not raise
 
 
 @pytest.mark.asyncio
@@ -265,97 +222,7 @@ async def test_record_sale_skips_notify_when_ledger_write_fails(monkeypatch):
     monkeypatch.setattr(telegram_bot_module, "send_message", fail_if_called)
 
     request = _FakeRequest(payment_payload=_FakePaymentPayload("0xBuyer"))
-    await x402_signals._record_sale_if_paid(request, "wallet_score")  # must not raise/call notify
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_route_records_a_sale_when_paid(monkeypatch, tmp_path):
-    from aria_core import x402_revenue_ledger as ledger
-    from app.api.routes import x402_signals
-
-    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
-
-    async def fake_score(address: str):
-        return 77.0
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-
-    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
-    result = await x402_signals.x402_wallet_score(address="0xScored", request=request)
-
-    assert result == {"wallet": "0xscored", "composite_percentile": 77.0}
-    sales = await ledger.list_sales()
-    assert len(sales) == 1
-    assert sales[0]["payer_address"] == "0xPayer"
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_404_never_records_a_sale(monkeypatch, tmp_path):
-    from fastapi import HTTPException
-
-    from aria_core import x402_revenue_ledger as ledger
-    from app.api.routes import x402_signals
-
-    monkeypatch.setattr(ledger, "DB_PATH", str(tmp_path / "ledger.db"))
-
-    async def fake_score(address: str):
-        return None
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-
-    request = _FakeRequest(payment_payload=_FakePaymentPayload("0xPayer"))
-    with pytest.raises(HTTPException):
-        await x402_signals.x402_wallet_score(address="0xneverscored", request=request)
-
-    assert await ledger.list_sales() == []
-
-
-# ── product health tracking (05/08, operator request: eviter de facturer ────
-# un x402 casse ou un resultat pas satisfaisant) ─────────────────────────────
-
-@pytest.mark.asyncio
-async def test_wallet_score_success_records_health_attempt(monkeypatch):
-    from app.api.routes import x402_signals
-    from aria_core import x402_product_health as health
-
-    async def fake_score(address: str):
-        return 42.0
-
-    recorded = []
-
-    async def fake_record_attempt(product, outcome):
-        recorded.append((product, outcome))
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
-
-    await x402_signals.x402_wallet_score(address="0xScored")
-
-    assert recorded == [("wallet_score", "success")]
-
-
-@pytest.mark.asyncio
-async def test_wallet_score_404_records_health_attempt_as_no_result(monkeypatch):
-    from fastapi import HTTPException
-
-    from app.api.routes import x402_signals
-    from aria_core import x402_product_health as health
-
-    async def fake_score(address: str):
-        return None
-
-    recorded = []
-
-    async def fake_record_attempt(product, outcome):
-        recorded.append((product, outcome))
-
-    monkeypatch.setattr(x402_signals, "latest_score_for_wallet", fake_score)
-    monkeypatch.setattr(health, "record_attempt", fake_record_attempt)
-
-    with pytest.raises(HTTPException):
-        await x402_signals.x402_wallet_score(address="0xneverscored")
-
-    assert recorded == [("wallet_score", "no_result")]
+    await x402_signals._record_sale_if_paid(request, "b20_safety")  # must not raise/call notify
 
 
 # ── B20 route (31/07) -- anti-abuse guardrails baked in from the start ──────

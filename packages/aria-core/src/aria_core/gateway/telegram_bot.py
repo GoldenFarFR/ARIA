@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -34,15 +33,6 @@ from aria_core.integrations.host_hooks import (
     reset_operator_failed_attempts,
 )
 from aria_core.runtime import settings
-# Wallet card/report formatting (#157 follow-up, 15/07) -- factored into
-# smart_money.py so the background cycle `wallet_scan_queue.py` reuses
-# EXACTLY the same text as `/walletscore`, never a second, diverging
-# formatting. Re-exported under the old private name so we don't break existing
-# tests that import it from this module.
-from aria_core.services.smart_money import (
-    chain_display_label as _chain_display_label,
-    format_wallet_scoring_report as _format_wallet_scoring_report,
-)
 
 if TYPE_CHECKING:
     from telegram import Update
@@ -933,29 +923,6 @@ async def _handle_trading_mode(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     await _reply(message, f"Mode de trading du test Milly basculé sur : {arg}.")
-
-
-async def _handle_topwallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/topwallets -- 21/07: "best investors" leaderboard (capacity
-    MAX_LEADERBOARD_SIZE, real composite_percentile -- never a
-    coordination/Sybil score, smart_money_leaderboard.py). Admin-only, read
-    only, no new network call (only reads what's already been ranked
-    by the background cycle)."""
-    if not await _admin_check_reply(update):
-        return
-    from aria_core.services.smart_money_leaderboard import MAX_LEADERBOARD_SIZE, get_leaderboard
-
-    rows = await get_leaderboard()
-    if not rows:
-        await _reply(
-            update.message,
-            f"Classement vide -- aucun wallet noté n'a encore rejoint le top {MAX_LEADERBOARD_SIZE}.",
-        )
-        return
-    lines = ["🏆 Top investisseurs (classement réel par performance, jamais un signal de coordination)"]
-    for r in rows:
-        lines.append(f"  {r['rank']}. {r['wallet']} -- percentile {r['composite_percentile']:.0f}e")
-    await _reply(update.message, "\n".join(lines))
 
 
 async def _handle_runway_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2620,11 +2587,8 @@ TELEGRAM_MENU_COMMANDS: list[tuple[str, str]] = [
     ("test_spend", "Test wallet_guard (aucune dépense réelle)"),
     ("these", "Journalise une thèse (BUY/WATCH/SELL/AVOID)"),
     ("theses", "Liste des thèses encore ouvertes"),
-    ("topwallets", "Classement des meilleurs investisseurs (percentile réel)"),
     ("track", "Pertinence du track-record (hit-rate, calibration)"),
     ("unlockmobile", "Débloque l'historique d'échecs de connexion du compte mobile (canal de secours)"),
-    ("walletqueue", "Ajoute un wallet à la file de fond (progressif), ou affiche le statut de la file sans argument"),
-    ("walletscore", "Note un wallet (analyse immédiate, 1 passage)"),
     ("watchlist", "Top candidats du pool screené"),
     ("whoami", "Ton identité/rôle Telegram (ID, admin ou non)"),
     ("x", "Statut/profil/publication X (status, profile, compose, post)"),
@@ -2888,178 +2852,6 @@ async def _handle_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await _reply_manual_candidates_queued(message, addresses, chain)
 
-
-# Dedicated concurrency guard (#157): a multi-token
-# wallet scan can take up to ~1-2 min (Blockscout pagination +
-# up to the token cap of `wallet_scoring_weights.WEIGHTS.max_tokens_analyzed`
-# x throttled GeckoTerminal), must not compete for the concurrency
-# budget of any other heavy command.
-_WALLET_SCORE_MAX_CONCURRENT = 2
-_WALLET_SCORE_MAX_WAITERS = 4
-_wallet_score_semaphore = asyncio.Semaphore(_WALLET_SCORE_MAX_CONCURRENT)
-_wallet_score_waiters = 0
-
-
-async def _run_wallet_score(message, addresses: list[str]) -> None:
-    global _wallet_score_waiters
-    if _wallet_score_semaphore.locked() and _wallet_score_waiters >= _WALLET_SCORE_MAX_WAITERS:
-        await _reply(message, "⏳ File d'attente /walletscore pleine, réessaie dans quelques minutes.")
-        return
-    if _wallet_score_semaphore.locked():
-        await _reply(message, "⏳ Une autre analyse wallet est en cours, mise en file d'attente...")
-
-    _wallet_score_waiters += 1
-    try:
-        await _wallet_score_semaphore.acquire()
-    finally:
-        _wallet_score_waiters -= 1
-    try:
-        await _wallet_score_analyze_and_reply(message, addresses)
-    finally:
-        _wallet_score_semaphore.release()
-
-
-async def _wallet_score_analyze_and_reply(message, addresses: list[str]) -> None:
-    from aria_core.services.geckoterminal import geckoterminal_client
-    from aria_core.services.goplus import goplus_client
-    from aria_core.services.smart_money import score_wallets
-
-    # ``chains``/``client`` omitted: score_wallets uses the real production
-    # multi-chain registry (Base/Ethereum/BNB, #157 14/07) -- the same
-    # 0x address is valid on all of them, ARIA tries each chain and consolidates.
-    report = await score_wallets(addresses, gecko=geckoterminal_client, goplus=goplus_client)
-
-    if not report.available:
-        await _reply(message, f"⚠️ {report.error or 'analyse indisponible'}")
-        return
-
-    await _reply(message, _format_wallet_scoring_report(report))
-
-
-async def _handle_walletscore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/walletscore <a1> [a2] [a3] — in-house "smart wallet" evaluator (#157), read
-    only: 1 to 3 WALLET addresses (not a token contract, see /scan for that) ->
-    hard disqualifiers, composite score (FIFO PnL/win-rate, Sortino, recurring
-    early entry across multiple launches, diversification, drawdown), separate
-    "positive suspect" flag, LLM thesis. Always a confirmation/context, never a
-    trigger. Gate ``ARIA_WALLET_SCORING_ENABLED``, OFF by default."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-
-    from aria_core.services.smart_money import wallet_scoring_enabled
-
-    if not wallet_scoring_enabled():
-        await _reply(message, "Évaluateur wallet désactivé (ARIA_WALLET_SCORING_ENABLED).")
-        return
-
-    text = (message.text or "").strip()
-    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
-    if not body and context.args:
-        body = " ".join(context.args).strip()
-
-    addresses = [p.strip() for p in body.split() if p.strip()]
-    if not addresses or len(addresses) > 3 or not all(_SCAN_ADDR_RE.match(a) for a in addresses):
-        await _reply(
-            message,
-            "Usage : /walletscore <adresse_wallet> [adresse2] [adresse3]\n"
-            "1 à 3 adresses WALLET (pas un contrat token) — attendu : 0x suivi de 40 caractères hexadécimaux.",
-        )
-        return
-
-    await _reply(message, "⏳ Analyse wallet en cours (peut prendre jusqu'à quelques minutes)...")
-    await _run_wallet_score(message, addresses)
-
-
-async def _handle_walletqueue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/walletqueue <a1> [a2] ...] — injects one or more wallets into the BACKGROUND
-    scan queue (#157 follow-up, 15/07): unlike
-    `/walletscore` (a single pass, immediate reply), each queued wallet
-    advances by several tokens on every heartbeat pass
-    (`wallet_scan_queue_cycle`) with no further operator action --
-    ARIA notifies progress every `PROGRESS_NOTIFY_STEP` (50) tokens
-    covered, then the full final report once coverage is complete.
-    PERMANENT tracking (#157 follow-up 2, 15/07): the wallet NEVER leaves the queue at
-    100% -- it switches to weekly monitoring (new activity
-    detected and notified without ever requesting full coverage again),
-    removed only after 3 months with no real on-chain activity.
-    Double gate: ``ARIA_WALLET_SCORING_ENABLED`` (the engine itself) AND
-    ``ARIA_WALLET_SCAN_QUEUE_ENABLED`` (the background cycle) — both OFF by
-    default."""
-    if not await _admin_check_reply(update):
-        return
-    message = update.message
-    if not message:
-        return
-
-    from aria_core.services.smart_money import wallet_scoring_enabled
-    from aria_core.services.wallet_scan_queue import (
-        enqueue_wallets,
-        queue_size,
-        queue_status_summary,
-        wallet_scan_queue_enabled,
-    )
-
-    if not wallet_scoring_enabled():
-        await _reply(message, "Évaluateur wallet désactivé (ARIA_WALLET_SCORING_ENABLED).")
-        return
-    if not wallet_scan_queue_enabled():
-        await _reply(message, "File d'attente en arrière-plan désactivée (ARIA_WALLET_SCAN_QUEUE_ENABLED).")
-        return
-
-    text = (message.text or "").strip()
-    body = text.split(maxsplit=1)[1].strip() if " " in text else ""
-    if not body and context.args:
-        body = " ".join(context.args).strip()
-
-    if not body:
-        # /walletqueue with no argument -- queue status, never a plain
-        # usage message (23/07, #29 follow-up: before this fix, no
-        # command let anyone check whether the queue was actually progressing).
-        status = await queue_status_summary()
-        lines = [
-            f"📋 File d'attente wallet — {status['total']} au total.",
-            f"Jamais tenté(s) : {status['never_attempted']}",
-            f"En rattrapage (déjà tenté, pas encore à 100%) : {status['in_progress']}",
-            f"En surveillance (déjà à 100%) : {status['monitoring']}",
-        ]
-        if status["oldest_never_attempted_wallet"]:
-            days = status["oldest_never_attempted_days"] or 0
-            lines.append(
-                f"Le plus ancien jamais tenté : {status['oldest_never_attempted_wallet']} "
-                f"(en attente depuis {days:.1f} jour(s))"
-            )
-        if status["last_scored_wallet"]:
-            lines.append(
-                f"Dernier scan réel : {status['last_scored_wallet']} à {status['last_scored_at']}"
-            )
-        await _reply(message, "\n".join(lines))
-        return
-
-    addresses = [p.strip() for p in body.split() if p.strip()]
-    if not addresses or not all(_SCAN_ADDR_RE.match(a) for a in addresses):
-        await _reply(
-            message,
-            "Usage : /walletqueue <adresse_wallet> [adresse2] [adresse3] ...\n"
-            "Ajoute à la file d'attente de fond — attendu : 0x suivi de 40 caractères hexadécimaux.\n"
-            "Sans argument : affiche l'état actuel de la file.",
-        )
-        return
-
-    added = await enqueue_wallets(addresses)
-    total = await queue_size()
-    skipped = len(addresses) - len(added)
-    lines = [f"✅ {len(added)} wallet(s) ajouté(s) à la file d'attente en arrière-plan."]
-    if skipped:
-        lines.append(f"({skipped} déjà en file, ignoré(s))")
-    lines.append(
-        f"File d'attente : {total} wallet(s) au total. Tu seras notifié tous les 50 tokens "
-        "couverts, puis dès la couverture complète -- suivi hebdomadaire ensuite pour toujours "
-        "(sauf 3 mois d'inactivité on-chain)."
-    )
-    await _reply(message, "\n".join(lines))
 
 
 async def _handle_goplusqueue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3902,8 +3694,6 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test_spend", _handle_test_spend))
     app.add_handler(CommandHandler("scan", _handle_scan))
     app.add_handler(CommandHandler("add", _handle_add))
-    app.add_handler(CommandHandler("walletscore", _handle_walletscore))
-    app.add_handler(CommandHandler("walletqueue", _handle_walletqueue))
     app.add_handler(CommandHandler("goplusqueue", _handle_goplusqueue))
     app.add_handler(CommandHandler("order", _handle_order))
     app.add_handler(CommandHandler("llmspend", _handle_llmspend))
@@ -3917,7 +3707,6 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("these", _handle_thesis))
     app.add_handler(CommandHandler("issue", _handle_issue))
     app.add_handler(CommandHandler("theses", _handle_theses))
-    app.add_handler(CommandHandler("topwallets", _handle_topwallets))
     app.add_handler(CommandHandler("runwayapi", _handle_runway_api))
     app.add_handler(CommandHandler("github", _handle_github))
     app.add_handler(CommandHandler("canal", _handle_aria_channel))

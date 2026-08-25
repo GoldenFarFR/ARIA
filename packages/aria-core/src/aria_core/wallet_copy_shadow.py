@@ -193,56 +193,12 @@ CREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (
 )
 """
 
-# 14/08 (#146) -- backlog item: "hook de tracking continu des wallets
-# performants pour v11" (a future scalping pocket, not yet designed --
-# operator-confirmed this is what "v11" means). Real gap found investigating
-# it: smart_money_leaderboard.py already scores wallets dynamically (feeds
-# the real leaderboard), but this module's TRACKED_WALLETS above stays a
-# hand-picked, never-updated list of 8 -- the two mechanisms never connect.
-# This table + discover_leaderboard_candidates() close that gap: wallets
-# that clear a percentile threshold on the REAL leaderboard get added here
-# and shadow-copied continuously, same engine as the 8 static wallets, but
-# kept in a SEPARATE table/tier (never merged into TRACKED_WALLETS itself)
-# -- same "kept honest, never blended" doctrine as the existing 3 tiers.
-# This is deliberately just the data-collection seam for v11, not v11
-# itself (still undesigned) -- CLAUDE.md anticipation doctrine: "lay the
-# seam now, even empty, rather than rewriting later."
-_DYNAMIC_CANDIDATES_DDL = """
-CREATE TABLE IF NOT EXISTS wallet_copy_shadow_dynamic_candidates (
-    wallet_address TEXT PRIMARY KEY,
-    added_at TEXT NOT NULL,
-    composite_percentile_at_add REAL NOT NULL
-)
-"""
-
-# Arbitrary first calibration, not empirically derived -- the real
-# leaderboard has only 1 active wallet at 37.5%p as of 14/08 (verified live
-# against smart_money_leaderboard), well under this floor, so this seam
-# starts genuinely empty and stays that way until #147/#151's sourcing work
-# grows the leaderboard's population. Recalibrate once enough wallets clear
-# a real percentile to judge a meaningful cutoff -- never lower this just to
-# force candidates through before the leaderboard itself has real signal.
-LEADERBOARD_DISCOVERY_MIN_PERCENTILE = 80.0
-
-# 15/08 (#172) -- the dynamic-candidates table had NO lifecycle: once added,
-# a wallet stayed tracked (scanned every cycle via Blockscout, sequentially,
-# forever) with no way back out, even once dormant or no longer competitive.
-# Real gap: #147/#151's sourcing work is actively growing the leaderboard's
-# population (the very thing #146's own comment above says this seam is
-# waiting for) -- unbounded growth here means run_scan_cycle's sequential
-# scan only ever gets slower, never self-corrects. Same "unique registry with
-# a real lifecycle" doctrine as goplus_watchlist.add_or_touch (worst-first
-# eviction when full) -- deliberately NOT applied to the 8 hand-picked
-# TRACKED_WALLETS, which stay permanent by design (manually vetted evidence,
-# never auto-pruned).
-MAX_DYNAMIC_CANDIDATES = 20
-
-# Absolute TTL: a wallet's percentile at discovery is a SNAPSHOT, not a
-# standing guarantee -- tracking it forever just because it's still
-# technically "active" would let an early-lucky wallet ride on a stale
-# justification indefinitely. Forces periodic re-discovery instead (a wallet
-# still worth tracking clears the percentile bar again on its own).
-DYNAMIC_CANDIDATE_MAX_AGE_DAYS = 90
+# 14/08 (#146) -- this module used to also dynamically source wallets off
+# the real smart_money_leaderboard (wallet_copy_shadow_dynamic_candidates,
+# discover_leaderboard_candidates()/evict_stale_dynamic_candidates()) on top
+# of the 8 hand-picked TRACKED_WALLETS below. Removed 25/08 along with the
+# entire wallet-scoring mechanism it depended on (operator decision) -- this
+# module now shadow-copies TRACKED_WALLETS only.
 
 _table_ready = False
 
@@ -254,7 +210,6 @@ async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_POSITION_DDL)
         await db.execute(_CURSOR_DDL)
-        await db.execute(_DYNAMIC_CANDIDATES_DDL)
         # Hot migration (08/08): last_transfer_at added after this table was
         # first deployed -- a prod DB that already ran a cycle needs it added
         # in place, same pattern as paper_trader.py's _ADDED_COLUMNS.
@@ -483,184 +438,12 @@ async def refresh_open_marks(wallet: str) -> None:
         logger.info("wallet_copy_shadow: mark refresh failed for %s (%s)", wallet[:10], exc)
 
 
-async def discover_leaderboard_candidates(
-    *, min_percentile: float = LEADERBOARD_DISCOVERY_MIN_PERCENTILE,
-) -> int:
-    """(#146, 14/08) Pulls wallets off the REAL ``smart_money_leaderboard``
-    (dynamic scoring, fed by ``wallet_scan_queue``) that clear
-    ``min_percentile`` and aren't already tracked (statically or
-    dynamically) -- adds them to ``wallet_copy_shadow_dynamic_candidates``
-    so the next ``run_scan_cycle()`` picks them up automatically. Pure
-    local-DB read + insert, same doctrine as the rest of this module (no
-    network call of its own). Best-effort: never raises, returns 0 on any
-    failure. Returns the count of NEWLY added wallets."""
-    try:
-        await _ensure_tables()
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                "SELECT wallet, composite_percentile FROM smart_money_leaderboard "
-                "WHERE composite_percentile >= ?",
-                (min_percentile,),
-            )
-            candidates = await cursor.fetchall()
-            if not candidates:
-                return 0
-            existing_static = set(TRACKED_WALLETS.keys())
-            added = 0
-            for wallet, percentile in candidates:
-                wallet_l = wallet.lower()
-                if wallet_l in existing_static:
-                    continue
-                cursor = await db.execute(
-                    "SELECT 1 FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
-                    (wallet_l,),
-                )
-                if await cursor.fetchone():
-                    continue
-
-                count_row = await (
-                    await db.execute("SELECT COUNT(*) FROM wallet_copy_shadow_dynamic_candidates")
-                ).fetchone()
-                count = int(count_row[0]) if count_row else 0
-                if count >= MAX_DYNAMIC_CANDIDATES:
-                    # Full: only a candidate that beats the CURRENT worst
-                    # earns a slot (same worst-first eviction as
-                    # goplus_watchlist.add_or_touch) -- never grows past the
-                    # cap, never evicts for nothing.
-                    worst = await (
-                        await db.execute(
-                            "SELECT wallet_address, composite_percentile_at_add "
-                            "FROM wallet_copy_shadow_dynamic_candidates "
-                            "ORDER BY composite_percentile_at_add ASC LIMIT 1"
-                        )
-                    ).fetchone()
-                    if worst is None or percentile <= worst[1]:
-                        continue
-                    await db.execute(
-                        "DELETE FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
-                        (worst[0],),
-                    )
-                    logger.info(
-                        "wallet_copy_shadow: evicted %s (percentile %.1f) for %s (percentile %.1f) -- registry full",
-                        worst[0][:10], worst[1], wallet_l[:10], percentile,
-                    )
-
-                await db.execute(
-                    "INSERT INTO wallet_copy_shadow_dynamic_candidates "
-                    "(wallet_address, added_at, composite_percentile_at_add) VALUES (?, ?, ?)",
-                    (wallet_l, datetime.now(timezone.utc).isoformat(), percentile),
-                )
-                added += 1
-            if added:
-                await db.commit()
-            return added
-    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
-        logger.info("wallet_copy_shadow: leaderboard discovery failed (%s)", exc)
-        return 0
-
-
-async def evict_stale_dynamic_candidates(
-    *, max_age_days: float = DYNAMIC_CANDIDATE_MAX_AGE_DAYS,
-    inactivity_threshold_days: float = INACTIVITY_THRESHOLD_DAYS,
-) -> int:
-    """(#172, 15/08) Removes dynamic candidates whose discovery has gone
-    stale, closing the "registry with no lifecycle" gap: (1) TTL -- past
-    ``max_age_days`` since discovery, its percentile snapshot is no longer a
-    standing justification; (2) dormant -- a real cursor exists (at least one
-    scan has run) and its last ON-CHAIN transfer is older than
-    ``inactivity_threshold_days``, same threshold ``summary()`` already uses
-    to LABEL a wallet dormant, now also acted on here. A candidate with NO
-    cursor row yet (not scanned once) is never evicted as dormant -- that's
-    "not scanned yet", not "went quiet".
-
-    Only ever touches ``wallet_copy_shadow_dynamic_candidates`` -- the 8
-    hand-picked ``TRACKED_WALLETS`` are permanent by design, never pruned.
-    Position/cursor history rows are left untouched (historical record); the
-    wallet simply stops being scanned/reported once evicted. Best-effort:
-    never raises, returns 0 on any failure. Returns the count evicted."""
-    try:
-        await _ensure_tables()
-        now = datetime.now(timezone.utc)
-        async with aiosqlite.connect(DB_PATH) as db:
-            rows = await (
-                await db.execute(
-                    "SELECT wallet_address, added_at FROM wallet_copy_shadow_dynamic_candidates"
-                )
-            ).fetchall()
-            evicted = 0
-            for wallet, added_at in rows:
-                reason = None
-                try:
-                    added_dt = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
-                    if (now - added_dt).days >= max_age_days:
-                        reason = "ttl_expired"
-                except (ValueError, TypeError):
-                    pass
-                if reason is None:
-                    last_row = await (
-                        await db.execute(
-                            "SELECT last_transfer_at FROM wallet_copy_shadow_cursor WHERE wallet_address = ?",
-                            (wallet,),
-                        )
-                    ).fetchone()
-                    last_transfer_at = last_row[0] if last_row else None
-                    if last_transfer_at:
-                        try:
-                            transfer_dt = datetime.fromisoformat(last_transfer_at.replace("Z", "+00:00"))
-                            if (now - transfer_dt).days >= inactivity_threshold_days:
-                                reason = "dormant"
-                        except (ValueError, TypeError):
-                            pass
-                if reason is not None:
-                    await db.execute(
-                        "DELETE FROM wallet_copy_shadow_dynamic_candidates WHERE wallet_address = ?",
-                        (wallet,),
-                    )
-                    logger.info("wallet_copy_shadow: evicted %s (%s)", wallet[:10], reason)
-                    evicted += 1
-            if evicted:
-                await db.commit()
-        return evicted
-    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
-        logger.info("wallet_copy_shadow: stale-eviction pass failed (%s)", exc)
-        return 0
-
-
-async def _dynamic_tracked_wallets() -> dict[str, dict]:
-    """Same ``{wallet: meta}`` shape as ``TRACKED_WALLETS`` (``label``/
-    ``tier``/``evidence`` -- ``scan_wallet``/``summary`` don't care which
-    dict a wallet came from), sourced from ``wallet_copy_shadow_dynamic_
-    candidates`` instead of the hand-picked list. ``tier`` stays distinct
-    (``leaderboard_dynamic``) so reporting never blends this weaker,
-    percentile-only evidence with the 3 manually-vetted tiers above."""
-    try:
-        await _ensure_tables()
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                "SELECT wallet_address, composite_percentile_at_add "
-                "FROM wallet_copy_shadow_dynamic_candidates"
-            )
-            rows = await cursor.fetchall()
-    except Exception as exc:  # noqa: BLE001 -- shadow seam, never blocking
-        logger.info("wallet_copy_shadow: dynamic wallet list read failed (%s)", exc)
-        return {}
-    return {
-        wallet: {
-            "label": f"leaderboard_{wallet[2:8]}",
-            "tier": "leaderboard_dynamic",
-            "evidence": f"smart_money_leaderboard composite_percentile={pct:.1f} at discovery",
-        }
-        for wallet, pct in rows
-    }
-
-
 async def run_scan_cycle() -> list[ShadowScanResult]:
     """Scans every tracked wallet, one at a time (sequential -- Blockscout
     is a shared, rate-limited resource, no reason to burst it) -- the 8
-    static wallets PLUS any dynamic candidate sourced off the real
-    leaderboard (#146). Never raises: a single wallet's failure is reported
-    in its own result, the others still run."""
-    all_wallets = {**TRACKED_WALLETS, **await _dynamic_tracked_wallets()}
+    hand-picked static wallets. Never raises: a single wallet's failure is
+    reported in its own result, the others still run."""
+    all_wallets = dict(TRACKED_WALLETS)
     results: list[ShadowScanResult] = []
     for wallet, meta in all_wallets.items():
         res = await scan_wallet(wallet, meta)
@@ -678,7 +461,7 @@ async def summary() -> dict[str, dict]:
     await _ensure_tables()
     now = datetime.now(timezone.utc)
     out: dict[str, dict] = {}
-    all_wallets = {**TRACKED_WALLETS, **await _dynamic_tracked_wallets()}
+    all_wallets = dict(TRACKED_WALLETS)
     async with aiosqlite.connect(DB_PATH) as db:
         for wallet, meta in all_wallets.items():
             activity_row = await db.execute(

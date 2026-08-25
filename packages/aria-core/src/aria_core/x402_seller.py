@@ -40,8 +40,6 @@ _SCHEME = "exact"
 # a raw third-party data pass-through. Prices are USDC (the "$" form x402
 # accepts).
 PRICING_CATALOG: dict[str, str] = {
-    # ARIA's own composite wallet score (percentile + confidence), already cached.
-    "wallet_score": "$0.10",
     # Full synthesized token verdict served from cache (no fresh scan).
     "token_analysis_cached": "$0.25",
     # Full synthesized token verdict forcing a fresh scan (real network COGS:

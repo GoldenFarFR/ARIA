@@ -911,7 +911,6 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_SOLANA_RENT_RECOVERY_ENABLED",
     "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
-    "ARIA_SMART_MONEY_LEADERBOARD_ENABLED",
     "ARIA_SMART_SWING_ENABLED",
     # 16/08 -- solana_pump_shadow.py's reserved gate name for a future
     # heartbeat wiring (NOT wired, NOT read anywhere yet -- named in the
@@ -925,7 +924,6 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_TELEGRAM_MINER_ENABLED",
     "ARIA_TELEGRAM_PUBLIC_CONVERSATION_ENABLED",
     "ARIA_TIKTOK_PUBLISH_ENABLED",
-    "ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED",
     "ARIA_TRADE_DEVILS_ADVOCATE_ENABLED",
     # 13/08 -- twitterapi_io_budget.check_and_alert: proactive prepaid-credit
     # runway monitor, one-time Telegram alert once projected runway < 24h.
@@ -953,18 +951,10 @@ _KNOWN_ENABLED_GATES = {
     # burning tokens) -- re-enable only after that routing bug is fixed and
     # verified live.
     "ARIA_VITRINE_LLM_ENABLED",
-    "ARIA_WALLET_CANDIDATE_SOURCING_ENABLED",
     # 08/08 -- wallet_copy_shadow.py : forward-test de copie sur 8 wallets réels,
     # ledgers fictifs indépendants, jamais un trigger réel (jamais de capital
     # réel, jamais fusionné avec le test 1M$). OFF par défaut.
     "ARIA_WALLET_COPY_SHADOW_ENABLED",
-    # 14/08 (#146) -- sub-gate inside the same cycle: sources dynamic wallet
-    # candidates off the REAL smart_money_leaderboard (percentile-based),
-    # independent of the 8 hand-picked wallets above. Seam for a future
-    # scalping pocket (v11, undesigned) -- OFF by default.
-    "ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED",
-    "ARIA_WALLET_SCAN_QUEUE_ENABLED",
-    "ARIA_WALLET_SCORING_ENABLED",
     "ARIA_WALLET_TRANSFERS_FAST_PROVIDER_ENABLED",
     # 14/08 -- watchlist_refill_cycle (momentum_entry.run_watchlist_refill_cycle):
     # pure-discovery honeypot-check-only pass over discover_momentum_candidates(),

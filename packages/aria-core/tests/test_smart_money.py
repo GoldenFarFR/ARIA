@@ -18,7 +18,6 @@ from aria_core.services.blockscout import (
     TokenTransfer,
     TokenTransfersResult,
 )
-from aria_core.services import smart_money as smart_money_module
 from aria_core.services.smart_money import analyze_smart_money
 
 TOKEN = "0x" + "t" * 40
@@ -29,26 +28,6 @@ COUNTERPARTY = "0x" + "c" * 40
 
 # 2026-01-01T00:00:00Z en millisecondes — sert de pair_created_at de reference
 PAIR_CREATED_MS = 1767225600000
-
-
-@pytest.fixture(autouse=True)
-def _isolated_db(tmp_path, monkeypatch):
-    """22/07 -- analyze_smart_money() lit désormais wallet_score_log (signal qualité-
-    prioritaire, cf. latest_score_for_wallet) : sans cette isolation, DB_PATH resterait
-    figé sur la valeur calculée au premier import du module dans la session pytest
-    (même patron que test_weekly_training.py sur screened_pool/vc_predictions.DB_PATH) --
-    jamais une fuite d'état entre tests."""
-    monkeypatch.setattr(smart_money_module, "DB_PATH", str(tmp_path / "smart_money_test.db"))
-
-
-async def _seed_wallet_score(wallet: str, composite_percentile: float) -> None:
-    """Insère une fiche wallet_score_log minimale pour tester le signal qualité-
-    prioritaire sans dépendre du pipeline lourd #157 (FIFO/PnL/percentile réel)."""
-    import json
-
-    await smart_money_module._log_wallet_score(
-        wallet, json.dumps({"composite_percentile": composite_percentile})
-    )
 
 
 def _transfer(*, from_addr: str, to_addr: str, timestamp: str, amount: float = 100.0) -> TokenTransfer:
@@ -291,71 +270,31 @@ def _convergent_transfers(wallet: str) -> TokenTransfersResult:
 
 
 @pytest.mark.asyncio
-async def test_high_composite_score_wallets_beat_many_low_score_wallets():
-    """22/07 -- exemple chiffré validé explicitement avec l'opérateur : 2 wallets à
-    gros composite_percentile (95) doivent produire un signal PLUS FORT que 10
-    wallets à faible composite_percentile (45), jamais l'inverse -- la qualité
-    prime sur la pure quantité (cf. constantes _CONVERGENCE_BONUS_*/_MAX_SECURITY_
-    SCORE_DELTA en tête de smart_money.py)."""
-    # Cas A : 2 wallets, composite_percentile élevé (95) connu.
-    wallets_high = [_addr(100), _addr(101)]
-    for w in wallets_high:
-        await _seed_wallet_score(w, 95.0)
-    fixtures_high = {w: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(w)) for w in wallets_high}
-    signal_high = await analyze_smart_money(
-        TOKEN, _holders(*wallets_high), client=FakeClient(fixtures_high),
+async def test_convergence_bonus_scales_with_qualified_wallet_count():
+    """25/08 -- wallet-scoring removed entirely (operator decision):
+    quality_signal no longer differentiates by a wallet's known global
+    composite_percentile (that data source no longer exists), every
+    convergent wallet now contributes the same _FALLBACK_QUALIFIED_SCORE.
+    The signal's magnitude is now driven purely by the NUMBER of convergent
+    wallets (capped at _CONVERGENCE_BONUS_MAX_WALLETS)."""
+    wallets_two = [_addr(100), _addr(101)]
+    fixtures_two = {w: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(w)) for w in wallets_two}
+    signal_two = await analyze_smart_money(
+        TOKEN, _holders(*wallets_two), client=FakeClient(fixtures_two),
         lp_address=LP, pair_created_at_ms=PAIR_CREATED_MS,
     )
 
-    # Cas B : 10 wallets, composite_percentile faible (45) connu chacun.
-    wallets_low = [_addr(200 + i) for i in range(10)]
-    for w in wallets_low:
-        await _seed_wallet_score(w, 45.0)
-    fixtures_low = {w: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(w)) for w in wallets_low}
-    signal_low = await analyze_smart_money(
-        TOKEN, _holders(*wallets_low), client=FakeClient(fixtures_low),
+    wallets_ten = [_addr(200 + i) for i in range(10)]
+    fixtures_ten = {w: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(w)) for w in wallets_ten}
+    signal_ten = await analyze_smart_money(
+        TOKEN, _holders(*wallets_ten), client=FakeClient(fixtures_ten),
         lp_address=LP, pair_created_at_ms=PAIR_CREATED_MS, max_wallets=10,
     )
 
-    assert signal_high.quality_signal == 98.0  # top=95 + bonus(2 wallets: +3), plafonné à 100
-    assert signal_low.quality_signal == 54.0  # top=45 + bonus plafonné (min(9,3)*3=9)
-    assert signal_high.score_delta > signal_low.score_delta
-    assert signal_high.score_delta == 15  # round(98/100*15)
-    assert signal_low.score_delta == 8  # round(54/100*15)
+    assert signal_two.quality_signal == 58.0  # 55 + bonus(2 wallets: +3)
+    assert signal_ten.quality_signal == 64.0  # 55 + bonus plafonné (min(9,3)*3=9)
+    assert signal_ten.quality_signal > signal_two.quality_signal
+    assert signal_two.score_delta == round(58.0 / 100 * 15)
+    assert signal_ten.score_delta == round(64.0 / 100 * 15)
 
 
-@pytest.mark.asyncio
-async def test_known_composite_score_overrides_fallback():
-    """Un wallet déjà scoré ailleurs (composite_percentile connu) utilise CE score
-    plutôt que le repli modeste (_FALLBACK_QUALIFIED_SCORE=55) -- la qualité déjà
-    prouvée sur d'autres tokens prime sur le jugement limité à ce seul token."""
-    await _seed_wallet_score(WALLET_A, 90.0)
-    # WALLET_B n'a jamais été scoré ailleurs -> repli à 55.
-    fixtures = {
-        WALLET_A: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(WALLET_A)),
-        WALLET_B: _WalletFixture(info=_eoa(), transfers=_convergent_transfers(WALLET_B)),
-    }
-    signal = await analyze_smart_money(
-        TOKEN, _holders(WALLET_A, WALLET_B), client=FakeClient(fixtures),
-        lp_address=LP, pair_created_at_ms=PAIR_CREATED_MS,
-    )
-
-    # top_score = 90 (WALLET_A, connu) ; bonus = +3 (2 wallets qualifiés) -> 93
-    assert signal.quality_signal == 93.0
-
-
-@pytest.mark.asyncio
-async def test_latest_score_for_wallet_none_when_never_scored():
-    from aria_core.services.smart_money import latest_score_for_wallet
-
-    assert await latest_score_for_wallet(WALLET_A) is None
-
-
-@pytest.mark.asyncio
-async def test_latest_score_for_wallet_returns_most_recent():
-    await _seed_wallet_score(WALLET_A, 40.0)
-    await _seed_wallet_score(WALLET_A, 70.0)  # scan plus récent -- doit primer
-
-    from aria_core.services.smart_money import latest_score_for_wallet
-
-    assert await latest_score_for_wallet(WALLET_A) == 70.0

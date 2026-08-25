@@ -45,7 +45,7 @@ def test_seller_enabled_alone_still_defaults_to_testnet(monkeypatch):
 
 
 def test_price_for_known_products():
-    assert s.price_for("wallet_score") == "$0.10"
+    assert s.price_for("b20_safety") == "$0.10"
     assert s.price_for("token_analysis_cached") == "$0.25"
     assert s.price_for("token_analysis_fresh") == "$0.25"
 
@@ -54,15 +54,15 @@ def test_price_for_unknown_product_is_none():
     assert s.price_for("nonexistent") is None
 
 
-def test_analysis_priced_above_wallet_score(monkeypatch):
+def test_analysis_priced_above_b20_safety(monkeypatch):
     """07/24, explicit operator revision (volume-first over margin-first --
     "1000 appels plutôt que 100"): the two analysis tiers now share the same
-    starting price, so only the wallet_score-vs-analysis ordering still
+    starting price, so only the b20_safety-vs-analysis ordering still
     holds, never a strict fresh > cached comparison."""
     def _usd(p):
         return float(p.lstrip("$"))
     assert _usd(s.PRICING_CATALOG["token_analysis_fresh"]) == _usd(s.PRICING_CATALOG["token_analysis_cached"])
-    assert _usd(s.PRICING_CATALOG["token_analysis_cached"]) > _usd(s.PRICING_CATALOG["wallet_score"])
+    assert _usd(s.PRICING_CATALOG["token_analysis_cached"]) > _usd(s.PRICING_CATALOG["b20_safety"])
 
 
 # ── build_resource_config ────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def test_analysis_priced_above_wallet_score(monkeypatch):
 
 def test_build_resource_config_none_when_seller_disabled(monkeypatch):
     monkeypatch.delenv("ARIA_X402_SELLER_ENABLED", raising=False)
-    assert s.build_resource_config("wallet_score") is None
+    assert s.build_resource_config("b20_safety") is None
 
 
 def test_build_resource_config_none_for_unknown_product(monkeypatch):
@@ -82,7 +82,7 @@ def test_build_resource_config_testnet_by_default(monkeypatch):
     pytest.importorskip("x402", reason="x402 is the optional [x402] extra")
     monkeypatch.setenv("ARIA_X402_SELLER_ENABLED", "true")
     monkeypatch.delenv("ARIA_X402_SELLER_MAINNET", raising=False)
-    rc = s.build_resource_config("wallet_score")
+    rc = s.build_resource_config("b20_safety")
     assert rc is not None
     assert rc.pay_to == s.ARIA_X402_RECEIVING_ADDRESS
     assert rc.price == "$0.10"

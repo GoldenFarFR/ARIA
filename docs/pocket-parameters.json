@@ -966,25 +966,10 @@
   "wallet_copy_shadow": {
     "label": "WALLET-COPY (8 verified Base wallets)",
     "parameters": {
-      "DYNAMIC_CANDIDATE_MAX_AGE_DAYS": {
-        "line": 245,
-        "value": 90,
-        "why": "Absolute TTL: a wallet's percentile at discovery is a SNAPSHOT, not a standing guarantee -- tracking it forever just because it's still technically \"active\" would let an early-lucky wallet ride on a stale justification indefinitely. Forces periodic re-discovery instead (a wallet still worth tracking clears the percentile bar again on its own)."
-      },
       "INACTIVITY_THRESHOLD_DAYS": {
         "line": 67,
         "value": 14,
         "why": "08/08 -- operator concern, verified real: some tracked wallets rotate (the leaderboard's \"all-time\" history can outlive the specific on-chain address currently associated with a handle -- confirmed live for songz, see TRACKED_WALLETS below). No reliable automatic way to discover a trader's NEW address exists here (would require re-scraping fomoscan/GMGN on a schedule, too fragile for a heartbeat cycle) -- what IS reliably buildable: flag a tracked wallet as dormant once it goes quiet, so a session can notice and manually look up whether the trader moved."
-      },
-      "LEADERBOARD_DISCOVERY_MIN_PERCENTILE": {
-        "line": 225,
-        "value": 80.0,
-        "why": "Arbitrary first calibration, not empirically derived -- the real leaderboard has only 1 active wallet at 37.5%p as of 14/08 (verified live against smart_money_leaderboard), well under this floor, so this seam starts genuinely empty and stays that way until #147/#151's sourcing work grows the leaderboard's population. Recalibrate once enough wallets clear a real percentile to judge a meaningful cutoff -- never lower this just to force candidates through before the leaderboard itself has real signal."
-      },
-      "MAX_DYNAMIC_CANDIDATES": {
-        "line": 238,
-        "value": 20,
-        "why": "15/08 (#172) -- the dynamic-candidates table had NO lifecycle: once added, a wallet stayed tracked (scanned every cycle via Blockscout, sequentially, forever) with no way back out, even once dormant or no longer competitive. Real gap: #147/#151's sourcing work is actively growing the leaderboard's population (the very thing #146's own comment above says this seam is waiting for) -- unbounded growth here means run_scan_cycle's sequential scan only ever gets slower, never self-corrects. Same \"unique registry with a real lifecycle\" doctrine as goplus_watchlist.add_or_touch (worst-first eviction when full) -- deliberately NOT applied to the 8 hand-picked TRACKED_WALLETS, which stay permanent by design (manually vetted evidence, never auto-pruned)."
       },
       "POSITION_SIZE_USD": {
         "line": 57,
@@ -995,11 +980,6 @@
         "line": 187,
         "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (\n    wallet_address TEXT PRIMARY KEY,\n    last_tx_hash TEXT,\n    last_scanned_at TEXT NOT NULL,\n    last_transfer_at TEXT\n)\n",
         "why": null
-      },
-      "_DYNAMIC_CANDIDATES_DDL": {
-        "line": 210,
-        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_dynamic_candidates (\n    wallet_address TEXT PRIMARY KEY,\n    added_at TEXT NOT NULL,\n    composite_percentile_at_add REAL NOT NULL\n)\n",
-        "why": "14/08 (#146) -- backlog item: \"hook de tracking continu des wallets performants pour v11\" (a future scalping pocket, not yet designed -- operator-confirmed this is what \"v11\" means). Real gap found investigating it: smart_money_leaderboard.py already scores wallets dynamically (feeds the real leaderboard), but this module's TRACKED_WALLETS above stays a hand-picked, never-updated list of 8 -- the two mechanisms never connect. This table + discover_leaderboard_candidates() close that gap: wallets that clear a percentile threshold on the REAL leaderboard get added here and shadow-copied continuously, same engine as the 8 static wallets, but kept in a SEPARATE table/tier (never merged into TRACKED_WALLETS itself) -- same \"kept honest, never blended\" doctrine as the existing 3 tiers. This is deliberately just the data-collection seam for v11, not v11 itself (still undesigned) -- CLAUDE.md anticipation doctrine: \"lay the seam now, even empty, rather than rewriting later.\""
       },
       "_MIN_POOL_LIQUIDITY_USD_FOR_PRICE": {
         "line": 84,

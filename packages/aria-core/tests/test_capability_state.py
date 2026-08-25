@@ -7,7 +7,6 @@ from aria_core.memory.capability_state import get_capability_state_text
 def _clean_env(monkeypatch):
     for var, _ in [
         ("ARIA_WEB_FETCH_ENABLED", None),
-        ("ARIA_WALLET_SCORING_ENABLED", None),
         ("ARIA_VISION_ENABLED", None),
         ("ARIA_WEB_SEARCH_PROVIDER", None),
         ("ARIA_AGENT_WALLET_PILOT_ENABLED", None),
@@ -33,13 +32,13 @@ def test_reflects_enabled_when_env_set(monkeypatch):
 
 
 def test_reflects_toggle_off_after_being_on(monkeypatch):
-    monkeypatch.setenv("ARIA_WALLET_SCORING_ENABLED", "true")
+    monkeypatch.setenv("ARIA_VISION_ENABLED", "true")
     assert "ACTIVE" in [
-        ln for ln in get_capability_state_text().splitlines() if "ARIA_WALLET_SCORING_ENABLED" in ln
+        ln for ln in get_capability_state_text().splitlines() if "ARIA_VISION_ENABLED" in ln
     ][0]
-    monkeypatch.delenv("ARIA_WALLET_SCORING_ENABLED", raising=False)
+    monkeypatch.delenv("ARIA_VISION_ENABLED", raising=False)
     assert "inactive" in [
-        ln for ln in get_capability_state_text().splitlines() if "ARIA_WALLET_SCORING_ENABLED" in ln
+        ln for ln in get_capability_state_text().splitlines() if "ARIA_VISION_ENABLED" in ln
     ][0]
 
 

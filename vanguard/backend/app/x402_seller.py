@@ -162,9 +162,8 @@ def mount_x402_seller(app) -> None:
     once and this function assumes it's safe to mount, so the gate check and
     the mount stay at a single call site rather than duplicated here.
 
-    Catalog of paid routes deliberately still small: ARIA's own composite
-    wallet score (already cached in wallet_score_log) and, since 31/07, her
-    B20 native-token role-holder safety verdict (services/b20.py) -- both
+    Catalog of paid routes deliberately still small: since 31/07, her
+    B20 native-token role-holder safety verdict (services/b20.py) --
     zero third-party raw-data re-exposure (ARIA's own computed judgment
     only). Extending this catalog to GitHub/Website/Docs/X substance scores
     (now persisted, see backlog #40) still waits on written ToS clearance
@@ -225,34 +224,6 @@ def mount_x402_seller(app) -> None:
         )
 
     routes = {
-        "GET /api/x402/walletscore": _route_config(
-            "wallet_score",
-            "ARIA's own composite wallet reputation score (Base wallets, cached)",
-            discovery=declare_discovery_extension(
-                input={"address": "0x1111111111166b7fe7bd91427724b487980afc69"},
-                input_schema={
-                    "properties": {
-                        "address": {
-                            "type": "string",
-                            "description": "Base wallet address, 0x-prefixed, 40 hex chars",
-                        },
-                    },
-                    "required": ["address"],
-                },
-                output=OutputConfig(
-                    example={
-                        "wallet": "0x1111111111166b7fe7bd91427724b487980afc69",
-                        "composite_percentile": 74,
-                    },
-                    schema={
-                        "properties": {
-                            "wallet": {"type": "string"},
-                            "composite_percentile": {"type": "number"},
-                        },
-                    },
-                ),
-            ),
-        ),
         # 31/07 -- B20 native Base token safety verdict (services/b20.py).
         "GET /api/x402/b20score": _route_config(
             "b20_safety",

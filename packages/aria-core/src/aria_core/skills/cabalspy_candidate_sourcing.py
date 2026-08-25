@@ -1,25 +1,21 @@
-"""Candidate wallet sourcing from CabalSpy (23/07, explicit operator decision
--- an acknowledged policy change, see the `services/cabalspy.py` docstring).
+"""KOL wallet directory from CabalSpy (23/07, explicit operator decision --
+an acknowledged policy change, see the `services/cabalspy.py` docstring).
 
-Two clearly separated tracks, never mixed:
-1. **Categorization** (`cabalspy_kol_wallets`): ALL labeled wallets fetched,
-   ACROSS ALL chains (Base/BNB/Solana) -- a simple directory, doesn't
-   prejudge their score in any way, never a trading signal.
-2. **Real sourcing into scoring** (`wallet_scan_queue.enqueue_wallets`):
-   Base wallets ONLY -- the only downstream pipeline (`smart_money.py`,
-   Blockscout) that knows how to process them today (hardcoded Base-only,
-   verified in the code). BNB (EVM, extension effort not yet verified) and
-   Solana (different address format, no Blockscout, separate project) are
-   categorized but never enqueued into scoring as long as this pipeline
-   isn't extended -- avoid wrongly scoring an address with the wrong
-   explorer rather than guessing at degraded behavior.
+**Categorization only** (`cabalspy_kol_wallets`): ALL labeled wallets
+fetched, ACROSS ALL chains (Base/BNB/Solana) -- a simple directory, doesn't
+prejudge their score in any way, never a trading signal. The "real sourcing
+into scoring" track this module used to also run (enqueuing Base wallets
+into `wallet_scan_queue`) was removed 25/08 along with the entire
+wallet-scoring mechanism (operator decision) -- this module is now purely a
+read-only KOL directory.
 
 Type "kol" prioritized (complete identity: name/twitter/telegram, verified
 real on Base -- 200 wallets). Type "smart" is NOT wired anywhere yet (24/07
 correction -- an earlier version of this docstring claimed it was) -- the
 underlying `services/cabalspy.py` client supports it, but no caller here
-requests it, likely a duplicate of what `smart_money.py` already detects by
-behavior, for free -- would need its own decision before ever being sourced."""
+requests it, likely a duplicate of what smart-money behavior detection
+already covers, for free -- would need its own decision before ever being
+sourced."""
 from __future__ import annotations
 
 import os
@@ -31,10 +27,7 @@ from aria_core.paths import aria_db_path
 
 DB_PATH = str(aria_db_path())
 
-# Categorized chains (all) vs. chains actually sourced into scoring
-# (Base only, downstream pipeline verified able to process them).
 _CATALOGUED_BLOCKCHAINS = ("base", "bnb", "solana")
-_SCORABLE_BLOCKCHAINS = ("base",)
 
 # The KOL list doesn't change from one day to the next -- avoid re-fetching
 # on every heartbeat cycle (saves CabalSpy credits, 300-10000/month depending
@@ -131,22 +124,15 @@ async def catalogued_wallets(blockchain: str | None = None) -> list[dict]:
 async def run_cabalspy_candidate_sourcing_cycle(notifier=None, *, now: datetime | None = None) -> dict:
     """One pass: if the last full sync is less than
     `MIN_RESYNC_INTERVAL_DAYS` old, does nothing (saves credits). Otherwise,
-    fetches the "kol" list for each categorized chain, stores EVERYTHING in
-    the directory, then enqueues ONLY Base wallets into `wallet_scan_queue`
-    (the only scoring pipeline that processes them today). Dedicated gate +
-    downstream (queue/scoring), fail-closed, respects the kill-switch."""
+    fetches the "kol" list for each categorized chain and stores it in the
+    directory. Fail-closed, respects the kill-switch."""
     if not cabalspy_sourcing_enabled():
         return {"outcome": "skipped", "reason": "gate_off"}
 
     from aria_core.services.cabalspy import is_cabalspy_configured, list_wallets
-    from aria_core.services.smart_money import wallet_scoring_enabled
-    from aria_core.services.wallet_scan_queue import enqueue_wallets, wallet_scan_queue_enabled
 
     if not is_cabalspy_configured():
         return {"outcome": "skipped", "reason": "no_api_key"}
-
-    if not wallet_scan_queue_enabled() or not wallet_scoring_enabled():
-        return {"outcome": "skipped", "reason": "downstream_disabled"}
 
     from aria_core import outgoing_pause
 
@@ -160,7 +146,6 @@ async def run_cabalspy_candidate_sourcing_cycle(notifier=None, *, now: datetime 
 
     per_chain: dict[str, int] = {}
     total_stored = 0
-    base_wallets: list[str] = []
 
     for blockchain in _CATALOGUED_BLOCKCHAINS:
         wallets = await list_wallets(blockchain, wallet_type="kol")
@@ -170,18 +155,11 @@ async def run_cabalspy_candidate_sourcing_cycle(notifier=None, *, now: datetime 
         stored = await _store_wallets(wallets, now=now)
         per_chain[blockchain] = stored
         total_stored += stored
-        if blockchain in _SCORABLE_BLOCKCHAINS:
-            base_wallets.extend(w.wallet_address for w in wallets)
 
     await _mark_full_sync_done(now)
 
-    added = await enqueue_wallets(base_wallets) if base_wallets else []
-
-    if (total_stored or added) and notifier is not None:
+    if total_stored and notifier is not None:
         detail = ", ".join(f"{chain}:{count}" for chain, count in per_chain.items())
-        await notifier(
-            f"🔍 Sourcing CabalSpy -- {total_stored} wallet(s) KOL catalogué(s) ({detail}), "
-            f"{len(added)} ajouté(s) à la file de scoring (Base uniquement)."
-        )
+        await notifier(f"🔍 Sourcing CabalSpy -- {total_stored} wallet(s) KOL catalogué(s) ({detail}).")
 
-    return {"outcome": "ok", "stored_per_chain": per_chain, "queued_for_scoring": len(added)}
+    return {"outcome": "ok", "stored_per_chain": per_chain}

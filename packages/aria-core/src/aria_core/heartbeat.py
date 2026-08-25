@@ -121,17 +121,6 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="wallet_scoring_chain_ranking_refresh",
-        name="Wallet-scoring chain TVL ranking",
-        description="Monthly refresh (DefiLlama) of the TVL ranking of the "
-                    "EVM chains scanned by /walletscore, among the 13 "
-                    "confirmed Blockscout x GeckoTerminal (#157, 07/14).",
-        interval_minutes=43200,  # ~30 days -- explicit operator decision (monthly, not daily)
-        # 25/08 -- forced OFF (operator decision, "debranche tout" on the
-        # wallet-scoring mechanism this ranking exists only to feed).
-        enabled=False,
-    ),
-    HeartbeatTask(
         id="tweet_schedule",
         name="Scheduled X posts",
         description="Publish /x compose tweets at operator local time",
@@ -617,37 +606,9 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="wallet_scan_queue_cycle",
-        name="File d'attente de scan wallet en arriere-plan",
-        description="Fait avancer d'un passage chaque wallet injecte via /walletqueue (1 par cycle) -- reutilise le moteur incremental existant (score_wallets/wallet_scan_state.py), rien duplique. Notifie une progression tous les 50 tokens couverts, puis le rapport final complet des la couverture complete. Suivi PERMANENT : le wallet ne quitte jamais la file a 100%, bascule en surveillance hebdomadaire (nouvelle activite detectee et notifiee sans jamais re-exiger une couverture complete) -- retire seulement apres 3 mois sans aucune activite on-chain reelle. Double gate : ARIA_WALLET_SCAN_QUEUE_ENABLED ET ARIA_WALLET_SCORING_ENABLED -- OFF par defaut tous les deux.",
-        interval_minutes=20,
-        enabled=False,
-    ),
-    HeartbeatTask(
-        id="wallet_candidate_sourcing_cycle",
-        name="Sourcing automatique de wallets candidats (historique ARIA)",
-        description="Repere dans vc_predictions.py un token qu'ARIA a deja juge gagnant (verdict clos, gain reel confirme >=100%), liste qui le detient ENCORE aujourd'hui (blockscout.get_token_holders, deja construit) et enfile ces adresses dans wallet_scan_queue.py -- zero nouvelle dependance externe, zero cout. Triple gate (ARIA_WALLET_CANDIDATE_SOURCING_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
-        interval_minutes=180,
-        enabled=False,
-    ),
-    HeartbeatTask(
         id="cabalspy_candidate_sourcing_cycle",
-        name="Sourcing de wallets candidats depuis CabalSpy (KOL labellises)",
-        description="Decision operateur explicite (23/07) : recupere la liste des wallets KOL labellises par CabalSpy (identite complete -- nom/twitter/telegram, verifie reel sur Base -- 200 wallets), toutes chaines catalogues (Base/BNB/Solana) mais SEULS les wallets Base sont enfiles dans wallet_scan_queue.py (seul pipeline downstream qui les score aujourd'hui). Resynchronisation complete au plus 1x/semaine (economie de credits, la liste ne bouge pas souvent). Triple gate (ARIA_CABALSPY_SOURCING_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
-        interval_minutes=180,
-        enabled=False,
-    ),
-    HeartbeatTask(
-        id="smart_money_leaderboard_discovery_cycle",
-        name="Decouverte de candidats pour le classement smart-money (token_holder_intel)",
-        description="Demande operateur (21/07) : repere les wallets EOA qui reviennent comme detenteur notable sur au moins 3 tokens deja extraits via Blockscout x402 (token_holder_intel.py, lecture locale pure, zero cout), exclut les labels d'infrastructure connus (exchanges/burn), enfile ces adresses dans wallet_scan_queue.py pour un scoring reel. Le classement lui-meme (capacite 600) se construit ensuite dans wallet_scan_queue_cycle (composite_percentile reel, jamais un score de coordination). #148 (13/08, operateur \"il faut cumulee des donnees\") : 2e source independante, best-effort, cumulee dans le meme cycle -- wallets Dune ayant achete un token Base dans sa 1ere heure et realise >=5x (dune.get_early_buyer_multiple_winners, requete deja construite le 15/07 mais jamais branchee avant ce jour). #149 (meme nuit) : 3e source, best-effort, restreinte aux positions swing/vc REELLEMENT ouvertes (jamais toute la watchlist -- compte GeckoTerminal deja tendu) -- acheteurs recents (kind=buy) sur le pool de chaque position via geckoterminal_client.get_pool_trades, endpoint verifie en direct le 13/08. #152 (meme nuit) : 4e source, best-effort -- adresses extraites par regex depuis des tweets trouves par twitterapi_io.search_tweets (requete fixe, jamais le texte brut du tweet propage plus loin, jamais d'appel LLM sur ce texte -- zero surface d'injection). Triple gate (ARIA_SMART_MONEY_LEADERBOARD_ENABLED + ARIA_WALLET_SCAN_QUEUE_ENABLED + ARIA_WALLET_SCORING_ENABLED), tous OFF par defaut.",
-        interval_minutes=180,
-        enabled=False,
-    ),
-    HeartbeatTask(
-        id="token_holder_extraction_cycle",
-        name="Extraction reguliere des holders (Blockscout x402) -- coordonne vers le classement smart-money",
-        description="Demande operateur (21/07) : fait grossir token_holder_intel.py en continu (jusqu'a 2 tokens Base jamais encore extraits/cycle, tries par liquidite deja connue), profondeur par capitalisation (500/300/200/100 holders selon mcap CoinGecko >=1000M/>=500M/>=100M/sinon). Alimente automatiquement la decouverte smart_money_leaderboard_discovery_cycle (meme table). Cout reel x402 (Blockscout, 0,002$/page), borne par le plafond hebdomadaire partage (x402_budget.py, 5$/semaine, deja fail-closed) -- aucun plafond dedie supplementaire. Gate ARIA_TOKEN_HOLDER_EXTRACTION_ENABLED, OFF par defaut.",
+        name="Repertoire KOL CabalSpy (categorisation)",
+        description="Decision operateur explicite (23/07) : recupere la liste des wallets KOL labellises par CabalSpy (identite complete -- nom/twitter/telegram, verifie reel sur Base -- 200 wallets), toutes chaines catalogues (Base/BNB/Solana), simple repertoire jamais un signal de trading. Resynchronisation complete au plus 1x/semaine (economie de credits, la liste ne bouge pas souvent). Gate ARIA_CABALSPY_SOURCING_ENABLED, OFF par defaut. 25/08 -- le lien vers le scoring de wallets (wallet_scan_queue.enqueue_wallets) a ete retire avec l'ensemble du mecanisme de wallet-scoring (decision operateur).",
         interval_minutes=180,
         enabled=False,
     ),
@@ -1049,14 +1010,6 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.agent_wallet_monitor import agent_wallet_monitor_enabled
 
                 task.enabled = agent_wallet_monitor_enabled()
-            if task.id == "wallet_scan_queue_cycle":
-                from aria_core.services.wallet_scan_queue import wallet_scan_queue_enabled
-
-                task.enabled = wallet_scan_queue_enabled()
-            if task.id == "wallet_candidate_sourcing_cycle":
-                from aria_core.skills.wallet_candidate_sourcing import wallet_candidate_sourcing_enabled
-
-                task.enabled = wallet_candidate_sourcing_enabled()
             if task.id == "cabalspy_candidate_sourcing_cycle":
                 from aria_core.skills.cabalspy_candidate_sourcing import cabalspy_sourcing_enabled
 
@@ -1100,21 +1053,6 @@ def _sync_x_curiosity_enabled() -> None:
                         60,
                         int(os.environ.get("ARIA_AUTONOMY_CYCLE_MINUTES", "360") or 360),
                     )
-            # 07/24 -- real production gap found by a throughput audit and confirmed
-            # independently (docker exec against the live container): these 3 tasks'
-            # `enabled()` functions exist and were already returning True in prod for
-            # 2 of them, but nothing here ever read that value -- they stayed frozen
-            # at the static `enabled=False` declared in HEARTBEAT_TASKS forever. This
-            # silently nullified capabilities CLAUDE.md documents as live (21/07
-            # "Intelligence wallet/entité propriétaire... EN LIGNE").
-            if task.id == "smart_money_leaderboard_discovery_cycle":
-                from aria_core.services.smart_money_leaderboard import smart_money_leaderboard_enabled
-
-                task.enabled = smart_money_leaderboard_enabled()
-            if task.id == "token_holder_extraction_cycle":
-                from aria_core.services.token_holder_extraction_cycle import token_holder_extraction_enabled
-
-                task.enabled = token_holder_extraction_enabled()
             if task.id == "trade_devils_advocate_cycle":
                 from aria_core.skills.trade_devils_advocate import trade_devils_advocate_enabled
 
@@ -1592,14 +1530,6 @@ class AriaHeartbeat:
             await self._notify_telegram(result["message"])
             append_memory("entrepreneur", "[app_poll] weekly 3-app poll sent")
 
-        elif task_id == "wallet_scoring_chain_ranking_refresh":
-            from aria_core.services.smart_money import refresh_chain_ranking_cache
-
-            # Silent routine (no Telegram notification, "never spam Telegram"
-            # doctrine already stated at the top of this file) -- success/
-            # failure already logged inside refresh_chain_ranking_cache itself.
-            await refresh_chain_ranking_cache()
-
         elif task_id == "tweet_schedule":
             from aria_core.tweet_compose_workflow import process_scheduled_tweets
 
@@ -1757,26 +1687,6 @@ class AriaHeartbeat:
         elif task_id == "wallet_copy_shadow_cycle":
             from aria_core import wallet_copy_shadow
 
-            # (#146, 14/08) -- sub-gate INSIDE this same cycle, distinct from
-            # the cycle's own ARIA_WALLET_COPY_SHADOW_ENABLED flag: lets the
-            # 8 hand-picked wallets keep running independently of whether
-            # the newer leaderboard-sourced discovery seam is enabled.
-            if os.environ.get(
-                "ARIA_WALLET_COPY_SHADOW_DYNAMIC_ENABLED", "",
-            ).strip().lower() in ("1", "true", "yes", "on"):
-                added = await wallet_copy_shadow.discover_leaderboard_candidates()
-                if added:
-                    logger.info(
-                        "wallet_copy_shadow_cycle: +%s wallet(s) découvert(s) via le leaderboard réel",
-                        added,
-                    )
-                # (#172, 15/08) -- registry lifecycle: TTL + dormant eviction,
-                # only meaningful while the dynamic seam itself is enabled.
-                evicted = await wallet_copy_shadow.evict_stale_dynamic_candidates()
-                if evicted:
-                    logger.info(
-                        "wallet_copy_shadow_cycle: -%s wallet(s) évincé(s) (TTL/dormance)", evicted,
-                    )
             results = await wallet_copy_shadow.run_scan_cycle()
             opened = sum(r.opened for r in results)
             closed = sum(r.closed for r in results)
@@ -2225,71 +2135,14 @@ class AriaHeartbeat:
             digest = await build_regime_peak_digest()
             await self._notify_telegram(digest)
 
-        elif task_id == "wallet_scan_queue_cycle":
-            from aria_core.services.wallet_scan_queue import run_wallet_scan_queue_cycle
-
-            result = await run_wallet_scan_queue_cycle(notifier=self._notify_telegram)
-            if result.get("completed_first_time"):
-                append_memory(
-                    "wallet_scan_queue",
-                    f"[wallet_scan_queue] couverture complete, surveillance activee : "
-                    f"{', '.join(result['completed_first_time'])}",
-                )
-            if result.get("dropped_inactive"):
-                append_memory(
-                    "wallet_scan_queue",
-                    f"[wallet_scan_queue] surveillance arretee (inactif >90j) : "
-                    f"{', '.join(result['dropped_inactive'])}",
-                )
-
-        elif task_id == "wallet_candidate_sourcing_cycle":
-            from aria_core.skills.wallet_candidate_sourcing import run_wallet_candidate_sourcing_cycle
-
-            result = await run_wallet_candidate_sourcing_cycle(notifier=self._notify_telegram)
-            if result.get("outcome") == "ok" and result.get("total_sourced"):
-                append_memory(
-                    "wallet_candidate_sourcing",
-                    f"[wallet_candidate_sourcing] {result['total_sourced']} wallet(s) source(s) "
-                    f"depuis {len(result.get('tokens_processed') or [])} token(s)",
-                )
-
         elif task_id == "cabalspy_candidate_sourcing_cycle":
             from aria_core.skills.cabalspy_candidate_sourcing import run_cabalspy_candidate_sourcing_cycle
 
             result = await run_cabalspy_candidate_sourcing_cycle(notifier=self._notify_telegram)
-            if result.get("outcome") == "ok" and result.get("queued_for_scoring"):
+            if result.get("outcome") == "ok" and result.get("stored_per_chain"):
                 append_memory(
                     "cabalspy_candidate_sourcing",
-                    f"[cabalspy_candidate_sourcing] {result['queued_for_scoring']} wallet(s) Base "
-                    f"ajoute(s) a la file de scoring, catalogue par chaine : {result.get('stored_per_chain')}",
-                )
-
-        elif task_id == "smart_money_leaderboard_discovery_cycle":
-            from aria_core.services.smart_money_leaderboard import discover_and_enqueue_candidates
-
-            result = await discover_and_enqueue_candidates()
-            if result.get("outcome") == "ok":
-                append_memory(
-                    "smart_money_leaderboard",
-                    f"[smart_money_leaderboard] {result.get('added_to_queue', 0)} wallet(s) "
-                    f"candidat(s) ajoute(s) a la file (sur {result.get('candidates_found')} "
-                    f"detectes, {result.get('already_rejected', 0)} deja rejetes) -- detail par "
-                    f"source : historique={result.get('cross_token_candidates', 0)}, "
-                    f"dune={result.get('dune_candidates', 0)}, "
-                    f"trades_positions_ouvertes={result.get('trade_candidates', 0)}, "
-                    f"social_x={result.get('social_candidates', 0)}",
-                )
-
-        elif task_id == "token_holder_extraction_cycle":
-            from aria_core.services.token_holder_extraction_cycle import run_token_holder_extraction_cycle
-
-            result = await run_token_holder_extraction_cycle(notifier=self._notify_telegram)
-            if result.get("outcome") == "ok" and result.get("tokens_processed"):
-                total = sum(p["holders_stored"] for p in result["tokens_processed"])
-                append_memory(
-                    "token_holder_extraction",
-                    f"[token_holder_extraction] {total} holder(s) stocke(s) sur "
-                    f"{len(result['tokens_processed'])} token(s)",
+                    f"[cabalspy_candidate_sourcing] catalogue par chaine : {result.get('stored_per_chain')}",
                 )
 
         elif task_id == "marketing_video_cycle":
