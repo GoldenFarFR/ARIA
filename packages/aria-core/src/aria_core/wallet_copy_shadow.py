@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS wallet_copy_shadow_position (
     exit_tx_hash TEXT,
     exit_price_usd REAL,
     exit_at TEXT,
+    exit_price_source TEXT,
     last_mark_price_usd REAL,
     last_mark_at TEXT
 )
@@ -244,6 +245,17 @@ async def _ensure_tables() -> None:
         }
         if "last_transfer_at" not in existing:
             await db.execute("ALTER TABLE wallet_copy_shadow_cursor ADD COLUMN last_transfer_at TEXT")
+        # Hot migration (25/08, "condition reelle" audit): exit_price_source
+        # traces WHICH of the 3 resolution tiers produced exit_price_usd
+        # (spot/historical/assumed_rug) -- never silently conflate a measured
+        # rug-exit price with a real spot fill, see
+        # _historical_exit_price_usd's docstring for why this exists.
+        position_columns = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(wallet_copy_shadow_position)")).fetchall()
+        }
+        if "exit_price_source" not in position_columns:
+            await db.execute("ALTER TABLE wallet_copy_shadow_position ADD COLUMN exit_price_source TEXT")
         await db.commit()
     _table_ready = True
 
@@ -337,18 +349,20 @@ async def _open_position(
 
 async def _close_open_position(
     wallet: str, contract: str, tx_hash: str, price_usd: float | None,
+    *, source: str | None = None,
 ) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE wallet_copy_shadow_position "
-            "SET status = 'closed', exit_tx_hash = ?, exit_price_usd = ?, exit_at = ? "
+            "SET status = 'closed', exit_tx_hash = ?, exit_price_usd = ?, exit_at = ?, "
+            "    exit_price_source = ? "
             "WHERE wallet_address = ? AND contract = ? AND status = 'open'",
-            (tx_hash, price_usd, datetime.now(timezone.utc).isoformat(), wallet, contract),
+            (tx_hash, price_usd, datetime.now(timezone.utc).isoformat(), source, wallet, contract),
         )
         await db.commit()
     logger.info(
-        "wallet_copy_shadow: %s closed position on %s at $%s (tx %s)",
-        wallet[:10], contract[:10], price_usd, tx_hash[:10],
+        "wallet_copy_shadow: %s closed position on %s at $%s (tx %s, source=%s)",
+        wallet[:10], contract[:10], price_usd, tx_hash[:10], source,
     )
 
 
@@ -386,6 +400,76 @@ def _realistic_exit_price(spot: float | None, liquidity_usd: float | None) -> fl
     from aria_core import risk_guard
 
     return risk_guard.simulated_exit_price(spot, POSITION_SIZE_USD, liquidity_usd, apply_swap_fee=True)
+
+
+# 25/08, operator directive ("il faut utiliser le rpc et le websocket ne pas
+# passer par les api"): diligence done on 2 real unknown_exit samples before
+# writing this -- neither Uniswap V2/V3/V4 nor Balancer/Curve/0x/1inch Swap
+# event topics matched their tx receipts (the tracked wallets route through
+# GMGN's own proprietary router, undocumented ABI), so a generic Swap-event
+# decoder isn't buildable from what's public. One of the two samples DID
+# wrap/unwrap native ETH mid-route (WETH Deposit/Withdrawal events) -- this
+# narrower, honest fallback covers exactly that subset: reads the
+# already-mined transaction receipt (immutable logs, works on any standard
+# Base RPC node, no archive node needed, same RPC endpoint already budgeted
+# via chainstack_ru_budget) and derives the implied price from the WETH leg
+# amount, never a guess when no such log exists.
+_WETH_BASE = "0x4200000000000000000000000000000000000006"
+_WETH_DEPOSIT_TOPIC0 = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
+_WETH_WITHDRAWAL_TOPIC0 = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
+
+
+async def _onchain_weth_leg_price_usd(tx_hash: str, chain: str, token_amount: float | None) -> float | None:
+    """Implied per-token USD price from a WETH Deposit/Withdrawal leg found in
+    ``tx_hash``'s own receipt -- ``None`` (never a guess) if the chain isn't
+    supported, the budget is spent, no such leg exists, or ``token_amount``
+    is missing/zero."""
+    if chain != "base" or not tx_hash or not token_amount:
+        return None
+    from aria_core.services import chainstack_ru_budget
+
+    if not await chainstack_ru_budget.can_spend(chain):
+        return None
+    try:
+        import asyncio
+
+        from aria_core.services.doppler import _client
+
+        w3 = _client()
+        receipt = await asyncio.to_thread(w3.eth.get_transaction_receipt, tx_hash)
+    except Exception as exc:  # noqa: BLE001 -- shadow, never blocking
+        logger.info("wallet_copy_shadow: receipt lookup failed for %s (%s)", tx_hash[:10], exc)
+        return None
+    chainstack_ru_budget.record_usage_fast(chain, 1)
+
+    weth_wei = None
+    for log in receipt.get("logs", []):
+        if (log.get("address") or "").lower() != _WETH_BASE:
+            continue
+        topics = log.get("topics") or []
+        if not topics:
+            continue
+        topic0 = topics[0].hex() if hasattr(topics[0], "hex") else str(topics[0])
+        if not topic0.startswith("0x"):
+            topic0 = "0x" + topic0
+        if topic0 in (_WETH_DEPOSIT_TOPIC0, _WETH_WITHDRAWAL_TOPIC0):
+            raw = log.get("data")
+            raw_hex = raw.hex() if hasattr(raw, "hex") else str(raw)
+            try:
+                weth_wei = int(raw_hex, 16)
+            except (TypeError, ValueError):
+                continue
+            break  # first match is the router's own wrap/unwrap leg
+    if weth_wei is None:
+        return None
+
+    from aria_core.services.doppler import eth_usd_rate
+
+    eth_usd = await eth_usd_rate()
+    if not eth_usd:
+        return None
+    weth_amount = weth_wei / 1e18
+    return (weth_amount * eth_usd) / token_amount
 
 
 async def _current_price_usd(contract: str) -> float | None:
@@ -471,7 +555,15 @@ async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
             elif is_sell and await _open_position_exists(wallet, contract):
                 spot, liquidity = await _current_price_and_liquidity_usd(contract)
                 price = _realistic_exit_price(spot, liquidity)
-                await _close_open_position(wallet, contract, t.tx_hash, price)
+                source = "spot" if price is not None else None
+                if price is None:
+                    # Dry pool by scan time -- try the RPC-only fallback
+                    # (25/08, "pas d'api, du rpc/ws") before giving up.
+                    onchain_price = await _onchain_weth_leg_price_usd(t.tx_hash, "base", t.amount)
+                    if onchain_price is not None:
+                        price = onchain_price
+                        source = "onchain_weth_leg"
+                await _close_open_position(wallet, contract, t.tx_hash, price, source=source)
                 closed += 1
 
         if newest_hash != last_seen:

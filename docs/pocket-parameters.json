@@ -977,17 +977,17 @@
     "label": "WALLET-COPY (8 verified Base wallets)",
     "parameters": {
       "CONFIDENCE_MAX_UNKNOWN_EXIT_RATIO": {
-        "line": 218,
+        "line": 219,
         "value": 0.2,
         "why": null
       },
       "CONFIDENCE_MIN_CLOSED_POSITIONS": {
-        "line": 216,
+        "line": 217,
         "value": 1000,
         "why": "Audit 001-audit-code-sans (25/08) found summary() has ZERO consumers anywhere -- a real, sourced per-wallet signal that nobody could ever see short of running it by hand. These bounds decide when a wallet's REALIZED track record (never latent/unrealized -- see the same audit's finding on how thin the realized side still is) is solid enough to surface, same spirit as signal_cascade_convergence's falsifiability watch: log once, never spam every cycle.  Operator-set bar (25/08, same day): \"+25% minimum pour 1000 trade sur chacun d'eux\" -- a deliberately long-horizon confirmation bar, not something expected to fire soon at the current pace (~70 closed positions/ wallet after 17 days). A shadow/paper calibration, never a real-capital edge (CLAUDE.md's public-repo restriction on strategy parameters doesn't apply here -- this bounds a fictional-ledger watch, not real capital)."
       },
       "CONFIDENCE_MIN_RETURN_PCT": {
-        "line": 217,
+        "line": 218,
         "value": 25.0,
         "why": null
       },
@@ -1002,12 +1002,12 @@
         "why": "Fictional stake per detected buy -- never real capital, purely a common yardstick so every copied wallet is compared on equal footing regardless of the source wallet's own real position sizing."
       },
       "_CONFIDENCE_STATE_DDL": {
-        "line": 195,
+        "line": 196,
         "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_confidence_state (\n    wallet_address TEXT PRIMARY KEY,\n    notified_at TEXT NOT NULL\n)\n",
         "why": null
       },
       "_CURSOR_DDL": {
-        "line": 187,
+        "line": 188,
         "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_cursor (\n    wallet_address TEXT PRIMARY KEY,\n    last_tx_hash TEXT,\n    last_scanned_at TEXT NOT NULL,\n    last_transfer_at TEXT\n)\n",
         "why": null
       },
@@ -1026,7 +1026,22 @@
       },
       "_POSITION_DDL": {
         "line": 168,
-        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_position (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    wallet_address TEXT NOT NULL,\n    wallet_label TEXT NOT NULL,\n    contract TEXT NOT NULL,\n    chain TEXT NOT NULL DEFAULT 'base',\n    symbol TEXT,\n    entry_tx_hash TEXT NOT NULL,\n    entry_price_usd REAL,\n    entry_at TEXT NOT NULL,\n    status TEXT NOT NULL DEFAULT 'open',\n    exit_tx_hash TEXT,\n    exit_price_usd REAL,\n    exit_at TEXT,\n    last_mark_price_usd REAL,\n    last_mark_at TEXT\n)\n",
+        "value": "\nCREATE TABLE IF NOT EXISTS wallet_copy_shadow_position (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    wallet_address TEXT NOT NULL,\n    wallet_label TEXT NOT NULL,\n    contract TEXT NOT NULL,\n    chain TEXT NOT NULL DEFAULT 'base',\n    symbol TEXT,\n    entry_tx_hash TEXT NOT NULL,\n    entry_price_usd REAL,\n    entry_at TEXT NOT NULL,\n    status TEXT NOT NULL DEFAULT 'open',\n    exit_tx_hash TEXT,\n    exit_price_usd REAL,\n    exit_at TEXT,\n    exit_price_source TEXT,\n    last_mark_price_usd REAL,\n    last_mark_at TEXT\n)\n",
+        "why": null
+      },
+      "_WETH_BASE": {
+        "line": 417,
+        "value": "0x4200000000000000000000000000000000000006",
+        "why": "25/08, operator directive (\"il faut utiliser le rpc et le websocket ne pas passer par les api\"): diligence done on 2 real unknown_exit samples before writing this -- neither Uniswap V2/V3/V4 nor Balancer/Curve/0x/1inch Swap event topics matched their tx receipts (the tracked wallets route through GMGN's own proprietary router, undocumented ABI), so a generic Swap-event decoder isn't buildable from what's public. One of the two samples DID wrap/unwrap native ETH mid-route (WETH Deposit/Withdrawal events) -- this narrower, honest fallback covers exactly that subset: reads the already-mined transaction receipt (immutable logs, works on any standard Base RPC node, no archive node needed, same RPC endpoint already budgeted via chainstack_ru_budget) and derives the implied price from the WETH leg amount, never a guess when no such log exists."
+      },
+      "_WETH_DEPOSIT_TOPIC0": {
+        "line": 418,
+        "value": "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c",
+        "why": null
+      },
+      "_WETH_WITHDRAWAL_TOPIC0": {
+        "line": 419,
+        "value": "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65",
         "why": null
       }
     },

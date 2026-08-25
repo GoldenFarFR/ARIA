@@ -3,6 +3,7 @@ never a live trigger (cf. module docstring). Same isolated-DB test pattern
 as test_narrative_signal_shadow.py."""
 from __future__ import annotations
 
+import aiosqlite
 import pytest
 
 from aria_core import wallet_copy_shadow as wcs
@@ -37,6 +38,14 @@ def _mock_transfers(monkeypatch, transfers, *, available=True, error=None):
     from aria_core.services.blockscout import blockscout_client
 
     monkeypatch.setattr(blockscout_client, "get_token_transfers", _fake)
+
+
+class _FakeHexBytes:
+    def __init__(self, value: str):
+        self._value = value
+
+    def hex(self):
+        return self._value
 
 
 def _mock_price(monkeypatch, price):
@@ -462,3 +471,162 @@ async def test_confidence_watch_never_fires_on_negative_realized_pnl(caplog):
     with caplog.at_level(logging.WARNING):
         await wcs.run_confidence_watch_cycle()
     assert not any("confidence" in r.message for r in caplog.records)
+
+
+# --- on-chain WETH-leg fallback (25/08, "utiliser le rpc, pas les api") -----
+
+def _mock_chainstack_budget(monkeypatch, *, can_spend=True):
+    async def _can_spend(chain):
+        return can_spend
+
+    def _record_usage_fast(chain, units):
+        pass
+
+    from aria_core.services import chainstack_ru_budget
+
+    monkeypatch.setattr(chainstack_ru_budget, "can_spend", _can_spend)
+    monkeypatch.setattr(chainstack_ru_budget, "record_usage_fast", _record_usage_fast)
+
+
+def _mock_receipt_with_weth_log(monkeypatch, *, weth_wei: int | None, topic0: str | None = None):
+    logs = []
+    if weth_wei is not None:
+        logs.append({
+            "address": WETH,
+            "topics": [_FakeHexBytes(topic0 or wcs._WETH_WITHDRAWAL_TOPIC0)],
+            "data": _FakeHexBytes(hex(weth_wei)),
+        })
+
+    class _FakeEth:
+        def get_transaction_receipt(self, tx_hash):
+            return {"logs": logs}
+
+    class _FakeW3:
+        eth = _FakeEth()
+
+    import aria_core.services.doppler as doppler_module
+
+    monkeypatch.setattr(doppler_module, "_client", lambda: _FakeW3())
+
+
+def _mock_eth_usd_rate(monkeypatch, rate):
+    async def _fake():
+        return rate
+
+    import aria_core.services.doppler as doppler_module
+
+    monkeypatch.setattr(doppler_module, "eth_usd_rate", _fake)
+
+
+@pytest.mark.asyncio
+async def test_onchain_weth_leg_price_decodes_withdrawal_log(monkeypatch):
+    _mock_chainstack_budget(monkeypatch)
+    _mock_receipt_with_weth_log(monkeypatch, weth_wei=int(0.1 * 1e18))  # 0.1 WETH unwrapped
+    _mock_eth_usd_rate(monkeypatch, 2_000.0)  # $2,000/ETH
+
+    price = await wcs._onchain_weth_leg_price_usd("0xsell1", "base", token_amount=100.0)
+    # 0.1 ETH * $2,000 = $200 received for 100 tokens -> $2/token.
+    assert price == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_onchain_weth_leg_price_none_without_matching_log(monkeypatch):
+    _mock_chainstack_budget(monkeypatch)
+    _mock_receipt_with_weth_log(monkeypatch, weth_wei=None)  # no WETH leg at all
+    _mock_eth_usd_rate(monkeypatch, 2_000.0)
+
+    assert await wcs._onchain_weth_leg_price_usd("0xsell1", "base", token_amount=100.0) is None
+
+
+@pytest.mark.asyncio
+async def test_onchain_weth_leg_price_none_when_budget_exhausted(monkeypatch):
+    _mock_chainstack_budget(monkeypatch, can_spend=False)
+    called = {"receipt": False}
+
+    def _client_should_never_be_called():
+        called["receipt"] = True
+        raise AssertionError("RPC must not be called once the daily budget is spent")
+
+    import aria_core.services.doppler as doppler_module
+
+    monkeypatch.setattr(doppler_module, "_client", _client_should_never_be_called)
+
+    assert await wcs._onchain_weth_leg_price_usd("0xsell1", "base", token_amount=100.0) is None
+    assert called["receipt"] is False
+
+
+@pytest.mark.asyncio
+async def test_onchain_weth_leg_price_none_without_token_amount(monkeypatch):
+    _mock_chainstack_budget(monkeypatch)
+    assert await wcs._onchain_weth_leg_price_usd("0xsell1", "base", token_amount=None) is None
+    assert await wcs._onchain_weth_leg_price_usd("0xsell1", "base", token_amount=0.0) is None
+
+
+@pytest.mark.asyncio
+async def test_sell_falls_back_to_onchain_price_when_spot_unavailable(monkeypatch):
+    """Dry pool by scan time (spot lookup returns None) -- the RPC fallback
+    must be tried and, on success, its result stored with an honest source
+    tag distinguishing it from a normal spot-resolved exit."""
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    _mock_price(monkeypatch, 1.0)
+    await wcs.scan_wallet(WALLET, META)
+
+    async def _no_spot(contract):
+        return None, None
+
+    monkeypatch.setattr(wcs, "_current_price_and_liquidity_usd", _no_spot)
+
+    async def _fake_onchain(tx_hash, chain, token_amount):
+        return 3.5
+
+    monkeypatch.setattr(wcs, "_onchain_weth_leg_price_usd", _fake_onchain)
+
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xsell1", from_address=WALLET)])
+    result = await wcs.scan_wallet(WALLET, META)
+    assert result.closed == 1
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT exit_price_usd, exit_price_source FROM wallet_copy_shadow_position "
+            "WHERE wallet_address = ?",
+            (WALLET,),
+        )
+        row = dict(await cur.fetchone())
+    assert row["exit_price_usd"] == pytest.approx(3.5)
+    assert row["exit_price_source"] == "onchain_weth_leg"
+
+
+@pytest.mark.asyncio
+async def test_sell_stays_honestly_unknown_when_every_fallback_fails(monkeypatch):
+    """Neither spot nor the on-chain fallback resolves a price -- never
+    fabricate one, exit_price_usd/source both stay NULL (same
+    closed_unknown_exit_count path summary() already tracks)."""
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    _mock_price(monkeypatch, 1.0)
+    await wcs.scan_wallet(WALLET, META)
+
+    async def _no_spot(contract):
+        return None, None
+
+    monkeypatch.setattr(wcs, "_current_price_and_liquidity_usd", _no_spot)
+
+    async def _no_onchain(tx_hash, chain, token_amount):
+        return None
+
+    monkeypatch.setattr(wcs, "_onchain_weth_leg_price_usd", _no_onchain)
+
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xsell1", from_address=WALLET)])
+    result = await wcs.scan_wallet(WALLET, META)
+    assert result.closed == 1
+
+    async with aiosqlite.connect(wcs.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT exit_price_usd, exit_price_source FROM wallet_copy_shadow_position "
+            "WHERE wallet_address = ?",
+            (WALLET,),
+        )
+        row = dict(await cur.fetchone())
+    assert row["exit_price_usd"] is None
+    assert row["exit_price_source"] is None
