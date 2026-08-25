@@ -30,9 +30,9 @@ def _isolated_db(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_empty_log_starts_with_full_budget():
     status = await budget.daily_status("solana")
-    assert status["cap_units"] == 200_000
+    assert status["cap_units"] == budget.cap_for("solana")
     assert status["used_units"] == 0
-    assert status["remaining_units"] == 200_000
+    assert status["remaining_units"] == budget.cap_for("solana")
 
 
 @pytest.mark.asyncio
@@ -46,12 +46,12 @@ async def test_recorded_usage_reduces_remaining():
     await budget.record_usage("solana", 25_000, purpose="curve_tracker_poll")
     status = await budget.daily_status("solana")
     assert status["used_units"] == 75_000
-    assert status["remaining_units"] == 125_000
+    assert status["remaining_units"] == budget.cap_for("solana") - 75_000
 
 
 @pytest.mark.asyncio
 async def test_hard_cap_never_exceeded():
-    await budget.record_usage("solana", budget.DAILY_UNIT_CAP_PER_CHAIN, purpose="curve_tracker_poll")
+    await budget.record_usage("solana", budget.cap_for("solana"), purpose="curve_tracker_poll")
     assert await budget.can_spend("solana") is False
     status = await budget.daily_status("solana")
     assert status["remaining_units"] == 0
@@ -63,9 +63,9 @@ async def test_usage_beyond_cap_still_recorded_but_reports_zero_remaining():
     remaining budget (e.g. a getMultipleAccounts burst) -- remaining_units
     floors at 0 rather than going negative, it never blocks logging what
     actually happened."""
-    await budget.record_usage("solana", budget.DAILY_UNIT_CAP_PER_CHAIN + 50_000, purpose="burst")
+    await budget.record_usage("solana", budget.cap_for("solana") + 50_000, purpose="burst")
     status = await budget.daily_status("solana")
-    assert status["used_units"] == budget.DAILY_UNIT_CAP_PER_CHAIN + 50_000
+    assert status["used_units"] == budget.cap_for("solana") + 50_000
     assert status["remaining_units"] == 0
 
 
@@ -73,13 +73,13 @@ async def test_usage_beyond_cap_still_recorded_but_reports_zero_remaining():
 async def test_chains_are_independently_budgeted():
     """The whole point of keying by chain: a chain at its cap must never
     starve another chain's own budget."""
-    await budget.record_usage("solana", budget.DAILY_UNIT_CAP_PER_CHAIN, purpose="curve_tracker_poll")
+    await budget.record_usage("solana", budget.cap_for("solana"), purpose="curve_tracker_poll")
     assert await budget.can_spend("solana") is False
     assert await budget.can_spend("base") is True
     assert await budget.can_spend("robinhood") is True
     base_status = await budget.daily_status("base")
     assert base_status["used_units"] == 0
-    assert base_status["remaining_units"] == 200_000
+    assert base_status["remaining_units"] == budget.cap_for("base")
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_daily_reset_on_new_calendar_day():
 
     status = await budget.daily_status("solana")
     assert status["used_units"] == 0
-    assert status["remaining_units"] == 200_000
+    assert status["remaining_units"] == budget.cap_for("solana")
 
 
 # --- record_usage_fast / flush_pending (24/08, hot-loop batching) ----------
@@ -111,7 +111,7 @@ async def test_record_usage_fast_counts_toward_used_before_any_flush():
     budget.record_usage_fast("solana", 3)
     status = await budget.daily_status("solana")
     assert status["used_units"] == 8
-    assert status["remaining_units"] == 200_000 - 8
+    assert status["remaining_units"] == budget.cap_for("solana") - 8
 
 
 @pytest.mark.asyncio
@@ -145,7 +145,7 @@ async def test_flush_pending_is_a_noop_with_nothing_pending():
 
 @pytest.mark.asyncio
 async def test_can_spend_turns_false_from_fast_usage_alone_before_any_flush():
-    budget.record_usage_fast("solana", budget.DAILY_UNIT_CAP_PER_CHAIN)
+    budget.record_usage_fast("solana", budget.cap_for("solana"))
     assert await budget.can_spend("solana") is False
     assert await budget.can_spend("base") is True  # unaffected, cloisonnement
 
@@ -167,3 +167,45 @@ async def test_used_today_read_is_cached_within_the_ttl(monkeypatch):
         await db.commit()
     status = await budget.daily_status("solana")  # still within the TTL
     assert status["used_units"] == 0  # stale cache, deliberately not re-read yet
+
+
+# --- per-chain caps (25/08) -------------------------------------------------
+
+def test_cap_for_returns_the_calibrated_per_chain_value():
+    assert budget.cap_for("base") == 25_000
+    assert budget.cap_for("solana") == 175_000
+    assert budget.cap_for("robinhood") == 400_000
+
+
+def test_cap_for_unknown_chain_falls_back_to_default():
+    assert budget.cap_for("some_future_chain") == budget._DEFAULT_CAP
+
+
+# --- cap-reached alert queue (25/08, operator request: notify on the moment) -
+
+@pytest.mark.asyncio
+async def test_can_spend_false_enqueues_exactly_one_alert():
+    await budget.record_usage("base", budget.cap_for("base"), purpose="test")
+    assert await budget.can_spend("base") is False
+    assert await budget.can_spend("base") is False  # refused again, same day
+    alerts = await budget.pop_unsent_cap_alerts()
+    assert len(alerts) == 1
+    assert alerts[0]["chain"] == "base"
+    assert alerts[0]["cap_units"] == budget.cap_for("base")
+
+
+@pytest.mark.asyncio
+async def test_pop_unsent_cap_alerts_never_returns_the_same_alert_twice():
+    await budget.record_usage("robinhood", budget.cap_for("robinhood"), purpose="test")
+    await budget.can_spend("robinhood")
+    first = await budget.pop_unsent_cap_alerts()
+    assert len(first) == 1
+    second = await budget.pop_unsent_cap_alerts()
+    assert second == []
+
+
+@pytest.mark.asyncio
+async def test_no_alert_while_still_under_cap():
+    await budget.record_usage("solana", 100, purpose="test")
+    await budget.can_spend("solana")
+    assert await budget.pop_unsent_cap_alerts() == []

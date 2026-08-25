@@ -46,10 +46,26 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 
-# Operator-set 24/08, see module docstring for the arithmetic. Same cap for
-# every chain today -- a dict override is deliberately NOT added until a real
-# chain needs a different number (never guess a per-chain split ahead of data).
-DAILY_UNIT_CAP_PER_CHAIN = 200_000
+# Per-chain caps, operator-set 25/08 after real per-chain usage data made a
+# single shared number wrong: Base barely spends anything (2 509 RU used by
+# 20:33 UTC, ~2 940/day projected) while Robinhood's ~100ms block time makes
+# it structurally far more expensive to watch (measured peak 36 213 RU/hour
+# on 25/08, later found to be a now-fixed keepalive bug -- see evm_swap_ws.py's
+# ``_check_idle_newheads``/``_check_budget_circuit_breaker`` docstrings for
+# that incident). Same total as the old shared 200k x 3 (600k/day), just
+# redistributed -- no extra cost against the Growth plan's shared pool.
+DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
+    "base": 25_000,
+    "solana": 175_000,
+    "robinhood": 400_000,
+}
+# Fallback for any future 4th chain never explicitly calibrated above --
+# same conservative default the shared constant used before this split.
+_DEFAULT_CAP = 200_000
+
+
+def cap_for(chain: str) -> int:
+    return DAILY_UNIT_CAP_PER_CHAIN.get(chain, _DEFAULT_CAP)
 
 # How long a cached `used_today` DB read stays valid before the next
 # can_spend/remaining_today call re-queries. Short enough that a chain
@@ -127,12 +143,21 @@ async def used_today(chain: str, now: datetime | None = None) -> int:
 
 async def remaining_today(chain: str, now: datetime | None = None) -> int:
     used = await used_today(chain, now)
-    return max(0, DAILY_UNIT_CAP_PER_CHAIN - used)
+    return max(0, cap_for(chain) - used)
 
 
 async def can_spend(chain: str, now: datetime | None = None) -> bool:
-    """Fail-closed: when in doubt, refuse rather than risk exceeding the cap."""
-    return await remaining_today(chain, now) > 0
+    """Fail-closed: when in doubt, refuse rather than risk exceeding the cap.
+
+    25/08, operator request: notify the moment a chain's cap is actually
+    reached, not just log it silently. ``_record_cap_alert_if_new`` is a
+    cheap no-op once today's alert already exists (UNIQUE(chain, day)), so
+    calling it on every refused call costs one INSERT OR IGNORE only after
+    the cap is already hit -- never on the hot, spendable path."""
+    spendable = await remaining_today(chain, now) > 0
+    if not spendable:
+        await _record_cap_alert_if_new(chain, now)
+    return spendable
 
 
 def record_usage_fast(chain: str, units: int) -> None:
@@ -188,10 +213,67 @@ async def record_usage(chain: str, units: int, *, purpose: str = "") -> None:
 
 async def daily_status(chain: str, now: datetime | None = None) -> dict:
     used = await used_today(chain, now)
+    cap = cap_for(chain)
     return {
         "chain": chain,
-        "cap_units": DAILY_UNIT_CAP_PER_CHAIN,
+        "cap_units": cap,
         "used_units": used,
-        "remaining_units": max(0, DAILY_UNIT_CAP_PER_CHAIN - used),
+        "remaining_units": max(0, cap - used),
         "day_started_at": day_start(now).isoformat(),
     }
+
+
+async def _ensure_alerts_table() -> None:
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chainstack_cap_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chain TEXT NOT NULL,
+                day TEXT NOT NULL,
+                cap_units INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                notified_at TEXT,
+                UNIQUE(chain, day)
+            )
+            """
+        )
+        await db.commit()
+
+
+async def _record_cap_alert_if_new(chain: str, now: datetime | None = None) -> None:
+    """INSERT OR IGNORE on (chain, day) -- the first refusal of the day for a
+    chain creates exactly one alert row, every later refusal that same day is
+    a silent no-op (never re-notifies for a cap already reported)."""
+    await _ensure_alerts_table()
+    day = day_start(now).date().isoformat()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO chainstack_cap_alerts (chain, day, cap_units, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (chain, day, cap_for(chain), datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+
+async def pop_unsent_cap_alerts() -> list[dict]:
+    """Read + mark-as-sent in one pass -- for a caller's own periodic loop
+    (its own Telegram/notification channel, this module never picks one
+    itself: the standalone shadow process and the Docker backend each have a
+    different notifier). Never returns the same alert twice."""
+    await _ensure_alerts_table()
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, chain, day, cap_units, created_at FROM chainstack_cap_alerts "
+            "WHERE notified_at IS NULL ORDER BY id ASC"
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+        if rows:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.executemany(
+                "UPDATE chainstack_cap_alerts SET notified_at = ? WHERE id = ?",
+                [(now_iso, r["id"]) for r in rows],
+            )
+            await db.commit()
+    return rows

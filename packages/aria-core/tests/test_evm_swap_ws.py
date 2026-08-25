@@ -516,7 +516,7 @@ async def test_add_pool_refuses_when_daily_budget_exhausted():
     fake_w3 = MagicMock()
     fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
     feed._w3 = fake_w3
-    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.cap_for("base"))
     ok = await feed.add_pool("0xabc123", dex_id="uniswap_v4", token_address="currency0")
     assert ok is False
     assert "0xabc123" not in feed._pools
@@ -528,7 +528,7 @@ async def test_add_pool_unaffected_by_a_different_chains_exhausted_budget():
     fake_w3 = MagicMock()
     fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
     feed._w3 = fake_w3
-    chainstack_ru_budget.record_usage_fast("robinhood", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("robinhood", chainstack_ru_budget.cap_for("robinhood"))
     ok = await feed.add_pool("0xabc123", dex_id="uniswap_v4", token_address="currency0")
     assert ok is True  # base's own budget is untouched
 
@@ -566,7 +566,7 @@ async def test_breaker_opens_and_unsubscribes_when_budget_exhausted():
     feed._w3 = fake_w3
     feed._pools["0xpool"] = _pool()
     feed._active_sub_ids = ["sub1"]
-    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.cap_for("base"))
 
     await feed._check_budget_circuit_breaker()
 
@@ -586,7 +586,7 @@ async def test_breaker_opens_even_with_nothing_tracked():
     on budget exhaustion alone, whether or not there is a pool to evict --
     its job now includes shutting the keepalive off too."""
     feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
-    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.cap_for("base"))
     await feed._check_budget_circuit_breaker()
     assert feed.breaker_open is True
 
@@ -603,7 +603,7 @@ async def test_breaker_closes_the_newheads_keepalive_with_nothing_else_tracked()
     fake_w3.eth.unsubscribe = AsyncMock()
     feed._w3 = fake_w3
     feed._newheads_sub_id = "newheads-sub"  # already open, nothing else tracked
-    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.cap_for("base"))
 
     await feed._check_budget_circuit_breaker()
 
@@ -676,7 +676,7 @@ async def test_breaker_open_then_close_is_idempotent_without_flapping():
     fake_w3.eth.unsubscribe = AsyncMock()
     feed._w3 = fake_w3
     feed._pools["0xpool"] = _pool()
-    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN)
+    chainstack_ru_budget.record_usage_fast("base", chainstack_ru_budget.cap_for("base"))
 
     await feed._check_budget_circuit_breaker()
     assert feed.breaker_open is True
