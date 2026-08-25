@@ -84,13 +84,23 @@ async def test_integrity_always_ok_structural_guarantee():
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lawyer_judge_are_always_unknown_never_fabricated():
+async def test_benchmark_judge_are_always_unknown_never_fabricated():
     for i in range(200):
         await _record_and_close(outcome_pct=5.0, created_at="2020-01-01T00:00:00+00:00")
     scorecard = await compute_readiness_scorecard()
-    for check_id in ("benchmark", "lawyer", "judge"):
+    for check_id in ("benchmark", "judge"):
         check = next(c for c in scorecard["checks"] if c.id == check_id)
         assert check.status == "unknown", f"{check_id} ne doit jamais être auto-validé"
+
+
+@pytest.mark.asyncio
+async def test_lawyer_check_removed_25_08():
+    """25/08 -- the "feu vert avocat" box was retired (operator decision):
+    it always returned unknown, which meant all_ok could never be True
+    regardless of every other box's real state."""
+    scorecard = await compute_readiness_scorecard()
+    ids = [c.id for c in scorecard["checks"]]
+    assert "lawyer" not in ids
 
 
 @pytest.mark.asyncio

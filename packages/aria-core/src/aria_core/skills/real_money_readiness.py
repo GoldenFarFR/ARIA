@@ -284,17 +284,15 @@ def _check_judge() -> ReadinessCheck:
     )
 
 
-def _check_lawyer() -> ReadinessCheck:
-    return ReadinessCheck(
-        id="lawyer",
-        label="Feu vert avocat sur la structure d'argent réel retenue",
-        status="unknown",
-        detail="action humaine/légale, hors de portée d'un calcul automatique — voir docs/conformite-dossier-avocat.md",
-    )
-
-
 async def compute_readiness_scorecard() -> dict:
-    """Computes the pact's 8 boxes from the real `vc_predictions` log.
+    """Computes the pact's boxes from the real `vc_predictions` log.
+
+    25/08 -- the "lawyer greenlight" box was retired (explicit operator
+    decision, docs/protocole-argent-reel.md §7) -- it always returned
+    ``unknown`` (a human/legal action, out of reach of an automated
+    calculation), which meant ``all_ok`` could never be ``True`` regardless
+    of every other box's real state. Removed entirely rather than kept as a
+    permanent unknown.
 
     Returns ``{"checks": [...], "all_ok": bool, "verdict": str}``. ``all_ok`` is
     NEVER ``True`` while a box is ``unknown`` or ``fail`` — absence of proof
@@ -313,7 +311,6 @@ async def compute_readiness_scorecard() -> dict:
         _check_robustness(predictions),
         _check_risk(metrics),
         _check_judge(),
-        _check_lawyer(),
     ]
     all_ok = all(c.status == "ok" for c in checks)
     n_ok = sum(1 for c in checks if c.status == "ok")
@@ -323,7 +320,7 @@ async def compute_readiness_scorecard() -> dict:
         "verdict": (
             "OUI — toutes les cases sont cochées avec preuve."
             if all_ok
-            else f"NON — {n_ok}/8 cases cochées, argent réel toujours hors de portée."
+            else f"NON — {n_ok}/{len(checks)} cases cochées, argent réel toujours hors de portée."
         ),
     }
 

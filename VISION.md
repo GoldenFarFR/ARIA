@@ -65,7 +65,7 @@ Aria doit progressivement être capable de :
 - **Overlay macro/géo/réglementaire obligatoire** : chaque analyse cadrée par le contexte de marché réel (régime risk-on/off, événements macro qui écrasent une thèse bottom-up). Facts-only, sources réelles datées.
 - **Base-first**, niche pré-bonding (Virtuals Protocol en tête, seul vrai launchpad à courbe de bonding sur Base) — détail : `docs/base-blockchain-launchpads.md`.
 - **Proof engine (LLM-juge)** = pilier qualité : audit adverse de chaque analyse. Dôme anti-injection maintenu partout, jamais d'exécution automatique sur capital réel significatif sans validation humaine.
-- **Conformité AVANT facturation** : facturer de l'analyse peut relever du conseil en investissement réglementé (AMF / MiFID II / MiCA) → avocat obligatoire avant tout encaissement. Détail : `docs/conformite-dossier-avocat.md`.
+- ~~Conformité AVANT facturation → avocat obligatoire avant tout encaissement~~ — **gate retiré (25/08, décision opérateur explicite)**, `docs/conformite-dossier-avocat.md` supprimé. Reste vrai indépendamment : un fonds pour compte de tiers reste soumis à régulation AIF (cf. `docs/roadmap-campagne.md`).
 
 ---
 

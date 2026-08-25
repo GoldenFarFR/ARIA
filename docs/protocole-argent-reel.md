@@ -48,9 +48,10 @@
    déconseillé a bien chuté).
 6. **Proof engine cohérent** : l'auto-audit (juge adverse) est **bien calibré**, pas
    complaisant — il attrape réellement les erreurs d'ARIA.
-7. **Feu vert avocat** sur la structure d'argent réel retenue (le tien vs. tiers ; cf.
-   `docs/conformite-dossier-avocat.md`). Un fonds pour compte de tiers reste le mur le
-   plus lourd et n'est pas le point de départ.
+7. ~~Feu vert avocat sur la structure d'argent réel retenue~~ — **case retirée (25/08,
+   décision opérateur explicite).** Reste vrai indépendamment de ce retrait : un fonds
+   pour compte de TIERS reste soumis à régulation AIF (cf. `docs/roadmap-campagne.md`),
+   cette case ne couvrait que le capital propre de l'opérateur.
 
 ## 3. La montée en taille — en DEUX étapes séquentielles (décision opérateur, 09/07)
 
