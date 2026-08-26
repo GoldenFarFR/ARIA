@@ -166,3 +166,38 @@ this plan would have added unprompted given the funnel-doctrine's default bias t
   of a second DexPaprika OHLCV call.* Rejected: a single spot price is not a candle series --
   re-simulating an alternate exit rule needs the intra-position price PATH, which only an OHLCV
   call provides; the two calls serve genuinely different purposes.
+
+## Decision 8: Telegram open/close notifications, own format rather than reusing `shadow_notify`
+
+**Decision**: Build a dedicated notification path inside `dip_recovery_v2_shadow.py`
+(`pending_notifications()`) rather than reusing `shadow_notify.notify_pocket()`. Same visual
+shape (OUVERTURE/CLOTURE, DexScreener link, a rolling aggregate) as every other shadow pocket the
+operator already sees notifications for, but built against THIS pocket's own real fields (market
+cap, liquidity, 24h dip, pool age, fixed take-profit/timeout) rather than the scale-out-ladder
+fields (`SCALE_OUT_STEP_PCT`, `next_scale_level`, m5/m15 surge data) `shadow_notify.py` expects.
+Wired into `heartbeat.py`'s existing `_notify_telegram` (the same Telegram send path 20+ other
+heartbeat tasks already use), called right after `dip_recovery_v2_shadow_cycle`'s dispatch.
+
+**Rationale**: raised by the operator ("je veux toutes les meme notif a l'identique sur telegram
+achat et vente") after the deploy. `shadow_notify.notify_pocket()` cannot be reused directly for
+two structural reasons: (1) it is called from `shadow_persistent.py`, the standalone OUT-OF-REPO
+process that runs Base/Robinhood/Solana's OWN shadow pockets -- this pocket runs in-process via
+`heartbeat.py` instead (same deployment shape as v1, `dip_recovery_shadow.py`), never in that
+process; (2) even if called from the right process, its message template reads fields
+(`SCALE_OUT_STEP_PCT`, `m5_pct`, `buyers_m15`, `next_scale_level`) this pocket's schema simply
+does not have -- a fixed take-profit/timeout pocket has no scale-out ladder to describe. Building
+a dedicated, schema-correct template is safer than bending a shared one until it silently reads
+`None` for fields that will never exist here.
+
+**Alternatives considered**:
+- *Migrate this pocket to `shadow_persistent.py` so it can reuse `shadow_notify.notify_pocket()`
+  verbatim.* Rejected: architecturally heavier (out-of-repo file, `systemctl restart` to deploy),
+  inconsistent with v1's own precedent (`dip_recovery_shadow.py` stays in-process), and the
+  scale-out-shaped template still would not fit this pocket's fields regardless of which process
+  calls it.
+- *Generalize `shadow_notify.py` to also support a fixed-take-profit shape.* Rejected for now:
+  `shadow_notify.py`'s own docstring already documents a past incident where a premature shared
+  abstraction silently rendered a wrong value for a pocket whose parameters had diverged from its
+  siblings -- the same risk applies here (a fixed-take-profit pocket has structurally different
+  fields, not just different numbers). A dedicated, explicit template is the safer choice the
+  same doctrine that docstring describes would recommend.

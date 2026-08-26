@@ -68,12 +68,17 @@ always open a new position once the previous one has actually closed
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
 from aria_core.paths import aria_db_path
 from aria_core.services import dexpaprika, dexscreener
+# Reused rather than duplicated (cohérence architecturale doctrine) -- these
+# two formatting helpers are generic (a timestamp, a duration), not specific
+# to shadow_notify.py's own scale-out-ladder shape which this pocket has
+# none of (see the module's own notification section further below).
+from aria_core.shadow_notify import _format_hold_duration, _local_hms
 
 logger = logging.getLogger(__name__)
 
@@ -479,3 +484,140 @@ async def summary() -> dict:
         "distinct_tokens": len({(r["contract"], r["chain"]) for r in rows}),
         "avg_pnl_pct": (sum(r["pnl_pct"] or 0 for r in closed) / len(closed)) if closed else None,
     }
+
+
+# --- Telegram open/close notifications (26/08, operator-directed: "je veux
+# toutes les meme notif a l'identique sur telegram achat et vente") --------
+#
+# shadow_notify.py's own notify_pocket() is NOT reused here: it is built for
+# Robinhood/Base's scale-out-ladder shape (SCALE_OUT_STEP_PCT, next_scale_
+# level, m5/m15 surge fields) and is called from shadow_persistent.py, the
+# standalone OUT-OF-REPO process -- this pocket runs in-process via
+# heartbeat.py instead (same as v1, dip_recovery_shadow.py), never in that
+# process. Same visual shape (OUVERTURE/CLOTURE, DexScreener link, a rolling
+# aggregate) rebuilt against this pocket's OWN real fields (market cap,
+# liquidity, 24h dip, pool age, fixed take-profit/timeout -- no scale-out,
+# no m5/m15 surge data to report). The two small formatting helpers used
+# below (_local_hms/_format_hold_duration) are imported from shadow_notify
+# at the top of this file rather than duplicated here.
+
+_last_notified_open_id: int | None = None
+_notified_closed_ids: set[int] = set()
+_NOTIFIED_CLOSED_MAX = 500
+
+
+async def _dip_v2_aggregate() -> str:
+    """Recent-30 then cumulative then 1h debit -- same reading order as
+    shadow_notify.aggregate(), adapted to this pocket's own schema (no
+    realistic/nominal distinction to make: pnl_pct here is ALREADY the
+    fee-adjusted, realistic figure on every row, never a fictional one)."""
+    try:
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT COUNT(*) n, AVG(pnl_pct) pnl, SUM(pnl_pct > 0) wins "
+                "FROM (SELECT * FROM dip_recovery_v2_shadow WHERE status = 'closed' "
+                "ORDER BY id DESC LIMIT 30)"
+            )
+            rec = dict(await cur.fetchone())
+            cur = await db.execute(
+                "SELECT COUNT(*) n, AVG(pnl_pct) pnl, SUM(pnl_pct > 0) wins "
+                "FROM dip_recovery_v2_shadow WHERE status = 'closed'"
+            )
+            cum = dict(await cur.fetchone())
+            cur = await db.execute("SELECT COUNT(*) n FROM dip_recovery_v2_shadow WHERE status = 'open'")
+            ouvertes = (await cur.fetchone())["n"]
+            depuis = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            cur = await db.execute(
+                "SELECT SUM(opened_at >= ?) ouv, SUM(closed_at >= ?) clo FROM dip_recovery_v2_shadow",
+                (depuis, depuis),
+            )
+            debit = dict(await cur.fetchone())
+    except Exception:  # noqa: BLE001 -- the aggregate must never kill the notification
+        return ""
+
+    out = ""
+    if rec.get("n"):
+        wr = f"{100.0 * (rec['wins'] or 0) / rec['n']:.0f}%"
+        out += f"\n{rec['n']} dernieres: winrate {wr}, PnL {rec['pnl'] or 0:+.1f}%"
+    if cum.get("n"):
+        wr = f"{100.0 * (cum['wins'] or 0) / cum['n']:.0f}%"
+        out += f"\nCumul: {cum['n']} clot., winrate {wr}, {ouvertes} ouv., PnL {cum['pnl'] or 0:+.1f}%"
+    out += f"\nDebit 1h: {debit.get('ouv') or 0} ouv., {debit.get('clo') or 0} clot."
+    return out
+
+
+def _dexscreener_link(row: dict) -> str:
+    pool = row.get("pool_address") or ""
+    return f"https://dexscreener.com/{row['chain']}/{pool}" if pool else ""
+
+
+async def pending_notifications() -> list[str]:
+    """Diff-based, same approach as shadow_notify.notify_pocket(): compares
+    row ids between passes rather than the pocket module tracking its own
+    "already notified" flag. Called once per heartbeat pass (heartbeat.py),
+    after run_cycle() -- a failure here must never affect the pocket
+    itself, so this never raises."""
+    global _last_notified_open_id
+    texts: list[str] = []
+    try:
+        await _ensure_tables()
+        async with aiosqlite.connect(_db_path()) as db:
+            db.row_factory = aiosqlite.Row
+            if _last_notified_open_id is None:
+                cur = await db.execute("SELECT COALESCE(MAX(id), 0) FROM dip_recovery_v2_shadow")
+                _last_notified_open_id = (await cur.fetchone())[0]
+                opened_rows: list[dict] = []  # this pass only anchors, never replays history
+            else:
+                cur = await db.execute(
+                    "SELECT * FROM dip_recovery_v2_shadow WHERE id > ? ORDER BY id ASC",
+                    (_last_notified_open_id,),
+                )
+                opened_rows = [dict(r) for r in await cur.fetchall()]
+
+            cur = await db.execute(
+                "SELECT * FROM dip_recovery_v2_shadow WHERE status = 'closed' AND closed_at >= ? "
+                "ORDER BY id ASC",
+                ((datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),),
+            )
+            closed_rows = [dict(r) for r in await cur.fetchall()]
+
+        agg = await _dip_v2_aggregate()
+
+        for row in opened_rows:
+            _last_notified_open_id = max(_last_notified_open_id, row["id"])
+            texts.append(
+                f"DIP-RECOVERY v2 ({row['chain']}) ({row.get('symbol') or row['contract'][:10]})\n"
+                f"OUVERTURE\n"
+                f"Market cap: ${(row.get('entry_market_cap_usd') or 0):.0f} "
+                f"[bande ${MIN_MARKET_CAP_USD:.0f}-${MAX_MARKET_CAP_USD:.0f}]\n"
+                f"Liquidite: ${(row.get('entry_liquidity_usd') or 0):.0f}\n"
+                f"Variation 24h a l'entree: {row.get('entry_var_24h_pct'):.1f}%\n"
+                f"Age du pool: {(row.get('entry_pool_age_days') or 0):.1f} j "
+                f"[MIN {MIN_POOL_AGE_DAYS:.0f} j]\n"
+                f"Entree: ${(row.get('entry_price') or 0):.10g} a {_local_hms(row.get('opened_at'))}\n"
+                f"Sortie: take-profit fixe +{TAKE_PROFIT_PCT:.0f}% "
+                f"| timeout {MAX_HOLD_HOURS / 24.0:.0f}j (pas de stop-loss)\n"
+                + _dexscreener_link(row) + agg
+            )
+
+        for row in closed_rows:
+            if row["id"] in _notified_closed_ids:
+                continue
+            _notified_closed_ids.add(row["id"])
+            if len(_notified_closed_ids) > _NOTIFIED_CLOSED_MAX:
+                for old_id in sorted(_notified_closed_ids)[:100]:
+                    _notified_closed_ids.discard(old_id)
+            pnl = row.get("pnl_pct")
+            pnl_txt = f"{pnl:+.1f}%" if pnl is not None else "n/a"
+            duree = _format_hold_duration(row.get("opened_at"), row.get("closed_at"))
+            texts.append(
+                f"DIP-RECOVERY v2 ({row['chain']}) ({row.get('symbol') or row['contract'][:10]})\n"
+                f"CLOTURE -- {row.get('close_reason') or 'n/a'}\n"
+                f"PnL: {pnl_txt}\n"
+                f"Duree: {duree}\n"
+                + _dexscreener_link(row) + agg
+            )
+    except Exception as exc:  # noqa: BLE001 -- notifications must never break the caller
+        logger.info("dip_recovery_v2_shadow: pending_notifications failed (%s)", exc)
+    return texts

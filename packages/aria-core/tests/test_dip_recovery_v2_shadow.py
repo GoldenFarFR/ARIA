@@ -30,6 +30,8 @@ CHAIN = "base"
 async def _tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", str(tmp_path / "shadow.db"))
     shadow._ensured_db_paths.clear()
+    monkeypatch.setattr(shadow, "_last_notified_open_id", None)
+    monkeypatch.setattr(shadow, "_notified_closed_ids", set())
     await shadow._ensure_tables()
     yield
     shadow._ensured_db_paths.clear()
@@ -567,6 +569,94 @@ async def test_advance_open_position_archives_after_candles(monkeypatch):
     assert call["phase"] == "after"
     assert call["chain"] == CHAIN
     assert call["candles"] == ohlcv.candles
+
+
+# --- Telegram notifications (26/08, operator-directed) ---------------------
+
+@pytest.mark.asyncio
+async def test_pending_notifications_first_pass_only_anchors(monkeypatch):
+    """Same doctrine as shadow_notify.notify_pocket(): the very first pass
+    after a (re)start must never replay pre-existing history as if it just
+    happened."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+    await shadow.discover_and_record(CHAIN)
+
+    texts = await shadow.pending_notifications()
+    assert texts == []
+
+
+@pytest.mark.asyncio
+async def test_pending_notifications_reports_a_new_open(monkeypatch):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    await shadow.pending_notifications()  # anchors on zero positions
+
+    await shadow.discover_and_record(CHAIN)
+    texts = await shadow.pending_notifications()
+    assert len(texts) == 1
+    assert "OUVERTURE" in texts[0]
+    assert CHAIN in texts[0]
+    assert "Market cap" in texts[0]
+    assert "Age du pool" in texts[0]
+
+    # A second pass with nothing new must not re-report the same open.
+    assert await shadow.pending_notifications() == []
+
+
+@pytest.mark.asyncio
+async def test_pending_notifications_reports_a_new_close_once(monkeypatch):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_usd=1.0)]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+    await shadow.pending_notifications()  # anchor
+    await shadow.discover_and_record(CHAIN)
+    await shadow.pending_notifications()  # consume the open
+
+    rows = await _rows()
+
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            "UPDATE dip_recovery_v2_shadow SET status='closed', closed_at=?, "
+            "pnl_pct=?, close_reason=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), 30.0, "take_profit_25pct", rows[0]["id"]),
+        )
+        await db.commit()
+
+    texts = await shadow.pending_notifications()
+    assert len(texts) == 1
+    assert "CLOTURE" in texts[0]
+    assert "take_profit_25pct" in texts[0]
+    assert "+30.0%" in texts[0]
+
+    # Never notified twice for the same close.
+    assert await shadow.pending_notifications() == []
+
+
+@pytest.mark.asyncio
+async def test_pending_notifications_never_raises_on_db_failure(monkeypatch):
+    monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
+    shadow._ensured_db_paths.clear()
+    texts = await shadow.pending_notifications()
+    assert texts == []
 
 
 # --- summary -----------------------------------------------------------

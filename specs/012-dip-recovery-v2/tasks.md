@@ -121,6 +121,13 @@ the position on a phantom take-profit.
 - [X] T030 Add an autouse `_no_real_candle_archive_calls` fixture to `test_dip_recovery_v2_shadow.py` (guards every other test against an unintended real network call, same guard pattern as `test_robinhood_pump_shadow.py`'s `_NetworkGuardClient`), plus 3 dedicated tests (`test_open_position_archives_before_candles`, `test_open_position_survives_candle_archive_failure`, `test_advance_open_position_archives_after_candles`).
 - [X] T031 Re-run targeted + full suite, confirm no regression and no accidental real network calls (test runtime back to ~1s, not ~23s).
 
+## Phase 5c: Telegram open/close notifications (operator-added post-deploy, research.md Decision 8)
+
+- [X] T032 In `dip_recovery_v2_shadow.py`, add `pending_notifications()` (diff-based, same doctrine as `shadow_notify.notify_pocket()`) building an OUVERTURE/CLOTURE text against this pocket's own fields, plus a `_dip_v2_aggregate()` helper for the rolling winrate/PnL readout.
+- [X] T033 In `heartbeat.py`'s `dip_recovery_v2_shadow_cycle` dispatch, call `pending_notifications()` after `run_cycle()` and send each text via `self._notify_telegram(text)`.
+- [X] T034 Add 4 dedicated tests to `test_dip_recovery_v2_shadow.py` (first-pass anchor, new-open reported once, new-close reported once, never raises on DB failure).
+- [X] T035 Re-run targeted + full suite, regenerate `docs/pocket-parameters.json` (line-shift only, no param diff).
+
 ---
 
 ## Dependencies & Execution Order

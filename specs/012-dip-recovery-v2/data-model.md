@@ -52,6 +52,15 @@ writes to the dome's existing shared `shadow_candle_archive` table (owned by
 `module` value in its existing `module` discriminator column, same pattern as
 `robinhood_pump`/`base_momentum`/every other wired shadow module.
 
+## Notification dedup state (in-memory, research.md Decision 8)
+
+`_last_notified_open_id` (int) / `_notified_closed_ids` (set of int) -- module-level, mirrors
+`shadow_notify._NotifyState`'s own shape but kept local to this module (no cross-pocket sharing
+needed, this pocket owns its own notification path). Not persisted to SQLite -- a heartbeat
+restart re-anchors on the current max id (same "never replay history" doctrine as
+`shadow_notify.notify_pocket`'s own first pass), acceptable since a missed notification after a
+rare restart is far less costly than a duplicate one on every restart.
+
 ## Relationship to `dip_recovery_shadow` (v1)
 
 None at the data level — different table, different module, no foreign key, no shared episode

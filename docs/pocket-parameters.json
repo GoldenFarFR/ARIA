@@ -167,7 +167,7 @@
     "label": "DIP-RECOVERY v2 (Base/Robinhood, market-cap-bounded, +25% take-profit)",
     "parameters": {
       "CHAINS": {
-        "line": 82,
+        "line": 87,
         "value": [
           "base",
           "robinhood"
@@ -175,48 +175,53 @@
         "why": null
       },
       "DIP_THRESHOLD_PCT": {
-        "line": 88,
+        "line": 93,
         "value": -30.0,
         "why": "Candidate thresholds under shadow evaluation -- verbatim from the operator's own proposal (26/08), not independently tuned. Shadow mode exists precisely so these can be validated (or not) against real forward data before ever considering a live paper pocket."
       },
       "DISCOVERY_LIMIT": {
-        "line": 123,
+        "line": 128,
         "value": 20,
         "why": "How many DexPaprika candidates to fetch per chain per pass -- the server-side liquidity floor already does most of the filtering, this just bounds how many surviving candidates get a DexScreener call."
       },
       "EXIT_PRICE_SANITY_MULTIPLE": {
-        "line": 118,
+        "line": 123,
         "value": 50.0,
         "why": "26/08, Decision 2 (research.md) -- a guard against the same failure class confirmed live THE SAME DAY on base_momentum_shadow.py (a corrupted AMM reserve-ratio price read as \"+707006.8% nominal, never executable\"). Both pockets read prices from the same provider (DexScreener), so the risk is not hypothetical here either. Set at 50x rather than base_momentum's 1000x: that pocket's own scale-out tests legitimately simulate jumps up to 1000x, a mechanic this pocket has none of -- this pocket closes immediately once pnl_pct clears +25%, so a genuinely legitimate multi-hundred-x read should never be sitting in an open position here. 50x matches the precedent already used by solana_support_bounce_shadow.py, whose take-profit-style (non-scale-out) exit shape is the closer match."
       },
       "MAX_HOLD_HOURS": {
-        "line": 105,
+        "line": 110,
         "value": 168.0,
         "why": "Safety net only, never an invented stop-loss -- see module docstring."
       },
       "MAX_MARKET_CAP_USD": {
-        "line": 91,
+        "line": 96,
         "value": 1000000.0,
         "why": null
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 92,
+        "line": 97,
         "value": 25000.0,
         "why": null
       },
       "MIN_MARKET_CAP_USD": {
-        "line": 90,
+        "line": 95,
         "value": 50000.0,
         "why": null
       },
       "MIN_POOL_AGE_DAYS": {
-        "line": 102,
+        "line": 107,
         "value": 14.0,
         "why": "26/08, operator-added requirement (session follow-up): \"post bonding\" is enforced not just by the market-cap floor but by a real minimum pair/pool age too -- a token that only just cleared 50k market cap hours after creation is a different (already-covered-elsewhere) risk profile from one that has traded for weeks. Sourced from TrendingPool.pool_created_at, already populated by dexpaprika.get_trending_pools at zero extra network cost (see research.md Decision 3) -- a candidate with no age data is never treated as qualifying by default."
       },
       "TAKE_PROFIT_PCT": {
-        "line": 89,
+        "line": 94,
         "value": 25.0,
+        "why": null
+      },
+      "_NOTIFIED_CLOSED_MAX": {
+        "line": 506,
+        "value": 500,
         "why": null
       }
     },

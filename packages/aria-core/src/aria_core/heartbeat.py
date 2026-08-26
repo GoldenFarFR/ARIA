@@ -1846,6 +1846,14 @@ class AriaHeartbeat:
 
             result = await dip_recovery_v2_shadow.run_cycle()
             logger.info("dip_recovery_v2_shadow_cycle: %s", result)
+            # 26/08, operator-directed ("je veux toutes les meme notif a
+            # l'identique sur telegram achat et vente") -- same _notify_telegram
+            # path used by every other Telegram-facing heartbeat task, never a
+            # second Telegram client. A notification failure here must never
+            # affect the pocket itself (pending_notifications() already never
+            # raises on its own).
+            for text in await dip_recovery_v2_shadow.pending_notifications():
+                await self._notify_telegram(text)
 
         elif task_id == "early_legitimacy_shadow_cycle":
             from aria_core.momentum_entry import run_early_legitimacy_shadow_cycle
