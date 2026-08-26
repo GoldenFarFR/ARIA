@@ -62,6 +62,28 @@ l'utilise — il ne lui « fournit » pas la donnée.
   (`outgoing_pause`). Jobs réels : `vc_crawl` (découverte→filtre→pool), `vc_resolve`,
   `vc_weekly_forecast`, `vc_self_report`, `vc_radar_x`, `vc_thesis_review`, `paper_trade_cycle` (gaté).
 
+- **RPC Solana : Chainstack ou Helius, sur quel flux exactement ? (26/08, vérifié en direct,
+  pas de mémoire — état amené à évoluer, revérifier avant de citer une valeur)**
+  → Deux composants distincts, deux états différents :
+  1. **Conteneur Docker prod (`aria-api`)** : `ARIA_SOLANA_RPC_HTTP`/`ARIA_SOLANA_RPC_HTTP_POLLING`
+     → Chainstack (`solana-mainnet.core.chainstack.com`). `ARIA_SOLANA_RPC_WS` → **Helius**
+     (`mainnet.helius-rpc.com`), utilisé comme PRIMAIRE (pas fallback) par le websocket de trades
+     ciblés (`pumpfun_trade_stream.py`/`pumpswap_ws.py`, `logsSubscribe` par mint pré-armé).
+     Testé empiriquement le 26/08 : Chainstack supporte `slotSubscribe` ET `logsSubscribe` avec
+     `mentions` (le type exact utilisé ici) — migration techniquement validée, code pas encore
+     changé au moment de cette entrée (opérateur : "renvoie tout vers le nœud Solana de
+     Chainstack", chantier ouvert, cf. `pumpswap_ws.require_solana_rpc_ws()`).
+  2. **Process shadow séparé (`shadow_persistent.py`, hors Docker)** : dérive `_CHAINSTACK_WSS`
+     depuis `ARIA_SOLANA_RPC_HTTP_POLLING` (`wss://` sur la même URL), Chainstack déjà PRIMAIRE ici.
+     Helius (`HELIUS_SOLANA_WSS_URL`/`HELIUS_SOLANA_HTTP_URL`, variables dédiées, distinctes de
+     `ARIA_SOLANA_RPC_WS`) reste en fallback obligatoire — le process refuse de démarrer si Helius
+     n'est pas configuré, même quand Chainstack est utilisé en pratique.
+  - Le polling batché (`pumpfun_curve_tracker.py`) est déjà Chainstack-primaire partout, Helius en
+    fallback si Chainstack échoue (`HELIUS_MAX_RPS = 9.0`) — jamais remis en cause par ce qui précède.
+  - Chantier de suivi : `specs/008-solana-regime-macro-gate/` (sensor macro de graduation +
+    pré-armement + instrumentation — sujet distinct du choix de fournisseur RPC ci-dessus, les deux
+    tournent en parallèle sur le même pocket `solana_late_bonding_shadow`).
+
 ## Ce qui est un SEAM VIDE (préparé mais pas branché — ne pas le présenter comme actif)
 - `services/x_social.py` : le radar social tourne mais **en veille** (aucune vraie source X/Farcaster injectée → renvoie []).
 - `release_pipeline.py` (campagne X/TikTok) : complet mais **aucun déclencheur** ne l'appelle (rien ne l'arme).
