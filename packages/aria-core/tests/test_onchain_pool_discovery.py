@@ -275,3 +275,61 @@ async def test_check_candidates_never_requeries_dexpaprika_within_recheck_interv
     await feed.check_candidates(min_liquidity_usd=4000.0)
     await feed.check_candidates(min_liquidity_usd=4000.0)
     assert len(calls) == 1  # second call within _RECHECK_INTERVAL_SECONDS is skipped
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_falls_back_to_dexpaprika_when_add_pool_never_succeeded(monkeypatch):
+    """26/08 real incident: a fresh day-zero pool whose add_pool() verify
+    call failed (RPC hadn't indexed the block yet -- "no such table"-style
+    race) used to `continue` straight past the REST fallback below, forever
+    -- zero real Base candidates got through despite the pool genuinely
+    qualifying. `available=False` must fall through to the SAME fallback
+    path a v3/v4 pool (which never gets a WS reserve_usd either) already
+    uses, not be treated as a dead end."""
+    feed = _make_feed()
+    feed._candidates["0xpoolid"] = m._Candidate(
+        pool_key="0xpoolid", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    feed._ws_feed.add_pool = AsyncMock(return_value=False)
+
+    async def _fake_get_pool_reserve_usd(pool_address, *, network):
+        return 15000.0
+
+    async def _fake_get_json(path, *, params):
+        return {"price_usd": 0.002}, None
+
+    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", _fake_get_pool_reserve_usd)
+    monkeypatch.setattr(m.dexpaprika, "_get_json", _fake_get_json)
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert len(result) == 1
+    assert result[0].reserve_usd == 15000.0
+    assert result[0].price_usd == 0.002
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_retries_add_pool_when_snapshot_unavailable(monkeypatch):
+    """The other half of the same fix: a retry gives the WS feed a real
+    chance to take over on a later pass once the RPC catches up, instead of
+    depending solely on the REST fallback forever."""
+    feed = _make_feed()
+    feed._candidates["0xpoolid"] = m._Candidate(
+        pool_key="0xpoolid", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    add_pool_calls = []
+
+    async def _fake_add_pool(pool_address, *, dex_id, token_address):
+        add_pool_calls.append(pool_address)
+        return False
+
+    feed._ws_feed.add_pool = _fake_add_pool
+    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", AsyncMock(return_value=None))
+    await feed.check_candidates(min_liquidity_usd=4000.0)
+    import asyncio
+    await asyncio.sleep(0)  # let the fire-and-forget create_task actually run
+    assert add_pool_calls == ["0xpoolid"]

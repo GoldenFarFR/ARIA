@@ -347,7 +347,36 @@ class OnChainPoolDiscoveryFeed:
                 continue
             snapshot = self._ws_feed.get_snapshot(key)
             if not snapshot.available:
-                continue
+                # 26/08 -- real incident: `add_pool` verification (a live
+                # `token0()`/`token1()` eth_call against a contract that may
+                # have landed on-chain only moments ago) genuinely fails on
+                # a fresh day-zero pool when the RPC node hasn't finished
+                # indexing that exact block yet ("Could not decode contract
+                # function call to token0() with return data: b''" -- an
+                # empty return is the classic signature of calling code that
+                # isn't visible at the queried state yet). `_register_candidate`
+                # only ever calls `add_pool` ONCE, at discovery -- a
+                # permanent RPC-vs-WS race left every such candidate stuck at
+                # `available=False` for its entire observation window,
+                # `continue`-ing straight past the REST fallback below on
+                # every single check_candidates() pass, which is exactly why
+                # this fell through to zero real day-zero candidates on Base
+                # despite the 26/08 Aerodrome factory fix landing correctly.
+                # Retry add_pool here (best-effort, fire-and-forget, same
+                # cooldown as the REST fallback so a persistently-broken pool
+                # doesn't spam eth_call every tick) -- the RPC has usually
+                # caught up within a few cycles, letting the WS take over
+                # for free on a later pass. Falling through to the REST
+                # fallback below (rather than `continue`-ing) means this
+                # candidate is never worse off than a v3/v4 pool that never
+                # gets a WS reserve_usd in the first place.
+                if cand.last_checked_at is None or (
+                    now - cand.last_checked_at >= _RECHECK_INTERVAL_SECONDS
+                ):
+                    import asyncio
+                    asyncio.create_task(self._ws_feed.add_pool(
+                        key, dex_id=cand.dex_id, token_address=cand.token_address,
+                    ))
             reserve_usd = snapshot.reserve_usd
             price_usd = None
             if snapshot.quote_is_weth:
