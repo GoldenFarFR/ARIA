@@ -38,6 +38,23 @@ _BURN_IN_NOMINAL_INTERVAL_MINUTES = {
     "robinhood_testnet_rehearsal_cycle": 240,
 }
 
+# 26/08 fix -- the ONLY tasks `outgoing_pause` (the real-capital kill-switch,
+# "/stop") should ever gate. Read each handler in `_run_task` before adding to
+# this set: the bar is "does this actually move real capital or rehearse the
+# exact code path that will," never "sounds financial." Explicitly NOT here:
+# `acp_provider_poll`/`acp_market_scan`/`revenue_autonomy` (these process
+# INCOME -- x402 sales, market scans -- never an outgoing spend);
+# `paper_trade_cycle`/`polymarket_paper_cycle` (100% fictional capital);
+# every vc_*/momentum_discovery_cycle/signal_cascade_*/shadow sourcing task
+# (research, zero capital moved). Testnet rehearsals are included on purpose,
+# by precaution -- they exercise the same code path real capital will one day
+# take, so they stay paused with it even though no real money is at risk today.
+_FINANCIAL_RISK_TASK_IDS = frozenset({
+    "agent_wallet_pilot_cycle",  # real capital, Coinbase Agentic Wallet pilot
+    "sepolia_autonomous_cycle",  # testnet swap, rehearses the real-capital swap path
+    "robinhood_testnet_rehearsal_cycle",  # testnet, rehearses the real-capital path
+})
+
 HEARTBEAT_TASKS = [
     HeartbeatTask(
         id="portfolio_scan",
@@ -1214,14 +1231,24 @@ class AriaHeartbeat:
 
     async def _tick(self) -> None:
         global _LAST_HEARTBEAT
-        # Kill-switch: while paused, no scheduled job runs (scheduled tweets, ACP,
-        # revenue, mentions, profile/visual sync, health watch...). The loop stays
-        # alive and resumes as-is on /start. _LAST_HEARTBEAT isn't touched: /status
-        # explicitly shows the paused state.
+        # 26/08 fix -- this used to be a single `if outgoing_pause.is_paused():
+        # return` covering the WHOLE tick. `outgoing_pause` is the REAL-CAPITAL
+        # kill-switch ("OUTGOING pause"), but the blanket early-return silently
+        # starved every sourcing/research/veille task too (vc_crawl,
+        # market_sentiment_cycle, cabalspy_candidate_sourcing_cycle...) --
+        # found live 26/08: armed at 2026-08-25T14:04, and every one of those
+        # cycles stopped ticking at that exact instant, for 17h+, with no
+        # relation whatsoever to a real trade. Same bug class already fixed in
+        # `shadow_persistent.py` on 24/08 for the same reason ("Gating THIS
+        # polling on outgoing_pause meant /stop silently starved the paper
+        # pocket too"), never carried over to this loop.
+        #
+        # Fix: gate ONLY the tasks that can actually move real capital, inside
+        # the per-task loop below -- everything else (research, shadow/paper,
+        # veille, ACP/revenue which are INCOME not outgoing spend) keeps
+        # running while /stop is armed, same as it always should have.
         from aria_core import outgoing_pause
 
-        if outgoing_pause.is_paused():
-            return
         now = datetime.now(timezone.utc)
         _sync_x_curiosity_enabled()
 
@@ -1229,6 +1256,8 @@ class AriaHeartbeat:
 
         for hb_task in HEARTBEAT_TASKS:
             if not hb_task.enabled:
+                continue
+            if hb_task.id in _FINANCIAL_RISK_TASK_IDS and outgoing_pause.is_paused():
                 continue
             interval_minutes = hb_task.interval_minutes
             if hb_task.id == "aria_brain_cycle":
