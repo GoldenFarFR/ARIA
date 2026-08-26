@@ -1844,14 +1844,32 @@ class AriaHeartbeat:
         elif task_id == "dip_recovery_v2_shadow_cycle":
             from aria_core import dip_recovery_v2_shadow
 
+            # 26/08, real bug found live and fixed the same day: calling
+            # pending_notifications() AFTER run_cycle() means the very
+            # first pass after a fresh process start (container restart)
+            # anchors on MAX(id) that ALREADY includes whatever this same
+            # pass just opened -- those positions were silently absorbed
+            # into the "anchor, never replay history" first-pass logic and
+            # never notified (confirmed live: 8 real Base/Robinhood
+            # positions opened at deploy time, zero Telegram messages sent).
+            # Anchoring BEFORE run_cycle() costs one cycle's delay (~15min)
+            # on the very first notification after a restart, but a
+            # position opened THIS pass is then, by construction, newer
+            # than the anchor and gets picked up -- never silently missed
+            # again. Cost is worth it: the operator explicitly wants every
+            # open/close notified, never a silent gap. Any text this
+            # pre-anchor call DOES return (normally none, past the very
+            # first pass -- a safety net if a prior cycle's own post-call
+            # ever failed midway) is still sent, never silently dropped.
+            for text in await dip_recovery_v2_shadow.pending_notifications():
+                await self._notify_telegram(text)
+
             result = await dip_recovery_v2_shadow.run_cycle()
             logger.info("dip_recovery_v2_shadow_cycle: %s", result)
-            # 26/08, operator-directed ("je veux toutes les meme notif a
-            # l'identique sur telegram achat et vente") -- same _notify_telegram
-            # path used by every other Telegram-facing heartbeat task, never a
-            # second Telegram client. A notification failure here must never
-            # affect the pocket itself (pending_notifications() already never
-            # raises on its own).
+            # Same _notify_telegram path used by every other Telegram-facing
+            # heartbeat task, never a second Telegram client. A notification
+            # failure here must never affect the pocket itself
+            # (pending_notifications() already never raises on its own).
             for text in await dip_recovery_v2_shadow.pending_notifications():
                 await self._notify_telegram(text)
 

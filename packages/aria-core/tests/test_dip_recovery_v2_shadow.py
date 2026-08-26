@@ -593,6 +593,56 @@ async def test_pending_notifications_first_pass_only_anchors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_calling_notifications_after_the_very_first_cycle_loses_that_cycles_opens(monkeypatch):
+    """Documents the REAL bug found live 26/08 (8 real Base/Robinhood
+    positions opened at deploy time, zero Telegram messages sent): calling
+    pending_notifications() only AFTER run_cycle() means the very first
+    call ever made anchors on MAX(id), which by then already includes
+    whatever THIS SAME cycle just opened -- those positions are absorbed
+    into the anchor and never notified. This test locks in the WRONG shape
+    so a future refactor cannot silently reintroduce it -- the correct
+    fix (heartbeat.py calling pending_notifications() once BEFORE
+    run_cycle(), see the next test) is the one actually wired in prod."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    # Wrong order: discover (opens a position) THEN notify for the first time.
+    await shadow.discover_and_record(CHAIN)
+    texts = await shadow.pending_notifications()
+    assert texts == []  # the open from THIS very cycle is silently lost
+
+
+@pytest.mark.asyncio
+async def test_anchoring_before_the_first_cycle_still_reports_that_cycles_opens(monkeypatch):
+    """The actual fix wired into heartbeat.py: call pending_notifications()
+    once BEFORE the first run_cycle() (a pure anchor, since nothing exists
+    yet) so a position opened during that very first cycle is, by
+    construction, newer than the anchor and gets reported by the
+    SECOND (post-cycle) call -- never silently absorbed."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    # Correct order: anchor first (nothing to report yet, DB is empty).
+    assert await shadow.pending_notifications() == []
+    await shadow.discover_and_record(CHAIN)
+    texts = await shadow.pending_notifications()
+    assert len(texts) == 1
+    assert "OUVERTURE" in texts[0]
+
+
+@pytest.mark.asyncio
 async def test_pending_notifications_reports_a_new_open(monkeypatch):
     async def fake_trending(*a, **k):
         return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
