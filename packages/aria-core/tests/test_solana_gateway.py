@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from aria_core.services import chainstack_ru_budget
 from aria_core.services.solana_gateway import SolanaGateway
 from aria_core.services.solana_rpc_budget import Priority
 
@@ -141,6 +142,39 @@ class TestFailover:
         client = _Client({PAID_A: _Resp(429)})
         assert await gw.call("getHealth", client=client) == {"result": "ok"}
         assert "https://public.example/rpc" in client.hits
+
+
+class TestChainstackRuAccounting:
+    """26/08 -- this gateway is the single door 5 real-money-adjacent callers
+    (jupiter_swap_signer.py, solana_rent_recovery.py, solana_agent_wallet.py,
+    pumpfun_curve_price.py) share, and none of them was ever counted against
+    chainstack_ru_budget before this. Measured gap: 419,197 real RU billed on
+    Solana on 25/08 vs 57,796 this dome's own budget saw that day."""
+
+    def setup_method(self):
+        chainstack_ru_budget._pending_units.clear()
+
+    def teardown_method(self):
+        chainstack_ru_budget._pending_units.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_paid_endpoint_attempt_counts_one_ru_even_on_failure(self):
+        """Counted before the attempt, not after success: Chainstack bills on
+        receipt, so a 429/5xx/timeout still spent the RU."""
+        gw = _gw(urls=[(PAID_A, True), (PAID_B, True)])
+        client = _Client({PAID_A: _Resp(500)})
+        await gw.call("getHealth", client=client)
+        # One attempt on PAID_A (failed, benched) + one on PAID_B (succeeded).
+        assert chainstack_ru_budget._pending_units.get("solana") == 2
+
+    @pytest.mark.asyncio
+    async def test_a_public_endpoint_attempt_never_spends_chainstack_ru(self):
+        gw = _gw(urls=[(PAID_A, True), ("https://public.example/rpc", False)])
+        client = _Client({PAID_A: _Resp(429)})
+        await gw.call("getHealth", client=client)
+        # Only the paid attempt on PAID_A should count -- the public fallback
+        # that actually served the response must not.
+        assert chainstack_ru_budget._pending_units.get("solana") == 1
 
 
 class TestPriority:

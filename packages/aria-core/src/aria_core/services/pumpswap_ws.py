@@ -321,6 +321,17 @@ async def _rpc_get_multiple_accounts(
         "method": "getMultipleAccounts",
         "params": [pubkeys, {"encoding": "base64", "commitment": "confirmed"}],
     }
+    # 26/08 -- counted right before the attempt (Chainstack bills on receipt,
+    # not on success), never conditional here: every KNOWN caller of this
+    # function defaults rpc_http_url to Chainstack (RPC_HTTP_DEFAULT or its
+    # direct fallback, both Chainstack today) with no public-RPC fallback
+    # (require_solana_rpc_http() raises rather than degrading) -- unlike
+    # solana_gateway's mixed pool, every caller seen today is Chainstack. If
+    # a future caller ever passes a genuinely non-Chainstack rpc_http_url,
+    # this unconditional count would need revisiting.
+    from aria_core.services import chainstack_ru_budget
+
+    chainstack_ru_budget.record_usage_fast("solana", 1)
     # No public fallback by design: an unset endpoint fails here, named,
     # rather than silently sending the dome's Solana reads to the free RPC.
     resp = await http_client.post(rpc_http_url or require_solana_rpc_http(), json=payload, timeout=15.0)

@@ -14,7 +14,7 @@ import struct
 import httpx
 import pytest
 
-from aria_core.services import pumpswap_ws
+from aria_core.services import chainstack_ru_budget, pumpswap_ws
 from aria_core.services.coingecko import SimplePriceResult
 
 # 20/08 -- passed explicitly everywhere: there is no public RPC default any
@@ -120,6 +120,37 @@ def _mock_transport(accounts_by_pubkey: dict[str, bytes]) -> httpx.MockTransport
 @pytest.fixture(autouse=True)
 def _no_setup_gap(monkeypatch):
     monkeypatch.setattr(pumpswap_ws, "SETUP_REQUEST_GAP_SECONDS", 0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_multiple_accounts_counts_one_chainstack_ru_per_call():
+    """26/08 -- record_usage_fast must fire once per _rpc_get_multiple_accounts
+    call, regardless of batch size or success/failure, since this is the ONLY
+    caller-agnostic point that saw real Chainstack Solana traffic go
+    uncounted (measured: 419,197 real RU on 25/08 vs 57,796 this dome's own
+    budget saw that day)."""
+    chainstack_ru_budget._pending_units.clear()
+    try:
+        async with httpx.AsyncClient(transport=_mock_transport({})) as http_client:
+            await pumpswap_ws._rpc_get_multiple_accounts(
+                http_client, _TEST_RPC, ["pubkeyA", "pubkeyB", "pubkeyC"],
+            )
+        assert chainstack_ru_budget._pending_units.get("solana") == 1
+    finally:
+        chainstack_ru_budget._pending_units.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_multiple_accounts_counts_nothing_for_an_empty_batch():
+    """No pubkeys means no HTTP call at all -- must not spend a phantom RU."""
+    chainstack_ru_budget._pending_units.clear()
+    try:
+        async with httpx.AsyncClient(transport=_mock_transport({})) as http_client:
+            result = await pumpswap_ws._rpc_get_multiple_accounts(http_client, _TEST_RPC, [])
+        assert result == []
+        assert chainstack_ru_budget._pending_units.get("solana", 0) == 0
+    finally:
+        chainstack_ru_budget._pending_units.clear()
 
 
 @pytest.mark.asyncio

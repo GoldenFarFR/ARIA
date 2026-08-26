@@ -313,6 +313,22 @@ class SolanaGateway:
                 if not await endpoint.budget.acquire(priority):
                     # Only LOW gives up; it retries later by design.
                     return None
+                if endpoint.paid:
+                    # 26/08 -- counted right before the attempt, not after a
+                    # successful response: Chainstack bills a request the
+                    # moment it reaches their server, so a timeout or a 5xx
+                    # here still spent the RU. This closed a real gap where
+                    # this gateway's own callers (jupiter_swap_signer.py,
+                    # solana_rent_recovery.py, solana_agent_wallet.py,
+                    # pumpfun_curve_price.py) sent real Chainstack traffic
+                    # that chainstack_ru_budget never saw -- measured 26/08:
+                    # the dashboard's real Solana RU (419,197 on 25/08) was
+                    # 7.3x this dome's own internal count (57,796) for the
+                    # same day. Public endpoints (paid=False) never touch
+                    # this budget -- they cost no RU.
+                    from aria_core.services import chainstack_ru_budget
+
+                    chainstack_ru_budget.record_usage_fast("solana", 1)
                 try:
                     resp = await client.post(
                         endpoint.url,

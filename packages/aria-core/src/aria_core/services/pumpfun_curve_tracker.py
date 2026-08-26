@@ -441,12 +441,15 @@ class PumpFunCurveTracker:
                     await solana_rpc_budget.acquire(Priority.NORMAL)
                 ep.last_call_at = time.monotonic()
                 try:
+                    # 26/08 -- record_usage_fast("solana", 1) now lives INSIDE
+                    # _rpc_get_multiple_accounts itself (counts the attempt,
+                    # not just this success), so it is never called again
+                    # here -- a second call here would double-count every
+                    # successful batch.
                     accounts = await _rpc_get_multiple_accounts(
                         http_client, ep.url, [e.pool_address for e in chunk])
                     ep.calls += 1
                     self.credits_spent += 1  # 1 credit per CALL, not per account
-                    if ep.name == "primary":
-                        chainstack_ru_budget.record_usage_fast("solana", 1)
                     break
                 except Exception as exc:  # noqa: BLE001 -- fall through to the next provider
                     ep.failures += 1
