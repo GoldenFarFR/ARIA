@@ -250,6 +250,34 @@ async def test_every_decision_is_logged_including_the_rejections(_tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_buys_sells_and_bonding_progress_reach_the_gate_log(_tmp_db):
+    """specs/008 -- these 3 columns existed in the schema but were always
+    NULL for this pocket before this fix (sell_pressure_slope/buys_observed/
+    sells_observed never read from `metrics`/`flow`)."""
+    stream = _Stream()
+    stream._flow.buy_count = 7
+    stream._flow.sell_count = 2
+
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=stream, resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+
+    async with aiosqlite.connect(_tmp_db) as c:
+        c.row_factory = aiosqlite.Row
+        cur = await c.execute(
+            f"SELECT buys_observed, sells_observed, sell_pressure_slope, bonding_progress "
+            f"FROM {pretrade_rejection_log.TABLE} WHERE pocket = 'late_bonding'"
+        )
+        row = dict(await cur.fetchone())
+
+    assert row["buys_observed"] == 7
+    assert row["sells_observed"] == 2
+    assert row["sell_pressure_slope"] == 0.1  # from _Stream.sell_pressure_slope()
+    assert row["bonding_progress"] is not None
+
+
+@pytest.mark.asyncio
 async def test_a_provider_failure_never_raises_into_the_caller(_tmp_db):
     async def _boom(*_a, **_kw):
         raise RuntimeError("rpc down")
@@ -2372,6 +2400,28 @@ class TestRegimeGate:
         assert state["samples"] == 0
 
     @pytest.mark.asyncio
+    async def test_recording_a_candidate_persists_bonding_progress(self, _tmp_db):
+        """specs/008 -- the curve position at entry must survive for a future
+        backtest, not be silently dropped like sell_pressure_slope/
+        buys_observed/sells_observed were before this fix."""
+        import aiosqlite
+
+        await pocket.record_regime_candidate(
+            pool_address="poolZ", mint="mintZ", chain="solana",
+            entry_price=1.0, reserve_usd=5000.0, bonding_progress=0.82,
+            db_path=_tmp_db,
+        )
+        async with aiosqlite.connect(_tmp_db) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT bonding_progress, peak_reached_at, decided_at "
+                f"FROM {pocket.REGIME_CANDIDATES_TABLE} WHERE mint='mintZ'"
+            )
+            row = dict(await cur.fetchone())
+        assert row["bonding_progress"] == 0.82
+        assert row["peak_reached_at"] == row["decided_at"]
+
+    @pytest.mark.asyncio
     async def test_advance_regime_candidates_tracks_the_peak_forward(self, _tmp_db):
         """The whole point of the websocket path: a free, local read updates
         the peak with no network call, and closes tracking once the window
@@ -2404,6 +2454,52 @@ class TestRegimeGate:
             row = dict(await cur.fetchone())
         assert row["peak_price"] == 2.0
         assert row["tracking_status"] == "tracking", "not expired yet, must stay tracking"
+
+    @pytest.mark.asyncio
+    async def test_peak_reached_at_only_moves_on_a_strict_new_high(self, _tmp_db):
+        """specs/008 -- `last_checked_at` already means "when we last looked";
+        without this distinction, time-to-peak stays unmeasurable even with
+        the column added, the exact gap this test exists to close."""
+        import aiosqlite
+
+        class _RisingSnap:
+            price_usd = 2.0
+            price_high_since_last_read = 2.0
+
+        class _FlatSnap:
+            price_usd = 1.5  # BELOW the already-recorded peak -- no new high
+            price_high_since_last_read = None
+
+        class _Feed:
+            def __init__(self, snap):
+                self._snap = snap
+
+            def get_snapshot(self, pool_address):
+                return self._snap
+
+        await pocket.record_regime_candidate(
+            pool_address="poolW", mint="mintW", chain="solana",
+            entry_price=1.0, reserve_usd=5000.0, db_path=_tmp_db,
+        )
+        await pocket.advance_regime_candidates(bonding_ws_feed=_Feed(_RisingSnap()), db_path=_tmp_db)
+
+        async with aiosqlite.connect(_tmp_db) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT peak_reached_at FROM {pocket.REGIME_CANDIDATES_TABLE} WHERE mint='mintW'"
+            )
+            after_rise = (await cur.fetchone())["peak_reached_at"]
+
+        await pocket.advance_regime_candidates(bonding_ws_feed=_Feed(_FlatSnap()), db_path=_tmp_db)
+
+        async with aiosqlite.connect(_tmp_db) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT peak_price, peak_reached_at FROM {pocket.REGIME_CANDIDATES_TABLE} WHERE mint='mintW'"
+            )
+            row = dict(await cur.fetchone())
+        assert row["peak_price"] == 2.0, "a lower snapshot must never overwrite a real peak"
+        assert row["peak_reached_at"] == after_rise, "no new high -> peak_reached_at must not move"
 
     @pytest.mark.asyncio
     async def test_advance_regime_candidates_expires_after_the_window(self, _tmp_db, monkeypatch):

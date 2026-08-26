@@ -623,13 +623,26 @@ async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
             f"CREATE INDEX IF NOT EXISTS idx_{REGIME_CANDIDATES_TABLE}_status "
             f"ON {REGIME_CANDIDATES_TABLE}(tracking_status)"
         )
+        # Hot ALTER, Doctrine d'Ingestion -- 26/08, specs/008. `bonding_progress`
+        # lets a future backtest reconstruct the entry-time curve position;
+        # `peak_reached_at` is only touched when a NEW high is set (see
+        # `advance_regime_candidates`), so it measures the real time-to-peak
+        # instead of `last_checked_at`'s tracking-window artefact.
+        cur = await db.execute(f"PRAGMA table_info({REGIME_CANDIDATES_TABLE})")
+        columns = {row[1] for row in await cur.fetchall()}
+        for col, decl in (("bonding_progress", "REAL"), ("peak_reached_at", "TEXT")):
+            if col not in columns:
+                await db.execute(
+                    f"ALTER TABLE {REGIME_CANDIDATES_TABLE} ADD COLUMN {col} {decl}"
+                )
         await db.commit()
     _ensured_regime_candidates_db_paths.add(path)
 
 
 async def record_regime_candidate(
     *, pool_address: str, mint: str, chain: str, entry_price: float,
-    reserve_usd: float | None, db_path: str | None = None,
+    reserve_usd: float | None, bonding_progress: float | None = None,
+    db_path: str | None = None,
 ) -> None:
     """Logs one candidate that cleared every filter up to the regime gate,
     independent of what the gate itself will decide. This is the whole fix:
@@ -647,10 +660,11 @@ async def record_regime_candidate(
             await db.execute(
                 f"INSERT INTO {REGIME_CANDIDATES_TABLE} "
                 f"(pool_address, mint, chain, decided_at, entry_price, reserve_usd, "
-                f" peak_price, last_checked_at, tracking_status) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'tracking')",
+                f" peak_price, last_checked_at, tracking_status, bonding_progress, "
+                f" peak_reached_at) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'tracking', ?, ?)",
                 (pool_address, mint, chain, now, entry_price, reserve_usd,
-                 entry_price, now),
+                 entry_price, now, bonding_progress, now),
             )
             await db.commit()
     except Exception as exc:  # noqa: BLE001 -- a sensor write never breaks a decision
@@ -700,12 +714,27 @@ async def advance_regime_candidates(
         new_peak = max(candidates)
         expired = row["decided_at"] < cutoff
         status = "closed" if expired else "tracking"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # 26/08, specs/008 -- only a STRICT new high moves `peak_reached_at`.
+        # `last_checked_at` already tracks "when we last looked" (capped by
+        # REGIME_TRACKING_WINDOW_MINUTES); without this distinction the two
+        # columns would be identical and time-to-peak would still be
+        # unmeasurable, the exact gap this column exists to close.
+        peak_moved = new_peak > (row["peak_price"] or float("-inf"))
         async with aiosqlite.connect(path) as db:
-            await db.execute(
-                f"UPDATE {REGIME_CANDIDATES_TABLE} SET peak_price = ?, "
-                f"last_checked_at = ?, tracking_status = ? WHERE id = ?",
-                (new_peak, datetime.now(timezone.utc).isoformat(), status, row["id"]),
-            )
+            if peak_moved:
+                await db.execute(
+                    f"UPDATE {REGIME_CANDIDATES_TABLE} SET peak_price = ?, "
+                    f"last_checked_at = ?, tracking_status = ?, peak_reached_at = ? "
+                    f"WHERE id = ?",
+                    (new_peak, now_iso, status, now_iso, row["id"]),
+                )
+            else:
+                await db.execute(
+                    f"UPDATE {REGIME_CANDIDATES_TABLE} SET peak_price = ?, "
+                    f"last_checked_at = ?, tracking_status = ? WHERE id = ?",
+                    (new_peak, now_iso, status, row["id"]),
+                )
             await db.commit()
         stats["updated"] += 1
         if status == "closed":
@@ -1097,6 +1126,10 @@ async def screen_candidate(
             if flow is not None and getattr(flow, "buy_count", None) is not None else None
         ),
         "buy_count": getattr(flow, "buy_count", None) if flow is not None else None,
+        # 26/08 -- the sell-side twin of buy_count, same source (`flow`),
+        # never read before: `pretrade_rejection_log.sells_observed` existed
+        # in the schema but was always NULL for this pocket (specs/008).
+        "sell_count": getattr(flow, "sell_count", None) if flow is not None else None,
         "observation_seconds": (
             (time.time() - getattr(flow, "first_trade_at", None))
             if (flow is not None and getattr(flow, "first_trade_at", None)) else None
@@ -1461,6 +1494,7 @@ async def consider_candidate(
                 await record_regime_candidate(
                     pool_address=pool_address, mint=mint, chain=chain,
                     entry_price=snapshot.price_usd, reserve_usd=snapshot.reserve_usd,
+                    bonding_progress=metrics.get("bonding_progress"),
                     db_path=db_path,
                 )
                 if not (await regime_state(db_path=db_path))["open"]:
@@ -1498,6 +1532,10 @@ async def consider_candidate(
                 distinct_buyers=metrics.get("distinct_buyers"),
                 top_buyer_share=metrics.get("top_buyer_share"),
                 buyer_acceleration=metrics.get("buyer_acceleration"),
+                sell_pressure_slope=metrics.get("sell_pressure_slope"),
+                buys_observed=metrics.get("buy_count"),
+                sells_observed=metrics.get("sell_count"),
+                bonding_progress=metrics.get("bonding_progress"),
             ),
             db_path=db_path,
         )
