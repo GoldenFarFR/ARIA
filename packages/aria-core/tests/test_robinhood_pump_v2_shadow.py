@@ -156,6 +156,29 @@ async def test_record_signals_rejects_thin_liquidity():
     assert logged == 0
 
 
+# --- specs/010-robinhood-dayzero-liquidity: entry-mode-aware liquidity floor -
+
+@pytest.mark.asyncio
+async def test_day_zero_entry_mode_uses_the_lower_liquidity_floor():
+    reserve = (v2.MIN_LIQUIDITY_USD_DAY_ZERO + v2.MIN_LIQUIDITY_USD) / 2
+    assert reserve < v2.MIN_LIQUIDITY_USD
+    logged = await v2.record_signals([_pool(reserve=reserve)], chain=CHAIN, entry_mode="day_zero")
+    assert logged == 1
+
+
+@pytest.mark.asyncio
+async def test_non_day_zero_entry_mode_still_uses_the_dexpaprika_floor():
+    reserve = (v2.MIN_LIQUIDITY_USD_DAY_ZERO + v2.MIN_LIQUIDITY_USD) / 2
+    logged = await v2.record_signals([_pool(reserve=reserve)], chain=CHAIN)
+    assert logged == 0
+
+
+@pytest.mark.asyncio
+async def test_day_zero_entry_mode_still_rejects_near_zero_liquidity():
+    logged = await v2.record_signals([_pool(reserve=6.40)], chain=CHAIN, entry_mode="day_zero")
+    assert logged == 0
+
+
 @pytest.mark.asyncio
 async def test_record_signals_rejects_unknown_age():
     pool = dataclasses.replace(_pool(m5=40.0), pool_created_at=None)

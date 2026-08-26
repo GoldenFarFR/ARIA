@@ -226,6 +226,36 @@ MAX_POOL_AGE_MINUTES = 10.0
 # it is where the winrate peaks while still keeping 61% of the flow.
 MIN_LIQUIDITY_USD = 4000.0
 
+# 26/08 -- MIN_LIQUIDITY_USD above was calibrated on the DexPaprika "trending
+# pools" population (already-established pools with real volume). The day-zero
+# discovery feed (specs/006, live since 25/08) sees a structurally different
+# population: pools at the SECOND of creation, before anyone has had time to
+# deposit real liquidity. Applying the same 4000$ floor there blocked ~100% of
+# the flow for 15h+ (measured: 318 real rejections in fresh_launch_pretrade_
+# gate_log, reserve_usd from $0 to $3996.5, MEDIAN NEAR ZERO, p75=$134, p90=
+# $2460 -- confirming the two populations cannot share one threshold).
+#
+# The existing 10-minute maturation window (_OBSERVATION_WINDOW_SECONDS in
+# services/onchain_pool_discovery.py) already retries a candidate every cycle
+# before it expires -- verified in code, not assumed -- so timing was already
+# handled correctly. The defect was purely the threshold.
+#
+# $200 is a PROVISIONAL, conservative floor (Doctrine d'Ingestion): high enough
+# to reject genuine dust/never-funded pools (the pre-23/08 defect above, mean
+# reserve $6.40, must never reopen), low enough that the measured day-zero
+# population can actually clear it. CAVEAT: the 318-row sample above is
+# left-censored (only rejections at the OLD 4000$ floor are visible -- the
+# true qualifying population's shape is still unknown). RECALIBRATE once this
+# path accumulates n>=100 day-zero closures (pocket_entry_sweep, same
+# statistical guardrails as everywhere else in this project) -- and note the
+# spec's own closure bar is separate and higher: the +25%/trade target is only
+# considered validated, and specs/010 only closeable, once the AVERAGE across
+# >=1000 same-epoch closures reaches it (see specs/010-robinhood-dayzero-
+# liquidity/spec.md SC-005). "Same epoch" = since the last archive/reset
+# triggered by a trading-style-affecting parameter change -- this fix itself
+# starts a new epoch (see docs/HANDOFF_PIPELINE_MOMENTUM.md, 2026.08.26 entry).
+MIN_LIQUIDITY_USD_DAY_ZERO = 200.0
+
 # Forward-measurement horizons, in minutes since detection -- m15/h1 give an
 # early read, h2 matches the calibrated strategy's own hard max-hold (a
 # position that hasn't resolved by 2h is force-closed in the real rule too).
@@ -806,7 +836,13 @@ async def record_signals(
                 # the age check so the cheaper test runs first. fail-CLOSED on an
                 # unknown reserve: this pocket's whole defect was treating an
                 # unmeasurable pool as a tradable one.
-                if pool.reserve_usd is None or pool.reserve_usd < MIN_LIQUIDITY_USD:
+                # 26/08 -- day-zero candidates are a structurally different
+                # population (see MIN_LIQUIDITY_USD_DAY_ZERO's own comment) --
+                # never judge them against the DexPaprika-calibrated floor.
+                liquidity_floor = (
+                    MIN_LIQUIDITY_USD_DAY_ZERO if entry_mode == "day_zero" else MIN_LIQUIDITY_USD
+                )
+                if pool.reserve_usd is None or pool.reserve_usd < liquidity_floor:
                     await _refuse(f"blocked_thin_liquidity: reserve={pool.reserve_usd or 0:.0f}")
                     continue
                 try:

@@ -270,6 +270,44 @@ async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     assert logged == 0  # fails closed, never raises into the caller
 
 
+# --- specs/010-robinhood-dayzero-liquidity: entry-mode-aware liquidity floor -
+
+@pytest.mark.asyncio
+async def test_day_zero_entry_mode_uses_the_lower_liquidity_floor():
+    """A pool above MIN_LIQUIDITY_USD_DAY_ZERO but below the DexPaprika-
+    calibrated MIN_LIQUIDITY_USD must qualify under entry_mode='day_zero' --
+    this is the whole point of the fix (real day-zero pools rarely clear
+    4000$, per the 318-row measured rejection sample)."""
+    reserve = (shadow.MIN_LIQUIDITY_USD_DAY_ZERO + shadow.MIN_LIQUIDITY_USD) / 2
+    assert reserve < shadow.MIN_LIQUIDITY_USD  # sanity: still below the old floor
+    logged = await shadow.record_signals(
+        [_pool(reserve=reserve)], chain=CHAIN, entry_mode="day_zero",
+    )
+    assert logged == 1
+
+
+@pytest.mark.asyncio
+async def test_non_day_zero_entry_mode_still_uses_the_dexpaprika_floor():
+    """The exact same reserve that qualifies under 'day_zero' must still be
+    rejected under the default entry mode -- MIN_LIQUIDITY_USD's own 200-trade
+    calibration must never regress."""
+    reserve = (shadow.MIN_LIQUIDITY_USD_DAY_ZERO + shadow.MIN_LIQUIDITY_USD) / 2
+    logged = await shadow.record_signals([_pool(reserve=reserve)], chain=CHAIN)
+    assert logged == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_day_zero_entry_mode_still_rejects_near_zero_liquidity():
+    """The pre-23/08 defect (mean reserve $6.40 treated as tradeable) must
+    never reopen under the new, lower day-zero floor."""
+    logged = await shadow.record_signals(
+        [_pool(reserve=6.40)], chain=CHAIN, entry_mode="day_zero",
+    )
+    assert logged == 0
+    assert await _rows() == []
+
+
 # --- _snapshot_from_ws / ws_feed wiring (24/08, evm_swap_ws.py integration) -
 
 class FakeWsFeed:

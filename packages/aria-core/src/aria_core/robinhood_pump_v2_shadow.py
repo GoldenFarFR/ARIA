@@ -64,6 +64,7 @@ from aria_core.robinhood_pump_shadow import (
     LIQUIDITY_COLLAPSE_EXIT_PCT,
     MAX_POOL_AGE_MINUTES,
     MIN_LIQUIDITY_USD,
+    MIN_LIQUIDITY_USD_DAY_ZERO,
     M5_SURGE_THRESHOLD_PCT,
     SIMULATED_TRADE_SIZE_USD,
     _PEAK_JUMP_SUSPECT_RATIO,
@@ -202,7 +203,13 @@ async def record_signals(
                 ).total_seconds() / 60.0
                 if pool_age_minutes >= MAX_POOL_AGE_MINUTES:
                     continue
-                if pool.reserve_usd is None or pool.reserve_usd < MIN_LIQUIDITY_USD:
+                # 26/08 -- day-zero candidates are a structurally different
+                # population, see robinhood_pump_shadow.MIN_LIQUIDITY_USD_DAY_ZERO's
+                # own comment -- never judge them against the DexPaprika-calibrated floor.
+                liquidity_floor = (
+                    MIN_LIQUIDITY_USD_DAY_ZERO if entry_mode == "day_zero" else MIN_LIQUIDITY_USD
+                )
+                if pool.reserve_usd is None or pool.reserve_usd < liquidity_floor:
                     continue
                 try:
                     if await is_stock_token(pool.token_address or "", chain):
