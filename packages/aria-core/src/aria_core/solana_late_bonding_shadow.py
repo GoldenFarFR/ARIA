@@ -1895,7 +1895,12 @@ async def resolve_migrated_pools(
     """Finds the AMM pool of every open position whose curve has completed, so
     it keeps being priced on the RPC instead of falling back to REST.
 
-    21/08, operator: "on a dit tout par le RPC Helius". Bounded on purpose --
+    21/08, operator: "on a dit tout par le RPC Helius" -- STALE as of 26/08,
+    corrected after being cited by mistake as current: `find_pool_for_mint`'s
+    `RPC_HTTP_DEFAULT` reads `ARIA_SOLANA_RPC_HTTP`, which now resolves to
+    Chainstack (verified live against the real backend/.env), not Helius.
+    Helius stays available as a reinforcement once its own credit quota
+    resets, not the default path. Bounded on purpose --
     at most `limit` unresolved positions per pass, each costing ONE
     `getProgramAccounts`, and each resolved exactly once for the position's
     whole remaining life. A failure is not recorded, so it simply retries on
