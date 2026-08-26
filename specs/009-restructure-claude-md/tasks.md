@@ -22,7 +22,7 @@ regenerated constitution (see Implementation Strategy).
 
 **Purpose**: Create the new destination file before anything moves into it.
 
-- [ ] T001 Create `docs/HANDOFF_INDEX.md` with a short header (purpose: per-component HANDOFF
+- [X] T001 Create `docs/HANDOFF_INDEX.md` with a short header (purpose: per-component HANDOFF
       description index, one entry per `docs/HANDOFF_<component>.md`; note that any new
       HANDOFF file must add its entry here in the same commit, mirroring the rule CLAUDE.md
       already states for itself)
@@ -36,9 +36,9 @@ confused with pre-existing failure.
 
 **⚠️ CRITICAL**: Do not start Phase 3+ until this passes.
 
-- [ ] T002 Run `cd packages/aria-core && python3 -m pytest tests/test_coherence.py -q` and
+- [X] T002 Run `cd packages/aria-core && python3 -m pytest tests/test_coherence.py -q` and
       confirm a clean baseline pass before any CLAUDE.md edit in this feature
-- [ ] T003 [P] Extract the current HANDOFF block verbatim (`awk '/^## Index of HANDOFF files by component/,/^## Format de réponse/' CLAUDE.md`) to a scratch file for the zero-loss diff check in US1 (T007) — scratch file, not committed
+- [X] T003 [P] Extract the current HANDOFF block verbatim (`awk '/^## Index of HANDOFF files by component/,/^## Format de réponse/' CLAUDE.md`) to a scratch file for the zero-loss diff check in US1 (T007) — scratch file, not committed
 
 **Checkpoint**: Baseline confirmed green, reference snapshot saved — user story work can begin.
 
@@ -56,16 +56,16 @@ description verbatim.
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] Copy each component's original description verbatim from the extracted block
+- [X] T004 [US1] Copy each component's original description verbatim from the extracted block
       (T003) into `docs/HANDOFF_INDEX.md`, one entry per `docs/HANDOFF_<component>.md`, same
       wording as today — no rewriting, no summarizing further
-- [ ] T005 [US1] Replace the detailed block in `CLAUDE.md` (the "Index of HANDOFF files by
+- [X] T005 [US1] Replace the detailed block in `CLAUDE.md` (the "Index of HANDOFF files by
       component" section) with a compact name list plus a one-line pointer to
       `docs/HANDOFF_INDEX.md`; keep the existing "index it in the same commit" rule, now
       pointing at the new file instead of CLAUDE.md directly
-- [ ] T006 [US1] Run `quickstart.md` step 2 (every HANDOFF name still grep-able in CLAUDE.md) —
+- [X] T006 [US1] Run `quickstart.md` step 2 (every HANDOFF name still grep-able in CLAUDE.md) —
       fix any name that silently dropped out before proceeding
-- [ ] T007 [US1] Run `quickstart.md` step 3 (verbatim diff of the extracted block vs.
+- [X] T007 [US1] Run `quickstart.md` step 3 (verbatim diff of the extracted block vs.
       `docs/HANDOFF_INDEX.md`) — zero information loss confirmed, not assumed
 
 **Checkpoint**: CLAUDE.md's largest relocatable block is gone; size should already drop by
@@ -85,11 +85,11 @@ is gone or reduced to a pointer; the four backlog lines are still present, uncha
 
 ### Implementation for User Story 2
 
-- [ ] T008 [US2] Trim the "Active state — pocket lineup" paragraph in `CLAUDE.md` to a short
+- [X] T008 [US2] Trim the "Active state — pocket lineup" paragraph in `CLAUDE.md` to a short
       pointer to `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 entry) for the v8/v9/megacap
       retirement detail — keep only what still carries operational meaning today (e.g. which
       pockets are currently active: swing + vc, solana_late_bonding_shadow, support-bounce v1/v2)
-- [ ] T009 [US2] Run `quickstart.md` step 4 — confirm the narrative residue is gone AND the
+- [X] T009 [US2] Run `quickstart.md` step 4 — confirm the narrative residue is gone AND the
       four backlog-index "v8" references (#279, #371, #374, #377) are untouched
 
 **Checkpoint**: Residue removed without collateral damage to unrelated backlog entries.
@@ -111,18 +111,18 @@ deduplicated clause.
 
 ### Implementation for User Story 3
 
-- [ ] T010 [US3] Re-identify the 6 full-restatement sites (`grep -n` the clause text in
+- [X] T010 [US3] Re-identify the 6 full-restatement sites (`grep -n` the clause text in
       CLAUDE.md) and confirm which one stays canonical (line 15, "Ne jamais modifier son propre
       code ni les fichiers de garde-fous..." — the most general, already-referenced-elsewhere
       version) vs. line 8 (keep as-is: its *exception-scope* content is not a duplicate, only
       trim if it also restates the full clause redundantly)
-- [ ] T011 [US3] In each of the remaining full-restatement sites (DOCTRINE D'AUTONOMIE's
+- [X] T011 [US3] In each of the remaining full-restatement sites (DOCTRINE D'AUTONOMIE's
       "Autonomie d'investigation & de proposition" and "Autonomie Totale de Déploiement et
       d'Auto-Correction" paragraphs), replace the repeated guardrail clause with a short
       cross-reference ("cf. Règles absolues"), preserving every other sentence of that
       paragraph unchanged (the mandate itself, not the boundary restatement, is what makes
       each paragraph non-duplicate)
-- [ ] T012 [US3] Run `quickstart.md` step 5 (occurrence count check) AND manually re-read each
+- [X] T012 [US3] Run `quickstart.md` step 5 (occurrence count check) AND manually re-read each
       edited paragraph side by side with its original wording — confirm no rule content was
       silently lost (per spec Edge Case: "preserve the more specific/complete wording, never
       silently pick the shorter one")
@@ -136,15 +136,15 @@ doctrine (HANDOFF relocation, no resolved-history residue, no duplicated guardra
 
 **Purpose**: Final verification and the single bundled commit.
 
-- [ ] T013 Run `quickstart.md` step 1 (`wc -c CLAUDE.md`) — confirm the result sits at or below
+- [X] T013 Run `quickstart.md` step 1 (`wc -c CLAUDE.md`) — confirm the result sits at or below
       ~80000 bytes (research.md Decision 4 target); if not, identify what further trimming is
       needed before proceeding
-- [ ] T014 Regenerate the constitution: `python3 scripts/generate-constitution.py`, then
+- [X] T014 Regenerate the constitution: `python3 scripts/generate-constitution.py`, then
       `git diff --stat .specify/memory/constitution.md` to confirm a new `source_digest`
       reflecting the CLAUDE.md edits
-- [ ] T015 Run the full coherence suite (`cd packages/aria-core && python3 -m pytest
+- [X] T015 Run the full coherence suite (`cd packages/aria-core && python3 -m pytest
       tests/test_coherence.py -q`) — confirm zero regression beyond the intended changes
-- [ ] T016 Commit `CLAUDE.md`, `docs/HANDOFF_INDEX.md`, and the regenerated
+- [X] T016 Commit `CLAUDE.md`, `docs/HANDOFF_INDEX.md`, and the regenerated
       `.specify/memory/constitution.md` together in a single commit (existing rule: constitution
       must never be committed separately from the CLAUDE.md edit that changed it)
 
