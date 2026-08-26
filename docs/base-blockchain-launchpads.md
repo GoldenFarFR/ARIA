@@ -75,10 +75,19 @@ a retroactive on-chain fee-term risk** — the immutability guarantee is structu
 a trust assumption resting on the current owner's goodwill. Nothing here changes the
 "recommended candidate" status; if anything it reinforces it.
 
-**Question on its weak point**: does Clanker's Discord support actually respond within
-a reasonable time to a real technical question (to be tested firsthand)? And does the
-$CLANKFUN requirement apply to every deployment path (API/SDK included) or only to the
-clanker.world web interface?
+**Update 26/08 (file-staleness-watch review, backlog #372)**: Neynar itself has stepped
+back from day-to-day Farcaster/Clanker product operations (confirmed 17/08/2026) after
+the protocol's revenue collapsed ~99% since acquisition. The structural conclusion above
+(non-upgradeable factory, immutable fee splits) still holds regardless of who operates
+the platform day-to-day — that guarantee was deliberately verified to not rest on trust
+in the current owner. But the operational weak point below (Discord support) needs a
+fresh check post-withdrawal, not the pre-17/08 assumption.
+
+**Question on its weak point**: who actually operates Clanker day-to-day now that Neynar
+has stepped back (17/08/2026) — has support/reliability changed? Does Clanker's Discord
+support actually respond within a reasonable time to a real technical question (to be
+tested firsthand)? And does the $CLANKFUN requirement apply to every deployment path
+(API/SDK included) or only to the clanker.world web interface?
 
 ---
 

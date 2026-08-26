@@ -1,5 +1,17 @@
 # Technical indicators inventory (DexScreener/TradingView native library)
 
+> **STALE CONTEXT CORRECTED 26/08 (file-staleness-watch review)**: this file was written
+> while `scalping_v8` was live and self-owned (CLAUDE.md's 05/08 mandate). Per CLAUDE.md's
+> "Active state — pocket lineup" (18/08 operator decision), **scalping v1-v9 is now fully
+> retired (code/tests/docs cleaned)** — confirmed 26/08, zero references to `scalping_v8`
+> or `evaluate_v8_wick_reversal` remain in `packages/`. The indicator-by-indicator analysis
+> below (which TradingView indicators fit a wick-confirmed RSI-divergence reversal scalper
+> with a flat trailing-stop, and why) is still a real, reusable piece of research — it just
+> no longer maps to a live pocket. Kept as a BANKED reference (POTENTIAL doctrine) for any
+> future short-horizon reversal-style pocket, not an active test plan. The "My picks, in
+> test order" section at the bottom is historical (what v8 would have tested next), not a
+> live backlog item.
+
 Source: full "Indicators" picker on DexScreener's chart widget (screenshots, 06/08),
 ~105 entries, TradingView's standard public indicator library. Cross-checked
 against the earlier web-research pass (arXiv 2507.01963 wash-trading paper,
