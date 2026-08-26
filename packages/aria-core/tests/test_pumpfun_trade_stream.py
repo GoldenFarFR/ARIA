@@ -554,19 +554,31 @@ def test_targeted_mode_reads_the_same_trades_as_program_wide():
     assert narrow.get_flow(mint).distinct_buyers == 1
 
 
-# --- streaming endpoint cascade (2026.08.21) --------------------------------
+# --- streaming endpoint cascade (2026.08.21, narrowed 2026.08.26) ----------
 # The free flat-rate endpoint carries the full program-wide feed (240 notif/s,
-# 32 GB/day measured) at no cost, where the metered one bills ~646k credits/day
-# for the same volume -- seven times the whole monthly quota. It is primary;
-# the metered one stays as fallback because the free tier warns of downtime.
+# 32 GB/day measured) at no cost, where the metered one (Chainstack since
+# Helius was removed dome-wide) bills per real usage. It is primary; the
+# metered one stays as fallback ONLY for a targeted subscription -- in
+# program-wide mode a fallback there would push ~5.7M credits/day through
+# Chainstack (~33x the whole 175k/day Solana cap, specs/007), so program-wide
+# mode gets no metered fallback at all (see test below).
 
 
 def test_the_free_endpoint_comes_first(monkeypatch):
     monkeypatch.delenv("ARIA_SOLANA_RPC_WS_STREAM", raising=False)
     monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
-    urls = stream.stream_ws_endpoints()
+    urls = stream.stream_ws_endpoints(targeted=True)
     assert urls[0] == stream.STREAM_WS_PUBLIC_DEFAULT
     assert "metered.example" in urls[1]
+
+
+def test_program_wide_mode_never_falls_back_to_the_metered_endpoint(monkeypatch):
+    """26/08 -- a program-wide stream falling back onto the metered endpoint
+    would blow the shared Chainstack budget 33x over, not just fail safely."""
+    monkeypatch.delenv("ARIA_SOLANA_RPC_WS_STREAM", raising=False)
+    monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
+    urls = stream.stream_ws_endpoints(targeted=False)
+    assert urls == [stream.STREAM_WS_PUBLIC_DEFAULT]
 
 
 def test_an_explicit_override_wins(monkeypatch):
@@ -592,7 +604,7 @@ def test_a_blank_override_falls_back_to_the_default(monkeypatch):
 def test_failures_rotate_to_the_next_provider(monkeypatch):
     monkeypatch.delenv("ARIA_SOLANA_RPC_WS_STREAM", raising=False)
     monkeypatch.setattr(stream, "RPC_WS_DEFAULT", "wss://metered.example")
-    s = stream.PumpFunTradeStream()
+    s = stream.PumpFunTradeStream(targeted=True)
     first = s.current_stream_url()
     s._endpoint_index += 1
     second = s.current_stream_url()

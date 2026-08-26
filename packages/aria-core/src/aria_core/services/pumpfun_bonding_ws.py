@@ -78,9 +78,9 @@ import httpx
 from aria_core.services.coingecko import coingecko_client
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
-    RPC_WS_DEFAULT,
+    RPC_WS_HIGH_VOLUME_DEFAULT,
     require_solana_rpc_http,
-    require_solana_rpc_ws,
+    require_solana_rpc_ws_high_volume,
     _pubkey_from_bytes,
     _rpc_get_multiple_accounts,
     decode_mint_decimals,
@@ -468,7 +468,7 @@ class PumpFunBondingWebSocketFeed:
     def __init__(
         self,
         *,
-        rpc_ws_url: str = RPC_WS_DEFAULT,
+        rpc_ws_url: str = RPC_WS_HIGH_VOLUME_DEFAULT,
         rpc_http_url: str = RPC_HTTP_DEFAULT,
         max_staleness_seconds: float = DEFAULT_MAX_STALENESS_SECONDS,
         connect_fn=None,
@@ -738,7 +738,7 @@ class PumpFunBondingWebSocketFeed:
             return self._connect_fn(self._rpc_ws_url)
         # No public fallback by design (see pumpswap_ws's own comment): an
         # unset endpoint fails here, named, rather than silently degrading.
-        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws()
+        self._rpc_ws_url = self._rpc_ws_url or require_solana_rpc_ws_high_volume()
         import websockets
 
         # ping_timeout raised 20->40s (19/08 empirical test): recurring "keepalive

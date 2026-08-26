@@ -511,7 +511,7 @@ def test_an_unset_endpoint_raises_a_named_error_rather_than_using_the_public_rpc
         m.RPC_WS_DEFAULT = ""
         assert m.solana_rpc_is_dedicated() is False
         for fn, var in ((m.require_solana_rpc_http, "ARIA_SOLANA_RPC_HTTP"),
-                        (m.require_solana_rpc_ws, "ARIA_SOLANA_RPC_WS")):
+                        (m.require_solana_rpc_ws, "ARIA_SOLANA_RPC_HTTP")):
             with _pytest.raises(RuntimeError) as exc:
                 fn()
             assert var in str(exc.value)
@@ -525,8 +525,8 @@ def test_a_configured_endpoint_is_returned_unchanged():
 
     original = m.RPC_HTTP_DEFAULT
     try:
-        m.RPC_HTTP_DEFAULT = "https://mainnet.helius-rpc.com/?api-key=x"
-        assert m.require_solana_rpc_http() == "https://mainnet.helius-rpc.com/?api-key=x"
+        m.RPC_HTTP_DEFAULT = "https://solana-mainnet.core.chainstack.com/x"
+        assert m.require_solana_rpc_http() == "https://solana-mainnet.core.chainstack.com/x"
     finally:
         m.RPC_HTTP_DEFAULT = original
 

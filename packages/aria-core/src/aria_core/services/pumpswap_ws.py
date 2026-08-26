@@ -97,7 +97,33 @@ WSOL_MINT = "So11111111111111111111111111111111111111112"
 # `require_solana_rpc_http()`/`require_solana_rpc_ws()` below -- loud, named,
 # and impossible to mistake for a working degraded mode.
 RPC_HTTP_DEFAULT = (os.environ.get("ARIA_SOLANA_RPC_HTTP", "") or "").strip()
-RPC_WS_DEFAULT = (os.environ.get("ARIA_SOLANA_RPC_WS", "") or "").strip()
+
+# 26/08, operator decision: Helius removed from the dome entirely --
+# "supprime le de notre base d'utilisation". Chainstack is the default Solana
+# WS provider from here on; derived from the already-configured HTTP
+# endpoint (same host/token, `https://` -> `wss://`) rather than a second
+# env var, same pattern already proven in `shadow_persistent.py` and
+# empirically confirmed live (`slotSubscribe`/`logsSubscribe` both worked).
+# `ARIA_SOLANA_RPC_WS` (formerly Helius) is no longer read by this default.
+RPC_WS_DEFAULT = (
+    (os.environ.get("ARIA_SOLANA_RPC_HTTP", "") or "").strip().replace("https://", "wss://")
+    or (os.environ.get("ARIA_SOLANA_RPC_HTTP_POLLING", "") or "").strip().replace("https://", "wss://")
+)
+
+# ONE deliberate, documented exception -- never a silent leftover.
+# `pumpfun_bonding_ws.py`'s feed was MEASURED live (specs/007-solana-chainstack-wss,
+# 26/08 00:58 UTC): pool count climbed 13->63+ in an hour, never plateaued,
+# real rate ~6.26 notifications/s -> ~540k/day at that sample alone -- ~3x the
+# ENTIRE 175k/day Chainstack Solana cap by itself, before the HTTP polling this
+# cap already shares with `pumpfun_curve_tracker.py`. Migrating this one feed
+# onto Chainstack would 429 the whole dome's Solana RPC, not just itself.
+# `wss://public.rpc.solanavibestation.com` (the free tier `pumpfun_trade_stream.py`
+# uses) was tested live the same day for this exact use (`accountSubscribe`) and
+# is ALREADY rate-limited (HTTP 429) under existing load -- no usable free
+# alternative today. Kept on Helius until a real fix exists: shrink the feed
+# (fewer concurrently-tracked pools) or find/build a provider with real
+# headroom -- tracked as open work in specs/007, not closed, not forgotten.
+RPC_WS_HIGH_VOLUME_DEFAULT = (os.environ.get("ARIA_SOLANA_RPC_WS", "") or "").strip()
 
 _RPC_MISSING_MSG = (
     "Solana RPC not configured: set {var} to the dedicated endpoint. There is NO "
@@ -161,8 +187,17 @@ def require_solana_rpc_http() -> str:
 
 def require_solana_rpc_ws() -> str:
     if not RPC_WS_DEFAULT:
-        raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_WS"))
+        raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_HTTP"))
     return RPC_WS_DEFAULT
+
+
+def require_solana_rpc_ws_high_volume() -> str:
+    """The ONE documented Helius exception -- see RPC_WS_HIGH_VOLUME_DEFAULT above.
+    Only `pumpfun_bonding_ws.py` calls this; every other feed uses
+    `require_solana_rpc_ws()` (Chainstack)."""
+    if not RPC_WS_HIGH_VOLUME_DEFAULT:
+        raise RuntimeError(_RPC_MISSING_MSG.format(var="ARIA_SOLANA_RPC_WS"))
+    return RPC_WS_HIGH_VOLUME_DEFAULT
 
 SETUP_REQUEST_GAP_SECONDS = 0.4  # keeps sequential setup calls well under the verified ceiling above
 

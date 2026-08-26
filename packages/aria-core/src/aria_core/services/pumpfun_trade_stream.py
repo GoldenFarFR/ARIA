@@ -287,16 +287,26 @@ _WATCH_QUEUE_POLL_SECONDS = 0.2
 STREAM_WS_PUBLIC_DEFAULT = "wss://public.rpc.solanavibestation.com"
 
 
-def stream_ws_endpoints() -> list[str]:
+def stream_ws_endpoints(*, targeted: bool = False) -> list[str]:
     """Streaming endpoints in priority order: free flat-rate first, metered
     fallback second. Duplicates and blanks removed so a misconfigured env can
-    never make the same provider be tried twice."""
+    never make the same provider be tried twice.
+
+    26/08 -- the metered fallback (RPC_WS_DEFAULT, Chainstack since Helius was
+    removed dome-wide) is only ever safe for a TARGETED subscription. In
+    program-wide mode (targeted=False), falling back onto it would push
+    ~5.7M credits/day through Chainstack -- ~33x the entire 175k/day Solana
+    cap, silently 429-ing every other Solana consumer sharing that budget
+    (specs/007-solana-chainstack-wss, measured 26/08). A program-wide stream
+    losing its free tier is a real outage, but a contained one -- it must
+    never fail over into taking down the whole dome's Solana RPC instead."""
     import os as _os
 
     primary = (_os.environ.get("ARIA_SOLANA_RPC_WS_STREAM", "") or "").strip() \
         or STREAM_WS_PUBLIC_DEFAULT
+    candidates = (primary, RPC_WS_DEFAULT) if targeted else (primary,)
     out = []
-    for url in (primary, RPC_WS_DEFAULT):
+    for url in candidates:
         if url and url not in out:
             out.append(url)
     return out
@@ -698,7 +708,7 @@ class PumpFunTradeStream:
         on 2026.08.21, for nothing, where the metered one costs seven times the
         monthly quota per day. The reasoning inverted with the facts.
         """
-        urls = stream_ws_endpoints()
+        urls = stream_ws_endpoints(targeted=self._targeted)
         if not urls:
             return require_solana_rpc_ws()
         return urls[self._endpoint_index % len(urls)]
@@ -754,7 +764,7 @@ class PumpFunTradeStream:
                 # Rotate to the next provider. The free flat-rate tier warns of
                 # unscheduled downtime, so a failure is expected occasionally --
                 # it must cost a reconnect, never the feed.
-                if len(stream_ws_endpoints()) > 1 and not self._rpc_ws_url:
+                if len(stream_ws_endpoints(targeted=self._targeted)) > 1 and not self._rpc_ws_url:
                     self._endpoint_index += 1
                 logger.info(
                     "pumpfun_trade_stream: disconnected (%s), retrying in %.0fs on %s",
