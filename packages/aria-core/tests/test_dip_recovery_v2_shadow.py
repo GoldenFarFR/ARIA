@@ -10,6 +10,7 @@ separate episode-state table to inspect, unlike the module's own first
 draft."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -82,10 +83,10 @@ def _pool(
     )
 
 
-def _snapshot(*, market_cap_usd: float | None = 200_000.0, liquidity_usd: float = 30_000.0, price_usd: float = 1.0, pair_address: str = "0xPOOL", base_symbol: str = "TOK") -> PairSnapshot:
+def _snapshot(*, market_cap_usd: float | None = 200_000.0, liquidity_usd: float = 30_000.0, price_usd: float = 1.0, pair_address: str = "0xPOOL", base_symbol: str = "TOK", price_change_24h: float = 0.0) -> PairSnapshot:
     return PairSnapshot(
         pair_address=pair_address, price_usd=price_usd, liquidity_usd=liquidity_usd,
-        market_cap_usd=market_cap_usd, base_symbol=base_symbol,
+        market_cap_usd=market_cap_usd, base_symbol=base_symbol, price_change_24h=price_change_24h,
     )
 
 
@@ -116,6 +117,82 @@ async def test_discover_opens_position_on_qualifying_dip(monkeypatch):
     assert rows[0]["entry_pool_age_days"] >= shadow.MIN_POOL_AGE_DAYS
     # Entry pays the real DEX swap fee, never the raw quote.
     assert rows[0]["entry_price"] == pytest.approx(shadow._realistic_fill_price(1.0))
+
+
+# --- specs/013: cross-provider entry sanity guard ---------------------------
+
+@pytest.mark.asyncio
+async def test_discover_rejects_entry_on_provider_sign_disagreement(monkeypatch):
+    """Real incident (26/08): position id=13, contract
+    0x23acfab04106a21af0ae1643b74cfec3c9aac181, chain=robinhood. DexPaprika
+    read -31.9487081644224 at entry; DexScreener/DexPaprika's own live lookup
+    both agreed ~+29% minutes later for the same token. Reproduced here with
+    the exact real numbers."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool(var_24h=-31.9487081644224)], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_change_24h=29.0)]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_discover_opens_on_ordinary_same_direction_disagreement(monkeypatch):
+    """Two providers sampled moments apart rarely agree to the decimal point
+    -- same-direction drift (both negative, different magnitude) is never a
+    sign disagreement and must not block an otherwise-qualifying entry."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool(var_24h=-31.0)], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_change_24h=-22.0)]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1
+
+
+@pytest.mark.asyncio
+async def test_discover_opens_when_dexscreener_change_is_missing_or_zero(monkeypatch):
+    """dexscreener.PairSnapshot.price_change_24h defaults to 0.0 when the
+    provider's field is absent (no "unknown" sentinel exists for it, unlike
+    liquidity_usd's liquidity_unknown) -- never treated as a disagreement."""
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool(var_24h=-35.0)], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_change_24h=0.0)]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1
+
+
+@pytest.mark.asyncio
+async def test_entry_sanity_rejection_is_logged_distinctly(monkeypatch, caplog):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool(var_24h=-31.9487081644224)], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_change_24h=29.0)]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    with caplog.at_level(logging.INFO, logger=shadow.logger.name):
+        opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 0
+    assert "entry sanity guard" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -127,6 +127,23 @@ EXIT_PRICE_SANITY_MULTIPLE = 50.0
 # bounds how many surviving candidates get a DexScreener call.
 DISCOVERY_LIMIT = 20
 
+# 26/08, specs/013-dip-recovery-entry-sanity -- real incident: position id=13
+# (contract 0x23acfab04106a21af0ae1643b74cfec3c9aac181, chain=robinhood)
+# opened on a DexPaprika var_24h_pct of -31.9487%, the pocket's ONLY source
+# for this field, with zero independent cross-check. Within minutes both
+# DexScreener's live card and DexPaprika's own live lookup agreed the token
+# was actually +29% -- the entry-time reading was never checked against
+# anything outside DexPaprika itself before triggering a (shadow) buy, the
+# same "a system's own data can never validate its own prices" gap already
+# closed on the exit side (EXIT_PRICE_SANITY_MULTIPLE above). Rejects only a
+# flat SIGN disagreement (DexPaprika strongly negative AND DexScreener
+# strongly positive) -- see research.md Decision 1 for why a magnitude-delta
+# threshold was rejected (it would collapse into "DexScreener must also show
+# a big dip", rejecting the ordinary same-direction drift between two
+# providers sampled moments apart). RECALIBRATE once enough real
+# rejected/closed candidates accumulate to measure typical provider drift.
+ENTRY_SANITY_MIN_CONFLICT_PCT = 10.0
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -299,6 +316,16 @@ async def _maybe_open_position(
         # every free/server-side filter.
         snapshot = await _resolve_market_cap_and_price(contract, chain, pool_address)
         if snapshot is None or not snapshot.price_usd:
+            return 0
+        # specs/013 -- cross-provider entry sanity guard (research.md Decision
+        # 1): DexPaprika says a big dip AND DexScreener independently says a
+        # big gain for the same candidate is never trusted as-is.
+        if var_24h_pct <= DIP_THRESHOLD_PCT and snapshot.price_change_24h >= ENTRY_SANITY_MIN_CONFLICT_PCT:
+            logger.info(
+                "dip_recovery_v2_shadow: entry sanity guard rejected %s "
+                "(dexpaprika=%.2f%%, dexscreener=%.2f%%)",
+                contract, var_24h_pct, snapshot.price_change_24h,
+            )
             return 0
         market_cap = snapshot.market_cap_usd
         if market_cap is None or not (MIN_MARKET_CAP_USD <= market_cap <= MAX_MARKET_CAP_USD):

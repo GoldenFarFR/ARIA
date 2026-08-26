@@ -184,6 +184,11 @@
         "value": 20,
         "why": "How many DexPaprika candidates to fetch per chain per pass -- the server-side liquidity floor already does most of the filtering, this just bounds how many surviving candidates get a DexScreener call."
       },
+      "ENTRY_SANITY_MIN_CONFLICT_PCT": {
+        "line": 145,
+        "value": 10.0,
+        "why": "26/08, specs/013-dip-recovery-entry-sanity -- real incident: position id=13 (contract 0x23acfab04106a21af0ae1643b74cfec3c9aac181, chain=robinhood) opened on a DexPaprika var_24h_pct of -31.9487%, the pocket's ONLY source for this field, with zero independent cross-check. Within minutes both DexScreener's live card and DexPaprika's own live lookup agreed the token was actually +29% -- the entry-time reading was never checked against anything outside DexPaprika itself before triggering a (shadow) buy, the same \"a system's own data can never validate its own prices\" gap already closed on the exit side (EXIT_PRICE_SANITY_MULTIPLE above). Rejects only a flat SIGN disagreement (DexPaprika strongly negative AND DexScreener strongly positive) -- see research.md Decision 1 for why a magnitude-delta threshold was rejected (it would collapse into \"DexScreener must also show a big dip\", rejecting the ordinary same-direction drift between two providers sampled moments apart). RECALIBRATE once enough real rejected/closed candidates accumulate to measure typical provider drift."
+      },
       "EXIT_PRICE_SANITY_MULTIPLE": {
         "line": 123,
         "value": 50.0,
@@ -220,7 +225,7 @@
         "why": null
       },
       "_NOTIFIED_CLOSED_MAX": {
-        "line": 506,
+        "line": 533,
         "value": 500,
         "why": null
       }
