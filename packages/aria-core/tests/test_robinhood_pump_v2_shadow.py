@@ -318,3 +318,24 @@ async def test_summary_aggregates_closed_positions():
     stats = await v2.summary(chain=CHAIN)
     assert stats["closed"] == 1
     assert stats["winrate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_ensure_table_recreates_after_external_drop_despite_stale_cache():
+    """26/08 -- real incident: an epoch-reset RENAME TABLE against a live
+    process left solana_late_bonding_shadow.py's twin cache stale, so every
+    write failed with "no such table" for 30+ minutes until a manual fix.
+    `_ensure_table` must re-verify the table actually exists even on a cache
+    hit, not just trust a stale in-memory flag."""
+    async with aiosqlite.connect(v2._db_path()) as db:
+        await db.execute(f"DROP TABLE {v2.TABLE}")
+        await db.commit()
+    assert v2._db_path() in v2._ensured_db_paths
+
+    await v2._ensure_table()
+
+    async with aiosqlite.connect(v2._db_path()) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (v2.TABLE,)
+        )
+        assert await cur.fetchone() is not None

@@ -396,7 +396,24 @@ def _db_path() -> str:
 async def _ensure_table() -> None:
     path = _db_path()
     if path in _ensured_db_paths:
-        return
+        # 26/08 -- self-healing check, real incident: an epoch-reset rename
+        # (RENAME TABLE base_momentum_shadow_log -> ..._archive_reset_<date>)
+        # run against a LIVE long-running process leaves this cache stale --
+        # every subsequent write fails with "no such table" until the process
+        # is restarted, because the cache short-circuits before this function
+        # ever re-checks reality. Found live on solana_late_bonding_shadow.py's
+        # twin cache (identical pattern) after its own 26/08 recalibration
+        # archive-reset ran moments after a restart rather than before it --
+        # the pocket silently produced zero candidates/exits for 30+ minutes.
+        # This one extra indexed lookup on the hot path is cheap insurance
+        # against that whole failure class recurring here.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='base_momentum_shadow_log'"
+            )
+            if await cur.fetchone():
+                return
+        _ensured_db_paths.discard(path)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             """
@@ -553,7 +570,15 @@ _ensured_regime_candidates_db_paths: set[str] = set()
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
     path = db_path or _db_path()
     if path in _ensured_regime_candidates_db_paths:
-        return
+        # 26/08 -- self-healing check, same rationale as _ensure_table above.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (REGIME_CANDIDATES_TABLE,),
+            )
+            if await cur.fetchone():
+                return
+        _ensured_regime_candidates_db_paths.discard(path)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""

@@ -2622,3 +2622,47 @@ class TestRegimeGate:
         produced zero closures for 15h+) -- a future edit can't silently drift
         this back without updating this test and its documented rationale."""
         assert pocket.REGIME_MIN_MEDIAN_PEAK_PCT == 30.0
+
+
+class TestEnsureTableSelfHeals:
+    """26/08 -- real incident found live: this spec's own epoch-reset
+    (RENAME TABLE solana_late_bonding_shadow_log -> ..._archive_reset_20260826)
+    ran against the live persistent process moments AFTER a restart rather
+    than before it -- the fresh cache had already marked the table "ensured"
+    from the brief window before the rename, so every subsequent
+    consider_candidate/exit-tracking/price-sweep call failed with "no such
+    table" for 30+ minutes until manually recreated. `_ensure_table`/
+    `_ensure_regime_candidates_table` must re-verify the table actually
+    exists even on a cache hit, not just trust a stale in-memory flag."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_table_recreates_after_external_drop_despite_stale_cache(self):
+        async with aiosqlite.connect(pocket._db_path()) as db:
+            await db.execute(f"DROP TABLE {pocket.TABLE}")
+            await db.commit()
+        assert (pocket._db_path(), pocket.TABLE) in pocket._ensured_db_paths
+
+        await pocket._ensure_table()
+
+        async with aiosqlite.connect(pocket._db_path()) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (pocket.TABLE,)
+            )
+            assert await cur.fetchone() is not None
+
+    @pytest.mark.asyncio
+    async def test_ensure_regime_candidates_table_recreates_after_external_drop(self):
+        await pocket._ensure_regime_candidates_table()
+        async with aiosqlite.connect(pocket._db_path()) as db:
+            await db.execute(f"DROP TABLE {pocket.REGIME_CANDIDATES_TABLE}")
+            await db.commit()
+        assert pocket._db_path() in pocket._ensured_regime_candidates_db_paths
+
+        await pocket._ensure_regime_candidates_table()
+
+        async with aiosqlite.connect(pocket._db_path()) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (pocket.REGIME_CANDIDATES_TABLE,),
+            )
+            assert await cur.fetchone() is not None

@@ -1778,3 +1778,44 @@ class TestRegimeGate:
         from aria_core import pretrade_rejection_log
         source = inspect.getsource(pretrade_rejection_log.record_decision)
         assert '"blocked_regime_closed"' in source
+
+
+class TestEnsureTableSelfHeals:
+    """26/08 -- real incident: an epoch-reset RENAME TABLE against a live
+    process left this pocket's twin cache (solana_late_bonding_shadow.py)
+    stale, so every write failed with "no such table" for 30+ minutes until
+    a manual fix. `_ensure_table`/`_ensure_regime_candidates_table` must
+    re-verify the table actually exists even on a cache hit, not just trust
+    a stale in-memory flag."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_table_recreates_after_external_drop_despite_stale_cache(self):
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            await db.execute("DROP TABLE base_momentum_shadow_log")
+            await db.commit()
+        assert shadow._db_path() in shadow._ensured_db_paths
+
+        await shadow._ensure_table()
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='base_momentum_shadow_log'"
+            )
+            assert await cur.fetchone() is not None
+
+    @pytest.mark.asyncio
+    async def test_ensure_regime_candidates_table_recreates_after_external_drop(self):
+        await shadow._ensure_regime_candidates_table()
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            await db.execute(f"DROP TABLE {shadow.REGIME_CANDIDATES_TABLE}")
+            await db.commit()
+        assert shadow._db_path() in shadow._ensured_regime_candidates_db_paths
+
+        await shadow._ensure_regime_candidates_table()
+
+        async with aiosqlite.connect(shadow._db_path()) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (shadow.REGIME_CANDIDATES_TABLE,),
+            )
+            assert await cur.fetchone() is not None

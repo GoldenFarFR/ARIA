@@ -636,7 +636,15 @@ REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
     path = db_path or _db_path()
     if path in _ensured_regime_candidates_db_paths:
-        return
+        # 26/08 -- self-healing check, same rationale as _ensure_table above.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (REGIME_CANDIDATES_TABLE,),
+            )
+            if await cur.fetchone():
+                return
+        _ensured_regime_candidates_db_paths.discard(path)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""
@@ -958,7 +966,23 @@ async def _ensure_table(db_path: str | None = None, *, table: str = TABLE) -> No
     path = db_path or _db_path()
     key = (path, table)
     if key in _ensured_db_paths:
-        return
+        # 26/08 -- self-healing check, real incident: this pocket's own
+        # 2026-08-26 regime-recalibration epoch-reset (RENAME TABLE
+        # solana_late_bonding_shadow_log -> ..._archive_reset_20260826) ran
+        # against this LIVE long-running process moments AFTER a restart
+        # rather than before it -- the fresh cache had already marked the
+        # table "ensured" from the brief window before the rename, so every
+        # subsequent consider_candidate/exit-tracking/price-sweep call failed
+        # with "no such table" for 30+ minutes until manually recreated. One
+        # cheap indexed lookup on the hot path makes this self-heal instead
+        # of depending on getting restart-vs-rename ordering right forever.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            )
+            if await cur.fetchone():
+                return
+        _ensured_db_paths.discard(key)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""

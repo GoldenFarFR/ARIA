@@ -443,7 +443,17 @@ def _db_path() -> str:
 async def _ensure_table() -> None:
     path = _db_path()
     if path in _ensured_db_paths:
-        return
+        # 26/08 -- self-healing check, see base_momentum_shadow.py's twin
+        # comment: an epoch-reset rename run against a live process leaves
+        # this cache stale and every write fails with "no such table" until
+        # a restart. One cheap indexed lookup here makes it self-heal instead.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='robinhood_pump_shadow_log'"
+            )
+            if await cur.fetchone():
+                return
+        _ensured_db_paths.discard(path)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             """
@@ -589,7 +599,15 @@ _ensured_regime_candidates_db_paths: set[str] = set()
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
     path = db_path or _db_path()
     if path in _ensured_regime_candidates_db_paths:
-        return
+        # 26/08 -- self-healing check, same rationale as _ensure_table above.
+        async with aiosqlite.connect(path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (REGIME_CANDIDATES_TABLE,),
+            )
+            if await cur.fetchone():
+                return
+        _ensured_regime_candidates_db_paths.discard(path)
     async with aiosqlite.connect(path) as db:
         await db.execute(
             f"""
