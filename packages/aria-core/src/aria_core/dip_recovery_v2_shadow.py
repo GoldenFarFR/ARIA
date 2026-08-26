@@ -300,7 +300,7 @@ async def _maybe_open_position(
             return 0
         if snapshot.liquidity_usd < MIN_LIQUIDITY_USD:
             return 0
-        await db.execute(
+        cur = await db.execute(
             """
             INSERT INTO dip_recovery_v2_shadow (
                 contract, chain, pool_address, symbol, status, entry_price,
@@ -315,7 +315,35 @@ async def _maybe_open_position(
             ),
         )
         await db.commit()
-        return 1
+        new_id = cur.lastrowid
+        new_pool_address = snapshot.pair_address
+
+    # 26/08, operator-directed ("un max de sqlite avec les log de suivi des
+    # positions ouvertes") -- same standing convention as every other shadow
+    # module since 18/08: archive the "before" candles this entry was based
+    # on, so an alternate parameter set (different market-cap band, dip
+    # threshold, take-profit level) can be honestly re-simulated against the
+    # real price path later, however the "factory" defaults chosen today
+    # turn out to perform. Done AFTER the DB connection above has closed
+    # (same connection-hold-time avoidance as robinhood_pump_shadow.py's own
+    # wiring) -- a genuinely new network call, not a free by-product, since
+    # this pocket's entry signal itself needs only a spot price.
+    try:
+        before_ohlcv = await dexpaprika.get_ohlcv(new_pool_address, network=chain)
+        if before_ohlcv.available and before_ohlcv.candles:
+            from aria_core import shadow_candle_archive
+
+            await shadow_candle_archive.store_candles(
+                module="dip_recovery_v2", position_id=new_id,
+                pool_address=new_pool_address, chain=chain, phase="before",
+                candles=before_ohlcv.candles,
+            )
+    except Exception as exc:  # noqa: BLE001 -- archiving must never break the entry
+        logger.info(
+            "dip_recovery_v2_shadow: before-candle archive failed for %s (%s)",
+            new_pool_address, exc,
+        )
+    return 1
 
 
 async def advance_open_positions(chain: str) -> dict:
@@ -356,6 +384,31 @@ async def _advance_one_position(row: dict) -> None:
     entry_price = row["entry_price"]
     if not entry_price:
         return
+
+    # 26/08, operator-directed ("un max de sqlite avec les log de suivi des
+    # positions ouvertes") -- archive the real price path for every open
+    # position on every pass, not just at entry/close, so any alternate
+    # exit rule (different take-profit level, a trailing stop, etc.) can be
+    # honestly re-simulated later against real data regardless of how the
+    # "factory" parameters shipped today end up performing. Best-effort,
+    # never blocks the actual exit-check logic below.
+    if row.get("pool_address"):
+        try:
+            after_ohlcv = await dexpaprika.get_ohlcv(row["pool_address"], network=row["chain"])
+            if after_ohlcv.available and after_ohlcv.candles:
+                from aria_core import shadow_candle_archive
+
+                await shadow_candle_archive.store_candles(
+                    module="dip_recovery_v2", position_id=row["id"],
+                    pool_address=row["pool_address"], chain=row["chain"], phase="after",
+                    candles=after_ohlcv.candles,
+                )
+        except Exception as exc:  # noqa: BLE001 -- archiving must never block the exit check
+            logger.info(
+                "dip_recovery_v2_shadow: after-candle archive failed for %s (%s)",
+                row["pool_address"], exc,
+            )
+
     snapshot = await _resolve_market_cap_and_price(row["contract"], row["chain"], row["pool_address"])
     age_hours = _hours_since(row["opened_at"]) or 0.0
     close_reason: str | None = None

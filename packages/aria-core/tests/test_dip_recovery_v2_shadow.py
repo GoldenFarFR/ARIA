@@ -16,8 +16,11 @@ import aiosqlite
 import pytest
 
 from aria_core import dip_recovery_v2_shadow as shadow
+from aria_core import shadow_candle_archive
 from aria_core.services.dexpaprika import TrendingPool, TrendingPoolsResult
 from aria_core.services.dexscreener import PairSnapshot
+from aria_core.services.geckoterminal import OHLCVResult
+from aria_core.skills.ta_levels import Candle
 
 CONTRACT = "0x" + "d" * 40
 CHAIN = "base"
@@ -30,6 +33,19 @@ async def _tmp_db(tmp_path, monkeypatch):
     await shadow._ensure_tables()
     yield
     shadow._ensured_db_paths.clear()
+
+
+@pytest.fixture(autouse=True)
+async def _no_real_candle_archive_calls(monkeypatch):
+    """The module's own before/after candle-archive wiring (26/08) calls
+    `dexpaprika.get_ohlcv` on every open/advance -- without this guard,
+    every test that doesn't care about archiving would otherwise make a
+    REAL network call (same guard pattern as
+    test_robinhood_pump_shadow.py's own `_NetworkGuardClient`)."""
+    async def _fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        return OHLCVResult(candles=[], available=False)
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", _fake_get_ohlcv)
 
 
 async def _rows(contract=CONTRACT, chain=CHAIN):
@@ -456,6 +472,101 @@ async def test_exit_check_processes_price_just_under_sanity_bar_normally(monkeyp
     assert counts["closed_take_profit"] == 1
     rows = await _rows()
     assert rows[0]["close_reason"] == "take_profit_25pct"
+
+
+# --- shadow_candle_archive wiring (26/08, operator-directed) ---------------
+
+@pytest.mark.asyncio
+async def test_open_position_archives_before_candles(monkeypatch):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    ohlcv = OHLCVResult(candles=[Candle(ts=1000, open=1.0, high=1.2, low=0.9, close=1.1, volume=5.0)], available=True)
+    captured = []
+
+    async def fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        return ohlcv
+
+    async def fake_store_candles(**kwargs):
+        captured.append(kwargs)
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv)
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+
+    await shadow.discover_and_record(CHAIN)
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["module"] == "dip_recovery_v2"
+    assert call["phase"] == "before"
+    assert call["chain"] == CHAIN
+    assert call["candles"] == ohlcv.candles
+    rows = await _rows()
+    assert call["position_id"] == rows[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_open_position_survives_candle_archive_failure(monkeypatch):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    async def fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1  # position still opens despite the archive call raising
+
+
+@pytest.mark.asyncio
+async def test_advance_open_position_archives_after_candles(monkeypatch):
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot(price_usd=1.0)]
+
+    async def fake_get_ohlcv_empty(pool_address, *, network="base", mode="standard"):
+        return OHLCVResult(candles=[], available=False)
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv_empty)
+    await shadow.discover_and_record(CHAIN)
+
+    ohlcv = OHLCVResult(candles=[Candle(ts=2000, open=1.0, high=1.1, low=0.95, close=1.05, volume=3.0)], available=True)
+    captured = []
+
+    async def fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        return ohlcv
+
+    async def fake_store_candles(**kwargs):
+        captured.append(kwargs)
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv)
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+
+    await shadow.advance_open_positions(CHAIN)
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["module"] == "dip_recovery_v2"
+    assert call["phase"] == "after"
+    assert call["chain"] == CHAIN
+    assert call["candles"] == ohlcv.candles
 
 
 # --- summary -----------------------------------------------------------

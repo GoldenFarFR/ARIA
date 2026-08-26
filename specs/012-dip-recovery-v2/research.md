@@ -132,3 +132,37 @@ tokens exist market-wide. No incident or measured cost problem motivates a chang
   current limit is missing qualifying candidates; raising it before observing real data would be
   an unmeasured guess, contrary to the project's "verify before affirming" doctrine. Revisit once
   SC-004's ≥100-closure review runs, if the sample turns out to be thin.
+
+## Decision 7: Wire `shadow_candle_archive` (before + after), operator-added mid-implementation
+
+**Decision**: Yes -- archive the real OHLCV candle path for every position, both the candles
+that justified entry (`phase="before"`, one `dexpaprika.get_ohlcv` call right after a position
+opens) and the candles observed on every exit-tracking pass while a position stays open
+(`phase="after"`, one call per open position per `advance_open_positions` pass). Same shared
+table (`shadow_candle_archive`, `module="dip_recovery_v2"`) and API every other shadow module in
+the dome already uses.
+
+**Rationale**: raised by the operator mid-implementation, independent of the FR-010 list: "même
+si on calibre ça au hasard" (even if today's entry/exit parameters turn out to be an arbitrary
+first guess), the real price path of every open position must be on disk so an alternate
+strategy (a different take-profit level, a trailing stop instead of a fixed one, a different
+market-cap band) can be honestly re-simulated against real data later -- exactly the standing
+18/08 dome-wide convention ("je veut les bougies avant et apres le point dachat a chaque futur
+shadow") this pocket had not yet been wired to. Without it, a future recalibration would face the
+exact gap `shadow_candle_archive.py`'s own docstring describes: only entry/peak/exit snapshots on
+disk, no path in between, forcing a live re-fetch that may not even be possible after the fact.
+
+**Cost, stated plainly rather than hidden**: this adds one real network call (`dexpaprika.get_ohlcv`)
+per newly-opened position (once) and one more per open position per pass (recurring, bounded by
+however many positions are open at once -- not unbounded, same shape as the pricing call this
+pocket already makes each pass). Accepted explicitly by the operator's own request; not something
+this plan would have added unprompted given the funnel-doctrine's default bias toward fewer calls.
+
+**Alternatives considered**:
+- *Archive only "after" candles, skip "before".* Rejected: the "before" candles are exactly what
+  justified the entry signal -- omitting them would leave the same class of gap this convention
+  exists to close, just shifted to the entry side instead of the exit side.
+- *Reuse the DexScreener spot-price call already made for take-profit/timeout evaluation instead
+  of a second DexPaprika OHLCV call.* Rejected: a single spot price is not a candle series --
+  re-simulating an alternate exit rule needs the intra-position price PATH, which only an OHLCV
+  call provides; the two calls serve genuinely different purposes.

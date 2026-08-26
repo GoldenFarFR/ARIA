@@ -42,6 +42,16 @@ removal, not a migration.
 - No transition re-opens a closed row. A fresh dip on the same (contract, chain) after closure
   inserts a NEW row (dedup only blocks while a row for that pair is `status='open'`).
 
+## `shadow_candle_archive` (existing shared table, new consumer)
+
+Per research.md Decision 7 (operator-added mid-implementation): every open/opened position also
+writes to the dome's existing shared `shadow_candle_archive` table (owned by
+`shadow_candle_archive.py`, its own separate SQLite file at `shadow_db_path()`) via
+`store_candles(module="dip_recovery_v2", position_id=<id>, pool_address=..., chain=..., phase=
+"before"|"after", candles=...)`. No schema change to that table — this pocket is simply a new
+`module` value in its existing `module` discriminator column, same pattern as
+`robinhood_pump`/`base_momentum`/every other wired shadow module.
+
 ## Relationship to `dip_recovery_shadow` (v1)
 
 None at the data level — different table, different module, no foreign key, no shared episode
