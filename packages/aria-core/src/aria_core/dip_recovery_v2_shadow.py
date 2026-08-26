@@ -144,6 +144,24 @@ DISCOVERY_LIMIT = 20
 # rejected/closed candidates accumulate to measure typical provider drift.
 ENTRY_SANITY_MIN_CONFLICT_PCT = 10.0
 
+# 26/08, specs/014-dip-recovery-reentry-cooldown -- real incident: position
+# id=15 (pool 0x49a11a3515755a730b20ae1d6c3ef5a997e20f728ad46d8859654c4d4eaad95a,
+# chain=robinhood, symbol EARTHCOIN) closed take_profit_25pct at +40.0%, then
+# a NEW position on the SAME contract opened 15 minutes later at essentially
+# the same price (-0.7% vs the previous exit) -- DexPaprika's var_24h_pct
+# swung ~8 points in that window despite the real price barely moving, the
+# same metric-instability class specs/013's entry-sanity guard already
+# documents. `_has_open_position` alone never prevents this: the instant a
+# position closes, the contract is immediately eligible again. Applies ONLY
+# to take_profit_25pct closes (research.md Decision 2) -- a timeout close
+# already means 7 days elapsed with no target reached, a fundamentally
+# different, already-cooled-down situation this guard's risk doesn't cover.
+# Conservative placeholder pending real data (same posture as
+# ENTRY_SANITY_MIN_CONFLICT_PCT/EXIT_PRICE_SANITY_MULTIPLE above) --
+# RECALIBRATE once n>=100 real candidates blocked/passed by this guard
+# accumulate.
+REENTRY_COOLDOWN_MINUTES = 60
+
 _ensured_db_paths: set[str] = set()
 
 
@@ -296,6 +314,30 @@ async def _has_open_position(db: aiosqlite.Connection, contract: str, chain: str
     return await cur.fetchone() is not None
 
 
+async def _recently_closed_via_take_profit(
+    db: aiosqlite.Connection, contract: str, chain: str,
+) -> tuple[bool, datetime | None, float]:
+    """specs/014 -- looks at the MOST RECENT close for this (contract, chain)
+    only, so an old, long-resolved close never blocks a candidate a much
+    more recent close would already have cleared. Applies ONLY to
+    take_profit_25pct (research.md Decision 2) -- a timeout close is a
+    fundamentally different, already-cooled-down situation. Returns
+    (in_cooldown, closed_at, minutes_elapsed) -- closed_at/minutes_elapsed
+    are for the caller's log line, not re-derived twice."""
+    cur = await db.execute(
+        "SELECT close_reason, closed_at FROM dip_recovery_v2_shadow "
+        "WHERE contract = ? AND chain = ? AND status = 'closed' "
+        "ORDER BY closed_at DESC LIMIT 1",
+        (contract, chain),
+    )
+    row = await cur.fetchone()
+    if row is None or row[0] != "take_profit_25pct" or not row[1]:
+        return False, None, 0.0
+    closed_at = datetime.fromisoformat(row[1])
+    minutes_elapsed = (datetime.now(timezone.utc) - closed_at).total_seconds() / 60.0
+    return minutes_elapsed < REENTRY_COOLDOWN_MINUTES, closed_at, minutes_elapsed
+
+
 async def _maybe_open_position(
     chain: str, contract: str, pool_address: str | None, var_24h_pct: float, age_days: float,
 ) -> int:
@@ -309,6 +351,17 @@ async def _maybe_open_position(
     (contract, chain) any time no position for it is currently open."""
     async with aiosqlite.connect(_db_path()) as db:
         if await _has_open_position(db, contract, chain):
+            return 0
+
+        in_cooldown, closed_at, minutes_elapsed = await _recently_closed_via_take_profit(
+            db, contract, chain,
+        )
+        if in_cooldown:
+            logger.info(
+                "dip_recovery_v2_shadow: reentry cooldown rejected %s "
+                "(closed_at=%s, take_profit_25pct, %.1f min ago)",
+                contract, closed_at.isoformat() if closed_at else None, minutes_elapsed,
+            )
             return 0
 
         # Fresh, currently-unheld qualifying dip -- resolve market cap (the

@@ -61,6 +61,32 @@ async def _rows(contract=CONTRACT, chain=CHAIN):
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def _seed_closed_position(
+    contract=CONTRACT, chain=CHAIN, *, close_reason: str, minutes_ago: float,
+) -> None:
+    """specs/014 -- test-only helper, seeds a pre-existing CLOSED row directly
+    (never in the production module) to set up "this contract already closed
+    N minutes ago via reason X" preconditions for the reentry-cooldown tests."""
+    await shadow._ensure_tables()
+    closed_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            """
+            INSERT INTO dip_recovery_v2_shadow (
+                contract, chain, pool_address, symbol, status, entry_price,
+                entry_var_24h_pct, entry_market_cap_usd, entry_liquidity_usd,
+                entry_pool_age_days, opened_at, closed_at, exit_price,
+                close_reason, pnl_pct
+            ) VALUES (?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                contract, chain, "0xPOOL", "TOK", 1.0, -31.0, 200_000.0, 30_000.0, 30.0,
+                closed_at, closed_at, 1.25, close_reason, 25.0,
+            ),
+        )
+        await db.commit()
+
+
 _UNSET = object()
 
 
@@ -193,6 +219,86 @@ async def test_entry_sanity_rejection_is_logged_distinctly(monkeypatch, caplog):
         opened = await shadow.discover_and_record(CHAIN)
     assert opened == 0
     assert "entry sanity guard" in caplog.text
+
+
+# --- specs/014: reentry cooldown after a take-profit close ------------------
+
+@pytest.mark.asyncio
+async def test_discover_rejects_reentry_within_cooldown_after_take_profit(monkeypatch):
+    """Real incident (26/08): position id=15 (pool
+    0x49a11a3515755a730b20ae1d6c3ef5a997e20f728ad46d8859654c4d4eaad95a,
+    chain=robinhood, symbol EARTHCOIN) closed take_profit_25pct at +40%, then
+    a NEW position on the SAME contract opened 15 minutes later at
+    essentially the same price. Reproduced here with the same shape."""
+    await _seed_closed_position(close_reason="take_profit_25pct", minutes_ago=15.0)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 0
+
+
+@pytest.mark.asyncio
+async def test_discover_opens_after_cooldown_window_elapses(monkeypatch):
+    await _seed_closed_position(close_reason="take_profit_25pct", minutes_ago=120.0)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1
+
+
+@pytest.mark.asyncio
+async def test_discover_ignores_cooldown_for_timeout_closes(monkeypatch):
+    """research.md Decision 2 -- a timeout close already means 7 days
+    elapsed with no target reached, a fundamentally different situation this
+    guard's risk doesn't cover; it never triggers the cooldown."""
+    await _seed_closed_position(close_reason="timeout_max_hold", minutes_ago=5.0)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1
+
+
+@pytest.mark.asyncio
+async def test_reentry_cooldown_rejection_is_logged_distinctly(monkeypatch, caplog):
+    await _seed_closed_position(close_reason="take_profit_25pct", minutes_ago=15.0)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    with caplog.at_level(logging.INFO, logger=shadow.logger.name):
+        opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 0
+    assert "reentry cooldown" in caplog.text
 
 
 @pytest.mark.asyncio

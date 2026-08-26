@@ -219,13 +219,18 @@
         "value": 14.0,
         "why": "26/08, operator-added requirement (session follow-up): \"post bonding\" is enforced not just by the market-cap floor but by a real minimum pair/pool age too -- a token that only just cleared 50k market cap hours after creation is a different (already-covered-elsewhere) risk profile from one that has traded for weeks. Sourced from TrendingPool.pool_created_at, already populated by dexpaprika.get_trending_pools at zero extra network cost (see research.md Decision 3) -- a candidate with no age data is never treated as qualifying by default."
       },
+      "REENTRY_COOLDOWN_MINUTES": {
+        "line": 163,
+        "value": 60,
+        "why": "26/08, specs/014-dip-recovery-reentry-cooldown -- real incident: position id=15 (pool 0x49a11a3515755a730b20ae1d6c3ef5a997e20f728ad46d8859654c4d4eaad95a, chain=robinhood, symbol EARTHCOIN) closed take_profit_25pct at +40.0%, then a NEW position on the SAME contract opened 15 minutes later at essentially the same price (-0.7% vs the previous exit) -- DexPaprika's var_24h_pct swung ~8 points in that window despite the real price barely moving, the same metric-instability class specs/013's entry-sanity guard already documents. `_has_open_position` alone never prevents this: the instant a position closes, the contract is immediately eligible again. Applies ONLY to take_profit_25pct closes (research.md Decision 2) -- a timeout close already means 7 days elapsed with no target reached, a fundamentally different, already-cooled-down situation this guard's risk doesn't cover. Conservative placeholder pending real data (same posture as ENTRY_SANITY_MIN_CONFLICT_PCT/EXIT_PRICE_SANITY_MULTIPLE above) -- RECALIBRATE once n>=100 real candidates blocked/passed by this guard accumulate."
+      },
       "TAKE_PROFIT_PCT": {
         "line": 94,
         "value": 25.0,
         "why": null
       },
       "_NOTIFIED_CLOSED_MAX": {
-        "line": 533,
+        "line": 586,
         "value": 500,
         "why": null
       }
