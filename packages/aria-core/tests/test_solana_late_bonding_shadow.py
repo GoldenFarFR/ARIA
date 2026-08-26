@@ -320,6 +320,56 @@ async def test_a_collapsing_position_is_closed_by_the_shared_rule(_tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_a_closed_position_unsubscribes_from_the_bonding_feed(_tmp_db):
+    """26/08 -- this pocket called add_pools() on entry but never remove_pools()
+    on exit, unlike its two siblings (FAST discovery, ws_exit shadow). Every
+    closed position stayed subscribed on the WS feed forever, which is why a
+    live measurement saw the tracked pool count climb without ever plateauing
+    -- a leak, not real trading volume, driving most of the feed's measured
+    RU/day cost."""
+    feed = _BondingFeed()
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+    assert feed.subscribed == [("poolA", "mintA")]
+
+    # The feed itself (not REST) prices open positions, so the collapse must
+    # be simulated on the feed's own snapshot -- see
+    # test_an_open_position_is_priced_from_the_rpc_feed_not_rest above.
+    feed._snap = SimpleNamespace(available=True, price_usd=0.0002, reserve_usd=390.0, dex_id="pumpfun")
+
+    stats = await pocket.advance_exit_simulation(bonding_ws_feed=feed, db_path=_tmp_db)
+
+    assert stats["closed"] == 1
+    assert feed.unsubscribed == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_an_open_position_never_unsubscribes(_tmp_db):
+    """The other half of the same invariant: a position that stays open must
+    never be dropped from the feed, or it would silently stop pricing."""
+    feed = _BondingFeed(price=0.002)  # unchanged from entry -- no exit rule should fire
+    await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+
+    stats = await pocket.advance_exit_simulation(
+        snapshot_fn=_rest_unused, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+
+    assert stats["closed"] == 0
+    assert feed.unsubscribed == []
+
+
+async def _rest_unused(_client, _pool, _mint, *, chain):
+    # The websocket feed answers first (available price), so REST is never
+    # called -- this exists only to satisfy the snapshot_fn parameter.
+    raise AssertionError("REST should not be reached while the feed is live")
+
+
+@pytest.mark.asyncio
 async def test_summary_reports_the_average_entry_progress(_tmp_db):
     await pocket.consider_candidate(
         "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
@@ -439,6 +489,7 @@ class _BondingFeed:
             reserve_usd=14000.0, dex_id="pumpfun",
         )
         self.subscribed = []
+        self.unsubscribed = []
 
     def get_snapshot(self, _pool):
         return self._snap
@@ -446,6 +497,9 @@ class _BondingFeed:
     async def add_pools(self, pairs):
         self.subscribed.extend(pairs)
         return len(pairs)
+
+    def remove_pools(self, pool_addresses):
+        self.unsubscribed.extend(pool_addresses)
 
 
 @pytest.mark.asyncio

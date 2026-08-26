@@ -2002,7 +2002,7 @@ def _mark_sell_failed(row_id: int) -> None:
 
 async def _apply_exit_check(
     row: dict, snapshot, *, chain: str, db_path: str | None, sell_fn=None,
-    table: str = TABLE, archive_module: str = ARCHIVE_MODULE,
+    table: str = TABLE, archive_module: str = ARCHIVE_MODULE, bonding_ws_feed=None,
 ) -> dict:
     """Archives the path, runs the SHARED exit rule and persists the outcome
     for ONE position.
@@ -2243,6 +2243,22 @@ async def _apply_exit_check(
         shadow_candle_archive.forget_position(
             module=archive_module, position_id=row["id"],
         )
+        # 26/08 -- this pocket never called remove_pools() on exit, unlike its
+        # two siblings (FAST discovery, ws_exit shadow). Every closed position
+        # stayed subscribed on pumpfun_bonding_ws.py's WS feed forever, which is
+        # why T004's live measurement saw the pool count climb 13->63 without
+        # ever plateauing -- a leak, not real trading volume, driving most of
+        # the ~540k RU/day that made this feed look too expensive to migrate
+        # off Helius. Best-effort: an unsubscribe failure must never block a
+        # position from being recorded as closed.
+        if bonding_ws_feed is not None:
+            try:
+                bonding_ws_feed.remove_pools([row["pool_address"]])
+            except Exception:  # noqa: BLE001 -- unsubscribe is an enhancement, not the write
+                logger.info(
+                    "solana_late_bonding_shadow: remove_pools failed for %s",
+                    row["pool_address"],
+                )
     return {"checked": 1, "closed": closed}
 
 
@@ -2305,6 +2321,7 @@ async def advance_position_by_pool(
 
     return await _apply_exit_check(
         row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
+        bonding_ws_feed=bonding_ws_feed,
     )
 
 
@@ -2594,7 +2611,7 @@ async def advance_exit_simulation(
 
         outcome = await _apply_exit_check(
             row, snapshot, chain=chain, db_path=db_path, sell_fn=sell_fn,
-            table=table, archive_module=archive_module,
+            table=table, archive_module=archive_module, bonding_ws_feed=bonding_ws_feed,
         )
         stats["closed"] += outcome["closed"]
     return stats
