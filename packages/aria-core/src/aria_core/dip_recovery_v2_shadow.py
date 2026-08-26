@@ -74,7 +74,7 @@ import aiosqlite
 
 from aria_core.paths import aria_db_path
 from aria_core.services import dexpaprika, dexscreener
-# Reused rather than duplicated (cohérence architecturale doctrine) -- these
+# Reused rather than duplicated (architectural-coherence doctrine) -- these
 # two formatting helpers are generic (a timestamp, a duration), not specific
 # to shadow_notify.py's own scale-out-ladder shape which this pocket has
 # none of (see the module's own notification section further below).
