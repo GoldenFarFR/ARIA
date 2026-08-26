@@ -67,22 +67,44 @@ l'utilise — il ne lui « fournit » pas la donnée.
   → Deux composants distincts, deux états différents :
   1. **Conteneur Docker prod (`aria-api`)** : `ARIA_SOLANA_RPC_HTTP`/`ARIA_SOLANA_RPC_HTTP_POLLING`
      → Chainstack (`solana-mainnet.core.chainstack.com`). `ARIA_SOLANA_RPC_WS` → **Helius**
-     (`mainnet.helius-rpc.com`), utilisé comme PRIMAIRE (pas fallback) par le websocket de trades
-     ciblés (`pumpfun_trade_stream.py`/`pumpswap_ws.py`, `logsSubscribe` par mint pré-armé).
-     Testé empiriquement le 26/08 : Chainstack supporte `slotSubscribe` ET `logsSubscribe` avec
-     `mentions` (le type exact utilisé ici) — migration techniquement validée, code pas encore
-     changé au moment de cette entrée (opérateur : "renvoie tout vers le nœud Solana de
-     Chainstack", chantier ouvert, cf. `pumpswap_ws.require_solana_rpc_ws()`).
+     (`mainnet.helius-rpc.com`), utilisé comme PRIMAIRE (pas fallback) par
+     `pumpfun_trade_stream.py`/`pumpswap_ws.py`.
+     **Correction (26/08, la ligne précédente de cette entrée était imprécise) : `_TRADE_STREAM =
+     PumpFunTradeStream()` (dans `shadow_persistent.py`) est instancié SANS `targeted=True`, donc
+     tourne en mode PROGRAM-WIDE par défaut** (`logsSubscribe` sur `{"mentions":
+     [PUMPFUN_PROGRAM_ID]}` — tout le programme pump.fun, pas un mint donné). Le mécanisme
+     `.watch(mint)`/`MAX_WATCHED_MINTS=12` existe dans le code mais est un NO-OP en mode
+     program-wide ("every mint is already covered there" — commentaire du code lui-même) : le cap
+     de 12 ne s'applique PAS actuellement, contrairement à ce que suggèrent les commentaires du
+     fichier ("~4 concurrent slots against a cap of 12"), qui décrivent le mode ciblé, pas le mode
+     réellement actif.
+     Volume mesuré et déjà documenté dans `specs/007-solana-chainstack-wss` (25/08→26/08) :
+     ~6650 trades/100s program-wide ≈ **5.7M crédits/jour sur Helius, ~33x le cap Chainstack Solana
+     de 175k/jour** (`chainstack_ru_budget.py`) — ce spec a donc DÉJÀ décidé explicitement de garder
+     ce flux sur Helius, mesures à l'appui.
+     Testé empiriquement le 26/08 : Chainstack supporte bien `slotSubscribe` ET `logsSubscribe` avec
+     `mentions=[mint_unique]` (mode ciblé) — migration validée SI ET SEULEMENT SI le stream passe en
+     mode ciblé (`targeted=True`, jamais testé en usage réel avec le pocket, changerait le
+     comportement fonctionnel : `get_flow()`/`round_trip_wallets()` ne verraient plus que les mints
+     explicitement watchés, plus tout le programme). **Ne jamais migrer le mode program-wide actuel
+     tel quel — épuiserait le budget Chainstack en quelques minutes et casserait tous les autres
+     flux qui le partagent (polling, HTTP RPC).** Décision en attente de clarification opérateur
+     (26/08 : "passe tout ce qui est sur Helius vers Chainstack" — en tension directe avec cette
+     mesure, signalé avant d'agir).
   2. **Process shadow séparé (`shadow_persistent.py`, hors Docker)** : dérive `_CHAINSTACK_WSS`
-     depuis `ARIA_SOLANA_RPC_HTTP_POLLING` (`wss://` sur la même URL), Chainstack déjà PRIMAIRE ici.
-     Helius (`HELIUS_SOLANA_WSS_URL`/`HELIUS_SOLANA_HTTP_URL`, variables dédiées, distinctes de
-     `ARIA_SOLANA_RPC_WS`) reste en fallback obligatoire — le process refuse de démarrer si Helius
-     n'est pas configuré, même quand Chainstack est utilisé en pratique.
+     depuis `ARIA_SOLANA_RPC_HTTP_POLLING` (`wss://` sur la même URL), Chainstack déjà PRIMAIRE ici
+     — pour le flux `PumpSwapWebSocketFeed`/`PumpFunBondingWebSocketFeed` (positions déjà migrées/
+     bonding curve), PAS pour `_TRADE_STREAM` qui utilise son propre cascade (`current_stream_url()`
+     / `ARIA_SOLANA_RPC_WS`, cf. point 1). Helius (`HELIUS_SOLANA_WSS_URL`/`HELIUS_SOLANA_HTTP_URL`,
+     variables dédiées, distinctes de `ARIA_SOLANA_RPC_WS`) reste en fallback obligatoire pour ce
+     flux précis — le process refuse de démarrer si Helius n'est pas configuré, même quand
+     Chainstack est utilisé en pratique. `pumpfun_bonding_ws.py` lui-même a été MESURÉ (specs/007,
+     26/08) à ~540k crédits/jour et reste sur Helius par décision explicite (3x le cap à lui seul).
   - Le polling batché (`pumpfun_curve_tracker.py`) est déjà Chainstack-primaire partout, Helius en
     fallback si Chainstack échoue (`HELIUS_MAX_RPS = 9.0`) — jamais remis en cause par ce qui précède.
-  - Chantier de suivi : `specs/008-solana-regime-macro-gate/` (sensor macro de graduation +
-    pré-armement + instrumentation — sujet distinct du choix de fournisseur RPC ci-dessus, les deux
-    tournent en parallèle sur le même pocket `solana_late_bonding_shadow`).
+  - **Chantier de référence pour tout ce sujet RPC : `specs/007-solana-chainstack-wss`** (pas
+    specs/008, qui couvre le sensor macro de graduation + pré-armement, sujet distinct tournant en
+    parallèle sur le même pocket `solana_late_bonding_shadow`).
 
 ## Ce qui est un SEAM VIDE (préparé mais pas branché — ne pas le présenter comme actif)
 - `services/x_social.py` : le radar social tourne mais **en veille** (aucune vraie source X/Farcaster injectée → renvoie []).
