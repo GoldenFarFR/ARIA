@@ -2615,3 +2615,10 @@ class TestRegimeGate:
 
         source = inspect.getsource(pretrade_rejection_log.record_decision)
         assert '"blocked_regime_closed"' in source
+
+    def test_regime_threshold_is_the_2026_08_26_recalibrated_value(self):
+        """specs/011-solana-regime-recalibration, 26/08: locks the recalibrated
+        30.0 (down from 40.0, which closed the gate ~94-96% of the time and
+        produced zero closures for 15h+) -- a future edit can't silently drift
+        this back without updating this test and its documented rationale."""
+        assert pocket.REGIME_MIN_MEDIAN_PEAK_PCT == 30.0

@@ -591,7 +591,46 @@ REGIME_TRACKING_WINDOW_MINUTES = 15.0
 # still real data, just not the bar currently enforced. Solana-only change --
 # robinhood_pump_shadow.py's own REGIME_MIN_MEDIAN_PEAK_PCT stays at 25.0,
 # operator-directed ("les autres tu touche pas").
-REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 40.0
+#
+# 26/08, LOWERED 40% -> 30%, operator-directed (specs/011-solana-regime-
+# recalibration): the 40% bar closed the gate ~94-96% of the time, producing
+# ZERO new closures for 15h+ despite the curve tracker actively finding
+# in-band candidates -- a pocket that cannot close positions cannot validate
+# or invalidate its own strategy. Real open-time trade-off recomputed
+# directly against solana_regime_candidates_log this session (4602 rolling
+# medians, REGIME_WINDOW=30, 2 distinct days): 20%->37.6%, 25%->19.8%,
+# 30%->11.5%, 35%->6.4%, 40%->4.0%. 20% (and below) is explicitly EXCLUDED --
+# it is the exact value with a measured, real, negative outcome (44 closures,
+# 23/08: mean REAL peak +16.23%, mean NET captured -11.74%, i.e. the capture
+# gap this pocket's exit mechanics (TRAILING_STOP_PCT, liquidity-collapse
+# exit) pays on every position regardless of entry threshold).
+#
+# 30.0 chosen over 25.0: (1) a wider safety margin from the known-dangerous
+# 20% bar (10 points vs. 5) -- the capture-gap figure above is a STRUCTURAL
+# property of the exit mechanics, not a function of this threshold, and
+# cannot be re-measured per-candidate-threshold today (only 12 real closures
+# exist in the current epoch, far below even the n>=100 provisional bar --
+# any per-threshold figure computed on 12 rows would be noise, not evidence,
+# stated honestly rather than faked with false precision); (2) already a
+# ~2.9x open-time gain over the current 4.0% (enough to meaningfully
+# accelerate closure accumulation) without erasing most of the margin gained
+# by every tightening step since 23/08 in one move; (3) consistent with this
+# pocket's own recalibration history (20->50->30->25->40, always incremental,
+# never a jump straight back to the most permissive prior value). 25.0 stays
+# banked as the natural next step if 30.0's real closures prove safe.
+#
+# RECALIBRATION PROTOCOL (specs/011 User Story 3, mirrors specs/010's own):
+# once n>=100 closures accumulate under 30.0, run a pocket_entry_sweep-style
+# pass (outlier removal top-2/top-5, day-count coverage) and specifically
+# RE-MEASURE the capture-gap (mean real peak vs. mean net captured) under
+# this threshold's own population -- if it has reopened toward the pre-24/08
+# defect, that is a signal to tighten back, not a silent continuation. The
+# +25%/trade target itself is only considered validated, and specs/011 only
+# closeable, once n>=1000 SAME-EPOCH closures confirm it (this recalibration
+# starts a new epoch, see solana_late_bonding_shadow_log_archive_reset_20260826).
+# If the sample stalls well below either gate for an extended period, state
+# so explicitly rather than silently drawing a conclusion from too few trades.
+REGIME_MIN_MEDIAN_PEAK_PCT: float | None = 30.0
 
 
 async def _ensure_regime_candidates_table(db_path: str | None = None) -> None:
