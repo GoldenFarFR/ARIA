@@ -33,6 +33,7 @@ WETH = "4200000000000000000000000000000000000006"
 PAIR = "3333333333333333333333333333333333333333"
 BASE_V2_FACTORY = "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
 BASE_V3_FACTORY = "0x33128a8fc17869897dce68ed026d694621f6fdfd"
+BASE_AERODROME_CLASSIC_FACTORY = "0x420dd381b31aef6683db6b902084cb0ffece40da"
 
 
 def _addr_topic(addr_hex: str) -> _FakeTopic:
@@ -85,6 +86,48 @@ async def test_v2_pair_created_skipped_when_neither_side_is_a_known_quote():
               _addr_topic(TOKEN0), _addr_topic(TOKEN1)]
     data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
     payload = {"result": {"address": BASE_V2_FACTORY, "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert not feed._candidates
+
+
+# --- Aerodrome Classic PoolCreated decode (specs/011, 26/08) ----------------
+# `event PoolCreated(address indexed token0, address indexed token1, bool
+# indexed stable, address pool, uint256)` -- `pool` is the FIRST word of the
+# non-indexed data, same layout as PairCreated's own pair address (unlike
+# the V3-style topics below, where pool is the LAST word).
+
+@pytest.mark.asyncio
+async def test_aerodrome_classic_pool_created_registers_candidate_with_weth_quote():
+    feed = _make_feed()
+    topics = [_FakeTopic(bytes.fromhex(m._POOL_CREATED_AERODROME_CLASSIC_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(WETH), _addr_topic("00")]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": BASE_AERODROME_CLASSIC_FACTORY, "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert f"0x{PAIR}" in feed._candidates
+    cand = feed._candidates[f"0x{PAIR}"]
+    assert cand.dex_id == "aerodrome"
+    assert cand.token_address == f"0x{TOKEN0}"
+
+
+@pytest.mark.asyncio
+async def test_aerodrome_classic_pool_created_ignored_for_unknown_factory_address():
+    feed = _make_feed()
+    topics = [_FakeTopic(bytes.fromhex(m._POOL_CREATED_AERODROME_CLASSIC_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(WETH), _addr_topic("00")]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": "0xdeadbeef00000000000000000000000000000000", "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert not feed._candidates
+
+
+@pytest.mark.asyncio
+async def test_aerodrome_classic_pool_created_skipped_when_neither_side_is_a_known_quote():
+    feed = _make_feed()
+    topics = [_FakeTopic(bytes.fromhex(m._POOL_CREATED_AERODROME_CLASSIC_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(TOKEN1), _addr_topic("00")]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": BASE_AERODROME_CLASSIC_FACTORY, "topics": topics, "data": data}}
     feed._handle_notification(payload)
     assert not feed._candidates
 

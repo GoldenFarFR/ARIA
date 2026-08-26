@@ -80,6 +80,21 @@ _POOL_CREATED_V3_TOPIC = _topic0("PoolCreated(address,address,uint24,int24,addre
 # aerodrome-finance/slipstream's ICLFactory.sol, 25/08: a DIFFERENT
 # signature (tickSpacing indexed instead of fee), so a distinct topic0.
 _POOL_CREATED_AERODROME_TOPIC = _topic0("PoolCreated(address,address,int24,address)")
+# Aerodrome's ORIGINAL "Classic" factory (stable/volatile pools, Solidly
+# fork) -- a THIRD, distinct signature from both V3-style topics above
+# (`bool indexed stable` where V3/Slipstream have `fee`/`tickSpacing`).
+# 26/08, found missing during specs/011's Base sourcing-silence diagnostic:
+# this pocket only ever listened for Slipstream (the concentrated-liquidity
+# fork), never Classic -- yet Classic is the dominant AMM for fresh memecoin
+# pools on Base (lower fees, simpler deploy). Signature verified against
+# aerodrome-finance/contracts' IPoolFactory.sol (26/08): `event PoolCreated(
+# address indexed token0, address indexed token1, bool indexed stable,
+# address pool, uint256)` -- `pool` is the FIRST word of the non-indexed
+# data (unlike the V3-style topics above, where it's the LAST), same layout
+# as `_PAIR_CREATED_TOPIC`'s own pair address.
+_POOL_CREATED_AERODROME_CLASSIC_TOPIC = _topic0(
+    "PoolCreated(address,address,bool,address,uint256)"
+)
 _INITIALIZE_V4_TOPIC = _topic0(
     "Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)"
 )
@@ -93,6 +108,11 @@ _FACTORIES: dict[str, dict[str, str]] = {
         "0x8909dc15e40173ff4699343b6eb8132c65e18ec6": "uniswap_v2",
         "0x33128a8fc17869897dce68ed026d694621f6fdfd": "uniswap_v3",
         "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a": "aerodrome_slipstream_3",
+        # Aerodrome Classic PoolFactory -- verified live on BaseScan, 26/08
+        # (contract "Aerodrome: Pool Factory", source verified). dex_id
+        # "aerodrome" matches evm_swap_ws._DEX_FAMILY's existing "v2" entry
+        # (already wired for pricing, only discovery was missing).
+        "0x420dd381b31aef6683db6b902084cb0ffece40da": "aerodrome",
         "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865": "pancakeswap_v3",
     },
     "robinhood": {
@@ -168,7 +188,8 @@ class OnChainPoolDiscoveryFeed:
         addresses = list(self._factories.keys()) + [self._pool_manager]
         topics = [
             _PAIR_CREATED_TOPIC, _POOL_CREATED_V3_TOPIC,
-            _POOL_CREATED_AERODROME_TOPIC, _INITIALIZE_V4_TOPIC,
+            _POOL_CREATED_AERODROME_TOPIC, _POOL_CREATED_AERODROME_CLASSIC_TOPIC,
+            _INITIALIZE_V4_TOPIC,
         ]
         while not self._stopped:
             try:
@@ -217,6 +238,8 @@ class OnChainPoolDiscoveryFeed:
                 self._on_v2_pair_created(address, topics, raw)
             elif topic0 in (_POOL_CREATED_V3_TOPIC, _POOL_CREATED_AERODROME_TOPIC):
                 self._on_v3_pool_created(address, topics, raw)
+            elif topic0 == _POOL_CREATED_AERODROME_CLASSIC_TOPIC:
+                self._on_aerodrome_classic_pool_created(address, topics, raw)
             elif topic0 == _INITIALIZE_V4_TOPIC:
                 self._on_v4_initialize(topics, raw)
         except Exception as exc:  # noqa: BLE001 -- one bad notification never kills the feed
@@ -245,6 +268,24 @@ class OnChainPoolDiscoveryFeed:
         # v3/PancakeSwap: data = tickSpacing(32) + pool(32) -- pool in the LAST word.
         # Aerodrome: data = pool(32) only -- pool in the ONLY word.
         pool_address = ("0x" + raw[-20:].hex()).lower()
+        self._register_candidate(pool_address, dex_id, token0, token1)
+
+    def _on_aerodrome_classic_pool_created(self, factory_address: str, topics, raw: bytes) -> None:
+        """26/08 -- `event PoolCreated(address indexed token0, address indexed
+        token1, bool indexed stable, address pool, uint256)` (verified against
+        aerodrome-finance/contracts' IPoolFactory.sol). `stable` (topics[3])
+        is intentionally not read here: `add_pool`/`_add_pool_v2v3` already
+        refuses a stable pool on its own (unsupported pricing curve, see
+        evm_swap_ws._DEX_FAMILY's "aerodrome" comment) -- duplicating that
+        check here would be a second place to keep in sync for no benefit.
+        `pool` is the FIRST word of the non-indexed data, same layout as
+        `_PAIR_CREATED_TOPIC`'s own pair address."""
+        dex_id = self._factories.get(factory_address)
+        if dex_id != "aerodrome" or len(topics) < 3:
+            return
+        token0 = self._addr_from_topic(topics[1])
+        token1 = self._addr_from_topic(topics[2])
+        pool_address = ("0x" + raw[12:32].hex()).lower()
         self._register_candidate(pool_address, dex_id, token0, token1)
 
     def _on_v4_initialize(self, topics, raw: bytes) -> None:
