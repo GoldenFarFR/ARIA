@@ -357,6 +357,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="dip_recovery_v2_shadow_cycle",
+        name="Dip-recovery shadow v2 -- Base/Robinhood, market-cap-bounded, +25% take-profit",
+        description="26/08 operator-proposed test, distinct signal from v1: \"un filtre de 50k a 1 milly de market cap, 25k de liquidite, acheter tout ce qui fait -30% sur 24h minimum, revendre avec 25% de benef\". Own independent dexpaprika.get_trending_pools(chain, sort=\"asc\") call per chain (worst 24h performers first, server-side liquidity floor) for BOTH base and robinhood -- v1's shared candle_history watchlist is Base-only, never extended for this test. Market cap resolved via one bounded dexscreener.fetch_token_pairs() call per candidate that already cleared the free filters. Fixed +25% take-profit (no stop-loss -- not requested this time), 7-day timeout safety net. Never touches the real $1M paper portfolio. Dedicated gate ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED.",
+        interval_minutes=15,
+        enabled=False,
+    ),
+    HeartbeatTask(
         id="early_legitimacy_shadow_cycle",
         name="Early-legitimacy shadow -- RPC-direct signals for brand-new tokens",
         description="15/08 operator research thread (\"comment differencier un vrai lancement du bruit\"), workflow-audited before being built. The existing legitimacy engine (dev_wallet.py/safety_screen.py/acp_onchain_scan.py) depends entirely on Blockscout, which structurally lags for brand-new tokens (confirmed live). This shadow computes 2 signals via DIRECT RPC only, zero Blockscout/GoPlus dependency: owner() renouncement (best-effort) and LP-token lock/burn percentage (Transfer-log scan on the pair contract, chunked <=500 blocks per call -- doppler.py's own empirically-safe window against mainnet.base.org's 413-on-wide-ranges limit). Evaluates each watchlist token exactly once, skips anything older than 6h (no longer \"early\"). Pure observation, never gates anything, never touches a real/paper trade. Dedicated gate ARIA_EARLY_LEGITIMACY_SHADOW_ENABLED, OFF by default.",
@@ -890,6 +897,14 @@ def _sync_x_curiosity_enabled() -> None:
                 # flag only, same doctrine as wallet_copy_shadow_cycle.
                 task.enabled = os.environ.get(
                     "ARIA_DIP_RECOVERY_SHADOW_ENABLED", "",
+                ).strip().lower() in ("1", "true", "yes", "on")
+            if task.id == "dip_recovery_v2_shadow_cycle":
+                # 26/08 -- same standalone-research doctrine as v1, own
+                # dedicated flag (never shares v1's gate -- a distinct
+                # module/table/signal, same precedent as every other vN
+                # variant in this project).
+                task.enabled = os.environ.get(
+                    "ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "early_legitimacy_shadow_cycle":
                 # 15/08 -- standalone research shadow, independent of the
@@ -1826,6 +1841,11 @@ class AriaHeartbeat:
                 "dip_recovery_shadow_cycle: %s/%s watchlist tokens evaluated",
                 result.get("evaluated"), result.get("watchlist_size"),
             )
+        elif task_id == "dip_recovery_v2_shadow_cycle":
+            from aria_core import dip_recovery_v2_shadow
+
+            result = await dip_recovery_v2_shadow.run_cycle()
+            logger.info("dip_recovery_v2_shadow_cycle: %s", result)
 
         elif task_id == "early_legitimacy_shadow_cycle":
             from aria_core.momentum_entry import run_early_legitimacy_shadow_cycle

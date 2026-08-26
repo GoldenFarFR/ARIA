@@ -825,6 +825,11 @@ _KNOWN_ENABLED_GATES = {
     # a real trigger (never real capital, never merged with the 1M$ test).
     # OFF by default.
     "ARIA_DIP_RECOVERY_SHADOW_ENABLED",
+    # 26/08 -- dip_recovery_v2_shadow.py: Base/Robinhood market-cap-bounded
+    # variant (50k-1M cap, 25k liquidity, -30%/24h entry, +25% take-profit).
+    # Own module/table/gate, never shares v1's. Pure shadow, never real
+    # capital, never the $1M paper portfolio.
+    "ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED",
     "ARIA_DIRECTIVE_CHANNEL_ENABLED",
     "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
     "ARIA_DUNE_ENABLED",

@@ -459,7 +459,7 @@ async def get_trending_pools(
     order_by: str = "price_change_percentage_5m", min_order_value: float | None = None,
     min_liquidity_usd: float | None = None, min_price_change_1h: float | None = None,
     max_pool_age_minutes: float | None = None, min_pool_age_minutes: float | None = None,
-    max_pages: int = 1,
+    max_pages: int = 1, sort: str = "desc",
 ) -> TrendingPoolsResult:
     """Independent discovery source (16/08) -- a SEPARATE provider from
     GeckoTerminal's own ``get_trending_pools``, deliberately used to avoid
@@ -536,9 +536,18 @@ async def get_trending_pools(
     ``_resolve_base_token`` call regardless of which page it came from, so
     raising this multiplies real API load linearly -- deliberately left to
     the caller to size against DexPaprika's real (already fragile some
-    nights) throughput, never a large default here."""
+    nights) throughput, never a large default here.
+
+    ``sort`` (26/08, operator-directed dip-buying test): the real API
+    accepts ``"asc"`` in addition to the ``"desc"`` every existing caller
+    relies on (verified live against docs.dexpaprika.com/tutorials/
+    pool-filtering) -- ``sort="asc"`` with
+    ``order_by="price_change_percentage_24h"`` surfaces the WORST 24h
+    performers first instead of the best, the exact opposite population a
+    momentum-surge caller wants. Default unchanged so every pre-existing
+    caller (Base/Robinhood momentum pipeline) behaves identically."""
     params: dict[str, object] = {
-        "limit": limit, "order_by": order_by, "sort": "desc",
+        "limit": limit, "order_by": order_by, "sort": sort,
     }
     if min_liquidity_usd is not None:
         params["liquidity_usd_min"] = min_liquidity_usd
