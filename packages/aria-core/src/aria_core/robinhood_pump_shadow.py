@@ -299,6 +299,14 @@ _PEAK_JUMP_SUSPECT_RATIO = 10.0
 # source for a given check -- a real but partial gap, not a fabricated fix.
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
+# 26/08 -- verified this pocket already has an equivalent guard against the
+# same failure class that hit base_momentum_shadow.py the same day
+# (corrupted AMM ratio-of-reserves price, "+707006.8% nominal" reading):
+# `_PEAK_JUMP_SUSPECT_RATIO`/`_advance_high_water` below already routes an
+# implausible jump through a multi-cycle confirmation instead of baking it
+# straight into peak_price. Nothing to port here -- checked before assuming
+# the gap found on the Base twin applied everywhere.
+#
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;

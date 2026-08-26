@@ -27,23 +27,28 @@
         "value": 1000.0,
         "why": "24/08, LOWERED 4000 -> 1000, operator-directed (\"viser large... pour cumulee des donnees\", same pass as M5_SURGE_THRESHOLD_PCT/ REGIME_MIN_MEDIAN_PEAK_PCT/MAX_POOL_AGE_MINUTES above). Own standalone value for THIS chain only -- no longer tied to any other pocket's figure (operator instruction: one constant per blockchain, never a shared/ borrowed number). Matches the discovery-side floor already active in shadow_persistent.py's base_shadow_loop() (dexpaprika.get_trending_pools min_liquidity_usd=1000.0), so a candidate cleared at discovery is never rejected again here at trade time. Recalibrate on Base's own reserve_usd- at-entry column once base_momentum_shadow_log clears n>=100 real closures (see pocket_entry_sweep.py) -- until then this is a deliberately wide starting floor, not a profitability-calibrated one."
       },
+      "PEAK_PRICE_SANITY_MULTIPLE": {
+        "line": 294,
+        "value": 1000.0,
+        "why": "26/08 -- real incident, found live by the operator: position id=202 (day-zero pool, entry $0.02) closed `liquidity_collapse` 8 minutes later with `last_price=141.42` (peak_price the same), reported as a \"+707006.8% (nominal, jamais executable)\" Telegram notification -- technically labeled non-executable but still a corrupted, alarming number, not a real market move. Root cause: an AMM ratio-of-reserves price (`evm_swap_ws._handle_sync`'s `reserve1/reserve0`) has no economic meaning once one side of the pool has collapsed far more than the other -- the same failure class `solana_support_bounce_shadow.py`'s own PEAK_PRICE_SANITY_MULTIPLE was built to catch on 19/08 (incident \"Jotchua/WW\", x5651/x4669 multipliers from the same kind of corrupted upstream price). Checked before assuming this applied everywhere: robinhood_pump_shadow.py/robinhood_pump_v2_shadow.py already have an equivalent guard (`_PEAK_JUMP_SUSPECT_RATIO`/`_advance_high_water`, multi-cycle confirmation instead of an outright reject) and solana_late_bonding_shadow.py already inherits Solana's own PEAK_PRICE_SANITY_MULTIPLE via its shared `evaluate_exit` import -- this pocket alone had zero such guard.  1000x, NOT the Solana precedent's 50x: this pocket's own existing test suite (`test_advance_exit_scale_out_dust_closes_position` et al.) deliberately exercises a slow-cycle price jump straight past several scale-out rungs using a 1000x spot price as a plausible (if extreme) stand-in for \"the ladder never got to react in real time\" -- honestly, with only 2-3 real closures on this pocket so far, there is no empirical basis yet to say where a genuine Base day-zero pump stops being plausible (unlike Solana's 50x, backed by \"no candidate observed anywhere near that in this pocket's whole history\"). 1000x is a deliberately conservative placeholder (Doctrine d'Ingestion): it never rejects anything this pocket's own tests already treat as legitimate, while still catching the real incident (7071x) with margin to spare. RECALIBRATE once this pocket accumulates enough real peak-price history to know what a genuine Base pump's upper bound actually looks like."
+      },
       "REGIME_CANDIDATES_TABLE": {
-        "line": 537,
+        "line": 572,
         "value": "base_momentum_regime_candidates_log",
         "why": "--------------------------------------------------------------------------- 23/08, operator-directed (\"construit ce 30 sur tout le monde\") -- same regime gate as solana_late_bonding_shadow.py's REGIME_MIN_MEDIAN_PEAK_PCT (read that module for the full incident history: a first sensor that self-fed on TAKEN trades measured -0.18%/trade in production against +13.10% in a biased simulation, rebuilt as an independent, trade-blind sensor). ``record_regime_candidate``/``regime_state`` mirror that module's functions of the same name field-for-field; ``regime_median_peak`` below is a DUPLICATE of its pure function rather than an import -- solana_pump_ shadow.py (this pocket's sibling) is itself imported BY solana_late_ bonding_shadow.py, so a shared import risks a circular dependency the moment one of these REST pockets is reused the same way. The function has no state, so duplicating it costs nothing a shared import would have saved.  WHY THIS POCKET CANNOT REUSE LATE_BONDING'S TRACKING MECHANISM: that sensor updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory read because the pool is already subscribed to a websocket for an unrelated reason (exit tracking). This pocket has no such subscription -- its only view of the market is the REST ``dexpaprika.get_trending_pools()`` fetch ``base_shadow_loop`` already performs every BASE_CADENCE_SECONDS=120s to look for NEW candidates, regardless of whether anything new is found. That fetch returns up to 25 pools with a live price EVERY cycle, so ``advance_regime_candidates_from_pools`` below re-reads THAT SAME response for pools already under tracking rather than issuing any REST call of its own -- zero marginal throughput.  REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets (robinhood/base/solana_pump) share DexPaprika's own throttle (independent of GeckoTerminal), 1 discovery call/cycle each at 120s cadence, plus ``advance_exit_simulation``'s DexScreener-first snapshot fallback (at most 1-2 calls per OPEN position per cycle, against a DIFFERENT provider's budget). A dedicated per-candidate regime poll on top of that -- up to 25 candidates/cycle/pocket, all new REST calls -- would have added real, uncosted load for a signal the discovery fetch already carries for free. Reusing it is strictly better: no new call, no new budget risk, no new failure mode -- exactly the \"Pense-Systeme\" bar CLAUDE.md sets (never a linear/unbounded resource pattern when a staged, already-paid-for read already exists).  HONEST LIMIT (documented, not hidden, same discipline as the sibling module's own comments): a candidate's peak is only updated on cycles where DexPaprika's top-25 \"trending\" response for this chain STILL carries its pool_address. A token that pumps briefly then drops out of the top 25 (illiquid enough, or simply outranked) stops updating -- its logged peak understates the true market peak in that case. This is a conservative (never-inflated) bias: undercounting a hot market's peak only makes the gate MORE cautious, never less, which is the safe direction for a mechanism whose job is to detect when the market has gone cold."
       },
       "REGIME_MIN_MEDIAN_PEAK_PCT": {
-        "line": 565,
+        "line": 600,
         "value": null,
         "why": "Provisional, borrowed from late_bonding's own value -- NOT calibrated for this pocket specifically (Doctrine d'Ingestion: a conservative hypothesis beats leaving a promising mechanism idle for lack of fresh data). RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine d'Ingestion's own n>=100 bar) -- this pocket's screened population may differ from late_bonding's in either direction.  24/08, LOWERED 30% -> 25%, operator-directed, kept in lockstep with late_bonding's own recalibration (see that module's comment for the causal replay behind the number). This pocket's own table held only 49 rows at the time -- still below the n>=100 bar above, so this move is BORROWED consistency, not an independent verdict from this pocket's own population.  24/08, DISARMED (25% -> None) same day, operator-directed: this gate measures the market's RAW peak (never adjusted for whether it was really sellable, see solana_late_bonding_shadow.py's 24/08 rug-vs-regime finding -- Base's own scams cluster $9-19K liquidity, real gains $22K+, so a scam's inflated peak can still open/hold this gate open even though it was never capturable). Disarming it here is deliberate, not an oversight: the operative filters are now M5_SURGE_THRESHOLD_PCT (above) and MIN_LIQUIDITY_USD (below) -- \"les criteres sont fixes ailleurs\". None, not 0.0: `disarmed = REGIME_MIN_MEDIAN_PEAK_PCT is None` is the only value that guarantees ALWAYS open (0.0 could still block on a rare negative median). Re-arm once base_momentum_shadow_log clears n>=100 real closures and its own peak-vs-liquidity relationship can be measured directly."
       },
       "REGIME_TRACKING_WINDOW_MINUTES": {
-        "line": 539,
+        "line": 574,
         "value": 15.0,
         "why": null
       },
       "REGIME_WINDOW": {
-        "line": 538,
+        "line": 573,
         "value": 30,
         "why": null
       },
@@ -58,7 +63,7 @@
         "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
       },
       "SIMULATED_TRADE_SIZE_USD": {
-        "line": 283,
+        "line": 318,
         "value": 0.1,
         "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- mirrors solana_pump_shadow.py's own addition, same session, same real trigger (X17690 on Solana: reserve_usd essentially zero at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price). NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
       },
@@ -73,7 +78,7 @@
         "why": null
       },
       "_SCALE_OUT_DUST_FRACTION": {
-        "line": 267,
+        "line": 302,
         "value": 0.01,
         "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
       }
@@ -259,7 +264,7 @@
     "label": "PUMP (Robinhood Chain)",
     "parameters": {
       "DEX_FEE_PCT": {
-        "line": 330,
+        "line": 338,
         "value": 1.0,
         "why": "Robinhood Chain memecoin launchpads: Uniswap's own pools.trade charges 0.25% (Uniswap v4 base fee), Robinpad charges 1% (Uniswap v3 LP fee) -- 1.0% used as the conservative middle-to-higher estimate across the real launchpads observed on this chain. Sourced 17/08 (crypto.news/coinreporter pools.trade launch coverage, robinpad.app docs), never assumed from memory."
       },
@@ -289,22 +294,22 @@
         "why": "26/08 -- MIN_LIQUIDITY_USD above was calibrated on the DexPaprika \"trending pools\" population (already-established pools with real volume). The day-zero discovery feed (specs/006, live since 25/08) sees a structurally different population: pools at the SECOND of creation, before anyone has had time to deposit real liquidity. Applying the same 4000$ floor there blocked ~100% of the flow for 15h+ (measured: 318 real rejections in fresh_launch_pretrade_ gate_log, reserve_usd from $0 to $3996.5, MEDIAN NEAR ZERO, p75=$134, p90= $2460 -- confirming the two populations cannot share one threshold).  The existing 10-minute maturation window (_OBSERVATION_WINDOW_SECONDS in services/onchain_pool_discovery.py) already retries a candidate every cycle before it expires -- verified in code, not assumed -- so timing was already handled correctly. The defect was purely the threshold.  $200 is a PROVISIONAL, conservative floor (Doctrine d'Ingestion): high enough to reject genuine dust/never-funded pools (the pre-23/08 defect above, mean reserve $6.40, must never reopen), low enough that the measured day-zero population can actually clear it. CAVEAT: the 318-row sample above is left-censored (only rejections at the OLD 4000$ floor are visible -- the true qualifying population's shape is still unknown). RECALIBRATE once this path accumulates n>=100 day-zero closures (pocket_entry_sweep, same statistical guardrails as everywhere else in this project) -- and note the spec's own closure bar is separate and higher: the +25%/trade target is only considered validated, and specs/010 only closeable, once the AVERAGE across >=1000 same-epoch closures reaches it (see specs/010-robinhood-dayzero- liquidity/spec.md SC-005). \"Same epoch\" = since the last archive/reset triggered by a trading-style-affecting parameter change -- this fix itself starts a new epoch (see docs/HANDOFF_PIPELINE_MOMENTUM.md, 2026.08.26 entry)."
       },
       "REGIME_CANDIDATES_TABLE": {
-        "line": 578,
+        "line": 586,
         "value": "robinhood_pump_regime_candidates_log",
         "why": "--------------------------------------------------------------------------- 23/08, operator-directed (\"construit ce 30 sur tout le monde\") -- same regime gate as solana_late_bonding_shadow.py's REGIME_MIN_MEDIAN_PEAK_PCT (read that module for the full incident history: a first sensor that self-fed on TAKEN trades measured -0.18%/trade in production against +13.10% in a biased simulation, rebuilt as an independent, trade-blind sensor). ``record_regime_candidate``/``regime_state`` mirror that module's functions of the same name field-for-field; ``regime_median_peak`` below is a DUPLICATE of its pure function rather than an import -- solana_pump_ shadow.py is itself imported BY solana_late_bonding_shadow.py (for ``_snapshot_with_fallback``/``_apply_price_impact_and_fee``), so a shared import from any of these REST pockets risks a circular dependency the moment one of them is reused the same way. The function has no state, so duplicating it costs nothing a shared import would have saved.  WHY THIS POCKET CANNOT REUSE LATE_BONDING'S TRACKING MECHANISM: that sensor updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory read because the pool is already subscribed to a websocket for an unrelated reason (exit tracking). This pocket has no such subscription -- its only view of the market is the REST ``dexpaprika.get_trending_pools()`` fetch ``robinhood_shadow_loop`` already performs every ROBINHOOD_CADENCE_SECONDS=120s to look for NEW candidates, regardless of whether anything new is found. That fetch returns up to 25 pools with a live price EVERY cycle, so ``advance_regime_candidates_from_pools`` below re-reads THAT SAME response for pools already under tracking rather than issuing any REST call of its own -- zero marginal throughput.  REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets (robinhood/base/solana_pump) share DexPaprika's own throttle (independent of GeckoTerminal), 1 discovery call/cycle each at 120s cadence, plus ``advance_exit_simulation``'s DexScreener-first snapshot fallback (at most 1-2 calls per OPEN position per cycle, against a DIFFERENT provider's budget). A dedicated per-candidate regime poll on top of that -- up to 25 candidates/cycle/pocket, all new REST calls -- would have added real, uncosted load for a signal the discovery fetch already carries for free. Reusing it is strictly better: no new call, no new budget risk, no new failure mode -- exactly the \"Pense-Systeme\" bar CLAUDE.md sets (never a linear/unbounded resource pattern when a staged, already-paid-for read already exists).  HONEST LIMIT (documented, not hidden, same discipline as the sibling module's own comments): a candidate's peak is only updated on cycles where DexPaprika's top-25 \"trending\" response for this chain STILL carries its pool_address. A token that pumps briefly then drops out of the top 25 (illiquid enough, or simply outranked) stops updating -- its logged peak understates the true market peak in that case. This is a conservative (never-inflated) bias: undercounting a hot market's peak only makes the gate MORE cautious, never less, which is the safe direction for a mechanism whose job is to detect when the market has gone cold."
       },
       "REGIME_MIN_MEDIAN_PEAK_PCT": {
-        "line": 594,
+        "line": 602,
         "value": 25.0,
         "why": "Provisional, borrowed from late_bonding's own value -- NOT calibrated for this pocket specifically (Doctrine d'Ingestion: a conservative hypothesis beats leaving a promising mechanism idle for lack of fresh data). RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine d'Ingestion's own n>=100 bar) -- this pocket's screened population may differ from late_bonding's in either direction.  24/08, LOWERED 30% -> 25%, operator-directed, kept in lockstep with late_bonding's own recalibration (see that module's comment for the causal replay behind the number). This pocket's own table held only 54 rows at the time -- still below the n>=100 bar above, so this move is BORROWED consistency, not an independent verdict from this pocket's own population. Re-verify once this table clears 100 rows."
       },
       "REGIME_TRACKING_WINDOW_MINUTES": {
-        "line": 580,
+        "line": 588,
         "value": 15.0,
         "why": null
       },
       "REGIME_WINDOW": {
-        "line": 579,
+        "line": 587,
         "value": 30,
         "why": null
       },
@@ -319,7 +324,7 @@
         "why": "The CALIBRATED exit rule itself (16/08 Dune backtest, see module docstring) -- distinct from M5_SURGE_THRESHOLD_PCT (the ENTRY signal) and from _HORIZON_MINUTES (the older 3-checkpoint proxy above)."
       },
       "SIMULATED_TRADE_SIZE_USD": {
-        "line": 324,
+        "line": 332,
         "value": 0.1,
         "why": "17/08, operator-requested realistic execution simulation (price impact + fees) -- mirrors solana_pump_shadow.py's own addition, same session, same real trigger (X17690 on Solana: reserve_usd essentially zero at detection, final_multiplier=341.68x on the naive calc that assumes perfect execution at the displayed spot price). NEVER replaces final_multiplier (kept as the \"ideal, zero-friction\" reference for comparison) -- feeds a separate realistic_final_multiplier column instead. 17/08 -- resized from 20.0$ (the old CDP-pilot-range value) to 0.1$, explicit operator decision after seeing the real reconstruction: at 20$, most Solana signals were unreachable (too large for a thin pump.fun pool's liquidity, price-impact function returns None), so the \"ideal\" PnL badly overstated what a real wallet could have captured. At 0.1$ far more of the real signal flow becomes tradeable (112/127 Solana positions vs 45/127 at 20$, verified by replaying every closed row through this exact function)."
       },
@@ -339,9 +344,9 @@
         "why": "25/08 -- specs/004-shadow-robinhood T003, see the peak-ratchet comment below for the full rationale. A candidate high more than this many times the last CONFIRMED peak, in a SINGLE cycle, must hold for paper_trader.HIGH_WATER_CONFIRMATION_SECONDS before it's trusted -- a genuine pump always ratchets gradually cycle over cycle, never jumps this far in one leap (the 2 confirmed artifacts were 20.6x/856x in one cycle)."
       },
       "_SCALE_OUT_DUST_FRACTION": {
-        "line": 308,
+        "line": 316,
         "value": 0.01,
-        "why": "Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
+        "why": "26/08 -- verified this pocket already has an equivalent guard against the same failure class that hit base_momentum_shadow.py the same day (corrupted AMM ratio-of-reserves price, \"+707006.8% nominal\" reading): `_PEAK_JUMP_SUSPECT_RATIO`/`_advance_high_water` below already routes an implausible jump through a multi-cycle confirmation instead of baking it straight into peak_price. Nothing to port here -- checked before assuming the gap found on the Base twin applied everywhere.  Below this fraction of the ORIGINAL position, a scale-out rung liquidates whatever is left in full and closes the row -- the calibrated ladder (25%-of-remaining forever) is asymptotic and never reaches a literal zero; this is a documented modeling choice (see module docstring), never a fabricated price -- the dust stub is valued at the current observed spot price, the only real observation available for it."
       }
     },
     "status": "present"

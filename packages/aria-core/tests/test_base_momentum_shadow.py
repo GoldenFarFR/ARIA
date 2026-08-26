@@ -912,6 +912,41 @@ async def test_advance_exit_liquidity_collapse_ignored_when_entry_reserve_unknow
 
 
 @pytest.mark.asyncio
+async def test_advance_exit_implausible_price_skips_this_cycle_untouched():
+    """26/08, real incident: position id=202 (entry $0.02) reported
+    last_price=$141.42 (7071x entry) via a corrupted AMM ratio-of-reserves
+    read once the pool's liquidity had collapsed -- "+707006.8% (nominal)"
+    in the Telegram notification. A reading this far above entry must be
+    treated as unavailable (checked, but the row stays untouched) rather
+    than baked into peak_price/exit_reason, same guard as
+    solana_fresh_launch_ws_exit_shadow.evaluate_exit's own
+    PEAK_PRICE_SANITY_MULTIPLE -- reproduces the exact real multiplier."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=100000.0)
+    # 7071x entry, the exact real incident's multiplier, well past the 1000x
+    # sanity bar -- and the reserve also "collapsed" in this same reading,
+    # exactly like the real incident (both symptoms of the same corrupted
+    # snapshot). liquidity_collapse must NOT fire.
+    client = FakeClient({"poolA": 7071.0678}, reserve_by_pool={"poolA": 1000.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 1
+    assert counts["closed_liquidity_collapse"] == 0
+    rows = await _rows()
+    assert rows[0]["exit_reason"] is None
+    assert rows[0]["peak_price"] is None  # never touched, unlike a normal checked cycle
+    assert rows[0]["remaining_qty"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_advance_exit_price_just_under_sanity_bar_processed_normally():
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    client = FakeClient({"poolA": 999.0})  # under the 1000x bar -- a real (if extreme) pump
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    assert counts["checked"] == 1
+    rows = await _rows()
+    assert rows[0]["peak_price"] == pytest.approx(999.0)
+
+
+@pytest.mark.asyncio
 async def test_advance_exit_liquidity_collapse_takes_priority_over_age_limit():
     await _insert_open_row(
         pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0,

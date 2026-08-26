@@ -258,6 +258,41 @@ MAX_HOLD_MINUTES = _HORIZON_MINUTES["h2"]  # same 2h hard timeout as the calibra
 # fires normally via the REST fallback (DexScreener/GeckoTerminal) instead.
 LIQUIDITY_COLLAPSE_EXIT_PCT = 50.0
 
+# 26/08 -- real incident, found live by the operator: position id=202
+# (day-zero pool, entry $0.02) closed `liquidity_collapse` 8 minutes later
+# with `last_price=141.42` (peak_price the same), reported as a
+# "+707006.8% (nominal, jamais executable)" Telegram notification --
+# technically labeled non-executable but still a corrupted, alarming
+# number, not a real market move. Root cause: an AMM ratio-of-reserves
+# price (`evm_swap_ws._handle_sync`'s `reserve1/reserve0`) has no economic
+# meaning once one side of the pool has collapsed far more than the other
+# -- the same failure class `solana_support_bounce_shadow.py`'s own
+# PEAK_PRICE_SANITY_MULTIPLE was built to catch on 19/08 (incident
+# "Jotchua/WW", x5651/x4669 multipliers from the same kind of corrupted
+# upstream price). Checked before assuming this applied everywhere:
+# robinhood_pump_shadow.py/robinhood_pump_v2_shadow.py already have an
+# equivalent guard (`_PEAK_JUMP_SUSPECT_RATIO`/`_advance_high_water`,
+# multi-cycle confirmation instead of an outright reject) and
+# solana_late_bonding_shadow.py already inherits Solana's own
+# PEAK_PRICE_SANITY_MULTIPLE via its shared `evaluate_exit` import -- this
+# pocket alone had zero such guard.
+#
+# 1000x, NOT the Solana precedent's 50x: this pocket's own existing test
+# suite (`test_advance_exit_scale_out_dust_closes_position` et al.)
+# deliberately exercises a slow-cycle price jump straight past several
+# scale-out rungs using a 1000x spot price as a plausible (if extreme)
+# stand-in for "the ladder never got to react in real time" -- honestly,
+# with only 2-3 real closures on this pocket so far, there is no empirical
+# basis yet to say where a genuine Base day-zero pump stops being
+# plausible (unlike Solana's 50x, backed by "no candidate observed
+# anywhere near that in this pocket's whole history"). 1000x is a
+# deliberately conservative placeholder (Doctrine d'Ingestion): it never
+# rejects anything this pocket's own tests already treat as legitimate,
+# while still catching the real incident (7071x) with margin to spare.
+# RECALIBRATE once this pocket accumulates enough real peak-price history
+# to know what a genuine Base pump's upper bound actually looks like.
+PEAK_PRICE_SANITY_MULTIPLE = 1000.0
+
 # Below this fraction of the ORIGINAL position, a scale-out rung liquidates
 # whatever is left in full and closes the row -- the calibrated ladder
 # (25%-of-remaining forever) is asymptotic and never reaches a literal zero;
@@ -1395,6 +1430,21 @@ async def advance_exit_simulation(
             # that hasn't formed a closed candle yet.
             effective_high = max(window_high, current_price)
             effective_low = min(window_low, current_price)
+
+            # 26/08, real bug fix -- see PEAK_PRICE_SANITY_MULTIPLE's own
+            # comment for the full incident. A reading implausibly far above
+            # this position's own entry price is treated the same as an
+            # unavailable snapshot -- skip this cycle, retry next poll,
+            # rather than baking a corrupted price into peak_price/the exit
+            # fill.
+            if entry_price and effective_high > entry_price * PEAK_PRICE_SANITY_MULTIPLE:
+                logger.info(
+                    "base_momentum_shadow: implausible price for %s "
+                    "(effective_high=%.10g, entry_price=%.10g) -- "
+                    "skipping this cycle, treated as unavailable",
+                    row["pool_address"], effective_high, entry_price,
+                )
+                continue
 
             peak_price = row["peak_price"] or entry_price
             next_scale_level = row["next_scale_level"] or (entry_price * (1 + SCALE_OUT_STEP_PCT / 100.0))
