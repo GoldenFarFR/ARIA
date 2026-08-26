@@ -314,7 +314,7 @@ async def _maybe_open_position(
             ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
             """,
             (
-                contract, chain, snapshot.pair_address, None,
+                contract, chain, snapshot.pair_address, snapshot.base_symbol or None,
                 _realistic_fill_price(snapshot.price_usd), var_24h_pct,
                 market_cap, snapshot.liquidity_usd, age_days, datetime.now(timezone.utc).isoformat(),
             ),

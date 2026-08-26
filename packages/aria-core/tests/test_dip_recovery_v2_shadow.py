@@ -82,10 +82,10 @@ def _pool(
     )
 
 
-def _snapshot(*, market_cap_usd: float | None = 200_000.0, liquidity_usd: float = 30_000.0, price_usd: float = 1.0, pair_address: str = "0xPOOL") -> PairSnapshot:
+def _snapshot(*, market_cap_usd: float | None = 200_000.0, liquidity_usd: float = 30_000.0, price_usd: float = 1.0, pair_address: str = "0xPOOL", base_symbol: str = "TOK") -> PairSnapshot:
     return PairSnapshot(
         pair_address=pair_address, price_usd=price_usd, liquidity_usd=liquidity_usd,
-        market_cap_usd=market_cap_usd,
+        market_cap_usd=market_cap_usd, base_symbol=base_symbol,
     )
 
 
@@ -107,6 +107,10 @@ async def test_discover_opens_position_on_qualifying_dip(monkeypatch):
     rows = await _rows()
     assert len(rows) == 1
     assert rows[0]["status"] == "open"
+    # 26/08 -- real bug fixed: symbol was hardcoded None despite DexScreener
+    # already carrying it for free on the same snapshot (operator-reported
+    # "?" in Telegram notifications).
+    assert rows[0]["symbol"] == "TOK"
     assert rows[0]["entry_var_24h_pct"] == pytest.approx(-31.0)
     assert rows[0]["entry_market_cap_usd"] == pytest.approx(200_000.0)
     assert rows[0]["entry_pool_age_days"] >= shadow.MIN_POOL_AGE_DAYS

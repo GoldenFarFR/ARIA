@@ -52,6 +52,18 @@ def _make_feed(chain: str = "base") -> m.OnChainPoolDiscoveryFeed:
     return feed
 
 
+@pytest.fixture(autouse=True)
+def _no_real_symbol_resolution_calls(monkeypatch):
+    """26/08 -- check_candidates() now resolves the qualified pool's symbol
+    via dexpaprika._resolve_base_token (real HTTP call). Default to None
+    (matches every pre-existing test's prior behavior) unless a test
+    explicitly overrides this mock to exercise resolution itself."""
+    async def _fake_resolve_base_token(network, pool_address):
+        return None
+
+    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _fake_resolve_base_token)
+
+
 # --- v2 PairCreated decode --------------------------------------------------
 
 @pytest.mark.asyncio
@@ -204,6 +216,47 @@ async def test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve():
     assert result[0].reserve_usd == 9000.0
     assert result[0].price_usd == 0.001
     assert "0xpool" not in feed._candidates  # qualified candidate is removed
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_resolves_symbol_for_a_qualified_pool(monkeypatch):
+    """26/08 -- real bug fixed: a day-zero on-chain PairCreated/Initialize
+    event carries no ERC-20 symbol metadata, so every qualified candidate
+    used to log with symbol=None ("?" in Telegram notifications, confirmed
+    live on base_momentum_shadow.py). Resolved here (bounded to QUALIFIED
+    candidates only, funnel doctrine) via the same pool-detail call
+    dexpaprika.py already makes for its own REST-sourced TrendingPool."""
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+
+    async def _fake_resolve_base_token(network, pool_address):
+        assert pool_address == "0xpool"
+        return ("0xtoken", "MYTOKEN", None)
+
+    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _fake_resolve_base_token)
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert len(result) == 1
+    assert result[0].symbol == "MYTOKEN"
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_symbol_stays_none_on_resolution_failure():
+    """Never fabricated -- a failed/unavailable pool-detail lookup leaves
+    symbol=None rather than guessing, same dome doctrine as every other
+    field in this module."""
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)  # fixture default: resolves to None
+    assert len(result) == 1
+    assert result[0].symbol is None
 
 
 @pytest.mark.asyncio

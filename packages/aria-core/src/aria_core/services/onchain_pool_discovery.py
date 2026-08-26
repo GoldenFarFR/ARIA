@@ -406,8 +406,18 @@ class OnChainPoolDiscoveryFeed:
                             price_usd = float(raw_price)
             if reserve_usd is None or reserve_usd < min_liquidity_usd or price_usd is None:
                 continue
+            # 26/08 -- a raw on-chain PairCreated/Initialize event carries no
+            # ERC-20 symbol metadata, so every day-zero candidate used to log
+            # with symbol=None ("?" in Telegram notifications, confirmed live
+            # on base_momentum_shadow.py). Resolving it here (bounded: only
+            # QUALIFIED candidates reach this line, funnel doctrine) reuses
+            # the same pool-detail call dexpaprika.py already makes for its
+            # own REST-sourced TrendingPool.symbol -- never fabricated, None
+            # on any resolution failure.
+            base = await dexpaprika._resolve_base_token(self.chain, key)  # noqa: SLF001 -- internal, same module family
+            symbol = base[1] if base is not None else None
             qualified.append(TrendingPool(
-                pool_address=key, token_address=cand.token_address, symbol=None,
+                pool_address=key, token_address=cand.token_address, symbol=symbol,
                 price_usd=price_usd, price_change_pct={}, transactions_m15=None,
                 volume_usd_m15=None, reserve_usd=reserve_usd,
                 pool_created_at=cand.pool_created_at, dex_id=cand.dex_id,
