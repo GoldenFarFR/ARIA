@@ -2588,7 +2588,42 @@ class TestRegimeGate:
     @pytest.mark.asyncio
     async def test_advance_regime_candidates_is_a_noop_without_a_feed(self, _tmp_db):
         stats = await pocket.advance_regime_candidates(bonding_ws_feed=None, db_path=_tmp_db)
-        assert stats == {"checked": 0, "updated": 0, "closed": 0}
+        assert stats == {
+            "checked": 0, "updated": 0, "closed": 0, "no_fresh_data": 0, "stale_reasons": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_advance_regime_candidates_counts_stale_reasons_when_no_fresh_price(self, _tmp_db):
+        """27/08 diagnostic -- real incident: peak_price has been stuck exactly
+        at entry_price for 100% of candidates since 26/08T14:00 (confirmed
+        against solana_regime_candidates_log directly), permanently forcing
+        the regime's own median to 0% and keeping the gate closed regardless
+        of the real market. When get_snapshot() returns no fresh price (both
+        price_usd and price_high_since_last_read are None), the candidate's
+        peak legitimately cannot move this cycle -- but WHY (pool never
+        subscribed vs. migrated to the AMM vs. some other reason) must be
+        visible rather than silently absorbed into an unremarkable "updated"
+        count, which is exactly what let this go unnoticed for a day."""
+
+        class _StaleSnap:
+            price_usd = None
+            price_high_since_last_read = None
+            error = "bonding_curve_complete_use_pumpswap_ws"
+
+        class _Feed:
+            def get_snapshot(self, pool_address):
+                return _StaleSnap()
+
+        await pocket.record_regime_candidate(
+            pool_address="poolX", mint="mintX", chain="solana",
+            entry_price=1.0, reserve_usd=5000.0, db_path=_tmp_db,
+        )
+        stats = await pocket.advance_regime_candidates(
+            bonding_ws_feed=_Feed(), db_path=_tmp_db,
+        )
+        assert stats["checked"] == 1
+        assert stats["no_fresh_data"] == 1
+        assert stats["stale_reasons"] == {"bonding_curve_complete_use_pumpswap_ws": 1}
 
     @pytest.mark.asyncio
     async def test_a_disarmed_gate_reads_as_open_never_as_shut(self, _tmp_db, monkeypatch):

@@ -731,7 +731,19 @@ async def advance_regime_candidates(
     `advance_exit_simulation`: all state lives in the row itself."""
     path = db_path or _db_path()
     await _ensure_regime_candidates_table(path)
-    stats = {"checked": 0, "updated": 0, "closed": 0}
+    # 27/08 diagnostic -- real incident: peak_price has been stuck exactly at
+    # entry_price for 100% of candidates since 26/08T14:00 (confirmed against
+    # solana_regime_candidates_log directly, day-by-day), silently forcing the
+    # regime's own median to 0% and keeping the gate permanently closed
+    # regardless of the real market. `stale_reasons` aggregates get_snapshot()'s
+    # own `error` field (never per-row logging, funnel/log discipline) so the
+    # next observation window says WHY no fresh price arrived this cycle --
+    # candidate hypothesis: "late bonding" candidates are by definition close
+    # to graduation, so a high share may migrate to the AMM (get_snapshot()
+    # returns `error="bonding_curve_complete_use_pumpswap_ws"` PERMANENTLY
+    # after that, since this feed only ever tracks the pre-graduation curve)
+    # during the 15-minute tracking window -- never confirmed empirically yet.
+    stats = {"checked": 0, "updated": 0, "closed": 0, "no_fresh_data": 0, "stale_reasons": {}}
     if bonding_ws_feed is None:
         return stats
     cutoff = (
@@ -755,6 +767,10 @@ async def advance_regime_candidates(
             continue
         price = getattr(snap, "price_usd", None)
         high = getattr(snap, "price_high_since_last_read", None)
+        if price is None and high is None:
+            stats["no_fresh_data"] += 1
+            reason = getattr(snap, "error", None) or "unknown"
+            stats["stale_reasons"][reason] = stats["stale_reasons"].get(reason, 0) + 1
         candidates = [v for v in (price, high, row["peak_price"]) if v is not None]
         if not candidates:
             continue
