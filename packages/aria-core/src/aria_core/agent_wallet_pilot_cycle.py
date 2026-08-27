@@ -45,7 +45,14 @@ from __future__ import annotations
 
 import logging
 
-from aria_core import agent_wallet_cdp_adapter, agent_wallet_log, agent_wallet_pilot, agent_wallet_sizing
+from aria_core import (
+    agent_wallet_cdp_adapter,
+    agent_wallet_log,
+    agent_wallet_pilot,
+    agent_wallet_sizing,
+    custody_pause,
+    outgoing_pause,
+)
 from aria_core.agent_wallet_monitor import get_wallet_balance_summary
 
 logger = logging.getLogger(__name__)
@@ -86,6 +93,22 @@ async def run_agent_wallet_pilot_cycle() -> dict:
     ``outcome``, never a silent crash of the heartbeat tick."""
     if not agent_wallet_pilot.agent_wallet_pilot_enabled():
         return {"outcome": "disabled"}
+
+    # 27/08, real gap found live: `/stop` (outgoing_pause) and custody_pause
+    # were only ever checked deep inside agent_wallet_pilot.attempt_swap --
+    # the very last step, right before signing. With `/stop` armed for days
+    # (real incident, 25/08-27/08), this cycle still ran its full sourcing
+    # (discover_momentum_candidates, evaluate_momentum_entry per candidate)
+    # every pass, spending real Chainstack/API budget on a decision that was
+    # ALWAYS going to be refused at the final step. Checked here, before any
+    # network call, so a paused system costs nothing beyond this one cheap
+    # local read -- distinct from solana_trade_pilot's own `/stop` handling
+    # (`shadow_persistent.py::_real_trading_seams`), which intentionally lets
+    # its underlying shadow sourcing keep running while paused because that
+    # sourcing IS the shadow pocket's own data collection. This cycle has no
+    # such shadow value: its sourcing exists only to find a real trade.
+    if outgoing_pause.is_paused(strict=True) or custody_pause.is_paused():
+        return {"outcome": "paused"}
 
     try:
         summary = await get_wallet_balance_summary()

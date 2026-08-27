@@ -19,6 +19,17 @@ def _gate_on(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _not_paused_by_default(monkeypatch):
+    """27/08 -- sans ça, les tests dépendraient de l'état RÉEL de
+    pause_state.json sur la machine qui les exécute (ex. `/stop` armé en
+    prod) -- jamais souhaitable pour une suite de tests. Les deux tests qui
+    veulent le comportement PAUSED le redéfinissent explicitement."""
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda strict=False: False)
+    monkeypatch.setattr("aria_core.custody_pause.is_paused", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_purchase_journal_lookup(monkeypatch):
     """13/08 -- ``list_aria_bought_tokens_still_held`` touche une vraie DB ;
     vide par défaut ici (jamais de token réputé acheté par ARIA) -- les tests
@@ -53,6 +64,37 @@ async def test_disabled_when_gate_off(monkeypatch):
     monkeypatch.setattr("aria_core.agent_wallet_pilot.agent_wallet_pilot_enabled", lambda: False)
     result = await cycle.run_agent_wallet_pilot_cycle()
     assert result == {"outcome": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_paused_when_stop_armed_never_calls_balance_or_sourcing(monkeypatch):
+    """27/08 -- gap réel trouvé en prod : `/stop` armé plusieurs jours n'a
+    jamais empêché ce cycle de lancer son sourcing/scoring complet, seul
+    `attempt_swap` (la toute dernière étape) le vérifiait -- gaspillage RU/API
+    pour une décision refusée d'avance. Le check doit couper AVANT tout appel
+    réseau, jamais juste avant l'exécution."""
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda strict=False: True)
+    monkeypatch.setattr("aria_core.custody_pause.is_paused", lambda: False)
+
+    async def _boom():
+        raise AssertionError("get_wallet_balance_summary must not be called while /stop is armed")
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", _boom)
+    result = await cycle.run_agent_wallet_pilot_cycle()
+    assert result == {"outcome": "paused"}
+
+
+@pytest.mark.asyncio
+async def test_paused_when_custody_pause_active(monkeypatch):
+    monkeypatch.setattr("aria_core.outgoing_pause.is_paused", lambda strict=False: False)
+    monkeypatch.setattr("aria_core.custody_pause.is_paused", lambda: True)
+
+    async def _boom():
+        raise AssertionError("get_wallet_balance_summary must not be called while custody_pause is active")
+
+    monkeypatch.setattr(cycle, "get_wallet_balance_summary", _boom)
+    result = await cycle.run_agent_wallet_pilot_cycle()
+    assert result == {"outcome": "paused"}
 
 
 @pytest.mark.asyncio
