@@ -244,6 +244,40 @@ async def test_check_candidates_resolves_symbol_for_a_qualified_pool(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_check_candidates_survives_concurrent_registration_mid_iteration(monkeypatch):
+    """27/08, real incident: `check_candidates()` awaits per-candidate
+    (dexpaprika resolution here), and `_register_candidate` -- called
+    synchronously from the WS notification handler -- can insert a new key
+    into `self._candidates` during that await, since both run on the same
+    event loop. Iterating the live dict then raised "dictionary changed
+    size during iteration", confirmed live on base_discovery_loop (186
+    consecutive failures, ~36h with zero new Base candidates). Reproduces
+    the race directly: the symbol-resolution await is the trigger point a
+    concurrent WS notification would land in."""
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+
+    async def _resolve_and_register_concurrently(network, pool_address):
+        # Simulates a WS notification landing mid-await, exactly like
+        # _handle_notification -> _register_candidate would in production.
+        feed._candidates["0xnewpool"] = m._Candidate(
+            pool_key="0xnewpool", dex_id="uniswap_v2", token_address="0xother", chain="base",
+        )
+        return None
+
+    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _resolve_and_register_concurrently)
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)  # must not raise
+    assert len(result) == 1
+    assert result[0].pool_address == "0xpool"
+    # The concurrently-registered candidate is untouched, picked up next pass.
+    assert "0xnewpool" in feed._candidates
+
+
+@pytest.mark.asyncio
 async def test_check_candidates_symbol_stays_none_on_resolution_failure():
     """Never fabricated -- a failed/unavailable pool-detail lookup leaves
     symbol=None rather than guessing, same dome doctrine as every other

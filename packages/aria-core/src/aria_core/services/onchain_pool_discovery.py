@@ -341,7 +341,20 @@ class OnChainPoolDiscoveryFeed:
         qualified: list[TrendingPool] = []
         now = time.monotonic()
         expired_keys = []
-        for key, cand in self._candidates.items():
+        # 27/08, real incident: this loop awaits repeatedly per candidate
+        # (dexpaprika lookups, symbol resolution), and `_register_candidate`
+        # -- called synchronously from the WS notification handler -- can
+        # insert a new key into `self._candidates` during any of those
+        # awaits. Iterating the live dict then raises "dictionary changed
+        # size during iteration" on the next `next()`. Confirmed live on
+        # base_discovery_loop (186 consecutive failures since 26/08 02:02,
+        # zero new candidates for ~36h): Base's WS throughput is high enough
+        # to reliably land a new pool mid-cycle; Robinhood's is not, so the
+        # same bug never surfaced there despite sharing this exact code
+        # path. A snapshot list sidesteps it: anything registered mid-cycle
+        # is simply picked up on the next check_candidates() pass, same as
+        # today's behavior for any candidate that arrives between cycles.
+        for key, cand in list(self._candidates.items()):
             if now - cand.discovered_at >= _OBSERVATION_WINDOW_SECONDS:
                 expired_keys.append(key)
                 continue
