@@ -239,7 +239,59 @@ async def test_record_signals_never_raises_on_db_failure(monkeypatch):
     assert logged == 0  # fails closed, never raises into the caller
 
 
-# --- _snapshot_with_fallback (16/08 API cascade) ---------------------------
+# --- _snapshot_with_fallback (16/08 API cascade, 27/08 ws_feed tried first) -
+
+@dataclasses.dataclass
+class _FakeWsSnapshot:
+    available: bool
+    price_usd: float | None = None
+    reserve_usd: float | None = None
+    dex_id: str | None = "pumpswap"
+
+
+class _FakeWsFeed:
+    def __init__(self, snapshots: dict) -> None:
+        self._snapshots = snapshots
+
+    def get_snapshot(self, pool_address: str) -> _FakeWsSnapshot:
+        return self._snapshots.get(pool_address, _FakeWsSnapshot(available=False))
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_uses_ws_feed_first_when_available(monkeypatch):
+    """27/08 -- operator-directed migration off GeckoTerminal onto Chainstack
+    WS for real-time price, same doctrine already proven on Base/Robinhood
+    and on solana_late_bonding_shadow's own bonding_ws_feed. A tracked pool's
+    live push must win over DexScreener too, not just over GeckoTerminal."""
+    ws_feed = _FakeWsFeed({"poolA": _FakeWsSnapshot(available=True, price_usd=4.2, reserve_usd=9000.0)})
+
+    async def _boom(contract, *, chain="solana"):
+        raise AssertionError("dexscreener must not be called when the ws_feed already answered")
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", _boom)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 4.2
+    assert snapshot.reserve_usd == 9000.0
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_falls_through_to_dexscreener_when_ws_feed_unavailable(monkeypatch):
+    """A ws_feed that doesn't yet track this pool (or hasn't ticked) must
+    never block the existing REST cascade -- same as ws_feed=None."""
+    ws_feed = _FakeWsFeed({})  # empty: every lookup returns available=False
+
+    async def fake_fetch_token_pairs(contract, *, chain="solana"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5  # DexScreener, the existing cascade unchanged
+
 
 @pytest.mark.asyncio
 async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
@@ -584,6 +636,18 @@ async def test_summary_no_closed_rows_is_none_not_zero():
 
 
 # --- advance_exit_simulation --------------------------------------------
+
+@pytest.mark.asyncio
+async def test_advance_exit_simulation_threads_ws_feed_to_snapshot_fallback():
+    """27/08 -- ws_feed must actually reach _snapshot_with_fallback, not just
+    be accepted as an unused parameter."""
+    await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
+    ws_feed = _FakeWsFeed({"poolA": _FakeWsSnapshot(available=True, price_usd=1.1)})
+    client = FakeClient({"poolA": 99.0})  # would prove wrong if this got used instead
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
+    assert counts.get("checked", 0) >= 1 or client.calls == []
+    assert client.calls == []  # GeckoTerminal never reached -- the ws_feed answered first
+
 
 @pytest.mark.asyncio
 async def test_advance_exit_multiple_rungs_filled_in_one_slow_cycle():

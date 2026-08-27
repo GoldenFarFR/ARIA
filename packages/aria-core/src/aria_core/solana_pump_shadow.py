@@ -921,8 +921,24 @@ def _epoch_of(iso_ts: str | None) -> float | None:
 
 async def _snapshot_with_fallback(
     client: GeckoTerminalClient, pool_address: str, token_address: str | None, *, chain: str,
+    ws_feed=None,
 ) -> PoolSnapshot:
-    """DexScreener FIRST for the spot price, GeckoTerminal as fallback --
+    """27/08 -- ``ws_feed`` (a ``PumpSwapWebSocketFeed``-shaped adapter,
+    ``get_snapshot(pool_address) -> PumpSwapLiveSnapshot``) tried FIRST when
+    given, same doctrine already proven on Base/Robinhood (``evm_swap_ws.py``)
+    and on this dome's own ``solana_late_bonding_shadow.advance_exit_
+    simulation`` (``bonding_ws_feed=_BONDING_OR_PUMPSWAP_FEED``, wired 19-21/
+    08): a tracked pool's live push is free, zero rate-limit risk, and
+    fresher than any REST call -- real gap this closes, operator-directed
+    (27/08, "passe tout ce qui est sur gecko vers chainstack en websocket"):
+    this pocket only trades ALREADY-GRADUATED pools (see module docstring,
+    "PAS la courbe de bonding"), so a plain ``PumpSwapWebSocketFeed`` covers
+    its whole lifetime, no bonding-curve leg needed. Optional and additive:
+    ``ws_feed=None`` (the default, e.g. every existing caller before this
+    change) falls straight through to the DexScreener/GeckoTerminal cascade
+    below, unchanged behaviour.
+
+    DexScreener FIRST (of the REST cascade) for the spot price, GeckoTerminal as fallback --
     16/08, operator-directed "API cascade" doctrine, inverted same day once
     both real budgets were compared (``docs/api-rate-limit-calibration.md``):
     DexScreener's confirmed real ceiling (~60/min, likely ~300/min on the
@@ -939,6 +955,14 @@ async def _snapshot_with_fallback(
     exit-sim permanently unchecked. Never a third silent fabrication: both
     sources failing still returns ``available=False``, same "never fabricate
     a price" doctrine as the rest of this module."""
+    if ws_feed is not None:
+        ws_snap = ws_feed.get_snapshot(pool_address)
+        if ws_snap.available and ws_snap.price_usd is not None:
+            return PoolSnapshot(
+                pool_address=pool_address, price_usd=ws_snap.price_usd,
+                reserve_usd=ws_snap.reserve_usd, available=True,
+                dex_id=ws_snap.dex_id or "pumpswap",
+            )
     if token_address:
         try:
             pairs = await dexscreener.fetch_token_pairs(token_address, chain=chain)
@@ -1012,6 +1036,7 @@ async def _snapshot_with_fallback(
 
 async def evaluate_open_signals(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 50,
+    ws_feed=None,
 ) -> dict[str, int]:
     """The real out-of-sample forward-measurement pass -- for each OPEN
     signal old enough to have crossed a not-yet-measured horizon (15min/1h/
@@ -1078,7 +1103,7 @@ async def evaluate_open_signals(
 
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
-                    client, row["pool_address"], row["token_address"], chain=chain,
+                    client, row["pool_address"], row["token_address"], chain=chain, ws_feed=ws_feed,
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
@@ -1123,6 +1148,7 @@ async def evaluate_open_signals(
 
 async def advance_exit_simulation(
     client: GeckoTerminalClient | None = None, *, chain: str = "solana", limit: int = 50,
+    ws_feed=None,
 ) -> dict[str, int]:
     """Stateful, incremental simulation of the CALIBRATED exit rule itself
     (25%-of-remaining scale-out ladder every +25% rung above entry, -20%
@@ -1251,7 +1277,7 @@ async def advance_exit_simulation(
 
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
-                    client, row["pool_address"], row["token_address"], chain=chain,
+                    client, row["pool_address"], row["token_address"], chain=chain, ws_feed=ws_feed,
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
