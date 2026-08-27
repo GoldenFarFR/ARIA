@@ -758,6 +758,79 @@ async def test_advance_open_position_archives_after_candles(monkeypatch):
     assert call["candles"] == ohlcv.candles
 
 
+# --- archive_recently_closed (27/08) -----------------------------------------
+# aria-94 (obv-ao-screener, sibling project) found her own MFE/MAE analysis
+# was impossible because after-candle archiving stopped dead at the exit --
+# same defect existed here (_advance_one_position only ever ran on OPEN
+# positions). Without candles past the exit, "was the stop too tight?" can
+# never be answered.
+
+@pytest.mark.asyncio
+async def test_archive_recently_closed_archives_a_position_closed_minutes_ago(monkeypatch):
+    await _seed_closed_position(close_reason="take_profit_25pct", minutes_ago=30.0)
+
+    ohlcv = OHLCVResult(candles=[Candle(ts=2000, open=1.0, high=1.1, low=0.95, close=1.05, volume=3.0)], available=True)
+    captured = []
+
+    async def fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        return ohlcv
+
+    async def fake_store_candles(**kwargs):
+        captured.append(kwargs)
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv)
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+
+    count = await shadow.archive_recently_closed(CHAIN)
+
+    assert count == 1
+    assert len(captured) == 1
+    assert captured[0]["phase"] == "after"
+
+
+@pytest.mark.asyncio
+async def test_archive_recently_closed_skips_a_position_past_the_horizon(monkeypatch):
+    """A position closed well before POST_CLOSE_ARCHIVE_HOURS must never
+    trigger a real DexPaprika call -- funnel doctrine, never spent on data
+    too old to feed any MFE/MAE horizon this exists for."""
+    await _seed_closed_position(
+        close_reason="take_profit_25pct",
+        minutes_ago=shadow.POST_CLOSE_ARCHIVE_HOURS * 60.0 + 5.0,
+    )
+
+    async def _must_not_be_called(*a, **k):
+        raise AssertionError("get_ohlcv must not be called past the archive horizon")
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", _must_not_be_called)
+
+    count = await shadow.archive_recently_closed(CHAIN)
+
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_archive_recently_closed_never_reopens_or_mutates_the_position(monkeypatch):
+    await _seed_closed_position(close_reason="timeout_max_hold", minutes_ago=10.0)
+
+    ohlcv = OHLCVResult(candles=[Candle(ts=2000, open=1.0, high=1.1, low=0.95, close=1.05, volume=3.0)], available=True)
+
+    async def fake_get_ohlcv(pool_address, *, network="base", mode="standard"):
+        return ohlcv
+
+    async def fake_store_candles(**kwargs):
+        return len(kwargs["candles"])
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_ohlcv", fake_get_ohlcv)
+    monkeypatch.setattr(shadow_candle_archive, "store_candles", fake_store_candles)
+
+    await shadow.archive_recently_closed(CHAIN)
+
+    rows = await _rows(CONTRACT, CHAIN)
+    assert rows[0]["status"] == "closed"
+    assert rows[0]["close_reason"] == "timeout_max_hold"
+
+
 # --- Telegram notifications (26/08, operator-directed) ---------------------
 
 @pytest.mark.asyncio

@@ -109,6 +109,12 @@ MIN_POOL_AGE_DAYS = 14.0
 # Safety net only, never an invented stop-loss -- see module docstring.
 MAX_HOLD_HOURS = 168.0  # 7 days, same default as v1
 
+# 27/08 -- how long past the exit candle archiving keeps running (see
+# ``archive_recently_closed``). 12h matches the longest MFE/MAE horizon this
+# exists to feed (aria-94/obv-ao-screener's own method, see HANDOFF) -- never
+# archived indefinitely, funnel doctrine, a real DexPaprika call per pass.
+POST_CLOSE_ARCHIVE_HOURS = 12.0
+
 # 26/08, Decision 2 (research.md) -- a guard against the same failure class
 # confirmed live THE SAME DAY on base_momentum_shadow.py (a corrupted AMM
 # reserve-ratio price read as "+707006.8% nominal, never executable"). Both
@@ -465,34 +471,67 @@ async def advance_open_positions(chain: str) -> dict:
     return counts
 
 
+async def _archive_after_close(row: dict) -> None:
+    """26/08, operator-directed ("un max de sqlite avec les log de suivi des
+    positions ouvertes") -- archive the real price path so any alternate
+    exit rule (different take-profit level, a trailing stop, etc.) can be
+    honestly re-simulated later against real data. Best-effort, never
+    raises -- a caller doing exit-check work must never be blocked by this.
+
+    27/08 -- extracted out of ``_advance_one_position`` so it can ALSO run
+    on already-CLOSED positions (see ``archive_recently_closed`` below):
+    aria-94 (obv-ao-screener, a sibling project) found the real reason her
+    own MFE/MAE analysis was impossible was that her archiving stopped
+    dead at the exit -- same defect existed here. Without candles past the
+    exit, "was the stop too tight?" can never be answered, only "what did
+    we make?"."""
+    if not row.get("pool_address"):
+        return
+    try:
+        after_ohlcv = await dexpaprika.get_ohlcv(row["pool_address"], network=row["chain"])
+        if after_ohlcv.available and after_ohlcv.candles:
+            from aria_core import shadow_candle_archive
+
+            await shadow_candle_archive.store_candles(
+                module="dip_recovery_v2", position_id=row["id"],
+                pool_address=row["pool_address"], chain=row["chain"], phase="after",
+                candles=after_ohlcv.candles,
+            )
+    except Exception as exc:  # noqa: BLE001 -- archiving must never block the caller
+        logger.info(
+            "dip_recovery_v2_shadow: after-candle archive failed for %s (%s)",
+            row["pool_address"], exc,
+        )
+
+
+async def archive_recently_closed(chain: str) -> int:
+    """27/08 -- keeps archiving ``phase="after"`` candles for
+    ``POST_CLOSE_ARCHIVE_HOURS`` past the exit, not just while a position is
+    still open. A position past that window is left alone (funnel doctrine:
+    the archive call itself costs a real DexPaprika request, never spent on
+    a position too old to ever feed the MFE/MAE horizons this exists for --
+    the longest one used elsewhere is 12h)."""
+    await _ensure_tables()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=POST_CLOSE_ARCHIVE_HOURS)).isoformat()
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM dip_recovery_v2_shadow WHERE chain = ? AND status = 'closed' "
+            "AND closed_at >= ?",
+            (chain, cutoff),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    for row in rows:
+        await _archive_after_close(row)
+    return len(rows)
+
+
 async def _advance_one_position(row: dict) -> None:
     entry_price = row["entry_price"]
     if not entry_price:
         return
 
-    # 26/08, operator-directed ("un max de sqlite avec les log de suivi des
-    # positions ouvertes") -- archive the real price path for every open
-    # position on every pass, not just at entry/close, so any alternate
-    # exit rule (different take-profit level, a trailing stop, etc.) can be
-    # honestly re-simulated later against real data regardless of how the
-    # "factory" parameters shipped today end up performing. Best-effort,
-    # never blocks the actual exit-check logic below.
-    if row.get("pool_address"):
-        try:
-            after_ohlcv = await dexpaprika.get_ohlcv(row["pool_address"], network=row["chain"])
-            if after_ohlcv.available and after_ohlcv.candles:
-                from aria_core import shadow_candle_archive
-
-                await shadow_candle_archive.store_candles(
-                    module="dip_recovery_v2", position_id=row["id"],
-                    pool_address=row["pool_address"], chain=row["chain"], phase="after",
-                    candles=after_ohlcv.candles,
-                )
-        except Exception as exc:  # noqa: BLE001 -- archiving must never block the exit check
-            logger.info(
-                "dip_recovery_v2_shadow: after-candle archive failed for %s (%s)",
-                row["pool_address"], exc,
-            )
+    await _archive_after_close(row)
 
     snapshot = await _resolve_market_cap_and_price(row["contract"], row["chain"], row["pool_address"])
     age_hours = _hours_since(row["opened_at"]) or 0.0
@@ -544,6 +583,7 @@ async def run_cycle() -> dict:
         stats["checked"] += chain_stats["checked"]
         stats["closed_take_profit"] += chain_stats["closed_take_profit"]
         stats["closed_timeout"] += chain_stats["closed_timeout"]
+        await archive_recently_closed(chain)
     return stats
 
 
