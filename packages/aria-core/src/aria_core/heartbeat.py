@@ -630,13 +630,6 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="cabalspy_candidate_sourcing_cycle",
-        name="Repertoire KOL CabalSpy (categorisation)",
-        description="Decision operateur explicite (23/07) : recupere la liste des wallets KOL labellises par CabalSpy (identite complete -- nom/twitter/telegram, verifie reel sur Base -- 200 wallets), toutes chaines catalogues (Base/BNB/Solana), simple repertoire jamais un signal de trading. Resynchronisation complete au plus 1x/semaine (economie de credits, la liste ne bouge pas souvent). Gate ARIA_CABALSPY_SOURCING_ENABLED, OFF par defaut. 25/08 -- le lien vers le scoring de wallets (wallet_scan_queue.enqueue_wallets) a ete retire avec l'ensemble du mecanisme de wallet-scoring (decision operateur).",
-        interval_minutes=180,
-        enabled=False,
-    ),
-    HeartbeatTask(
         id="memory_consolidation",
         name="Consolidation memoire episodique",
         description="Consolide memory_dir() (fichiers {categorie}_{date}.md) categorie par categorie, un seul appel LLM en depth=brief par categorie qualifiee (seuil >=3 nouvelles entrees). Archive-then-rewrite : instantane brut avant toute reecriture, aucune suppression physique. Perimetre verrouille en dur -- jamais le truth-ledger, jamais cognitive_knowledge WHERE approved=1. Gate OFF par defaut (#128).",
@@ -1042,10 +1035,6 @@ def _sync_x_curiosity_enabled() -> None:
                 from aria_core.agent_wallet_monitor import agent_wallet_monitor_enabled
 
                 task.enabled = agent_wallet_monitor_enabled()
-            if task.id == "cabalspy_candidate_sourcing_cycle":
-                from aria_core.skills.cabalspy_candidate_sourcing import cabalspy_sourcing_enabled
-
-                task.enabled = cabalspy_sourcing_enabled()
             if task.id == "marketing_video_cycle":
                 from aria_core.skills.marketing_video import marketing_video_enabled
 
@@ -2209,16 +2198,6 @@ class AriaHeartbeat:
 
             digest = await build_regime_peak_digest()
             await self._notify_telegram(digest)
-
-        elif task_id == "cabalspy_candidate_sourcing_cycle":
-            from aria_core.skills.cabalspy_candidate_sourcing import run_cabalspy_candidate_sourcing_cycle
-
-            result = await run_cabalspy_candidate_sourcing_cycle(notifier=self._notify_telegram)
-            if result.get("outcome") == "ok" and result.get("stored_per_chain"):
-                append_memory(
-                    "cabalspy_candidate_sourcing",
-                    f"[cabalspy_candidate_sourcing] catalogue par chaine : {result.get('stored_per_chain')}",
-                )
 
         elif task_id == "marketing_video_cycle":
             from aria_core.skills.marketing_video import run_marketing_video_cycle

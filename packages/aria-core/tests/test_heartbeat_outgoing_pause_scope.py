@@ -38,7 +38,7 @@ def test_income_and_shadow_tasks_are_never_in_the_financial_risk_set():
     never_gated = {
         "acp_provider_poll", "acp_market_scan", "acp_email_watch", "revenue_autonomy",
         "paper_trade_cycle", "polymarket_paper_cycle", "vc_crawl",
-        "momentum_discovery_cycle", "cabalspy_candidate_sourcing_cycle",
+        "momentum_discovery_cycle",
         "market_sentiment_cycle",
     }
     assert not (never_gated & heartbeat._FINANCIAL_RISK_TASK_IDS)
