@@ -736,6 +736,35 @@ class EVMSwapWebSocketFeed:
             logger.info("evm_swap_ws[%s]: notification decode failed (%s)", self.chain, exc)
 
     def _handle_sync(self, address: str, result: dict) -> None:
+        # 27/08, real defect found via cross-session review with aria-94
+        # (obv-ao-screener, a sibling project) -- `Sync(uint112,uint112)` is
+        # emitted on EVERY reserve change, not just a swap: `Mint`/`Burn`
+        # (add/remove liquidity) emit it too, in the same transaction. This
+        # module only subscribes to Sync/V3-Swap (see the `topics` filter in
+        # start()), never Mint/Burn, so a Mint/Burn's own Sync is silently
+        # treated the same as a real swap's.
+        #
+        # Verified this does NOT corrupt `price` -- a standard V2 mint/burn
+        # preserves the reserve RATIO by design (both legs move together),
+        # so the ratio computed below stays correct either way. The one real
+        # casualty is `pool.swap_count += 1` a few lines down: it counts a
+        # Mint/Burn as a swap. Grepped every caller in this repo (27/08):
+        # `swap_count` is exposed in `get_snapshot()` but consumed by NO
+        # other module today -- zero real impact right now.
+        #
+        # Correct fix (not applied here, deliberately) -- CORRECTED 27/08,
+        # aria-94 retracted her first proposal below: transactionHash
+        # correlation does NOT work, because Sync is always emitted FIRST in
+        # the transaction, before Mint/Burn/Swap -- there is no way to know
+        # at Sync-receipt-time whether a Mint/Burn will follow, so nothing to
+        # correlate against yet. Her corrected, simpler fix: never derive
+        # `swap_count` (or volume) from Sync at all -- move that tracking to
+        # the V2 `Swap` event instead (Mint/Burn never emit Swap, only Sync).
+        # This module doesn't currently subscribe to/decode V2 Swap at all
+        # (only Sync for V2, Swap for V3/V4) -- adding a `_handle_v2_swap`
+        # would be the real fix. Not built: `swap_count` is unused today
+        # (confirmed via grep, no other module reads it). Revisit if
+        # `swap_count` is ever wired into a real decision -- fix it THEN.
         pool = self._pools.get(address)
         if pool is None or pool.family != "v2":
             return

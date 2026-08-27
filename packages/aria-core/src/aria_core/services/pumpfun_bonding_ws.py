@@ -75,7 +75,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from aria_core.services import sol_usd_rate
+from aria_core.services import chainstack_ru_budget, sol_usd_rate
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
     RPC_WS_HIGH_VOLUME_DEFAULT,
@@ -850,6 +850,19 @@ class PumpFunBondingWebSocketFeed:
         params = msg.get("params")
         if not params:
             return
+        # 27/08, real gap found live: operator's Chainstack dashboard showed
+        # ~1.8-2M "accountNotification" calls over 7 days (the dominant
+        # method, by far) while this dome's own internal RU budget
+        # (`chainstack_ru_budget`) never counted a single one -- every OTHER
+        # Solana/Base/Robinhood feed already does (see `pumpfun_curve_tracker.py`,
+        # `onchain_pool_discovery.py`, `evm_swap_ws.py`'s own `_handle_notification`),
+        # this one was the sole exception. A push notification IS a billed
+        # request on Chainstack's side the moment it reaches this process,
+        # same "count on arrival, not on successful decode" doctrine as
+        # `solana_gateway.py`'s own comment on why paid RU is counted before
+        # the attempt. Counted here, before any decode, so a malformed
+        # payload still gets billed honestly.
+        chainstack_ru_budget.record_usage_fast("solana", 1)
         sub_id = params.get("subscription")
         pool_addr = sub_id_to_pool.get(sub_id)
         if pool_addr is None:
