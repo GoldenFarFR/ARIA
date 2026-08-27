@@ -154,6 +154,17 @@ class OnChainPoolDiscoveryFeed:
         self._task = None
         self._stopped = False
         self._connected = False
+        # 27/08, real incident: Base went from ~28 candidates/hour (25/08) to
+        # ZERO for 36h+ straight (crash fixed same day, see check_candidates'
+        # own comment) -- and even after the fix, zero new candidates AND
+        # zero add_pool attempts over a full clean 48min observation window,
+        # with the WS reporting "subscribed on 6 factories" throughout. No
+        # existing counter could tell "no raw notifications reaching this
+        # feed at all" apart from "notifications arrive but every one is
+        # rejected by the quote-token filter" -- both look identical from
+        # the outside (silence). Diagnostics-only, never changes behaviour.
+        self.raw_notifications_seen = 0
+        self.rejected_not_priceable_count = 0
 
     @property
     def connected(self) -> bool:
@@ -223,6 +234,7 @@ class OnChainPoolDiscoveryFeed:
             result = payload.get("result") if isinstance(payload, dict) else None
             if not result:
                 return
+            self.raw_notifications_seen += 1
             chainstack_ru_budget.record_usage_fast(self.chain, 1)
             topics = result.get("topics") or []
             if not topics:
@@ -309,6 +321,7 @@ class OnChainPoolDiscoveryFeed:
             # Neither side is a known quote (unpriceable), or both are
             # (stable/stable or WETH/WETH -- not a memecoin pool) -- honestly
             # uncovered, never guessed.
+            self.rejected_not_priceable_count += 1
             return
         tracked_token = token1 if token0_is_quote else token0
         if pool_key in self._candidates:
@@ -440,6 +453,18 @@ class OnChainPoolDiscoveryFeed:
             self._candidates.pop(key, None)
         self._dropped_count += sum(
             1 for k in expired_keys if k not in {q.pool_address for q in qualified}
+        )
+        # 27/08, real incident: Base's candidate rate dropped from ~28/hour
+        # to zero for 36h+ (crash, fixed) then STAYED at zero afterwards with
+        # no error logged anywhere -- silence looked identical whether the
+        # WS simply received nothing or received plenty that the quote-token
+        # filter rejected. One line per cycle (same cadence as "SOLANA regime
+        # sensor:") makes the two cases distinguishable without guessing.
+        logger.info(
+            "onchain_pool_discovery[%s]: raw_notifications_seen=%d "
+            "rejected_not_priceable=%d pending=%d qualified_this_cycle=%d",
+            self.chain, self.raw_notifications_seen,
+            self.rejected_not_priceable_count, len(self._candidates), len(qualified),
         )
         return qualified
 

@@ -102,6 +102,51 @@ async def test_v2_pair_created_skipped_when_neither_side_is_a_known_quote():
     assert not feed._candidates
 
 
+# --- 27/08, diagnostic counters (backlog: Base went silent post-fix) -------
+# Real incident: after the dict-mutation race was fixed, Base STAYED at zero
+# new candidates for 48min+ of clean observation with zero errors logged --
+# indistinguishable from the outside whether the WS received nothing, or
+# received plenty the quote-token filter rejected. These counters exist to
+# tell the two apart from a log line alone, no behaviour change.
+
+@pytest.mark.asyncio
+async def test_raw_notifications_seen_counts_every_notification_with_a_result():
+    feed = _make_feed()
+    topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(TOKEN1)]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": BASE_V2_FACTORY, "topics": topics, "data": data}}
+
+    assert feed.raw_notifications_seen == 0
+    feed._handle_notification(payload)
+    feed._handle_notification(payload)
+    assert feed.raw_notifications_seen == 2
+
+
+@pytest.mark.asyncio
+async def test_rejected_not_priceable_count_tracks_the_quote_filter_only():
+    feed = _make_feed()
+    unpriceable_topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+                          _addr_topic(TOKEN0), _addr_topic(TOKEN1)]
+    unpriceable_data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    unpriceable_payload = {"result": {"address": BASE_V2_FACTORY,
+                                      "topics": unpriceable_topics, "data": unpriceable_data}}
+    feed._handle_notification(unpriceable_payload)
+    assert feed.rejected_not_priceable_count == 1
+    assert not feed._candidates
+
+    # Reuses the exact same WETH-quote scenario as
+    # test_v2_pair_created_registers_candidate_with_weth_quote -- a real
+    # accept must never touch this counter.
+    priceable_topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+                        _addr_topic(TOKEN0), _addr_topic(WETH)]
+    priceable_data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    priceable_payload = {"result": {"address": BASE_V2_FACTORY,
+                                    "topics": priceable_topics, "data": priceable_data}}
+    feed._handle_notification(priceable_payload)
+    assert feed.rejected_not_priceable_count == 1, "an accepted candidate must not bump this counter"
+
+
 # --- Aerodrome Classic PoolCreated decode (specs/011, 26/08) ----------------
 # `event PoolCreated(address indexed token0, address indexed token1, bool
 # indexed stable, address pool, uint256)` -- `pool` is the FIRST word of the
@@ -216,6 +261,27 @@ async def test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve():
     assert result[0].reserve_usd == 9000.0
     assert result[0].price_usd == 0.001
     assert "0xpool" not in feed._candidates  # qualified candidate is removed
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_logs_diagnostic_counters_every_cycle(caplog):
+    """27/08 -- one line per cycle so a silent Base (or Robinhood) can be
+    diagnosed from logs alone: raw_notifications_seen distinguishes "the WS
+    never received anything" from "it did, but the quote-token filter ate
+    it all" (rejected_not_priceable), which look identical without this."""
+    import logging
+
+    feed = _make_feed()
+    feed.raw_notifications_seen = 5
+    feed.rejected_not_priceable_count = 3
+
+    with caplog.at_level(logging.INFO):
+        await feed.check_candidates(min_liquidity_usd=4000.0)
+
+    assert any(
+        "raw_notifications_seen=5" in r.message and "rejected_not_priceable=3" in r.message
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
