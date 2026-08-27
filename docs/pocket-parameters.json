@@ -137,32 +137,6 @@
     },
     "status": "present"
   },
-  "dip_recovery_shadow": {
-    "label": "DIP-RECOVERY (operator-proposed entry signal)",
-    "parameters": {
-      "DIP_THRESHOLD_PCT": {
-        "line": 55,
-        "value": -30.0,
-        "why": "Candidate thresholds under shadow evaluation -- verbatim from the operator's own proposal (13/08), not independently tuned. Shadow mode exists precisely so these can be validated (or not) against real forward data before ever considering a live paper pocket."
-      },
-      "LOOKBACK_CANDLES": {
-        "line": 61,
-        "value": 24,
-        "why": null
-      },
-      "MAX_HOLD_HOURS": {
-        "line": 59,
-        "value": 168.0,
-        "why": "Safety net only, never an invented take-profit -- see module docstring."
-      },
-      "STOP_LOSS_PCT": {
-        "line": 56,
-        "value": -5.0,
-        "why": null
-      }
-    },
-    "status": "present"
-  },
   "dip_recovery_v2_shadow": {
     "label": "DIP-RECOVERY v2 (Base/Robinhood, market-cap-bounded, +25% take-profit)",
     "parameters": {

@@ -1,7 +1,7 @@
 """Early legitimacy shadow (15/08) -- owner_renounced/lp_lock_snapshot mocked
 Web3 clients (no real RPC calls), persistence/upsert behavior, and the
 forward-price-tracking helpers against a real (isolated tmp) candle_history
-table. Mirrors test_dip_recovery_shadow.py's isolated-tmp-sqlite pattern."""
+table. Same isolated-tmp-sqlite pattern used across this dome's shadow-pocket tests."""
 from __future__ import annotations
 
 import aiosqlite

@@ -820,11 +820,6 @@ _KNOWN_ENABLED_GATES = {
     "ARIA_CONVICTION_RESEARCH_ENABLED",
     "ARIA_COUNTERFACTUAL_TRACKER_ENABLED",
     "ARIA_DAILY_TRADE_FLOOR_ENABLED",
-    # 13/08 -- dip_recovery_shadow.py: forward-test of the operator-proposed
-    # signal (-30%/24h + -5% stop), pure local read of candle_history, never
-    # a real trigger (never real capital, never merged with the 1M$ test).
-    # OFF by default.
-    "ARIA_DIP_RECOVERY_SHADOW_ENABLED",
     # 26/08 -- dip_recovery_v2_shadow.py: Base/Robinhood market-cap-bounded
     # variant (50k-1M cap, 25k liquidity, -30%/24h entry, +25% take-profit).
     # Own module/table/gate, never shares v1's. Pure shadow, never real

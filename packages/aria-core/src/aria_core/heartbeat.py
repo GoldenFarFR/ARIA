@@ -350,13 +350,6 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
-        id="dip_recovery_shadow_cycle",
-        name="Dip-recovery shadow -- operator's -30%/24h dip-buy, -5% stop signal",
-        description="13/08 operator-proposed entry signal, shadow-tested before ever building a live pocket (a manual backtest found the deduplicated sample too small -- 12 trades -- to conclude, same anti-overfitting doctrine as the v8 wick-gate incident). Pure local-DB read: reuses candles already collected by candle_history_watchlist_cycle (mode=standard, 1H series), zero extra network call, scans the full watchlist every passage. Detects a fresh -30%/24h dip episode per token, opens exactly one shadow position per continuous episode, closes on a fixed -5% stop or a 7-day timeout. Standalone research shadow, never touches the real $1M paper portfolio. Dedicated gate ARIA_DIP_RECOVERY_SHADOW_ENABLED, OFF by default.",
-        interval_minutes=15,
-        enabled=False,
-    ),
-    HeartbeatTask(
         id="dip_recovery_v2_shadow_cycle",
         name="Dip-recovery shadow v2 -- Base/Robinhood, market-cap-bounded, +25% take-profit",
         description="26/08 operator-proposed test, distinct signal from v1: \"un filtre de 50k a 1 milly de market cap, 25k de liquidite, acheter tout ce qui fait -30% sur 24h minimum, revendre avec 25% de benef\". Own independent dexpaprika.get_trending_pools(chain, sort=\"asc\") call per chain (worst 24h performers first, server-side liquidity floor) for BOTH base and robinhood -- v1's shared candle_history watchlist is Base-only, never extended for this test. Market cap resolved via one bounded dexscreener.fetch_token_pairs() call per candidate that already cleared the free filters. Fixed +25% take-profit (no stop-loss -- not requested this time), 7-day timeout safety net. Never touches the real $1M paper portfolio. Dedicated gate ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED.",
@@ -890,14 +883,6 @@ def _sync_x_curiosity_enabled() -> None:
                 task.enabled = os.environ.get(
                     "ARIA_GITHUB_SIGNAL_CASCADE_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
-            if task.id == "dip_recovery_shadow_cycle":
-                # 13/08 -- standalone research shadow, independent of the
-                # $1M momentum test (no paper_trading double-gate needed --
-                # it never touches paper_trader positions). Single dedicated
-                # flag only, same doctrine as wallet_copy_shadow_cycle.
-                task.enabled = os.environ.get(
-                    "ARIA_DIP_RECOVERY_SHADOW_ENABLED", "",
-                ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "dip_recovery_v2_shadow_cycle":
                 # 26/08 -- same standalone-research doctrine as v1, own
                 # dedicated flag (never shares v1's gate -- a distinct
@@ -910,7 +895,7 @@ def _sync_x_curiosity_enabled() -> None:
                 # 15/08 -- standalone research shadow, independent of the
                 # $1M momentum test (no paper_trading double-gate needed --
                 # it never touches paper_trader positions). Single dedicated
-                # flag only, same doctrine as dip_recovery_shadow_cycle.
+                # flag only, same doctrine as wallet_copy_shadow_cycle.
                 task.enabled = os.environ.get(
                     "ARIA_EARLY_LEGITIMACY_SHADOW_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
@@ -1833,14 +1818,6 @@ class AriaHeartbeat:
                 result.get("fetched"), result.get("attempted"),
             )
 
-        elif task_id == "dip_recovery_shadow_cycle":
-            from aria_core.momentum_entry import run_dip_recovery_shadow_cycle
-
-            result = await run_dip_recovery_shadow_cycle()
-            logger.info(
-                "dip_recovery_shadow_cycle: %s/%s watchlist tokens evaluated",
-                result.get("evaluated"), result.get("watchlist_size"),
-            )
         elif task_id == "dip_recovery_v2_shadow_cycle":
             from aria_core import dip_recovery_v2_shadow
 

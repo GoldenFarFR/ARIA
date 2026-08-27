@@ -42,8 +42,8 @@ module relies on the existing reactive dome (best-effort try/except, never
 raises, retried next cycle) plus a small per-passage batch size, rather than
 inventing a false-precision number.
 
-Same shadow design as ``candle_staleness_shadow.py``/``dip_recovery_shadow.py``
-(deliberately mirrored): dedicated table, one row per (contract, chain),
+Same shadow design as ``candle_staleness_shadow.py`` (deliberately mirrored):
+dedicated table, one row per (contract, chain),
 best-effort writes that NEVER raise into a real fetch path, per-DB-path
 ensure cache. Pure observation -- no gate anywhere reads this table yet.
 """

@@ -39,7 +39,6 @@ POCKET_MODULES = {
     "robinhood_pump_v2_shadow": "PUMP v2 (Robinhood Chain, aggressive scale-out)",
     "base_momentum_shadow": "MOMENTUM (Base, shadow-only -- real pipeline paused since 17/08)",
     "solana_variant_shadow": "SOLANA VARIANTS (3 parallel entry thresholds)",
-    "dip_recovery_shadow": "DIP-RECOVERY (operator-proposed entry signal)",
     "dip_recovery_v2_shadow": "DIP-RECOVERY v2 (Base/Robinhood, market-cap-bounded, +25% take-profit)",
     "narrative_signal_shadow": "NARRATIVE (trade the news, not the chart)",
     "wallet_copy_shadow": "WALLET-COPY (8 verified Base wallets)",
