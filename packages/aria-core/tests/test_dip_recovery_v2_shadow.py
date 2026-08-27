@@ -889,6 +889,52 @@ async def test_pending_notifications_reports_a_new_close_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_notification_aggregate_is_scoped_to_the_notified_row_own_chain(monkeypatch):
+    """27/08, real defect fixed: every aggregate query in _dip_v2_aggregate()
+    used to scan base AND robinhood together, so a robinhood trade's own
+    notification displayed a cumulative winrate/PnL blended with base's --
+    misleading given the two markets behave very differently in practice
+    (confirmed live the same day: base's day-zero feed is far more active
+    than robinhood's). This seeds one closed BASE position with a distinctive
+    PnL, then opens a fresh ROBINHOOD position -- its notification's "Cumul"
+    must reflect robinhood alone (0 closed, so no Cumul line at all yet),
+    never leak base's +999.0% into it."""
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        await db.execute(
+            """
+            INSERT INTO dip_recovery_v2_shadow (
+                contract, chain, pool_address, symbol, status, entry_price,
+                entry_var_24h_pct, entry_market_cap_usd, entry_liquidity_usd,
+                entry_pool_age_days, opened_at, closed_at, exit_price,
+                close_reason, pnl_pct
+            ) VALUES (?, 'base', '0xBASEPOOL', 'BASETOK', 'closed', 1.0,
+                      -31.0, 200000.0, 30000.0, 30.0, ?, ?, 9.99,
+                      'take_profit_25pct', 999.0)
+            """,
+            ("0x" + "e" * 40, datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    await shadow.pending_notifications()  # anchors
+    await shadow.discover_and_record("robinhood")
+    texts = await shadow.pending_notifications()
+
+    assert len(texts) == 1
+    assert "OUVERTURE" in texts[0]
+    assert "999.0" not in texts[0], "base's PnL must never leak into a robinhood notification"
+    assert "Cumul" not in texts[0], "robinhood has zero closed rows yet -- no cumulative line to show"
+
+
+@pytest.mark.asyncio
 async def test_pending_notifications_never_raises_on_db_failure(monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
     shadow._ensured_db_paths.clear()

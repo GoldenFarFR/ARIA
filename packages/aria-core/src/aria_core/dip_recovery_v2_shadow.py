@@ -586,31 +586,45 @@ _notified_closed_ids: set[int] = set()
 _NOTIFIED_CLOSED_MAX = 500
 
 
-async def _dip_v2_aggregate() -> str:
+async def _dip_v2_aggregate(chain: str) -> str:
     """Recent-30 then cumulative then 1h debit -- same reading order as
     shadow_notify.aggregate(), adapted to this pocket's own schema (no
     realistic/nominal distinction to make: pnl_pct here is ALREADY the
-    fee-adjusted, realistic figure on every row, never a fictional one)."""
+    fee-adjusted, realistic figure on every row, never a fictional one).
+
+    27/08, real defect fixed: every query used to scan the WHOLE table
+    (base + robinhood mixed), so a robinhood trade's own notification
+    displayed a cumulative winrate/PnL blended with base's -- two markets
+    with very different real behavior (confirmed the same day: base's
+    day-zero feed is far more active than robinhood's). Scoped to the
+    notified row's own chain instead, matching the "(chain)" already in
+    the notification's title line."""
     try:
         async with aiosqlite.connect(_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT COUNT(*) n, AVG(pnl_pct) pnl, SUM(pnl_pct > 0) wins "
-                "FROM (SELECT * FROM dip_recovery_v2_shadow WHERE status = 'closed' "
-                "ORDER BY id DESC LIMIT 30)"
+                "FROM (SELECT * FROM dip_recovery_v2_shadow WHERE status = 'closed' AND chain = ? "
+                "ORDER BY id DESC LIMIT 30)",
+                (chain,),
             )
             rec = dict(await cur.fetchone())
             cur = await db.execute(
                 "SELECT COUNT(*) n, AVG(pnl_pct) pnl, SUM(pnl_pct > 0) wins "
-                "FROM dip_recovery_v2_shadow WHERE status = 'closed'"
+                "FROM dip_recovery_v2_shadow WHERE status = 'closed' AND chain = ?",
+                (chain,),
             )
             cum = dict(await cur.fetchone())
-            cur = await db.execute("SELECT COUNT(*) n FROM dip_recovery_v2_shadow WHERE status = 'open'")
+            cur = await db.execute(
+                "SELECT COUNT(*) n FROM dip_recovery_v2_shadow WHERE status = 'open' AND chain = ?",
+                (chain,),
+            )
             ouvertes = (await cur.fetchone())["n"]
             depuis = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
             cur = await db.execute(
-                "SELECT SUM(opened_at >= ?) ouv, SUM(closed_at >= ?) clo FROM dip_recovery_v2_shadow",
-                (depuis, depuis),
+                "SELECT SUM(opened_at >= ?) ouv, SUM(closed_at >= ?) clo "
+                "FROM dip_recovery_v2_shadow WHERE chain = ?",
+                (depuis, depuis, chain),
             )
             debit = dict(await cur.fetchone())
     except Exception:  # noqa: BLE001 -- the aggregate must never kill the notification
@@ -662,7 +676,12 @@ async def pending_notifications() -> list[str]:
             )
             closed_rows = [dict(r) for r in await cur.fetchall()]
 
-        agg = await _dip_v2_aggregate()
+        agg_by_chain: dict[str, str] = {}
+
+        async def _agg_for(chain: str) -> str:
+            if chain not in agg_by_chain:
+                agg_by_chain[chain] = await _dip_v2_aggregate(chain)
+            return agg_by_chain[chain]
 
         for row in opened_rows:
             _last_notified_open_id = max(_last_notified_open_id, row["id"])
@@ -678,7 +697,7 @@ async def pending_notifications() -> list[str]:
                 f"Entree: ${(row.get('entry_price') or 0):.10g} a {_local_hms(row.get('opened_at'))}\n"
                 f"Sortie: take-profit fixe +{TAKE_PROFIT_PCT:.0f}% "
                 f"| timeout {MAX_HOLD_HOURS / 24.0:.0f}j (pas de stop-loss)\n"
-                + _dexscreener_link(row) + agg
+                + _dexscreener_link(row) + await _agg_for(row["chain"])
             )
 
         for row in closed_rows:
@@ -696,7 +715,7 @@ async def pending_notifications() -> list[str]:
                 f"CLOTURE -- {row.get('close_reason') or 'n/a'}\n"
                 f"PnL: {pnl_txt}\n"
                 f"Duree: {duree}\n"
-                + _dexscreener_link(row) + agg
+                + _dexscreener_link(row) + await _agg_for(row["chain"])
             )
     except Exception as exc:  # noqa: BLE001 -- notifications must never break the caller
         logger.info("dip_recovery_v2_shadow: pending_notifications failed (%s)", exc)
