@@ -22,10 +22,17 @@ and requires an active X API subscription the operator just cancelled) as
 the bonding "detective mode" (``project_name``-based search, tried when
 Virtuals declares no official link at all) -- both keep Tavily as the
 fallback when this is unconfigured/fails. Response shape (``createdAt`` in
-Twitter's own RFC-2822-like format, e.g. "Tue Dec 10 07:00:30 +0000 2024" --
-DIFFERENT from ``fetch_user_profile``/``fetch_last_tweets``'s ISO8601
-``createdAt``, parsed with its own helper) verified live via WebFetch on
+Twitter's own RFC-2822-like format, e.g. "Tue Dec 10 07:00:30 +0000 2024",
+parsed with its own helper) verified live via WebFetch on
 docs.twitterapi.io/api-reference/endpoint/tweet_advanced_search.
+
+**27/08, real incident**: this docstring used to claim ``fetch_last_tweets``
+returned ISO8601 "verified live" (07/23) -- re-verified live and found
+FALSE: it returns this SAME legacy RFC-2822-like format, not ISO8601. Only
+``fetch_user_profile`` (``/user/info``) genuinely returns ISO8601. See
+``_parse_created_at``'s own docstring for the real, currently-live incident
+this caused (``x_substance.py``'s regularity criterion silently scored
+0/100 for every account since this shipped).
 
 ``fetch_last_tweets`` (07/23, same session) adds activity/engagement --
 explicit operator request after a comparison table confirmed that
@@ -132,18 +139,21 @@ def is_twitterapi_io_configured() -> bool:
     return bool(os.environ.get("TWITTERAPI_IO_KEY", "").strip())
 
 
+_LEGACY_TWITTER_DATE_FORMAT = "%a %b %d %H:%M:%S %z %Y"
+
+
 def _parse_twitter_format_created_at(raw: object) -> str | None:
     """``advanced_search``'s own ``createdAt`` shape (e.g. "Tue Dec 10
-    07:00:30 +0000 2024") -- distinct from the ISO8601 one used by
-    ``fetch_user_profile``/``fetch_last_tweets``, see module docstring.
-    Returns the ISO8601 string form (never the raw datetime object) so
-    callers get the exact same shape as ``gateway.x_twitter``'s own
-    ``created_at`` field -- ``None`` on anything unparsable, never a
-    fabricated timestamp."""
+    07:00:30 +0000 2024") -- 27/08: ``fetch_last_tweets`` turned out to use
+    this SAME legacy shape too (see ``_parse_created_at``'s own docstring),
+    not the ISO8601 this module's docstring used to claim. Returns the
+    ISO8601 string form (never the raw datetime object) so callers get the
+    exact same shape as ``gateway.x_twitter``'s own ``created_at`` field --
+    ``None`` on anything unparsable, never a fabricated timestamp."""
     if not raw or not isinstance(raw, str):
         return None
     try:
-        return datetime.strptime(raw, "%a %b %d %H:%M:%S %z %Y").isoformat()
+        return datetime.strptime(raw, _LEGACY_TWITTER_DATE_FORMAT).isoformat()
     except ValueError:
         return None
 
@@ -159,10 +169,27 @@ async def _throttle() -> None:
 
 
 def _parse_created_at(raw: object) -> datetime | None:
+    """``/user/info`` genuinely returns ISO8601 (verified live 27/08). But
+    ``/user/last_tweets`` was ALSO assumed to (this module's own docstring
+    claimed it was "verified live" on 07/23) -- re-verified live 27/08 and
+    found FALSE: it returns the same legacy Twitter v1.1 format as
+    ``search_tweets`` ("Tue Aug 25 18:44:11 +0000 2026"), which
+    ``fromisoformat`` cannot parse. Every call silently returned ``None``,
+    making ``fetch_last_tweets`` return an always-empty list regardless of
+    the account -- ``x_substance.py``'s regularity criterion (25% weight)
+    scored 0/100 for every account evaluated since this shipped, a silent
+    bias never caught because the test suite's own mocks used fabricated ISO
+    dates rather than the real shape. ISO tried first (still the real shape
+    for ``/user/info``), legacy format as fallback -- never the reverse, to
+    keep the fast/common path first."""
     if not raw or not isinstance(raw, str):
         return None
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(raw, _LEGACY_TWITTER_DATE_FORMAT).astimezone(timezone.utc)
     except ValueError:
         return None
 

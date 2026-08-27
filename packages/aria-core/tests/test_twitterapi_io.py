@@ -193,7 +193,10 @@ async def test_last_tweets_without_key_returns_none(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_last_tweets_success_real_shape(_fresh):
+async def test_last_tweets_success_iso_shape(_fresh):
+    """ISO8601 is still accepted (e.g. if the provider ever returns it, or
+    for /user/info's own genuinely-ISO createdAt) -- NOT the real shape
+    /user/last_tweets actually returns in production, see the test below."""
     _FakeAsyncClient._response = _FakeResponse(
         200,
         {
@@ -216,6 +219,34 @@ async def test_last_tweets_success_real_shape(_fresh):
     assert tweets[1].like_count == 49
     assert tweets[1].created_at == datetime(2026, 7, 21, 16, 9, 39, tzinfo=timezone.utc)
     assert _FakeAsyncClient._captured_headers == {"X-API-Key": "test-key-sentinel"}
+
+
+@pytest.mark.asyncio
+async def test_last_tweets_success_real_legacy_shape(_fresh):
+    """27/08, real incident -- this IS the actual shape /user/last_tweets
+    returns in production (verified live), not ISO8601 as this module's own
+    docstring wrongly claimed since 07/23. Before the fix, _parse_created_at
+    silently returned None for every tweet, making fetch_last_tweets return
+    an always-empty list regardless of the account -- x_substance.py's
+    regularity criterion (25% weight) scored 0/100 for every account
+    evaluated by signal_cascade_x.py since this shipped."""
+    _FakeAsyncClient._response = _FakeResponse(
+        200,
+        {
+            "status": "success",
+            "tweets": [
+                {
+                    "createdAt": "Tue Aug 25 18:44:11 +0000 2026",
+                    "likeCount": 0, "replyCount": 0, "retweetCount": 0, "quoteCount": 0,
+                    "text": "real shape observed live 27/08",
+                },
+            ],
+        },
+    )
+    tweets = await tw.fetch_last_tweets("aispace_bot", max_results=20)
+    assert tweets is not None
+    assert len(tweets) == 1
+    assert tweets[0].created_at == datetime(2026, 8, 25, 18, 44, 11, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
