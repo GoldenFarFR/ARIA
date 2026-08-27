@@ -147,6 +147,42 @@ async def test_rejected_not_priceable_count_tracks_the_quote_filter_only():
     assert feed.rejected_not_priceable_count == 1, "an accepted candidate must not bump this counter"
 
 
+# --- 27/08, real gap found live: Robinhood's own quote tokens were never in
+# the (Base-only) filter, so every single Robinhood notification was rejected
+# as unpriceable -- 1095/1095 in a real 24h prod sample, not a partial miss.
+# Addresses verified against robinhoodchain.blockscout.com's live token
+# listing (WETH: 505,469 holders; USDG: 104,054 holders -- both dominant by
+# a wide margin over the next candidate).
+
+ROBINHOOD_V2_FACTORY = "0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f"
+ROBINHOOD_WETH = "0bd7d308f8e1639fab988df18a8011f41eacad73"
+ROBINHOOD_USDG = "5fc5360d0400a0fd4f2af552add042d716f1d168"
+
+
+@pytest.mark.asyncio
+async def test_robinhood_pair_created_registers_candidate_with_weth_quote():
+    feed = _make_feed(chain="robinhood")
+    topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(ROBINHOOD_WETH)]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": ROBINHOOD_V2_FACTORY, "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert f"0x{PAIR}" in feed._candidates
+    assert feed.rejected_not_priceable_count == 0
+
+
+@pytest.mark.asyncio
+async def test_robinhood_pair_created_registers_candidate_with_usdg_quote():
+    feed = _make_feed(chain="robinhood")
+    topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(ROBINHOOD_USDG)]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": ROBINHOOD_V2_FACTORY, "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert f"0x{PAIR}" in feed._candidates
+    assert feed.rejected_not_priceable_count == 0
+
+
 # --- Aerodrome Classic PoolCreated decode (specs/011, 26/08) ----------------
 # `event PoolCreated(address indexed token0, address indexed token1, bool
 # indexed stable, address pool, uint256)` -- `pool` is the FIRST word of the

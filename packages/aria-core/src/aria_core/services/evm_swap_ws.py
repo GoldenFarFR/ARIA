@@ -113,12 +113,28 @@ _BREAKER_CHECK_INTERVAL_SECONDS = 30.0
 # moments later doesn't flap the keepalive open/closed for no real saving.
 _IDLE_NEWHEADS_CLOSE_SECONDS = 120.0
 
+# 27/08, real gap found live: both sets were Base-only, silently applied to
+# Robinhood notifications too (this class and onchain_pool_discovery.py both
+# reuse the same global constants for every chain, `self.chain` never
+# consulted here) -- confirmed via a 24h prod sample that this made
+# onchain_pool_discovery reject 100% of Robinhood's own accountNotification
+# traffic (1095/1095 in one clean window), never a partial miss like Base's.
+# Robinhood addresses verified live against robinhoodchain.blockscout.com's
+# own token listing (never guessed): WETH is the dominant pairing token by a
+# wide margin (505,469 holders, decimals=18, exchange_rate ~2498$ matching
+# real ETH price), USDG (Global Dollar) the dominant stablecoin (104,054
+# holders, decimals=6) -- both orders of magnitude ahead of the next
+# candidates (USDE at 4,804 holders). Combining both chains into these same
+# two global sets (rather than a per-chain lookup) is intentional and safe:
+# addresses are globally unique strings, no collision risk between chains.
 _KNOWN_USD_STABLES = frozenset({
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base, bridged)
+    "0x5fc5360d0400a0fd4f2af552add042d716f1d168",  # USDG / Global Dollar (Robinhood Chain)
 })
 _WETH_ADDRESSES = frozenset({
     "0x4200000000000000000000000000000000000006",  # WETH (Base, canonical)
+    "0x0bd7d308f8e1639fab988df18a8011f41eacad73",  # WETH (Robinhood Chain, canonical)
 })
 
 # Event topic0 hashes, computed live (never hand-typed/guessed) so a typo
