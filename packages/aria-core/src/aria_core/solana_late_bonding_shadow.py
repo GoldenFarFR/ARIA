@@ -1429,7 +1429,7 @@ async def consider_candidate(
             # resumed (24/08 shadow_pause fix) -- every candidate started
             # failing with 429. Routed through the shared budget so the two
             # callers share the one real limit instead of adding past it.
-            await solana_rpc_budget.acquire(Priority.NORMAL)
+            await solana_rpc_budget.acquire(Priority.NORMAL, caller="solana_late_bonding_shadow")
             resolved = await resolver(client, [(pool_address, mint)], rpc_http_url=RPC_HTTP_DEFAULT)
         finally:
             if owns_client:

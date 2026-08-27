@@ -129,6 +129,16 @@ class SolanaRpcBudget:
         self._waiting = {p: 0 for p in Priority}
         self.granted = {p: 0 for p in Priority}
         self.skipped = {p: 0 for p in Priority}
+        # 27/08, backlog #364 step 1 (observe-only, no behaviour change) --
+        # this singleton is a SEPARATE regulator from solana_gateway's own
+        # per-endpoint buckets: a caller that acquires here still makes its
+        # own HTTP call outside the gateway, so the two pools can add past
+        # the provider's real ceiling with neither one seeing the other.
+        # `caller` lets each direct user identify itself so a week of real
+        # `calls_by_caller` data can size that real risk before any
+        # structural fix (delegating this budget into the gateway) is
+        # attempted -- never guessed.
+        self.calls_by_caller: dict[str, int] = {}
 
     # -- internals ---------------------------------------------------------
 
@@ -150,7 +160,9 @@ class SolanaRpcBudget:
 
     # -- public API --------------------------------------------------------
 
-    async def acquire(self, priority: Priority = Priority.NORMAL) -> bool:
+    async def acquire(
+        self, priority: Priority = Priority.NORMAL, *, caller: str = "unknown"
+    ) -> bool:
         """Wait for permission to make ONE call.
 
         Returns True when permission is granted. Returns False only for LOW
@@ -159,6 +171,10 @@ class SolanaRpcBudget:
 
         Raises `BudgetTimeout` for HIGH/NORMAL held up past `MAX_WAIT_SECONDS`:
         silently hanging a sell would be worse than surfacing the problem.
+
+        `caller` is diagnostics-only (backlog #364 step 1) -- identifies which
+        module bypassed the gateway to come here directly, never affects
+        whether permission is granted.
         """
         if self._lock is None:
             self._lock = asyncio.Lock()
@@ -176,6 +192,7 @@ class SolanaRpcBudget:
                     if self._tokens >= 1.0 and not self._higher_pending(priority):
                         self._tokens -= 1.0
                         self.granted[priority] += 1
+                        self.calls_by_caller[caller] = self.calls_by_caller.get(caller, 0) + 1
                         return True
                     missing = max(0.0, 1.0 - self._tokens)
                     wait = missing / self.rate if missing else 0.005
@@ -203,6 +220,7 @@ class SolanaRpcBudget:
             "granted": {p.name: self.granted[p] for p in Priority},
             "skipped": {p.name: self.skipped[p] for p in Priority},
             "waiting": {p.name: self._waiting[p] for p in Priority},
+            "calls_by_caller": dict(self.calls_by_caller),
         }
 
 
@@ -211,6 +229,6 @@ class SolanaRpcBudget:
 budget = SolanaRpcBudget()
 
 
-async def acquire(priority: Priority = Priority.NORMAL) -> bool:
+async def acquire(priority: Priority = Priority.NORMAL, *, caller: str = "unknown") -> bool:
     """Convenience wrapper over the shared instance."""
-    return await budget.acquire(priority)
+    return await budget.acquire(priority, caller=caller)

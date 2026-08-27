@@ -271,6 +271,48 @@ class TestPressureFeedback:
         assert "pressure" in stats and "level" in stats
 
 
+class TestSharedBudgetCollisionDiagnostics:
+    """27/08, backlog #364 step 1 -- observe-only. This gateway's own
+    per-endpoint buckets and solana_rpc_budget's shared singleton are two
+    SEPARATE regulators for the same real providers; a caller that acquires
+    from the singleton directly still makes its own HTTP call outside this
+    gateway. These tests only cover visibility, never behaviour."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_shared_budget(self):
+        from aria_core.services import solana_rpc_budget as shared
+
+        shared.budget.calls_by_caller = {}
+        yield
+        shared.budget.calls_by_caller = {}
+
+    @pytest.mark.asyncio
+    async def test_stats_expose_direct_caller_traffic_alongside_gateway_stats(self):
+        from aria_core.services import solana_rpc_budget as shared
+
+        await shared.acquire(Priority.NORMAL, caller="pumpfun_curve_tracker")
+
+        gw = SolanaGateway()
+        gw.configure(urls=[(PAID_A, True)])
+        assert gw.stats()["shared_budget_direct_calls"] == {"pumpfun_curve_tracker": 1}
+
+    def test_a_pressure_transition_logs_the_direct_caller_totals(self, caplog):
+        import logging
+
+        from aria_core.services import solana_rpc_budget as shared
+
+        shared.budget.calls_by_caller = {"pumpfun_curve_tracker": 3}
+
+        gw = SolanaGateway(rate_per_second=10.0)
+        gw.configure(urls=[(PAID_A, True)])
+        gw._endpoints[0].budget._tokens = 0.0  # forces calm -> critical
+
+        with caplog.at_level(logging.WARNING):
+            assert gw.level() == "critical"
+
+        assert any("pumpfun_curve_tracker" in r.message for r in caplog.records)
+
+
 class TestSelfRegulation:
     """Budget-aware, not just rate-aware. An endpoint can be perfectly fluid
     second to second and still burn a month's quota in three days -- which is

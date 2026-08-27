@@ -438,7 +438,7 @@ class PumpFunCurveTracker:
                     # a hard stop -- this budget is Chainstack-specific.
                     if not await chainstack_ru_budget.can_spend("solana"):
                         continue
-                    await solana_rpc_budget.acquire(Priority.NORMAL)
+                    await solana_rpc_budget.acquire(Priority.NORMAL, caller="pumpfun_curve_tracker")
                 ep.last_call_at = time.monotonic()
                 try:
                     # 26/08 -- record_usage_fast("solana", 1) now lives INSIDE

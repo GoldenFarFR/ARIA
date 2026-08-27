@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from aria_core.services import solana_rpc_budget as shared_rpc_budget
 from aria_core.services.solana_rpc_budget import Priority, SolanaRpcBudget
 
 logger = logging.getLogger(__name__)
@@ -394,9 +395,21 @@ class SolanaGateway:
             level = "calm"
         if level != self._level:
             healthy = sum(1 for e in self._endpoints if e.healthy())
+            # 27/08, backlog #364 step 1 (observe-only) -- this gateway's own
+            # per-endpoint buckets and solana_rpc_budget's shared singleton
+            # are two SEPARATE regulators for the same real providers (see
+            # that module's own comment on `calls_by_caller`). Logging the
+            # direct-caller totals at every pressure transition is a cheap,
+            # zero-behaviour-change way to see whether direct traffic was
+            # already adding to a real ceiling the moment this gateway alone
+            # got tight -- a week of these lines is the "collision log" the
+            # backlog item asked for, before any structural fix is attempted.
+            direct_calls = shared_rpc_budget.budget.calls_by_caller
             logger.warning(
-                "solana_gateway: pressure %s -> %s (%.0f%%, %d/%d endpoints healthy)",
+                "solana_gateway: pressure %s -> %s (%.0f%%, %d/%d endpoints healthy, "
+                "direct shared-budget calls so far: %s)",
                 self._level, level, value * 100, healthy, len(self._endpoints),
+                direct_calls or "none",
             )
             self._level = level
         return level
@@ -528,6 +541,8 @@ class SolanaGateway:
             "total_rate_per_second": round(
                 self.rate * sum(1 for e in self._endpoints if e.healthy()), 1
             ),
+            # backlog #364 step 1 -- see the comment in level() above.
+            "shared_budget_direct_calls": shared_rpc_budget.budget.calls_by_caller,
         }
 
 

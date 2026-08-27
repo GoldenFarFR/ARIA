@@ -163,3 +163,48 @@ class TestCalibration:
         stats = budget.stats()
         assert stats["granted"]["NORMAL"] == 1
         assert stats["skipped"]["LOW"] == 1
+
+
+class TestCallerDiagnostics:
+    """27/08, backlog #364 step 1 -- observe-only instrumentation so a real
+    collision between this singleton and solana_gateway's own per-endpoint
+    buckets can be sized from a week of real data, before any structural fix.
+    Must never affect whether permission is granted."""
+
+    @pytest.mark.asyncio
+    async def test_a_granted_call_is_counted_under_its_caller(self):
+        budget, clock = _budget(rate=10.0, burst=10.0)
+        await budget.acquire(Priority.NORMAL, caller="pumpfun_curve_tracker")
+        await budget.acquire(Priority.NORMAL, caller="pumpfun_curve_tracker")
+        await budget.acquire(Priority.NORMAL, caller="solana_late_bonding_shadow")
+
+        assert budget.calls_by_caller == {
+            "pumpfun_curve_tracker": 2,
+            "solana_late_bonding_shadow": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_unidentified_caller_is_still_counted(self):
+        budget, clock = _budget(rate=10.0, burst=10.0)
+        await budget.acquire(Priority.NORMAL)  # no caller kwarg passed
+
+        assert budget.calls_by_caller == {"unknown": 1}
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_low_priority_call_is_never_counted(self):
+        """Diagnostics must reflect real provider traffic -- a LOW call that
+        gave up never reached the network, so counting it would overstate the
+        real collision risk this instrumentation exists to measure."""
+        budget, clock = _budget(rate=1.0, burst=1.0)
+        await budget.acquire(Priority.NORMAL, caller="a")
+        granted = await budget.acquire(Priority.LOW, caller="a")
+
+        assert granted is False
+        assert budget.calls_by_caller == {"a": 1}
+
+    @pytest.mark.asyncio
+    async def test_stats_exposes_calls_by_caller(self):
+        budget, clock = _budget(rate=10.0, burst=10.0)
+        await budget.acquire(Priority.NORMAL, caller="pumpfun_curve_tracker")
+
+        assert budget.stats()["calls_by_caller"] == {"pumpfun_curve_tracker": 1}
