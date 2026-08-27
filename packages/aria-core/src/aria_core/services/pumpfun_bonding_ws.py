@@ -75,7 +75,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from aria_core.services.coingecko import coingecko_client
+from aria_core.services import sol_usd_rate
 from aria_core.services.pumpswap_ws import (
     RPC_HTTP_DEFAULT,
     RPC_WS_HIGH_VOLUME_DEFAULT,
@@ -805,15 +805,23 @@ class PumpFunBondingWebSocketFeed:
         return confirmed
 
     async def _maybe_refresh_calibration(self) -> None:
+        """27/08, real incident fixed: this used to call CoinGecko alone, with
+        no fallback -- once CoinGecko's monthly credit cap was reached,
+        `self._sol_usd` stayed `None` forever, silently pinning the regime
+        sensor's own peak-tracking to `error="no_sol_usd_calibration"` on the
+        overwhelming majority of candidates (confirmed live via the diagnostic
+        instrumentation added the same day). `sol_usd_rate.sol_usd_cached()`
+        tries Jupiter first (a real quote, no aggregator quota) before ever
+        falling back to CoinGecko -- same fix already proven in
+        `solana_agent_wallet.py`'s own real-money pilot, reused rather than
+        duplicated."""
         now = time.time()
         if self._sol_usd is not None and (now - self._last_calibration_at) < SOL_USD_CALIBRATION_REFRESH_SECONDS:
             return
         try:
-            result = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
-            if result.available:
-                price = result.prices.get("solana", {}).get("usd")
-                if price is not None:
-                    self._sol_usd = price
+            price = await sol_usd_rate.sol_usd_cached()
+            if price is not None:
+                self._sol_usd = price
         except Exception as exc:  # noqa: BLE001 -- calibration is best-effort, never fatal
             logger.info("pumpfun_bonding_ws: SOL/USD calibration failed (%s)", exc)
         finally:

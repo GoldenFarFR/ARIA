@@ -33,6 +33,7 @@ from aria_core import solana_trade_pilot
 from aria_core.onchain import jupiter_swap_signer, jupiter_swap_simulation
 from aria_core.services import jupiter
 from aria_core.services.coingecko import coingecko_client
+from aria_core.services import sol_usd_rate
 from aria_core.services import solana_gateway
 from aria_core.services.solana_rpc_budget import Priority
 
@@ -160,54 +161,16 @@ _REAL_MONEY_LOG_PREFIX = jupiter_swap_signer._REAL_MONEY_LOG_PREFIX
 BUY_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
 SELL_COMMITMENT = jupiter_swap_signer.COMMITMENT_SENT
 
-_SOL_USD_TTL_SECONDS = 60.0
-_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-_USDC_DECIMALS = 6
-_sol_usd_cache: tuple[float, float] | None = None
 _decimals_cache: dict[str, int] = {}
 
 
-async def sol_usd_cached(*, client: httpx.AsyncClient | None = None) -> float | None:
-    """SOL price in dollars, at most `_SOL_USD_TTL_SECONDS` old.
-
-    Jupiter first, CoinGecko only as a fallback. Returns None when neither
-    knows -- the pilot treats that as a refusal, never as a guess.
-    """
-    import time
-
-    global _sol_usd_cache
-    now = time.monotonic()
-    if _sol_usd_cache and now - _sol_usd_cache[0] < _SOL_USD_TTL_SECONDS:
-        return _sol_usd_cache[1]
-
-    value: float | None = None
-    try:
-        # One SOL, priced in USDC. No aggregator, no extra dependency, and the
-        # rate is the one our own trades will actually get.
-        quote = await jupiter.fetch_quote(
-            jupiter.SOL_MINT, _USDC_MINT, 1_000_000_000, slippage_bps=100, client=client,
-        )
-        out = int(quote.get("outAmount") or 0)
-        if out:
-            value = out / (10 ** _USDC_DECIMALS)
-    except Exception as exc:  # noqa: BLE001 -- fall through to the aggregator
-        logger.info("solana_agent_wallet: SOL/USD via Jupiter failed (%s)", exc)
-
-    if value is None:
-        try:
-            price = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
-            raw = price.prices.get("solana", {}).get("usd") if price.available else None
-            value = float(raw) if raw else None
-        except Exception as exc:  # noqa: BLE001
-            logger.info("solana_agent_wallet: SOL/USD fallback failed (%s)", exc)
-
-    if value:
-        _sol_usd_cache = (now, float(value))
-        return float(value)
-    # A failed refresh keeps the last known price rather than blocking: a
-    # slightly stale rate is a better basis for sizing than no trade at all,
-    # and the dollar cap is enforced against the real balance regardless.
-    return _sol_usd_cache[1] if _sol_usd_cache else None
+# 27/08 -- extracted to services/sol_usd_rate.py so pumpfun_bonding_ws.py's
+# own regime sensor (a shadow/observation module) can reuse the same
+# Jupiter-first/CoinGecko-fallback logic without importing this module's
+# real-wallet machinery (jupiter_swap_signer, solana_trade_pilot). Re-exported
+# here under the same name so every existing caller/test keeps working
+# unchanged.
+sol_usd_cached = sol_usd_rate.sol_usd_cached
 
 
 async def _swap(*, mint: str, amount_in_usd: float, slippage_bps: int) -> dict:

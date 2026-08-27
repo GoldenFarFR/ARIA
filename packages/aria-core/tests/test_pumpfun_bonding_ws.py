@@ -179,3 +179,58 @@ def test_the_account_subscription_listens_at_the_earliest_commitment():
     from aria_core.services import pumpfun_bonding_ws as mod
 
     assert mod.ACCOUNT_COMMITMENT == "processed"
+
+
+# --- 27/08, SOL/USD calibration -- real incident: this used to call
+# CoinGecko alone, no fallback. Once CoinGecko's monthly credit cap was
+# reached, self._sol_usd stayed None forever, silently pinning the regime
+# sensor's own peak-tracking (get_snapshot() -> error="no_sol_usd_calibration"
+# on the overwhelming majority of candidates). Now delegates to
+# sol_usd_rate.sol_usd_cached() (Jupiter first, CoinGecko only as a
+# fallback) -- never tested here before this fix, a real coverage gap.
+
+@pytest.mark.asyncio
+async def test_calibration_uses_the_shared_sol_usd_rate_helper(monkeypatch):
+    from aria_core.services import pumpfun_bonding_ws as mod
+
+    async def _fake_sol_usd_cached(*, client=None):
+        return 142.5
+
+    monkeypatch.setattr(mod.sol_usd_rate, "sol_usd_cached", _fake_sol_usd_cached)
+
+    feed = PumpFunBondingWebSocketFeed()
+    assert feed._sol_usd is None
+    await feed._maybe_refresh_calibration()
+    assert feed._sol_usd == 142.5
+
+
+@pytest.mark.asyncio
+async def test_calibration_failure_never_raises_and_leaves_sol_usd_unset(monkeypatch):
+    from aria_core.services import pumpfun_bonding_ws as mod
+
+    async def _fake_sol_usd_cached(*, client=None):
+        return None
+
+    monkeypatch.setattr(mod.sol_usd_rate, "sol_usd_cached", _fake_sol_usd_cached)
+
+    feed = PumpFunBondingWebSocketFeed()
+    await feed._maybe_refresh_calibration()  # must not raise
+    assert feed._sol_usd is None
+
+
+@pytest.mark.asyncio
+async def test_calibration_is_not_refreshed_before_the_ttl_elapses(monkeypatch):
+    from aria_core.services import pumpfun_bonding_ws as mod
+
+    calls = []
+
+    async def _fake_sol_usd_cached(*, client=None):
+        calls.append(1)
+        return 142.5
+
+    monkeypatch.setattr(mod.sol_usd_rate, "sol_usd_cached", _fake_sol_usd_cached)
+
+    feed = PumpFunBondingWebSocketFeed()
+    await feed._maybe_refresh_calibration()
+    await feed._maybe_refresh_calibration()
+    assert len(calls) == 1, "a still-fresh calibration must not re-call the rate helper"
