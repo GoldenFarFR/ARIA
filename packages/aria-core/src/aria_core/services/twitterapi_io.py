@@ -294,7 +294,8 @@ async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[Twi
 
     if not isinstance(payload, dict) or payload.get("status") != "success":
         return None
-    raw_tweets = payload.get("tweets")
+    data = payload.get("data")
+    raw_tweets = data.get("tweets") if isinstance(data, dict) else None
     if not isinstance(raw_tweets, list):
         return None
 

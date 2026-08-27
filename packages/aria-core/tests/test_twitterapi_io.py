@@ -201,16 +201,18 @@ async def test_last_tweets_success_iso_shape(_fresh):
         200,
         {
             "status": "success",
-            "tweets": [
-                {
-                    "createdAt": "2026-07-21T17:12:03.000000Z",
-                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
-                },
-                {
-                    "createdAt": "2026-07-21T16:09:39.000000Z",
-                    "likeCount": 49, "replyCount": 14, "retweetCount": 7, "quoteCount": 0,
-                },
-            ],
+            "data": {
+                "tweets": [
+                    {
+                        "createdAt": "2026-07-21T17:12:03.000000Z",
+                        "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                    },
+                    {
+                        "createdAt": "2026-07-21T16:09:39.000000Z",
+                        "likeCount": 49, "replyCount": 14, "retweetCount": 7, "quoteCount": 0,
+                    },
+                ],
+            },
         },
     )
     tweets = await tw.fetch_last_tweets("crynuxio", max_results=20)
@@ -229,18 +231,24 @@ async def test_last_tweets_success_real_legacy_shape(_fresh):
     silently returned None for every tweet, making fetch_last_tweets return
     an always-empty list regardless of the account -- x_substance.py's
     regularity criterion (25% weight) scored 0/100 for every account
-    evaluated by signal_cascade_x.py since this shipped."""
+    evaluated by signal_cascade_x.py since this shipped. Also carries the
+    second, independent bug found the same day: tweets are nested under
+    "data" (matching /user/info's own shape), not at the payload root --
+    fetch_last_tweets previously read payload["tweets"] directly and always
+    got None even with correct date parsing."""
     _FakeAsyncClient._response = _FakeResponse(
         200,
         {
             "status": "success",
-            "tweets": [
-                {
-                    "createdAt": "Tue Aug 25 18:44:11 +0000 2026",
-                    "likeCount": 0, "replyCount": 0, "retweetCount": 0, "quoteCount": 0,
-                    "text": "real shape observed live 27/08",
-                },
-            ],
+            "data": {
+                "tweets": [
+                    {
+                        "createdAt": "Tue Aug 25 18:44:11 +0000 2026",
+                        "likeCount": 0, "replyCount": 0, "retweetCount": 0, "quoteCount": 0,
+                        "text": "real shape observed live 27/08",
+                    },
+                ],
+            },
         },
     )
     tweets = await tw.fetch_last_tweets("aispace_bot", max_results=20)
@@ -256,13 +264,15 @@ async def test_last_tweets_parses_text_field(_fresh):
         200,
         {
             "status": "success",
-            "tweets": [
-                {
-                    "createdAt": "2026-07-21T17:12:03.000000Z",
-                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
-                    "text": "Big news for $CMEM today!",
-                },
-            ],
+            "data": {
+                "tweets": [
+                    {
+                        "createdAt": "2026-07-21T17:12:03.000000Z",
+                        "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                        "text": "Big news for $CMEM today!",
+                    },
+                ],
+            },
         },
     )
     tweets = await tw.fetch_last_tweets("crynuxio")
@@ -275,12 +285,14 @@ async def test_last_tweets_missing_text_field_defaults_to_empty(_fresh):
         200,
         {
             "status": "success",
-            "tweets": [
-                {
-                    "createdAt": "2026-07-21T17:12:03.000000Z",
-                    "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
-                },
-            ],
+            "data": {
+                "tweets": [
+                    {
+                        "createdAt": "2026-07-21T17:12:03.000000Z",
+                        "likeCount": 5, "replyCount": 1, "retweetCount": 0, "quoteCount": 0,
+                    },
+                ],
+            },
         },
     )
     tweets = await tw.fetch_last_tweets("crynuxio")
@@ -293,10 +305,12 @@ async def test_last_tweets_respects_max_results(_fresh):
         200,
         {
             "status": "success",
-            "tweets": [
-                {"createdAt": "2026-07-21T17:12:03.000000Z", "likeCount": i}
-                for i in range(50)
-            ],
+            "data": {
+                "tweets": [
+                    {"createdAt": "2026-07-21T17:12:03.000000Z", "likeCount": i}
+                    for i in range(50)
+                ],
+            },
         },
     )
     tweets = await tw.fetch_last_tweets("crynuxio", max_results=5)
@@ -307,7 +321,7 @@ async def test_last_tweets_respects_max_results(_fresh):
 async def test_last_tweets_skips_entries_without_created_at(_fresh):
     _FakeAsyncClient._response = _FakeResponse(
         200,
-        {"status": "success", "tweets": [{"likeCount": 1}, {"createdAt": None}]},
+        {"status": "success", "data": {"tweets": [{"likeCount": 1}, {"createdAt": None}]}},
     )
     assert await tw.fetch_last_tweets("crynuxio") is None
 
@@ -320,7 +334,7 @@ async def test_last_tweets_http_error_returns_none(_fresh):
 
 @pytest.mark.asyncio
 async def test_last_tweets_empty_list_returns_none(_fresh):
-    _FakeAsyncClient._response = _FakeResponse(200, {"status": "success", "tweets": []})
+    _FakeAsyncClient._response = _FakeResponse(200, {"status": "success", "data": {"tweets": []}})
     assert await tw.fetch_last_tweets("crynuxio") is None
 
 
