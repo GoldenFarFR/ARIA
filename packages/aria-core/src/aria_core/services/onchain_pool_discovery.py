@@ -312,9 +312,9 @@ class OnChainPoolDiscoveryFeed:
         self._register_candidate(pool_id_hex, _V4_DEX_ID, currency0, currency1)
 
     def _register_candidate(self, pool_key: str, dex_id: str, token0: str, token1: str) -> None:
-        from aria_core.services.evm_swap_ws import _KNOWN_USD_STABLES, _WETH_ADDRESSES
+        from aria_core.services.evm_swap_ws import _CBBTC_ADDRESSES, _KNOWN_USD_STABLES, _WETH_ADDRESSES
 
-        quote_candidates = _KNOWN_USD_STABLES | _WETH_ADDRESSES
+        quote_candidates = _KNOWN_USD_STABLES | _WETH_ADDRESSES | _CBBTC_ADDRESSES
         token0_is_quote = token0 in quote_candidates
         token1_is_quote = token1 in quote_candidates
         if token0_is_quote == token1_is_quote:

@@ -136,6 +136,15 @@ _WETH_ADDRESSES = frozenset({
     "0x4200000000000000000000000000000000000006",  # WETH (Base, canonical)
     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",  # WETH (Robinhood Chain, canonical)
 })
+# 27/08 -- confirmed real, active quote token on Base via GeckoTerminal's live
+# top-pools listing (genuine third-party tokens quoted directly against it,
+# not just widely held) -- see doppler.btc_usd_rate()'s own docstring for the
+# full verification. Kept SEPARATE from _WETH_ADDRESSES on purpose: a BTC-
+# quoted pool needs doppler.btc_usd_rate(), never eth_usd_rate() -- merging
+# the sets would silently apply the wrong asset's price.
+_CBBTC_ADDRESSES = frozenset({
+    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",  # cbBTC (Base, Coinbase-issued canonical)
+})
 
 # Event topic0 hashes, computed live (never hand-typed/guessed) so a typo
 # can never silently produce a filter that matches nothing.
@@ -245,6 +254,10 @@ class EVMSwapSnapshot:
     # rather than silently treating an unresolved WETH-quoted pool the same
     # as a genuinely un-priceable one).
     quote_is_weth: bool = False
+    # 27/08 -- same cue as quote_is_weth above, but for a cbBTC-quoted pool:
+    # the caller must multiply price_quote by doppler.btc_usd_rate(), never
+    # eth_usd_rate() (BTC and ETH trade at very different USD levels).
+    quote_is_btc: bool = False
 
 
 @dataclass
@@ -256,6 +269,7 @@ class _TrackedPool:
     decimals1: int
     quote_is_weth: bool
     quote_is_stable: bool
+    quote_is_btc: bool = False
     ticks: deque = field(default_factory=deque)  # [(monotonic_time, price_quote)]
     pool_id_hex: str | None = None  # v4 only, the topic-filtered poolId
     last_reserve_usd: float | None = None  # v2 only, exact when quote_is_stable
@@ -509,6 +523,7 @@ class EVMSwapWebSocketFeed:
             dex_id=dex_id, family=family, token_is_currency0=token_is_currency0,
             decimals0=decimals0, decimals1=decimals1,
             quote_is_weth=quote in _WETH_ADDRESSES, quote_is_stable=quote in _KNOWN_USD_STABLES,
+            quote_is_btc=quote in _CBBTC_ADDRESSES,
         )
         await self._resubscribe()
         return True
@@ -567,6 +582,8 @@ class EVMSwapWebSocketFeed:
             price_usd = last_price
         elif pool.quote_is_weth:
             price_usd = None  # resolved by the caller via doppler.eth_usd_rate() -- no network I/O here
+        elif pool.quote_is_btc:
+            price_usd = None  # resolved by the caller via doppler.btc_usd_rate() -- no network I/O here
         return EVMSwapSnapshot(
             available=True, price_quote=last_price, price_usd=price_usd,
             window_high_quote=max(window), window_low_quote=min(window),
@@ -574,7 +591,7 @@ class EVMSwapWebSocketFeed:
             reserve_usd=pool.last_reserve_usd, raw_liquidity=pool.last_raw_liquidity,
             swap_count=pool.swap_count, cumulative_volume_quote=pool.cumulative_volume_quote,
             distinct_traders_count=len(pool.distinct_traders),
-            quote_is_weth=pool.quote_is_weth,
+            quote_is_weth=pool.quote_is_weth, quote_is_btc=pool.quote_is_btc,
         )
 
     # -- websocket loop ----------------------------------------------------

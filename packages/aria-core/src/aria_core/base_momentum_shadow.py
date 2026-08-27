@@ -1021,6 +1021,10 @@ async def _snapshot_from_ws(
         eth_rate = await doppler.eth_usd_rate()
         if eth_rate is not None:
             price_usd = ws_snap.price_quote * eth_rate
+    if price_usd is None and ws_snap.quote_is_btc and ws_snap.price_quote is not None:
+        btc_rate = await doppler.btc_usd_rate()
+        if btc_rate is not None:
+            price_usd = ws_snap.price_quote * btc_rate
     if price_usd is None:
         return None  # quote leg not resolvable to USD -- honest fallback to REST
     return PoolSnapshot(

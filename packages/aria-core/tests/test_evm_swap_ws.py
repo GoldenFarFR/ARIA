@@ -168,6 +168,21 @@ def test_get_snapshot_weth_quote_leaves_price_usd_none():
     assert snap.quote_is_weth is True
 
 
+def test_get_snapshot_cbbtc_quote_leaves_price_usd_none():
+    """27/08 -- same honesty rule as the WETH case above, for a cbBTC-quoted
+    pool: USD resolution needs doppler.btc_usd_rate(), never computed here."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(quote_is_weth=False, quote_is_stable=False, quote_is_btc=True)
+    pool.ticks.append((time.monotonic(), 0.00002))
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    snap = feed.get_snapshot("0xpool")
+    assert snap.available is True
+    assert snap.price_usd is None
+    assert snap.price_quote == pytest.approx(0.00002)
+    assert snap.quote_is_btc is True
+
+
 def test_get_snapshot_window_excludes_stale_ticks():
     feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
     pool = _pool()
@@ -389,6 +404,29 @@ async def test_add_pool_v2v3_registers_and_is_idempotent():
     ok_again = await feed.add_pool("0xpool", dex_id="uniswap_v3", token_address="0xtoken0")
     assert ok_again is True
     fake_w3.eth.contract.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_pool_v2v3_sets_quote_is_btc_for_a_cbbtc_quoted_pool():
+    """27/08 -- cbBTC quote-token support: add_pool must flag a cbBTC-quoted
+    pool distinctly from a WETH-quoted one (different USD rate resolution)."""
+    cbbtc = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+    contract.functions.token1.return_value.call = AsyncMock(return_value=cbbtc)
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=8)
+    fake_w3.eth.contract.return_value = contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool("0xpool", dex_id="uniswap_v3", token_address="0xtoken0")
+    assert ok is True
+    pool = feed._pools["0xpool"]
+    assert pool.quote_is_btc is True
+    assert pool.quote_is_weth is False
+    assert pool.quote_is_stable is False
 
 
 @pytest.mark.asyncio

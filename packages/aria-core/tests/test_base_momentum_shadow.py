@@ -283,6 +283,7 @@ class _FakeWsSnapshot:
     price_quote: float | None = None
     reserve_usd: float | None = None
     quote_is_weth: bool = False
+    quote_is_btc: bool = False
 
 
 @pytest.mark.asyncio
@@ -320,6 +321,34 @@ async def test_snapshot_from_ws_weth_quote_resolved_via_doppler(monkeypatch):
     )
     assert snapshot.available is True
     assert snapshot.price_usd == pytest.approx(3.0)  # 0.001 * 3000
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_from_ws_cbbtc_quote_resolved_via_doppler(monkeypatch):
+    """27/08 -- cbBTC quote-token support, same pattern as the WETH test
+    above but a real BTC-quoted pool must use btc_usd_rate(), never
+    eth_usd_rate() (different asset, very different USD level)."""
+    ws_feed = FakeWsFeed()
+    ws_feed._pools["poola"] = True
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(
+        available=True, price_usd=None, price_quote=0.00002, quote_is_btc=True,
+    )
+
+    async def fake_btc_usd_rate():
+        return 95000.0
+
+    async def _boom():
+        raise AssertionError("eth_usd_rate must not be called for a cbBTC-quoted pool")
+
+    monkeypatch.setattr(shadow.doppler, "btc_usd_rate", fake_btc_usd_rate)
+    monkeypatch.setattr(shadow.doppler, "eth_usd_rate", _boom)
+    client = FakeClient({"poolA": 99.0})
+    snapshot = await shadow._snapshot_with_fallback(
+        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+    )
+    assert snapshot.available is True
+    assert snapshot.price_usd == pytest.approx(1.9)  # 0.00002 * 95000
     assert client.calls == []
 
 

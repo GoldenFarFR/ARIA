@@ -58,6 +58,15 @@ STATE_VIEW_ADDRESS = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
 
 WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
 _ETH_COINGECKO_ID = "ethereum"
+# 27/08 -- cbBTC (Coinbase Wrapped BTC, Base's own canonical BTC token,
+# 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf) confirmed as a real, actively
+# used quote token on Base (not just a widely-held asset): GeckoTerminal's
+# live top-pools listing shows genuine third-party tokens quoted directly
+# against it (e.g. "SOL/cbBTC"), same pairing role as WETH/USDC. Needed its
+# own BTC/USD rate -- reusing eth_usd_rate()'s ETH rate for a BTC-quoted pool
+# would multiply a token/cbBTC ratio by the wrong asset's price (BTC trades
+# at a very different level than ETH).
+_BTC_COINGECKO_ID = "bitcoin"
 
 _Q96 = 2 ** 96
 
@@ -216,6 +225,25 @@ async def eth_usd_rate() -> float | None:
     if not result.available:
         return None
     rate = result.prices.get(_ETH_COINGECKO_ID, {}).get("usd")
+    if not rate or rate <= 0:
+        return None
+    return rate
+
+
+async def btc_usd_rate() -> float | None:
+    """Current BTC/USD rate (cbBTC == BTC for valuation purposes) -- same
+    fail-open contract as ``eth_usd_rate`` above, same CoinGecko call
+    (shares its budget, no extra client)."""
+    from aria_core.services.coingecko import coingecko_client
+
+    try:
+        result = await coingecko_client.get_simple_price([_BTC_COINGECKO_ID], vs_currencies=["usd"])
+    except Exception as exc:  # noqa: BLE001
+        logger.info("doppler.btc_usd_rate: CoinGecko failed (%s)", exc)
+        return None
+    if not result.available:
+        return None
+    rate = result.prices.get(_BTC_COINGECKO_ID, {}).get("usd")
     if not rate or rate <= 0:
         return None
     return rate

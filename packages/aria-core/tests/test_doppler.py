@@ -343,6 +343,51 @@ async def test_eth_usd_rate_network_error_returns_none(monkeypatch):
     assert await doppler.eth_usd_rate() is None
 
 
+# ── btc_usd_rate (mock coingecko, 27/08 -- cbBTC quote-token support) ───────
+
+@pytest.mark.asyncio
+async def test_btc_usd_rate_success(monkeypatch):
+    from aria_core.services import coingecko
+
+    class _FakeResult:
+        available = True
+        prices = {"bitcoin": {"usd": 95412.30}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        assert coin_ids == ["bitcoin"]
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    rate = await doppler.btc_usd_rate()
+    assert rate == pytest.approx(95412.30)
+
+
+@pytest.mark.asyncio
+async def test_btc_usd_rate_unavailable_returns_none(monkeypatch):
+    from aria_core.services import coingecko
+
+    class _FakeResult:
+        available = False
+        prices = {}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    assert await doppler.btc_usd_rate() is None
+
+
+@pytest.mark.asyncio
+async def test_btc_usd_rate_network_error_returns_none(monkeypatch):
+    from aria_core.services import coingecko
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    assert await doppler.btc_usd_rate() is None
+
+
 # ── get_token_price_usd (end-to-end, everything mocked) ─────────────────────
 
 @pytest.mark.asyncio

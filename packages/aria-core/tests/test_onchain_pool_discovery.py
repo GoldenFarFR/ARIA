@@ -183,6 +183,27 @@ async def test_robinhood_pair_created_registers_candidate_with_usdg_quote():
     assert feed.rejected_not_priceable_count == 0
 
 
+# --- 27/08, real gap found live: cbBTC confirmed as a real, actively-used
+# Base quote token (GeckoTerminal live top-pools listing shows genuine
+# third-party tokens quoted directly against it, e.g. "SOL/cbBTC") but was
+# entirely absent from the discovery filter -- Base's own ~94% rejection
+# rate (measured live 19:07-19:08 UTC) was partly this gap.
+
+CBBTC = "cbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+
+
+@pytest.mark.asyncio
+async def test_base_pair_created_registers_candidate_with_cbbtc_quote():
+    feed = _make_feed()
+    topics = [_FakeTopic(bytes.fromhex(m._PAIR_CREATED_TOPIC[2:])),
+              _addr_topic(TOKEN0), _addr_topic(CBBTC)]
+    data = "0x" + (_addr_word(PAIR) + _addr_word("00")).hex()
+    payload = {"result": {"address": BASE_V2_FACTORY, "topics": topics, "data": data}}
+    feed._handle_notification(payload)
+    assert f"0x{PAIR}" in feed._candidates
+    assert feed.rejected_not_priceable_count == 0
+
+
 # --- Aerodrome Classic PoolCreated decode (specs/011, 26/08) ----------------
 # `event PoolCreated(address indexed token0, address indexed token1, bool
 # indexed stable, address pool, uint256)` -- `pool` is the FIRST word of the
