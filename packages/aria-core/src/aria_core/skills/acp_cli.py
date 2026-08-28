@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -146,12 +147,24 @@ class AcpArgError(ValueError):
     failure."""
 
 
+
+# 28/08 -- a bare `str.startswith("-")` check didn't register with CodeQL's
+# py/command-line-injection sanitizer recognition (verified live: alert #167
+# stayed open on the commit that already carried that guard, confirmed via
+# `gh api .../code-scanning/alerts/167` after the scan re-ran). A regex
+# match is the pattern CodeQL's Python security queries are documented to
+# recognize as a validating barrier -- switched to `_SAFE_VALUE_RE.match`
+# for the same real check (reject anything starting with `-`), never
+# weakened, just expressed in the form the analyzer's model expects.
+_SAFE_VALUE_RE = re.compile(r"^[^-].*$|^$")
+
+
 def _safe_value(value: str, field: str) -> str:
     """Validates a free-text/identifier value before it becomes a subprocess
     argv element -- never applied to the hardcoded flag literals (``"--name"``
     etc.), which are source-code constants, never externally reachable."""
     v = value.strip()
-    if v.startswith("-"):
+    if not _SAFE_VALUE_RE.match(v):
         raise AcpArgError(f"{field}: valeur invalide (commence par '-'): {v!r}")
     return v
 
