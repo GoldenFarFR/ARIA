@@ -317,6 +317,44 @@ async def test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve():
 
 
 @pytest.mark.asyncio
+async def test_check_candidates_logs_event_provenance_when_qualified_from_websocket(caplog):
+    """28/08, operator-directed post-deploy observation ask -- distinguish a
+    real decoded Sync/Swap event from a cold eth_call read in the logs,
+    without a DB schema change."""
+    import logging
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    with caplog.at_level(logging.INFO):
+        await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert any("qualified 0xpool via event" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_logs_cold_read_provenance_when_qualified_from_resolve_cold(caplog):
+    import logging
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    feed._ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=True, price_usd=2.0, reserve_usd=9000.0, quote_is_weth=False,
+    ))
+    with caplog.at_level(logging.INFO):
+        result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert len(result) == 1
+    assert any("qualified 0xpool via cold_read" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_check_candidates_converts_weth_reserve_via_live_snapshot(monkeypatch):
     """28/08, specs/015-robinhood-chainstack-only -- real finding (T023/T024
     worked example): 11/11 real Robinhood pools sampled were WETH-quoted,

@@ -447,6 +447,14 @@ class OnChainPoolDiscoveryFeed:
                     ))
             reserve_usd = snapshot.reserve_usd
             price_usd = None
+            # 28/08, operator-directed post-deploy observation ask -- lets
+            # the qualification log line below distinguish a real decoded
+            # Sync/Swap event from a cold eth_call read, without a DB schema
+            # change (SC-002's own tx_hash/block_number provenance already
+            # covers the live-event case at the EVMSwapSnapshot level; this
+            # is a lighter, log-only signal for the immediate post-deploy
+            # observation window, not a replacement for that).
+            source = "event"
             if snapshot.quote_is_weth:
                 from aria_core.services.doppler import eth_usd_rate
                 rate = await eth_usd_rate()
@@ -494,6 +502,7 @@ class OnChainPoolDiscoveryFeed:
                     # on this partial/absent read).
                     self.not_yet_priceable_count += 1
                     continue
+                source = "cold_read"
                 reserve_usd = cold.reserve_usd
                 price_usd = cold.price_usd
                 if cold.quote_is_weth and (price_usd is None or (reserve_usd is None and cold.quote_reserve_raw is not None)):
@@ -518,6 +527,10 @@ class OnChainPoolDiscoveryFeed:
             # DexPaprika's `_resolve_base_token` with a direct `symbol()`
             # eth_call, never fabricated, None on any resolution failure).
             symbol = await self._ws_feed.resolve_token_symbol(cand.token_address)
+            logger.info(
+                "onchain_pool_discovery[%s]: qualified %s via %s (price_usd=%s reserve_usd=%s)",
+                self.chain, key, source, price_usd, reserve_usd,
+            )
             qualified.append(TrendingPool(
                 pool_address=key, token_address=cand.token_address, symbol=symbol,
                 price_usd=price_usd, price_change_pct={}, transactions_m15=None,
