@@ -370,6 +370,59 @@ async def _rest_unused(_client, _pool, _mint, *, chain):
 
 
 @pytest.mark.asyncio
+async def test_a_candidate_rejected_after_subscribing_unsubscribes(_tmp_db, monkeypatch):
+    """28/08 -- same leak CLASS as the 26/08 fix above, one step earlier in
+    the funnel: add_pools() runs for every candidate reaching the pricing
+    branch, but a candidate then rejected by the regime gate (or any other
+    post-subscription filter) never became an open row, so the 26/08 fix
+    (which only fires from advance_exit_simulation/advance_position_by_pool)
+    never ran for it either. Confirmed live 28/08: 335 accounts tracked on
+    pumpfun_bonding_ws while 0 positions were open anywhere in this pocket --
+    exactly candidates stuck in this state forever."""
+    async def _toxic(_chain):
+        return {"regime": "pic_toxique", "detail": "volume 2.10x son EWMA 30j MAIS TVL -15.0%"}
+
+    monkeypatch.setattr(pocket.chain_liquidity_regime, "latest_regime", _toxic)
+
+    feed = _BondingFeed()
+    got = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+
+    assert got is None
+    rows = await _rows(_tmp_db)
+    assert rows == []
+    # The real point of this test: subscribed AND unsubscribed, never left
+    # dangling on the feed just because the candidate never opened a position.
+    assert feed.subscribed == [("poolA", "mintA")]
+    assert feed.unsubscribed == ["poolA"]
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_rejected_by_creator_factory_check_unsubscribes(_tmp_db, monkeypatch):
+    """Same leak, the OTHER post-subscription rejection path (creator_
+    reputation.is_factory), checked after the regime gates -- a distinct
+    return point in consider_candidate, needs its own coverage."""
+    from aria_core import creator_reputation
+
+    async def _is_factory(_creator, *, db_path=None):
+        return True
+
+    monkeypatch.setattr(creator_reputation, "is_factory", _is_factory)
+
+    feed = _BondingFeed()
+    got = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, bonding_ws_feed=feed, db_path=_tmp_db,
+    )
+
+    assert got is None
+    assert feed.subscribed == [("poolA", "mintA")]
+    assert feed.unsubscribed == ["poolA"]
+
+
+@pytest.mark.asyncio
 async def test_summary_reports_the_average_entry_progress(_tmp_db):
     await pocket.consider_candidate(
         "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,

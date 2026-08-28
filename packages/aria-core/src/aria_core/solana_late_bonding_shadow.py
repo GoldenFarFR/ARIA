@@ -1363,6 +1363,20 @@ def _add_snapshot_metrics(metrics: dict, snapshot) -> None:
     metrics["trades_per_second"] = (total / seconds) if (total and seconds) else None
 
 
+def _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address: str) -> None:
+    """28/08 -- a candidate subscribed via ``bonding_ws_feed.add_pools()``
+    that is then rejected before ever becoming an open position must be
+    unsubscribed too, same doctrine as ``advance_position_by_pool``'s own
+    26/08 fix for a closed position. Best-effort: an unsubscribe failure
+    must never block the rejection itself."""
+    if bonding_ws_feed is None:
+        return
+    try:
+        bonding_ws_feed.remove_pools([pool_address])
+    except Exception:  # noqa: BLE001 -- unsubscribe is an enhancement, not the write
+        logger.info("solana_late_bonding_shadow: remove_pools failed for %s", pool_address)
+
+
 async def consider_candidate(
     mint: str, pool_address: str, *, chain: str = "solana", trade_stream=None,
     http_client: httpx.AsyncClient | None = None, geckoterminal_client=None,
@@ -1619,11 +1633,24 @@ async def consider_candidate(
             db_path=db_path,
         )
         if not accepted or snapshot is None:
+            # 28/08 -- same leak class fixed 26/08 for a closed POSITION
+            # (see advance_position_by_pool's own comment), but that fix only
+            # covers a candidate that made it all the way to an open row.
+            # add_pools() above ran for every candidate reaching this branch,
+            # including one rejected here (blocked_regime_closed/
+            # blocked_regime_defillama/blocked_discovery_only) -- without an
+            # unsubscribe on THIS path too, it stays subscribed on
+            # pumpfun_bonding_ws.py's WS feed forever, exactly the "pool
+            # count climbs and never plateaus" symptom, just one step
+            # earlier in the funnel. Confirmed live 28/08: 335 accounts
+            # tracked while 0 positions were open anywhere in this pocket.
+            _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address)
             return None
 
         _add_snapshot_metrics(metrics, snapshot)
 
         if await creator_reputation.is_factory(getattr(account, "creator", None), db_path=db_path):
+            _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address)
             return None
 
         realistic = _apply_price_impact_and_fee(
@@ -1657,8 +1684,10 @@ async def consider_candidate(
                 )
             except Exception as exc:  # noqa: BLE001 -- a failed buy is not a position
                 logger.info("solana_late_bonding_shadow: execute_fn raised for %s (%s)", mint, exc)
+                _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address)
                 return None
             if not filled or not filled.get("entry_price"):
+                _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address)
                 return None
             # The real fill price becomes the entry, and the "realistic"
             # column too: a modelled impact makes no sense once a genuine

@@ -213,9 +213,33 @@ async def test_record_signals_dedupes_while_already_open():
 
 @pytest.mark.asyncio
 async def test_record_signals_relogs_after_previous_signal_closed():
+    # 28/08 -- exit_reason is the real close marker (advance_exit_simulation
+    # is the only pass the standalone process actually wires); `status`
+    # alone never flips to 'closed' in production (evaluate_open_signals,
+    # the only writer of `status`, is never called), so dedupe must key off
+    # exit_reason, never status.
     await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     async with aiosqlite.connect(shadow._db_path()) as db:
-        await db.execute("UPDATE solana_pump_shadow_log SET status = 'closed'")
+        await db.execute("UPDATE solana_pump_shadow_log SET exit_reason = 'trailing_stop'")
+        await db.commit()
+    logged_again = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
+    assert logged_again == 1
+    rows = await _rows()
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_record_signals_still_blocked_by_stale_status_alone():
+    """28/08 real bug fixed: `status` staying 'open' forever (the standalone
+    process never calls evaluate_open_signals, the only writer of `status`)
+    must NOT permanently block re-entry once the position is genuinely
+    closed via exit_reason -- this is the exact scenario that silently
+    starved re-entry on every real pool before the fix."""
+    await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        # status left untouched at 'open' -- exit_reason is the only signal
+        # of a real close, exactly the production shape found live.
+        await db.execute("UPDATE solana_pump_shadow_log SET exit_reason = 'max_hold'")
         await db.commit()
     logged_again = await shadow.record_signals([_pool(m5=30.0)], chain=CHAIN)
     assert logged_again == 1

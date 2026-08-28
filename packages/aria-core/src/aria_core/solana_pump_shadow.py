@@ -499,8 +499,17 @@ async def _ensure_table() -> None:
 
 
 async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: str) -> bool:
+    # 28/08 -- real bug found live: `status` is only ever set to 'closed' by
+    # evaluate_open_signals() (its own h2-checkpoint UPDATE), but the
+    # standalone process running this module never calls that pass -- only
+    # record_signals/advance_exit_simulation are wired (shadow_persistent.py,
+    # confirmed by grep). `status` therefore stays 'open' forever once a pool
+    # is first logged, permanently blocking re-entry on that same pool --
+    # same bug CLASS as dip_recovery_v2_shadow's fixed episode-state latch.
+    # exit_reason IS the column advance_exit_simulation (the pass that IS
+    # actually wired) keeps current -- dedupe against that instead.
     cur = await db.execute(
-        "SELECT 1 FROM solana_pump_shadow_log WHERE pool_address = ? AND chain = ? AND status = 'open' LIMIT 1",
+        "SELECT 1 FROM solana_pump_shadow_log WHERE pool_address = ? AND chain = ? AND exit_reason IS NULL LIMIT 1",
         (pool_address, chain),
     )
     return (await cur.fetchone()) is not None
