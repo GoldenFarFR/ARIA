@@ -121,6 +121,60 @@ class FakeClient:
         return OHLCVResult(candles=[], available=False, error="v2 is spot-only, never called")
 
 
+class _WsFeedFromRestPrices:
+    """28/08 (specs/015-robinhood-chainstack-only) -- v2's
+    `advance_exit_simulation` no longer threads `client` into
+    `_snapshot_with_fallback` at all (shared with v1, GeckoTerminal removed
+    from that path entirely); a `ws_feed` is now the only way to inject a
+    deterministic price into these exit-ladder tests."""
+
+    def __init__(self, price_by_pool, reserve_by_pool=None):
+        self._prices = dict(price_by_pool)
+        self._reserves = dict(reserve_by_pool or {})
+        self._pools: dict[str, object] = {}
+
+    def get_snapshot(self, pool_address):
+        import dataclasses as _dc
+
+        price = self._prices.get(pool_address)
+        if price is None:
+            return _dc.replace(_FAKE_WS_SNAPSHOT_UNAVAILABLE)
+        return _dc.replace(
+            _FAKE_WS_SNAPSHOT_UNAVAILABLE, available=True, price_usd=price,
+            reserve_usd=self._reserves.get(pool_address),
+        )
+
+    async def add_pool(self, pool_address, *, dex_id, token_address):
+        self._pools[pool_address.lower()] = True
+        return True
+
+    async def remove_pool(self, pool_address):
+        self._pools.pop(pool_address.lower(), None)
+
+    async def resolve_cold(self, pool_address, *, dex_id=None, token_address=None):
+        return _FAKE_COLD_SNAPSHOT_UNAVAILABLE
+
+
+@dataclasses.dataclass
+class _FakeWsSnapshot:
+    available: bool
+    price_usd: float | None = None
+    price_quote: float | None = None
+    reserve_usd: float | None = None
+    quote_is_weth: bool = False
+
+
+@dataclasses.dataclass
+class _FakeColdSnapshot:
+    available: bool
+    price_usd: float | None = None
+    reserve_usd: float | None = None
+
+
+_FAKE_WS_SNAPSHOT_UNAVAILABLE = _FakeWsSnapshot(available=False)
+_FAKE_COLD_SNAPSHOT_UNAVAILABLE = _FakeColdSnapshot(available=False)
+
+
 # --- record_signals -------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -249,8 +303,8 @@ async def test_record_signals_independent_from_v1_table():
 @pytest.mark.asyncio
 async def test_advance_exit_scale_out_sells_half_at_first_rung():
     await v2.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=30.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.16})  # crossed the +15% rung (1.15)
-    stats = await v2.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.16})  # crossed the +15% rung (1.15)
+    stats = await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert stats["scale_out_fills"] == 1
     rows = await _rows()
     assert rows[0]["remaining_qty"] == pytest.approx(0.5)
@@ -266,8 +320,8 @@ async def test_advance_exit_scale_out_complete_closes_row():
     price = 1.0
     for _ in range(12):
         price *= 1.16
-    client = FakeClient({"poolA": price})
-    stats = await v2.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": price})
+    stats = await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert stats["closed_scale_out_complete"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "scale_out_complete"
@@ -278,10 +332,10 @@ async def test_advance_exit_scale_out_complete_closes_row():
 @pytest.mark.asyncio
 async def test_advance_exit_trailing_stop_fires_from_peak():
     await v2.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=30.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.16})
-    await v2.advance_exit_simulation(client, chain=CHAIN)  # one scale-out fill, peak=1.16
-    client2 = FakeClient({"poolA": 1.16 * (1 - v2.TRAILING_STOP_PCT / 100.0) - 0.001})
-    stats = await v2.advance_exit_simulation(client2, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.16})
+    await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)  # one scale-out fill, peak=1.16
+    ws_feed2 = _WsFeedFromRestPrices({"poolA": 1.16 * (1 - v2.TRAILING_STOP_PCT / 100.0) - 0.001})
+    stats = await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed2)
     assert stats["closed_trailing_stop"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "trailing_stop"
@@ -295,24 +349,25 @@ async def test_advance_exit_max_hold_closes_stale_position():
     async with aiosqlite.connect(v2._db_path()) as db:
         await db.execute(f"UPDATE {v2.TABLE} SET detected_at = ?", (old.isoformat(),))
         await db.commit()
-    client = FakeClient({"poolA": 1.05})  # below the first rung, never scales out
-    stats = await v2.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05})  # below the first rung, never scales out
+    stats = await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert stats["closed_max_hold"] == 1
 
 
 @pytest.mark.asyncio
 async def test_advance_exit_liquidity_collapse_force_closes():
     await v2.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=30.0, reserve=10000.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 1000.0})  # -90%, past the 50% floor
-    stats = await v2.advance_exit_simulation(client, chain=CHAIN)
+    # -90%, past the 50% floor
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05}, reserve_by_pool={"poolA": 1000.0})
+    stats = await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert stats["closed_liquidity_collapse"] == 1
 
 
 @pytest.mark.asyncio
 async def test_advance_exit_suspect_peak_jump_does_not_ratchet_instantly():
     await v2.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=30.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.0 * v2._PEAK_JUMP_SUSPECT_RATIO * 2})
-    await v2.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.0 * v2._PEAK_JUMP_SUSPECT_RATIO * 2})
+    await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.0)  # not ratcheted yet
     assert rows[0]["pending_peak_price"] is not None
@@ -321,8 +376,8 @@ async def test_advance_exit_suspect_peak_jump_does_not_ratchet_instantly():
 @pytest.mark.asyncio
 async def test_advance_exit_normal_jump_still_ratchets_instantly():
     await v2.record_signals([_pool(pool_address="poolA", price_usd=1.0, m5=30.0)], chain=CHAIN)
-    client = FakeClient({"poolA": 1.16})  # under the suspect ratio -- instant, unchanged behavior
-    await v2.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.16})  # under the suspect ratio -- instant, unchanged
+    await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.16)
     assert rows[0]["pending_peak_price"] is None
@@ -343,8 +398,11 @@ async def test_summary_aggregates_closed_positions():
     async with aiosqlite.connect(v2._db_path()) as db:
         await db.execute(f"UPDATE {v2.TABLE} SET detected_at = ?", (old.isoformat(),))
         await db.commit()
-    client = FakeClient({"poolA": 1.05})
-    await v2.advance_exit_simulation(client, chain=CHAIN)
+    # reserve_usd deep enough for the realistic-impact simulation to resolve
+    # (matches the old FakeClient's own 100000.0 default) -- summary() only
+    # counts rows with a non-NULL realistic_final_multiplier.
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05}, reserve_by_pool={"poolA": 100000.0})
+    await v2.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     stats = await v2.summary(chain=CHAIN)
     assert stats["closed"] == 1
     assert stats["winrate"] == 1.0

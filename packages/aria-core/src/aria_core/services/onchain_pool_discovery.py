@@ -23,13 +23,19 @@ own docstring) -- a WETH-quoted v2 pool, and EVERY v3/v4 pool (concentrated
 liquidity has no single "total reserve"), leave ``reserve_usd=None`` by
 design. Rather than reimplement USD liquidity math for every family (a real,
 separate chantier -- concentrated-liquidity depth in particular), this
-module falls back to ONE bounded, ponctual call to
-``dexpaprika.get_pool_reserve_usd`` (already cached negatively, already
-throttled) the moment a pool's first real tick arrives -- never polling
-before that, never repeated more than once per ``_RECHECK_INTERVAL_SECONDS``
-within the observation window. This keeps the actual latency win (detection
-at creation, not at the next 120s scan) while reusing the one liquidity
-source this dome already trusts, rather than inventing a second one.
+module falls back to ONE bounded, ponctual targeted on-chain read
+(``EVMSwapWebSocketFeed.resolve_cold``, a direct ``eth_call`` reusing the
+SAME price/reserve formula the live event decoder already applies -- see
+that method's own docstring) the moment a pool's first real tick still
+hasn't landed -- never polling before that, never repeated more than once
+per ``_RECHECK_INTERVAL_SECONDS`` within the observation window. This keeps
+the actual latency win (detection at creation, not at the next 120s scan)
+while staying 100% Chainstack-sourced (28/08, specs/015-robinhood-
+chainstack-only -- this used to fall back to ``dexpaprika.get_pool_reserve_
+usd`` here, which is the confirmed, direct cause of every day-zero candidate
+without an observed Sync/Swap event getting stuck at ``qualified_this_
+cycle=0`` once that provider started failing, see that feature's research.md
+for the full trace).
 
 **Never program-wide**: the subscription filter is a FIXED, small list of
 factory addresses (Uniswap v2/v3/v4 per chain, plus Aerodrome Slipstream and
@@ -45,7 +51,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from aria_core.services import chainstack_ru_budget, dexpaprika
+from aria_core.services import chainstack_ru_budget
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.services.geckoterminal import TrendingPool
 
@@ -56,14 +62,22 @@ logger = logging.getLogger(__name__)
 # docstring's "no silent cap" doctrine).
 _OBSERVATION_WINDOW_SECONDS = 600.0
 
-# Minimum spacing between two ``get_pool_reserve_usd`` calls for the SAME
-# candidate -- dexpaprika.py's own negative cache already absorbs a
-# confirmed 404, but a pool that exists yet isn't indexed YET would
+# Minimum spacing between two ``resolve_cold`` calls for the SAME candidate
+# -- a pool that exists yet has produced no Sync/Swap event YET would
 # otherwise be re-queried on every single tick.
 _RECHECK_INTERVAL_SECONDS = 20.0
 
 _RECONNECT_MIN_SECONDS = 1.0
 _RECONNECT_MAX_SECONDS = 30.0
+
+# 28/08, specs/015-robinhood-chainstack-only T020 -- an INITIAL guardrail,
+# not a tuned optimum: research.md measured ~66 concurrently-tracked
+# candidates under the DexPaprika 402 outage (qualification was failing at
+# the time, so real post-fix demand may be higher). 150 gives ~2.3x headroom
+# over that baseline. Recalibrate once qualification is genuinely restored
+# and real demand is measured (T031, a separate follow-up decision, never
+# bundled into this feature).
+MAX_CONCURRENT_TRACKED_POOLS = 150
 
 
 def _topic0(signature: str) -> str:
@@ -165,6 +179,21 @@ class OnChainPoolDiscoveryFeed:
         # the outside (silence). Diagnostics-only, never changes behaviour.
         self.raw_notifications_seen = 0
         self.rejected_not_priceable_count = 0
+        # 28/08, specs/015-robinhood-chainstack-only T019 -- distinct from
+        # `rejected_not_priceable_count` above (a PERMANENT rejection at
+        # registration time: neither pool side is a known quote token).
+        # This one counts a TEMPORARY state: a candidate whose websocket
+        # snapshot and cold on-chain read both came back unresolved THIS
+        # cycle -- it stays in `_candidates`, retried on a later pass, never
+        # dropped and never treated as qualified on a partial read (operator's
+        # explicit two-state requirement: not_yet_priceable vs. qualified,
+        # nothing in between).
+        self.not_yet_priceable_count = 0
+        # T020 -- initial guardrail (research.md: measured ~66 concurrent
+        # candidates under the 402 outage, 2.3x headroom), NOT a tuned
+        # optimum. Recalibrate once qualification is genuinely restored and
+        # real post-fix demand is measured (T031, separate follow-up).
+        self._cap_dropped_count = 0
 
     @property
     def connected(self) -> bool:
@@ -326,6 +355,19 @@ class OnChainPoolDiscoveryFeed:
         tracked_token = token1 if token0_is_quote else token0
         if pool_key in self._candidates:
             return
+        if len(self._candidates) >= MAX_CONCURRENT_TRACKED_POOLS:
+            # T020 -- skip/defer, never an unbounded queue: a pool dropped
+            # here because the cap is full is simply never subscribed this
+            # notification; if it re-notifies (another Sync/Swap-adjacent
+            # factory event) once headroom frees up, it gets picked up then,
+            # same as any other candidate arriving between cycles.
+            self._cap_dropped_count += 1
+            logger.info(
+                "onchain_pool_discovery[%s]: MAX_CONCURRENT_TRACKED_POOLS=%d reached, "
+                "dropping candidate %s (cap_dropped_total=%d)",
+                self.chain, MAX_CONCURRENT_TRACKED_POOLS, pool_key, self._cap_dropped_count,
+            )
+            return
         self._candidates[pool_key] = _Candidate(
             pool_key=pool_key, dex_id=dex_id, token_address=tracked_token, chain=self.chain,
         )
@@ -355,7 +397,7 @@ class OnChainPoolDiscoveryFeed:
         now = time.monotonic()
         expired_keys = []
         # 27/08, real incident: this loop awaits repeatedly per candidate
-        # (dexpaprika lookups, symbol resolution), and `_register_candidate`
+        # (cold on-chain reads, symbol resolution), and `_register_candidate`
         # -- called synchronously from the WS notification handler -- can
         # insert a new key into `self._candidates` during any of those
         # awaits. Iterating the live dict then raises "dictionary changed
@@ -410,38 +452,72 @@ class OnChainPoolDiscoveryFeed:
                 rate = await eth_usd_rate()
                 if rate is not None and snapshot.price_quote is not None:
                     price_usd = snapshot.price_quote * rate
+                # 28/08, specs/015 -- same real reason `qualified_this_cycle`
+                # stayed at 0 even after DexPaprika/Gecko were removed:
+                # reserve_usd was NEVER converted for a WETH-quoted pool
+                # (only price_usd was), so every such pool -- the vast
+                # majority sampled on Robinhood Chain, T023/T024's finding --
+                # permanently failed the liquidity floor below regardless of
+                # its real depth. Reuses the SAME `rate` fetched above, never
+                # a second doppler call.
+                if rate is not None and reserve_usd is None and snapshot.quote_reserve_raw is not None:
+                    reserve_usd = 2.0 * snapshot.quote_reserve_raw * rate
             elif reserve_usd is not None:
                 price_usd = snapshot.price_quote
-            if reserve_usd is None:
+            # specs/015-robinhood-chainstack-only -- was a `dexpaprika.
+            # get_pool_reserve_usd`/`_get_json` fallback (the confirmed,
+            # direct cause of `qualified_this_cycle=0` under the 402 outage,
+            # see research.md's "real call chain" finding): a fresh pool with
+            # no Sync/Swap event observed yet ALWAYS had `reserve_usd is
+            # None` here, and every such candidate routed straight into the
+            # now-broken provider. Replaced by a targeted cold on-chain read
+            # -- same all-or-nothing contract as the websocket path: either
+            # BOTH reserve and price resolve together, or the candidate
+            # stays `not_yet_priceable` and is retried on a later cycle
+            # (never a partial reserve-without-price or vice versa treated
+            # as good enough, per the operator's own explicit vigilance).
+            if reserve_usd is None or price_usd is None:
                 if cand.last_checked_at is not None and (
                     now - cand.last_checked_at < _RECHECK_INTERVAL_SECONDS
                 ):
                     continue
                 cand.last_checked_at = now
-                reserve_usd = await dexpaprika.get_pool_reserve_usd(key, network=self.chain)
-                if price_usd is None and reserve_usd is not None:
-                    # Last resort for price when neither a stable quote nor a
-                    # WETH conversion is available -- never fabricated, only
-                    # used if DexPaprika itself already has an indexed price.
-                    detail, _ = await dexpaprika._get_json(  # noqa: SLF001 -- internal, same module family
-                        f"/networks/{self.chain}/pools/{key}", params={},
-                    )
-                    if isinstance(detail, dict):
-                        raw_price = detail.get("price_usd")
-                        if isinstance(raw_price, (int, float)):
-                            price_usd = float(raw_price)
+                cold = await self._ws_feed.resolve_cold(
+                    key, dex_id=cand.dex_id, token_address=cand.token_address,
+                )
+                if not cold.available:
+                    # T019 -- explicit, counted `not_yet_priceable` state:
+                    # neither the websocket nor the cold on-chain read could
+                    # resolve BOTH reserve and price this cycle. The
+                    # candidate stays in `_candidates`, retried on a later
+                    # pass (never dropped here, never treated as qualified
+                    # on this partial/absent read).
+                    self.not_yet_priceable_count += 1
+                    continue
+                reserve_usd = cold.reserve_usd
+                price_usd = cold.price_usd
+                if cold.quote_is_weth and (price_usd is None or (reserve_usd is None and cold.quote_reserve_raw is not None)):
+                    from aria_core.services.doppler import eth_usd_rate
+                    rate = await eth_usd_rate()
+                    if rate is not None:
+                        if price_usd is None and cold.price_quote is not None:
+                            price_usd = cold.price_quote * rate
+                        # 28/08, specs/015 -- same WETH reserve_usd
+                        # conversion as the live-snapshot branch above,
+                        # mirrored here for the cold-read path.
+                        if reserve_usd is None and cold.quote_reserve_raw is not None:
+                            reserve_usd = 2.0 * cold.quote_reserve_raw * rate
             if reserve_usd is None or reserve_usd < min_liquidity_usd or price_usd is None:
                 continue
             # 26/08 -- a raw on-chain PairCreated/Initialize event carries no
             # ERC-20 symbol metadata, so every day-zero candidate used to log
             # with symbol=None ("?" in Telegram notifications, confirmed live
             # on base_momentum_shadow.py). Resolving it here (bounded: only
-            # QUALIFIED candidates reach this line, funnel doctrine) reuses
-            # the same pool-detail call dexpaprika.py already makes for its
-            # own REST-sourced TrendingPool.symbol -- never fabricated, None
-            # on any resolution failure.
-            base = await dexpaprika._resolve_base_token(self.chain, key)  # noqa: SLF001 -- internal, same module family
-            symbol = base[1] if base is not None else None
+            # QUALIFIED candidates reach this line, funnel doctrine) --
+            # cosmetic only, never gates qualification (specs/015: replaced
+            # DexPaprika's `_resolve_base_token` with a direct `symbol()`
+            # eth_call, never fabricated, None on any resolution failure).
+            symbol = await self._ws_feed.resolve_token_symbol(cand.token_address)
             qualified.append(TrendingPool(
                 pool_address=key, token_address=cand.token_address, symbol=symbol,
                 price_usd=price_usd, price_change_pct={}, transactions_m15=None,
@@ -462,9 +538,11 @@ class OnChainPoolDiscoveryFeed:
         # sensor:") makes the two cases distinguishable without guessing.
         logger.info(
             "onchain_pool_discovery[%s]: raw_notifications_seen=%d "
-            "rejected_not_priceable=%d pending=%d qualified_this_cycle=%d",
+            "rejected_not_priceable=%d not_yet_priceable_total=%d cap_dropped_total=%d "
+            "pending=%d qualified_this_cycle=%d",
             self.chain, self.raw_notifications_seen,
-            self.rejected_not_priceable_count, len(self._candidates), len(qualified),
+            self.rejected_not_priceable_count, self.not_yet_priceable_count,
+            self._cap_dropped_count, len(self._candidates), len(qualified),
         )
         return qualified
 
@@ -475,3 +553,7 @@ class OnChainPoolDiscoveryFeed:
     @property
     def dropped_count(self) -> int:
         return self._dropped_count
+
+    @property
+    def cap_dropped_count(self) -> int:
+        return self._cap_dropped_count

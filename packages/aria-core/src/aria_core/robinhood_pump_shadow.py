@@ -132,7 +132,7 @@ from aria_core import pretrade_rejection_log, shadow_discovery_only, shadow_pock
 from aria_core.momentum_entry import _best_pair
 from aria_core.paper_trader import _advance_high_water
 from aria_core.paths import shadow_db_path
-from aria_core.services import dexpaprika, dexscreener, doppler
+from aria_core.services import dexscreener, doppler
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.skills import chain_liquidity_regime
 from aria_core.services.geckoterminal import (
@@ -553,13 +553,14 @@ async def _has_open_signal(db: aiosqlite.Connection, pool_address: str, chain: s
 # updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory
 # read because the pool is already subscribed to a websocket for an
 # unrelated reason (exit tracking). This pocket has no such subscription --
-# its only view of the market is the REST ``dexpaprika.get_trending_pools()``
-# fetch ``robinhood_shadow_loop`` already performs every
-# ROBINHOOD_CADENCE_SECONDS=120s to look for NEW candidates, regardless of
-# whether anything new is found. That fetch returns up to 25 pools with a
+# its only view of the market is the discovery fetch ``robinhood_
+# discovery_loop`` already performs every cycle to look for NEW candidates
+# (on-chain day-zero feed as of 28/08, specs/015-robinhood-chainstack-only;
+# was DexPaprika's REST ``get_trending_pools()`` before that), regardless of
+# whether anything new is found. That fetch returns qualified pools with a
 # live price EVERY cycle, so ``advance_regime_candidates_from_pools`` below
 # re-reads THAT SAME response for pools already under tracking rather than
-# issuing any REST call of its own -- zero marginal throughput.
+# issuing any extra call of its own -- zero marginal throughput.
 #
 # REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets
 # (robinhood/base/solana_pump) share DexPaprika's own throttle (independent
@@ -682,8 +683,9 @@ async def advance_regime_candidates_from_pools(
     """Updates each still-tracked candidate's peak using the discovery
     fetch's OWN response -- see the module-level comment above for why this
     needs no dedicated network call. ``pools`` must be the exact same list
-    the caller's loop already fetched via ``dexpaprika.get_trending_pools()``
-    this cycle. A candidate whose pool is absent from this cycle's response
+    the caller's loop already fetched this cycle (the on-chain day-zero feed
+    as of 28/08, specs/015-robinhood-chainstack-only). A candidate whose
+    pool is absent from this cycle's response
     simply keeps its last known peak (see the "HONEST LIMIT" comment above);
     it is still closed once REGIME_TRACKING_WINDOW_MINUTES elapses either
     way, so a candidate that fell out of the trending list cannot track
@@ -1054,34 +1056,25 @@ async def _snapshot_from_ws(
 
 
 async def _snapshot_with_fallback(
-    client: GeckoTerminalClient, pool_address: str, token_address: str | None, *, chain: str,
+    pool_address: str, token_address: str | None, *, chain: str,
     ws_feed: EVMSwapWebSocketFeed | None = None, dex_id: str | None = None,
 ) -> PoolSnapshot:
-    """DexScreener FIRST for the spot price, GeckoTerminal as fallback --
-    16/08, operator-directed "API cascade" doctrine, inverted same day once
-    both real budgets were compared (``docs/api-rate-limit-calibration.md``):
-    DexScreener's confirmed real ceiling (~60/min, likely ~300/min on the
-    pairs/tokens endpoint this module uses) is far above GeckoTerminal's
-    demo-tier real ceiling (~15/min, repeatedly confirmed lower under load).
-    DexScreener has its own INDEPENDENT rate budget (``services/
-    dexscreener.py``, never shared with GeckoTerminal's adaptive throttle),
-    so putting it first frees up GeckoTerminal's scarcer budget for what it
-    alone can do -- OHLCV candles (DexScreener exposes NO real OHLCV
-    endpoint, verified in ``services/dexscreener.py``, only a synthesized
-    approximation from % variations, never real wicks). Real incident this
-    whole cascade fixes: this exact pool (Robinhood SQUIRREL) 429'd on every
-    GeckoTerminal attempt across many consecutive cycles, leaving its
-    exit-sim permanently unchecked. Never a third silent fabrication: both
-    sources failing still returns ``available=False``, same "never fabricate
+    """DexScreener for the spot price, a targeted Chainstack cold read as the
+    fallback -- 16/08, operator-directed "API cascade" doctrine, then
+    28/08 (specs/015-robinhood-chainstack-only) removed GeckoTerminal and
+    DexPaprika from this path entirely: both used to backfill `reserve_usd`
+    ONLY when DexScreener itself reported `liquidity_unknown`, and DexPaprika
+    is the confirmed, direct cause of this dome's active outage
+    (system_issues #269) when it fails. Never a silent fabrication: every
+    source failing still returns ``available=False``, same "never fabricate
     a price" doctrine as the rest of this module.
 
     **24/08 -- ``ws_feed`` tried FIRST, ahead of DexScreener**, when given:
     direct on-chain price, no aggregator indexing delay (see
-    ``_snapshot_from_ws``). Falls through to this same DexScreener/
-    GeckoTerminal cascade unchanged whenever the WS feed isn't tracking this
-    pool yet, hasn't ticked, or can't resolve USD -- the WS path is a
-    latency upgrade layered on top, never a replacement that could leave a
-    pool unpriced."""
+    ``_snapshot_from_ws``). Falls through to DexScreener unchanged whenever
+    the WS feed isn't tracking this pool yet, hasn't ticked, or can't
+    resolve USD -- the WS path is a latency upgrade layered on top, never a
+    replacement that could leave a pool unpriced."""
     if ws_feed is not None:
         ws_snapshot = await _snapshot_from_ws(ws_feed, pool_address, dex_id=dex_id)
         if ws_snapshot is not None:
@@ -1103,57 +1096,62 @@ async def _snapshot_with_fallback(
             # the correct "unknown" sentinel -- advance_exit_simulation
             # already guards on `reserve_usd is not None`.
             reserve_usd = None if pair.liquidity_unknown else pair.liquidity_usd
-            if reserve_usd is None:
-                # 18/08, same real bug as solana_pump_shadow.py's twin
-                # function (Krackpot, a $123K/24h-volume pump.fun pool
-                # DexScreener reports as liquidity_unknown -- downstream,
-                # _apply_price_impact_and_fee conflates "unknown" with
-                # "genuinely dry", falsely marking an active pool as
-                # unsellable/stranded). One extra lightweight GeckoTerminal
-                # call, ONLY when DexScreener itself came back unknown, to
-                # backfill a real reserve figure before conceding to None --
-                # DexScreener's own price stays authoritative regardless.
+            if reserve_usd is None and ws_feed is not None:
+                # 28/08 -- replaces the old GeckoTerminal/DexPaprika reserve
+                # backfill (specs/015). Same all-or-nothing contract as
+                # resolve_cold's own docstring: DexScreener's price stays
+                # authoritative regardless (this branch only backfills
+                # `reserve_usd`), so a resolve_cold failure here just leaves
+                # `reserve_usd` at None, never a fabricated value.
                 try:
-                    gecko_snapshot = await client.get_pool_snapshot(pool_address, network=chain)
-                    if gecko_snapshot.available and gecko_snapshot.reserve_usd:
-                        reserve_usd = gecko_snapshot.reserve_usd
+                    cold = await ws_feed.resolve_cold(
+                        pool_address, dex_id=dex_id, token_address=token_address,
+                    )
+                    if cold.available and cold.reserve_usd:
+                        reserve_usd = cold.reserve_usd
                 except Exception as exc:  # noqa: BLE001 -- best-effort backfill, never blocks the primary snapshot
                     logger.info(
-                        "robinhood_pump_shadow: GeckoTerminal reserve backfill failed for %s (%s)",
+                        "robinhood_pump_shadow: Chainstack reserve backfill failed for %s (%s)",
                         pool_address, exc,
                     )
-                if reserve_usd is None:
-                    # 18/08 -- twin of solana_pump_shadow.py's own 3rd-source
-                    # fallback (see its comment for the SadDog incident that
-                    # prompted this). DexPaprika's real Robinhood Chain
-                    # coverage isn't separately confirmed -- best-effort,
-                    # degrades to None on any failure, same as every other
-                    # backfill attempt here.
-                    try:
-                        reserve_usd = await dexpaprika.get_pool_reserve_usd(pool_address, network=chain)
-                    except Exception as exc:  # noqa: BLE001 -- best-effort backfill, never blocks the primary snapshot
-                        logger.info(
-                            "robinhood_pump_shadow: DexPaprika reserve backfill failed for %s (%s)",
-                            pool_address, exc,
-                        )
             return PoolSnapshot(
                 pool_address=pool_address, price_usd=pair.price_usd,
                 reserve_usd=reserve_usd, available=True, dex_id=pair.dex_id,
             )
-    return await client.get_pool_snapshot(pool_address, network=chain)
+    # 28/08 -- replaces the old GeckoTerminal-sole-fallback (specs/015): no
+    # token_address means no DexScreener lookup was even attempted, but
+    # resolve_cold is keyed on `pool_address` alone, so it can still be
+    # tried here rather than conceding to `available=False` outright.
+    if ws_feed is not None:
+        cold = await ws_feed.resolve_cold(pool_address, dex_id=dex_id, token_address=token_address)
+        if cold.available and cold.price_usd is not None:
+            return PoolSnapshot(
+                pool_address=pool_address, price_usd=cold.price_usd,
+                reserve_usd=cold.reserve_usd, available=True, dex_id=dex_id,
+            )
+    return PoolSnapshot(pool_address=pool_address, available=False)
 
 
 async def evaluate_open_signals(
     client: GeckoTerminalClient | None = None, *, chain: str = "robinhood", limit: int = 50,
+    ws_feed: EVMSwapWebSocketFeed | None = None,
 ) -> dict[str, int]:
     """The real out-of-sample forward-measurement pass -- for each OPEN
     signal old enough to have crossed a not-yet-measured horizon (15min/1h/
     2h since detection), fetches the pool's CURRENT price
-    (``get_pool_snapshot``) and records the real forward return. Closes the
-    row once the 2h checkpoint lands. Best-effort per row: one pool's lookup
-    failing (delisted, no liquidity left, network error) never blocks the
-    others -- ``PoolSnapshot.available=False`` is simply skipped, left for
-    the next passage to retry, never a fabricated 0%."""
+    (``_snapshot_with_fallback``) and records the real forward return. Closes
+    the row once the 2h checkpoint lands. Best-effort per row: one pool's
+    lookup failing (delisted, no liquidity left, network error) never blocks
+    the others -- ``PoolSnapshot.available=False`` is simply skipped, left
+    for the next passage to retry, never a fabricated 0%.
+
+    ``client`` kept for call-site compatibility but no longer threaded into
+    the snapshot resolver (28/08, specs/015-robinhood-chainstack-only --
+    GeckoTerminal/DexPaprika removed from that path entirely). ``ws_feed``
+    (new 28/08) lets this pass benefit from the same Chainstack-first
+    resolution ``advance_exit_simulation`` already receives -- previously
+    missing here, so this pass depended solely on the DexScreener/cold-read
+    cascade with no websocket priority at all."""
     client = client or geckoterminal_client
     counts = {"measured_m15": 0, "measured_h1": 0, "measured_h2": 0, "closed": 0}
     try:
@@ -1197,7 +1195,7 @@ async def evaluate_open_signals(
 
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
-                    client, row["pool_address"], row["token_address"], chain=chain,
+                    row["pool_address"], row["token_address"], chain=chain, ws_feed=ws_feed,
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch
                 logger.info(
@@ -1382,7 +1380,7 @@ async def advance_exit_simulation(
 
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
-                    client, row["pool_address"], row["token_address"], chain=chain,
+                    row["pool_address"], row["token_address"], chain=chain,
                     ws_feed=ws_feed, dex_id=row.get("dex_id"),
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch

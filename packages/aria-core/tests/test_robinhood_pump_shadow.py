@@ -354,6 +354,8 @@ class FakeWsFeed:
         self._snapshots: dict[str, object] = {}
         self.add_pool_calls: list[tuple[str, str, str]] = []
         self.remove_pool_calls: list[str] = []
+        self.resolve_cold_calls: list[str] = []
+        self.resolve_cold_result = _FakeColdSnapshot(available=False)
 
     async def add_pool(self, pool_address, *, dex_id, token_address):
         self.add_pool_calls.append((pool_address, dex_id, token_address))
@@ -367,6 +369,10 @@ class FakeWsFeed:
     def get_snapshot(self, pool_address):
         return _FakeWsSnapshot(available=False)
 
+    async def resolve_cold(self, pool_address, *, dex_id=None, token_address=None):
+        self.resolve_cold_calls.append(pool_address)
+        return self.resolve_cold_result
+
 
 @dataclasses.dataclass
 class _FakeWsSnapshot:
@@ -377,6 +383,52 @@ class _FakeWsSnapshot:
     quote_is_weth: bool = False
 
 
+@dataclasses.dataclass
+class _FakeColdSnapshot:
+    """Minimal double for the fields of ``EVMSwapSnapshot`` that
+    ``_snapshot_with_fallback``'s ``resolve_cold``-based backfill reads
+    (specs/015-robinhood-chainstack-only, 28/08)."""
+    available: bool
+    price_usd: float | None = None
+    reserve_usd: float | None = None
+
+
+class _WsFeedFromRestPrices:
+    """28/08 (specs/015-robinhood-chainstack-only) -- ``evaluate_open_signals``
+    /``advance_exit_simulation`` no longer thread ``client`` into the price
+    resolver at all (GeckoTerminal removed from that path entirely); a
+    ``ws_feed`` is now the only way to inject a deterministic price into
+    these exit-ladder/forward-measurement tests. Wraps the SAME
+    ``price_by_pool``/``reserve_by_pool`` shape ``FakeClient`` already took,
+    so the pre-28/08 test bodies below only need a second object built from
+    the same dict, not a rewrite of their ladder-math assertions."""
+
+    def __init__(self, price_by_pool, reserve_by_pool=None):
+        self._prices = dict(price_by_pool)
+        self._reserves = dict(reserve_by_pool or {})
+        self._pools: dict[str, object] = {}
+        self.get_snapshot_calls: list[str] = []
+
+    def get_snapshot(self, pool_address):
+        self.get_snapshot_calls.append(pool_address)
+        price = self._prices.get(pool_address)
+        if price is None:
+            return _FakeWsSnapshot(available=False)
+        return _FakeWsSnapshot(
+            available=True, price_usd=price, reserve_usd=self._reserves.get(pool_address),
+        )
+
+    async def add_pool(self, pool_address, *, dex_id, token_address):
+        self._pools[pool_address.lower()] = True
+        return True
+
+    async def remove_pool(self, pool_address):
+        self._pools.pop(pool_address.lower(), None)
+
+    async def resolve_cold(self, pool_address, *, dex_id=None, token_address=None):
+        return _FakeColdSnapshot(available=False)
+
+
 @pytest.mark.asyncio
 async def test_snapshot_from_ws_used_when_available_and_price_resolved(monkeypatch):
     ws_feed = FakeWsFeed()
@@ -384,14 +436,12 @@ async def test_snapshot_from_ws_used_when_available_and_price_resolved(monkeypat
     ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(
         available=True, price_usd=4.2, reserve_usd=5000.0,
     )
-    client = FakeClient({"poolA": 99.0})  # would prove wrong if this got used instead
     snapshot = await shadow._snapshot_with_fallback(
-        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+        "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
     )
     assert snapshot.available is True
     assert snapshot.price_usd == 4.2
     assert snapshot.reserve_usd == 5000.0
-    assert client.calls == []  # REST cascade never reached
 
 
 @pytest.mark.asyncio
@@ -406,13 +456,11 @@ async def test_snapshot_from_ws_weth_quote_resolved_via_doppler(monkeypatch):
         return 3000.0
 
     monkeypatch.setattr(shadow.doppler, "eth_usd_rate", fake_eth_usd_rate)
-    client = FakeClient({"poolA": 99.0})
     snapshot = await shadow._snapshot_with_fallback(
-        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+        "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
     )
     assert snapshot.available is True
     assert snapshot.price_usd == pytest.approx(3.0)  # 0.001 * 3000
-    assert client.calls == []
 
 
 @pytest.mark.asyncio
@@ -423,29 +471,38 @@ async def test_snapshot_from_ws_falls_back_to_rest_when_pool_not_tracked(monkeyp
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": 99.0})
     snapshot = await shadow._snapshot_with_fallback(
-        client, "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
+        "poolA", "tokA", chain=CHAIN, ws_feed=ws_feed, dex_id="uniswap_v3",
     )
     assert snapshot.available is True
     assert snapshot.price_usd == 3.5  # DexScreener answered, WS had nothing
 
 
 @pytest.mark.asyncio
-async def test_advance_exit_calls_add_pool_when_dex_id_known():
+async def test_advance_exit_calls_add_pool_when_dex_id_known(monkeypatch):
     await _insert_open_row(
         pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
     )
     ws_feed = FakeWsFeed()
-    client = FakeClient({"poolA": 1.0})  # stays open (no move) -- REST fallback still answers
+
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return []  # add_pool is called unconditionally, independent of pricing -- see below
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    client = FakeClient({"poolA": 1.0})  # kept only for get_ohlcv, still threaded via client
     await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert ws_feed.add_pool_calls == [("poolA", "uniswap_v3", "tokA")]
 
 
 @pytest.mark.asyncio
-async def test_advance_exit_never_calls_add_pool_when_dex_id_unknown():
+async def test_advance_exit_never_calls_add_pool_when_dex_id_unknown(monkeypatch):
     await _insert_open_row(pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0)
     ws_feed = FakeWsFeed()
+
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return []
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
     client = FakeClient({"poolA": 1.0})
     await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert ws_feed.add_pool_calls == []
@@ -457,24 +514,28 @@ async def test_advance_exit_calls_remove_pool_on_close():
         pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
     )
     ws_feed = FakeWsFeed()
-    client = FakeClient({"poolA": 1000.0})  # far past enough rungs to fully close
+    # far past enough rungs to fully close -- price now flows through the
+    # ws_feed cascade (28/08, specs/015), not the removed client argument.
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(available=True, price_usd=1000.0)
+    client = FakeClient({"poolA": 1000.0})  # kept only for get_ohlcv, still threaded via client
     counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_scale_out_complete"] == 1
     assert ws_feed.remove_pool_calls == ["poolA"]
 
 
 @pytest.mark.asyncio
-async def test_advance_exit_never_calls_remove_pool_while_still_open():
+async def test_advance_exit_never_calls_remove_pool_while_still_open(monkeypatch):
     await _insert_open_row(
         pool_address="poolA", token_address="tokA", entry_price=1.0, minutes_ago=10.0, dex_id="uniswap_v3",
     )
     ws_feed = FakeWsFeed()
-    client = FakeClient({"poolA": 1.0})  # no move -- stays open
+    ws_feed.get_snapshot = lambda pool_address: _FakeWsSnapshot(available=True, price_usd=1.0)  # no move
+    client = FakeClient({"poolA": 1.0})  # kept only for get_ohlcv, still threaded via client
     await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert ws_feed.remove_pool_calls == []
 
 
-# --- _snapshot_with_fallback (16/08 API cascade) ---------------------------
+# --- _snapshot_with_fallback (16/08 API cascade, 28/08 Chainstack-only) ---
 
 @pytest.mark.asyncio
 async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
@@ -482,89 +543,79 @@ async def test_snapshot_fallback_uses_dexscreener_when_available(monkeypatch):
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=10000.0)]
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": 99.0})  # would prove wrong if GeckoTerminal got used instead
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN)
     assert snapshot.available is True
     assert snapshot.price_usd == 3.5
     assert snapshot.reserve_usd == 10000.0
-    assert client.calls == []  # GeckoTerminal never called -- DexScreener answered first
 
 
 @pytest.mark.asyncio
-async def test_snapshot_fallback_unknown_liquidity_backfilled_from_geckoterminal(monkeypatch):
+async def test_snapshot_fallback_unknown_liquidity_backfilled_from_resolve_cold(monkeypatch):
     """17/08, same real bug as the Solana twin: DexScreener's
     liquidity_unknown=True must become None, not the default 0.0, or
     advance_exit_simulation's liquidity_collapse check reads it as a real
     drain.
 
-    18/08, same follow-up bug as the Solana twin: a bare None fixed the
-    false liquidity_collapse, but `_apply_price_impact_and_fee` treats it
-    identically to a genuine 0, falsely marking an actively-traded pool as
-    unsellable/stranded. Now backfills from GeckoTerminal when DexScreener
-    came back unknown -- DexScreener's own price is never overwritten."""
+    28/08 (specs/015-robinhood-chainstack-only): the GeckoTerminal/DexPaprika
+    reserve backfill was replaced by a single targeted Chainstack cold read
+    (``ws_feed.resolve_cold``) -- DexScreener's own price is still never
+    overwritten by the backfill."""
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": 99.0})  # FakeClient.get_pool_snapshot reports reserve_usd=1000.0
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=True, reserve_usd=1000.0)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is True
     assert snapshot.price_usd == 3.5  # DexScreener's price, never overwritten by the backfill call
-    assert snapshot.reserve_usd == 1000.0  # backfilled from GeckoTerminal, not left None
-    assert client.calls == ["poolA"]  # the backfill call really happened
+    assert snapshot.reserve_usd == 1000.0  # backfilled from the Chainstack cold read, not left None
+    assert ws_feed.resolve_cold_calls == ["poolA"]  # the backfill call really happened
 
 
 @pytest.mark.asyncio
-async def test_snapshot_fallback_unknown_liquidity_backfilled_from_dexpaprika_when_gecko_empty(monkeypatch):
-    """18/08, same real bug as the Solana twin (SadDog): a THIRD backfill
-    source (DexPaprika, independent rate-limit budget) is reached only when
-    both DexScreener AND GeckoTerminal already came back empty."""
+async def test_snapshot_fallback_unknown_liquidity_stays_none_when_resolve_cold_unavailable(monkeypatch):
+    """The backfill is best-effort, never a fabrication -- if DexScreener
+    reports unknown liquidity AND the Chainstack cold read also can't
+    resolve it, reserve_usd must stay None."""
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
 
-    async def fake_get_pool_reserve_usd(pool_address, *, network="robinhood"):
-        return 2062.5
-
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    monkeypatch.setattr(shadow.dexpaprika, "get_pool_reserve_usd", fake_get_pool_reserve_usd)
-    client = FakeClient({"poolA": None})  # GeckoTerminal has nothing for this pool
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
-    assert snapshot.available is True
-    assert snapshot.price_usd == 3.5
-    assert snapshot.reserve_usd == 2062.5  # backfilled from DexPaprika, not left None
-
-
-@pytest.mark.asyncio
-async def test_snapshot_fallback_unknown_liquidity_stays_none_when_all_three_sources_empty(monkeypatch):
-    """The backfill is best-effort, never a fabrication -- if DexScreener,
-    GeckoTerminal, AND DexPaprika all have nothing, reserve_usd must stay
-    None."""
-    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
-        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
-
-    async def fake_get_pool_reserve_usd(pool_address, *, network="robinhood"):
-        return None
-
-    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    monkeypatch.setattr(shadow.dexpaprika, "get_pool_reserve_usd", fake_get_pool_reserve_usd)
-    client = FakeClient({"poolA": None})  # GeckoTerminal also has nothing for this pool
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=False)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is True
     assert snapshot.price_usd == 3.5
     assert snapshot.reserve_usd is None
 
 
 @pytest.mark.asyncio
-async def test_snapshot_fallback_falls_back_to_geckoterminal_when_dexscreener_empty(monkeypatch):
+async def test_snapshot_fallback_unknown_liquidity_stays_none_without_ws_feed(monkeypatch):
+    """Same as above, but no ``ws_feed`` at all was passed in -- the backfill
+    branch must be skipped entirely, never raise."""
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return [PairSnapshot(base_address=contract, price_usd=3.5, liquidity_usd=0.0, liquidity_unknown=True)]
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is True
+    assert snapshot.price_usd == 3.5
+    assert snapshot.reserve_usd is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_falls_back_to_resolve_cold_when_dexscreener_empty(monkeypatch):
     async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
         return []
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": 2.0})
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=True, price_usd=2.0, reserve_usd=500.0)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is True
-    assert snapshot.price_usd == 2.0
-    assert client.calls == ["poolA"]  # GeckoTerminal used as the real fallback
+    assert snapshot.price_usd == 2.0  # the Chainstack cold read used as the real fallback
+    assert ws_feed.resolve_cold_calls == ["poolA"]
 
 
 @pytest.mark.asyncio
@@ -573,8 +624,9 @@ async def test_snapshot_fallback_falls_back_on_dexscreener_exception(monkeypatch
         raise RuntimeError("dexscreener unreachable")
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", broken_fetch_token_pairs)
-    client = FakeClient({"poolA": 2.0})
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=True, price_usd=2.0, reserve_usd=500.0)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is True
     assert snapshot.price_usd == 2.0
 
@@ -585,9 +637,20 @@ async def test_snapshot_fallback_unavailable_when_both_sources_fail(monkeypatch)
         return []
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
-    client = FakeClient({"poolA": None})  # GeckoTerminal also has nothing
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", "tokA", chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=False)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is False  # never fabricated, both sources genuinely empty
+
+
+@pytest.mark.asyncio
+async def test_snapshot_fallback_unavailable_without_ws_feed_when_dexscreener_fails(monkeypatch):
+    async def fake_fetch_token_pairs(contract, *, chain="robinhood"):
+        return []
+
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_fetch_token_pairs)
+    snapshot = await shadow._snapshot_with_fallback("poolA", "tokA", chain=CHAIN)
+    assert snapshot.available is False  # no ws_feed at all -- never fabricated
 
 
 @pytest.mark.asyncio
@@ -596,8 +659,9 @@ async def test_snapshot_fallback_skips_dexscreener_without_a_token_address(monke
         raise AssertionError("dexscreener should never be called without a token_address")
 
     monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", unexpected_call)
-    client = FakeClient({"poolA": 4.0})
-    snapshot = await shadow._snapshot_with_fallback(client, "poolA", None, chain=CHAIN)
+    ws_feed = FakeWsFeed()
+    ws_feed.resolve_cold_result = _FakeColdSnapshot(available=True, price_usd=4.0, reserve_usd=None)
+    snapshot = await shadow._snapshot_with_fallback("poolA", None, chain=CHAIN, ws_feed=ws_feed)
     assert snapshot.available is True
     assert snapshot.price_usd == 4.0
 
@@ -687,8 +751,8 @@ async def _insert_open_row(
 @pytest.mark.asyncio
 async def test_evaluate_measures_m15_once_aged_past_15_minutes():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=20.0)
-    client = FakeClient({"poolA": 1.5})
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.5})
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts["measured_m15"] == 1
     rows = await _rows()
     assert rows[0]["forward_price_m15"] == 1.5
@@ -699,20 +763,20 @@ async def test_evaluate_measures_m15_once_aged_past_15_minutes():
 @pytest.mark.asyncio
 async def test_evaluate_skips_pool_not_yet_old_enough():
     await _insert_open_row(minutes_ago=5.0)  # younger than the 15min horizon
-    client = FakeClient({"poolA": 2.0})
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 2.0})
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts == {"measured_m15": 0, "measured_h1": 0, "measured_h2": 0, "closed": 0}
-    assert client.calls == []
+    assert ws_feed.get_snapshot_calls == []
 
 
 @pytest.mark.asyncio
 async def test_evaluate_closes_row_on_h2_checkpoint():
     await _insert_open_row(entry_price=1.0, minutes_ago=130.0)
-    client = FakeClient({"poolA": 0.8})
+    ws_feed = _WsFeedFromRestPrices({"poolA": 0.8})
     # First pass advances m15, second h1, third h2 -- exercise all three in sequence.
-    await shadow.evaluate_open_signals(client, chain=CHAIN)
-    await shadow.evaluate_open_signals(client, chain=CHAIN)
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
+    await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed"] == 1
     rows = await _rows()
     assert rows[0]["status"] == "closed"
@@ -723,8 +787,8 @@ async def test_evaluate_closes_row_on_h2_checkpoint():
 @pytest.mark.asyncio
 async def test_evaluate_never_fabricates_when_snapshot_unavailable():
     await _insert_open_row(minutes_ago=20.0)
-    client = FakeClient({"poolA": None})  # unavailable
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": None})  # unavailable
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts["measured_m15"] == 0
     rows = await _rows()
     assert rows[0]["forward_price_m15"] is None
@@ -736,14 +800,14 @@ async def test_evaluate_one_pool_failure_never_blocks_others():
     await _insert_open_row(pool_address="poolA", minutes_ago=20.0)
     await _insert_open_row(pool_address="poolB", minutes_ago=20.0)
 
-    class RaisingThenWorkingClient(FakeClient):
-        async def get_pool_snapshot(self, pool_address, *, network="robinhood"):
+    class RaisingThenWorkingWsFeed(_WsFeedFromRestPrices):
+        def get_snapshot(self, pool_address):
             if pool_address == "poolA":
                 raise RuntimeError("boom")
-            return await super().get_pool_snapshot(pool_address, network=network)
+            return super().get_snapshot(pool_address)
 
-    client = RaisingThenWorkingClient({"poolB": 3.0})
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    ws_feed = RaisingThenWorkingWsFeed({"poolB": 3.0})
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts["measured_m15"] == 1  # poolB still measured despite poolA's failure
 
 
@@ -761,10 +825,10 @@ async def test_evaluate_old_row_awaiting_h2_never_starves_a_younger_rows_m15():
         )
         await db.commit()
 
-    client = FakeClient({"poolOld": 1.3, "poolYoung": 2.0})
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN, limit=1)
+    ws_feed = _WsFeedFromRestPrices({"poolOld": 1.3, "poolYoung": 2.0})
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, limit=1, ws_feed=ws_feed)
     assert counts["measured_m15"] == 1  # poolYoung's due m15, not wasted on poolOld
-    assert client.calls == ["poolYoung"]
+    assert ws_feed.get_snapshot_calls == ["poolYoung"]
     rows = {r["pool_address"]: r for r in await _rows()}
     assert rows["poolYoung"]["forward_pct_m15"] == pytest.approx(100.0)
     assert rows["poolOld"]["forward_price_h1"] == pytest.approx(1.2)  # untouched, not yet due for h2
@@ -774,8 +838,8 @@ async def test_evaluate_old_row_awaiting_h2_never_starves_a_younger_rows_m15():
 async def test_evaluate_never_raises_on_db_failure(monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
     shadow._ensured_db_paths.clear()
-    client = FakeClient({})
-    counts = await shadow.evaluate_open_signals(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({})
+    counts = await shadow.evaluate_open_signals(chain=CHAIN, ws_feed=ws_feed)
     assert counts["measured_m15"] == 0
 
 
@@ -860,9 +924,10 @@ async def test_summary_no_closed_rows_is_none_not_zero():
 async def test_advance_exit_multiple_rungs_filled_in_one_slow_cycle():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     client = FakeClient({"poolA": 2.0})  # a slow cycle: price jumped straight past 3 rungs
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 2.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert counts["scale_out_fills"] == 3
-    assert client.calls == ["poolA"]  # exactly one snapshot call for this position
+    assert ws_feed.get_snapshot_calls == ["poolA"]  # exactly one snapshot call for this position
     rows = await _rows()
     assert rows[0]["remaining_qty"] == pytest.approx(0.421875)
     assert rows[0]["realized_proceeds"] == pytest.approx(0.880126953125)
@@ -876,7 +941,8 @@ async def test_advance_exit_multiple_rungs_filled_in_one_slow_cycle():
 async def test_advance_exit_scale_out_dust_closes_position():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     client = FakeClient({"poolA": 1000.0})  # far past enough rungs to leave <1% remaining
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1000.0})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_scale_out_complete"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "scale_out_complete"
@@ -889,12 +955,12 @@ async def test_advance_exit_scale_out_dust_closes_position():
 async def test_advance_exit_trailing_stop_triggers():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     # Cycle 1: price rises past the first rung, sets a new peak at 1.3.
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.3}))
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
     assert rows[0]["peak_price"] == pytest.approx(1.3)
     # Cycle 2: price falls to exactly -20% of the 1.3 peak -> trailing stop.
-    counts = await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.04}))
     assert counts["closed_trailing_stop"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "trailing_stop"
@@ -911,7 +977,7 @@ async def test_advance_exit_suspect_peak_jump_does_not_ratchet_instantly():
     stays a pending candidacy until confirmed."""
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     # 15x the entry in one cycle -- well past the suspect ratio.
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 15.0}))
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.0)  # unchanged, never trusted on one read
     assert rows[0]["pending_peak_price"] == pytest.approx(15.0)
@@ -921,7 +987,7 @@ async def test_advance_exit_suspect_peak_jump_does_not_ratchet_instantly():
 @pytest.mark.asyncio
 async def test_advance_exit_suspect_peak_jump_confirms_once_it_holds():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 15.0}))
     # Simulate the confirmation window having elapsed since the candidacy opened.
     from datetime import datetime, timedelta, timezone as tz
 
@@ -932,7 +998,7 @@ async def test_advance_exit_suspect_peak_jump_confirms_once_it_holds():
         )
         await db.commit()
     # Same price still held -- candidacy confirms this cycle.
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 15.0}))
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(15.0)
     assert rows[0]["pending_peak_price"] is None
@@ -945,8 +1011,8 @@ async def test_advance_exit_suspect_peak_jump_abandoned_if_it_falls_back():
     back below the last CONFIRMED peak before the candidacy holds long
     enough, it's abandoned entirely -- proof it wasn't sustained."""
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 15.0}), chain=CHAIN)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 0.9}), chain=CHAIN)
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 15.0}))
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 0.9}))
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.0)
     assert rows[0]["pending_peak_price"] is None
@@ -958,7 +1024,8 @@ async def test_advance_exit_normal_jump_still_ratchets_instantly():
     """A jump well under _PEAK_JUMP_SUSPECT_RATIO keeps the original
     unchanged behavior -- never delayed, no pending candidacy created."""
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 3.0}), chain=CHAIN)  # 3x, well under 10x
+    # 3x, well under 10x
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 3.0}))
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(3.0)
     assert rows[0]["pending_peak_price"] is None
@@ -968,8 +1035,8 @@ async def test_advance_exit_normal_jump_still_ratchets_instantly():
 @pytest.mark.asyncio
 async def test_advance_exit_max_hold_triggers():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=125.0)
-    client = FakeClient({"poolA": 1.1})  # no rung crossed, no stop hit -- only the timeout fires
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.1})  # no rung crossed, no stop hit -- only the timeout fires
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_max_hold"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "max_hold"
@@ -980,8 +1047,8 @@ async def test_advance_exit_max_hold_triggers():
 @pytest.mark.asyncio
 async def test_advance_exit_stays_open_when_nothing_triggers():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    client = FakeClient({"poolA": 1.1})  # below the first rung, above the stop, well under 2h
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.1})  # below the first rung, above the stop, well under 2h
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["checked"] == 1
     assert counts["scale_out_fills"] == 0
     rows = await _rows()
@@ -993,8 +1060,8 @@ async def test_advance_exit_stays_open_when_nothing_triggers():
 @pytest.mark.asyncio
 async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    client = FakeClient({"poolA": None})  # unavailable
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": None})  # unavailable
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["checked"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
@@ -1004,8 +1071,9 @@ async def test_advance_exit_never_fabricates_when_snapshot_unavailable():
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_force_closes_a_losing_position():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
-    client = FakeClient({"poolA": 0.95})  # below entry -- losing, no rung/stop/max-hold triggered on its own
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    # below entry -- losing, no rung/stop/max-hold triggered on its own
+    ws_feed = _WsFeedFromRestPrices({"poolA": 0.95})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_age_limit"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "age_limit"
@@ -1016,8 +1084,9 @@ async def test_advance_exit_age_limit_force_closes_a_losing_position():
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, pool_age_minutes=30.0)
-    client = FakeClient({"poolA": 1.1})  # above entry -- winning, kept open despite the age
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    # above entry -- winning, kept open despite the age
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.1})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_age_limit"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
@@ -1027,8 +1096,9 @@ async def test_advance_exit_age_limit_never_force_closes_a_winning_position():
 @pytest.mark.asyncio
 async def test_advance_exit_age_limit_ignored_when_age_unknown():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)  # pool_age_minutes=None
-    client = FakeClient({"poolA": 0.95})  # losing, but age is unknown -- never force-closed on that basis alone
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    # losing, but age is unknown -- never force-closed on that basis alone
+    ws_feed = _WsFeedFromRestPrices({"poolA": 0.95})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_age_limit"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
@@ -1038,8 +1108,8 @@ async def test_advance_exit_age_limit_ignored_when_age_unknown():
 async def test_advance_exit_liquidity_collapse_force_closes_a_position():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=100000.0)
     # Reserve fell to 40% of entry -- past the 50% LIQUIDITY_COLLAPSE_EXIT_PCT threshold.
-    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 40000.0})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05}, reserve_by_pool={"poolA": 40000.0})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_liquidity_collapse"] == 1
     rows = await _rows()
     assert rows[0]["exit_reason"] == "liquidity_collapse"
@@ -1051,8 +1121,8 @@ async def test_advance_exit_liquidity_collapse_force_closes_a_position():
 async def test_advance_exit_liquidity_collapse_ignored_when_above_threshold():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=100000.0)
     # Reserve down to 60% of entry -- still above the 50% threshold, not a collapse.
-    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 60000.0})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05}, reserve_by_pool={"poolA": 60000.0})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_liquidity_collapse"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
@@ -1062,8 +1132,8 @@ async def test_advance_exit_liquidity_collapse_ignored_when_above_threshold():
 @pytest.mark.asyncio
 async def test_advance_exit_liquidity_collapse_ignored_when_entry_reserve_unknown():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0, reserve_usd=None)
-    client = FakeClient({"poolA": 1.05}, reserve_by_pool={"poolA": 1.0})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05}, reserve_by_pool={"poolA": 1.0})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_liquidity_collapse"] == 0
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
@@ -1076,8 +1146,8 @@ async def test_advance_exit_liquidity_collapse_takes_priority_over_age_limit():
         reserve_usd=100000.0,
     )
     # Losing (triggers age_limit on its own) AND reserve collapsed -- collapse must win.
-    client = FakeClient({"poolA": 0.95}, reserve_by_pool={"poolA": 10000.0})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 0.95}, reserve_by_pool={"poolA": 10000.0})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["closed_liquidity_collapse"] == 1
     assert counts["closed_age_limit"] == 0
     rows = await _rows()
@@ -1099,8 +1169,9 @@ async def test_advance_exit_archives_after_candles(monkeypatch):
         candles=[_candle(detected_epoch + 60, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True,
     )
     client = FakeClient({"poolA": 1.05}, ohlcv_by_pool={"poolA": ohlcv})
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05})
 
-    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
 
     assert len(captured) == 1
     call = captured[0]
@@ -1125,8 +1196,9 @@ async def test_advance_exit_after_candle_archive_failure_never_blocks_the_close(
         candles=[_candle(detected_epoch + 60, open_=1.0, high=1.2, low=0.9, close=1.1)], available=True,
     )
     client = FakeClient({"poolA": 1.05}, ohlcv_by_pool={"poolA": ohlcv})
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05})
 
-    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
 
     rows = await _rows()
     assert rows[0]["exit_reason"] is not None  # some close still happens despite the archive call raising
@@ -1137,14 +1209,14 @@ async def test_advance_exit_one_pool_failure_never_blocks_others():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     await _insert_open_row(pool_address="poolB", entry_price=1.0, minutes_ago=10.0)
 
-    class RaisingThenWorkingClient(FakeClient):
-        async def get_pool_snapshot(self, pool_address, *, network="robinhood"):
+    class RaisingThenWorkingWsFeed(_WsFeedFromRestPrices):
+        def get_snapshot(self, pool_address):
             if pool_address == "poolA":
                 raise RuntimeError("boom")
-            return await super().get_pool_snapshot(pool_address, network=network)
+            return super().get_snapshot(pool_address)
 
-    client = RaisingThenWorkingClient({"poolB": 1.1})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = RaisingThenWorkingWsFeed({"poolB": 1.1})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["checked"] == 1  # poolB still processed despite poolA's failure
 
 
@@ -1152,8 +1224,8 @@ async def test_advance_exit_one_pool_failure_never_blocks_others():
 async def test_advance_exit_never_raises_on_db_failure(monkeypatch):
     monkeypatch.setattr(shadow, "DB_PATH", "/nonexistent/dir/shadow.db")
     shadow._ensured_db_paths.clear()
-    client = FakeClient({})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({})
+    counts = await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     assert counts["checked"] == 0
 
 
@@ -1178,7 +1250,8 @@ async def test_advance_exit_window_low_catches_stop_missed_by_point_sample():
     # rung is +25%), no stop breached. OHLCV unavailable this cycle (not
     # needed to establish the peak) -- pure point-sample fallback.
     client1 = FakeClient({"poolA": 1.16})
-    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    ws_feed1 = _WsFeedFromRestPrices({"poolA": 1.16})
+    await shadow.advance_exit_simulation(client1, chain=CHAIN, ws_feed=ws_feed1)
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.16)
     assert rows[0]["exit_reason"] is None
@@ -1195,7 +1268,8 @@ async def test_advance_exit_window_low_catches_stop_missed_by_point_sample():
     client2 = FakeClient(
         {"poolA": 0.03}, {"poolA": OHLCVResult(candles=candles, available=True, error=None)},
     )
-    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    ws_feed2 = _WsFeedFromRestPrices({"poolA": 0.03})
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN, ws_feed=ws_feed2)
     assert counts["closed_trailing_stop"] == 1
     assert client2.ohlcv_calls == ["poolA"]  # exactly one get_ohlcv call for this position (5min mode, 17/08)
 
@@ -1224,7 +1298,8 @@ async def test_advance_exit_window_high_catches_rung_retraced_before_poll():
     client = FakeClient(
         {"poolA": 1.05}, {"poolA": OHLCVResult(candles=candles, available=True, error=None)},
     )
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.05})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert counts["scale_out_fills"] == 1
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.30)  # window high, not the spot 1.05
@@ -1244,7 +1319,7 @@ async def test_advance_exit_accumulates_window_volume_across_passages():
     client1 = FakeClient(
         {"poolA": 1.0}, {"poolA": OHLCVResult(candles=candles1, available=True, error=None)},
     )
-    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    await shadow.advance_exit_simulation(client1, chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.0}))
     rows = await _rows()
     assert rows[0]["window_volume_usd"] == pytest.approx(100.0)
     last_checked_epoch = shadow._epoch_of(rows[0]["last_checked_at"])
@@ -1253,7 +1328,7 @@ async def test_advance_exit_accumulates_window_volume_across_passages():
     client2 = FakeClient(
         {"poolA": 1.0}, {"poolA": OHLCVResult(candles=candles2, available=True, error=None)},
     )
-    await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    await shadow.advance_exit_simulation(client2, chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.0}))
     rows = await _rows()
     assert rows[0]["window_volume_usd"] == pytest.approx(350.0)  # 100 + 250, never overwritten
 
@@ -1262,7 +1337,8 @@ async def test_advance_exit_accumulates_window_volume_across_passages():
 async def test_advance_exit_window_volume_stays_none_when_ohlcv_unavailable():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
     client = FakeClient({"poolA": 1.0})  # no OHLCV configured -> unavailable
-    await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.0})
+    await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     rows = await _rows()
     assert rows[0]["window_volume_usd"] is None  # never fabricated as 0
 
@@ -1275,12 +1351,12 @@ async def test_advance_exit_falls_back_to_point_sample_when_ohlcv_unavailable():
     unavailable = OHLCVResult(candles=[], available=False, error="unavailable")
 
     client1 = FakeClient({"poolA": 1.3}, {"poolA": unavailable})
-    await shadow.advance_exit_simulation(client1, chain=CHAIN)
+    await shadow.advance_exit_simulation(client1, chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.3}))
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.3)  # collapsed to the spot alone
 
     client2 = FakeClient({"poolA": 1.04}, {"poolA": unavailable})
-    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN)
+    counts = await shadow.advance_exit_simulation(client2, chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.04}))
     assert counts["closed_trailing_stop"] == 1
     rows = await _rows()
     # Same figure the pure point-sample math would have produced (peak 1.3,
@@ -1300,7 +1376,8 @@ async def test_advance_exit_ohlcv_exception_falls_back_and_never_raises():
             raise RuntimeError("boom")
 
     client = RaisingOhlcvClient({"poolA": 1.1})
-    counts = await shadow.advance_exit_simulation(client, chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.1})
+    counts = await shadow.advance_exit_simulation(client, chain=CHAIN, ws_feed=ws_feed)
     assert counts["checked"] == 1
     rows = await _rows()
     assert rows[0]["peak_price"] == pytest.approx(1.1)  # fell back to the spot price alone
@@ -1495,11 +1572,16 @@ async def test_the_floor_lets_a_pool_exactly_on_it_through():
 
 @pytest.mark.asyncio
 async def test_advance_exit_realistic_multiplier_lower_than_ideal_on_a_normal_pool():
-    # FakeClient's snapshot carries reserve_usd=1000.0 -- deep enough to
-    # absorb SIMULATED_TRADE_SIZE_USD without going unreachable.
+    # reserve_usd=1000.0 -- deep enough to absorb SIMULATED_TRADE_SIZE_USD
+    # without going unreachable (matches FakeClient's own former default).
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    reserves = {"poolA": 1000.0}
+    await shadow.advance_exit_simulation(
+        chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.3}, reserve_by_pool=reserves),
+    )
+    await shadow.advance_exit_simulation(
+        chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.04}, reserve_by_pool=reserves),
+    )
     rows = await _rows()
     assert rows[0]["exit_reason"] == "trailing_stop"
     assert rows[0]["realistic_final_multiplier"] is not None
@@ -1515,8 +1597,13 @@ async def test_advance_exit_realistic_multiplier_null_when_entry_already_unreach
     await _insert_open_row(
         pool_address="poolA", entry_price=1.0, minutes_ago=10.0, realistic_entry_price=None,
     )
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.3}), chain=CHAIN)
-    counts = await shadow.advance_exit_simulation(FakeClient({"poolA": 1.04}), chain=CHAIN)
+    reserves = {"poolA": 1000.0}
+    await shadow.advance_exit_simulation(
+        chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.3}, reserve_by_pool=reserves),
+    )
+    counts = await shadow.advance_exit_simulation(
+        chain=CHAIN, ws_feed=_WsFeedFromRestPrices({"poolA": 1.04}, reserve_by_pool=reserves),
+    )
     assert counts["closed_trailing_stop"] == 1
     rows = await _rows()
     assert rows[0]["final_multiplier"] is not None
@@ -1526,7 +1613,8 @@ async def test_advance_exit_realistic_multiplier_null_when_entry_already_unreach
 @pytest.mark.asyncio
 async def test_advance_exit_realistic_multiplier_stays_open_row_null_until_close():
     await _insert_open_row(pool_address="poolA", entry_price=1.0, minutes_ago=10.0)
-    await shadow.advance_exit_simulation(FakeClient({"poolA": 1.1}), chain=CHAIN)
+    ws_feed = _WsFeedFromRestPrices({"poolA": 1.1}, reserve_by_pool={"poolA": 1000.0})
+    await shadow.advance_exit_simulation(chain=CHAIN, ws_feed=ws_feed)
     rows = await _rows()
     assert rows[0]["exit_reason"] is None
     assert rows[0]["realistic_final_multiplier"] is None

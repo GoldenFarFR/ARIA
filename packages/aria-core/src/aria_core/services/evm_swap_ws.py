@@ -242,6 +242,17 @@ class EVMSwapSnapshot:
     #   (use reserve_usd there instead, which IS exact).
     reserve_usd: float | None = None
     raw_liquidity: float | None = None
+    # 28/08, specs/015-robinhood-chainstack-only -- v2 ONLY, the decimals-
+    # adjusted raw amount of the QUOTE-side token (WETH units when
+    # quote_is_weth), populated unconditionally (unlike reserve_usd, which
+    # stays None unless the quote leg is already USD-priced). Lets a caller
+    # that already fetched doppler.eth_usd_rate() for price_usd reuse the
+    # SAME rate to also resolve reserve_usd (= 2.0 * quote_reserve_raw *
+    # eth_rate) for a WETH-quoted pool -- never a second network call, and
+    # never fabricated if the rate itself is unavailable (caller's own
+    # None-check). None for v3/v4 (no single reserve figure, same honesty
+    # rule as reserve_usd above).
+    quote_reserve_raw: float | None = None
     # 24/08, operator-directed ("tu aurai du pensai a capturer tous se qui
     # est utile") -- also already in every decoded event, zero extra RPC:
     swap_count: int = 0  # real per-event count (undercounted by any 2s-
@@ -258,6 +269,14 @@ class EVMSwapSnapshot:
     # the caller must multiply price_quote by doppler.btc_usd_rate(), never
     # eth_usd_rate() (BTC and ETH trade at very different USD levels).
     quote_is_btc: bool = False
+    # 28/08, specs/015-robinhood-chainstack-only -- provenance for SC-002
+    # ("never fabricate a price"): non-null ONLY when this snapshot's price/
+    # reserve came from a real decoded Sync/Swap event, never from a cold
+    # eth_call reserve read (EVMSwapWebSocketFeed.resolve_cold). A caller
+    # wanting a mechanically-checkable "this price is real" proof reads
+    # these two fields, not a heuristic.
+    tx_hash: str | None = None
+    block_number: int | None = None
 
 
 @dataclass
@@ -274,6 +293,7 @@ class _TrackedPool:
     pool_id_hex: str | None = None  # v4 only, the topic-filtered poolId
     last_reserve_usd: float | None = None  # v2 only, exact when quote_is_stable
     last_raw_liquidity: float | None = None  # v3/v4 only, abstract depth proxy
+    last_quote_reserve_raw: float | None = None  # v2 only, see EVMSwapSnapshot's own comment
     # 24/08, operator-directed ("tu aurai du pensai a capturer tous se qui
     # est utile") -- also already in every decoded event, zero extra RPC:
     swap_count: int = 0  # real per-event count, distinct from _log_tick's
@@ -284,6 +304,8 @@ class _TrackedPool:
     # sender (that is a SEPARATE Swap event this module does not decode),
     # so V2 pools never populate this, honestly left empty rather than
     # approximated.
+    last_tx_hash: str | None = None  # 28/08 -- provenance, see EVMSwapSnapshot
+    last_block_number: int | None = None
 
 
 class EVMSwapWebSocketFeed:
@@ -565,6 +587,133 @@ class EVMSwapWebSocketFeed:
         if removed_active:
             await self._resubscribe()
 
+    # -- cold reads (specs/015-robinhood-chainstack-only) -----------------
+
+    async def resolve_cold(
+        self, pool_address: str, *, dex_id: str | None = None, token_address: str | None = None,
+    ) -> EVMSwapSnapshot:
+        """Targeted on-chain read for a pool that has NOT yet produced a
+        Sync/Swap event this feed's websocket has observed -- the direct
+        replacement for what a DexPaprika reserve/price lookup used to cover
+        (specs/015, research.md's "real call chain" finding).
+
+        **All-or-nothing contract, operator-directed 28/08**: "ne pas
+        considerer 'eth_call reussi' comme equivalent a 'snapshot
+        economiquement correct'". Every branch below either resolves BOTH
+        the reserve/liquidity figure AND the price together (v2: reserve0
+        AND reserve1 from the same `getReserves()` call; v3: sqrtPriceX96
+        AND liquidity from two calls that must BOTH succeed) or returns
+        ``available=False`` -- never a snapshot with one half filled in and
+        the other silently absent. ``tx_hash``/``block_number`` stay
+        ``None`` (this is state, not an event) -- see ``EVMSwapSnapshot``'s
+        own docstring for why that distinction matters for SC-002.
+
+        v3/v4 math is NOT reimplemented here: v2 reuses the exact ratio
+        formula ``_handle_sync`` already uses, v3 reuses
+        ``price_from_sqrt_price_x96`` -- the SAME function the live event
+        decoder calls, so a cold read and a live event can never silently
+        diverge in convention (decimals, token0/token1 orientation).
+
+        v4 pools are NOT supported by this cold-read path today: unlike
+        v2/v3, v4 has no per-pool contract to `eth_call` against (it is a
+        singleton `PoolManager`, see `_add_pool_v4`'s own comment -- reading
+        its state needs the StateLibrary pattern, not a plain ABI call,
+        and getting that wrong would be exactly the kind of "mechanically
+        successful but economically wrong" read this contract exists to
+        prevent). Always returns ``available=False`` for a v4 pool -- an
+        honest `not_yet_priceable` until a real Swap event arrives over the
+        websocket, never a guessed v4 read."""
+        key = pool_address.lower()
+        pool = self._pools.get(key)
+        if pool is None:
+            if dex_id is None or token_address is None or self._w3 is None:
+                return EVMSwapSnapshot(available=False)
+            registered = await self.add_pool(pool_address, dex_id=dex_id, token_address=token_address)
+            if not registered:
+                return EVMSwapSnapshot(available=False)
+            pool = self._pools.get(key)
+            if pool is None:
+                return EVMSwapSnapshot(available=False)
+        if self._w3 is None or pool.family == "v4":
+            return EVMSwapSnapshot(available=False)
+        # 28/08 -- reuses the SAME shared throughput point `add_pool` already
+        # checks above, per CLAUDE.md's "single throughput-coordination
+        # point" norm (never a second independent throttle). Real per-call
+        # RU cost for `eth_call` is not separately documented/measured for
+        # this provider (see chainstack_ru_budget.py's own doctrine on never
+        # fabricating a precise number) -- `units=1` is a conservative floor
+        # that counts every call rather than a claimed-precise figure.
+        if not await chainstack_ru_budget.can_spend(self.chain):
+            return EVMSwapSnapshot(available=False)
+        try:
+            checksum = self._w3.to_checksum_address(pool_address)
+            if pool.family == "v2":
+                contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_V2_RESERVES_ABI)
+                reserve0, reserve1, _ = await contract.functions.getReserves().call()
+                chainstack_ru_budget.record_usage_fast(self.chain, 1)
+                if not reserve0 or not reserve1:
+                    return EVMSwapSnapshot(available=False)  # never divide by a zero reserve
+                # Same formula as _handle_sync, deliberately -- see this
+                # method's own docstring.
+                ratio = (reserve1 / (10 ** pool.decimals1)) / (reserve0 / (10 ** pool.decimals0))
+                price_quote = ratio if pool.token_is_currency0 else (1.0 / ratio)
+                # 28/08, specs/015 -- computed unconditionally (see
+                # _handle_sync's identical change), not just when
+                # quote_is_stable: lets the caller convert a WETH-quoted
+                # pool's reserve_usd itself via quote_reserve_raw, same
+                # honesty rule as price_usd's own quote_is_weth cue.
+                quote_reserve = (reserve0 if not pool.token_is_currency0 else reserve1) / (
+                    10 ** (pool.decimals0 if not pool.token_is_currency0 else pool.decimals1)
+                )
+                reserve_usd = 2.0 * quote_reserve if pool.quote_is_stable else None
+                price_usd = price_quote if pool.quote_is_stable else None
+                return EVMSwapSnapshot(
+                    available=True, price_quote=price_quote, price_usd=price_usd,
+                    reserve_usd=reserve_usd, quote_reserve_raw=quote_reserve,
+                    quote_is_weth=pool.quote_is_weth, quote_is_btc=pool.quote_is_btc,
+                )
+            if pool.family == "v3":
+                slot0_contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_V3_SLOT0_ABI)
+                liquidity_contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_V3_LIQUIDITY_ABI)
+                slot0 = await slot0_contract.functions.slot0().call()
+                sqrt_price_x96 = slot0[0]
+                chainstack_ru_budget.record_usage_fast(self.chain, 1)
+                raw_liquidity = await liquidity_contract.functions.liquidity().call()
+                chainstack_ru_budget.record_usage_fast(self.chain, 1)
+                if not sqrt_price_x96 or raw_liquidity is None:
+                    return EVMSwapSnapshot(available=False)  # both must resolve together
+                price_quote = price_from_sqrt_price_x96(
+                    sqrt_price_x96, token_is_currency0=pool.token_is_currency0,
+                    decimals0=pool.decimals0, decimals1=pool.decimals1,
+                )
+                price_usd = price_quote if pool.quote_is_stable else None
+                return EVMSwapSnapshot(
+                    available=True, price_quote=price_quote, price_usd=price_usd,
+                    raw_liquidity=float(raw_liquidity), quote_is_weth=pool.quote_is_weth,
+                    quote_is_btc=pool.quote_is_btc,
+                )
+        except Exception as exc:  # noqa: BLE001 -- a cold read failing must never fabricate a snapshot
+            logger.info("evm_swap_ws[%s]: resolve_cold failed for %s (%s)", self.chain, pool_address, exc)
+        return EVMSwapSnapshot(available=False)
+
+    async def resolve_token_symbol(self, token_address: str) -> str | None:
+        """Cosmetic only, per spec.md's Edge Cases -- never gates
+        qualification, replaces DexPaprika's ``_resolve_base_token`` role
+        for display purposes only."""
+        if self._w3 is None:
+            return None
+        if not await chainstack_ru_budget.can_spend(self.chain):
+            return None
+        try:
+            checksum = self._w3.to_checksum_address(token_address)
+            contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_SYMBOL_ABI)
+            symbol = await contract.functions.symbol().call()
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
+            return symbol
+        except Exception as exc:  # noqa: BLE001 -- cosmetic lookup, never blocks the caller
+            logger.info("evm_swap_ws[%s]: symbol() failed for %s (%s)", self.chain, token_address, exc)
+            return None
+
     # -- snapshot --------------------------------------------------------
 
     def get_snapshot(self, pool_address_or_id: str, *, window_seconds: float = 300.0) -> EVMSwapSnapshot:
@@ -589,9 +738,11 @@ class EVMSwapWebSocketFeed:
             window_high_quote=max(window), window_low_quote=min(window),
             last_update_at=last_t, stale_seconds=now - last_t,
             reserve_usd=pool.last_reserve_usd, raw_liquidity=pool.last_raw_liquidity,
+            quote_reserve_raw=pool.last_quote_reserve_raw,
             swap_count=pool.swap_count, cumulative_volume_quote=pool.cumulative_volume_quote,
             distinct_traders_count=len(pool.distinct_traders),
             quote_is_weth=pool.quote_is_weth, quote_is_btc=pool.quote_is_btc,
+            tx_hash=pool.last_tx_hash, block_number=pool.last_block_number,
         )
 
     # -- websocket loop ----------------------------------------------------
@@ -732,6 +883,21 @@ class EVMSwapWebSocketFeed:
 
         return self._active_sub_ids[-1] if self._active_sub_ids else self._newheads_sub_id
 
+    @staticmethod
+    def _record_provenance(pool: "_TrackedPool", result: dict) -> None:
+        """28/08 -- ``transactionHash``/``blockNumber`` are already present on
+        every raw log push (standard ``eth_subscribe("logs")`` shape), just
+        never read until now, same "already available, zero extra RPC"
+        pattern as ``last_raw_liquidity``'s own 24/08 addition above."""
+        tx = result.get("transactionHash")
+        if tx is not None:
+            pool.last_tx_hash = tx.hex() if hasattr(tx, "hex") else str(tx)
+            if not pool.last_tx_hash.startswith("0x"):
+                pool.last_tx_hash = "0x" + pool.last_tx_hash
+        block = result.get("blockNumber")
+        if block is not None:
+            pool.last_block_number = int(block, 16) if isinstance(block, str) else int(block)
+
     def _handle_notification(self, payload) -> None:
         try:
             result = payload.get("result") if isinstance(payload, dict) else None
@@ -813,13 +979,18 @@ class EVMSwapWebSocketFeed:
         # quote leg is a known USD stable (2x its reserve == total pool
         # value at equilibrium); WETH-quoted pools need doppler.eth_usd_
         # rate() to convert, left to the caller per this module's no-
-        # network-I/O-in-decoder rule.
+        # network-I/O-in-decoder rule. 28/08, specs/015 -- the raw quote-side
+        # amount is computed UNCONDITIONALLY (not gated on quote_is_stable)
+        # so a WETH-quoted pool's caller can still do that conversion itself
+        # via `last_quote_reserve_raw`, never left permanently unresolvable.
+        quote_reserve = (reserve0 if not pool.token_is_currency0 else reserve1) / (
+            10 ** (pool.decimals0 if not pool.token_is_currency0 else pool.decimals1)
+        )
+        pool.last_quote_reserve_raw = quote_reserve
         if pool.quote_is_stable:
-            quote_reserve = (reserve0 if not pool.token_is_currency0 else reserve1) / (
-                10 ** (pool.decimals0 if not pool.token_is_currency0 else pool.decimals1)
-            )
             pool.last_reserve_usd = 2.0 * quote_reserve
         pool.swap_count += 1
+        self._record_provenance(pool, result)
         self._record_tick(pool, price)
 
     @staticmethod
@@ -870,6 +1041,7 @@ class EVMSwapWebSocketFeed:
         # topics: [topic0, sender, recipient] -- sender is topics[1]
         sender_topic = topics[1] if len(topics) > 1 else None
         self._record_swap_amount(pool, raw, sender_topic)
+        self._record_provenance(pool, result)
         self._record_tick(pool, price)
 
     def _handle_v4_swap(self, topics, result: dict) -> None:
@@ -896,6 +1068,7 @@ class EVMSwapWebSocketFeed:
         # topics: [topic0, id, sender] -- sender is topics[2]
         sender_topic = topics[2] if len(topics) > 2 else None
         self._record_swap_amount(pool, raw, sender_topic)
+        self._record_provenance(pool, result)
         self._record_tick(pool, price)
 
     def _record_tick(self, pool: _TrackedPool, price: float) -> None:
@@ -913,4 +1086,41 @@ _MINIMAL_TOKEN01_ABI = [
 
 _MINIMAL_DECIMALS_ABI = [
     {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
+]
+
+# 28/08, specs/015-robinhood-chainstack-only -- targeted cold reads for a
+# pool that has not yet produced a Sync/Swap event this feed's websocket has
+# seen. Deliberately the SAME raw fields the live event decoders above
+# already extract (reserve0/reserve1 for v2's Sync; sqrtPriceX96+liquidity
+# for v3's Swap) so `resolve_cold` below can feed them through the exact
+# same `price_from_sqrt_price_x96`/ratio math, never a re-derived formula
+# that could silently diverge from the live decoder's convention.
+_MINIMAL_V2_RESERVES_ABI = [
+    {
+        "constant": True, "inputs": [], "name": "getReserves"
+        , "outputs": [
+            {"name": "reserve0", "type": "uint112"}, {"name": "reserve1", "type": "uint112"},
+            {"name": "blockTimestampLast", "type": "uint32"},
+        ], "type": "function",
+    },
+]
+
+_MINIMAL_V3_SLOT0_ABI = [
+    {
+        "constant": True, "inputs": [], "name": "slot0", "outputs": [
+            {"name": "sqrtPriceX96", "type": "uint160"}, {"name": "tick", "type": "int24"},
+            {"name": "observationIndex", "type": "uint16"},
+            {"name": "observationCardinality", "type": "uint16"},
+            {"name": "observationCardinalityNext", "type": "uint16"},
+            {"name": "feeProtocol", "type": "uint8"}, {"name": "unlocked", "type": "bool"},
+        ], "type": "function",
+    },
+]
+
+_MINIMAL_V3_LIQUIDITY_ABI = [
+    {"constant": True, "inputs": [], "name": "liquidity", "outputs": [{"name": "", "type": "uint128"}], "type": "function"},
+]
+
+_MINIMAL_SYMBOL_ABI = [
+    {"constant": True, "inputs": [], "name": "symbol", "outputs": [{"name": "", "type": "string"}], "type": "function"},
 ]

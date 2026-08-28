@@ -48,20 +48,16 @@ def _make_feed(chain: str = "base") -> m.OnChainPoolDiscoveryFeed:
     ws_feed = MagicMock()
     ws_feed._pool_manager_address.return_value = "0x498581ff718922c3f8e6a244956af099b2652b2b"
     ws_feed.add_pool = AsyncMock(return_value=True)
+    # specs/015-robinhood-chainstack-only -- replaces the old dexpaprika
+    # fallback mocks. Default to "nothing resolves" (matches every
+    # pre-existing test's prior behavior with the old fixture) unless a
+    # test explicitly overrides these to exercise the cold-read path.
+    ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=False, reserve_usd=None, price_usd=None, price_quote=None, quote_is_weth=False,
+    ))
+    ws_feed.resolve_token_symbol = AsyncMock(return_value=None)
     feed = m.OnChainPoolDiscoveryFeed(chain=chain, ws_url="wss://test.invalid", ws_feed=ws_feed)
     return feed
-
-
-@pytest.fixture(autouse=True)
-def _no_real_symbol_resolution_calls(monkeypatch):
-    """26/08 -- check_candidates() now resolves the qualified pool's symbol
-    via dexpaprika._resolve_base_token (real HTTP call). Default to None
-    (matches every pre-existing test's prior behavior) unless a test
-    explicitly overrides this mock to exercise resolution itself."""
-    async def _fake_resolve_base_token(network, pool_address):
-        return None
-
-    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _fake_resolve_base_token)
 
 
 # --- v2 PairCreated decode --------------------------------------------------
@@ -321,6 +317,55 @@ async def test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve():
 
 
 @pytest.mark.asyncio
+async def test_check_candidates_converts_weth_reserve_via_live_snapshot(monkeypatch):
+    """28/08, specs/015-robinhood-chainstack-only -- real finding (T023/T024
+    worked example): 11/11 real Robinhood pools sampled were WETH-quoted,
+    and reserve_usd was NEVER converted for them (only price_usd was),
+    permanently blocking every one from qualifying regardless of real
+    liquidity. Reuses the SAME eth_usd_rate() call already made for
+    price_usd, never a second network call."""
+    async def fake_eth_usd_rate():
+        return 3000.0
+
+    monkeypatch.setattr("aria_core.services.doppler.eth_usd_rate", fake_eth_usd_rate)
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(
+        available=True, reserve_usd=None, quote_is_weth=True, price_quote=0.001, quote_reserve_raw=5.0,
+    )
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert len(result) == 1
+    assert result[0].reserve_usd == pytest.approx(30000.0)  # 2 * 5.0 WETH * 3000
+    assert result[0].price_usd == pytest.approx(3.0)  # 0.001 * 3000
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_converts_weth_reserve_via_cold_read(monkeypatch):
+    async def fake_eth_usd_rate():
+        return 2000.0
+
+    monkeypatch.setattr("aria_core.services.doppler.eth_usd_rate", fake_eth_usd_rate)
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    feed._ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=True, price_usd=None, price_quote=0.0004, reserve_usd=None,
+        quote_reserve_raw=8.0, quote_is_weth=True,
+    ))
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert len(result) == 1
+    assert result[0].reserve_usd == pytest.approx(32000.0)  # 2 * 8.0 WETH * 2000
+    assert result[0].price_usd == pytest.approx(0.8)  # 0.0004 * 2000
+
+
+@pytest.mark.asyncio
 async def test_check_candidates_logs_diagnostic_counters_every_cycle(caplog):
     """27/08 -- one line per cycle so a silent Base (or Robinhood) can be
     diagnosed from logs alone: raw_notifications_seen distinguishes "the WS
@@ -347,8 +392,9 @@ async def test_check_candidates_resolves_symbol_for_a_qualified_pool(monkeypatch
     event carries no ERC-20 symbol metadata, so every qualified candidate
     used to log with symbol=None ("?" in Telegram notifications, confirmed
     live on base_momentum_shadow.py). Resolved here (bounded to QUALIFIED
-    candidates only, funnel doctrine) via the same pool-detail call
-    dexpaprika.py already makes for its own REST-sourced TrendingPool."""
+    candidates only, funnel doctrine) via a direct on-chain symbol() read
+    (specs/015-robinhood-chainstack-only -- replaces the old DexPaprika
+    pool-detail call)."""
     feed = _make_feed()
     feed._candidates["0xpool"] = m._Candidate(
         pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
@@ -356,11 +402,11 @@ async def test_check_candidates_resolves_symbol_for_a_qualified_pool(monkeypatch
     snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
     feed._ws_feed.get_snapshot.return_value = snapshot
 
-    async def _fake_resolve_base_token(network, pool_address):
-        assert pool_address == "0xpool"
-        return ("0xtoken", "MYTOKEN", None)
+    async def _fake_resolve_token_symbol(token_address):
+        assert token_address == "0xtoken"
+        return "MYTOKEN"
 
-    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _fake_resolve_base_token)
+    feed._ws_feed.resolve_token_symbol = AsyncMock(side_effect=_fake_resolve_token_symbol)
     result = await feed.check_candidates(min_liquidity_usd=4000.0)
     assert len(result) == 1
     assert result[0].symbol == "MYTOKEN"
@@ -369,7 +415,7 @@ async def test_check_candidates_resolves_symbol_for_a_qualified_pool(monkeypatch
 @pytest.mark.asyncio
 async def test_check_candidates_survives_concurrent_registration_mid_iteration(monkeypatch):
     """27/08, real incident: `check_candidates()` awaits per-candidate
-    (dexpaprika resolution here), and `_register_candidate` -- called
+    (on-chain symbol resolution here), and `_register_candidate` -- called
     synchronously from the WS notification handler -- can insert a new key
     into `self._candidates` during that await, since both run on the same
     event loop. Iterating the live dict then raised "dictionary changed
@@ -384,7 +430,7 @@ async def test_check_candidates_survives_concurrent_registration_mid_iteration(m
     snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
     feed._ws_feed.get_snapshot.return_value = snapshot
 
-    async def _resolve_and_register_concurrently(network, pool_address):
+    async def _resolve_and_register_concurrently(token_address):
         # Simulates a WS notification landing mid-await, exactly like
         # _handle_notification -> _register_candidate would in production.
         feed._candidates["0xnewpool"] = m._Candidate(
@@ -392,7 +438,7 @@ async def test_check_candidates_survives_concurrent_registration_mid_iteration(m
         )
         return None
 
-    monkeypatch.setattr(m.dexpaprika, "_resolve_base_token", _resolve_and_register_concurrently)
+    feed._ws_feed.resolve_token_symbol = AsyncMock(side_effect=_resolve_and_register_concurrently)
     result = await feed.check_candidates(min_liquidity_usd=4000.0)  # must not raise
     assert len(result) == 1
     assert result[0].pool_address == "0xpool"
@@ -445,57 +491,139 @@ async def test_check_candidates_drops_after_observation_window_and_counts_it():
 
 
 @pytest.mark.asyncio
-async def test_check_candidates_falls_back_to_dexpaprika_for_v4_liquidity(monkeypatch):
+async def test_check_candidates_v4_pool_without_websocket_reserve_stays_unqualified():
+    """specs/015-robinhood-chainstack-only -- v4 has no per-pool contract to
+    `eth_call` against (singleton PoolManager, see EVMSwapWebSocketFeed.
+    resolve_cold's own docstring), so a v4 pool without a real websocket-
+    observed Sync/Swap event stays `not_yet_priceable` forever this cycle --
+    never a DexPaprika fallback anymore. Verifies the state machine honestly
+    reports unavailable rather than qualifying on a v4 guess."""
     feed = _make_feed()
     feed._candidates["0xpoolid"] = m._Candidate(
         pool_key="0xpoolid", dex_id="uniswap_v4", token_address="0xtoken", chain="base",
     )
     snapshot = MagicMock(available=True, reserve_usd=None, quote_is_weth=False, price_quote=None)
     feed._ws_feed.get_snapshot.return_value = snapshot
+    # _make_feed's default resolve_cold already returns available=False --
+    # explicit here for a v4 pool_id key (not an address) to match how a
+    # real v4 candidate is keyed.
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert result == []
+    assert "0xpoolid" in feed._candidates  # stays pending, not dropped, not fabricated
+    assert feed.not_yet_priceable_count == 1  # T019 -- explicit, counted state
 
-    async def _fake_get_pool_reserve_usd(pool_address, *, network):
-        return 15000.0
 
-    async def _fake_get_json(path, *, params):
-        return {"price_usd": 0.002}, None
+# --- T019/T020/T022 (Phase 4, US2 -- not_yet_priceable state + subscription cap) --
 
-    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", _fake_get_pool_reserve_usd)
-    monkeypatch.setattr(m.dexpaprika, "_get_json", _fake_get_json)
+@pytest.mark.asyncio
+async def test_check_candidates_counts_not_yet_priceable_only_when_both_sources_fail():
+    """T019 -- distinct from `rejected_not_priceable_count` (a permanent
+    rejection at registration time). This counter is temporary/retryable:
+    no websocket snapshot AND resolve_cold both unresolved this cycle."""
+    feed = _make_feed()
+    feed._candidates["0xpoolid"] = m._Candidate(
+        pool_key="0xpoolid", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    assert feed.not_yet_priceable_count == 0
+    await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert feed.not_yet_priceable_count == 1
+    assert "0xpoolid" in feed._candidates  # retried later, never dropped for this alone
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_never_counts_not_yet_priceable_on_a_qualified_read():
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
     result = await feed.check_candidates(min_liquidity_usd=4000.0)
     assert len(result) == 1
-    assert result[0].reserve_usd == 15000.0
-    assert result[0].price_usd == 0.002
+    assert feed.not_yet_priceable_count == 0  # resolved on the first (WS) source, never reached resolve_cold
 
 
 @pytest.mark.asyncio
-async def test_check_candidates_never_requeries_dexpaprika_within_recheck_interval(monkeypatch):
+async def test_check_candidates_never_qualifies_a_partial_cold_read():
+    """T022 -- real resolve_cold contract case: a v3 stable-quoted pool
+    resolves `price_usd` but NEVER `reserve_usd` (v3 has no reserve figure,
+    only active-tick liquidity, see resolve_cold's own docstring). The
+    qualification gate below must still reject this as unpriceable rather
+    than treat the resolved price as good enough on its own -- the operator's
+    explicit "no subtler fabricated-price failure class" requirement."""
     feed = _make_feed()
     feed._candidates["0xpoolid"] = m._Candidate(
-        pool_key="0xpoolid", dex_id="uniswap_v4", token_address="0xtoken", chain="base",
+        pool_key="0xpoolid", dex_id="uniswap_v3", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    feed._ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=True, price_usd=0.002, reserve_usd=None, price_quote=0.002, quote_is_weth=False,
+    ))
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+    assert result == []  # a resolved price alone, with no reserve, never qualifies
+    assert "0xpoolid" in feed._candidates  # stays pending, not fabricated as qualified
+
+
+@pytest.mark.asyncio
+async def test_register_candidate_skips_and_counts_when_cap_reached():
+    """T020 -- an initial guardrail (150), not a tuned optimum. Skip/defer,
+    never an unbounded queue: a candidate arriving once the cap is full is
+    simply never subscribed this notification."""
+    feed = _make_feed()
+    for i in range(m.MAX_CONCURRENT_TRACKED_POOLS):
+        feed._candidates[f"0xfull{i}"] = m._Candidate(
+            pool_key=f"0xfull{i}", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+        )
+    assert feed.cap_dropped_count == 0
+    feed._register_candidate("0xoverflow", "uniswap_v2", f"0x{TOKEN0}", f"0x{WETH}")
+    assert "0xoverflow" not in feed._candidates
+    assert feed.cap_dropped_count == 1
+    feed._ws_feed.add_pool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_register_candidate_still_registers_below_the_cap():
+    feed = _make_feed()
+    for i in range(m.MAX_CONCURRENT_TRACKED_POOLS - 1):
+        feed._candidates[f"0xfull{i}"] = m._Candidate(
+            pool_key=f"0xfull{i}", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+        )
+    feed._register_candidate("0xroom", "uniswap_v2", f"0x{TOKEN0}", f"0x{WETH}")
+    assert "0xroom" in feed._candidates
+    assert feed.cap_dropped_count == 0
+
+
+@pytest.mark.asyncio
+async def test_check_candidates_never_requeries_resolve_cold_within_recheck_interval():
+    feed = _make_feed()
+    feed._candidates["0xpoolid"] = m._Candidate(
+        pool_key="0xpoolid", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
     )
     snapshot = MagicMock(available=True, reserve_usd=None, quote_is_weth=False, price_quote=None)
     feed._ws_feed.get_snapshot.return_value = snapshot
-    calls = []
-
-    async def _fake_get_pool_reserve_usd(pool_address, *, network):
-        calls.append(1)
-        return None
-
-    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", _fake_get_pool_reserve_usd)
+    feed._ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=False, reserve_usd=None, price_usd=None, price_quote=None, quote_is_weth=False,
+    ))
     await feed.check_candidates(min_liquidity_usd=4000.0)
     await feed.check_candidates(min_liquidity_usd=4000.0)
-    assert len(calls) == 1  # second call within _RECHECK_INTERVAL_SECONDS is skipped
+    assert feed._ws_feed.resolve_cold.await_count == 1  # second call within _RECHECK_INTERVAL_SECONDS is skipped
 
 
 @pytest.mark.asyncio
-async def test_check_candidates_falls_back_to_dexpaprika_when_add_pool_never_succeeded(monkeypatch):
+async def test_check_candidates_falls_back_to_resolve_cold_when_add_pool_never_succeeded():
     """26/08 real incident: a fresh day-zero pool whose add_pool() verify
     call failed (RPC hadn't indexed the block yet -- "no such table"-style
-    race) used to `continue` straight past the REST fallback below, forever
-    -- zero real Base candidates got through despite the pool genuinely
-    qualifying. `available=False` must fall through to the SAME fallback
-    path a v3/v4 pool (which never gets a WS reserve_usd either) already
-    uses, not be treated as a dead end."""
+    race) used to `continue` straight past the fallback below, forever --
+    zero real Base candidates got through despite the pool genuinely
+    qualifying. `available=False` must fall through to the SAME cold-read
+    path a v3 pool (which never gets a WS reserve_usd either) already uses,
+    not be treated as a dead end. specs/015-robinhood-chainstack-only --
+    the fallback itself is now `resolve_cold`, never DexPaprika."""
     feed = _make_feed()
     feed._candidates["0xpoolid"] = m._Candidate(
         pool_key="0xpoolid", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
@@ -504,15 +632,9 @@ async def test_check_candidates_falls_back_to_dexpaprika_when_add_pool_never_suc
         available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
     )
     feed._ws_feed.add_pool = AsyncMock(return_value=False)
-
-    async def _fake_get_pool_reserve_usd(pool_address, *, network):
-        return 15000.0
-
-    async def _fake_get_json(path, *, params):
-        return {"price_usd": 0.002}, None
-
-    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", _fake_get_pool_reserve_usd)
-    monkeypatch.setattr(m.dexpaprika, "_get_json", _fake_get_json)
+    feed._ws_feed.resolve_cold = AsyncMock(return_value=MagicMock(
+        available=True, reserve_usd=15000.0, price_usd=0.002, price_quote=0.002, quote_is_weth=False,
+    ))
     result = await feed.check_candidates(min_liquidity_usd=4000.0)
     assert len(result) == 1
     assert result[0].reserve_usd == 15000.0
@@ -538,7 +660,6 @@ async def test_check_candidates_retries_add_pool_when_snapshot_unavailable(monke
         return False
 
     feed._ws_feed.add_pool = _fake_add_pool
-    monkeypatch.setattr(m.dexpaprika, "get_pool_reserve_usd", AsyncMock(return_value=None))
     await feed.check_candidates(min_liquidity_usd=4000.0)
     import asyncio
     await asyncio.sleep(0)  # let the fire-and-forget create_task actually run

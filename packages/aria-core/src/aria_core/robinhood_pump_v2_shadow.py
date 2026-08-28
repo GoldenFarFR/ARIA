@@ -328,7 +328,7 @@ async def advance_exit_simulation(
 
             try:
                 snapshot: PoolSnapshot = await _snapshot_with_fallback(
-                    client, row["pool_address"], row["token_address"], chain=chain,
+                    row["pool_address"], row["token_address"], chain=chain,
                     ws_feed=ws_feed, dex_id=row.get("dex_id"),
                 )
             except Exception as exc:  # noqa: BLE001 -- one pool's failure never blocks the batch

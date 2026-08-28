@@ -219,6 +219,27 @@ def test_handle_sync_computes_price_and_exact_reserve_usd_for_stable_quote():
     assert pool.swap_count == 1
     assert pool.last_reserve_usd == pytest.approx(40.0)  # 2 * quote_reserve (20)
     assert pool.ticks[-1][1] == pytest.approx(2.0)
+    assert pool.last_quote_reserve_raw == pytest.approx(20.0)  # unconditional, even for a stable quote
+
+
+def test_handle_sync_records_quote_reserve_raw_for_a_weth_quote():
+    """28/08, specs/015-robinhood-chainstack-only -- unlike last_reserve_usd
+    (only exact for a known USD stable), last_quote_reserve_raw is computed
+    regardless, so a WETH-quoted pool's caller can still convert it to USD
+    itself via doppler.eth_usd_rate() -- see onchain_pool_discovery.py's
+    check_candidates for the real conversion site."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=True, quote_is_stable=False,
+    )
+    feed._pools["0xpool"] = pool
+    reserve0 = 10 * (10 ** 18)
+    reserve1 = 5 * (10 ** 18)  # 5 WETH on the quote side
+    data = _u256(reserve0) + _u256(reserve1)
+    feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
+    assert pool.last_reserve_usd is None  # never fabricated without a real ETH rate
+    assert pool.last_quote_reserve_raw == pytest.approx(5.0)
 
 
 def test_handle_sync_ignores_unknown_pool():
@@ -1036,3 +1057,265 @@ async def test_resubscribe_clears_idle_tracking_once_a_pool_is_tracked_again():
     await feed._resubscribe()
 
     assert feed._pools_empty_since is None
+
+
+# --- specs/015-robinhood-chainstack-only: provenance (tx_hash/block_number) -
+
+def test_handle_sync_records_tx_hash_and_block_number_from_the_event():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=6, quote_is_weth=False, quote_is_stable=True,
+    )
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    data = _u256(10 * 10**18) + _u256(20 * 10**6)
+    feed._handle_sync("0xpool", {
+        "data": "0x" + data.hex(), "transactionHash": "abc123", "blockNumber": "0x2a",
+    })
+    assert pool.last_tx_hash == "0xabc123"
+    assert pool.last_block_number == 42
+    snapshot = feed.get_snapshot("0xpool")
+    assert snapshot.tx_hash == "0xabc123"
+    assert snapshot.block_number == 42
+
+
+def test_handle_v3_swap_records_tx_hash_and_block_number_from_the_event():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    feed._pools["0xpool"] = pool
+    sqrt_price = _sqrt_price_x96_for_price(2.0)
+    data = _u256(1) + _u256(1) + _u256(sqrt_price) + _u256(500) + _u256(0)
+    sender_topic = _FakeTopic(bytes.fromhex("00" * 12 + "aa" * 20))
+    feed._handle_v3_swap("0xpool", [MagicMock(), sender_topic], {
+        "data": "0x" + data.hex(), "transactionHash": "def456", "blockNumber": 99,
+    })
+    assert pool.last_tx_hash == "0xdef456"
+    assert pool.last_block_number == 99
+
+
+def test_get_snapshot_tx_hash_and_block_number_default_none_when_never_set():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=6, quote_is_weth=False, quote_is_stable=True,
+    )
+    pool.ticks.append((time.monotonic(), 2.0))
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    snapshot = feed.get_snapshot("0xpool")
+    assert snapshot.tx_hash is None
+    assert snapshot.block_number is None
+
+
+# --- specs/015-robinhood-chainstack-only: resolve_cold (targeted eth_call) --
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v2_full_read_matches_the_live_decoder_formula():
+    """Same reserve0/reserve1/decimals as test_handle_sync_computes_price_
+    and_exact_reserve_usd_for_stable_quote -- proves the cold-read path
+    produces the IDENTICAL price/reserve_usd the live Sync decoder would,
+    per the operator's own vigilance point (never a re-derived formula)."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=6, quote_is_weth=False, quote_is_stable=True,
+    )
+    feed._pools["0xpool"] = pool
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.getReserves.return_value.call = AsyncMock(
+        return_value=(10 * 10**18, 20 * 10**6, 0)
+    )
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool")
+
+    assert snapshot.available is True
+    assert snapshot.price_quote == pytest.approx(2.0)
+    assert snapshot.price_usd == pytest.approx(2.0)
+    assert snapshot.reserve_usd == pytest.approx(40.0)
+    assert snapshot.quote_reserve_raw == pytest.approx(20.0)
+    assert snapshot.tx_hash is None  # cold read, never a decoded event
+    assert snapshot.block_number is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v2_weth_quote_leaves_reserve_usd_none_but_exposes_raw():
+    """28/08, specs/015 -- mirrors test_handle_sync_records_quote_reserve_
+    raw_for_a_weth_quote for the cold-read path: reserve_usd stays None
+    (never fabricated without a real ETH rate), but quote_reserve_raw is
+    still populated so the caller (check_candidates) can convert it."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=True, quote_is_stable=False,
+    )
+    feed._pools["0xpool"] = pool
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.getReserves.return_value.call = AsyncMock(
+        return_value=(10 * 10**18, 5 * 10**18, 0)
+    )
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool")
+
+    assert snapshot.available is True
+    assert snapshot.reserve_usd is None
+    assert snapshot.price_usd is None
+    assert snapshot.quote_reserve_raw == pytest.approx(5.0)
+    assert snapshot.quote_is_weth is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v2_zero_reserve_is_unavailable_never_fabricated():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=6, quote_is_weth=False, quote_is_stable=True,
+    )
+    feed._pools["0xpool"] = pool
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.getReserves.return_value.call = AsyncMock(return_value=(0, 20 * 10**6, 0))
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool")
+
+    assert snapshot.available is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v3_full_read_matches_the_live_decoder_formula():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=True,
+    )
+    feed._pools["0xpool"] = pool
+    sqrt_price = _sqrt_price_x96_for_price(2.0)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.slot0.return_value.call = AsyncMock(
+        return_value=(sqrt_price, 0, 0, 0, 0, 0, True)
+    )
+    contract.functions.liquidity.return_value.call = AsyncMock(return_value=123456)
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool")
+
+    assert snapshot.available is True
+    assert snapshot.price_quote == pytest.approx(2.0, rel=1e-4)
+    assert snapshot.raw_liquidity == pytest.approx(123456.0)
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v3_partial_read_never_falls_through_as_priceable():
+    """Operator's explicit vigilance point: reserve/liquidity resolving while
+    price fails (or vice versa) must NEVER produce an available=True
+    snapshot -- this is the exact 'subtler fabrication' class this feature
+    exists to close."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=True,
+    )
+    feed._pools["0xpool"] = pool
+    sqrt_price = _sqrt_price_x96_for_price(2.0)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.slot0.return_value.call = AsyncMock(
+        return_value=(sqrt_price, 0, 0, 0, 0, 0, True)
+    )
+    contract.functions.liquidity.return_value.call = AsyncMock(side_effect=Exception("rpc timeout"))
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool")
+
+    assert snapshot.available is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_v4_is_never_supported_returns_unavailable():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._pools["0xv4pool"] = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    feed._w3 = MagicMock()
+
+    snapshot = await feed.resolve_cold("0xv4pool")
+
+    assert snapshot.available is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_registers_an_untracked_pool_before_reading():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(return_value="0xtoken0")
+    contract.functions.token1.return_value.call = AsyncMock(return_value="0xtoken1")
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=18)
+    contract.functions.getReserves.return_value.call = AsyncMock(
+        return_value=(10 * 10**18, 20 * 10**18, 0)
+    )
+    fake_w3.eth.contract.return_value = contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+
+    snapshot = await feed.resolve_cold("0xpool", dex_id="uniswap_v2", token_address="0xtoken0")
+
+    assert snapshot.available is True
+    assert "0xpool" in feed._pools
+
+
+@pytest.mark.asyncio
+async def test_resolve_cold_returns_unavailable_when_untracked_and_no_registration_args():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    snapshot = await feed.resolve_cold("0xneverseen")
+    assert snapshot.available is False
+
+
+# --- specs/015-robinhood-chainstack-only: resolve_token_symbol (cosmetic) ---
+
+@pytest.mark.asyncio
+async def test_resolve_token_symbol_returns_the_real_symbol():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.symbol.return_value.call = AsyncMock(return_value="PUMP")
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+    symbol = await feed.resolve_token_symbol("0xtoken")
+    assert symbol == "PUMP"
+
+
+@pytest.mark.asyncio
+async def test_resolve_token_symbol_returns_none_on_failure_never_raises():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.symbol.return_value.call = AsyncMock(side_effect=Exception("no symbol()"))
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+    symbol = await feed.resolve_token_symbol("0xtoken")
+    assert symbol is None
