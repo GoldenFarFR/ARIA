@@ -2288,6 +2288,48 @@ async def test_once_per_candidate_resolver_still_resolves_distinct_pools_and_fre
 
 
 @pytest.mark.asyncio
+async def test_once_per_candidate_resolver_memoizes_a_failure_and_calls_resolve_fn_once():
+    """28/08, SAME-DAY CORRECTION: the first version of this function only
+    memoized a SUCCESSFUL result -- a raised exception left the cache empty,
+    so a second call for the same pool silently re-hit the network. Confirmed
+    live: 3 of 5 mints touched by a real 429 burst failed TWICE each, in
+    pairs under 1s apart, 8 minutes into the post-deploy measurement window
+    -- the exact doublon this function exists to remove. This is now a
+    permanent regression guard for that failure mode."""
+    calls = []
+
+    async def _always_429(_client, pairs, **_kw):
+        calls.append(pairs[0])
+        raise RuntimeError("Client error '429 Too Many Requests'")
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_always_429)
+    with pytest.raises(RuntimeError, match="429"):
+        await resolve_once(None, [("poolX", "mintX")])
+    with pytest.raises(RuntimeError, match="429"):
+        await resolve_once(None, [("poolX", "mintX")])
+    assert len(calls) == 1, f"expected exactly 1 underlying resolve call despite the failure, got {len(calls)}"
+
+
+@pytest.mark.asyncio
+async def test_once_per_candidate_resolver_both_consumers_see_the_identical_exception():
+    """Not just 'an exception of the same type' -- the literal same instance,
+    so message/args/traceback are indistinguishable from what a single real
+    caller would have observed."""
+    async def _boom(_client, pairs, **_kw):
+        raise RuntimeError(f"429 on {pairs[0][0]}")
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_boom)
+    caught = []
+    for _ in range(2):
+        try:
+            await resolve_once(None, [("poolX", "mintX")])
+        except RuntimeError as exc:
+            caught.append(exc)
+    assert len(caught) == 2
+    assert caught[0] is caught[1], "both consumers must observe the exact same exception instance"
+
+
+@pytest.mark.asyncio
 async def test_the_primary_and_retracement_calls_share_one_resolver_call_for_the_same_candidate(_tmp_db):
     """28/08, backlog #364 P0: the real shadow_persistent.py pattern -- the
     exact same (pool, mint) evaluated through consider_candidate twice in one
@@ -2324,6 +2366,47 @@ async def test_the_primary_and_retracement_calls_share_one_resolver_call_for_the
     assert len(primary_rows) == 1 and len(variant_rows) == 1
     assert primary_rows[0]["progress_retracement_at_entry"] == pytest.approx(0.10)
     assert variant_rows[0]["progress_retracement_at_entry"] == pytest.approx(0.10)
+
+
+@pytest.mark.asyncio
+async def test_the_primary_and_retracement_calls_both_see_the_same_resolver_failure_with_one_underlying_call(_tmp_db):
+    """PERMANENT REGRESSION GUARD (28/08, backlog #364): a resolver failure
+    (429) shared through make_once_per_candidate_resolver() must be memoized
+    exactly like a success -- one real underlying call for BOTH the primary
+    and the retracement consider_candidate calls on the same (pool, mint).
+    This is the exact scenario the first version of the dedup got wrong: the
+    cache stayed empty on an exception, so the retracement call independently
+    re-hit the network and produced a second, real 429 for the same
+    candidate. Both calls must fail cleanly (consider_candidate's own
+    try/except already swallows the exception and returns None -- unchanged
+    by this fix), and neither table gets a row."""
+    calls = []
+
+    async def _always_429(_client, pairs, **_kw):
+        calls.append(pairs[0])
+        raise RuntimeError("Client error '429 Too Many Requests'")
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_always_429)
+
+    primary_id = await pocket.consider_candidate(
+        "mintFails", "poolFails", trade_stream=_Stream(), resolve_curves_fn=resolve_once,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db,
+    )
+    variant_id = await pocket.consider_candidate(
+        "mintFails", "poolFails", trade_stream=_Stream(), resolve_curves_fn=resolve_once,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert primary_id is None and variant_id is None
+    assert len(calls) == 1, (
+        f"expected exactly 1 underlying resolve call despite the failure, got {len(calls)} -- "
+        "the exact doublon backlog #364's P0 fix exists to remove"
+    )
+
+    primary_rows = [r for r in await _rows(_tmp_db) if r["pool_address"] == "poolFails"]
+    variant_rows = [r for r in await _rows_from(_tmp_db, pocket.RETRACEMENT_TABLE) if r["pool_address"] == "poolFails"]
+    assert primary_rows == [] and variant_rows == []
 
 
 @pytest.mark.asyncio

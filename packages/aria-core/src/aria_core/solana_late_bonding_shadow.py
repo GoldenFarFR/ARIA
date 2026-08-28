@@ -1387,7 +1387,7 @@ def make_once_per_candidate_resolver(base_resolve_fn=None):
     """28/08, backlog #364 (P0 dedup): wraps a curve resolver so that, within
     the SAME returned closure, the same ``pool_address`` triggers at most one
     real on-chain read (``resolve_bonding_curves`` itself already costs 2 RPC
-    calls -- curve + mint decimals).
+    calls -- curve + mint decimals) -- SUCCESS OR EXCEPTION, always.
 
     Built for shadow_persistent.py's real call pattern: within one pass of
     its ``for mint in mints:`` loop, ``consider_candidate`` is invoked TWICE
@@ -1398,6 +1398,22 @@ def make_once_per_candidate_resolver(base_resolve_fn=None):
     the retracement gate (which depends on this same read) ever got a chance
     to reject anything.
 
+    28/08 CORRECTION (same day, live incident): the first version only
+    memoized a SUCCESSFUL result -- ``cache[pool_address] = await
+    resolve_fn(...)`` never executes its assignment when ``resolve_fn``
+    raises, so the cache stayed empty on a 429 and the second (retracement)
+    call independently re-hit the network, reproducing the exact doublon
+    this function exists to remove. Confirmed live 8 minutes into the
+    post-deploy measurement window: 3 of 5 mints touched by a burst of 429s
+    failed TWICE each, in pairs under 1s apart -- the same signature the
+    dedup was built to eliminate. The contract is now: **one candidate, one
+    cycle, exactly one real invocation of ``resolve_fn``, success OR
+    exception** -- an exception is memoized as an object and RE-RAISED
+    verbatim (the literal same exception instance, not a new one built from
+    its message) on every subsequent call for that pool this cycle, so both
+    consumers observe an identical type/message/behaviour without a second
+    network round-trip.
+
     Scope is deliberately narrow, matching the operator's own bound: no
     global cache, no persistent state, no throttle change. The cache lives
     only in this closure's local dict -- it is garbage-collected the moment
@@ -1407,13 +1423,26 @@ def make_once_per_candidate_resolver(base_resolve_fn=None):
     legitimately be re-evaluated on a later pass, and that must always cost
     a fresh on-chain read, never a stale one served from an earlier cycle."""
     resolve_fn = base_resolve_fn or resolve_bonding_curves
-    cache: dict[str, dict] = {}
+    # Each entry is (is_error, value) -- value is the resolved dict on
+    # success, or the literal exception instance on failure. A plain
+    # dict-of-results can't represent "the RPC call itself failed" without
+    # either fabricating a fake result or leaving the cache unset (the exact
+    # bug being fixed here), so failure is stored as an explicit outcome.
+    cache: dict[str, tuple[bool, object]] = {}
 
     async def _resolve_once(http_client, pool_mint_pairs, **kwargs):
         pool_address, _mint = pool_mint_pairs[0]
         if pool_address not in cache:
-            cache[pool_address] = await resolve_fn(http_client, pool_mint_pairs, **kwargs)
-        return cache[pool_address]
+            try:
+                result = await resolve_fn(http_client, pool_mint_pairs, **kwargs)
+            except Exception as exc:  # noqa: BLE001 -- memoized verbatim, re-raised identically below
+                cache[pool_address] = (True, exc)
+            else:
+                cache[pool_address] = (False, result)
+        is_error, value = cache[pool_address]
+        if is_error:
+            raise value
+        return value
 
     return _resolve_once
 
