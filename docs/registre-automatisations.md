@@ -222,25 +222,46 @@ est vert.
   fenetre, donc plus de positions tenues plus longtemps. Le mode de defaillance
   devient plus probable, pas moins.
 
-### robinhood_shadow_loop (23/08) -- ACTIF, observation pure
-- **Quoi** : boucle dans `shadow_persistent.py` (hors git), cadence 120 s,
-  source **DexPaprika** (`get_trending_pools("robinhood")`), ecrit dans
-  `robinhood_pump_shadow_log`.
-- **Pourquoi elle etait morte** : le module existait (246 positions archivees)
-  mais n'etait appele nulle part depuis le 17/08. Le blocage etait la SOURCE :
-  il ne connaissait que GeckoTerminal, en suspension automatique pour
-  rate-limit et deja goulot de deux autres poches. Decision operateur : pas de
-  Robinhood sur Gecko.
-- **Piege ecarte** : DexScreener expose Robinhood via `token-profiles` /
-  `token-boosts`, mais ce sont des tokens dont les createurs ont PAYE leur
-  visibilite -- un catalogue publicitaire, pas une decouverte.
-- **Complement de liquidite** : DexPaprika laisse `liquidity_usd = 0` sur ~35 %
-  des pools, et c'est un TROU D'INDEXATION verifie un a un (7/7, liquidites
-  reelles de 10k$ a 34k$). La boucle complete ces pools via DexScreener, sur un
-  budget independant, en respectant `liquidity_unknown` pour ne jamais ecrire
-  un 0 qui serait relu comme "pas de liquidite". Fait AVANT tout filtrage : le
-  sujet n'est pas de filtrer mais de ne pas accumuler des zeros faux, comme le
-  prix perime a contamine les chiffres Solana pendant deux jours.
+### robinhood_shadow_loop (23/08, migre 28/08) -- ACTIF, observation pure
+- **Quoi** : `robinhood_discovery_loop` dans `shadow_persistent.py` (hors
+  git), source **exclusivement on-chain** depuis le 28/08
+  (specs/015-robinhood-chainstack-only) -- decouverte via
+  `OnChainPoolDiscoveryFeed.check_candidates` (Chainstack websocket +
+  eth_call cible), prix/liquidite via `EVMSwapWebSocketFeed`
+  (`resolve_cold`), plus AUCUN appel GeckoTerminal ni DexPaprika sur ce
+  chemin. Ecrit dans `robinhood_pump_shadow_log`. Detail complet et
+  incident declencheur (DexPaprika 402 dome-wide, `system_issues` #269) :
+  `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entree 2026.08.28).
+- **Historique (avant le 28/08)** : cadence 120 s, source DexPaprika
+  (`get_trending_pools("robinhood")`) -- morte du 17/08 au 23/08 (le module
+  existait mais n'etait appele nulle part), puis DexPaprika-only jusqu'au
+  28/08. Retiree entierement suite a la panne 402.
+- **Piege ecarte (toujours vrai)** : DexScreener expose Robinhood via
+  `token-profiles` / `token-boosts`, mais ce sont des tokens dont les
+  createurs ont PAYE leur visibilite -- un catalogue publicitaire, pas une
+  decouverte.
 - **Aucun reglage Solana copie** : Robinhood Chain n'a pas de courbe de bonding
   pump.fun, et le plancher de liquidite a ete calibre sur des pools Solana de
   6-12k$. On collecte d'abord, on calibrera sur du mesure.
+- **Decouverte 28/08 en validant le fix** : `reserve_usd` n'etait jamais
+  converti pour un pool cote WETH (seul `price_usd` l'etait) -- corrige le
+  meme jour, voir le HANDOFF ci-dessus.
+
+### robinhood-observation-watch (28/08) -- TEMPORAIRE, a retirer une fois T031 tranche
+- **Quoi** : `systemd-run --unit=robinhood-observation-watch`, boucle Python
+  bornee a 6h (`/opt/aria-data/robinhood-observation-watch/watch_loop.py`),
+  poll `shadow_persistent.log` toutes les 20 min via `observation.py` (meme
+  repertoire), accumule un resume dans `journal.log` : deltas
+  raw_notifications_seen/not_yet_priceable/cap_dropped, `pending` max,
+  qualifications reelles (avec origine event/cold_read), appels DexPaprika
+  residuels sur le reseau robinhood (doit rester a 0), erreurs RPC.
+- **Pourquoi** : demande operateur explicite (28/08) apres le deploiement de
+  specs/015-robinhood-chainstack-only -- verifier que `qualified_this_cycle`
+  recommence REELLEMENT a produire des candidats, pas juste "le service est
+  sain", avant de considerer le chantier comme une preuve de restauration et
+  avant de trancher T031 (recalibrage du plafond `MAX_CONCURRENT_TRACKED_
+  POOLS=150`, actuellement un garde-fou provisoire, pas une mesure reelle).
+- **A retirer** : `systemctl stop robinhood-observation-watch` (unit
+  transitoire, disparait seule a l'arret) une fois une lecture suffisante
+  obtenue et T031 tranche -- ne pas laisser tourner indefiniment, ce n'est
+  pas un mecanisme permanent.
