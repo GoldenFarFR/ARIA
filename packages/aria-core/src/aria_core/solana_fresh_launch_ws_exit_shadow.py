@@ -1163,6 +1163,18 @@ async def _track_and_maybe_insert_pumpportal(
                 if row is None:
                     stats["abandoned"] = stats.get("abandoned", 0) + 1
                     return
+                # 28/08 -- the shadow-wide open-position cap (see
+                # shadow_pocket_cap.py) was applied to record_signals()'s own
+                # insert path (below MAX_POOL_AGE_MINUTES gate) but missed
+                # THIS pocket's second, far more active insertion path --
+                # confirmed live, record_signals is fed by a near-dead
+                # legacy source (11 rows total) while this PumpPortal path
+                # is the real one. Checked right before the write, same
+                # doctrine as every other pocket.
+                async with aiosqlite.connect(_db_path()) as db:
+                    if await shadow_pocket_cap.at_capacity(db, TABLE, open_clause="exit_reason IS NULL"):
+                        stats["capacity_reached"] = stats.get("capacity_reached", 0) + 1
+                        return
                 new_id = await _insert_confirmed_row_pumpportal(row)
                 stats["confirmed"] = stats.get("confirmed", 0) + 1
                 asyncio.create_task(_enrich_with_rugcheck_pumpportal(

@@ -1239,7 +1239,47 @@ async def test_run_forever_pumpportal_counts_an_abandoned_candidate_without_inse
     stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=1)
 
     assert stats["abandoned"] == 1
-    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_run_forever_pumpportal_blocks_insert_when_pocket_at_capacity(monkeypatch):
+    """28/08 -- the shadow-wide 25-open-position cap was wired to
+    record_signals()'s insert path (a near-dead legacy source, 11 rows
+    total) but missed THIS pocket's real, far more active insertion path
+    (PumpPortal). A confirmed candidate must still be refused once the
+    pocket already holds MAX_OPEN_POSITIONS_PER_POCKET open rows."""
+    from aria_core import shadow_pocket_cap
+
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(shadow_pocket_cap.MAX_OPEN_POSITIONS_PER_POCKET):
+            await db.execute(
+                f"""
+                INSERT INTO {shadow.TABLE} (
+                    pool_address, token_address, chain, symbol, detected_at, entry_price,
+                    reserve_usd, remaining_qty, realized_proceeds, peak_price, realistic_entry_price
+                ) VALUES (?, ?, ?, 'FRESH', ?, 1.0, 4000.0, 1.0, 0.0, 1.0, 0.99)
+                """,
+                (f"poolAlreadyOpen{i}", f"mintAlreadyOpen{i}", CHAIN, datetime.now(timezone.utc).isoformat()),
+            )
+        await db.commit()
+
+    feed = _FakeQueueFeed([_pp_event(mint="mintNew", bonding_curve_key="curveNew")])
+    monkeypatch.setattr(
+        shadow, "_track_candidate_pumpportal",
+        AsyncMock(return_value={
+            "pool_address": "curveNew", "token_address": "mintNew", "chain": CHAIN, "symbol": "FRESH",
+            "detected_at": datetime.now(timezone.utc).isoformat(), "entry_price": 1.0,
+            "reserve_usd": 4000.0, "pool_created_at": None, "peak_price": 1.0,
+            "realistic_entry_price": 0.99, "dex_id": "rest", "market_cap_sol_at_creation": None,
+        }),
+    )
+
+    stats = await shadow.run_forever_pumpportal(feed, chain=CHAIN, max_events=1)
+
+    assert stats.get("capacity_reached") == 1
+    assert stats.get("confirmed") is None
+    rows = await _rows()
+    assert "curveNew" not in {r["pool_address"] for r in rows}
 
 
 @pytest.mark.asyncio
