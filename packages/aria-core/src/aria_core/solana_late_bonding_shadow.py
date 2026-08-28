@@ -57,7 +57,13 @@ import httpx
 
 from aria_core import db_migrations
 
-from aria_core import creator_reputation, pretrade_rejection_log, shadow_candle_archive, shadow_discovery_only
+from aria_core import (
+    creator_reputation,
+    pretrade_rejection_log,
+    shadow_candle_archive,
+    shadow_discovery_only,
+    shadow_pocket_cap,
+)
 from aria_core.paths import ensure_wal, shadow_db_path
 from aria_core.skills import chain_liquidity_regime
 from aria_core.services.solana_rpc_budget import Priority
@@ -1430,6 +1436,17 @@ async def consider_candidate(
             if await _has_open_signal(db, pool_address, chain, table=table):
                 return None
             if await _in_reentry_cooldown(db, mint, chain, table=table):
+                return None
+            # 28/08 -- shadow-wide resource cap, see shadow_pocket_cap.py's
+            # module docstring. Never a trading gate: purely a ceiling on how
+            # many concurrent open positions this pocket may hold. Checked
+            # here, before the RPC curve resolver below, so a candidate
+            # rejected by the cap costs no Chainstack budget either (same
+            # funnel doctrine as every other cheap-filter-first check in this
+            # function). Scoped to the SAME ``table`` the caller passed, so
+            # the retracement-gated variant (its own table) gets its own
+            # independent cap, never shared with the primary pocket's.
+            if await shadow_pocket_cap.at_capacity(db, table, open_clause="exit_reason IS NULL"):
                 return None
 
         resolver = resolve_curves_fn or resolve_bonding_curves

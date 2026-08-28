@@ -128,7 +128,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from aria_core import pretrade_rejection_log, shadow_discovery_only
+from aria_core import pretrade_rejection_log, shadow_discovery_only, shadow_pocket_cap
 from aria_core.momentum_entry import _best_pair
 from aria_core.paper_trader import _advance_high_water
 from aria_core.paths import shadow_db_path
@@ -881,6 +881,15 @@ async def record_signals(
                     )
                 if await _has_open_signal(db, pool.pool_address, chain):
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
+
+                # 28/08 -- shadow-wide resource cap, see shadow_pocket_cap.py's
+                # module docstring. Never a trading gate: purely a ceiling on
+                # how many concurrent open positions this pocket may hold.
+                if await shadow_pocket_cap.at_capacity(
+                    db, "robinhood_pump_shadow_log", open_clause="status = 'open'"
+                ):
+                    await _refuse("blocked_pocket_cap")
+                    continue
 
                 # 23/08 -- regime gate, see the REGIME_MIN_MEDIAN_PEAK_PCT
                 # block above. This candidate cleared every OTHER filter

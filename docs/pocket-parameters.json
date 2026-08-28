@@ -141,7 +141,7 @@
     "label": "DIP-RECOVERY v2 (Base/Robinhood, market-cap-bounded, +25% take-profit)",
     "parameters": {
       "CHAINS": {
-        "line": 87,
+        "line": 88,
         "value": [
           "base",
           "robinhood"
@@ -149,67 +149,67 @@
         "why": null
       },
       "DIP_THRESHOLD_PCT": {
-        "line": 93,
+        "line": 94,
         "value": -30.0,
         "why": "Candidate thresholds under shadow evaluation -- verbatim from the operator's own proposal (26/08), not independently tuned. Shadow mode exists precisely so these can be validated (or not) against real forward data before ever considering a live paper pocket."
       },
       "DISCOVERY_LIMIT": {
-        "line": 134,
+        "line": 135,
         "value": 20,
         "why": "How many DexPaprika candidates to fetch per chain per pass -- the server-side liquidity floor already does most of the filtering, this just bounds how many surviving candidates get a DexScreener call."
       },
       "ENTRY_SANITY_MIN_CONFLICT_PCT": {
-        "line": 151,
+        "line": 152,
         "value": 10.0,
         "why": "26/08, specs/013-dip-recovery-entry-sanity -- real incident: position id=13 (contract 0x23acfab04106a21af0ae1643b74cfec3c9aac181, chain=robinhood) opened on a DexPaprika var_24h_pct of -31.9487%, the pocket's ONLY source for this field, with zero independent cross-check. Within minutes both DexScreener's live card and DexPaprika's own live lookup agreed the token was actually +29% -- the entry-time reading was never checked against anything outside DexPaprika itself before triggering a (shadow) buy, the same \"a system's own data can never validate its own prices\" gap already closed on the exit side (EXIT_PRICE_SANITY_MULTIPLE above). Rejects only a flat SIGN disagreement (DexPaprika strongly negative AND DexScreener strongly positive) -- see research.md Decision 1 for why a magnitude-delta threshold was rejected (it would collapse into \"DexScreener must also show a big dip\", rejecting the ordinary same-direction drift between two providers sampled moments apart). RECALIBRATE once enough real rejected/closed candidates accumulate to measure typical provider drift."
       },
       "EXIT_PRICE_SANITY_MULTIPLE": {
-        "line": 129,
+        "line": 130,
         "value": 50.0,
         "why": "26/08, Decision 2 (research.md) -- a guard against the same failure class confirmed live THE SAME DAY on base_momentum_shadow.py (a corrupted AMM reserve-ratio price read as \"+707006.8% nominal, never executable\"). Both pockets read prices from the same provider (DexScreener), so the risk is not hypothetical here either. Set at 50x rather than base_momentum's 1000x: that pocket's own scale-out tests legitimately simulate jumps up to 1000x, a mechanic this pocket has none of -- this pocket closes immediately once pnl_pct clears +25%, so a genuinely legitimate multi-hundred-x read should never be sitting in an open position here. 50x matches the precedent already used by solana_support_bounce_shadow.py, whose take-profit-style (non-scale-out) exit shape is the closer match."
       },
       "MAX_HOLD_HOURS": {
-        "line": 110,
+        "line": 111,
         "value": 168.0,
         "why": "Safety net only, never an invented stop-loss -- see module docstring."
       },
       "MAX_MARKET_CAP_USD": {
-        "line": 96,
+        "line": 97,
         "value": 1000000.0,
         "why": null
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 97,
+        "line": 98,
         "value": 25000.0,
         "why": null
       },
       "MIN_MARKET_CAP_USD": {
-        "line": 95,
+        "line": 96,
         "value": 50000.0,
         "why": null
       },
       "MIN_POOL_AGE_DAYS": {
-        "line": 107,
+        "line": 108,
         "value": 14.0,
         "why": "26/08, operator-added requirement (session follow-up): \"post bonding\" is enforced not just by the market-cap floor but by a real minimum pair/pool age too -- a token that only just cleared 50k market cap hours after creation is a different (already-covered-elsewhere) risk profile from one that has traded for weeks. Sourced from TrendingPool.pool_created_at, already populated by dexpaprika.get_trending_pools at zero extra network cost (see research.md Decision 3) -- a candidate with no age data is never treated as qualifying by default."
       },
       "POST_CLOSE_ARCHIVE_HOURS": {
-        "line": 116,
+        "line": 117,
         "value": 12.0,
         "why": "27/08 -- how long past the exit candle archiving keeps running (see ``archive_recently_closed``). 12h matches the longest MFE/MAE horizon this exists to feed (aria-94/obv-ao-screener's own method, see HANDOFF) -- never archived indefinitely, funnel doctrine, a real DexPaprika call per pass."
       },
       "REENTRY_COOLDOWN_MINUTES": {
-        "line": 169,
+        "line": 170,
         "value": 60,
         "why": "26/08, specs/014-dip-recovery-reentry-cooldown -- real incident: position id=15 (pool 0x49a11a3515755a730b20ae1d6c3ef5a997e20f728ad46d8859654c4d4eaad95a, chain=robinhood, symbol EARTHCOIN) closed take_profit_25pct at +40.0%, then a NEW position on the SAME contract opened 15 minutes later at essentially the same price (-0.7% vs the previous exit) -- DexPaprika's var_24h_pct swung ~8 points in that window despite the real price barely moving, the same metric-instability class specs/013's entry-sanity guard already documents. `_has_open_position` alone never prevents this: the instant a position closes, the contract is immediately eligible again. Applies ONLY to take_profit_25pct closes (research.md Decision 2) -- a timeout close already means 7 days elapsed with no target reached, a fundamentally different, already-cooled-down situation this guard's risk doesn't cover. Conservative placeholder pending real data (same posture as ENTRY_SANITY_MIN_CONFLICT_PCT/EXIT_PRICE_SANITY_MULTIPLE above) -- RECALIBRATE once n>=100 real candidates blocked/passed by this guard accumulate."
       },
       "TAKE_PROFIT_PCT": {
-        "line": 94,
+        "line": 95,
         "value": 25.0,
         "why": null
       },
       "_NOTIFIED_CLOSED_MAX": {
-        "line": 626,
+        "line": 635,
         "value": 500,
         "why": null
       }
@@ -485,57 +485,57 @@
     "label": "FRESH-LAUNCH",
     "parameters": {
       "CHECKPOINT_INTERVAL": {
-        "line": 166,
+        "line": 167,
         "value": 50,
         "why": "19/08, operator correction: no closure cap that stops sourcing (unlike solana_variant_shadow.py's TARGET_CLOSURES_PER_VARIANT) -- this pocket trades indefinitely. A checkpoint snapshot is written every N total closures instead, see module docstring."
       },
       "CHECKPOINT_TABLE": {
-        "line": 104,
+        "line": 105,
         "value": "solana_fresh_launch_checkpoint_log",
         "why": null
       },
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 153,
+        "line": 154,
         "value": 50.0,
         "why": null
       },
       "MAX_HOLD_MINUTES": {
-        "line": 152,
+        "line": 153,
         "value": 60.0,
         "why": null
       },
       "MAX_POOL_AGE_MINUTES": {
-        "line": 140,
+        "line": 141,
         "value": 5.0,
         "why": null
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 139,
+        "line": 140,
         "value": 6000.0,
         "why": "Entry criteria (operator-specified 19/08, real live test confirmed both server-side DexPaprika filters -- liquidity_usd_min/created_after -- work independently of order_by, so nothing is lost sourcing this way). 19/08, lowered 3000->2000 (operator-requested live test): real data on the first ~180 closures showed 3000-6000$ as the WORST liquidity band (net loss, up to 54% liquidity_collapse rate) vs 6000-10000$+ being net positive -- the operator's own hypothesis going in was that few real pools even exist below 3000$ at the moment they'd pass the other entry criteria, so this mostly tests whether lowering the floor changes anything in practice rather than expecting an improvement. Compare closures before/ after this change using last_checked_at, same method as the 19/08 starvation-fix before/after split.  19/08, SAME session, briefly tried 2000->1000 then REVERTED (real test, not a guess): the hypothesis was that a lower floor is crossed faster (real-liquidity-accumulation wait is the actual bottleneck, not the pipeline itself -- see FAST_DISCOVERY_POLL_INTERVAL_SECONDS's own docstring). Measured the OPPOSITE in practice: mean delay went from 66.1s (2000$ floor, 7-position sample) to 84.2s (1000$ floor, 20-position sample) -- a lower floor qualifies far more candidates per minute (7 -> 20 in a comparable window), which saturates MAX_CONCURRENT_TRACKED_CANDIDATES and the shared DexPaprika REST throttle, moving the real bottleneck from \"market liquidity wait\" to \"internal contention\" instead of removing it.  20/08, raised 2000->6000 (operator-directed performance investigation, 446-closure sample vs the 180-closure sample above): re-bucketing reserve_usd against realistic_final_multiplier on the FULL current sample confirms the earlier 3000-6000$ \"worst band\" reading was itself only a transient artifact of the smaller sample -- the durable pattern is 2-6k$ net-negative across the board (winrate 4.1-18.6%, n=205) vs 6-20k$ net-positive (winrate 46.9-53.2%, avg_mult 1.24-1.38, n=96). Raising the floor to 6000 keeps this pocket entirely inside the confirmed-positive band instead of straddling the dead zone below it."
       },
       "PEAK_PRICE_SANITY_MULTIPLE": {
-        "line": 160,
+        "line": 161,
         "value": 50.0,
         "why": "Same doctrine/incident as solana_support_bounce_shadow.py's own constant (see that module's comment for the full Jotchua/WW writeup) -- ported here from day one rather than found live a second time. 50x is deliberately generous, catches a corrupted-upstream-read artifact without ever rejecting a genuine pump."
       },
       "SUPPORT_CANDLE_INTERVAL": {
-        "line": 145,
+        "line": 146,
         "value": "1m",
         "why": "Informational-only support-distance reading, see module docstring -- NEVER gates entry. 1-minute candles, 1-5 available (never wait for the full 5 -- the earliest window is the whole point, operator-explicit)."
       },
       "SUPPORT_CANDLE_MAX_COUNT": {
-        "line": 146,
+        "line": 147,
         "value": 5,
         "why": null
       },
       "TABLE": {
-        "line": 103,
+        "line": 104,
         "value": "solana_fresh_launch_shadow_log",
         "why": null
       },
       "TRAILING_STOP_PCT": {
-        "line": 151,
+        "line": 152,
         "value": 15.0,
         "why": "Exit mechanics -- ladder constants imported from solana_pump_shadow.py (never duplicated); these three are THIS module's own tuning, operator- specified 19/08."
       }
@@ -561,12 +561,12 @@
         "why": "20/08, explicit operator decision -- the REAL wallet concentration guardrail, pool excluded. Distinct from the threshold above, which the same day's investigation showed measures something else entirely (the pool's own unsold share, i.e. traction). A single wallet holding >=20% of a fresh launch can dump the whole pool at will, and the constant above cannot see it: the first real gate decision logged (20:14:18) passed a token at 52.6% pool share -- comfortably \"clean\" by that threshold -- while a single non-pool wallet held 16.97%.  HONESTY ABOUT THIS NUMBER: 20% is a CONSERVATIVE PROVISIONAL threshold from market logic (a fifth of supply in one hand is a well-understood dump risk), NOT a value calibrated on ARIA's own data -- there is exactly n=1 measured observation behind it today. It follows the proactive-ingestion doctrine's third step (a temporary conservative hypothesis WITH an explicit recalibration plan) rather than waiting for data while unprotected. The recalibration plan is concrete and already instrumented: every decision, blocked or passed, records `top_holder_excluding_pool_pct` in `pretrade_rejection_log`, so once n>=100 the real winrate/PnL curve against this variable can move the threshold onto measured ground. Until then it is deliberately loose (20%, not 10%) so it cuts only the flagrant cases and cannot quietly become the pocket's main filter on an uncalibrated number."
       },
       "HOLDER_GATE_FAIL_CLOSED": {
-        "line": 603,
+        "line": 608,
         "value": true,
         "why": "20/08, explicit operator instruction (\"ou rejette par securite\"): if the holder concentration cannot be established in time, the order is NOT sent. Fail-closed, the same doctrine as every other guardrail in this project. The real cost of this choice is stated plainly rather than hidden: a RugCheck outage stops this pocket entering ENTIRELY (it does not degrade to entering unchecked). That is the intended trade -- an unchecked entry on this pocket has a measured 0.8% winrate in the >=97% band, so entering blind is strictly worse than not entering. `blocked_holder_gate_unavailable` in the cycle stats is what makes such an outage visible instead of silent."
       },
       "HOLDER_GATE_TIMEOUT_S": {
-        "line": 586,
+        "line": 591,
         "value": 12.0,
         "why": "throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED)."
       },
@@ -591,12 +591,12 @@
         "why": "20/08, decoupled from solana_fresh_launch_shadow.MIN_LIQUIDITY_USD (operator-directed performance investigation, 558-closure sample). 500$-wide buckets inside this pocket's own operative 2000-5000$ range (bounded above by MAX_LIQUIDITY_USD_ENTRY, see below): the 2000-2499$ bucket alone holds 253/394 closures (64% of the sample) at a 3.2% winrate/0.916 avg realistic multiplier -- by far the worst bucket in the pocket. From 3000$ up, winrate roughly triples (13.8-31.3% across the 3000-4500$ buckets). Raising the floor to 3000 removes the dead zone while staying well inside the MAX_LIQUIDITY_USD_ENTRY=5000 ceiling the 19/08 finding below still confirms on the current sample."
       },
       "REQUIRE_OBSERVED_BUY": {
-        "line": 577,
+        "line": 582,
         "value": true,
         "why": "20/08 -- how long the pre-trade gate may wait on RugCheck before giving up. Sized against real measurements, not guessed: RugCheck answers in ~0.17s, and the only real wait is this dome's OWN shared throttle (_MIN_INTERVAL_S=4.5s in services/rugcheck.py). 12s covers a couple of queued turns at that throttle while still bounding the entry delay -- past that the candidate is rejected rather than entered blind (see HOLDER_GATE_FAIL_CLOSED). 20/08 -- gate on the live trade flow: refuse to enter a candidate on which not a single BUY was observed while tracking it. Provisional and deliberately minimal (>=1 buy, never a tuned threshold) until the counters logged on every decision give enough history to calibrate a real N-buys-in-T-seconds rule."
       },
       "STATS_LOG_EVERY_N_EVENTS": {
-        "line": 592,
+        "line": 597,
         "value": 200,
         "why": "20/08 -- how often the discovery loop emits its running outcome counters. At the real feed rate (~38 events/min, measured live) this is roughly one line every 5 minutes: frequent enough to notice a stalled or fail-closed pocket quickly, rare enough not to drown the log."
       },
@@ -641,142 +641,142 @@
     "label": "LATE-BONDING (70-98.5% of the bonding curve)",
     "parameters": {
       "ARCHIVE_MODULE": {
-        "line": 122,
+        "line": 128,
         "value": "solana_late_bonding",
         "why": "The name this pocket goes by in the shared path archive. Matches the sibling pockets' convention (\"solana_support_bounce\" etc.) -- one table, the `module` column keeps them apart."
       },
       "CONFIG_EPOCH": {
-        "line": 957,
+        "line": 963,
         "value": "2026-08-21T23:37:10+00:00",
         "why": "21/08 -- CONFIG EPOCH. Everything closed before this instant was produced by a DIFFERENT configuration and must not be averaged with what follows: the 40-95% collection band, and a window where entry was priced by REST while the exit used the RPC (every PnL then compared two sources). Mixing them makes the headline meaningless, which is exactly the problem the recent-window fix was already treating.  Deliberately an EPOCH MARKER, not a delete. The rows stay: they produced every finding of the last two days (the rug gradient 48.9% -> 27.0%, the graduation rate 2.0% -> 50.0%, the +161% on migrated positions) and this dome's standing rule is that real history is never destroyed. `summary()` reports from here; anything older is still queryable, just not averaged in. Move this forward on the NEXT configuration change rather than editing the rows."
       },
       "DEFAULT_MIN_RETRACEMENT": {
-        "line": 111,
+        "line": 117,
         "value": 0.05,
         "why": "Provisional, arbitrary starting point -- NOT calibrated (standing doctrine: never present an uncalibrated threshold as final). Recalibrate once this variant has accumulated a real closure sample -- see docs/HANDOFF_PIPELINE_MOMENTUM.md (23/08 entry)."
       },
       "EXEMPT_GRADUATED_FROM_MAX_HOLD": {
-        "line": 353,
+        "line": 359,
         "value": true,
         "why": "21/08 -- a position whose token GRADUATED is exempt from max_hold. Measured on this pocket's own graduated closures: `trailing_stop` exits returned +228.3% (n=47, capturing 71% of a +296% peak) while `max_hold` exits returned -5.3% (n=12) despite having reached a +52.4% peak. Those 12 were still alive when the clock killed them -- the trailing was armed and simply had not triggered, because the price had never fallen back far enough. A token that graduated has PROVEN its traction (87% winrate, +161% average), so it is handed to the trailing stop alone rather than to a timer that knows nothing about it. The trailing still protects the downside, and liquidity_collapse still applies."
       },
       "FIXED_STOP_PCT": {
-        "line": 475,
+        "line": 481,
         "value": null,
         "why": "22/08 -- WIDENED 5% -> 12%, operator's call (\"branche celle qui nous permet davoir 150% en moyenne sur les 100 meilleur et on teste\"). It is the pairing that tops the 360-combination sweep on the rebuilt runner paths: trailing 8% with a -12% floor averages +153.7% against +148.1% at -5%.  THE COST IS KNOWN AND WAS ACCEPTED, not overlooked. 418 of 1029 closures (41%) never reach the +10% peak that arms the trailing, so they exit on this floor -- widening it costs them 7 points each, about 2.8 points across the whole population, against roughly 1.4 points gained from the ~10% that run. The arithmetic says NEGATIVE by about 1.4 points overall; the operator chose to measure it live rather than trust the estimate, which is fair since the estimate assumes every unarmed trade sinks to the floor and many do not.  Also fragile on its own terms: this setting swings 13 points between the two intra-minute orderings, far more than the 6-8 points of the -5% variant. A result that depends that much on an unknowable ordering is a candidate, never a conclusion. Revert is one line. 23/08 -- DISABLED (None), after 320 closures said the stop was the loss.  The pocket lost -2585 points over those closures (-8.05% per trade, 18% winrate). 236 of them exited on this stop for -3216 points. The stop was set at -5% and FILLED at -13.6%: -2085 points of slippage, i.e. 80% of the entire loss. That is not a selection problem, it is this stop.  What the stop actually did, reserve-copied rows excluded (53 rows carry last_reserve_usd bit-identical to entry, never re-read -- they cannot say anything about the pool): 16.6% (35)  real pool drain (<-15% reserve), filled at -33.2% -> the stop did NOT protect, it arrived far too late 57.8% (122) moderate leak, filled at -7.8%  -> roughly did its job 25.6% (54)  pool INTACT (>-5% reserve), filled at -10.5%, -565 points -> ejected on noise, nothing was actually draining  And the pocket already knew: see `trailing_distance_for`'s note above -- 78% of the >+100% winners pull back past 5% on their way up, NONE past 15%. A -5% stop is aimed exactly at the trades that carry the pocket.  TESTED AND DROPPED, so nobody re-runs them: tightening to -2/-3% (+216 pts but the winrate falls 20.4% -> 14.2%, and price crosses -2% and -5% inside the same interval anyway); tightening the trailing (negative, -40 pts at 10%); a +5% take-profit (looked like +1428 pts, refuted -- the replay gave the TP a perfect fill while this same engine slips -8.6 pts on its stop; corrected to +295 pts at best, -40 pts once the 10 best improvements are removed); reading the price more often (the effect reverses sign once holding time is controlled for, so it was survivorship, not cadence).  WHAT THIS IS NOT: a measured result. Archived paths stop AT the real exit, so no replay can say what these positions would have done without a stop -- every \"no stop\" replay returns the real fill by construction. This is a live test, and it is one change on one mechanism so it stays attributable. The reference point that motivates it is another pocket, not a replay: robinhood_pump runs with NO fixed stop and returns +33.3% over 106 closures (+17.8% without its five best).  The floor does not disappear: HARD_STOP_PCT (-20%) and the shared progressive trailing bands still close a position that genuinely collapses. Revert is one line -- put 5.0 back."
       },
       "HARD_STOP_PCT": {
-        "line": 892,
+        "line": 898,
         "value": 20.0,
         "why": "23/08 -- this comment used to say the trailing path was unreachable because FIXED_STOP_PCT took precedence; that stopped being true the moment FIXED_STOP_PCT was disabled (see its own comment above) -- the trailing is live again. `hard_stopped` (in the shared `evaluate_exit`) only fires while the peak has never armed the trailing, so the two are not really competing: hard_stop catches positions that never moved, trailing catches the ones that did. FAST-DISCOVERY still runs the trailing at a flat 15%, a live A/B against this pocket's banded distance."
       },
       "MAX_BONDING_PROGRESS": {
-        "line": 194,
+        "line": 200,
         "value": 0.985,
         "why": "21/08, RAISED 0.95 -> 0.985 on 676 real closures. The old ceiling existed because a curve past 90% can COMPLETE mid-position and migrate its liquidity to the AMM -- treated as a risk to avoid. The data says that is the single BEST outcome available: stayed on the curve   n=620  winrate 32.6%  PnL  -15.93% MIGRATED to PumpSwap  n= 54  winrate 87.0%  PnL +161.42% and the migrated figure survives the outlier test intact (+138.5% without its two best, 47 winners of 54). Graduation is also PREDICTABLE from entry position, monotonically: 40-60%: 2.0%   60-70%: 2.5%   70-80%: 8.3%   80-90%: 24.5%   90-95%: 50.0% So the ceiling was excluding exactly the band with the highest chance of the best outcome. Kept just below 1.0 rather than removed: at a fully complete curve there is no bonding liquidity left to enter against at all."
       },
       "MAX_CONCURRENT_TRACKED": {
-        "line": 969,
+        "line": 975,
         "value": 60,
         "why": "20/08 -- raised with the widened band. The REAL constraint is the exit loop: more open positions means each one is checked less often, which is exactly what caused the late liquidity_collapse catches fixed earlier today (first check landing 32-116s after entry despite a 10s cadence). The exit sweep's own `limit` is raised in step below so widening collection cannot quietly re-create that failure."
       },
       "MAX_TOP_BUYER_SHARE": {
-        "line": 341,
+        "line": 347,
         "value": 0.4,
         "why": "20/08, RELAXED 0.60 -> 0.95. Kept non-1.0 on purpose: at 100% a single wallet is literally the only buyer, which is not a market at all. Everything below that is COLLECTED rather than judged -- `top_buyer_share_at_entry` is recorded, so the real wash-trading cutoff is measurable later.  22/08 -- TIGHTENED 0.95 -> 0.40. The \"measurable later\" arrived: 1029 closures above the liquidity floor, swept at every level.  ceiling   trades cut   their average   outlier-tested PnL kept 95% (old)      -            -                 +13.49% 50%           13         +13.7%               +13.48% 40%           24          +5.8%               +13.67% 30%           42          +6.6%               +13.86%  The 24 trades above 40% return +5.8% against the pocket's +17.85%: cutting them IMPROVES the result rather than costing anything, and five of them are worse than -20%.  What settled the level is the winners, not the average. Of the 80 closures at +100% or more, this ceiling keeps 79 -- and NOT ONE of the 31 closures above +200% is cut. The fifteen best trades all sit under 15% concentration, which is the real finding: a token that runs attracts many buyers, so no single one dominates. High concentration marks a token carried by one actor, going nowhere, able to leave whenever it likes.  STATED HONESTLY: the PnL gain does NOT survive cross-validation (+0.26 on one day, -0.25 on the next). This is kept for the STRUCTURAL reason -- an actor holding 40%+ of the buy volume can empty the pool at will, which is true regardless of what 1029 trades say -- and it is taken because it costs nothing, not because it earns something."
       },
       "MIN_BONDING_PROGRESS": {
-        "line": 180,
+        "line": 186,
         "value": 0.7,
         "why": "21/08, RAISED 0.40 -> 0.70 on 721 real closures. The band was widened to 0.40 the night before to COLLECT broadly and find out which sub-band works. It has now answered, and the answer is monotonic on both axes at once: 40-60%  n=327  rug 48.9%  win 37.0%  PnL -4.3% 60-70%  n=132  rug 43.2%  win 37.1%  PnL -4.0% 70-80%  n=140  rug 37.1%  win 42.9%  PnL +6.5% 80%+    n=122  rug 27.0%  win 50.0%  PnL +5.7% Rug risk nearly HALVES climbing the curve while the win rate rises -- a token that already convinced hundreds of buyers gets rug-pulled far less often than a fresh one. Yet 71% of entries were landing in 40-60%, the worst band of all (operator spotted this from a live screenshot before the data was queried).  Second reason, operator's own: real on-chain execution is NOT instant. Curve drift during a ~5s execution window is negligible on a quiet token (+0.10%) but reaches several points on one actually moving (+47.5%/min average among risers) -- precisely the tokens worth buying. Latency therefore pushes the real entry UP the curve, which is the right direction, but it means a floor has to be set where the band is already good rather than where it is barely acceptable. 23/08 -- RAISED BACK 0.50 -> 0.70. The 22/08 test (see the retained history below) has answered, and the answer confirms the 21/08 measurement it set out to overturn: the SAME liquidity floor that was supposed to protect this band was ALSO lowered 5500$ -> 4000$ the same day (see MIN_LIQUIDITY_USD's own comment) -- so the one thing the test's justification leaned on never actually held. Verified directly on 578 closures (22-23/08, 2 distinct days): raising the floor ALONE, at any level from 4000$ to 10000$, never recovers a positive PnL (-8% to -13% throughout, winrate stuck at 20-23%) -- the band itself is the problem, not just its thinnest pools. Concretely costly: hard_stop fills in this band average -33% to -39% (vs -20% nominal, -23.5% once the band clears 80%), on positions that die in well under 5s -- a slippage the module's own honest fill rule (min(stop_price, current_price)) cannot avoid when a pool this thin drains 50-90% in one transaction. Operator's own stated objective the same day (\"je prefere trader moins si le marche le permet pas que trader pour perdre\") settles the remaining question: the test has produced its answer, continuing to pay this cost would not be collecting new information, only repeating a known one -- and the regime gate (REGIME_MIN_MEDIAN_PEAK_PCT above) is a DIFFERENT, complementary mechanism (market-wide, not band-specific) that does not substitute for this floor. Decision made under explicit operator mandate (\"prends tes responsabilites et fais les meilleurs choix\") after the data above was verified, not before.  History retained for context -- what the 22/08 test actually tested: 22/08 -- LOWERED 0.70 -> 0.50, operator's explicit test. Stated plainly because the 21/08 measurement above says the opposite: 40-60% was the WORST band on 721 closures (48.9% rugs, -4.3% PnL) and that is exactly why the floor was raised to 0.70 in the first place.  What was believed to have changed, and made the test worth running rather than a repeat of a known mistake: * the liquidity floor went 3000$ -> 5500$, validated at +23.34 points on 528 vs 830 same-day closures. Most 40-60% rugs were thin pools; that floor now cuts them before the band is even reached. * entries are priced from the CHAIN, not from a websocket that could be 36s stale, so the band's own numbers were partly measured on false prices."
       },
       "MIN_DISTINCT_BUYERS": {
-        "line": 202,
+        "line": 208,
         "value": 1,
         "why": "20/08, RELAXED 3 -> 1 for the same collection reason. A candidate must still show SOME real buyer (buying what nobody buys is the behaviour the data condemns most clearly, -21.56% on the <30s band), but the exact N is one of the values this pocket exists to find -- fixing it at 3 up front would pre-decide the answer. `distinct_buyers_at_entry` is on every row, so the real threshold gets read off the data instead of guessed."
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 279,
+        "line": 285,
         "value": 5500.0,
         "why": "21/08 -- LIQUIDITY FLOOR, aligned with FAST-DISCOVERY's own 3000$.  This pocket had NO liquidity filter at all -- found while answering \"70% de bonding, ca correspond a quel market cap ?\", which surfaced entries with a pool holding TWO DOLLARS. Harmless while simulating (we only pretend to buy); impossible in reality, where a 1$ order in a 2$ pool moves the price 50%. The real-execution seam added the same day makes this a blocker, not a cosmetic gap.  Measured on 1114 closures with honest fills: no floor    PnL -8.3%  (without top2 -10.7%)  31% winners >= 1000$        -8.5%             -10.9%      31% >= 3000$        -7.3%             -10.0%      31% >= 5000$        -3.0%              -6.0%      35% 5000$ scores clearly better AND survives the outlier test, so it is not an artefact -- but it cuts 28% of the >=+100% winners (their average: +313%), against 8% at 3000$. This dome's standing rule is that any extra entry filter cuts the rare winners carrying everything, so the tighter floor is NOT taken on backtest alone: 5000$ stays one line away if live data confirms it, whereas winners we stopped observing can never be recovered.  22/08 -- RAISED to 5500$. The live data the note above was waiting for came in: 1609 closures, every entry metric on the row swept for a threshold that separates losers from winners. The pool's reserve is the ONLY one that does, and it does so on all three robustness checks at once:  reserve at entry     n     avg    without top2   winners  losses <=-20% 2000 - 3500$        180  -13.2%      -16.5%        33%        58% 3500 - 5450$        370   -2.0%       -9.5%        36%        51% 5450 - 8000$        817  +20.2%      +17.8%        55%        24% 8000 - 12000$       187   +8.6%       +0.2%        43%        17%  - outlier test: kept side +15.5% without its best two, against +7.4% for the unfiltered baseline -- the first entry filter tried on this pocket that does not collapse once its top trades are removed; - temporal stability: holds on each day taken separately (20/08 kept -6.8% vs cut -49.6%; 21/08 kept +18.1% vs cut -2.0%); - monotonic across bands, so it is a gradient and not one lucky bucket.  The cost is paid knowingly, on the operator's explicit instruction (\"meme si sa fait perdre 2 ou 3 trade gagnant je prefere les eviter\"): of the 30 best trades, this floor cuts 9, including the single best (+1709%, reserve 4450$). Losses removed still outweigh gains removed by ~2800 points.  NO upper bound is set despite the 8000$+ band scoring worse: only 31 closures sit above 12000$, far too few to cut on. Left to accumulate.  Also sets the tradable position size: a 3000$ pool tolerates roughly 30$ before price impact eats the edge (measured via Jupiter the same day). 23/08 -- RAISED BACK 4000 -> 5500. The 22/08 test (retained below) has answered: re-verified directly on 578 closures (22-23/08, 2 distinct days) that raising THIS floor alone, at any level from 4000$ to 10000$, never recovers a positive PnL (-8% to -13% throughout) -- confirming this floor was never really tested in isolation, exactly as the note below already suspected (\"the two filters overlap, so the band cannot be evaluated while both stand\"). MIN_BONDING_PROGRESS raised back to 0.70 the same pass, for the same reason -- see its own comment for the fuller writeup (hard_stop slippage measured, operator's stability-first objective, explicit mandate under which this decision was made).  History retained for context -- what the 22/08 test actually tested: 22/08 -- LOWERED 5500 -> 4000, operator's explicit test, and stated plainly because the data above says the opposite: this floor is the ONE entry filter that survived every check this session (+23.34 points measured at CONSTANT DAY -- 528 closures under it at -12.29% against 830 above at +11.06%), and the 2000-3500$ band it partly reopens scored -13.2%.  The reason to run the test anyway: lowering the entry band to 50% turned out to change nothing, because THIS floor already cuts that zone -- a token at mid-curve has not accumulated 5500$ of reserve yet. Measured live right after the deploy: `blocked_thin_liquidity` 5, `blocked_outside_band` 3. The two filters overlap, so the 50% band cannot be evaluated while both stand.  What was actually being tested was therefore the PAIR (band 50% + floor 4000$), not the floor alone."
       },
       "RECENT_WINDOW_CLOSURES": {
-        "line": 941,
+        "line": 947,
         "value": 50,
         "why": "How many of the most recent closures the 'recent' summary covers."
       },
       "RECONCILE_WINDOW_MINUTES": {
-        "line": 961,
+        "line": 967,
         "value": 30.0,
         "why": "How far back reconciliation looks. Long enough to catch a swap that took several slots to land, short enough that an old row can never resurrect."
       },
       "REENTRY_COOLDOWN_MINUTES": {
-        "line": 309,
+        "line": 315,
         "value": 525600.0,
         "why": "21/08 -- CARENCE APRES SORTIE. Le defaut le plus couteux trouve ce jour-la, revele par une capture de l'operateur : CALLOUTS a ete achete et stoppe TROIS fois en huit minutes (0s, 33s, 2min), puis a fait +199% sans nous.  Rien n'empechait de racheter un token qui venait de nous ejecter. Le stop fixe coupe a -5%, le prix remonte de 5%, on rachete, on se refait couper. Mesure sur 6h : 423 clotures pour seulement 192 tokens distincts, 73% des clotures etaient des RE-ENTREES, jusqu'a 12 positions sur un meme token. tokens re-trad\u00e9s   +6.7%  (79 tokens) tokens trad\u00e9s 1x  +30.0% On divisait notre propre performance par quatre en repayant la friction a chaque aller-retour sur le meme sous-jacent.  30 minutes plutot qu'un blocage definitif : un token qui nous a stoppe puis se reprend VRAIMENT reste une opportunite legitime (CALLOUTS l'a prouve), mais pas dans les secondes qui suivent, quand le prix oscille autour du seuil qui vient de nous sortir. 21/08 -- RE-ENTRIES BANNED OUTRIGHT, no longer merely delayed. Diagnostic over 206 closures: the 22 re-entries returned -4.07% at 23% winrate against +25.12% and 68% for first entries. Above all they held ZERO x2 winners out of 22 -- which is what separates this from every other filter tested the same day, each of which cut at least one big winner. Removing them takes the pocket from +21.99% to +25.12%.  A token that already ejected us once does not turn good again thirty minutes later: it showed what it was worth. Deliberately a huge value rather than a boolean -- the cooldown stays the mechanism, only its duration changes, so nothing else needs touching and reverting is a one-line edit."
       },
       "REGIME_CANDIDATES_TABLE": {
-        "line": 116,
+        "line": 122,
         "value": "solana_regime_candidates_log",
         "why": "23/08 -- the independent regime sensor's own table (see REGIME_MIN_MEDIAN_PEAK_PCT below). Deliberately its own name/set, not reusing TABLE/_ensured_db_paths: this sensor must never depend on -- or be confused with -- the pocket's trade log."
       },
       "REGIME_MIN_MEDIAN_PEAK_PCT": {
-        "line": 633,
+        "line": 639,
         "value": 30.0,
         "why": "23/08, LOWERED 50% -> 30% same day, operator-directed -- no new measurement behind this specific number, unlike the 20% -> 50% move a few hours earlier (which had a concrete capture-gap figure to justify it). Still on the same \"conservative hypothesis, explicit recalibration plan\" footing: 30% sits between the two prior values, pending the new sensor's own verdict once it holds >=100 rows.  23/08, RAISED 20% -> 50% same day, operator-directed: the gate's threshold measures the market's raw peak, but the pocket never captures the raw peak -- TRAILING_STOP_PCT=15.0 and the liquidity_collapse exit (checked FIRST, see its own comment above) both sell before the top. Measured on the same 44 closures this pocket already had: mean REAL peak was +16.23%, mean NET captured was -11.74% -- i.e. a market that clears the OLD 20% bar on average still lands the pocket in the red once its own exit mechanics take their cut. 50% was not itself calibrated on the new sensor (see history below) -- it was the operator's explicit correction for this capture gap, on the same \"conservative temporary hypothesis, explicit recalibration plan\" footing as the 20% it replaced.  HISTORY -- why 20% was chosen originally (23/08, same day, RE-ARMED at a PROVISIONAL 20%): Doctrine d'Ingestion (CLAUDE.md), a conservative temporary hypothesis borrowed from adjacent logic, with an explicit recalibration plan, beats leaving a promising idea idle for lack of fresh data. Left disarmed a few hours earlier the same day (44 closures/3h measured meanwhile: -9.3%/trade, 25% winrate, zero market filter active), operator flagged the live bleed directly. 20% itself was the median-peak threshold found by the causal replay on the OLD, self-feeding sensor (2303 closures, monotonic across 10/15/20%, best hourly stability at 20%) -- unreliable in ABSOLUTE terms (that replay's population was biased toward candidates the gate itself had let through), but a reasonable ORDER OF MAGNITUDE for \"the market just turned cold\" until the new sensor had its own answer.  The mechanism itself makes any value here safe to set: `regime_median_peak` returns None below REGIME_WINDOW=30 samples, so `regime_state()` reads OPEN -- i.e. this line has ZERO effect until the rebuilt, independent sensor (REGIME_CANDIDATES_TABLE) has actually accumulated 30 real candidates, at this pocket's measured ~48/hour that is roughly 35-40 minutes, not the hours a from-scratch mechanism would need. No risk of blocking on absent data, cf. the circularity guard tested in `test_below_the_window_there_is_no_verdict`. At 50%, expect the gate to stay shut far more often than at 20% -- the market rarely holds a 30-candidate median peak that high, so this pocket may trade much less. That is the intended effect given the capture gap above, not a side effect to walk back without new evidence.  RECALIBRATION IS MANDATORY, NOT OPTIONAL: revisit this number with the operator once the new sensor holds >=100 rows (Doctrine d'Ingestion's own n>=100 bar) -- the real distribution of SCREENED candidates (including ones the old sensor never saw, since it only recorded taken trades) may differ from 50% in either direction, and the capture-gap math above should be re-measured on THIS sensor's own population once it exists.  24/08, RAISED 25% -> 40%, operator-directed same day (a few hours after the 30->25 lowering just above -- the causal-replay case for 25% stands on its own population, but the operator chose to tighten past the original 30% bar rather than wait for a fresh replay). Kept the 25% note rather than deleting it: the 20-30% band's causal case (n=804, 87.8% positive) is still real data, just not the bar currently enforced. Solana-only change -- robinhood_pump_shadow.py's own REGIME_MIN_MEDIAN_PEAK_PCT stays at 25.0, operator-directed (\"les autres tu touche pas\").  26/08, LOWERED 40% -> 30%, operator-directed (specs/011-solana-regime- recalibration): the 40% bar closed the gate ~94-96% of the time, producing ZERO new closures for 15h+ despite the curve tracker actively finding in-band candidates -- a pocket that cannot close positions cannot validate or invalidate its own strategy. Real open-time trade-off recomputed directly against solana_regime_candidates_log this session (4602 rolling medians, REGIME_WINDOW=30, 2 distinct days): 20%->37.6%, 25%->19.8%, 30%->11.5%, 35%->6.4%, 40%->4.0%. 20% (and below) is explicitly EXCLUDED -- it is the exact value with a measured, real, negative outcome (44 closures, 23/08: mean REAL peak +16.23%, mean NET captured -11.74%, i.e. the capture gap this pocket's exit mechanics (TRAILING_STOP_PCT, liquidity-collapse exit) pays on every position regardless of entry threshold).  30.0 chosen over 25.0: (1) a wider safety margin from the known-dangerous 20% bar (10 points vs. 5) -- the capture-gap figure above is a STRUCTURAL property of the exit mechanics, not a function of this threshold, and cannot be re-measured per-candidate-threshold today (only 12 real closures exist in the current epoch, far below even the n>=100 provisional bar -- any per-threshold figure computed on 12 rows would be noise, not evidence, stated honestly rather than faked with false precision); (2) already a ~2.9x open-time gain over the current 4.0% (enough to meaningfully accelerate closure accumulation) without erasing most of the margin gained by every tightening step since 23/08 in one move; (3) consistent with this pocket's own recalibration history (20->50->30->25->40, always incremental, never a jump straight back to the most permissive prior value). 25.0 stays banked as the natural next step if 30.0's real closures prove safe.  RECALIBRATION PROTOCOL (specs/011 User Story 3, mirrors specs/010's own): once n>=100 closures accumulate under 30.0, run a pocket_entry_sweep-style pass (outlier removal top-2/top-5, day-count coverage) and specifically RE-MEASURE the capture-gap (mean real peak vs. mean net captured) under this threshold's own population -- if it has reopened toward the pre-24/08 defect, that is a signal to tighten back, not a silent continuation. The +25%/trade target itself is only considered validated, and specs/011 only closeable, once n>=1000 SAME-EPOCH closures confirm it (this recalibration starts a new epoch, see solana_late_bonding_shadow_log_archive_reset_20260826). If the sample stalls well below either gate for an extended period, state so explicitly rather than silently drawing a conclusion from too few trades."
       },
       "REGIME_TRACKING_WINDOW_MINUTES": {
-        "line": 532,
+        "line": 538,
         "value": 15.0,
         "why": "23/08 -- REBUILT with an INDEPENDENT sensor, after the first version measured -0.18%/trade in production against +13.10% in my own (wrong) simulation. The defect: the sensor read this pocket's OWN trade table, so a shut gate stopped feeding its own input and read only its 10% probes -- a biased handful. The probe existed only to keep that sensor alive; it is REMOVED here, not kept, because the new sensor no longer has that disease.  THE FIX: log every candidate that clears every filter up to this gate (bonding band, buyer/wash-trading screen, liquidity floor) into `REGIME_CANDIDATES_TABLE` -- REGARDLESS of what this gate itself decides -- then track its peak forward via `bonding_ws_feed.get_snapshot()`, a LOCAL, FREE, IN-MEMORY read: the pool is already subscribed at this point (`add_pools` runs earlier in `consider_candidate`, before this gate is ever reached), so tracking costs nothing beyond what the entry decision already pays for. No REST, no rate limit, no reason it should ever be starved.  This is what made `pretrade_rejection_log` unusable for the same job: it tracks refused candidates through the REST cascade at max_rows=5 every 300s against ~250 live rejects, so a given reject is re-read almost never. Measured: refused candidates tracked 90.5 min showed +1.27% mean peak while taken ones tracked 4.6 min showed +16.63% -- a sampling artefact, not a market fact. The websocket path has no such starvation: every candidate gets read on the SAME cadence the exit-tracking loop already runs at."
       },
       "REGIME_WINDOW": {
-        "line": 507,
+        "line": 513,
         "value": 30,
         "why": "23/08 -- MARKET-REGIME GATE. Operator's direction, verbatim: \"je pr\u00e9f\u00e8re trader moins si le march\u00e9 le permet pas que trader pour perdre mon objectif c'est de tenir un +20% minimum toute l'ann\u00e9e, vis\u00e9e la stabilit\u00e9 et avoir la possibilit\u00e9 de capter ceux qui pump fort\".  It gates on the REGIME, never on the token: when the market is hot everything passes, so the rare runners that carry the whole result are not filtered out. What it refuses is a market where nothing climbs any more.  Measured causally on 2303 closures over 4 days (each decision uses only the closures already known at that instant, no future data): no gate            2303 trades  +6.60%/trade   58% of hours positive median peak >=10%  1240 trades +10.38%/trade   73% median peak >=15%   956 trades +13.39%/trade   77% median peak >=20%   718 trades +16.21%/trade   93%   <- chosen median peak >=25%   499 trades +17.13%/trade   88% median peak >=30%   297 trades +18.71%/trade   89% 20% is not the highest average -- it is the point where the hourly standard deviation is LOWEST (17.8% against 19.5-22.2% everywhere else) and the share of positive hours is HIGHEST. That is the operator's stated criterion, so it is the one that decides. It holds without the top 5 trades (+12.54%) and it improved every single day of the sample, refusing 100% of the losing one.  HONEST LIMIT: this was validated on OUR OWN closures, which is also its weakness -- a shut gate starves its own sensor if it reads its own trades. See `docs/HANDOFF_PIPELINE_MOMENTUM.md` (23/08 entries) for the full history: first version self-fed on this pocket's own trade table and measured -0.18%/trade in production against +13.10% in a simulation that (wrongly) fed it every screened candidate rather than only the taken ones. Rebuilt below with an independent, trade-blind sensor."
       },
       "REINFORCE_ADD_WEIGHT": {
-        "line": 938,
+        "line": 944,
         "value": 0.5,
         "why": null
       },
       "REINFORCE_ENTRY_WEIGHT": {
-        "line": 937,
+        "line": 943,
         "value": 0.5,
         "why": null
       },
       "REINFORCE_TRIGGER_PCT": {
-        "line": 936,
+        "line": 942,
         "value": 30.0,
         "why": "21/08 -- REINFORCEMENT, measured in parallel and never acted on.  Operator's read of the PnL is exact: many small losers, a few explosions. His question was whether adding to a position that has already proven something amplifies the winning side. On 1013 real closures it does, and the decisive figure is this: capital added after a token moved returns +8.2% (outlier-tested) while the capital committed blind at entry returns -10.4%, on the SAME tokens over the SAME period.  Simulated at portfolio level, return on capital actually deployed: no reinforcement        -9.1%  (without top2 -11.7%) reinforce at +30%       -3.1%  (-6.6%)   <-- chosen reinforce at +50%       -4.5%  (-8.1%) reinforce at +75%       -5.8%  (-9.3%) Earlier is better, and stated plainly: this REDUCES the loss by 6 points, it does not make the pocket profitable. The median reinforcement still LOSES (-8.4%) -- the gain comes from the same handful of explosions as everything else here, so it is another asymmetric bet, not compounding.  Half at entry and half on confirmation, because doubling both stakes changes nothing per euro deployed: the two variants scored identically, and this one reaches it with 0.67 of capital per position instead of 1.34.  SHADOW-ONLY AND PARALLEL: nothing about the live position changes. The would-be reinforcement price is recorded and a second PnL computed beside the real one, so both are measured on the SAME tokens without splitting the data rate and without any way to damage the measurement in flight."
       },
       "RETRACEMENT_ARCHIVE_MODULE": {
-        "line": 106,
+        "line": 112,
         "value": "solana_late_bonding_retracement",
         "why": null
       },
       "RETRACEMENT_TABLE": {
-        "line": 105,
+        "line": 111,
         "value": "solana_late_bonding_retracement_shadow_log",
         "why": "23/08, operator-directed -- retracement-gated shadow variant. Every entry so far bought at the local curve-progress top: 26/26 real closures carrying `progress_retracement_at_entry` sat under 2% retracement (44 total closures, only 26 have the metric -- it was added mid-flight). This variant requires a minimum pullback from the local high before entering, tested purely in shadow against the unfiltered pocket above as the control.  Own TABLE (same shadow.db, same schema, different name) rather than a second database file: every other shadow module in this project shares one physical db (`shadow_db_path()`), and `pocket_entry_sweep.POCKETS` / `sqlite3 -readonly` tooling assume that single file. `table`/ `archive_module` parameters are threaded through `consider_candidate`, `resolve_migrated_pools`, `_apply_exit_check` and `advance_exit_simulation` so this variant's anti-duplicate check, entry write and exit tracking never read or write the primary pocket's rows -- see each parameter's own docstring. NOT threaded through `advance_position_by_pool` (event-driven exit, wired to the websocket's `on_update` hook) or `reconcile_with_chain` (real-capital wallet reconciliation): this variant never trades real capital and is only ever advanced by the periodic exit-tracking loop, so neither path is reachable for its rows regardless."
       },
       "SELL_COOLDOWN_SECONDS": {
-        "line": 2093,
+        "line": 2081,
         "value": 30.0,
         "why": "A sell that just failed is not retried for this long. Without it, a position that cannot be exited is retried by every loop on every pass -- which on 22/08 produced 847 rate-limit errors and took the whole pocket down for 3 hours, discovery included. The exit is not abandoned, only paced."
       },
       "TABLE": {
-        "line": 83,
+        "line": 89,
         "value": "solana_late_bonding_shadow_log",
         "why": null
       },
       "TRAILING_STOP_PCT": {
-        "line": 882,
+        "line": 888,
         "value": 15.0,
         "why": "22/08 -- BACK TO 15%, the shared default, after three hours of production disproved the 8% bet. Kept as an explicit constant rather than deleted so the next person sees WHY it is not 8.  The bet was: 8% was the best of 360 combinations replayed over the 100 best trades, winning under both intra-minute orderings. It was written down at the time as a deliberate bet on half the problem, not a validated setting, because the sample WAS the winners -- a tight trailing shines on tokens that climb with shallow pullbacks.  What production said, hour by hour, on the day it shipped: 16h  peak median +37.7%   peaks >+50%: 38.2%   PnL +15.69% 18h  peak median +11.8%   peaks >+50%: 20.6%   PnL +16.98% 19h  peak median  +2.3%   peaks >+50%:  3.7%   PnL  -5.43%   <- 8% live 21h  peak median  +6.6%   peaks >+50%:  0.0%   PnL  -8.76%  The PEAKS collapsed, not just the PnL. A peak is the highest price seen BEFORE our exit, so a collapsing peak means we stop observing the rise at all. The market moved the other way that day (22/08 peak median +16.3% against +13.1% on 21/08), so this was the setting, not conditions.  The arithmetic, which needed no replay: the trailing arms at +10% and sits `distance` below the peak. At 8%, a +12% peak puts the stop at +3.0% -- any breath ejects the position. At 15%, the same peak puts it at -4.8%, BELOW the fixed stop, so the position simply keeps running until a real move. 8% does not follow a trend, it exits it."
       },
       "_EFFECTIVE_REALISTIC_MULT_SQL": {
-        "line": 2728,
+        "line": 2716,
         "value": "CASE WHEN realistic_final_multiplier IS NOT NULL THEN realistic_final_multiplier WHEN realistic_entry_price IS NOT NULL THEN COALESCE(realistic_realized_proceeds, 0.0) / realistic_entry_price ELSE NULL END",
         "why": null
       }
@@ -822,22 +822,22 @@
         "why": "--- 17/08, LIQUIDITY-FIRST REVISION (operator-directed) ------------------ Root cause found by splitting the real 156-position sample by outcome after the survivorship-bias fix: positions that managed to EXIT cleanly were collectively PROFITABLE (+0.37$ over 64 rows), while positions that became unsellable mid-flight lost -7.91$ over 80 rows -- i.e. 96% of the total loss came from being STUCK, not from bad entries or a bad stop. The exit rule was never the problem; not getting out was.  Two levers, in the order they matter:  1. MIN_RESERVE_USD_AT_ENTRY -- the stranded rate is strongly monotone in entry liquidity, measured on the same sample: <2k$ -> 65-72% stranded, 2-5k$ -> 74%, 5-10k$ -> 42%, 10-25k$ -> 34%, >25k$ -> 36%. Entering below ~10k$ is close to a coin flip on whether the position can ever be closed at all. NOTE this is a real behavioural change to the shadow: it no longer FUNDS every signal it sees. Sourcing itself stays unfiltered (every candidate is still logged, per this module's own doctrine) -- what changes is that a too-thin pool is recorded with ``realistic_entry_price`` left NULL, i.e. observed but never bought, exactly like a pool already too shallow to fill the trade size. 2. LIQUIDITY_COLLAPSE_EXIT_PCT -- the entry filter alone is NOT enough (35% of >=10k$ positions still ended stranded, still -26% overall), because what traps a position is liquidity draining WHILE it is held, not its depth at entry. The pool's current reserve is already fetched every single cycle for the price-impact maths and was simply never compared against the entry value. Now it is: a reserve that has fallen past this fraction of its entry level closes the position IMMEDIATELY at the current price, without waiting for the price stop -- the whole point being to sell while a buyer still exists.  Both are deliberately EXPRESSED AS CONSTANTS rather than hardcoded, and both are UNVALIDATED out-of-sample: they were derived from the very sample that revealed them (textbook overfitting risk, cf. this project's own anti-overfitting doctrine). The 17/08 shadow reset exists precisely to test them on independent data before anything is promoted further."
       },
       "REGIME_CANDIDATES_TABLE": {
-        "line": 568,
+        "line": 559,
         "value": "solana_pump_regime_candidates_log",
         "why": "--------------------------------------------------------------------------- 23/08, operator-directed (\"construit ce 30 sur tout le monde\") -- same regime gate as solana_late_bonding_shadow.py's REGIME_MIN_MEDIAN_PEAK_PCT (read that module for the full incident history: a first sensor that self-fed on TAKEN trades measured -0.18%/trade in production against +13.10% in a biased simulation, rebuilt as an independent, trade-blind sensor). ``record_regime_candidate``/``regime_state`` mirror that module's functions of the same name field-for-field; ``regime_median_peak`` below is a DUPLICATE of its pure function rather than an import -- THIS module is itself imported BY solana_late_bonding_shadow.py (for ``_snapshot_with_fallback``/``_apply_price_impact_and_fee``), so importing back from it here would be a genuine circular dependency, not a stylistic choice. The function has no state, so duplicating it costs nothing a shared import would have saved.  WHY THIS POCKET CANNOT REUSE LATE_BONDING'S TRACKING MECHANISM: that sensor updates its peak via ``bonding_ws_feed.get_snapshot()``, a free in-memory read because the pool is already subscribed to a websocket for an unrelated reason (exit tracking). This pocket -- \"SOLANA TENDANCE\", already-graduated AMM pools, NOT the bonding curve -- has no such subscription: its only view of the market is the REST ``dexpaprika. get_trending_pools()`` fetch ``solana_pump_shadow_loop`` already performs every SOLANA_PUMP_CADENCE_SECONDS=120s to look for NEW candidates, regardless of whether anything new is found. That fetch returns up to 25 pools with a live price EVERY cycle, so ``advance_regime_candidates_from_ pools`` below re-reads THAT SAME response for pools already under tracking rather than issuing any REST call of its own -- zero marginal throughput.  REAL BUDGET CHECKED BEFORE CHOOSING THIS (23/08): the 3 REST shadow pockets (robinhood/base/solana_pump) share DexPaprika's own throttle (independent of GeckoTerminal), 1 discovery call/cycle each at 120s cadence, plus ``advance_exit_simulation``'s DexScreener-first snapshot fallback (at most 1-2 calls per OPEN position per cycle, against a DIFFERENT provider's budget). A dedicated per-candidate regime poll on top of that -- up to 25 candidates/cycle/pocket, all new REST calls -- would have added real, uncosted load for a signal the discovery fetch already carries for free. Reusing it is strictly better: no new call, no new budget risk, no new failure mode -- exactly the \"Pense-Systeme\" bar CLAUDE.md sets (never a linear/unbounded resource pattern when a staged, already-paid-for read already exists).  HONEST LIMIT (documented, not hidden, same discipline as the sibling module's own comments): a candidate's peak is only updated on cycles where DexPaprika's top-25 \"trending\" response for this chain STILL carries its pool_address. A token that pumps briefly then drops out of the top 25 (illiquid enough, or simply outranked) stops updating -- its logged peak understates the true market peak in that case. This is a conservative (never-inflated) bias: undercounting a hot market's peak only makes the gate MORE cautious, never less, which is the safe direction for a mechanism whose job is to detect when the market has gone cold."
       },
       "REGIME_MIN_MEDIAN_PEAK_PCT": {
-        "line": 577,
+        "line": 568,
         "value": 30.0,
         "why": "Provisional, borrowed from late_bonding's own value -- NOT calibrated for this pocket specifically (Doctrine d'Ingestion: a conservative hypothesis beats leaving a promising mechanism idle for lack of fresh data). RECALIBRATION MANDATORY once this table holds >=100 rows (Doctrine d'Ingestion's own n>=100 bar) -- this pocket's screened population may differ from late_bonding's in either direction."
       },
       "REGIME_TRACKING_WINDOW_MINUTES": {
-        "line": 570,
+        "line": 561,
         "value": 15.0,
         "why": null
       },
       "REGIME_WINDOW": {
-        "line": 569,
+        "line": 560,
         "value": 30,
         "why": null
       },
@@ -878,67 +878,67 @@
     "label": "SUPPORT-BOUNCE v1",
     "parameters": {
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 148,
+        "line": 149,
         "value": 50.0,
         "why": null
       },
       "MAX_HOLD_MINUTES": {
-        "line": 147,
+        "line": 148,
         "value": 120.0,
         "why": null
       },
       "MAX_RANGE_RATIO": {
-        "line": 116,
+        "line": 117,
         "value": 5.0,
         "why": "17/08, real bug caught live by the operator (BULLSHIT: range_high_10c was 7386x range_low_10c -- a near-total collapse within the 50min lookback, not a real consolidation. entry_price landed exactly at range_low, \"distance 0%\" was technically true but this was catching a falling knife after a crash, not a support bounce). No sane bound previously existed on how WIDE the 10-candle range itself could be. Claude's own pick (operator had no preference -- \"je sais pas\"), first guess like SUPPORT_TOLERANCE_PCT, to recalibrate once enough real outcomes accumulate.  18/08 -- widened 3.0 -> 5.0, operator-directed: the 3.0 cap meant this module could NEVER accumulate any real outcome data past 3.0x (structural zero, not \"untested\" -- a query against the 104 real closures confirmed n=0 above 3.0). Pure data-gathering move, not a claim that 5.0 is a good threshold -- exactly the \"recalibrate once enough real outcomes accumulate\" the original comment already asked for, now extended to the 3.0-5.0x range specifically so it stops being permanently invisible."
       },
       "MIN_H1_PCT": {
-        "line": 94,
+        "line": 95,
         "value": -5.0,
         "why": "Entry criteria (operator-specified 17/08) 18/08, operator decision: raised from 0.0 (required h1 strictly positive) to -5.0 after observing the discovery funnel live -- get_trending_pools sorts by strongest 1h gainer, so most fetched candidates sit near the TOP of their own 10-candle range (still actively pumping), not the bottom, which structurally starves the support-distance filter downstream. Letting in mildly-cooling candidates (down to -5% over 1h, not just still-positive ones) gives more candidates a real chance of sitting near their recent low."
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 95,
+        "line": 96,
         "value": 5000.0,
         "why": null
       },
       "MIN_POOL_AGE_MINUTES": {
-        "line": 96,
+        "line": 97,
         "value": 70.0,
         "why": null
       },
       "PEAK_PRICE_SANITY_MULTIPLE": {
-        "line": 166,
+        "line": 167,
         "value": 50.0,
         "why": "19/08, real bug found live by the operator asking for a PnL point: two positions (Jotchua, WW) had `peak_price` set to a manifestly corrupted upstream price (7.38 and 2.5 respectively) -- ~5000x/4700x above their own entry AND above their own range_high_10c measured just minutes earlier at entry (0.00151/0.000539). `advance_exit_simulation` took whatever snapshot.price_usd/OHLCV high it received at face value with zero plausibility check, so a single bad upstream read (known DexPaprika/ GeckoTerminal data-quality gap, documented elsewhere in this dome) got baked PERMANENTLY into peak_price (never decreases) and then into the trailing-stop fill price -- a multiplier of x5651/x4669 on just 3-4 positions out of 220+ was enough to swing the WHOLE pocket's aggregate PnL from a real +2.1%/position to a fabricated +8802% return_on_deployed_pct. 50x the entry-time range_high_10c is deliberately generous (no real candidate observed anywhere near that in this pocket's whole history so far) -- high enough to never reject a genuine pump, low enough to catch this exact class of corrupted-price artifact."
       },
       "SUPPORT_CANDLE_COUNT": {
-        "line": 98,
+        "line": 99,
         "value": 10,
         "why": null
       },
       "SUPPORT_CANDLE_INTERVAL": {
-        "line": 99,
+        "line": 100,
         "value": "5m",
         "why": null
       },
       "SUPPORT_TOLERANCE_PCT": {
-        "line": 97,
+        "line": 98,
         "value": 20.0,
         "why": null
       },
       "TABLE": {
-        "line": 84,
+        "line": 85,
         "value": "solana_support_bounce_shadow_log",
         "why": null
       },
       "TARGET_CLOSURES": {
-        "line": 188,
+        "line": 189,
         "value": 100,
         "why": "18/08, lowered back 150 -> 50, operator-directed, paired with the TRAILING_STOP_PCT change above -- same size as the very first batch this module ever ran (which came back net positive, winrate 45%, PnL +9.7%, before being raised to 150 the same day). A fresh, smaller, faster read on the new stop width before committing to another 150-closure run.  18/08, same day -- raised 50 -> 100, operator-directed: the first 50-batch read (74 closures logged before this cap fired, since record_signals only checks the cap BEFORE sourcing new candidates, not mid-cycle) surfaced a real signal worth confirming on a larger, still-fresh sample before touching the entry filter -- entries 10-15% into the support range (distance_from_support_pct) outperformed the naive \"closest to support\" 0-5% band on BOTH v1 and v2 independently, but each bucket's n (13-50) was too thin to trust. Never sourcing new candidates once the cap is hit means this run does NOT reset -- it just keeps accumulating past 74 toward 100 on the exact same -5% stop / distance filter, so the comparison stays apples-to-apples. Once at 100: split train/validation, re-check the distance-bucket signal on each half independently before ever narrowing the entry filter based on it -- same anti-overfitting doctrine as the v8 wick-gate incident (never promote a pattern mined on one un-split batch)."
       },
       "TRAILING_STOP_PCT": {
-        "line": 146,
+        "line": 147,
         "value": 15.0,
         "why": "Exit mechanics (operator-specified originally: \"stop loss suiveur -10%\", \"aucun palier\"). 18/08, second change: tightened 10.0 -> 5.0, operator- directed, ISOLATED single-variable test to see whether a tighter stop would do BETTER. The 160-closure 10% batch (archived, PnL +4.9% realistic at the time) is preserved, not discarded -- see the reset note on TARGET_CLOSURES below.  19/08, reverted 5.0 -> 10.0 -- the experiment's own answer came back negative. Same-day operator observation (\"les donnees etaient meilleures quand on prenait plus de risque\") verified against real numbers, both batches re-cleaned through the SAME PEAK_PRICE_SANITY_MULTIPLE filter (the earlier same-day naive comparison, made BEFORE that filter existed, was flagged inconclusive -- this redo is the clean version): archived 10%-stop batch, n=153 closed (0 outliers found), return +4.87% -- vs the live 5%-stop batch, n=213 closed (4 outliers excluded), return -0.57%. A ~5.4-point gap on comparable sample sizes, both cleaned the same way -- more solid than the MAX_RANGE_RATIO=1.5 signal that turned out to be noise on a small sample. Still NOT a true replayed-backtest (two different time periods, not the same positions re-run under both widths) -- flagged for a real candle-replay redo if this needs firmer proof later.  19/08, same day, widened again 10.0 -> 15.0 -- operator-directed exploratory test (\"test 15 plutot de stop loss\"), extrapolating the same \"more risk did better\" direction one step further. UNLIKE the 5.0 -> 10.0 revert above, this is NOT yet backed by any real closed-position data at 15% (no batch exists to compare) -- purely a new hypothesis to test prospectively, same doctrine as every other untested first guess in this module. Recalibrate once enough real 15%-stop outcomes accumulate."
       }
@@ -949,72 +949,72 @@
     "label": "SUPPORT-BOUNCE v2",
     "parameters": {
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 98,
+        "line": 99,
         "value": 50.0,
         "why": null
       },
       "MAX_HOLD_MINUTES": {
-        "line": 97,
+        "line": 98,
         "value": 120.0,
         "why": null
       },
       "MAX_RANGE_RATIO": {
-        "line": 86,
+        "line": 87,
         "value": 5.0,
         "why": null
       },
       "MAX_TOP_HOLDER_PCT": {
-        "line": 80,
+        "line": 81,
         "value": 15.0,
         "why": null
       },
       "MIN_H1_PCT": {
-        "line": 78,
+        "line": 79,
         "value": -5.0,
         "why": "Entry criteria -- identical to the original except MIN_LIQUIDITY_USD and the new MAX_TOP_HOLDER_PCT check, see module docstring for the real-data basis of the change."
       },
       "MIN_LIQUIDITY_USD": {
-        "line": 79,
+        "line": 80,
         "value": 20000.0,
         "why": null
       },
       "MIN_POOL_AGE_MINUTES": {
-        "line": 82,
+        "line": 83,
         "value": 70.0,
         "why": "missing rugcheck data, fail-closed only on a confirmed reading above this."
       },
       "PEAK_PRICE_SANITY_MULTIPLE": {
-        "line": 105,
+        "line": 106,
         "value": 50.0,
         "why": "19/08, same real bug as solana_support_bounce_shadow.py -- see its own PEAK_PRICE_SANITY_MULTIPLE comment for the full incident writeup (Jotchua/WW corrupted upstream prices, x5651/x4669 multipliers on just a few positions swinging this pocket's whole aggregate PnL from a real ~flat/-0.1% to a fabricated +57579% return_on_deployed_pct)."
       },
       "SUPPORT_CANDLE_COUNT": {
-        "line": 84,
+        "line": 85,
         "value": 10,
         "why": null
       },
       "SUPPORT_CANDLE_INTERVAL": {
-        "line": 85,
+        "line": 86,
         "value": "5m",
         "why": null
       },
       "SUPPORT_TOLERANCE_PCT": {
-        "line": 83,
+        "line": 84,
         "value": 20.0,
         "why": null
       },
       "TABLE": {
-        "line": 73,
+        "line": 74,
         "value": "solana_support_bounce_v2_shadow_log",
         "why": null
       },
       "TARGET_CLOSURES": {
-        "line": 107,
+        "line": 108,
         "value": 150,
         "why": null
       },
       "TRAILING_STOP_PCT": {
-        "line": 96,
+        "line": 97,
         "value": 15.0,
         "why": "Exit mechanics -- identical to the original, no longer a v2-distinctive test variable. 19/08, reverted 5.0 -> 10.0 alongside the original -- see that module's own TRAILING_STOP_PCT comment for the real-data reasoning (archived 10%-stop batch +4.87% vs live 5%-stop batch -0.57%, both cleaned through PEAK_PRICE_SANITY_MULTIPLE). Same day, widened again 10.0 -> 15.0, operator-directed exploratory test -- NOT yet backed by real 15%-stop data, see the original module's own comment."
       }
@@ -1025,47 +1025,47 @@
     "label": "SOLANA VARIANTS (3 parallel entry thresholds)",
     "parameters": {
       "LIQUIDITY_COLLAPSE_EXIT_PCT": {
-        "line": 89,
+        "line": 90,
         "value": 50.0,
         "why": null
       },
       "MAX_HOLD_MINUTES": {
-        "line": 88,
+        "line": 89,
         "value": 120.0,
         "why": null
       },
       "MAX_POOL_AGE_MINUTES": {
-        "line": 82,
+        "line": 83,
         "value": 120.0,
         "why": null
       },
       "MIN_POOL_AGE_MINUTES": {
-        "line": 81,
+        "line": 82,
         "value": 20.0,
         "why": "Age window -- deliberately the ORIGINAL, already-validated 20-120min band (not the 20-240min currently under test in solana_pump_shadow.py). This experiment already varies entry threshold, liquidity floor, and exit mechanics at once (operator-directed) -- holding age constant at a known value avoids piling on a FOURTH simultaneous variable."
       },
       "SCALE_OUT_SELL_FRACTION": {
-        "line": 87,
+        "line": 88,
         "value": 0.25,
         "why": null
       },
       "SCALE_OUT_STEP_PCT": {
-        "line": 86,
+        "line": 87,
         "value": 25.0,
         "why": "Exit mechanics -- scale-out ladder identical to solana_pump_shadow.py. TRAILING_STOP_PCT deliberately does not exist in this module."
       },
       "TABLE": {
-        "line": 61,
+        "line": 62,
         "value": "solana_variant_shadow_log",
         "why": null
       },
       "TARGET_CLOSURES_PER_VARIANT": {
-        "line": 74,
+        "line": 75,
         "value": 50,
         "why": null
       },
       "_SCALE_OUT_DUST_FRACTION": {
-        "line": 90,
+        "line": 91,
         "value": 0.01,
         "why": null
       }

@@ -223,6 +223,38 @@ async def test_record_signals_multiple_pools_independent():
 
 
 @pytest.mark.asyncio
+async def test_record_signals_skips_new_candidate_when_pocket_at_cap():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(25):
+            await db.execute(
+                "INSERT INTO robinhood_pump_shadow_log "
+                "(pool_address, chain, status, detected_at, entry_price) "
+                "VALUES (?, ?, 'open', '2026-08-28T00:00:00', 1.0)",
+                (f"cap_pool_{i}", CHAIN),
+            )
+        await db.commit()
+    logged = await shadow.record_signals([_pool(pool_address="new_pool", m5=30.0)], chain=CHAIN)
+    assert logged == 0
+    assert "new_pool" not in {r["pool_address"] for r in await _rows()}
+
+
+@pytest.mark.asyncio
+async def test_record_signals_still_logs_below_pocket_cap():
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(24):
+            await db.execute(
+                "INSERT INTO robinhood_pump_shadow_log "
+                "(pool_address, chain, status, detected_at, entry_price) "
+                "VALUES (?, ?, 'open', '2026-08-28T00:00:00', 1.0)",
+                (f"cap_pool_{i}", CHAIN),
+            )
+        await db.commit()
+    logged = await shadow.record_signals([_pool(pool_address="new_pool", m5=30.0)], chain=CHAIN)
+    assert logged == 1
+    assert "new_pool" in {r["pool_address"] for r in await _rows()}
+
+
+@pytest.mark.asyncio
 async def test_record_signals_archives_before_candles(monkeypatch):
     captured = []
 

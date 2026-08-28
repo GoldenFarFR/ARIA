@@ -205,6 +205,36 @@ async def test_record_signals_dedupes_while_open():
 
 
 @pytest.mark.asyncio
+async def test_record_signals_skips_new_candidate_when_pocket_at_cap():
+    async with aiosqlite.connect(v2._db_path()) as db:
+        for i in range(25):
+            await db.execute(
+                f"INSERT INTO {v2.TABLE} (pool_address, chain, detected_at, entry_price) "
+                "VALUES (?, ?, '2026-08-28T00:00:00', 1.0)",
+                (f"cap_pool_{i}", CHAIN),
+            )
+        await db.commit()
+    logged = await v2.record_signals([_pool(pool_address="new_pool", m5=30.0)], chain=CHAIN)
+    assert logged == 0
+    assert "new_pool" not in {r["pool_address"] for r in await _rows()}
+
+
+@pytest.mark.asyncio
+async def test_record_signals_still_logs_below_pocket_cap():
+    async with aiosqlite.connect(v2._db_path()) as db:
+        for i in range(24):
+            await db.execute(
+                f"INSERT INTO {v2.TABLE} (pool_address, chain, detected_at, entry_price) "
+                "VALUES (?, ?, '2026-08-28T00:00:00', 1.0)",
+                (f"cap_pool_{i}", CHAIN),
+            )
+        await db.commit()
+    logged = await v2.record_signals([_pool(pool_address="new_pool", m5=30.0)], chain=CHAIN)
+    assert logged == 1
+    assert "new_pool" in {r["pool_address"] for r in await _rows()}
+
+
+@pytest.mark.asyncio
 async def test_record_signals_independent_from_v1_table():
     """v2 opens its own row even when v1 already has an open signal for the
     same pool -- two independent parallel ledgers, per the module docstring."""

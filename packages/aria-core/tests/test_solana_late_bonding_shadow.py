@@ -207,6 +207,39 @@ async def test_the_same_pool_is_never_entered_twice_while_open(_tmp_db):
     assert len(await _rows(_tmp_db)) == 1
 
 
+async def _seed_open_rows(path, n: int, *, chain=CHAIN) -> None:
+    async with aiosqlite.connect(path) as db:
+        for i in range(n):
+            await db.execute(
+                f"INSERT INTO {pocket.TABLE} (pool_address, token_address, chain, detected_at) "
+                "VALUES (?, ?, ?, '2026-08-28T00:00:00')",
+                (f"cap_pool_{i}", f"cap_mint_{i}", chain),
+            )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_consider_candidate_skips_new_entry_when_pocket_at_cap(_tmp_db):
+    await _seed_open_rows(_tmp_db, 25)
+    row_id = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert row_id is None
+    assert "poolA" not in {r["pool_address"] for r in await _rows(_tmp_db)}
+
+
+@pytest.mark.asyncio
+async def test_consider_candidate_still_enters_below_pocket_cap(_tmp_db):
+    await _seed_open_rows(_tmp_db, 24)
+    row_id = await pocket.consider_candidate(
+        "mintA", "poolA", trade_stream=_Stream(), resolve_curves_fn=_resolve_ok,
+        snapshot_fn=_snapshot_ok, db_path=_tmp_db,
+    )
+    assert row_id is not None
+    assert "poolA" in {r["pool_address"] for r in await _rows(_tmp_db)}
+
+
 @pytest.mark.asyncio
 async def test_a_known_token_factory_creator_never_gets_an_entry(_tmp_db):
     """4+ tokens from one wallet = 4.7% winrate vs 15.5% (measured)."""

@@ -145,6 +145,67 @@ async def test_discover_opens_position_on_qualifying_dip(monkeypatch):
     assert rows[0]["entry_price"] == pytest.approx(shadow._realistic_fill_price(1.0))
 
 
+async def _seed_open_positions(n: int, *, chain=CHAIN) -> None:
+    """Test-only helper (never in the production module): seeds N pre-existing
+    OPEN rows with distinct contracts, to set up the 28/08 shadow_pocket_cap
+    precondition."""
+    await shadow._ensure_tables()
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(n):
+            await db.execute(
+                """
+                INSERT INTO dip_recovery_v2_shadow (
+                    contract, chain, pool_address, symbol, status, entry_price,
+                    entry_var_24h_pct, entry_market_cap_usd, entry_liquidity_usd,
+                    entry_pool_age_days, opened_at
+                ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"0x{i:040d}", chain, f"0xPOOL{i}", "TOK", 1.0, -31.0,
+                    200_000.0, 30_000.0, 30.0, datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_new_candidate_when_pocket_at_cap(monkeypatch):
+    await _seed_open_positions(25)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 0
+    assert await _rows() == []
+
+
+@pytest.mark.asyncio
+async def test_discover_still_opens_below_pocket_cap(monkeypatch):
+    await _seed_open_positions(24)
+
+    async def fake_trending(*a, **k):
+        return TrendingPoolsResult(pools=[_pool()], available=True, error=None)
+
+    async def fake_pairs(contract, *, chain="base"):
+        return [_snapshot()]
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    monkeypatch.setattr(shadow.dexscreener, "fetch_token_pairs", fake_pairs)
+
+    opened = await shadow.discover_and_record(CHAIN)
+    assert opened == 1
+    rows = await _rows()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "open"
+
+
 # --- specs/013: cross-provider entry sanity guard ---------------------------
 
 @pytest.mark.asyncio

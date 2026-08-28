@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from aria_core import shadow_pocket_cap
 from aria_core.paths import shadow_db_path
 from aria_core.services import rugcheck
 from aria_core.services.geckoterminal import GeckoTerminalClient, PoolSnapshot, TrendingPool, geckoterminal_client
@@ -223,6 +224,17 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
 
                 for variant in qualifying_variants:
                     if await _has_open_signal(db, variant, pool.pool_address, chain):
+                        continue
+                    # 28/08 -- shadow-wide resource cap, see shadow_pocket_cap.py's
+                    # module docstring. Never a trading gate: purely a ceiling on
+                    # how many concurrent open positions this pocket may hold.
+                    # Scoped per VARIANT (like this module's own
+                    # closures_so_far/TARGET_CLOSURES_PER_VARIANT), never the
+                    # whole table -- each variant is its own independent
+                    # comparison arm with its own subscription cost.
+                    if await shadow_pocket_cap.at_capacity(
+                        db, TABLE, open_clause="variant = ? AND exit_reason IS NULL", params=(variant,)
+                    ):
                         continue
                     await db.execute(
                         f"""

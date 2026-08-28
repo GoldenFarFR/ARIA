@@ -125,7 +125,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from aria_core import pretrade_rejection_log
+from aria_core import pretrade_rejection_log, shadow_pocket_cap
 from aria_core.momentum_entry import _best_pair
 from aria_core.paths import shadow_db_path
 from aria_core.services import dexpaprika, dexscreener, rugcheck
@@ -781,6 +781,17 @@ async def record_signals(pools: list[TrendingPool], *, chain: str = "solana") ->
                     continue  # outside the measured age window (see the constants)
                 if await _has_open_signal(db, pool.pool_address, chain):
                     continue  # dedupe: an ongoing pump isn't re-logged every cycle
+
+                # 28/08 -- shadow-wide resource cap, see shadow_pocket_cap.py's
+                # module docstring. Never a trading gate: purely a ceiling on
+                # how many concurrent open positions this pocket may hold.
+                # exit_reason IS NULL (not status='open'), same as this
+                # module's own recently-fixed _has_open_signal reasoning:
+                # status is never reliably updated in prod.
+                if await shadow_pocket_cap.at_capacity(
+                    db, TABLE, open_clause="exit_reason IS NULL"
+                ):
+                    continue
 
                 # 23/08 -- regime gate, see the REGIME_MIN_MEDIAN_PEAK_PCT
                 # block above. This candidate cleared every OTHER filter

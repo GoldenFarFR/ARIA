@@ -72,6 +72,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
+from aria_core import shadow_pocket_cap
 from aria_core.paths import aria_db_path
 from aria_core.services import dexpaprika, dexscreener
 # Reused rather than duplicated (architectural-coherence doctrine) -- these
@@ -357,6 +358,14 @@ async def _maybe_open_position(
     (contract, chain) any time no position for it is currently open."""
     async with aiosqlite.connect(_db_path()) as db:
         if await _has_open_position(db, contract, chain):
+            return 0
+
+        # 28/08 -- shadow-wide resource cap, see shadow_pocket_cap.py's
+        # module docstring. Never a trading gate: purely a ceiling on how
+        # many concurrent open positions this pocket may hold.
+        if await shadow_pocket_cap.at_capacity(
+            db, "dip_recovery_v2_shadow", open_clause="status = 'open'"
+        ):
             return 0
 
         in_cooldown, closed_at, minutes_elapsed = await _recently_closed_via_take_profit(

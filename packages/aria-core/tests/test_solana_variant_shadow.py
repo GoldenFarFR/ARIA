@@ -101,6 +101,38 @@ async def test_pool_at_20pct_qualifies_all_three():
     assert variants_logged == {"m5_5pct", "m5_10pct", "m5_15pct"}
 
 
+async def _seed_open_rows(variant: str, n: int, *, chain=CHAIN) -> None:
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(n):
+            await db.execute(
+                f"INSERT INTO {shadow.TABLE} (variant, pool_address, chain, detected_at, entry_price) "
+                "VALUES (?, ?, ?, '2026-08-28T00:00:00', 1.0)",
+                (variant, f"cap_pool_{i}", chain),
+            )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_record_signals_skips_new_candidate_when_variant_at_cap():
+    await _seed_open_rows("m5_5pct", 25)
+    # A pool at m5=20 qualifies all three variants -- only the capped one
+    # (m5_5pct) should be skipped, proving the cap is scoped PER VARIANT,
+    # never the whole table (each variant is its own independent arm).
+    logged = await shadow.record_signals([_pool(pool_address="new_pool", m5=20.0)], chain=CHAIN)
+    assert logged == 2
+    variants_logged = {r["variant"] for r in await _rows() if r["pool_address"] == "new_pool"}
+    assert variants_logged == {"m5_10pct", "m5_15pct"}
+
+
+@pytest.mark.asyncio
+async def test_record_signals_still_logs_variant_below_cap():
+    await _seed_open_rows("m5_5pct", 24)
+    logged = await shadow.record_signals([_pool(pool_address="new_pool", m5=20.0)], chain=CHAIN)
+    assert logged == 3
+    variants_logged = {r["variant"] for r in await _rows() if r["pool_address"] == "new_pool"}
+    assert variants_logged == {"m5_5pct", "m5_10pct", "m5_15pct"}
+
+
 @pytest.mark.asyncio
 async def test_pool_below_all_thresholds_logs_nothing():
     logged = await shadow.record_signals([_pool(m5=3.0)], chain=CHAIN)

@@ -177,6 +177,35 @@ async def test_liquidity_below_floor_rejected(monkeypatch):
     assert logged == 0
 
 
+async def _seed_open_rows(n: int, *, chain=CHAIN) -> None:
+    async with aiosqlite.connect(shadow._db_path()) as db:
+        for i in range(n):
+            await db.execute(
+                f"INSERT INTO {shadow.TABLE} (pool_address, chain, detected_at, entry_price) "
+                "VALUES (?, ?, '2026-08-28T00:00:00', 1.0)",
+                (f"cap_pool_{i}", chain),
+            )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_record_signals_skips_new_candidate_when_pocket_at_cap(monkeypatch):
+    await _seed_open_rows(25)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    logged = await shadow.record_signals([_pool(pool_address="new_pool")], chain=CHAIN)
+    assert logged == 0
+    assert "new_pool" not in {r["pool_address"] for r in await _rows()}
+
+
+@pytest.mark.asyncio
+async def test_record_signals_still_logs_below_pocket_cap(monkeypatch):
+    await _seed_open_rows(24)
+    monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
+    logged = await shadow.record_signals([_pool(pool_address="new_pool")], chain=CHAIN)
+    assert logged == 1
+    assert "new_pool" in {r["pool_address"] for r in await _rows()}
+
+
 @pytest.mark.asyncio
 async def test_age_below_70min_rejected(monkeypatch):
     monkeypatch.setattr(shadow.dexpaprika, "_fetch_one_interval", AsyncMock(return_value=_candles([0.9])))
