@@ -34,6 +34,7 @@ Same sensitive-name keyword list as show-env-safe.sh/block-secret-display.sh
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -150,6 +151,20 @@ def main() -> None:
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out_lines).rstrip("\n") + "\n")
+
+    # 28/08 -- GitHub CodeQL #166 (py/clear-text-storage-sensitive-data): this
+    # file holds real secrets in clear text by DESIGN (the project's own
+    # established secret-storage mechanism, see CLAUDE.md -- not a defect
+    # this script introduces, and encrypting it would break every component
+    # that reads it via a plain `load_dotenv()`). The one real, actionable
+    # hardening a rewrite script CAN do: never leave the file (or its backup)
+    # more permissive than owner-only, regardless of the original's mode or
+    # the process umask. `open(path, "w")` on an existing file preserves its
+    # current permission bits rather than resetting them -- this makes the
+    # restriction explicit instead of relying on whatever the file already
+    # happened to be.
+    os.chmod(path, 0o600)
+    os.chmod(backup_path, 0o600)
 
     print(f"Backup written to {backup_path}")
     print(f"Reorganized: {len(secrets)} secrets, {len(gates)} gates, {len(other)} other")

@@ -129,11 +129,38 @@ def _unwrap_offering(data: Any) -> dict | None:
     return None
 
 
+class AcpArgError(ValueError):
+    """27/08 -- GitHub CodeQL #167 (py/command-line-injection, CWE-088):
+    CodeQL traced a real flow from 3 public /chat endpoints (free-text a
+    visitor types, reachable by an LLM tool-call into these functions) into
+    subprocess.run()'s argv list. subprocess.run is called WITHOUT
+    shell=True (confirmed in run_acp below), so classic shell metacharacter
+    injection isn't possible here -- but nothing stopped a value like
+    ``name``/``query``/``offering_id`` from starting with ``-`` and being
+    read as a FLAG by acp-cli's own argument parser instead of the literal
+    value it's supposed to be (argument injection, not command injection).
+    Raised by ``_safe_value``/``_schema_arg`` below, caught at each public
+    function's own boundary and turned into that function's normal
+    error-tuple return -- never left to propagate, same "never raise into
+    the caller" contract every function here already has for a subprocess
+    failure."""
+
+
+def _safe_value(value: str, field: str) -> str:
+    """Validates a free-text/identifier value before it becomes a subprocess
+    argv element -- never applied to the hardcoded flag literals (``"--name"``
+    etc.), which are source-code constants, never externally reachable."""
+    v = value.strip()
+    if v.startswith("-"):
+        raise AcpArgError(f"{field}: valeur invalide (commence par '-'): {v!r}")
+    return v
+
+
 def _schema_arg(value: str | dict[str, Any] | list[Any] | None) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value.strip()
+        return _safe_value(value, "requirements/deliverable")
     return json.dumps(value, ensure_ascii=False)
 
 
@@ -170,30 +197,33 @@ def create_offering(
     hidden: bool = False,
     subscription_ids: str = "",
 ) -> tuple[dict | None, str | None]:
-    args = [
-        "offering",
-        "create",
-        "--name",
-        name.strip(),
-        "--description",
-        description.strip(),
-        "--price-type",
-        price_type,
-        "--price-value",
-        str(price_value),
-        "--sla-minutes",
-        str(int(sla_minutes)),
-    ]
-    req = _schema_arg(requirements)
-    if req:
-        args.extend(["--requirements", req])
-    deliv = _schema_arg(deliverable)
-    if deliv:
-        args.extend(["--deliverable", deliv])
-    args.append("--required-funds" if required_funds else "--no-required-funds")
-    args.append("--hidden" if hidden else "--no-hidden")
-    if subscription_ids.strip():
-        args.extend(["--subscription-ids", subscription_ids.strip()])
+    try:
+        args = [
+            "offering",
+            "create",
+            "--name",
+            _safe_value(name, "name"),
+            "--description",
+            _safe_value(description, "description"),
+            "--price-type",
+            _safe_value(price_type, "price_type"),
+            "--price-value",
+            str(price_value),
+            "--sla-minutes",
+            str(int(sla_minutes)),
+        ]
+        req = _schema_arg(requirements)
+        if req:
+            args.extend(["--requirements", req])
+        deliv = _schema_arg(deliverable)
+        if deliv:
+            args.extend(["--deliverable", deliv])
+        args.append("--required-funds" if required_funds else "--no-required-funds")
+        args.append("--hidden" if hidden else "--no-hidden")
+        if subscription_ids.strip():
+            args.extend(["--subscription-ids", _safe_value(subscription_ids, "subscription_ids")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -217,33 +247,36 @@ def update_offering(
     hidden: bool | None = None,
     subscription_ids: str | None = None,
 ) -> tuple[dict | None, str | None]:
-    args = ["offering", "update", "--offering-id", offering_id.strip()]
-    if name:
-        args.extend(["--name", name.strip()])
-    if description:
-        args.extend(["--description", description.strip()])
-    if price_type:
-        args.extend(["--price-type", price_type])
-    if price_value is not None:
-        args.extend(["--price-value", str(price_value)])
-    if sla_minutes is not None:
-        args.extend(["--sla-minutes", str(int(sla_minutes))])
-    req = _schema_arg(requirements) if requirements is not None else ""
-    if req:
-        args.extend(["--requirements", req])
-    deliv = _schema_arg(deliverable) if deliverable is not None else ""
-    if deliv:
-        args.extend(["--deliverable", deliv])
-    if required_funds is True:
-        args.append("--required-funds")
-    elif required_funds is False:
-        args.append("--no-required-funds")
-    if hidden is True:
-        args.append("--hidden")
-    elif hidden is False:
-        args.append("--no-hidden")
-    if subscription_ids:
-        args.extend(["--subscription-ids", subscription_ids.strip()])
+    try:
+        args = ["offering", "update", "--offering-id", _safe_value(offering_id, "offering_id")]
+        if name:
+            args.extend(["--name", _safe_value(name, "name")])
+        if description:
+            args.extend(["--description", _safe_value(description, "description")])
+        if price_type:
+            args.extend(["--price-type", _safe_value(price_type, "price_type")])
+        if price_value is not None:
+            args.extend(["--price-value", str(price_value)])
+        if sla_minutes is not None:
+            args.extend(["--sla-minutes", str(int(sla_minutes))])
+        req = _schema_arg(requirements) if requirements is not None else ""
+        if req:
+            args.extend(["--requirements", req])
+        deliv = _schema_arg(deliverable) if deliverable is not None else ""
+        if deliv:
+            args.extend(["--deliverable", deliv])
+        if required_funds is True:
+            args.append("--required-funds")
+        elif required_funds is False:
+            args.append("--no-required-funds")
+        if hidden is True:
+            args.append("--hidden")
+        elif hidden is False:
+            args.append("--no-hidden")
+        if subscription_ids:
+            args.extend(["--subscription-ids", _safe_value(subscription_ids, "subscription_ids")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -254,7 +287,10 @@ def update_offering(
 
 
 def delete_offering(offering_id: str, *, force: bool = True) -> tuple[bool, str]:
-    args = ["offering", "delete", "--offering-id", offering_id.strip()]
+    try:
+        args = ["offering", "delete", "--offering-id", _safe_value(offering_id, "offering_id")]
+    except AcpArgError as exc:
+        return False, str(exc)
     if force:
         args.append("--force")
     code, out, err = run_acp(*args, json_mode=False)
@@ -264,6 +300,10 @@ def delete_offering(offering_id: str, *, force: bool = True) -> tuple[bool, str]
 
 
 def job_history(job_id: str, *, chain_id: str = "8453") -> tuple[dict | None, str | None]:
+    try:
+        job_id, chain_id = _safe_value(job_id, "job_id"), _safe_value(chain_id, "chain_id")
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp("job", "history", "--job-id", job_id, "--chain-id", chain_id)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -280,6 +320,12 @@ def provider_submit(
     chain_id: str = "8453",
 ) -> tuple[bool, str]:
     payload = deliverable if isinstance(deliverable, str) else json.dumps(deliverable, ensure_ascii=False)
+    try:
+        job_id, chain_id = _safe_value(job_id, "job_id"), _safe_value(chain_id, "chain_id")
+        if isinstance(deliverable, str):
+            payload = _safe_value(payload, "deliverable")
+    except AcpArgError as exc:
+        return False, str(exc)
     code, out, err = run_acp(
         "provider",
         "submit",
@@ -304,20 +350,23 @@ def client_create_job(
     chain_id: str = "8453",
     package_id: str = "",
 ) -> tuple[dict | None, str | None]:
-    args = [
-        "client",
-        "create-job",
-        "--offering-name",
-        offering_name.strip(),
-        "--requirements",
-        _schema_arg(requirements),
-        "--chain-id",
-        chain_id,
-    ]
-    if provider.strip():
-        args.extend(["--provider", provider.strip()])
-    if package_id.strip():
-        args.extend(["--package-id", package_id.strip()])
+    try:
+        args = [
+            "client",
+            "create-job",
+            "--offering-name",
+            _safe_value(offering_name, "offering_name"),
+            "--requirements",
+            _schema_arg(requirements),
+            "--chain-id",
+            _safe_value(chain_id, "chain_id"),
+        ]
+        if provider.strip():
+            args.extend(["--provider", _safe_value(provider, "provider")])
+        if package_id.strip():
+            args.extend(["--package-id", _safe_value(package_id, "package_id")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -333,7 +382,10 @@ def client_fund_job(
     amount_usdc: float | None = None,
     chain_id: str = "8453",
 ) -> tuple[dict | None, str | None]:
-    args = ["client", "fund", "--job-id", job_id.strip(), "--chain-id", chain_id]
+    try:
+        args = ["client", "fund", "--job-id", _safe_value(job_id, "job_id"), "--chain-id", _safe_value(chain_id, "chain_id")]
+    except AcpArgError as exc:
+        return None, str(exc)
     if amount_usdc is not None and amount_usdc > 0:
         args.extend(["--amount", str(amount_usdc)])
     code, out, err = run_acp(*args, json_mode=False)
@@ -348,16 +400,19 @@ def client_complete_job(
     reason: str = "Approved",
     chain_id: str = "8453",
 ) -> tuple[dict | None, str | None]:
-    args = [
-        "client",
-        "complete",
-        "--job-id",
-        job_id.strip(),
-        "--chain-id",
-        chain_id,
-        "--reason",
-        reason[:200],
-    ]
+    try:
+        args = [
+            "client",
+            "complete",
+            "--job-id",
+            _safe_value(job_id, "job_id"),
+            "--chain-id",
+            _safe_value(chain_id, "chain_id"),
+            "--reason",
+            _safe_value(reason[:200], "reason"),
+        ]
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args, json_mode=False)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -370,16 +425,19 @@ def client_reject_job(
     reason: str = "Rejected",
     chain_id: str = "8453",
 ) -> tuple[dict | None, str | None]:
-    args = [
-        "client",
-        "reject",
-        "--job-id",
-        job_id.strip(),
-        "--chain-id",
-        chain_id,
-        "--reason",
-        reason[:200],
-    ]
+    try:
+        args = [
+            "client",
+            "reject",
+            "--job-id",
+            _safe_value(job_id, "job_id"),
+            "--chain-id",
+            _safe_value(chain_id, "chain_id"),
+            "--reason",
+            _safe_value(reason[:200], "reason"),
+        ]
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args, json_mode=False)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -395,21 +453,24 @@ def trade_tokens(
     chain_out: str = "8453",
     slippage: str = "",
 ) -> tuple[dict | None, str | None]:
-    args = [
-        "trade",
-        "--token-in",
-        token_in.strip(),
-        "--token-out",
-        token_out.strip(),
-        "--amount-in",
-        amount_in.strip(),
-        "--chain-in",
-        chain_in,
-        "--chain-out",
-        chain_out,
-    ]
-    if slippage.strip():
-        args.extend(["--slippage", slippage.strip()])
+    try:
+        args = [
+            "trade",
+            "--token-in",
+            _safe_value(token_in, "token_in"),
+            "--token-out",
+            _safe_value(token_out, "token_out"),
+            "--amount-in",
+            _safe_value(amount_in, "amount_in"),
+            "--chain-in",
+            _safe_value(chain_in, "chain_in"),
+            "--chain-out",
+            _safe_value(chain_out, "chain_out"),
+        ]
+        if slippage.strip():
+            args.extend(["--slippage", _safe_value(slippage, "slippage")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args, json_mode=False)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -418,9 +479,12 @@ def trade_tokens(
 
 
 def email_search(query: str = "") -> tuple[dict | list | None, str | None]:
-    args = ["email", "search"]
-    if query.strip():
-        args.extend(["--query", query.strip()])
+    try:
+        args = ["email", "search"]
+        if query.strip():
+            args.extend(["--query", _safe_value(query, "query")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -431,9 +495,12 @@ def email_search(query: str = "") -> tuple[dict | list | None, str | None]:
 
 
 def email_inbox(*, cursor: str = "") -> tuple[dict | list | None, str | None]:
-    args = ["email", "inbox"]
-    if cursor.strip():
-        args.extend(["--cursor", cursor.strip()])
+    try:
+        args = ["email", "inbox"]
+        if cursor.strip():
+            args.extend(["--cursor", _safe_value(cursor, "cursor")])
+    except AcpArgError as exc:
+        return None, str(exc)
     code, out, err = run_acp(*args)
     if code != 0:
         return None, err or out or f"exit {code}"
@@ -444,7 +511,11 @@ def email_inbox(*, cursor: str = "") -> tuple[dict | list | None, str | None]:
 
 
 def email_thread(thread_id: str) -> tuple[dict | None, str | None]:
-    code, out, err = run_acp("email", "thread", "--thread-id", thread_id.strip())
+    try:
+        thread_id = _safe_value(thread_id, "thread_id")
+    except AcpArgError as exc:
+        return None, str(exc)
+    code, out, err = run_acp("email", "thread", "--thread-id", thread_id)
     if code != 0:
         return None, err or out or f"exit {code}"
     data = _parse_json(out)
@@ -462,17 +533,20 @@ def browse_agents(
     legacy: bool = False,
     timeout: int | None = None,
 ) -> tuple[list[dict], str | None]:
-    args = ["browse"]
-    if query.strip():
-        args.append(query.strip())
-    if top_k > 0:
-        args.extend(["--top-k", str(int(top_k))])
-    if sort_by.strip():
-        args.extend(["--sort-by", sort_by.strip()])
-    if mode.strip():
-        args.extend(["--mode", mode.strip()])
-    if legacy:
-        args.append("--legacy")
+    try:
+        args = ["browse"]
+        if query.strip():
+            args.append(_safe_value(query, "query"))
+        if top_k > 0:
+            args.extend(["--top-k", str(int(top_k))])
+        if sort_by.strip():
+            args.extend(["--sort-by", _safe_value(sort_by, "sort_by")])
+        if mode.strip():
+            args.extend(["--mode", _safe_value(mode, "mode")])
+        if legacy:
+            args.append("--legacy")
+    except AcpArgError as exc:
+        return [], str(exc)
     browse_timeout = timeout
     if browse_timeout is None:
         raw = (os.environ.get("ACP_BROWSE_TIMEOUT") or "15").strip()
