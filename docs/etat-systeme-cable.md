@@ -19,6 +19,22 @@ l'utilise — il ne lui « fournit » pas la donnée.
   doublon inutile. (Le backend a AUSSI son propre `app/services/geckoterminal.py` pour son API web —
   deux couches distinctes, c'est voulu.)
 
+- **Comment le prix TEMPS RÉEL est-il sourcé aujourd'hui (Base/Robinhood/Solana) ? (27/08)**
+  → **Chainstack WebSocket en priorité, GeckoTerminal/DexScreener en repli seulement.**
+  Base/Robinhood : `evm_swap_ws.py` (Sync/Swap décodés en direct) est déjà primaire,
+  `onchain_pool_discovery.py` découvre les pools via les mêmes événements bruts.
+  Robinhood rejetait 100% de ses candidats jusqu'au 27/08 (filtre de tokens de
+  cotation Base-only, jamais adapté par chaîne) — corrigé avec les vraies adresses
+  WETH/USDG Robinhood. Base rejetait ~94% pour la même raison (cbBTC manquant,
+  ajouté avec son propre taux BTC/USD, jamais confondu avec le taux ETH). Solana :
+  `solana_late_bonding_shadow` a son propre feed WS (`_BONDING_OR_PUMPSWAP_FEED`)
+  depuis le 19-21/08 ; `solana_pump_shadow` (poches déjà graduées) vient d'être
+  câblé pareil le 27/08 (`PumpSwapWebSocketFeed` en premier, cascade REST inchangée
+  en repli). **OHLCV/ATH/trending-pools restent sur GeckoTerminal** (données déjà
+  agrégées côté serveur, pas reconstruisibles depuis un nœud brut sans un vrai
+  projet d'indexation — hors périmètre de cette migration, opérateur confirmé).
+  Détail complet : `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entrées 27/08).
+
 - **Comment la poche late-bonding fixe son prix d'entrée et de sortie ? (22/08)**
   → **Depuis la courbe de bonding lue on-chain**, pas depuis le websocket.
   `price_and_reserve_from_curve` (dans `services/pumpfun_bonding_ws.py`) calcule
