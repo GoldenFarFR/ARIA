@@ -2243,6 +2243,89 @@ async def _rows_from(path, table):
         return [dict(r) for r in await cur.fetchall()]
 
 
+# --- cycle-scoped resolver dedup (28/08, backlog #364 P0) ------------------
+# shadow_persistent.py calls consider_candidate TWICE per pass for the exact
+# same (pool, mint) -- primary pocket, then the pure-shadow retracement
+# variant tested just above. Each call used to independently re-read the
+# same on-chain account. These tests target make_once_per_candidate_resolver
+# itself (unit-level contract) and its real integration through the two
+# consider_candidate calls (the actual pattern shadow_persistent.py runs).
+
+@pytest.mark.asyncio
+async def test_once_per_candidate_resolver_reuses_the_same_pool_within_one_instance():
+    calls = []
+
+    async def _counting_resolve(_client, pairs, **_kw):
+        calls.append(pairs[0])
+        return {pairs[0][0]: SimpleNamespace(curve=_curve(0.5), token_decimals=6)}
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_counting_resolve)
+    r1 = await resolve_once(None, [("poolX", "mintX")])
+    r2 = await resolve_once(None, [("poolX", "mintX")])
+    assert len(calls) == 1
+    assert r1 == r2
+
+
+@pytest.mark.asyncio
+async def test_once_per_candidate_resolver_still_resolves_distinct_pools_and_fresh_instances():
+    """Dedup must never bleed across a DIFFERENT candidate in the same
+    instance, nor across a FRESH instance for the same pool -- the second
+    case is what protects a later pass from serving a stale on-chain read."""
+    calls = []
+
+    async def _counting_resolve(_client, pairs, **_kw):
+        calls.append(pairs[0])
+        return {pairs[0][0]: SimpleNamespace(curve=_curve(0.5), token_decimals=6)}
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_counting_resolve)
+    await resolve_once(None, [("poolX", "mintX")])
+    await resolve_once(None, [("poolY", "mintY")])
+    assert len(calls) == 2  # distinct pool, same instance -> its own real call
+
+    fresh_instance = pocket.make_once_per_candidate_resolver(_counting_resolve)
+    await fresh_instance(None, [("poolX", "mintX")])
+    assert len(calls) == 3  # same pool, a NEW instance -> no cross-cycle leak
+
+
+@pytest.mark.asyncio
+async def test_the_primary_and_retracement_calls_share_one_resolver_call_for_the_same_candidate(_tmp_db):
+    """28/08, backlog #364 P0: the real shadow_persistent.py pattern -- the
+    exact same (pool, mint) evaluated through consider_candidate twice in one
+    pass, primary then retracement variant (see
+    test_the_two_tables_never_interact_on_the_same_pool above for the
+    un-deduped version of this same pattern). Passing one shared
+    make_once_per_candidate_resolver() instance to both calls, as
+    shadow_persistent.py now does, must collapse the underlying resolve to
+    exactly one call, and must NOT change either call's own accept/reject
+    decision or which table it lands in."""
+    calls = []
+
+    async def _counting_resolve(_client, pairs, **_kw):
+        calls.append(pairs[0])
+        return await _resolve_ok(_client, pairs, **_kw)
+
+    resolve_once = pocket.make_once_per_candidate_resolver(_counting_resolve)
+
+    primary_id = await pocket.consider_candidate(
+        "mintBoth", "poolBoth", trade_stream=_Stream(), resolve_curves_fn=resolve_once,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db,
+    )
+    variant_id = await pocket.consider_candidate(
+        "mintBoth", "poolBoth", trade_stream=_Stream(), resolve_curves_fn=resolve_once,
+        snapshot_fn=_snapshot_ok, curve_tracker=_RetracementTracker(0.10),
+        db_path=_tmp_db, min_retracement=0.05, table=pocket.RETRACEMENT_TABLE,
+    )
+    assert primary_id is not None and variant_id is not None
+    assert len(calls) == 1, f"expected exactly 1 underlying resolve call, got {len(calls)}"
+
+    primary_rows = await _rows(_tmp_db)
+    variant_rows = await _rows_from(_tmp_db, pocket.RETRACEMENT_TABLE)
+    assert len(primary_rows) == 1 and len(variant_rows) == 1
+    assert primary_rows[0]["progress_retracement_at_entry"] == pytest.approx(0.10)
+    assert variant_rows[0]["progress_retracement_at_entry"] == pytest.approx(0.10)
+
+
 @pytest.mark.asyncio
 async def test_the_stop_level_and_the_fill_are_stored_as_numbers(_tmp_db, monkeypatch):
     """Operator's ask, 22/08: the stop and the fill, to the decimal, as NUMBERS.

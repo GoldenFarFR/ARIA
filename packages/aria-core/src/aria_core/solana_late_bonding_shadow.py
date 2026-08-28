@@ -1383,6 +1383,41 @@ def _unsubscribe_rejected_candidate(bonding_ws_feed, pool_address: str) -> None:
         logger.info("solana_late_bonding_shadow: remove_pools failed for %s", pool_address)
 
 
+def make_once_per_candidate_resolver(base_resolve_fn=None):
+    """28/08, backlog #364 (P0 dedup): wraps a curve resolver so that, within
+    the SAME returned closure, the same ``pool_address`` triggers at most one
+    real on-chain read (``resolve_bonding_curves`` itself already costs 2 RPC
+    calls -- curve + mint decimals).
+
+    Built for shadow_persistent.py's real call pattern: within one pass of
+    its ``for mint in mints:`` loop, ``consider_candidate`` is invoked TWICE
+    for the exact same ``(pool_address, mint)`` -- once for the primary
+    pocket, once for the pure-shadow retracement variant (``table=
+    RETRACEMENT_TABLE``). Each call used to independently call its own
+    resolver, so every candidate cost 4 real RPC reads instead of 2, before
+    the retracement gate (which depends on this same read) ever got a chance
+    to reject anything.
+
+    Scope is deliberately narrow, matching the operator's own bound: no
+    global cache, no persistent state, no throttle change. The cache lives
+    only in this closure's local dict -- it is garbage-collected the moment
+    the caller stops holding a reference to the returned function. The
+    caller MUST build a fresh instance per loop iteration (never hoist it
+    above ``for mint in mints:``, never reuse it across passes): a mint can
+    legitimately be re-evaluated on a later pass, and that must always cost
+    a fresh on-chain read, never a stale one served from an earlier cycle."""
+    resolve_fn = base_resolve_fn or resolve_bonding_curves
+    cache: dict[str, dict] = {}
+
+    async def _resolve_once(http_client, pool_mint_pairs, **kwargs):
+        pool_address, _mint = pool_mint_pairs[0]
+        if pool_address not in cache:
+            cache[pool_address] = await resolve_fn(http_client, pool_mint_pairs, **kwargs)
+        return cache[pool_address]
+
+    return _resolve_once
+
+
 async def consider_candidate(
     mint: str, pool_address: str, *, chain: str = "solana", trade_stream=None,
     http_client: httpx.AsyncClient | None = None, geckoterminal_client=None,
