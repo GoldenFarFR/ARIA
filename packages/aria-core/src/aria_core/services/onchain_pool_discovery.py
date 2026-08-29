@@ -51,6 +51,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from aria_core import discovery_liquidity_observation
 from aria_core.services import chainstack_ru_budget
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.services.geckoterminal import TrendingPool
@@ -501,6 +502,14 @@ class OnChainPoolDiscoveryFeed:
                     # pass (never dropped here, never treated as qualified
                     # on this partial/absent read).
                     self.not_yet_priceable_count += 1
+                    # 29/08, operator-directed -- log-only observation, see
+                    # discovery_liquidity_observation.py's own docstring.
+                    # Never gates anything, never a new network call.
+                    await discovery_liquidity_observation.record_observation(
+                        chain=self.chain, pool_address=key, token_address=cand.token_address,
+                        reserve_usd=None, price_usd=None, min_liquidity_usd=min_liquidity_usd,
+                        source=None, qualified=False,
+                    )
                     continue
                 source = "cold_read"
                 reserve_usd = cold.reserve_usd
@@ -517,6 +526,17 @@ class OnChainPoolDiscoveryFeed:
                         if reserve_usd is None and cold.quote_reserve_raw is not None:
                             reserve_usd = 2.0 * cold.quote_reserve_raw * rate
             if reserve_usd is None or reserve_usd < min_liquidity_usd or price_usd is None:
+                # 29/08, operator-directed -- log-only observation of the
+                # FULL population reaching this verdict (not just rejects),
+                # see discovery_liquidity_observation.py's own docstring.
+                # Never gates anything, never a new network call: reserve_usd/
+                # price_usd/source are exactly the values already computed
+                # above.
+                await discovery_liquidity_observation.record_observation(
+                    chain=self.chain, pool_address=key, token_address=cand.token_address,
+                    reserve_usd=reserve_usd, price_usd=price_usd, min_liquidity_usd=min_liquidity_usd,
+                    source=source, qualified=False,
+                )
                 continue
             # 26/08 -- a raw on-chain PairCreated/Initialize event carries no
             # ERC-20 symbol metadata, so every day-zero candidate used to log
@@ -527,6 +547,15 @@ class OnChainPoolDiscoveryFeed:
             # DexPaprika's `_resolve_base_token` with a direct `symbol()`
             # eth_call, never fabricated, None on any resolution failure).
             symbol = await self._ws_feed.resolve_token_symbol(cand.token_address)
+            # 29/08, same observation point as the rejects above -- the
+            # qualified branch of the same verdict, so the eventual analysis
+            # has a real denominator (qualified + rejected) rather than a
+            # rejects-only sample.
+            await discovery_liquidity_observation.record_observation(
+                chain=self.chain, pool_address=key, token_address=cand.token_address,
+                reserve_usd=reserve_usd, price_usd=price_usd, min_liquidity_usd=min_liquidity_usd,
+                source=source, qualified=True,
+            )
             logger.info(
                 "onchain_pool_discovery[%s]: qualified %s via %s (price_usd=%s reserve_usd=%s)",
                 self.chain, key, source, price_usd, reserve_usd,

@@ -513,6 +513,117 @@ async def test_check_candidates_rejects_below_liquidity_floor():
     assert "0xpool" in feed._candidates  # stays pending, not dropped yet
 
 
+# --- log-only liquidity/price observation (29/08, operator-directed) -------
+# discovery_liquidity_observation.record_observation is mocked here rather
+# than exercised end-to-end (see test_discovery_liquidity_observation.py for
+# the real-DB tests) -- these tests confirm check_candidates' CONTRACT with
+# it: called with the right values at the right verdict, and -- the whole
+# point -- the qualification decision itself is byte-identical to before
+# this instrumentation existed.
+
+@pytest.mark.asyncio
+async def test_a_below_floor_candidate_is_observed_with_its_real_reserve(monkeypatch):
+    from aria_core import discovery_liquidity_observation
+
+    recorded = []
+
+    async def _capture(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(discovery_liquidity_observation, "record_observation", _capture)
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=50.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    result = await feed.check_candidates(min_liquidity_usd=200.0)
+
+    # Same decision as test_check_candidates_rejects_below_liquidity_floor,
+    # unchanged by the new observation call.
+    assert result == []
+    assert "0xpool" in feed._candidates
+
+    assert len(recorded) == 1
+    obs = recorded[0]
+    assert obs["chain"] == "base"
+    assert obs["pool_address"] == "0xpool"
+    assert obs["token_address"] == "0xtoken"
+    assert obs["reserve_usd"] == 50.0
+    assert obs["price_usd"] == 0.001
+    assert obs["min_liquidity_usd"] == 200.0
+    assert obs["source"] == "event"
+    assert obs["qualified"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_qualified_candidate_is_observed_alongside_the_qualification(monkeypatch):
+    from aria_core import discovery_liquidity_observation
+
+    recorded = []
+
+    async def _capture(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(discovery_liquidity_observation, "record_observation", _capture)
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001)
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+
+    # Same decision as test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve.
+    assert len(result) == 1
+    assert isinstance(result[0], TrendingPool)
+    assert result[0].reserve_usd == 9000.0
+
+    assert len(recorded) == 1
+    obs = recorded[0]
+    assert obs["reserve_usd"] == 9000.0
+    assert obs["price_usd"] == 0.001
+    assert obs["source"] == "event"
+    assert obs["qualified"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_unpriceable_candidate_is_observed_with_explicit_nones(monkeypatch):
+    """Neither the websocket nor the cold read resolved anything this
+    cycle -- the operator's explicit ask: None must stay None, never
+    collapsed to 0."""
+    from aria_core import discovery_liquidity_observation
+
+    recorded = []
+
+    async def _capture(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(discovery_liquidity_observation, "record_observation", _capture)
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=True, reserve_usd=None, quote_is_weth=False, price_quote=None,
+    )
+    # _make_feed's default resolve_cold already returns available=False.
+    result = await feed.check_candidates(min_liquidity_usd=200.0)
+
+    assert result == []
+    assert feed.not_yet_priceable_count == 1  # unchanged existing counter
+
+    assert len(recorded) == 1
+    obs = recorded[0]
+    assert obs["reserve_usd"] is None
+    assert obs["price_usd"] is None
+    assert obs["source"] is None
+    assert obs["qualified"] is False
+
+
 @pytest.mark.asyncio
 async def test_check_candidates_drops_after_observation_window_and_counts_it():
     feed = _make_feed()
