@@ -277,6 +277,13 @@ class EVMSwapSnapshot:
     # these two fields, not a heuristic.
     tx_hash: str | None = None
     block_number: int | None = None
+    # 29/08, operator-directed -- lets a log-only activity observer (see
+    # onchain_activity_observation.py) distinguish v2 (Sync-derived swap_count,
+    # biased by Mint/Burn -- see the "one real casualty" comment on
+    # `pool.swap_count += 1` in `_handle_v2_sync` further below) from v3/v4
+    # (clean, from a real decoded Swap event). Never gates anything itself --
+    # purely descriptive provenance for the observation log.
+    family: str | None = None
 
 
 @dataclass
@@ -743,6 +750,7 @@ class EVMSwapWebSocketFeed:
             distinct_traders_count=len(pool.distinct_traders),
             quote_is_weth=pool.quote_is_weth, quote_is_btc=pool.quote_is_btc,
             tx_hash=pool.last_tx_hash, block_number=pool.last_block_number,
+            family=pool.family,
         )
 
     # -- websocket loop ----------------------------------------------------

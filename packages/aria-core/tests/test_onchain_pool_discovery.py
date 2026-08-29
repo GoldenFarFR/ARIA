@@ -625,6 +625,90 @@ async def test_an_unpriceable_candidate_is_observed_with_explicit_nones(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_activity_observation_is_recorded_alongside_qualification_unchanged(monkeypatch):
+    """29/08, operator-directed -- point 6 of the activity-observation ask:
+    wiring onchain_activity_observation must never change the qualification
+    decision (same scenario/assertions as
+    test_a_qualified_candidate_is_observed_alongside_the_qualification)."""
+    from aria_core import onchain_activity_observation
+
+    recorded = []
+
+    async def _capture(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(onchain_activity_observation, "record_observation", _capture)
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    snapshot = MagicMock(
+        available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001,
+        family="v2", swap_count=42, cumulative_volume_quote=1234.5,
+        distinct_traders_count=7, stale_seconds=3.2,
+    )
+    feed._ws_feed.get_snapshot.return_value = snapshot
+    result = await feed.check_candidates(min_liquidity_usd=4000.0)
+
+    # Same decision as test_check_candidates_qualifies_a_pool_with_exact_v2_stable_reserve
+    # / test_a_qualified_candidate_is_observed_alongside_the_qualification -- unchanged.
+    assert len(result) == 1
+    assert result[0].reserve_usd == 9000.0
+
+    assert len(recorded) == 1
+    obs = recorded[0]
+    assert obs["chain"] == "base"
+    assert obs["pool_address"] == "0xpool"
+    assert obs["token_address"] == "0xtoken"
+    assert obs["available"] is True
+    assert obs["family"] == "v2"
+    assert obs["swap_count"] == 42
+    assert obs["cumulative_volume_quote"] == 1234.5
+    assert obs["distinct_traders_count"] == 7
+    assert obs["last_swap_age_seconds"] == 3.2
+
+
+@pytest.mark.asyncio
+async def test_activity_observation_records_none_when_snapshot_unavailable(monkeypatch):
+    """Same point 6, unavailable-snapshot branch: not_yet_priceable_count
+    (the real decision counter) stays unchanged, and every activity field
+    is explicitly None rather than a fabricated 0."""
+    from aria_core import onchain_activity_observation
+
+    recorded = []
+
+    async def _capture(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(onchain_activity_observation, "record_observation", _capture)
+
+    feed = _make_feed()
+    feed._candidates["0xpool"] = m._Candidate(
+        pool_key="0xpool", dex_id="uniswap_v2", token_address="0xtoken", chain="base",
+    )
+    feed._ws_feed.get_snapshot.return_value = MagicMock(
+        available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
+        family=None, swap_count=0, cumulative_volume_quote=0.0,
+        distinct_traders_count=0, stale_seconds=None,
+    )
+    # _make_feed's default resolve_cold already returns available=False.
+    result = await feed.check_candidates(min_liquidity_usd=200.0)
+
+    assert result == []
+    assert feed.not_yet_priceable_count == 1  # unchanged existing counter
+
+    assert len(recorded) == 1
+    obs = recorded[0]
+    assert obs["available"] is False
+    assert obs["family"] is None
+    assert obs["swap_count"] is None
+    assert obs["cumulative_volume_quote"] is None
+    assert obs["distinct_traders_count"] is None
+    assert obs["last_swap_age_seconds"] is None
+
+
+@pytest.mark.asyncio
 async def test_check_candidates_drops_after_observation_window_and_counts_it():
     feed = _make_feed()
     old_candidate = m._Candidate(

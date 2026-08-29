@@ -152,6 +152,19 @@ def test_get_snapshot_computes_window_high_low_and_usd_for_stable_quote():
     assert snap.distinct_traders_count == 2
 
 
+def test_get_snapshot_exposes_pool_family():
+    """29/08, operator-directed -- lets onchain_activity_observation.py
+    distinguish v2 (Sync-derived swap_count, biased by Mint/Burn) from
+    v3/v4 (clean, from a real decoded Swap event)."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", quote_is_stable=True)
+    pool.ticks.append((time.monotonic(), 1.0))
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    snap = feed.get_snapshot("0xpool")
+    assert snap.family == "v2"
+
+
 def test_get_snapshot_weth_quote_leaves_price_usd_none():
     """USD resolution for a WETH-quoted pool needs doppler.eth_usd_rate(),
     deliberately not called here (no network I/O inside a decoder) -- the

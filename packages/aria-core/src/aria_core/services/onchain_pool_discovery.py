@@ -51,7 +51,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from aria_core import discovery_liquidity_observation
+from aria_core import discovery_liquidity_observation, onchain_activity_observation
 from aria_core.services import chainstack_ru_budget
 from aria_core.services.evm_swap_ws import EVMSwapWebSocketFeed
 from aria_core.services.geckoterminal import TrendingPool
@@ -415,6 +415,25 @@ class OnChainPoolDiscoveryFeed:
                 expired_keys.append(key)
                 continue
             snapshot = self._ws_feed.get_snapshot(key)
+            # 29/08, operator-directed -- log-only activity observation
+            # (swap_count/cumulative_volume_quote/distinct_traders_count),
+            # separate axis from the liquidity/price observation below.
+            # Recorded from THIS snapshot regardless of the branch taken
+            # next (cold-read fallback or not) -- activity is independent
+            # of whether reserve_usd/price_usd end up resolved. Never gates
+            # anything, never a new network call, best-effort.
+            await onchain_activity_observation.record_observation(
+                chain=self.chain, pool_address=key, token_address=cand.token_address,
+                available=snapshot.available, family=snapshot.family,
+                swap_count=snapshot.swap_count if snapshot.available else None,
+                cumulative_volume_quote=(
+                    snapshot.cumulative_volume_quote if snapshot.available else None
+                ),
+                distinct_traders_count=(
+                    snapshot.distinct_traders_count if snapshot.available else None
+                ),
+                last_swap_age_seconds=snapshot.stale_seconds if snapshot.available else None,
+            )
             if not snapshot.available:
                 # 26/08 -- real incident: `add_pool` verification (a live
                 # `token0()`/`token1()` eth_call against a contract that may
