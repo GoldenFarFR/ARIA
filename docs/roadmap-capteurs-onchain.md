@@ -98,31 +98,27 @@ gagnant/perdant sert UNIQUEMENT à l'analyse après coup, jamais à la sélectio
 ou au calcul des features elles-mêmes. Le dataset doit contenir gagnants,
 moyens ET perdants — sinon on construit un détecteur de passé, pas de futur.
 
-### Protocole de labellisation du dataset (ajouté 29/08, décision opérateur)
+### Protocole de labellisation du dataset (ajouté 29/08, affiné le même jour — décision opérateur)
 
-Trois catégories, jamais deux : **pump durable / non-scam** (continuation
-organique), **pump-and-dump / scam** (piège), **contrôles neutres**
-(n'explosent jamais — sans eux, un modèle apprend juste "grosse hausse = bon",
-pas "pump sain vs pump toxique"). Cible : 10 + 10 + 10 minimum.
+**Question de recherche prioritaire, reformulée par l'opérateur** : pas "est-ce
+moralement un scam" (intention, rug prouvé, honeypot) — la question est plus
+simple et directement mesurable : **pourquoi certains tokens pump à des
+multiples extrêmes (+30 000%) et continuent, alors que d'autres, après un
+pump similaire, retombent ?** Le label se fonde sur le **résultat de prix
+observé**, jamais sur une classification d'intention. Pas besoin de prouver
+un rug/honeypot pour qu'un token compte comme "retombé" — la trajectoire de
+prix (variation depuis le pic, tenue du niveau) suffit et est directement
+lisible sur DexScreener.
 
-**Deux règles non négociables sur les labels :**
-1. **Un label ne se fige jamais avant d'avoir une preuve suffisante.** Un
-   token vieux de quelques heures avec une variation extrême n'est PAS
-   labellisable "durable" — il peut encore dumper. Un token n'entre dans le
-   dataset "pump durable" qu'après avoir démontré une continuation réelle sur
-   une fenêtre de plusieurs jours/semaines après le pic initial.
-2. **"Scam" exige une preuve objective, jamais la seule baisse de prix.**
-   Une baisse de 90% n'est PAS automatiquement un scam. Preuves acceptées :
-   liquidité retirée (liquidité actuelle << liquidité au pic alors que le prix
-   a moins chuté), honeypot confirmé, concentration de supply suivie d'un
-   dump corrélé, abandon avec drawdown extrême ET signal de retrait
-   coordonné. Sans preuve concrète citée : étiqueter "baisse de prix sans
-   preuve de scam", jamais "scam confirmé" par défaut.
+Catégories utiles : **pump massif + tenue/continuation** vs **pump massif +
+retombée** — une 3e catégorie "contrôles neutres" (jamais explosé du tout)
+reste utile plus tard pour éviter qu'un modèle apprenne juste "grosse hausse
+= bon", mais n'est pas le sujet prioritaire immédiat.
 
-Les labels doivent être **figés avant tout calcul de feature**, et
-**indépendants des features elles-mêmes** — jamais choisir un token parce
-qu'une feature candidate "marche dessus". Voir la règle anti-look-ahead
-ci-dessus, qui s'applique symétriquement au choix des labels.
+Règle qui reste absolue : les labels doivent être **figés avant tout calcul
+de feature**, et **indépendants des features elles-mêmes** — jamais choisir
+un token parce qu'une feature candidate "marche dessus". Voir la règle
+anti-look-ahead ci-dessus, qui s'applique symétriquement au choix des labels.
 
 ### Architecture cible
 
