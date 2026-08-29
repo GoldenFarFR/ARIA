@@ -406,3 +406,96 @@ retournement. Cette formulation aligne les capteurs on-chain, la boucle
 réflexive frontend/FOMO, le backfill, le replay causal et l'exécution en un
 seul fil directeur — à ne jamais perdre de vue en construisant les briques
 suivantes.
+
+## Mini-spec Brique 2 — Buy/Sell Flow (29/08, PRÉPARÉE, PAS IMPLÉMENTÉE)
+
+Statut : Brique 1 fonctionnellement validée en production (checkpoint
+2026-08-29T15:19:22Z-15:40Z, zéro anomalie), robustesse encore en
+observation (checkpoint élargi à venir). **Cette mini-spec prépare
+uniquement Brique 2** — aucune implémentation avant confirmation du
+checkpoint élargi ET accord explicite de l'opérateur sur cette spec.
+Ancrée dans le vrai code de `evm_swap_ws.py` (relu le 29/08), pas une
+convention inventée à l'aveugle.
+
+### Convention de sens, par famille, telle qu'elle existe déjà dans le décodeur
+
+**V2 (`_handle_v2_swap`)** : le Swap event V2 expose 4 `uint256` séparés et
+JAMAIS négatifs — `amount0_in`/`amount1_in`/`amount0_out`/`amount1_out`. Le
+code calcule déjà `quote_in`/`quote_out` (le côté quote selon
+`token_is_currency0`), avec la garantie structurelle qu'**un seul des deux
+est non-nul** ("one side of the quote pair is always zero", commentaire
+existant du code). Convention : `quote_in > 0` -> le trader a payé en quote
+pour recevoir le token tracké -> **BUY**. `quote_out > 0` -> le trader a
+reçu du quote en échange du token tracké -> **SELL**.
+
+**V3/V4 (`_record_swap_amount`, partagé)** : le Swap event expose
+`amount0`/`amount1` en `int256` SIGNÉS (convention Uniswap V3 standard :
+positif = le pool REÇOIT ce token, négatif = le pool ENVOIE ce token). Le
+code calcule déjà `quote_raw` (signé, avant le `abs()` actuel qui sert
+uniquement à alimenter `cumulative_volume_quote` sans distinction de sens —
+**ce signe est aujourd'hui perdu, Brique 2 doit le capturer AVANT le
+`abs()`**). Convention : `quote_raw > 0` -> le pool reçoit le quote, le
+trader paie en quote -> **BUY** du token tracké. `quote_raw < 0` -> le pool
+envoie le quote, le trader reçoit du quote -> **SELL**.
+
+### Cas indéterminé — ne jamais forcer
+
+V2 : si les DEUX amounts (in ET out) sont non-nuls simultanément (ne devrait
+jamais arriver selon la mécanique standard, signal d'un event anormal) ->
+indéterminé. V3/V4 : si `quote_raw == 0` (rare, un swap dont le côté quote
+s'arrondit à zéro après ajustement décimal) -> indéterminé. Un swap
+indéterminé compte dans `swap_count`/`cumulative_volume_quote` (Brique 1
+inchangée) mais NI dans `buy_count` NI dans `sell_count` — un nouveau champ
+`undetermined_count`/`undetermined_volume_quote` absorbe ce cas plutôt que
+de forcer un sens arbitraire.
+
+### Champs nouveaux (additifs, zéro nouvel appel RPC/websocket)
+
+Sur `_TrackedPool`/`EVMSwapSnapshot` : `buy_count`, `sell_count`,
+`undetermined_count`, `buy_volume_quote`, `sell_volume_quote`,
+`undetermined_volume_quote`. `net_flow_quote` = `buy_volume_quote -
+sell_volume_quote`, calculé à la volée (jamais stocké séparément). Côté
+`onchain_activity_observation.py` : deltas correspondants
+(`buy_count_delta`, `sell_count_delta`, `buy_volume_quote_delta`,
+`sell_volume_quote_delta`), même doctrine que Brique 1 (`None`/`baseline_reset`
+sur restart, jamais un delta fabriqué).
+
+### Invariants — formulation robuste (pas la version simplifiée)
+
+`buy_count + sell_count + undetermined_count == swap_count` — **toujours
+vrai par construction**, jamais une approximation. `buy_volume_quote +
+sell_volume_quote + undetermined_volume_quote == cumulative_volume_quote` —
+idem, toujours vrai. Sur un snapshot "clean" (`undetermined_count == 0`,
+le cas normal attendu), la version simple de l'opérateur (`buy_count +
+sell_count == swap_count`, `buy_volume_quote + sell_volume_quote ==
+cumulative_volume_quote`) redevient vraie automatiquement — elle n'est
+donc pas remplacée, juste dérivée du cas général plutôt que supposée toujours
+applicable telle quelle.
+
+### Plan de tests obligatoire (avant toute implémentation)
+
+1. V2 buy (`quote_in>0`, `quote_out=0`) -> `buy_count+=1`, volume au bon
+   compteur.
+2. V2 sell (`quote_out>0`, `quote_in=0`) -> `sell_count+=1`, volume au bon
+   compteur.
+3. V3/V4 buy (`quote_raw>0` signé) -> `buy_count+=1`.
+4. V3/V4 sell (`quote_raw<0` signé) -> `sell_count+=1`.
+5. Volume correctement affecté au bon côté sur les 4 cas ci-dessus (aucune
+   fuite croisée buy<->sell).
+6. `net_flow_quote = buy_volume_quote - sell_volume_quote` (calcul, jamais
+   un champ stocké séparément qui pourrait diverger).
+7. Event ambigu/indéterminé (V2 in+out simultanés, V3/V4 `quote_raw==0`)
+   -> ni buy ni sell forcé, `undetermined_count` incrémenté.
+8. Compteurs cohérents sur une séquence mixte réelle de plusieurs swaps
+   (test d'intégration bout en bout, pas seulement unitaire).
+9. Comportement Brique 1 inchangé — `swap_count`/`cumulative_volume_quote`
+   byte-identiques avec/sans ce wiring (non-régression explicite).
+10. Les deux invariants ci-dessus vérifiés sur un mélange buy/sell/indéterminé,
+    pas seulement sur des snapshots 100% propres.
+
+### Ce que cette brique ne fait PAS
+
+Aucun score, aucun seuil, aucune conversion USD. Pas de calcul de
+`net_flow`/`buy/sell pressure` en tant que SIGNAL — seulement les compteurs
+et volumes bruts, prêts à être consommés par une future feature (Brique 7+),
+jamais gravés en règle de trading directement.
