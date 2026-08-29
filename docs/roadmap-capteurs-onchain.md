@@ -142,10 +142,55 @@ PAPER / SHADOW
 EXECUTION
 ```
 
+### Candidats identifiés (29/08, fournis par l'opérateur)
+
+Deux lots de 10 liens DexScreener identifiés via recherche (WebFetch +
+claude-in-chrome, DexScreener étant une SPA React). **2 exclusions déjà
+trouvées, à ne jamais réintroduire sans re-vérification** : le token "NTF"
+(Robinhood, était classé "perdant" mais était en fait +2682% sur 24h au
+moment de l'identification) et "COPPERINU" en double (même contrat
+`0x531...B63B` sur deux pools — Uniswap V3 ET V4 — identifié une fois côté
+"gagnant" +31 439% et une fois côté "perdant" +74.92% : ce n'est PAS un
+second exemple, c'est le même token vu sous un pool différent). Toujours
+vérifier par ADRESSE DE CONTRAT, jamais par nom/symbole affiché — les clones
+de nom sont fréquents sur ce marché.
+
+**Gagnants (pump massif, 8 valides sur 10 fournis — 2 liens ne correspondent
+à aucun pool existant)** : Greyson/CACKLE (Solana, PumpSwap), Copper
+Inu/COPPERINU (Robinhood, Uniswap V4, `0x531...B63B`), pTokens
+Index/PDEX (Robinhood V4), Twofold/TWO (Robinhood V4), MU MU THE
+BULL/MU (Robinhood V4), Qubit/QUBIT (Robinhood V4), dawg/DAWG (Solana,
+Raydium), Pons Charity/CHARITY (Robinhood V4).
+
+**Perdants (retombée confirmée par le prix, 8 valides sur 10 fournis — 2
+exclus, cf. ci-dessus)** : fone/apeonfone -35.70% (Solana, PumpSwap),
+ANTSEM -58.48% (Solana, PumpSwap), Pistacio -55.96% (Solana, PumpSwap),
+PAWHOOD -44.00% (Robinhood V4), OPTIMUS -93.36% (Robinhood V4, exemple
+étudié en détail — crash quasi-vertical puis mort totale malgré des
+agrégats 24h buy/sell en apparence équilibrés, cf. note ci-dessous), VERONA
+-92.69% (Robinhood V4), HOODHIM -93.58% (Robinhood V4), MSR -11.13%
+(Robinhood V2, seul V2/V3 classique du lot perdant avec MSR).
+
+**Insight empirique précoce (29/08, avant même le backfill réel)** :
+comparaison visuelle Copper Inu (continuation, paliers de consolidation puis
+nouvelle jambe haussière, $377K de liquidité, 3616 traders) vs Optimus (dents
+de scie puis crash quasi-vertical puis mort totale, $5.8K de liquidité
+seulement, 15h d'âge). **Les agrégats 24h (nombre de traders, ratio buy/sell
+volume) étaient PRESQUE IDENTIQUEMENT équilibrés dans les deux cas** — parce
+qu'ils mélangent la phase de pump et la phase de dump. Ça confirme qu'un
+simple comptage agrégé sur toute la fenêtre ne suffira probablement pas : le
+signal différenciateur est plus probablement dans la DYNAMIQUE TEMPORELLE
+autour du pic (vitesse/amplitude du retracement immédiat, liquidité
+disponible au moment du pic, reprise ou mort de l'activité après) — exactement
+ce que la fenêtre "5s/10s/20s/30s/60s avant/après" plus haut dans ce document
+est censée capturer. À vérifier empiriquement une fois le backfill possible,
+pas encore une conclusion.
+
 ### Étape A — prototype (après validation réelle de la Brique 1 en production)
 
 - 10-20 pools historiques (mélange gagnants + pump-and-dump/perdants — jamais
-  seulement des gagnants, cf. règle anti-look-ahead).
+  seulement des gagnants, cf. règle anti-look-ahead). Candidats déjà
+  identifiés ci-dessus (8+8 valides).
 - Backfill ciblé via `eth_getLogs`.
 - Reconstruire les événements avec le décodeur validé (Brique 1).
 - Comparer aux transactions/events connus (vérité terrain).
