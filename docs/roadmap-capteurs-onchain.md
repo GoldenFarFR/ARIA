@@ -522,3 +522,33 @@ Aucun score, aucun seuil, aucune conversion USD. Pas de calcul de
 `net_flow`/`buy/sell pressure` en tant que SIGNAL — seulement les compteurs
 et volumes bruts, prêts à être consommés par une future feature (Brique 7+),
 jamais gravés en règle de trading directement.
+
+### Ce que Brique 2 débloque pour la suite (candidates, PAS codées maintenant)
+
+Brique 1 répondait "il se passe quelque chose". Brique 2 répond "qui pousse
+le marché, dans quel sens, avec quelle intensité". Exemple concret : deux
+tokens tous deux à +500% au même instant peuvent avoir un graphique
+identique en apparence, alors qu'on-chain ils sont dans deux situations
+opposées — Token A (`buyers` en hausse, `buy_volume` dominant, `net_flow`
+fortement positif) vs Token B (`buyers` stagnant, `sell_volume` dominant,
+`net_flow` fortement négatif). C'est précisément ce que Brique 1 seule ne
+pouvait pas distinguer.
+
+**Le vrai intérêt n'est pas `net_flow` pris isolément à un instant T — c'est
+sa DYNAMIQUE.** Un `net_flow` qui accélère régulièrement (`+20k -> +35k ->
++60k -> +110k -> +180k -> +240k`) signale un déséquilibre acheteur qui
+s'intensifie. Un `net_flow` qui s'érode puis s'inverse (`+200k -> +160k ->
++100k -> +30k -> -40k -> -150k`) signale un flux qui se retourne — c'est
+directement la question PvP posée plus haut : "est-ce que le mouvement a
+encore du carburant maintenant ?".
+
+Features candidates que Brique 2 rend calculables plus tard (Brique 7+,
+jamais avant validation empirique sur le dataset A/B/C) : `buy_flow_
+acceleration`, `net_flow_velocity`, `buy/sell_imbalance`, `flow_reversal`,
+`buy_volume_per_new_trader`, `selling_pressure / liquidity`,
+`flow_persistence`.
+
+Séquence qui reste inchangée : Brique 2 (données buy/sell propres) ->
+Brique 3 (liquidity delta) -> features dynamiques -> comparaison type
+Copper Inu vs Optimus -> dataset A/B/C historique -> discovery. Aucune
+feature de cette liste n'est codée avant ce point.
