@@ -552,3 +552,50 @@ Séquence qui reste inchangée : Brique 2 (données buy/sell propres) ->
 Brique 3 (liquidity delta) -> features dynamiques -> comparaison type
 Copper Inu vs Optimus -> dataset A/B/C historique -> discovery. Aucune
 feature de cette liste n'est codée avant ce point.
+
+## Notes d'exploration Brique 3 — Mint/Burn/liquidity delta (29/08, terrain préparé, AUCUN CODE)
+
+Exploré pendant l'observation de Brique 2 (lecture seule, périmètre
+différent du mécanisme en cours de mesure). Pas encore une mini-spec
+validée — juste ce qu'il faut savoir avant d'en écrire une.
+
+**Confirmé par grep : aucun topic Mint/Burn n'est actuellement souscrit**
+(`_SYNC_TOPIC`/`_V2_SWAP_TOPIC`/`_V3_SWAP_TOPIC`/`_V4_SWAP_TOPIC` sont les
+seuls dans `evm_swap_ws.py`). 5 nouveaux `topic0` à calculer : Mint V2,
+Burn V2, Mint V3, Burn V3, `ModifyLiquidity` V4.
+
+**Zéro nouvelle connexion possible** — `_resubscribe()` construit déjà le
+filtre v2/v3 avec une LISTE de topic0 sur `topics[0]` (`[_SYNC_TOPIC,
+_SYNC_TOPIC_AERODROME, _V2_SWAP_TOPIC, _V3_SWAP_TOPIC]`) — ajouter Mint/Burn
+à cette même liste ne coûte aucune souscription/connexion supplémentaire,
+même pattern que Brique 1 pour `_V2_SWAP_TOPIC`.
+
+**Asymétrie structurelle importante entre familles, à trancher AVANT de
+coder** :
+- **V2** : `Mint(sender, amount0, amount1)` / `Burn(sender, amount0,
+  amount1, to)` — deux events séparés, PAS de signe explicite (le sens
+  ajout/retrait est déterminé par QUEL event est reçu, Mint=ajout,
+  Burn=retrait). `amount0`/`amount1` sont déjà en unités de token (uint,
+  jamais négatifs), directement convertibles en quote comme le reste du
+  module.
+- **V3** : `Mint(sender, owner, tickLower, tickUpper, amount, amount0,
+  amount1)` / `Burn(owner, tickLower, tickUpper, amount, amount0,
+  amount1)` — même principe (deux events séparés, signe implicite par
+  l'event), `amount0`/`amount1` en unités de token comme V2. `amount`
+  (uint128) est la quantité de liquidité concentrée (L), une unité
+  abstraite distincte, pas directement en quote.
+- **V4** : **UN SEUL event** `ModifyLiquidity(id, sender, tickLower,
+  tickUpper, liquidityDelta, salt)` — couvre mint ET burn, distingué par
+  le SIGNE de `liquidityDelta` (int256, positif=ajout/négatif=retrait) --
+  déjà signé nativement, contrairement à V2/V3. **Mais `liquidityDelta` est
+  en unité de liquidité concentrée abstraite (L), PAS en montant de token**
+  — contrairement à V2/V3 qui donnent `amount0`/`amount1` en clair. Convertir
+  V4's liquidity_delta en "quote units" comparables à V2/V3 demanderait un
+  calcul supplémentaire (prix courant + ticks), pas juste lire un champ.
+
+**Décision à prendre avec l'opérateur avant la mini-spec formelle** : soit
+persister `liquidity_delta` dans DEUX unités différentes selon la famille
+(quote pour V2/V3, abstrait L pour V4 — même honnêteté que `raw_liquidity`
+déjà fait ainsi pour le swap), soit accepter la complexité de convertir V4
+en quote. Pencherais pour la première option (cohérente avec le principe
+"jamais fabriquer une précision qu'on n'a pas") mais pas encore tranché.
