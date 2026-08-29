@@ -741,6 +741,38 @@ ensemble) de distribution (buy flow monte mais liquidité s'érode) de
 véritable exhaustion (les deux se retournent). Pure réflexion à ce stade,
 aucune formule/seuil arrêté.
 
+### Principe consolidé (29/08, décision opérateur) — la force d'un pump est une INTERACTION, jamais une métrique isolée
+
+Formulation qui généralise et verrouille le Cas A/B/C ci-dessus, à traiter
+comme principe de conception pour tout le feature engine à venir (Brique 7+),
+pas seulement pour Brique 3 : **la force réelle d'un pump ne se lit pas dans
+le buy flow seul — elle se lit dans la relation entre buy flow, participation
+(traders), liquidité disponible, et capacité du marché à absorber les ventes
+à venir.** Un buy flow massif porté par une liquidité qui s'érode n'a pas la
+même solidité qu'un buy flow identique porté par une liquidité stable ou
+croissante — même signal de surface, mécanique sous-jacente opposée.
+
+**Ce que ça implique pour la suite** : une fois Brique 2 (direction) et
+Brique 3 (liquidité) validées en production, le vrai candidat de feature
+n'est probablement pas un ratio simple (`buy_volume / liquidity`) mais une
+mesure d'INTERACTION dynamique entre au moins 4 axes — `buy_flow`,
+`participation` (traders actifs/nouveaux), `liquidity_level`,
+`liquidity_trend` (Brique 3) — dont la combinaison estime la capacité
+d'absorption RESTANTE du pool (combien de pression vendeuse le marché
+peut encore encaisser avant que le prix ne casse). C'est cette capacité
+d'absorption, plutôt qu'une métrique isolée à un instant T, qui distinguerait
+le mieux continuation (Groupe A) d'exhaustion imminente (bascule vers
+Groupe B) dans le dataset A/B/C.
+
+**Reste une direction de recherche, pas une formule** — aucun poids, aucun
+seuil, aucune combinaison arrêtée à ce stade. La validation empirique sur le
+dataset A/B/C (une fois le backfill réel possible) tranchera si cette
+interaction se mesure bien par un ratio composite, une dérivée temporelle
+multi-axes, ou autre chose — à découvrir sur données réelles, jamais deviné
+à l'avance. Prochaine étape concrète : possible seulement après Brique 3
+(liquidity delta) validée en production, elle-même après le GO explicite de
+l'opérateur sur sa mini-spec.
+
 ### Confirmation architecturale majeure (temps réel == backfill, même sémantique)
 
 Point le plus important validé par cette exploration : **le décodeur temps
