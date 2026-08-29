@@ -492,6 +492,15 @@ applicable telle quelle.
    byte-identiques avec/sans ce wiring (non-régression explicite).
 10. Les deux invariants ci-dessus vérifiés sur un mélange buy/sell/indéterminé,
     pas seulement sur des snapshots 100% propres.
+11. **Garde-fou ajouté par l'opérateur (29/08) — test d'identité du sens au
+    niveau du TOKEN TRACKÉ, pas du pair.** Les 4 tests 1-4 ci-dessus doivent
+    CHACUN être dédoublés sur `token_is_currency0=True` ET
+    `token_is_currency0=False` (8 tests effectifs, pas 4) — la convention
+    "quote entrant dans le pool = BUY" ne veut dire "achat du token tracké"
+    que si `token_is_currency0` est correctement propagé ; une inversion
+    silencieuse de ce flag inverserait BUY/SELL sans qu'aucun autre test ne
+    le détecte. C'est un garde-fou obligatoire, pas optionnel, avant toute
+    implémentation.
 
 ### Ce que cette brique ne fait PAS
 
