@@ -593,9 +593,108 @@ coder** :
   V4's liquidity_delta en "quote units" comparables à V2/V3 demanderait un
   calcul supplémentaire (prix courant + ticks), pas juste lire un champ.
 
-**Décision à prendre avec l'opérateur avant la mini-spec formelle** : soit
-persister `liquidity_delta` dans DEUX unités différentes selon la famille
-(quote pour V2/V3, abstrait L pour V4 — même honnêteté que `raw_liquidity`
-déjà fait ainsi pour le swap), soit accepter la complexité de convertir V4
-en quote. Pencherais pour la première option (cohérente avec le principe
-"jamais fabriquer une précision qu'on n'a pas") mais pas encore tranché.
+**Décision tranchée par l'opérateur (29/08)** : deux unités différentes
+selon la famille, ne PAS forcer V4 dans une pseudo-unité quote artificielle
+au stade capteur brut. V2/V3 -> `liquidity_added_quote`/`liquidity_
+removed_quote` (montants réels de token). V4 -> `liquidity_delta_raw`
+signé, unité abstraite, jamais converti. Convertir V4 trop tôt ajouterait
+une couche de calcul (prix, tick/range, sqrtPrice, décimales, position) qui
+transformerait un capteur mécanique en mini-modèle — hors scope de cette
+brique. Une feature comparable entre familles, si les données le
+permettent proprement, se construira bien plus tard dans le feature engine,
+jamais ici.
+
+### Ce que Brique 3 ajoute conceptuellement (troisième axe, distinct de buy/sell)
+
+Avec Brique 1+2, ARIA sait : `Swap -> BUY/SELL -> volume`. Brique 3 ajoute
+un axe complètement séparé : `Mint -> liquidité ajoutée`, `Burn ->
+liquidité retirée`. Trois phénomènes distincts sur un même pool : BUY,
+SELL, et LIQUIDITY (elle-même MINT/BURN) — jamais mélangés. C'est
+déterminant pour l'hypothèse PvP : "prix ↑, buy flow ↑, traders ↑,
+liquidité stable" n'est PAS la même situation que "prix ↑, buy flow ↑,
+traders ↑, liquidité retirée fortement" (le deuxième cas sépare le flux de
+trading de l'érosion de la profondeur disponible — un signal d'alarme que
+Brique 1+2 seules ne peuvent pas voir).
+
+### Invariants conceptuels (à respecter dès la mini-spec formelle)
+
+**V2/V3** : Mint et Burn ne doivent JAMAIS augmenter `swap_count` (ce ne
+sont pas des trades). Un Mint augmente le bucket liquidité ajoutée. Un Burn
+augmente le bucket liquidité retirée. Aucun montant de Mint/Burn ne doit
+contaminer `buy_volume_quote`/`sell_volume_quote` — trois compteurs
+complètement séparés, jamais additionnés entre eux.
+
+**V4** : `liquidityDelta > 0` -> ajout. `liquidityDelta < 0` -> retrait.
+`liquidityDelta == 0` -> cas ignoré/indéterminé (à vérifier contre la
+mécanique réelle une fois la mini-spec écrite). Ne jamais transformer
+silencieusement `liquidityDelta` en quote.
+
+**Absolu, toutes familles** : Brique 3 ne dit JAMAIS "bonne" ou "mauvaise"
+liquidité — elle constate seulement `+liquidity`, `-liquidity`, quand, où,
+combien, dans l'unité native de la famille concernée. Aucun jugement,
+aucun seuil.
+
+### Détail technique par famille (exploration précise, 29/08)
+
+**V2** : `Mint(address indexed sender, uint amount0, uint amount1)` /
+`Burn(address indexed sender, uint amount0, uint amount1, address indexed
+to)` — deux events séparés, chacun donne `amount0`/`amount1` en clair
+(unités de token réelles, toujours positives, jamais négatives comme dans
+un Swap). Même pattern d'extraction que le décodeur swap déjà existant :
+le côté quote (`token_is_currency0` déjà connu du pool) donne directement
+`liquidity_added_quote` (depuis Mint) ou `liquidity_removed_quote` (depuis
+Burn), décimal-ajusté comme le reste du module. 2 nouveaux `topic0` à
+calculer : `Mint(address,uint256,uint256)`, `Burn(address,uint256,uint256,address)`.
+
+**V3** : `Mint(sender, owner, tickLower, tickUpper, amount, amount0,
+amount1)` / `Burn(owner, tickLower, tickUpper, amount, amount0, amount1)`
+— même principe, `amount0`/`amount1` en clair permettent le même calcul que
+V2. `amount` (uint128) est la quantité de liquidité concentrée L modifiée à
+CETTE position (range `[tickLower, tickUpper]`) — une mesure différente,
+utile plus tard (comparable pool à pool comme `raw_liquidity` déjà fait
+pour le swap) mais pas nécessaire pour `liquidity_added_quote`/`_removed_
+quote`. **Nuance technique réelle à documenter, pas à sur-résoudre
+maintenant** : dans Uniswap V3, un `Burn` crédite les montants au owner
+sans forcément les transférer immédiatement (un `collect()` séparé règle
+le vrai mouvement de trésorerie) — mais pour notre usage (mesurer la
+profondeur active disponible pour absorber un futur swap), c'est le
+`Burn` lui-même (réduction de la position active) qui est le signal
+pertinent, pas le règlement. 2 nouveaux `topic0` (V3 partage la famille
+avec Aerodrome Slipstream, même event shape déjà vérifié pour Swap).
+
+**V4** : `ModifyLiquidity(PoolId indexed id, address indexed sender, int24
+tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)` — UN
+SEUL event, `liquidityDelta` déjà signé (positif=ajout, négatif=retrait).
+**Mesure brute fiable directement extractible, sans aucun calcul** :
+`liquidity_delta_raw` (le champ signé lui-même), `tickLower`/`tickUpper`
+(la range concernée), `sender`. **Ce qui serait nécessaire pour une
+conversion ultérieure en quote units** (PAS fait maintenant) : le prix
+courant du pool (déjà tracké via `pool.ticks`), les ticks de la range
+(déjà dans l'event), et la formule Uniswap standard convertissant
+liquidité(L) + range + prix courant en montants réels de token0/token1 --
+une vraie formule mathématique non triviale (différente selon que le prix
+courant est dans la range ou en dehors), pas un champ à lire. Exactement
+pourquoi l'opérateur tranche pour garder V4 en unité abstraite au stade
+capteur brut. 1 nouveau `topic0` : `ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)`.
+
+### Impact sur le format temporel du backfill (point 3, vérifié conceptuellement)
+
+Le pattern déjà établi (Brique 1/2) : `_TrackedPool` accumule des
+compteurs CUMULATIFS en mémoire, `onchain_activity_observation.py` calcule
+des DELTAS entre observations successives avec `baseline_reset` sur
+restart. Brique 3 suivrait le même pattern -- `liquidity_added_quote`/
+`liquidity_removed_quote` cumulatifs (V2/V3), `liquidity_added_raw`/
+`liquidity_removed_raw` cumulatifs séparés par signe (V4) -- donc le MÊME
+format temporel (timestamp + cumulatif + delta) que Brique 1/2. Pas de
+cassure structurelle prévue pour le backfill : les events Mint/Burn/
+ModifyLiquidity sont on-chain immuables comme Swap/Sync, rejouables via
+`eth_getLogs`. **Le vrai risque à surveiller, pas une cassure de format
+mais une cassure de DÉFINITION** : le décodeur de backfill devra utiliser
+EXACTEMENT la même logique de classification (V2/V3 -> quote via
+amount0/amount1, V4 -> raw `liquidityDelta` jamais converti) que le
+décodeur temps réel -- sinon on aurait deux définitions différentes de
+"liquidity_delta" selon la source, le même risque déjà identifié pour la
+frontière `v2_biased` avant/après le T0 de Brique 1.
+
+**Statut : exploration terminée, mini-spec formelle PAS encore écrite,
+attend le checkpoint Brique 2 de 17:08Z avant de démarrer.**
