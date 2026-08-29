@@ -940,6 +940,114 @@ Documentation/mini-spec (ci-dessus, verrouillée) → tests (plan ci-dessus,
 observation → checkpoint, exactement le même protocole que Briques 1/2,
 sans élargir le scope.
 
+## Mini-spec Brique 4 — Oracle WETH/USD on-chain (29/08, PRÉPARÉE, PAS IMPLÉMENTÉE)
+
+Statut : Briques 1-3 validées en production sur Base ET Robinhood
+(checkpoint live fermé 22:33Z, cf. HANDOFF). **Cette mini-spec prépare
+uniquement Brique 4** — aucune implémentation avant accord explicite de
+l'opérateur. Ancrée dans le vrai code de `evm_swap_ws.py` et `doppler.py`
+(relus le 29/08), pas une convention inventée à l'aveugle.
+
+### Reformulation de l'objectif (rappel, gravé par l'opérateur)
+
+Ne jamais poser Brique 4 comme "obtenir un prix USD" — la question est
+"établir une conversion quote→USD vérifiable et indépendante des
+fournisseurs externes". Le capteur de prix/activité en quote existe déjà
+(Briques 1-3) ; l'oracle n'apporte QUE la référence USD, jamais une
+redéfinition du capteur existant.
+
+### Point d'ancrage exact dans le code déjà déployé
+
+`EVMSwapWebSocketFeed.get_snapshot()` (`evm_swap_ws.py:822-829`) résout
+déjà `price_usd` directement pour un pool `quote_is_stable` (`price_usd =
+last_price`), mais retourne explicitement `price_usd = None` pour un pool
+`quote_is_weth`/`quote_is_btc`, avec le commentaire du code lui-même :
+*"resolved by the caller via doppler.eth_usd_rate() -- no network I/O
+here"*. `doppler.eth_usd_rate()`/`btc_usd_rate()` (`doppler.py:213-249`)
+sont la SEULE conversion USD existante aujourd'hui pour ce cas, et
+dépendent TOUTES LES DEUX de CoinGecko (`coingecko_client.get_simple_price`)
+— exactement la dépendance externe que l'incident #271 (quota CoinGecko
+épuisé depuis le 26/08) a mise en évidence comme point de blocage. Brique
+4 comble ce trou précis, sans toucher au reste de `doppler.py`.
+
+### Mécanisme proposé (réutilisation stricte de l'existant, zéro nouveau capteur)
+
+```
+pool de référence WETH/stable (déjà lisible par Brique 1-3, quote_is_stable=True)
+        v
+son propre get_snapshot().price_usd DÉJÀ résolu nativement (ligne 824-825)
+        v
+onchain_eth_usd_rate(chain) -> lit ce snapshot, expose le taux
+        v
+caller (ex. _handle_sync pour un pool quote_is_weth) l'utilise à la place
+de doppler.eth_usd_rate()
+```
+
+Aucun nouveau mécanisme de lecture on-chain : le taux ETH/USD est déjà
+calculable par le code existant, à condition qu'un pool WETH/stable à
+forte liquidité soit ajouté à la liste des pools **suivis en permanence**
+par `EVMSwapWebSocketFeed` (via `add_pool`, déjà existant, jamais
+réimplémenté) — actuellement les pools suivis sont ceux découverts
+dynamiquement par `onchain_pool_discovery.py`, jamais des pools de
+référence fixes.
+
+### Pools de référence candidats (un seul confirmé par clic ce jour, l'autre à reconfirmer)
+
+- **Base** : `0x6c561b446416e1a00e8e93e221854d6ea4171372` (WETH/USDC,
+  Uniswap V3, $116M liquidité) — **vérifié par clic-through DexScreener le
+  29/08** (même pool déjà utilisé pour le test de preuve du décodeur
+  Brique 3, cf. HANDOFF). `token0=WETH`, `token1=USDC`.
+- **Robinhood** : pool WETH/USDG déjà mentionné dans CLAUDE.md ($45.77M/24h
+  vol) — **adresse exacte à reconfirmer par clic-through avant toute
+  implémentation, jamais devinée** (navigateur indisponible au moment de
+  cette mini-spec).
+
+### Fail-closed / staleness (même doctrine que Briques 1-3)
+
+`onchain_eth_usd_rate(chain)` retourne `None` si : le pool de référence
+n'est pas encore suivi, `get_snapshot()` retourne `available=False`, ou le
+snapshot est trop périmé (`stale_seconds` au-delà d'un seuil à définir,
+cohérent avec le reste du dôme) — jamais un taux fabriqué ou périmé
+silencieusement réutilisé. Le caller (ex. `_handle_sync`) garde le même
+comportement fail-open déjà en place : `reserve_usd`/`price_usd` restent
+`None` si le taux n'est pas disponible, jamais une conversion approximative.
+
+### Ce que Brique 4 ne fait PAS
+
+Ne remplace pas `doppler.eth_usd_rate()`/`btc_usd_rate()` partout dans le
+dôme — scope strictement limité au besoin direct des capteurs on-chain
+(Briques 1-3/6, bloqués par #271 pour la collecte de liquidité). Migrer
+d'autres consommateurs existants de `doppler.eth_usd_rate()` vers ce
+nouveau mécanisme est un chantier séparé, hors scope. Aucun score, aucun
+seuil, aucune conversion V4/liquidité abstraite touchée par cette brique.
+Le cas BTC/cbBTC reste hors scope (aucun pool cbBTC-quoté identifié comme
+prioritaire à ce stade).
+
+### Plan de tests obligatoire (avant toute implémentation)
+
+1. Pool de référence `quote_is_stable=True` déjà suivi, snapshot
+   disponible -> `onchain_eth_usd_rate` retourne le `price_usd` exact du
+   pool.
+2. Pool de référence pas encore suivi -> `None`, jamais une exception.
+3. Snapshot périmé (au-delà du seuil de staleness) -> `None`.
+4. Un pool `quote_is_weth` consommant ce taux calcule un `reserve_usd`
+   cohérent (`quote_reserve_raw * onchain_eth_usd_rate`), comparé à une
+   valeur de référence externe (DexScreener) à titre de sanity check
+   uniquement, jamais de vérité d'entraînement (même doctrine que Brique 6).
+5. Non-régression : `doppler.eth_usd_rate()` et son usage existant
+   restent inchangés — Brique 4 AJOUTE une alternative, ne modifie rien
+   dans `doppler.py`.
+6. Wiring réel : le pool de référence effectivement présent dans la liste
+   des pools suivis au démarrage du process, pas seulement testable en
+   isolation.
+
+### Séquence d'exécution (même protocole que Briques 1-3)
+
+Documentation/mini-spec (ce document) → GO explicite de l'opérateur →
+tests (plan ci-dessus, écrits AVANT le code) → implémentation → suite
+complète → déploiement → observation → checkpoint. Aucune ligne de code
+avant le GO.
+
 ## Scénario post-capteurs — contrat de destination (29/08, document d'architecture expérimentale, AUCUN CODE, AUCUNE règle de trading)
 
 Écrit maintenant que Briques 1-2 ont suffisamment avancé, pour que chaque
