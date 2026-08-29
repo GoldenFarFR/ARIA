@@ -252,6 +252,14 @@ flow, and the open item: `docs/etat-systeme-cable.md` (RPC Solana entry) and
 only. Prior resource-budget incident (a narrowed feed silently breaking a second
 consumer nobody had inventoried): `docs/HANDOFF_RESOURCE_BUDGET.md`.
 
+## Active state — on-chain activity sensors roadmap (29/08)
+6-brick sequence (real Swap V2 -> buy/sell flow -> Mint/Burn -> on-chain USD
+oracle -> persistence -> historical backfill research), one brick at a time,
+never merged. Brick 1 code-complete, production validation in progress. Full
+vision, discipline, and the anti-look-ahead rule for the historical-backfill
+brick: `docs/roadmap-capteurs-onchain.md` — edit that file in place, never
+restate the detail here.
+
 
 ## Active state — pocket lineup (18/08, explicit operator decision, updated 28/08)
 **Active sourcing pockets**: swing + vc, `solana_late_bonding_shadow` (only Solana sourcing pocket since FAST discovery's 21/08 retirement — its exit tracking stays wired until open positions close, closures kept as the control group), `robinhood_pump_shadow`/`robinhood_pump_v2_shadow`, and `base_momentum_shadow`. Scalping v1-v9, "megacap", Solana FAST discovery, and — as of 28/08, code/tests/docs cleaned, verified never called anywhere and never above +25% PnL on the full closure sample — `solana_support_bounce_shadow`/`_v2` and `solana_variant_shadow` are fully retired. Two additions since 18/08: `solana_pump_shadow` ("tendance", already-graduated Solana pools, reactivated 23/08 after operator question, sourced via DexPaprika never GeckoTerminal) and `dip_recovery_v2_shadow` (Base+Robinhood, market-cap-bounded dip-buying, +25% take-profit/no stop-loss/168h timeout, gate `ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED` live since 27/08 — **its "100% winrate" reads are a structural artifact, not yet a real measurement**: with no stop-loss, a position can only close via take-profit or the 7-day timeout, and zero timeout has fired yet as of 28/08 — first real read possible starting ~02/09. Also has no latent/mark-to-market PnL on open positions today, only realized PnL at close). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 and 27/08 entries).
