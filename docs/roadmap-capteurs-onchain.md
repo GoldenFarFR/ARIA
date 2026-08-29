@@ -50,9 +50,17 @@ analytique à réécrire plus tard.
 3. **Mint/Burn (liquidity_delta)** — liquidité ajoutée/retirée, distinguer
    activité de trading vs argent qui entre/sort du pool.
 4. **Oracle WETH/USD on-chain** — Robinhood : pool WETH/USDG déjà identifié
-   ($45.77M/24h vol). Base : équivalent à chercher. Objectif : `reserve_usd`
-   sans dépendre de CoinGecko/DexPaprika (cf. incident #271, quota CoinGecko
-   épuisé 26/08, bloque toute la collecte liquidité actuelle).
+   ($45.77M/24h vol). Base : équivalent à chercher. **Reformulation de
+   l'objectif (29/08, précision opérateur)** : ne jamais la poser comme
+   "obtenir un prix USD" — la question est "établir une conversion
+   quote→USD vérifiable et indépendante des fournisseurs externes". Le
+   capteur de prix/activité en quote existe déjà (Briques 1-3) ; l'oracle
+   n'apporte QUE la référence USD, jamais une redéfinition du capteur
+   existant. Objectif technique inchangé : `reserve_usd` sans dépendre de
+   CoinGecko/DexPaprika (cf. incident #271, quota CoinGecko épuisé 26/08,
+   bloque toute la collecte liquidité actuelle). **Pas commencée** — attend
+   sa propre mini-spec et un GO explicite, même discipline que les briques
+   précédentes (jamais deux ouvertes en même temps).
 5. **Persistance complète** — snapshots/deltas dans le temps, reprise propre
    après restart (déjà largement couvert par `onchain_activity_observation.py`,
    à étendre une fois les nouvelles primitives câblées).
@@ -1283,12 +1291,31 @@ anti-look-ahead déjà gravées plus haut, aucune règle nouvelle. Un
 protocole qui échoue sur l'historique connu économise du temps et du
 capital réel avant même d'être tenté en shadow/paper.
 
-### Candidat de cohorte banqué (29/08, PAS encore vérifié par adresse)
+### Candidat de cohorte vérifié (29/08, adresses confirmées via DexScreener)
 
-Couple $AI/NVDA sur Robinhood et sa vague de ~15-20 clones concurrents nés
-à la même période — candidat de cohorte narrative pour un futur backfill
-ciblé. **Aucune adresse de contrat vérifiée à ce stade** — à ne jamais
-deviner ; si l'opérateur fournit le contrat exact du token gagnant et de
-ses clones, ce candidat rejoint la liste de tokens déjà identifiés plus
-haut dans ce document, avec la même exigence de vérification par adresse
-(jamais par nom/symbole affiché, cf. l'incident COPPERINU).
+Contexte de marché confirmé (WebSearch, presse crypto) : depuis mi-juillet
+2026, les launchpads Bankr/long.xyz permettent de créer des memecoins
+adossés à la liquidité de >90 tickers d'actions tokenisées sur Robinhood
+Chain (NVDA, AAPL, TSLA, SPY, TSM, MU, ...). Ce n'est PAS un cluster de
+15-20 clones nés en un seul jour (hypothèse de départ infirmée) mais un
+FLUX CONTINU de tels memecoins depuis cette date, sur lequel $AI a émergé
+tôt et gardé une domination écrasante. Chaque ligne = contrat vérifié par
+clic direct (jamais deviné) :
+
+| Token | Contrat | Pool créé | Mkt Cap | Liquidité |
+|---|---|---|---|---|
+| AI (Artificial Inu) | `0x2e8c31162b855a2ffa90f6f8634643ad6f111e18` | 1mo15d | $123.4M | $3.8M |
+| AIM (AI Man, NVDA-paired) | `0x621...1e18` (pool `0x334...3aff`) | 1mo14h | $19K | $19K |
+| REALSTONK (NVDA-paired) | `0x237...8ba3` (pool `0xe49...8d73`) | 1mo9d | $64K | $45K |
+| Aibo the robot (MU-paired) | `0x338...1e18` (pool `0x67a...26fb`) | 1mo4d | $21K | $21K |
+| Robinhood AI (CORTEX/WETH) | `0x268...a07c` (pool `0x298...6751`) | 1mo28d | $19K | $16K |
+| microduck (NVDA-paired) | `0xD5F...E725` | 2d10h | $14.6M | $334K |
+
+**Le candidat le plus pertinent pour la question de recherche** : AIM,
+né à ~1 jour d'écart de $AI, même quote token (NVDA), même thème IA —
+écart de mkt cap de x6500 malgré un timing de lancement quasi identique.
+Bien plus parlant que REALSTONK (6 jours d'écart) pour isoler ce qui
+divergeait dans les toutes premières heures. **Adresses tronquées
+ci-dessus à compléter (clic direct, jamais deviné) avant tout usage réel
+en backfill** — ce tableau reste un candidat banqué, pas encore un
+dataset prêt à l'emploi.
