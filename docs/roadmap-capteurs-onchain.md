@@ -794,8 +794,143 @@ vide)`. Première fois qu'ARIA disposera des trois dimensions nécessaires
 pour commencer à comprendre ce qui se passe réellement derrière la courbe
 de prix, plutôt que le prix seul.
 
-**Statut : exploration terminée, mini-spec formelle PAS encore écrite,
-attend le checkpoint Brique 2 de 17:08Z avant de démarrer.**
+**Statut : GO opérateur reçu (29/08, post-checkpoint Brique 2 concluant) —
+mini-spec formelle ci-dessous, verrouillée avant implémentation.**
+
+## Mini-spec Brique 3 — Mint/Burn/Liquidity Delta (29/08, PRÉPARÉE, GO REÇU)
+
+### Invariants de non-régression (à respecter dès le premier commit, jamais assouplir)
+
+```
+Mint/Burn/ModifyLiquidity
+        v
+    liquidity*
+        =/=
+    swap_count
+        =/=
+    buy_volume
+        =/=
+    sell_volume
+```
+
+Aucun événement Mint/Burn/ModifyLiquidity ne doit jamais incrémenter
+`swap_count`/`cumulative_volume_quote`/`buy_count`/`sell_count`/
+`buy_volume_quote`/`sell_volume_quote` — trois familles de compteurs
+(SWAP, BUY/SELL, LIQUIDITY) strictement séparées, jamais additionnées.
+
+### Principe architectural (rappel, gravé, condition de confiance du futur replay)
+
+```
+temps réel  ==  même sémantique de décodage  ==  backfill historique
+```
+
+Le décodeur Brique 3 doit utiliser exactement la même logique de
+classification en temps réel et lors du futur backfill (Brique 6) — deux
+définitions différentes de "liquidity_delta" selon la source romprait la
+confiance dans le replay causal avant même qu'il existe.
+
+### Convention par famille (reprise de l'exploration, verrouillée, ne pas rouvrir)
+
+**V2/V3** : `Mint(sender, amount0, amount1)` / `Burn(sender/owner, amount0,
+amount1, ...)` — deux events séparés, `amount0`/`amount1` en clair (unités
+de token réelles, jamais négatives). Le côté quote (`token_is_currency0`
+déjà connu du pool) donne directement `liquidity_added_quote` (depuis
+Mint) ou `liquidity_removed_quote` (depuis Burn), décimal-ajusté comme le
+reste du module. Deux compteurs CUMULATIFS séparés (jamais un net stocké
+directement) — même doctrine que `buy_volume_quote`/`sell_volume_quote` :
+un `net_liquidity_quote` = `liquidity_added_quote - liquidity_removed_quote`
+se calcule à la volée (propriété, jamais un champ stocké séparément).
+
+**V4** : `ModifyLiquidity(id, sender, tickLower, tickUpper, liquidityDelta,
+salt)` — un seul event, `liquidityDelta` (int256) déjà signé. **Décision
+tranchée : deux compteurs cumulatifs séparés par signe**, jamais un seul
+champ signé cumulé (qui perdrait de l'information par annulation, comme un
+`net_flow` stocké directement aurait fait pour Brique 2) : `liquidity_
+added_raw` (somme des `liquidityDelta` positifs), `liquidity_removed_raw`
+(somme des valeurs absolues des `liquidityDelta` négatifs). `net_
+liquidity_delta_raw` = `liquidity_added_raw - liquidity_removed_raw`,
+calculé à la volée, même pattern que `net_flow_quote`. Unité abstraite (L),
+jamais convertie en quote units — un `liquidityDelta == 0` est un no-op
+silencieux (aucun compteur touché, pas un bucket "undetermined" séparé :
+contrairement à BUY/SELL, ici il n'y a pas d'ambiguïté de SENS, seulement
+un montant nul dégénéré).
+
+### Distinction V3 — réduction de position active vs transfert effectif (gravée, jamais assouplir)
+
+Un `Burn` V3 crédite le owner sans transférer immédiatement les tokens (un
+`collect()` séparé, non capturé par cette brique, règle le mouvement réel
+de trésorerie). Brique 3 mesure UNIQUEMENT "la position/liquidité active a
+été réduite" — jamais "des tokens ont effectivement quitté le pool à cet
+instant". Cette seconde affirmation, plus forte, ne doit JAMAIS être
+déduite implicitement d'un `Burn` dans une future feature ou un futur
+signal. Si le règlement réel (`collect()`) devient un jour nécessaire, ce
+sera une brique/extension séparée.
+
+### Champs nouveaux (additifs, zéro nouvel appel RPC/websocket)
+
+Sur `_TrackedPool`/`EVMSwapSnapshot` : `liquidity_added_quote`,
+`liquidity_removed_quote` (V2/V3, cumulatifs, REAL uniquement pour ces
+familles — `None`/`0.0` pour V4), `liquidity_added_raw`, `liquidity_
+removed_raw` (V4, cumulatifs, REAL uniquement pour V4). `net_liquidity_
+quote` et `net_liquidity_delta_raw` calculés à la volée (properties,
+jamais stockés). Côté `onchain_activity_observation.py` : deltas
+correspondants (`liquidity_added_quote_delta`, `liquidity_removed_quote_
+delta`, `liquidity_added_raw_delta`, `liquidity_removed_raw_delta`), même
+doctrine `baseline_reset`/jamais un delta fabriqué que Briques 1/2.
+
+### Nouveaux topics à souscrire (zéro nouvelle connexion, ajoutés à la liste topic0 déjà ouverte dans `_resubscribe()`)
+
+`Mint(address,uint256,uint256)` (V2), `Burn(address,uint256,uint256,
+address)` (V2), `Mint(address,address,int24,int24,uint128,uint256,
+uint256)` (V3), `Burn(address,int24,int24,uint128,uint256,uint256)` (V3),
+`ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)` (V4) — 5
+nouveaux `topic0` (keccak256 des signatures), à calculer et vérifier
+contre une vraie transaction connue avant de les coder en dur (même
+discipline que `_V2_SWAP_TOPIC` en Brique 1).
+
+### Plan de tests obligatoire (avant toute implémentation)
+
+1. V2 Mint → `liquidity_added_quote` += montant côté quote, `swap_count`/
+   `buy_count`/`sell_count` inchangés.
+2. V2 Burn → `liquidity_removed_quote` += montant côté quote, mêmes
+   compteurs inchangés.
+3. V3 Mint → idem V2 (même calcul côté quote, `amount` L ignoré pour ce
+   champ).
+4. V3 Burn → idem.
+5. V4 `ModifyLiquidity` positif → `liquidity_added_raw` += `liquidityDelta`.
+6. V4 `ModifyLiquidity` négatif → `liquidity_removed_raw` += `abs(liquidityDelta)`.
+7. V4 `liquidityDelta == 0` → no-op silencieux, aucun compteur touché.
+8. **Garde-fou obligatoire, même raison qu'en Brique 2** : les tests 1-4
+   doublés sur `token_is_currency0=True/False` (8 tests effectifs) — une
+   inversion silencieuse de ce flag inverserait quel côté est "added"/
+   "removed" sans qu'aucun autre test ne le détecte.
+9. Invariant de non-contamination : sur une séquence mixte réelle (swaps +
+   Mint + Burn entrelacés), `swap_count`/`buy_count`/`sell_count`/
+   `buy_volume_quote`/`sell_volume_quote` restent BYTE-IDENTIQUES avec/sans
+   ce wiring (non-régression Brique 1/2 explicite).
+10. `net_liquidity_quote`/`net_liquidity_delta_raw` calculés (jamais des
+    champs stockés qui pourraient diverger).
+11. Wiring réel de souscription : les 5 nouveaux `topic0` effectivement
+    présents dans `_resubscribe()`'s topics list, pas seulement décodables
+    en isolation.
+12. `get_snapshot()` expose les nouveaux champs.
+13. Séquence bout en bout (test d'intégration, pas seulement unitaire) sur
+    un pool réel simulé mêlant les trois familles d'événements.
+
+### Ce que cette brique ne fait PAS
+
+Aucun score, aucun seuil, aucun jugement "bonne"/"mauvaise" liquidité.
+Aucune conversion V4 en quote units (ça resterait une unité abstraite tant
+qu'aucune feature validée n'en a besoin). Aucun mélange avec BUY/SELL —
+trois axes (SWAP, DIRECTION, LIQUIDITY) qui restent lisibles séparément,
+jamais combinés au niveau capteur.
+
+### Séquence d'exécution (ordre imposé par l'opérateur)
+
+Documentation/mini-spec (ci-dessus, verrouillée) → tests (plan ci-dessus,
+écrits AVANT le code) → implémentation → suite complète → déploiement →
+observation → checkpoint, exactement le même protocole que Briques 1/2,
+sans élargir le scope.
 
 ## Scénario post-capteurs — contrat de destination (29/08, document d'architecture expérimentale, AUCUN CODE, AUCUNE règle de trading)
 
