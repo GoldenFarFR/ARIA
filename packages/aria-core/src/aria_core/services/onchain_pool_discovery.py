@@ -441,6 +441,14 @@ class OnChainPoolDiscoveryFeed:
                 undetermined_volume_quote=(
                     snapshot.undetermined_volume_quote if snapshot.available else None
                 ),
+                liquidity_added_quote=(
+                    snapshot.liquidity_added_quote if snapshot.available else None
+                ),
+                liquidity_removed_quote=(
+                    snapshot.liquidity_removed_quote if snapshot.available else None
+                ),
+                liquidity_added_raw=snapshot.liquidity_added_raw if snapshot.available else None,
+                liquidity_removed_raw=snapshot.liquidity_removed_raw if snapshot.available else None,
             )
             if not snapshot.available:
                 # 26/08 -- real incident: `add_pool` verification (a live

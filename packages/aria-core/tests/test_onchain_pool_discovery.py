@@ -649,6 +649,8 @@ async def test_activity_observation_is_recorded_alongside_qualification_unchange
         distinct_traders_count=7, stale_seconds=3.2,
         buy_count=25, sell_count=17, undetermined_count=0,
         buy_volume_quote=700.0, sell_volume_quote=534.5, undetermined_volume_quote=0.0,
+        liquidity_added_quote=900.0, liquidity_removed_quote=150.0,
+        liquidity_added_raw=0.0, liquidity_removed_raw=0.0,
     )
     feed._ws_feed.get_snapshot.return_value = snapshot
     result = await feed.check_candidates(min_liquidity_usd=4000.0)
@@ -677,6 +679,11 @@ async def test_activity_observation_is_recorded_alongside_qualification_unchange
     assert obs["buy_volume_quote"] == 700.0
     assert obs["sell_volume_quote"] == 534.5
     assert obs["undetermined_volume_quote"] == 0.0
+    # brique 3/5 (29/08) -- liquidity fields actually wired through too.
+    assert obs["liquidity_added_quote"] == 900.0
+    assert obs["liquidity_removed_quote"] == 150.0
+    assert obs["liquidity_added_raw"] == 0.0
+    assert obs["liquidity_removed_raw"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -703,6 +710,8 @@ async def test_activity_observation_records_none_when_snapshot_unavailable(monke
         distinct_traders_count=0, stale_seconds=None,
         buy_count=0, sell_count=0, undetermined_count=0,
         buy_volume_quote=0.0, sell_volume_quote=0.0, undetermined_volume_quote=0.0,
+        liquidity_added_quote=0.0, liquidity_removed_quote=0.0,
+        liquidity_added_raw=0.0, liquidity_removed_raw=0.0,
     )
     # _make_feed's default resolve_cold already returns available=False.
     result = await feed.check_candidates(min_liquidity_usd=200.0)
@@ -726,6 +735,10 @@ async def test_activity_observation_records_none_when_snapshot_unavailable(monke
     assert obs["cumulative_volume_quote"] is None
     assert obs["distinct_traders_count"] is None
     assert obs["last_swap_age_seconds"] is None
+    assert obs["liquidity_added_quote"] is None
+    assert obs["liquidity_removed_quote"] is None
+    assert obs["liquidity_added_raw"] is None
+    assert obs["liquidity_removed_raw"] is None
 
 
 @pytest.mark.asyncio

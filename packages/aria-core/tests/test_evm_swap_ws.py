@@ -645,6 +645,291 @@ def test_handle_v4_swap_ignores_unmapped_pool_id():
     feed._handle_v4_swap(topics, {"data": "0x" + raw.hex()})  # must not raise, no pool registered
 
 
+# --- brique 3/5: Mint/Burn/ModifyLiquidity -- liquidity delta, a THIRD axis,
+# never touching swap_count/buy_volume_quote/sell_volume_quote -----------------
+
+def test_topic0_liquidity_values_are_all_distinct_and_from_swap_topics():
+    liquidity_topics = {
+        m._V2_MINT_TOPIC, m._V2_BURN_TOPIC, m._V3_MINT_TOPIC,
+        m._V3_BURN_TOPIC, m._V4_MODIFY_LIQUIDITY_TOPIC,
+    }
+    assert len(liquidity_topics) == 5
+    swap_topics = {m._SYNC_TOPIC, m._SYNC_TOPIC_AERODROME, m._V2_SWAP_TOPIC, m._V3_SWAP_TOPIC, m._V4_SWAP_TOPIC}
+    assert liquidity_topics.isdisjoint(swap_topics)
+
+
+def _v2_liquidity_data(amount0: int, amount1: int) -> str:
+    return "0x" + (_u256(amount0) + _u256(amount1)).hex()
+
+
+def test_handle_v2_mint_adds_liquidity_quote_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    # quote is currency1 (6 dec): 50 quote units added.
+    data = _v2_liquidity_data(amount0=3 * 10**18, amount1=50 * 10**6)
+    feed._handle_v2_mint("0xpool", {"data": data})
+    assert pool.liquidity_added_quote == pytest.approx(50.0)
+    assert pool.liquidity_removed_quote == pytest.approx(0.0)
+    # non-contamination: swap_count/buy_volume/sell_volume untouched.
+    assert pool.swap_count == 0
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+
+
+def test_handle_v2_mint_adds_liquidity_quote_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=False, decimals0=6, decimals1=18)
+    feed._pools["0xpool"] = pool
+    # quote is currency0 (6 dec): 40 quote units added.
+    data = _v2_liquidity_data(amount0=40 * 10**6, amount1=2 * 10**18)
+    feed._handle_v2_mint("0xpool", {"data": data})
+    assert pool.liquidity_added_quote == pytest.approx(40.0)
+
+
+def test_handle_v2_burn_removes_liquidity_quote_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    data = _v2_liquidity_data(amount0=1 * 10**18, amount1=25 * 10**6)
+    feed._handle_v2_burn("0xpool", {"data": data})
+    assert pool.liquidity_removed_quote == pytest.approx(25.0)
+    assert pool.liquidity_added_quote == pytest.approx(0.0)
+    assert pool.swap_count == 0
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+
+
+def test_handle_v2_burn_removes_liquidity_quote_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=False, decimals0=6, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v2_liquidity_data(amount0=15 * 10**6, amount1=1 * 10**18)
+    feed._handle_v2_burn("0xpool", {"data": data})
+    assert pool.liquidity_removed_quote == pytest.approx(15.0)
+
+
+def test_handle_v2_mint_ignores_unknown_pool():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v2_liquidity_data(1, 1)
+    feed._handle_v2_mint("0xunknown", {"data": data})  # must not raise
+
+
+def test_handle_v2_burn_ignores_unknown_pool():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v2_liquidity_data(1, 1)
+    feed._handle_v2_burn("0xunknown", {"data": data})  # must not raise
+
+
+def _v3_mint_data(amount0: int, amount1: int, *, sender: int = 0, liquidity_l: int = 0) -> str:
+    return "0x" + (_u256(sender) + _u256(liquidity_l) + _u256(amount0) + _u256(amount1)).hex()
+
+
+def _v3_burn_data(amount0: int, amount1: int, *, liquidity_l: int = 0) -> str:
+    return "0x" + (_u256(liquidity_l) + _u256(amount0) + _u256(amount1)).hex()
+
+
+def test_handle_v3_mint_adds_liquidity_quote_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v3_mint_data(amount0=2 * 10**18, amount1=7 * 10**18)
+    feed._handle_v3_mint("0xpool", {"data": data})
+    assert pool.liquidity_added_quote == pytest.approx(7.0)
+    assert pool.swap_count == 0
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+
+
+def test_handle_v3_mint_adds_liquidity_quote_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=False, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v3_mint_data(amount0=9 * 10**18, amount1=4 * 10**18)
+    feed._handle_v3_mint("0xpool", {"data": data})
+    assert pool.liquidity_added_quote == pytest.approx(9.0)
+
+
+def test_handle_v3_burn_removes_liquidity_quote_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v3_burn_data(amount0=3 * 10**18, amount1=6 * 10**18)
+    feed._handle_v3_burn("0xpool", {"data": data})
+    assert pool.liquidity_removed_quote == pytest.approx(6.0)
+    assert pool.liquidity_added_quote == pytest.approx(0.0)
+    assert pool.swap_count == 0
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+
+
+def test_handle_v3_burn_removes_liquidity_quote_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=False, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v3_burn_data(amount0=8 * 10**18, amount1=1 * 10**18)
+    feed._handle_v3_burn("0xpool", {"data": data})
+    assert pool.liquidity_removed_quote == pytest.approx(8.0)
+
+
+def test_handle_v3_mint_ignores_unknown_pool():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v3_mint_data(1, 1)
+    feed._handle_v3_mint("0xunknown", {"data": data})  # must not raise
+
+
+def test_handle_v3_burn_ignores_unknown_pool():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v3_burn_data(1, 1)
+    feed._handle_v3_burn("0xunknown", {"data": data})  # must not raise
+
+
+def _v4_modify_liquidity_data(liquidity_delta_signed: int, *, tick_lower: int = 0, tick_upper: int = 0, salt: int = 0) -> str:
+    delta_u256 = liquidity_delta_signed % (1 << 256)
+    return "0x" + (_u256(tick_lower) + _u256(tick_upper) + _u256(delta_u256) + _u256(salt)).hex()
+
+
+def test_handle_v4_modify_liquidity_added_positive_delta():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool_id_raw = bytes.fromhex("11" * 32)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0x" + pool_id_raw.hex(),
+    )
+    feed._pools["0x" + pool_id_raw.hex()] = pool
+    data = _v4_modify_liquidity_data(12_345)
+    topics = [MagicMock(), _FakeTopic(pool_id_raw), _FakeTopic(bytes.fromhex("00" * 12 + "aa" * 20))]
+    feed._handle_v4_modify_liquidity(topics, {"data": data})
+    assert pool.liquidity_added_raw == pytest.approx(12_345.0)
+    assert pool.liquidity_removed_raw == pytest.approx(0.0)
+    assert pool.swap_count == 0
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+
+
+def test_handle_v4_modify_liquidity_removed_negative_delta():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool_id_raw = bytes.fromhex("22" * 32)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0x" + pool_id_raw.hex(),
+    )
+    feed._pools["0x" + pool_id_raw.hex()] = pool
+    data = _v4_modify_liquidity_data(-6_789)
+    topics = [MagicMock(), _FakeTopic(pool_id_raw), _FakeTopic(bytes.fromhex("00" * 12 + "bb" * 20))]
+    feed._handle_v4_modify_liquidity(topics, {"data": data})
+    assert pool.liquidity_removed_raw == pytest.approx(6_789.0)
+    assert pool.liquidity_added_raw == pytest.approx(0.0)
+
+
+def test_handle_v4_modify_liquidity_zero_delta_is_noop():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool_id_raw = bytes.fromhex("33" * 32)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0x" + pool_id_raw.hex(),
+    )
+    feed._pools["0x" + pool_id_raw.hex()] = pool
+    data = _v4_modify_liquidity_data(0)
+    topics = [MagicMock(), _FakeTopic(pool_id_raw), _FakeTopic(bytes.fromhex("00" * 32))]
+    feed._handle_v4_modify_liquidity(topics, {"data": data})
+    assert pool.liquidity_added_raw == pytest.approx(0.0)
+    assert pool.liquidity_removed_raw == pytest.approx(0.0)
+
+
+def test_handle_v4_modify_liquidity_ignores_unmapped_pool_id():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v4_modify_liquidity_data(100)
+    topics = [MagicMock(), _FakeTopic(bytes.fromhex("00" * 32)), _FakeTopic(bytes.fromhex("00" * 32))]
+    feed._handle_v4_modify_liquidity(topics, {"data": data})  # must not raise, no pool registered
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_includes_liquidity_topics_in_the_v2v3_filter():
+    """Confirms the 4 new v2/v3 topic0s are actually wired into the real
+    subscription filter, not just decodable in isolation."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_v2v3")
+    feed._pools["0xpool"] = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    filter_arg = feed._w3.eth.subscribe.call_args[0][1]
+    for topic in (m._V2_MINT_TOPIC, m._V2_BURN_TOPIC, m._V3_MINT_TOPIC, m._V3_BURN_TOPIC):
+        assert topic in filter_arg["topics"][0]
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_includes_modify_liquidity_topic_in_the_v4_filter():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_v4")
+    pool_id_raw = bytes.fromhex("44" * 32)
+    feed._pools["0x" + pool_id_raw.hex()] = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0x" + pool_id_raw.hex(),
+    )
+    await feed._resubscribe()
+    filter_arg = feed._w3.eth.subscribe.call_args[0][1]
+    assert m._V4_MODIFY_LIQUIDITY_TOPIC in filter_arg["topics"][0]
+
+
+def test_get_snapshot_exposes_liquidity_fields():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    pool.ticks.append((time.monotonic(), 1.0))
+    pool.liquidity_added_quote = 100.0
+    pool.liquidity_removed_quote = 40.0
+    pool.liquidity_added_raw = 500.0
+    pool.liquidity_removed_raw = 200.0
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    snap = feed.get_snapshot("0xpool")
+    assert snap.liquidity_added_quote == pytest.approx(100.0)
+    assert snap.liquidity_removed_quote == pytest.approx(40.0)
+    assert snap.liquidity_added_raw == pytest.approx(500.0)
+    assert snap.liquidity_removed_raw == pytest.approx(200.0)
+
+
+def test_net_liquidity_properties_computed_not_stored():
+    snap = m.EVMSwapSnapshot(
+        available=True, liquidity_added_quote=100.0, liquidity_removed_quote=30.0,
+        liquidity_added_raw=500.0, liquidity_removed_raw=800.0,
+    )
+    assert snap.net_liquidity_quote == pytest.approx(70.0)
+    assert snap.net_liquidity_delta_raw == pytest.approx(-300.0)
+
+
+def test_mixed_swap_mint_burn_sequence_never_contaminates_swap_or_buysell_counters():
+    """Integration-level: a real interleaved sequence of a v3 swap, a v3
+    mint, and a v3 burn on the same pool -- swap_count/buy_count/sell_count
+    must stay exactly what the swap alone would have produced."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+
+    # 1) a real buy swap
+    raw = _v3v4_raw(amount0_signed=-2 * 10**18, amount1_signed=3 * 10**18)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    # 2) a mint (liquidity added)
+    feed._handle_v3_mint("0xpool", {"data": _v3_mint_data(amount0=1 * 10**18, amount1=5 * 10**18)})
+    # 3) a burn (liquidity removed)
+    feed._handle_v3_burn("0xpool", {"data": _v3_burn_data(amount0=1 * 10**18, amount1=2 * 10**18)})
+
+    assert pool.swap_count == 1
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.buy_volume_quote == pytest.approx(3.0)
+    assert pool.liquidity_added_quote == pytest.approx(5.0)
+    assert pool.liquidity_removed_quote == pytest.approx(2.0)
+
+
 # --- _handle_notification: topic0 dispatch, "0x" prefix normalization ------
 
 def test_handle_notification_normalizes_missing_0x_prefix_and_dispatches_sync():
@@ -1215,7 +1500,11 @@ async def test_resubscribe_restricts_v4_filter_to_tracked_pool_ids():
     )
     await feed._resubscribe()
     filter_arg = feed._w3.eth.subscribe.call_args[0][1]
-    assert filter_arg["topics"] == [[m._V4_SWAP_TOPIC], ["0xpoolid"]]
+    # 29/08, brique 3/5 -- topics[0] also carries _V4_MODIFY_LIQUIDITY_TOPIC
+    # now (same already-open filter, zero new subscription); poolIds
+    # restriction (topics[1]) is the real invariant this test guards and
+    # stays unchanged.
+    assert filter_arg["topics"] == [[m._V4_SWAP_TOPIC, m._V4_MODIFY_LIQUIDITY_TOPIC], ["0xpoolid"]]
 
 
 @pytest.mark.asyncio

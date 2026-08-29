@@ -229,3 +229,75 @@ async def test_unavailable_snapshot_stores_null_buy_sell_never_zero(_tmp_db):
     assert row["undetermined_count"] is None
     assert row["buy_volume_quote"] is None
     assert row["sell_volume_quote"] is None
+
+
+# --- brique 3/5 (29/08): liquidity delta, same doctrine, third axis --------
+
+@pytest.mark.asyncio
+async def test_liquidity_cumulatives_are_recorded(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        liquidity_added_quote=500.0, liquidity_removed_quote=120.0,
+        liquidity_added_raw=0.0, liquidity_removed_raw=0.0,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["liquidity_added_quote"] == 500.0
+    assert row["liquidity_removed_quote"] == 120.0
+    assert row["liquidity_added_quote_delta"] is None  # first observation
+
+
+@pytest.mark.asyncio
+async def test_liquidity_delta_against_the_prior_observation(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v4", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        liquidity_added_raw=1000.0, liquidity_removed_raw=200.0,
+    )
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v4", swap_count=9, cumulative_volume_quote=180.0,
+        distinct_traders_count=4, last_swap_age_seconds=1.0, db_path=_tmp_db,
+        liquidity_added_raw=1500.0, liquidity_removed_raw=350.0,
+    )
+    second = (await _rows(_tmp_db))[1]
+    assert second["liquidity_added_raw_delta"] == 500.0
+    assert second["liquidity_removed_raw_delta"] == 150.0
+
+
+@pytest.mark.asyncio
+async def test_liquidity_baseline_reset_after_restart_never_a_fabricated_delta(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=500, cumulative_volume_quote=9000.0,
+        distinct_traders_count=40, last_swap_age_seconds=3.0, db_path=_tmp_db,
+        liquidity_added_quote=50000.0, liquidity_removed_quote=10000.0,
+    )
+    m._last_observed.clear()  # process restart
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=2, cumulative_volume_quote=30.0,
+        distinct_traders_count=1, last_swap_age_seconds=0.5, db_path=_tmp_db,
+        liquidity_added_quote=10.0, liquidity_removed_quote=5.0,
+    )
+    second = (await _rows(_tmp_db))[1]
+    assert second["baseline_reset"] == 1
+    assert second["liquidity_added_quote_delta"] is None
+    assert second["liquidity_removed_quote_delta"] is None
+    assert second["liquidity_added_quote"] == 10.0  # real post-restart value, still recorded
+
+
+@pytest.mark.asyncio
+async def test_unavailable_snapshot_stores_null_liquidity_never_zero(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=False, family=None, swap_count=None, cumulative_volume_quote=None,
+        distinct_traders_count=None, last_swap_age_seconds=None, db_path=_tmp_db,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["liquidity_added_quote"] is None
+    assert row["liquidity_removed_quote"] is None
+    assert row["liquidity_added_raw"] is None
+    assert row["liquidity_removed_raw"] is None

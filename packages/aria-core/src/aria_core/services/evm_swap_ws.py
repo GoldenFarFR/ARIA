@@ -183,6 +183,21 @@ _V4_SWAP_TOPIC = _topic0(
     "Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"
 )
 
+# 29/08, brique 3/5 (mint/burn/liquidity delta) -- standard Uniswap V2/V3/V4
+# event signatures (verified against IUniswapV2Pair.sol/IUniswapV3PoolEvents.sol/
+# IPoolManager.sol, same "compute live, never hand-type" discipline as every
+# topic0 above). Never emitted by a Swap -- these are two-way separated event
+# TYPES (Mint vs Burn) for v2/v3, one signed field for v4, so liquidity moves
+# structurally cannot be confused with trading volume at the subscription
+# level, same principle as _V2_SWAP_TOPIC's own separation from Sync.
+_V2_MINT_TOPIC = _topic0("Mint(address,uint256,uint256)")
+_V2_BURN_TOPIC = _topic0("Burn(address,uint256,uint256,address)")
+_V3_MINT_TOPIC = _topic0("Mint(address,address,int24,int24,uint128,uint256,uint256)")
+_V3_BURN_TOPIC = _topic0("Burn(address,int24,int24,uint128,uint256,uint256)")
+_V4_MODIFY_LIQUIDITY_TOPIC = _topic0(
+    "ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)"
+)
+
 # 25/08, real bug found live: this module always subscribed to Base's own
 # PoolManager (``POOL_MANAGER_ADDRESS``, imported from doppler.py, itself
 # explicitly documented as "Canonical Base addresses" -- never intended for
@@ -315,6 +330,35 @@ class EVMSwapSnapshot:
         fields it derives from)."""
         return self.buy_volume_quote - self.sell_volume_quote
 
+    # 29/08, brique 3/5 (mint/burn/liquidity delta) -- a THIRD axis, distinct
+    # from swap_count (activity) and buy/sell (direction). Mint/Burn/
+    # ModifyLiquidity never touch swap_count/buy_volume_quote/sell_volume_quote
+    # (see evm_swap_ws.py's own handlers -- structurally separate events).
+    # V2/V3: real token amounts (amount0/amount1), decimal-adjusted, quote
+    # side only -- REAL quote units, comparable to buy/sell_volume_quote.
+    # V4: liquidityDelta is an ABSTRACT concentrated-liquidity unit (L), never
+    # converted to quote units at this stage (would need current price + tick
+    # range + the standard Uniswap V3/V4 math, a real calculation, not a field
+    # read -- deliberately deferred, see roadmap-capteurs-onchain.md). None
+    # for the family that doesn't apply (v2/v3 -> only *_quote populated,
+    # v4 -> only *_raw populated).
+    liquidity_added_quote: float = 0.0
+    liquidity_removed_quote: float = 0.0
+    liquidity_added_raw: float = 0.0
+    liquidity_removed_raw: float = 0.0
+
+    @property
+    def net_liquidity_quote(self) -> float:
+        """liquidity_added_quote - liquidity_removed_quote (v2/v3), computed
+        on read, never stored separately -- same doctrine as net_flow_quote."""
+        return self.liquidity_added_quote - self.liquidity_removed_quote
+
+    @property
+    def net_liquidity_delta_raw(self) -> float:
+        """liquidity_added_raw - liquidity_removed_raw (v4), abstract L unit,
+        computed on read, never stored separately."""
+        return self.liquidity_added_raw - self.liquidity_removed_raw
+
 
 @dataclass
 class _TrackedPool:
@@ -350,6 +394,12 @@ class _TrackedPool:
     buy_volume_quote: float = 0.0
     sell_volume_quote: float = 0.0
     undetermined_volume_quote: float = 0.0
+    # 29/08, brique 3/5 -- see EVMSwapSnapshot's own comment for the
+    # v2/v3-vs-v4 unit distinction (real quote units vs abstract raw L).
+    liquidity_added_quote: float = 0.0
+    liquidity_removed_quote: float = 0.0
+    liquidity_added_raw: float = 0.0
+    liquidity_removed_raw: float = 0.0
 
 
 class EVMSwapWebSocketFeed:
@@ -792,6 +842,10 @@ class EVMSwapWebSocketFeed:
             undetermined_count=pool.undetermined_count,
             buy_volume_quote=pool.buy_volume_quote, sell_volume_quote=pool.sell_volume_quote,
             undetermined_volume_quote=pool.undetermined_volume_quote,
+            liquidity_added_quote=pool.liquidity_added_quote,
+            liquidity_removed_quote=pool.liquidity_removed_quote,
+            liquidity_added_raw=pool.liquidity_added_raw,
+            liquidity_removed_raw=pool.liquidity_removed_raw,
         )
 
     # -- websocket loop ----------------------------------------------------
@@ -887,13 +941,24 @@ class EVMSwapWebSocketFeed:
         if v2v3_addresses:
             sub_id = await self._w3.eth.subscribe(
                 "logs",
-                {"address": v2v3_addresses, "topics": [[_SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V2_SWAP_TOPIC, _V3_SWAP_TOPIC]]},
+                {
+                    "address": v2v3_addresses,
+                    "topics": [[
+                        _SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V2_SWAP_TOPIC, _V3_SWAP_TOPIC,
+                        # 29/08, brique 3/5 -- same already-open filter, zero
+                        # new subscription/connection cost.
+                        _V2_MINT_TOPIC, _V2_BURN_TOPIC, _V3_MINT_TOPIC, _V3_BURN_TOPIC,
+                    ]],
+                },
             )
             self._active_sub_ids.append(sub_id)
         if v4_pool_ids:
             sub_id = await self._w3.eth.subscribe(
                 "logs",
-                {"address": [self._pool_manager_address()], "topics": [[_V4_SWAP_TOPIC], v4_pool_ids]},
+                {
+                    "address": [self._pool_manager_address()],
+                    "topics": [[_V4_SWAP_TOPIC, _V4_MODIFY_LIQUIDITY_TOPIC], v4_pool_ids],
+                },
             )
             self._active_sub_ids.append(sub_id)
 
@@ -982,6 +1047,16 @@ class EVMSwapWebSocketFeed:
                 self._handle_v3_swap(address, topics, result)
             elif topic0 == _V4_SWAP_TOPIC:
                 self._handle_v4_swap(topics, result)
+            elif topic0 == _V2_MINT_TOPIC:
+                self._handle_v2_mint(address, result)
+            elif topic0 == _V2_BURN_TOPIC:
+                self._handle_v2_burn(address, result)
+            elif topic0 == _V3_MINT_TOPIC:
+                self._handle_v3_mint(address, result)
+            elif topic0 == _V3_BURN_TOPIC:
+                self._handle_v3_burn(address, result)
+            elif topic0 == _V4_MODIFY_LIQUIDITY_TOPIC:
+                self._handle_v4_modify_liquidity(topics, result)
         except Exception as exc:  # noqa: BLE001 -- one bad notification never kills the feed
             logger.info("evm_swap_ws[%s]: notification decode failed (%s)", self.chain, exc)
 
@@ -1127,6 +1202,108 @@ class EVMSwapWebSocketFeed:
             # address, never the padded topic, so distinct_traders holds
             # genuine EVM addresses comparable to any other source.
             pool.distinct_traders.add(("0x" + sender_hex[-40:]).lower())
+
+    @staticmethod
+    def _liquidity_quote_amount(pool: "_TrackedPool", amount0: int, amount1: int) -> float:
+        """Shared by every v2/v3 Mint/Burn handler -- same quote-side
+        selection as _record_swap_amount's own token_is_currency0 branch,
+        never a re-derived convention (see the mandatory guard tests doubling
+        every case on token_is_currency0=True/False)."""
+        quote_raw = amount1 if pool.token_is_currency0 else amount0
+        quote_decimals = pool.decimals1 if pool.token_is_currency0 else pool.decimals0
+        return quote_raw / (10 ** quote_decimals)
+
+    def _handle_v2_mint(self, address: str, result: dict) -> None:
+        """V2 `Mint(address,uint256,uint256)` -- never touches swap_count/
+        buy_volume_quote/sell_volume_quote (a structurally separate event,
+        see this module's brique-3 topic0 comment)."""
+        pool = self._pools.get(address)
+        if pool is None or pool.family != "v2":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 64:  # amount0(32) amount1(32)
+            return
+        amount0 = int.from_bytes(raw[0:32], "big")
+        amount1 = int.from_bytes(raw[32:64], "big")
+        pool.liquidity_added_quote += self._liquidity_quote_amount(pool, amount0, amount1)
+
+    def _handle_v2_burn(self, address: str, result: dict) -> None:
+        """V2 `Burn(address,uint256,uint256,address)` -- same amount0/amount1
+        data layout as Mint (the extra indexed `to` topic doesn't move the
+        data offsets)."""
+        pool = self._pools.get(address)
+        if pool is None or pool.family != "v2":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 64:  # amount0(32) amount1(32)
+            return
+        amount0 = int.from_bytes(raw[0:32], "big")
+        amount1 = int.from_bytes(raw[32:64], "big")
+        pool.liquidity_removed_quote += self._liquidity_quote_amount(pool, amount0, amount1)
+
+    def _handle_v3_mint(self, address: str, result: dict) -> None:
+        """V3 `Mint(address,address,int24,int24,uint128,uint256,uint256)` --
+        owner/tickLower/tickUpper are indexed (topics), data is
+        sender(32)+amount(32,L)+amount0(32)+amount1(32). `amount` (L) is
+        intentionally not read here -- not needed for the quote-side sum,
+        see roadmap-capteurs-onchain.md's own scoping decision."""
+        pool = self._pools.get(address)
+        if pool is None or pool.family != "v3":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 128:  # sender(32) amount(32) amount0(32) amount1(32)
+            return
+        amount0 = int.from_bytes(raw[64:96], "big")
+        amount1 = int.from_bytes(raw[96:128], "big")
+        pool.liquidity_added_quote += self._liquidity_quote_amount(pool, amount0, amount1)
+
+    def _handle_v3_burn(self, address: str, result: dict) -> None:
+        """V3 `Burn(address,int24,int24,uint128,uint256,uint256)` -- owner/
+        tickLower/tickUpper indexed, data is amount(32,L)+amount0(32)+
+        amount1(32) (no `sender` field, one 32-byte word shorter than Mint's
+        data). Measures the position/liquidity reduction ITSELF -- never
+        proves the tokens actually left the pool (a separate `collect()` call
+        settles that, not observed by this brique -- see the mini-spec's
+        own gravé distinction)."""
+        pool = self._pools.get(address)
+        if pool is None or pool.family != "v3":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 96:  # amount(32) amount0(32) amount1(32)
+            return
+        amount0 = int.from_bytes(raw[32:64], "big")
+        amount1 = int.from_bytes(raw[64:96], "big")
+        pool.liquidity_removed_quote += self._liquidity_quote_amount(pool, amount0, amount1)
+
+    def _handle_v4_modify_liquidity(self, topics, result: dict) -> None:
+        """V4 `ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)`
+        -- id/sender indexed (topics[1]/topics[2]), data is tickLower(32)+
+        tickUpper(32)+liquidityDelta(32,signed)+salt(32). liquidityDelta is
+        an ABSTRACT concentrated-liquidity unit (L), never converted to
+        quote units here (deliberate scoping, see roadmap-capteurs-onchain.md).
+        Positive -> added, negative -> removed, zero -> silent no-op (not an
+        ambiguous side like buy/sell -- just a degenerate zero-amount event,
+        no `undetermined` bucket needed)."""
+        pool_id_hex = (topics[1].hex() if hasattr(topics[1], "hex") else str(topics[1])).lower()
+        if not pool_id_hex.startswith("0x"):
+            pool_id_hex = "0x" + pool_id_hex
+        pool = self._pools.get(pool_id_hex)
+        if pool is None or pool.family != "v4":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 96:  # tickLower(32) tickUpper(32) liquidityDelta(32)
+            return
+        liquidity_delta = self._to_signed256(int.from_bytes(raw[64:96], "big"))
+        if liquidity_delta > 0:
+            pool.liquidity_added_raw += float(liquidity_delta)
+        elif liquidity_delta < 0:
+            pool.liquidity_removed_raw += float(-liquidity_delta)
+        # liquidity_delta == 0 -> no-op, no counter touched.
 
     def _handle_v3_swap(self, address: str, topics, result: dict) -> None:
         pool = self._pools.get(address)
