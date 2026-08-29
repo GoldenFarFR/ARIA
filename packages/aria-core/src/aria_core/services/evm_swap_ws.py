@@ -293,6 +293,27 @@ class EVMSwapSnapshot:
     # (clean, from a real decoded Swap event). Never gates anything itself --
     # purely descriptive provenance for the observation log.
     family: str | None = None
+    # 29/08, brique 2/5 (buy/sell flow) -- direction derived from the SAME
+    # decoded Swap event, zero extra RPC call. V2: quote_in>0 -> buy,
+    # quote_out>0 -> sell (structurally mutually exclusive, see
+    # `_handle_v2_swap`). V3/V4: signed quote_raw>0 -> buy, <0 -> sell (the
+    # sign was previously discarded by `_record_swap_amount`'s `abs()`).
+    # `undetermined_*` absorbs the (should-be-rare) case where the direction
+    # can't be determined -- NEVER forced into buy or sell, per the
+    # operator's explicit "never fabricate a side" instruction.
+    buy_count: int = 0
+    sell_count: int = 0
+    undetermined_count: int = 0
+    buy_volume_quote: float = 0.0
+    sell_volume_quote: float = 0.0
+    undetermined_volume_quote: float = 0.0
+
+    @property
+    def net_flow_quote(self) -> float:
+        """buy_volume_quote - sell_volume_quote -- computed on read, never
+        stored separately (would risk drifting out of sync with the two
+        fields it derives from)."""
+        return self.buy_volume_quote - self.sell_volume_quote
 
 
 @dataclass
@@ -321,6 +342,14 @@ class _TrackedPool:
     # event, distinct from Sync which carries no sender).
     last_tx_hash: str | None = None  # 28/08 -- provenance, see EVMSwapSnapshot
     last_block_number: int | None = None
+    # 29/08, brique 2/5 -- see EVMSwapSnapshot's own comment for the
+    # direction convention per family.
+    buy_count: int = 0
+    sell_count: int = 0
+    undetermined_count: int = 0
+    buy_volume_quote: float = 0.0
+    sell_volume_quote: float = 0.0
+    undetermined_volume_quote: float = 0.0
 
 
 class EVMSwapWebSocketFeed:
@@ -759,6 +788,10 @@ class EVMSwapWebSocketFeed:
             quote_is_weth=pool.quote_is_weth, quote_is_btc=pool.quote_is_btc,
             tx_hash=pool.last_tx_hash, block_number=pool.last_block_number,
             family=pool.family,
+            buy_count=pool.buy_count, sell_count=pool.sell_count,
+            undetermined_count=pool.undetermined_count,
+            buy_volume_quote=pool.buy_volume_quote, sell_volume_quote=pool.sell_volume_quote,
+            undetermined_volume_quote=pool.undetermined_volume_quote,
         )
 
     # -- websocket loop ----------------------------------------------------
@@ -1026,6 +1059,22 @@ class EVMSwapWebSocketFeed:
         quote_raw = quote_in + quote_out
         pool.cumulative_volume_quote += quote_raw / (10 ** quote_decimals)
         pool.swap_count += 1
+        # Direction (brique 2/5, 29/08): a real V2 Swap always has exactly
+        # ONE of quote_in/quote_out nonzero (see comment above). quote_in>0
+        # means the trader paid quote to receive the tracked token -> BUY.
+        # quote_out>0 means the trader received quote for the tracked token
+        # -> SELL. Both nonzero (or both zero) is not a real Swap shape and
+        # is never forced into either side -- undetermined instead, per the
+        # operator's explicit "never fabricate a side" instruction.
+        if quote_in > 0 and quote_out == 0:
+            pool.buy_count += 1
+            pool.buy_volume_quote += quote_in / (10 ** quote_decimals)
+        elif quote_out > 0 and quote_in == 0:
+            pool.sell_count += 1
+            pool.sell_volume_quote += quote_out / (10 ** quote_decimals)
+        else:
+            pool.undetermined_count += 1
+            pool.undetermined_volume_quote += quote_raw / (10 ** quote_decimals)
         # `sender` (topics[1]) is indexed -- same right-aligned-in-32-bytes
         # extraction as _record_swap_amount's own v3/v4 handling below.
         sender_topic = topics[1] if len(topics) > 1 else None
@@ -1052,6 +1101,25 @@ class EVMSwapWebSocketFeed:
         quote_decimals = pool.decimals1 if pool.token_is_currency0 else pool.decimals0
         pool.cumulative_volume_quote += abs(quote_raw) / (10 ** quote_decimals)
         pool.swap_count += 1
+        # Direction (brique 2/5, 29/08): standard Uniswap V3/V4 sign
+        # convention -- a POSITIVE amount means the POOL received that
+        # token (the trader paid it in), a NEGATIVE amount means the pool
+        # SENT it out (the trader received it). So quote_raw>0 -> the
+        # trader paid quote to receive the tracked token -> BUY. quote_raw<0
+        # -> the trader received quote for the tracked token -> SELL. The
+        # sign is captured here, BEFORE the `abs()` above which only feeds
+        # the direction-agnostic cumulative_volume_quote. quote_raw==0 is
+        # the rare case where the swap didn't move the quote leg at all
+        # (e.g. rounds to zero after decimal adjustment) -- never forced
+        # into either side, undetermined instead.
+        if quote_raw > 0:
+            pool.buy_count += 1
+            pool.buy_volume_quote += quote_raw / (10 ** quote_decimals)
+        elif quote_raw < 0:
+            pool.sell_count += 1
+            pool.sell_volume_quote += (-quote_raw) / (10 ** quote_decimals)
+        else:
+            pool.undetermined_count += 1
         if sender_topic is not None:
             sender_hex = sender_topic.hex() if hasattr(sender_topic, "hex") else str(sender_topic)
             # An indexed `address` topic is always right-aligned in 32 bytes

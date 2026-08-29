@@ -149,3 +149,83 @@ async def test_v2_is_labeled_biased_never_mixed_with_v3v4_clean(_tmp_db):
     row = (await _rows(_tmp_db))[0]
     assert row["family"] == "v2"
     assert row["activity_quality"] == "v2_biased"
+
+
+# --- brique 2/5 (29/08): buy/sell cumulative + delta persistence ------------
+
+@pytest.mark.asyncio
+async def test_buy_sell_cumulatives_are_recorded(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        buy_count=3, sell_count=2, undetermined_count=0,
+        buy_volume_quote=60.0, sell_volume_quote=40.0, undetermined_volume_quote=0.0,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["buy_count"] == 3
+    assert row["sell_count"] == 2
+    assert row["undetermined_count"] == 0
+    assert row["buy_volume_quote"] == 60.0
+    assert row["sell_volume_quote"] == 40.0
+    assert row["buy_count_delta"] is None  # first observation of this pool
+
+
+@pytest.mark.asyncio
+async def test_buy_sell_delta_against_the_prior_observation(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        buy_count=3, sell_count=2, buy_volume_quote=60.0, sell_volume_quote=40.0,
+    )
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=9, cumulative_volume_quote=180.0,
+        distinct_traders_count=4, last_swap_age_seconds=1.0, db_path=_tmp_db,
+        buy_count=5, sell_count=4, buy_volume_quote=100.0, sell_volume_quote=80.0,
+    )
+    second = (await _rows(_tmp_db))[1]
+    assert second["buy_count_delta"] == 2
+    assert second["sell_count_delta"] == 2
+    assert second["buy_volume_quote_delta"] == 40.0
+    assert second["sell_volume_quote_delta"] == 40.0
+
+
+@pytest.mark.asyncio
+async def test_buy_sell_baseline_reset_after_restart_never_a_fabricated_delta(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=500, cumulative_volume_quote=9000.0,
+        distinct_traders_count=40, last_swap_age_seconds=3.0, db_path=_tmp_db,
+        buy_count=300, sell_count=200, buy_volume_quote=5000.0, sell_volume_quote=4000.0,
+    )
+    m._last_observed.clear()  # process restart
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=2, cumulative_volume_quote=30.0,
+        distinct_traders_count=1, last_swap_age_seconds=0.5, db_path=_tmp_db,
+        buy_count=1, sell_count=1, buy_volume_quote=15.0, sell_volume_quote=15.0,
+    )
+    second = (await _rows(_tmp_db))[1]
+    assert second["baseline_reset"] == 1
+    assert second["buy_count_delta"] is None
+    assert second["sell_count_delta"] is None
+    assert second["buy_volume_quote_delta"] is None
+    assert second["sell_volume_quote_delta"] is None
+    assert second["buy_count"] == 1  # the real post-restart value, still recorded
+
+
+@pytest.mark.asyncio
+async def test_unavailable_snapshot_stores_null_buy_sell_never_zero(_tmp_db):
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=False, family=None, swap_count=None, cumulative_volume_quote=None,
+        distinct_traders_count=None, last_swap_age_seconds=None, db_path=_tmp_db,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["buy_count"] is None
+    assert row["sell_count"] is None
+    assert row["undetermined_count"] is None
+    assert row["buy_volume_quote"] is None
+    assert row["sell_volume_quote"] is None

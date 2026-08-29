@@ -349,6 +349,82 @@ def test_a_real_swap_transaction_sync_then_swap_counts_exactly_once():
     assert pool.ticks[-1][1] == pytest.approx(2.0)  # price still comes from Sync only
 
 
+# --- brique 2/5 (29/08): buy/sell direction classification ------------------
+# Operator-required guard: each buy/sell case is doubled across
+# token_is_currency0=True/False, since the "quote entering the pool = BUY"
+# convention only means "bought the TRACKED token" if this flag is correctly
+# propagated -- a silent inversion would flip buy/sell with nothing else
+# catching it.
+
+def test_handle_v2_swap_buy_when_quote_in_positive_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    # quote is currency1 -- swapper paid quote in, received tracked token out.
+    data = _v2_swap_data(amount0_in=0, amount1_in=20 * 10**6, amount0_out=5 * 10**18, amount1_out=0)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.undetermined_count == 0
+    assert pool.buy_volume_quote == pytest.approx(20.0)
+    assert pool.sell_volume_quote == pytest.approx(0.0)
+
+
+def test_handle_v2_swap_buy_when_quote_in_positive_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=False, decimals0=6, decimals1=18)
+    feed._pools["0xpool"] = pool
+    # quote is currency0 -- swapper paid quote in, received tracked token out.
+    data = _v2_swap_data(amount0_in=30 * 10**6, amount1_in=0, amount0_out=0, amount1_out=7 * 10**18)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.buy_volume_quote == pytest.approx(30.0)
+
+
+def test_handle_v2_swap_sell_when_quote_out_positive_currency0_true():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    # quote is currency1 -- swapper paid tracked token in, received quote out.
+    data = _v2_swap_data(amount0_in=5 * 10**18, amount1_in=0, amount0_out=0, amount1_out=20 * 10**6)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.sell_count == 1
+    assert pool.buy_count == 0
+    assert pool.undetermined_count == 0
+    assert pool.sell_volume_quote == pytest.approx(20.0)
+    assert pool.buy_volume_quote == pytest.approx(0.0)
+
+
+def test_handle_v2_swap_sell_when_quote_out_positive_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=False, decimals0=6, decimals1=18)
+    feed._pools["0xpool"] = pool
+    # quote is currency0 -- swapper paid tracked token in, received quote out.
+    data = _v2_swap_data(amount0_in=0, amount1_in=7 * 10**18, amount0_out=30 * 10**6, amount1_out=0)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.sell_count == 1
+    assert pool.buy_count == 0
+    assert pool.sell_volume_quote == pytest.approx(30.0)
+
+
+def test_handle_v2_swap_both_in_and_out_nonzero_is_undetermined_never_forced():
+    """Not a real V2 Swap shape (one side should always be zero) -- if it
+    ever happens, never force a side, count as undetermined instead."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    data = _v2_swap_data(amount0_in=0, amount1_in=5 * 10**6, amount0_out=0, amount1_out=5 * 10**6)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+    assert pool.undetermined_count == 1
+    # swap_count/cumulative_volume_quote (brique 1) stay exactly as before --
+    # this brique never regresses that behaviour.
+    assert pool.swap_count == 1
+    assert pool.cumulative_volume_quote == pytest.approx(10.0)
+
+
 @pytest.mark.asyncio
 async def test_resubscribe_includes_v2_swap_topic_in_the_v2v3_filter():
     """Confirms the new topic is actually wired into the real subscription
@@ -423,6 +499,115 @@ def test_handle_v3_swap_skips_zero_sqrt_price():
     feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
     assert pool.swap_count == 0
     assert len(pool.ticks) == 0
+
+
+def _v3v4_raw(amount0_signed: int, amount1_signed: int, *, sqrt_price: int = None) -> bytes:
+    if sqrt_price is None:
+        sqrt_price = _sqrt_price_x96_for_price(1.0)
+    a0 = amount0_signed % (1 << 256)
+    a1 = amount1_signed % (1 << 256)
+    return (
+        a0.to_bytes(32, "big") + a1.to_bytes(32, "big")
+        + sqrt_price.to_bytes(32, "big") + (0).to_bytes(32, "big") + (0).to_bytes(32, "big")
+    )
+
+
+def test_handle_v3_swap_buy_when_quote_raw_positive_currency0_true():
+    """token_is_currency0=True -> quote leg is amount1. Positive amount1
+    means the pool RECEIVED quote (trader paid quote for the tracked
+    token) -> BUY."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    raw = _v3v4_raw(amount0_signed=-2 * 10**18, amount1_signed=3 * 10**18)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.undetermined_count == 0
+    assert pool.buy_volume_quote == pytest.approx(3.0)
+    assert pool.sell_volume_quote == pytest.approx(0.0)
+
+
+def test_handle_v3_swap_buy_when_quote_raw_positive_currency0_false():
+    """token_is_currency0=False -> quote leg is amount0."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=False, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    raw = _v3v4_raw(amount0_signed=4 * 10**18, amount1_signed=-1 * 10**18)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.buy_volume_quote == pytest.approx(4.0)
+
+
+def test_handle_v3_swap_sell_when_quote_raw_negative_currency0_true():
+    """Negative amount1 means the pool SENT quote out (trader received
+    quote for the tracked token it sold) -> SELL."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    raw = _v3v4_raw(amount0_signed=5 * 10**18, amount1_signed=-2 * 10**18)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    assert pool.sell_count == 1
+    assert pool.buy_count == 0
+    assert pool.undetermined_count == 0
+    assert pool.sell_volume_quote == pytest.approx(2.0)
+    assert pool.buy_volume_quote == pytest.approx(0.0)
+
+
+def test_handle_v3_swap_sell_when_quote_raw_negative_currency0_false():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=False, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    raw = _v3v4_raw(amount0_signed=-3 * 10**18, amount1_signed=6 * 10**18)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    assert pool.sell_count == 1
+    assert pool.buy_count == 0
+    assert pool.sell_volume_quote == pytest.approx(3.0)
+
+
+def test_handle_v3_swap_zero_quote_raw_is_undetermined():
+    """quote_raw == 0 -- rounds to zero after decimal adjustment or a swap
+    that genuinely didn't move the quote leg. Never forced into buy/sell."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v3", token_is_currency0=True, decimals0=18, decimals1=18)
+    feed._pools["0xpool"] = pool
+    raw = _v3v4_raw(amount0_signed=5 * 10**18, amount1_signed=0)
+    feed._handle_v3_swap("0xpool", [MagicMock(), MagicMock()], {"data": "0x" + raw.hex()})
+    assert pool.buy_count == 0
+    assert pool.sell_count == 0
+    assert pool.undetermined_count == 1
+    # swap_count/cumulative_volume_quote (brique 1) unaffected.
+    assert pool.swap_count == 1
+    assert pool.cumulative_volume_quote == pytest.approx(0.0)
+
+
+def test_handle_v4_swap_classifies_buy_sell_direction():
+    """V4 shares _record_swap_amount with V3 -- confirms the classification
+    is actually wired through the V4 dispatch path, not just decodable via
+    V3 in isolation."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool_id_raw = bytes.fromhex("dd" * 32)
+    pool = m._TrackedPool(
+        dex_id="uniswap_v4", family="v4", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+        pool_id_hex="0x" + pool_id_raw.hex(),
+    )
+    feed._pools["0x" + pool_id_raw.hex()] = pool
+    sqrt_price = _sqrt_price_x96_for_price(1.0)
+    amount0 = ((-2 * 10**18) % (1 << 256))
+    amount1 = 3 * 10**18
+    fee = 3000
+    raw = (
+        amount0.to_bytes(32, "big") + amount1.to_bytes(32, "big")
+        + sqrt_price.to_bytes(32, "big") + (0).to_bytes(32, "big")
+        + (0).to_bytes(32, "big") + fee.to_bytes(32, "big")
+    )
+    topics = [MagicMock(), _FakeTopic(pool_id_raw), _FakeTopic(bytes.fromhex("00" * 12 + "ee" * 20))]
+    feed._handle_v4_swap(topics, {"data": "0x" + raw.hex()})
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.buy_volume_quote == pytest.approx(3.0)
 
 
 def test_handle_v4_swap_uses_pool_id_from_topics_1_and_sender_from_topics_2():
@@ -1443,3 +1628,75 @@ async def test_resolve_token_symbol_returns_none_on_failure_never_raises():
     feed._w3 = fake_w3
     symbol = await feed.resolve_token_symbol("0xtoken")
     assert symbol is None
+
+
+# --- brique 2/5: net_flow_quote, mixed sequences, invariants, get_snapshot --
+
+def test_net_flow_quote_is_buy_minus_sell():
+    snapshot = m.EVMSwapSnapshot(available=True, buy_volume_quote=30.0, sell_volume_quote=12.0)
+    assert snapshot.net_flow_quote == pytest.approx(18.0)
+
+
+def test_net_flow_quote_defaults_to_zero_when_no_swaps():
+    snapshot = m.EVMSwapSnapshot(available=True)
+    assert snapshot.net_flow_quote == pytest.approx(0.0)
+
+
+def test_mixed_sequence_of_buys_and_sells_keeps_counters_consistent():
+    """A real mixed sequence -- buy, sell, buy -- on the same v2 pool.
+    Integration-level, not just one isolated event."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    buy1 = _v2_swap_data(amount0_in=0, amount1_in=10 * 10**6, amount0_out=1 * 10**18, amount1_out=0)
+    sell1 = _v2_swap_data(amount0_in=1 * 10**18, amount1_in=0, amount0_out=0, amount1_out=4 * 10**6)
+    buy2 = _v2_swap_data(amount0_in=0, amount1_in=5 * 10**6, amount0_out=1 * 10**17, amount1_out=0)
+    for data in (buy1, sell1, buy2):
+        feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.swap_count == 3
+    assert pool.buy_count == 2
+    assert pool.sell_count == 1
+    assert pool.undetermined_count == 0
+    assert pool.buy_volume_quote == pytest.approx(15.0)
+    assert pool.sell_volume_quote == pytest.approx(4.0)
+    assert pool.buy_count + pool.sell_count + pool.undetermined_count == pool.swap_count
+    assert pool.buy_volume_quote + pool.sell_volume_quote + pool.undetermined_volume_quote == pytest.approx(
+        pool.cumulative_volume_quote
+    )
+
+
+def test_invariant_buy_sell_undetermined_sums_to_swap_count_and_volume_with_an_undetermined_swap():
+    """The invariant must hold even when an undetermined swap is mixed in --
+    it is always-true by construction, never an approximation that only
+    works on a 100% clean snapshot."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    buy1 = _v2_swap_data(amount0_in=0, amount1_in=10 * 10**6, amount0_out=1 * 10**18, amount1_out=0)
+    ambiguous = _v2_swap_data(amount0_in=0, amount1_in=3 * 10**6, amount0_out=0, amount1_out=3 * 10**6)
+    for data in (buy1, ambiguous):
+        feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.swap_count == 2
+    assert pool.buy_count == 1
+    assert pool.sell_count == 0
+    assert pool.undetermined_count == 1
+    assert pool.buy_count + pool.sell_count + pool.undetermined_count == pool.swap_count
+    assert pool.buy_volume_quote + pool.sell_volume_quote + pool.undetermined_volume_quote == pytest.approx(
+        pool.cumulative_volume_quote
+    )
+
+
+def test_get_snapshot_exposes_buy_sell_fields():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    feed._connected = True
+    data = _v2_swap_data(amount0_in=0, amount1_in=10 * 10**6, amount0_out=1 * 10**18, amount1_out=0)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    pool.ticks.append((time.monotonic(), 1.0))
+    snap = feed.get_snapshot("0xpool")
+    assert snap.buy_count == 1
+    assert snap.sell_count == 0
+    assert snap.undetermined_count == 0
+    assert snap.buy_volume_quote == pytest.approx(10.0)
+    assert snap.net_flow_quote == pytest.approx(10.0)

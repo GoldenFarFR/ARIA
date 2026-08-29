@@ -647,6 +647,8 @@ async def test_activity_observation_is_recorded_alongside_qualification_unchange
         available=True, reserve_usd=9000.0, quote_is_weth=False, price_quote=0.001,
         family="v2", swap_count=42, cumulative_volume_quote=1234.5,
         distinct_traders_count=7, stale_seconds=3.2,
+        buy_count=25, sell_count=17, undetermined_count=0,
+        buy_volume_quote=700.0, sell_volume_quote=534.5, undetermined_volume_quote=0.0,
     )
     feed._ws_feed.get_snapshot.return_value = snapshot
     result = await feed.check_candidates(min_liquidity_usd=4000.0)
@@ -667,6 +669,14 @@ async def test_activity_observation_is_recorded_alongside_qualification_unchange
     assert obs["cumulative_volume_quote"] == 1234.5
     assert obs["distinct_traders_count"] == 7
     assert obs["last_swap_age_seconds"] == 3.2
+    # brique 2/5 (29/08) -- buy/sell fields actually wired through, not just
+    # decodable in evm_swap_ws.py in isolation.
+    assert obs["buy_count"] == 25
+    assert obs["sell_count"] == 17
+    assert obs["undetermined_count"] == 0
+    assert obs["buy_volume_quote"] == 700.0
+    assert obs["sell_volume_quote"] == 534.5
+    assert obs["undetermined_volume_quote"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -691,6 +701,8 @@ async def test_activity_observation_records_none_when_snapshot_unavailable(monke
         available=False, reserve_usd=None, quote_is_weth=False, price_quote=None,
         family=None, swap_count=0, cumulative_volume_quote=0.0,
         distinct_traders_count=0, stale_seconds=None,
+        buy_count=0, sell_count=0, undetermined_count=0,
+        buy_volume_quote=0.0, sell_volume_quote=0.0, undetermined_volume_quote=0.0,
     )
     # _make_feed's default resolve_cold already returns available=False.
     result = await feed.check_candidates(min_liquidity_usd=200.0)
@@ -702,6 +714,14 @@ async def test_activity_observation_records_none_when_snapshot_unavailable(monke
     obs = recorded[0]
     assert obs["available"] is False
     assert obs["family"] is None
+    # brique 2/5 -- an unavailable snapshot must pass None, never the mock's
+    # own zero-valued fields, per the caller's `if snapshot.available else None`.
+    assert obs["buy_count"] is None
+    assert obs["sell_count"] is None
+    assert obs["undetermined_count"] is None
+    assert obs["buy_volume_quote"] is None
+    assert obs["sell_volume_quote"] is None
+    assert obs["undetermined_volume_quote"] is None
     assert obs["swap_count"] is None
     assert obs["cumulative_volume_quote"] is None
     assert obs["distinct_traders_count"] is None

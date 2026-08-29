@@ -36,6 +36,22 @@ restart marks ``baseline_reset=True`` and leaves the deltas ``NULL``
 rather than fabricating a delta against a counter that silently reset to
 zero underneath it.
 
+**Buy/sell flow (29/08, brique 2/5, operator GO after brique 1's production
+checkpoint).** Same doctrine, one more axis: `EVMSwapWebSocketFeed` now also
+classifies each decoded Swap's direction (see its own `EVMSwapSnapshot`
+comment for the V2/V3/V4 sign convention) into `buy_count`/`sell_count`/
+`undetermined_count` and their matching quote volumes. This module records
+the cumulative values plus deltas for `buy_count`/`sell_count`/
+`buy_volume_quote`/`sell_volume_quote` (same restart-safe `baseline_reset`
+handling). `undetermined_count`/`undetermined_volume_quote` are recorded as
+cumulatives only, no delta -- not requested, and the invariant
+(`buy_count + sell_count + undetermined_count == swap_count`) is already
+checkable from the cumulative columns alone. Still no score, no threshold,
+no `net_flow`/`buy_pressure` computed or stored here -- `net_flow_quote` is
+a read-time property on `EVMSwapSnapshot`, never persisted, and building an
+actual pressure/acceleration feature is explicitly out of scope for this
+brique.
+
 **Strictly log-only, best-effort.** Same contract as
 ``discovery_liquidity_observation.py``: never influences the caller's own
 decision, never triggers a network call, records only values already
@@ -52,6 +68,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from . import db_migrations
 from .paths import shadow_db_path
 
 logger = logging.getLogger(__name__)
@@ -61,10 +78,11 @@ TABLE = "onchain_activity_observation_log"
 _ensured_db_paths: set[str] = set()
 
 # In-process only, one entry per (chain, pool_address) -- (swap_count,
-# cumulative_volume_quote, distinct_traders_count) as of the last recorded
-# observation. Empty on import, so the first observation of any pool after
-# a process restart always finds nothing here and marks baseline_reset.
-_last_observed: dict[str, tuple[int, float, int]] = {}
+# cumulative_volume_quote, distinct_traders_count, buy_count, sell_count,
+# buy_volume_quote, sell_volume_quote) as of the last recorded observation.
+# Empty on import, so the first observation of any pool after a process
+# restart always finds nothing here and marks baseline_reset.
+_last_observed: dict[str, tuple[int, float, int, int, int, float, float]] = {}
 
 
 def _cache_key(chain: str, pool_address: str) -> str:
@@ -107,6 +125,16 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 swaps_delta INTEGER,
                 volume_quote_delta REAL,
                 traders_delta INTEGER,
+                buy_count INTEGER,
+                sell_count INTEGER,
+                undetermined_count INTEGER,
+                buy_volume_quote REAL,
+                sell_volume_quote REAL,
+                undetermined_volume_quote REAL,
+                buy_count_delta INTEGER,
+                sell_count_delta INTEGER,
+                buy_volume_quote_delta REAL,
+                sell_volume_quote_delta REAL,
                 baseline_reset INTEGER NOT NULL
             )
             """
@@ -115,6 +143,22 @@ async def _ensure_table(db_path: str | None = None) -> None:
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_pool "
             f"ON {TABLE} (chain, pool_address, observed_at)"
         )
+        # 29/08, brique 2/5 -- catches up a table created before buy/sell
+        # columns existed. CREATE TABLE IF NOT EXISTS above already covers a
+        # fresh database; this is only needed for one already running in
+        # production with the older schema.
+        await db_migrations.ensure_columns(db, TABLE, [
+            ("buy_count", "INTEGER"),
+            ("sell_count", "INTEGER"),
+            ("undetermined_count", "INTEGER"),
+            ("buy_volume_quote", "REAL"),
+            ("sell_volume_quote", "REAL"),
+            ("undetermined_volume_quote", "REAL"),
+            ("buy_count_delta", "INTEGER"),
+            ("sell_count_delta", "INTEGER"),
+            ("buy_volume_quote_delta", "REAL"),
+            ("sell_volume_quote_delta", "REAL"),
+        ])
         await db.commit()
     _ensured_db_paths.add(path)
 
@@ -130,6 +174,12 @@ async def record_observation(
     cumulative_volume_quote: float | None,
     distinct_traders_count: int | None,
     last_swap_age_seconds: float | None,
+    buy_count: int | None = None,
+    sell_count: int | None = None,
+    undetermined_count: int | None = None,
+    buy_volume_quote: float | None = None,
+    sell_volume_quote: float | None = None,
+    undetermined_volume_quote: float | None = None,
     db_path: str | None = None,
 ) -> None:
     """One row per candidate check where the feed was asked for a snapshot.
@@ -137,25 +187,39 @@ async def record_observation(
     activity field as NULL and never touches the delta cache -- the next
     real snapshot still compares against the last REAL observation, not
     against this gap. Never raises -- a failure here must never turn a
-    real discovery cycle into a broken one."""
+    real discovery cycle into a broken one.
+
+    Buy/sell params default to ``None`` (rather than being required) so an
+    existing caller upgraded only for the liquidity/activity axes keeps
+    working unchanged -- brique 2/5, 29/08."""
     path = db_path or _db_path()
     key = _cache_key(chain, pool_address)
 
     if not available:
         swaps_delta = volume_quote_delta = traders_delta = None
+        buy_count_delta = sell_count_delta = None
+        buy_volume_quote_delta = sell_volume_quote_delta = None
         baseline_reset = False
         family = None
         activity_quality = None
         swap_count = cumulative_volume_quote = distinct_traders_count = None
         last_swap_age_seconds = None
+        buy_count = sell_count = undetermined_count = None
+        buy_volume_quote = sell_volume_quote = undetermined_volume_quote = None
     else:
         activity_quality = _activity_quality(family)
         prior = _last_observed.get(key)
         if prior is None:
             swaps_delta = volume_quote_delta = traders_delta = None
+            buy_count_delta = sell_count_delta = None
+            buy_volume_quote_delta = sell_volume_quote_delta = None
             baseline_reset = True
         else:
-            prior_swaps, prior_volume, prior_traders = prior
+            (
+                prior_swaps, prior_volume, prior_traders,
+                prior_buy_count, prior_sell_count,
+                prior_buy_volume, prior_sell_volume,
+            ) = prior
             swaps_delta = None if swap_count is None else swap_count - prior_swaps
             volume_quote_delta = (
                 None if cumulative_volume_quote is None else cumulative_volume_quote - prior_volume
@@ -163,9 +227,19 @@ async def record_observation(
             traders_delta = (
                 None if distinct_traders_count is None else distinct_traders_count - prior_traders
             )
+            buy_count_delta = None if buy_count is None else buy_count - prior_buy_count
+            sell_count_delta = None if sell_count is None else sell_count - prior_sell_count
+            buy_volume_quote_delta = (
+                None if buy_volume_quote is None else buy_volume_quote - prior_buy_volume
+            )
+            sell_volume_quote_delta = (
+                None if sell_volume_quote is None else sell_volume_quote - prior_sell_volume
+            )
             baseline_reset = False
         _last_observed[key] = (
             swap_count or 0, cumulative_volume_quote or 0.0, distinct_traders_count or 0,
+            buy_count or 0, sell_count or 0,
+            buy_volume_quote or 0.0, sell_volume_quote or 0.0,
         )
 
     try:
@@ -177,14 +251,23 @@ async def record_observation(
                     (observed_at, chain, pool_address, token_address, family,
                      activity_quality, swap_count, cumulative_volume_quote,
                      distinct_traders_count, last_swap_age_seconds,
-                     swaps_delta, volume_quote_delta, traders_delta, baseline_reset)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     swaps_delta, volume_quote_delta, traders_delta,
+                     buy_count, sell_count, undetermined_count,
+                     buy_volume_quote, sell_volume_quote, undetermined_volume_quote,
+                     buy_count_delta, sell_count_delta,
+                     buy_volume_quote_delta, sell_volume_quote_delta,
+                     baseline_reset)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now(timezone.utc).isoformat(),
                     chain, pool_address, token_address, family, activity_quality,
                     swap_count, cumulative_volume_quote, distinct_traders_count,
                     last_swap_age_seconds, swaps_delta, volume_quote_delta, traders_delta,
+                    buy_count, sell_count, undetermined_count,
+                    buy_volume_quote, sell_volume_quote, undetermined_volume_quote,
+                    buy_count_delta, sell_count_delta,
+                    buy_volume_quote_delta, sell_volume_quote_delta,
                     int(baseline_reset),
                 ),
             )

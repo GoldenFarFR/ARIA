@@ -433,6 +433,14 @@ class OnChainPoolDiscoveryFeed:
                     snapshot.distinct_traders_count if snapshot.available else None
                 ),
                 last_swap_age_seconds=snapshot.stale_seconds if snapshot.available else None,
+                buy_count=snapshot.buy_count if snapshot.available else None,
+                sell_count=snapshot.sell_count if snapshot.available else None,
+                undetermined_count=snapshot.undetermined_count if snapshot.available else None,
+                buy_volume_quote=snapshot.buy_volume_quote if snapshot.available else None,
+                sell_volume_quote=snapshot.sell_volume_quote if snapshot.available else None,
+                undetermined_volume_quote=(
+                    snapshot.undetermined_volume_quote if snapshot.available else None
+                ),
             )
             if not snapshot.available:
                 # 26/08 -- real incident: `add_pool` verification (a live
