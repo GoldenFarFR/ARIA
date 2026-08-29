@@ -255,19 +255,20 @@ consumer nobody had inventoried): `docs/HANDOFF_RESOURCE_BUDGET.md`.
 ## Active state — on-chain activity sensors roadmap (29/08)
 6-brick sequence (real Swap V2 -> buy/sell flow -> Mint/Burn -> on-chain USD
 oracle -> persistence -> historical backfill research), one brick at a time,
-never merged. Bricks 1 (real Swap V2) and 2 (buy/sell flow): validated in
-production on BOTH Base and Robinhood. Brick 3 (Mint/Burn/liquidity delta):
-validated on Robinhood (real Mint+Burn observed, zero swap-counter
-contamination) — still 🟡 on Base (no real Mint/Burn appeared in ~1h48/2781
-observations as of 29/08 21:55 CEST; not a technical failure, just missing
-proof). Next legitimate move: a TARGETED backfill on one known Base pool to
-prove the decoder against a real historical Mint/Burn event — explicitly a
-decoder proof, never a production validation, Brick 3 Base stays 🟡 until a
-live event lands. Brick 4/global historical backfill stay blocked until
-Brick 3 closes on both chains. Full vision, discipline, mini-specs, and the
-anti-look-ahead rule for the historical-backfill brick:
-`docs/roadmap-capteurs-onchain.md` — edit that file in place, never restate
-the detail here. Checkpoint facts: `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
+never merged. Bricks 1-3 (real Swap V2, buy/sell flow, Mint/Burn/liquidity
+delta) now VALIDATED IN PRODUCTION ON BOTH Base and Robinhood (closed
+2026-08-29T22:33Z — 3 real Burn events observed live on Base, zero
+swap-axis contamination even in the one cycle where a real swap coincided;
+Robinhood closed earlier the same day). Phase-capteurs (briques 1-3) is
+CLOSED on both chains. Next legitimate move, per explicit operator
+instruction: brick 4 (on-chain WETH/USD oracle) — not started, needs its
+own mini-spec and GO first, same discipline as every prior brick (never
+open two bricks at once, historical backfill stays blocked until brick 4/5
+close too). Full vision, discipline, mini-specs, and the anti-look-ahead
+rule for the historical-backfill brick, plus the newer narrative-cohort
+research extension: `docs/roadmap-capteurs-onchain.md` — edit that file in
+place, never restate the detail here. Checkpoint facts:
+`docs/HANDOFF_PIPELINE_MOMENTUM.md`.
 
 
 ## Active state — pocket lineup (18/08, explicit operator decision, updated 28/08)
