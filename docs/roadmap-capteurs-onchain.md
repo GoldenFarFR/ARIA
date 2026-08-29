@@ -98,22 +98,61 @@ gagnant/perdant sert UNIQUEMENT à l'analyse après coup, jamais à la sélectio
 ou au calcul des features elles-mêmes. Le dataset doit contenir gagnants,
 moyens ET perdants — sinon on construit un détecteur de passé, pas de futur.
 
-### Protocole de labellisation du dataset (ajouté 29/08, affiné le même jour — décision opérateur)
+### Protocole de labellisation du dataset (29/08, version consolidée après le cas COPPERINU)
 
-**Question de recherche prioritaire, reformulée par l'opérateur** : pas "est-ce
-moralement un scam" (intention, rug prouvé, honeypot) — la question est plus
-simple et directement mesurable : **pourquoi certains tokens pump à des
-multiples extrêmes (+30 000%) et continuent, alors que d'autres, après un
-pump similaire, retombent ?** Le label se fonde sur le **résultat de prix
-observé**, jamais sur une classification d'intention. Pas besoin de prouver
-un rug/honeypot pour qu'un token compte comme "retombé" — la trajectoire de
-prix (variation depuis le pic, tenue du niveau) suffit et est directement
-lisible sur DexScreener.
+**Identité canonique d'une observation — jamais le nom/symbole.** Le cas
+COPPERINU (même contrat compté deux fois sous deux pools différents,
+V3 et V4, avec des noms identiques) a prouvé que le nom affiché n'est pas
+fiable. Chaque ligne du dataset doit porter au minimum :
+`chain + token_contract + pool_address/pool_id + dex + création_pool +
+timestamp`. Le nom/symbole reste une info descriptive, jamais une clé
+d'identité ou de déduplication.
 
-Catégories utiles : **pump massif + tenue/continuation** vs **pump massif +
-retombée** — une 3e catégorie "contrôles neutres" (jamais explosé du tout)
-reste utile plus tard pour éviter qu'un modèle apprenne juste "grosse hausse
-= bon", mais n'est pas le sujet prioritaire immédiat.
+**Question de recherche** : pas "est-ce moralement un scam" (intention, rug
+prouvé, honeypot) — la question est mesurable directement sur la
+trajectoire : pourquoi certains tokens pump à des multiples extrêmes et
+continuent, alors que d'autres, après un pump similaire, retombent ?
+
+**Trois groupes, jamais deux** :
+- **Groupe A — pump durable** : forte hausse -> consolidation ->
+  continuation -> pas de rug évident.
+- **Groupe B — pump-and-dump** : forte hausse -> distribution ->
+  effondrement.
+- **Groupe C — contrôles neutres** : activité comparable, pas de
+  continuation significative (jamais explosé). **Indispensable, pas
+  optionnel** : sans lui, ARIA risque d'apprendre une règle triviale du
+  genre "beaucoup de volume + beaucoup de traders = bon", alors que ces
+  mêmes caractéristiques peuvent précéder un dump (cf. cas Optimus — Groupe B
+  — dont les agrégats 24h étaient presque aussi équilibrés que Copper Inu —
+  Groupe A).
+
+**Mesurer la trajectoire, jamais seulement le résultat final.** Une fenêtre
+temporelle centrée sur le pic (`T-60m ... T0 ... T+60m`), avec à chaque pas
+les features suivantes calculées et leur VARIATION dans le temps (pas
+seulement leur valeur ponctuelle) : `unique_traders`, `new_traders_rate`,
+`buy_volume`, `sell_volume`, `buy/sell_ratio`, `swap_count`,
+`median_swap_size`, `swap_size_distribution`, `liquidity`,
+`liquidity_delta`, `price_return`, `volume_acceleration`,
+`buyer/seller_concentration`. L'observation intéressante n'est pas "3616
+traders" (un nombre statique) mais "le nombre de participants continue à
+augmenter PENDANT que le marché consolide" (une dynamique) — hypothèse plus
+exploitable qu'un seuil.
+
+**Prudence sur le mot "organique"** : label descriptif, jamais une vérité de
+terrain ni une règle de code. Un token avec 3000 traders peut être manipulé ;
+un token avec 100 traders peut faire une vraie continuation ; des bots
+peuvent aussi représenter une activité légitime. **Interdit** : coder
+`traders > X -> organic`. **Recherché** : quelles COMBINAISONS et quelles
+TRAJECTOIRES séparent statistiquement A / B / C — jamais un seuil unique sur
+une seule variable.
+
+**DexScreener = sanity check externe, jamais vérité d'entraînement.**
+Hiérarchie de validation : `ON-CHAIN -> notre reconstruction -> comparaison
+DexScreener -> écarts détectés -> correction du décodeur`. Une fois la
+reconstruction validée : `ON-CHAIN -> ARIA FEATURES -> REPLAY HISTORIQUE ->
+A/B/C -> DISCOVERY`. Les chiffres DexScreener servent à vérifier que notre
+décodeur est juste, jamais de source d'entraînement pour les features
+elles-mêmes.
 
 Règle qui reste absolue : les labels doivent être **figés avant tout calcul
 de feature**, et **indépendants des features elles-mêmes** — jamais choisir
@@ -212,3 +251,57 @@ RPC de backfill lancé.** Candidats de tokens à fournir par l'opérateur (mix
 pump réussi / pump-and-dump) déjà proposés — à collecter pour préparer l'étape
 A, mais l'exécution réelle du backfill attend la validation production de la
 Brique 1 (cf. `docs/HANDOFF_PIPELINE_MOMENTUM.md` pour l'état exact).
+
+## Cadrage stratégique — memecoin trading comme jeu PvP (29/08, décision opérateur)
+
+**Le trading de memecoins par "vibe" n'est pas une stratégie d'investissement,
+c'est un jeu PvP à horizon court.** Ça change la nature des variables qui
+comptent, et donc ce que ces capteurs doivent finir par produire.
+
+**Investissement organique** : `fondamentaux -> adoption -> croissance ->
+revalorisation` — le temps joue plutôt en faveur du participant.
+
+**Meme trading PvP** : `attention -> flux -> accélération -> positionnement
+-> sortie` — la question n'est jamais "est-ce un projet sérieux ?" mais "où
+est le flux de capitaux maintenant, qui entre, qui sort, à quelle vitesse, et
+combien de temps ce déséquilibre peut-il encore durer ?".
+
+**Principe à graver** : fondamentalement mauvais != tradablement mauvais ;
+fondamentalement bon != tradablement bon. Un pump peut être totalement
+dépourvu de fondamentaux et rester un excellent trade. Pour un moteur PvP,
+les variables prioritaires sont : attention, accélération, participation,
+liquidité, concentration, comportement des gros wallets, rythme des swaps,
+pression acheteuse/vendeuse, capacité du marché à absorber les ventes — pas
+des indicateurs de qualité fondamentale du projet.
+
+**Architecture cible du futur moteur** (au-delà des capteurs, pour mémoire —
+pas construit) :
+
+```
+DETECTION
+    v
+FLOW / VIBE
+    v
+ENTRY AGGRESSIVE
+    v
+POSITION MANAGEMENT
+    v
+DETECTION D'EXHAUSTION
+    v
+EXIT
+```
+
+**Le mot-clé est "exhaustion".** L'avantage recherché n'est probablement pas
+de trouver le prochain x100 — c'est de détecter assez tôt que le jeu PvP
+bascule en notre faveur, PUIS, tout aussi important, que l'avantage est en
+train de disparaître, pour sortir avant que la majorité ne le comprenne.
+**ARIA doit devenir aussi bonne pour détecter la fin d'un bon pump que son
+début** — optimiser uniquement la détection des "bons pumps" serait une
+erreur de conception. Le dataset A/B/C (ci-dessus) sert exactement ça : pas
+seulement "bon token vs mauvais token", mais "flux soutenable ->
+accumulation/distribution -> continuation" vs "flux toxique -> extraction ->
+collapse".
+
+Nuance de vocabulaire actée : remplacer "solitaire" par **indépendant du
+consensus** — ARIA n'a pas besoin d'être isolée, elle a besoin de ne pas
+suivre le narratif ambiant sans le vérifier par le flux réel.
