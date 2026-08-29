@@ -54,9 +54,23 @@ from aria_core.paths import aria_db_path
 # ``_check_idle_newheads``/``_check_budget_circuit_breaker`` docstrings for
 # that incident). Same total as the old shared 200k x 3 (600k/day), just
 # redistributed -- no extra cost against the Growth plan's shared pool.
+#
+# 29/08, operator-directed real incident: Base's 25k/day cap (calibrated on a
+# NORMAL day with no restarts) was blown by 17:10:20Z the same day three
+# on-chain-sensor briques were deployed in a few hours -- each restart forces
+# a fresh _resubscribe() and a real 4 161 RU spike was measured in the single
+# hour (16h UTC) covering two of those restarts, on top of the ~1000-1600/hour
+# baseline. Raised to 100k (4x headroom for a multi-restart day). Solana cut
+# to 0 (fail-closed immediately, same circuit-breaker mechanism) to offset the
+# increase and stay within the Growth plan's shared 20M/month pool (100k+0+
+# 400k=500k/day, BELOW the prior 600k/day total) -- explicit operator
+# trade-off, not a calibration of Solana's own real usage. Real, current
+# impact: solana_late_bonding_shadow's sourcing (pumpfun_curve_tracker.py) and
+# pricing (pumpswap_ws.py) both gate on chain_spend("solana") -- a 0 cap stops
+# both immediately, fail-closed, until the operator raises this back up.
 DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
-    "base": 25_000,
-    "solana": 175_000,
+    "base": 100_000,
+    "solana": 0,
     "robinhood": 400_000,
 }
 # Fallback for any future 4th chain never explicitly calibrated above --

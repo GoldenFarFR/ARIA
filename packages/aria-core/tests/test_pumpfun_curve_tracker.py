@@ -33,6 +33,13 @@ def _isolated_chainstack_ru_budget_db(tmp_path, monkeypatch):
     with whatever else imported the module (same isolation gap already
     fixed in test_chainstack_ru_budget.py's own fixture)."""
     monkeypatch.setattr(chainstack_ru_budget, "aria_db_path", lambda: tmp_path / "chainstack_ru_budget_test.db")
+    # 29/08, operator-directed real incident: solana's real DAILY_UNIT_CAP_PER_CHAIN
+    # entry was cut to 0 in production (traded off against base's cap raise,
+    # see chainstack_ru_budget.py's own comment) -- this file tests the
+    # primary/fallback ENDPOINT SELECTION mechanism itself, never the real
+    # calibrated cap, so it must not silently start refusing every call the
+    # moment that unrelated production value changes again.
+    monkeypatch.setitem(chainstack_ru_budget.DAILY_UNIT_CAP_PER_CHAIN, "solana", 175_000)
     chainstack_ru_budget._pending_units.clear()
     chainstack_ru_budget._read_cache.clear()
     yield
