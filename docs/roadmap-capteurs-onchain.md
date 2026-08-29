@@ -1291,6 +1291,43 @@ cohorte, pas seulement en ayant un volume élevé dans l'absolu.
    s'érode — variante du principe déjà gravé (interaction flow/
    participation/liquidité), appliquée spécifiquement au côté vendeur.
 
+### Raffinement majeur — "seconde couche" réflexive autour du token central (29/08)
+
+Observation sociale en direct (compte X `@gkisokay`, activité du 29/08) qui
+précise le concept de cohorte narrative : ce n'est pas seulement plusieurs
+tokens INDÉPENDANTS qui se disputent l'attention d'un même narratif — un
+système de tokens SATELLITES peut se former AUTOUR d'un token central déjà
+établi, avec une relation de dépendance mutuelle explicite :
+
+```
+NVDA (action tokenisée sous-jacente)
+  ↑
+ AI  (token central, déjà établi, "centerpiece")
+  ↑
+AGI / SPACEHOOD / CLIPPY / MOO / ... (tokens satellites/"pairs")
+```
+
+Boucle réflexive décrite (par des participants du marché eux-mêmes, à
+vérifier empiriquement sur le on-chain, jamais supposée) : un satellite qui
+accélère (ex. AGI cassant son ATH) génère des achats sur le token central
+(AI) par les détenteurs du satellite cherchant une exposition indirecte
+plus établie -> AI monte -> l'attention nouvelle rejaillit sur le
+satellite -> nouveaux satellites créés. Distinct du concept de "part de
+flux de cohorte" déjà posé plus haut (`cohort_flow_share`) : ici la
+relation n'est pas compétitive (qui gagne la cohorte) mais POTENTIELLEMENT
+COOPÉRATIVE/RÉFLEXIVE entre un token central et ses satellites. Si
+confirmé sur données réelles, une feature candidate serait une mesure de
+CORRÉLATION DE FLOW à courte fenêtre entre un token central identifié et
+ses satellites narratifs, distincte d'une simple corrélation de prix.
+
+**Vigilance adresse (29/08)** : une adresse candidate transmise pour $AI
+(`0x427d...3dba`) NE correspond PAS au contrat vérifié directement sur le
+site officiel (`artificialinu.com`, qui affiche `0x2e8c31...111e18`,
+identique à l'adresse déjà utilisée dans ce document) — écartée, jamais
+intégrée. Rappel de la discipline déjà gravée : toujours vérifier par
+clic/source primaire, jamais adopter une adresse transmise sans
+recoupement, même informellement.
+
 ### Décision méthodologique actée (confirme, n'ajoute pas de nouvelle règle)
 
 Reproduire ces hypothèses sur des trajectoires historiques DÉJÀ CONNUES
