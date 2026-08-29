@@ -35,6 +35,18 @@ l'utilise — il ne lui « fournit » pas la donnée.
   projet d'indexation — hors périmètre de cette migration, opérateur confirmé).
   Détail complet : `docs/HANDOFF_PIPELINE_MOMENTUM.md` (entrées 27/08).
 
+- **Où en sont les capteurs on-chain d'activité (Swap/Buy-Sell/Mint-Burn) ? (29/08)**
+  → Brique 1 (vrai Swap V2) et Brique 2 (buy/sell flow) : **validées en production
+  sur Base ET Robinhood** (invariants confirmés, cas BUY+SELL réel sur un même
+  pool). Brique 3 (Mint/Burn/liquidity delta) : **validée sur Robinhood** (Mint+Burn
+  réels observés, zéro contamination des compteurs swap) — **toujours 🟡 sur Base**
+  (aucun Mint/Burn réel apparu dans ~1h48/2781 observations, pas un échec technique,
+  juste une absence de preuve). Brique 4 (oracle USD)/backfill historique : bloqués
+  tant que Brique 3 n'est pas close sur les deux chaînes. Budget RU Chainstack
+  recalibré le même jour (Base 25k→100k/jour, Solana→0, circuit breaker s'était
+  ouvert). Vision complète, mini-specs, discipline : `docs/roadmap-capteurs-onchain.md`.
+  Détail factuel/checkpoints : `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
+
 - **Comment la poche late-bonding fixe son prix d'entrée et de sortie ? (22/08)**
   → **Depuis la courbe de bonding lue on-chain**, pas depuis le websocket.
   `price_and_reserve_from_curve` (dans `services/pumpfun_bonding_ws.py`) calcule
