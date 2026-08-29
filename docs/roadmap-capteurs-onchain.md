@@ -138,6 +138,20 @@ traders" (un nombre statique) mais "le nombre de participants continue à
 augmenter PENDANT que le marché consolide" (une dynamique) — hypothèse plus
 exploitable qu'un seuil.
 
+**Feature candidate ajoutée (29/08, confirmation externe indépendante)** :
+`higher_lows_count` / structure de la zone d'accumulation post-premier-repli.
+Un post externe (X, @0xkioto, capture fournie par l'opérateur) documente le
+même schéma sur 3 runners réels de Robinhood Chain (rally initial ->
+drawdown -60% à -80% -> nouvel ATH 4.6x-23x le point bas), en insistant sur
+une série de creux SUCCESSIVEMENT PLUS HAUTS pendant la consolidation avant
+la cassure — pas juste "est-ce que ça reprend une fois" (ce qu'on avait déjà
+avec Copper Inu vs Optimus), mais la STRUCTURE des creux qui montre une
+conviction acheteuse croissante. Confirme indépendamment que le concept de
+zone d'accumulation post-retracement (déjà présent dans ce document) est un
+signal recherché par d'autres praticiens du même marché, pas une
+construction ad-hoc. Reste une feature à tester empiriquement sur le
+dataset A/B/C, pas une règle validée.
+
 **Prudence sur le mot "organique"** : label descriptif, jamais une vérité de
 terrain ni une règle de code. Un token avec 3000 traders peut être manipulé ;
 un token avec 100 traders peut faire une vraie continuation ; des bots
