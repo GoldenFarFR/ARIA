@@ -1106,3 +1106,124 @@ Chaque flèche reste une DIRECTION de recherche, jamais une formule ou un
 seuil arrêté — cohérent avec le principe déjà gravé : les capteurs
 produisent des primitives brutes, le feature engine découvre ensuite les
 combinaisons, jamais l'inverse.
+
+## Hypothèse de recherche post-backfill — attention sociale comme variable latente on-chain (29/08, formulation opérateur, AUCUN CODE)
+
+**Reformulation de l'objectif** : ARIA ne doit pas chercher à prédire le
+social ni à trouver "où l'attention est la plus forte". Elle doit mesurer
+QUAND l'attention sociale devient économiquement visible on-chain, puis si
+le déséquilibre qui en résulte est encore exploitable maintenant, avant
+qu'il ne soit pleinement absorbé par le prix. Formulation qui s'aligne
+directement sur l'objectif déjà gravé plus haut (auto-renforcement d'un
+déséquilibre PvP, edge restant, exhaustion) — cette section l'étend, ne le
+remplace pas.
+
+**Chaîne causale visée** : attention sociale -> FOMO/découverte/imitation
+-> nouveaux entrants -> swaps↑/buy flow↑/fréquence↑/taille des swaps↑ ->
+accélération on-chain -> ARIA détecte -> le marché a-t-il encore de
+l'edge ? -> exhaustion.
+
+**Le test n'est pas trivial** : pas "volume élevé = attention élevée", mais
+la TRANSITION `activité normale -> activité qui accélère -> nouveaux
+wallets qui arrivent -> buy flow qui domine -> taille/fréquence des swaps
+augmente -> prix commence à réagir`. C'est cette propagation dans le
+comportement des participants qui serait potentiellement exploitable, pas
+un niveau statique.
+
+### Attention comme variable latente, jamais dépendante d'une plateforme
+
+Au lieu de dépendre de X / Fomo / Telegram / Farcaster / Discord (donc de
+leur disponibilité, de leurs quotas, de leur API), ARIA estimerait une
+quantité d'attention injectée dans un marché à partir de signaux
+observables on-chain déjà capturés ou capturables par les Briques
+1-3/6 : `new_traders_rate`, `swap_frequency`, `buy_flow`, `flow_
+acceleration`, `median_swap_size`, `unique_traders`,
+`buyer/seller_concentration`, `liquidity`, `liquidity_trend`, `price_
+acceleration`. But recherché : établir si ce proxy on-chain détecte
+l'arrivée de l'attention suffisamment tôt pour rendre une dépendance
+sociale externe secondaire — plus robuste qu'un scraper X/Fomo dont la
+disponibilité n'est jamais garantie.
+
+**Deux niveaux à garder strictement séparés, ne pas les fusionner
+maintenant** :
+- **Niveau 1 — on-chain** : ce que l'architecture déjà en construction
+  (Briques 1-6) produit.
+- **Niveau 2 — social** : utilisé PLUS TARD uniquement comme variable
+  externe de VALIDATION (le lead/lag mesuré ci-dessous), jamais branché en
+  amont d'un signal maintenant.
+
+### Attention ≠ prix — trois cas à distinguer empiriquement (dataset A/B/C, Brique 6)
+
+```
+Cas 1 — attention ↑ / prix ↑ déjà réactif
+  new traders ↑, buy flow ↑, swaps ↑, prix ↑
+  -> mouvement déjà reconnu par le marché.
+
+Cas 2 — attention ↑↑ / prix encore relativement plat
+  new traders ↑↑, buy flow ↑↑, swap frequency ↑↑, prix faible réaction
+  -> potentiellement le cas le plus intéressant : la pression n'est pas
+     encore absorbée par le prix.
+
+Cas 3 — attention ↑ mais flow qui se dégrade
+  traders ↑, volume ↑, mais buy flow ↓, sell flow ↑, higher lows cassés
+  -> l'attention existe encore mais le déséquilibre est en train de
+     disparaître -- la composante "exhaustion" déjà posée plus haut.
+```
+
+### Expérience clé (une fois une trace sociale temporelle disponible pour certains tokens)
+
+Aligner, pour les tokens où une trace sociale temporelle est récupérable,
+les cinq séries suivantes sur une fenêtre `T-60m / T-30m / T-20m / T-10m /
+T-5m / T0 / T+5m / T+10m / T+30m` : attention sociale, participation
+on-chain, flow, liquidité, prix — puis chercher QUI bouge en premier.
+Question probablement la plus importante de cette direction de recherche :
+un lead structurel (`social -> +90s -> new traders -> +20s -> buy flow
+acceleration -> +15s -> price acceleration`) rendrait le social exploitable
+comme signal précoce ; un lag (`price -> traders -> social`) signifierait
+que le social ne fait que confirmer un mouvement déjà démarré on-chain,
+jamais le prédire. Reste une question expérimentale ouverte, pas une
+conclusion — à trancher uniquement sur données réelles une fois Brique 6
+possible.
+
+### Priorité de recherche par chaîne pour le PvP meme trading (décision opérateur, révisée en cours de discussion)
+
+```
+1. ROBINHOOD  <- marché prioritaire
+2. SOLANA     <- second laboratoire (généralité vs spécificité Robinhood)
+3. BASE       <- infrastructure / contrôle / opportuniste, jamais un effort
+                 dédié chasse-memecoin (les memes y sont rares)
+```
+
+Raison de la priorité Robinhood, pas seulement "plus de memes" : c'est déjà
+la chaîne du pipeline EVM en cours de validation (Briques 1-3) — tester
+l'hypothèse n'exige donc aucune nouvelle infrastructure parallèle. Solana
+reste indispensable ensuite pour vérifier si le phénomène est général au
+meme trading ou une propriété spécifique à Robinhood — distinction
+scientifique importante, pas cosmétique. Base reste utile pour valider
+l'architecture EVM générique, développer les primitives génériques, et
+servir de contrôle contre l'hypothèse "notre signal ne marche que sur une
+chaîne" — mais n'attire pas d'effort de recherche PvP dédié.
+
+**Conséquence sur Brique 6 (backfill)** : une fois Brique 3 fermée sur les
+deux chaînes EVM, Robinhood devrait probablement être le premier dataset
+historique construit sérieusement — pas parce qu'on sait déjà qu'il est
+meilleur, mais parce que c'est aujourd'hui le meilleur terrain pour tester
+cette hypothèse avec l'infrastructure déjà construite.
+
+**Noyau de features potentiellement commun, paramètres potentiellement
+distincts par chaîne** : `participation`, `flow`, `accélération`,
+`liquidité`, `concentration`, `exhaustion` comme noyau conceptuel partagé —
+mais la microstructure et le comportement des participants peuvent différer
+suffisamment entre Solana/Robinhood/Base pour que les distributions de
+features et les seuils (jamais fixés a priori) diffèrent par chaîne. À
+vérifier empiriquement, jamais supposé transférable sans preuve.
+
+### Garde-fou explicite (répété par l'opérateur, absolu)
+
+**Ne pas modifier la séquence des briques maintenant.** Cette section est
+une priorité de RECHERCHE qui s'applique APRÈS la fermeture des capteurs
+(Briques 1-5) et la construction du backfill (Brique 6) — jamais un
+chantier actif, jamais du code, jamais une nouvelle "Brique Social". Le
+backfill permettra de mesurer objectivement quelle chaîne produit
+réellement le type de trajectoires recherchées, avant d'investir dans le
+feature engine qui teste cette hypothèse.
