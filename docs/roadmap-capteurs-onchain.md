@@ -1041,3 +1041,68 @@ des 14 étapes, l'exigence que chaque étape journalise le POURQUOI. **Ne fige
 PAS** : aucune formule, aucun seuil, aucun poids, aucune feature validée —
 tout ça reste à découvrir empiriquement une fois le backfill (Brique 6)
 possible, exactement comme le reste de ce document.
+
+### Format exact d'une observation — contrat de ligne pour le feature engine (29/08, PAS de code)
+
+Complète le scénario ci-dessus par le SCHÉMA concret que chaque ligne
+d'observation devra porter avant d'attaquer l'étape "CONSTRUIRE LES
+FEATURES DYNAMIQUES" — une primitive brute par colonne, jamais une feature
+déjà calculée :
+
+```
+timestamp
+price
+swap_count_delta
+buy_count_delta
+sell_count_delta
+buy_volume_delta
+sell_volume_delta
+traders_delta
+liquidity_added_delta
+liquidity_removed_delta
+liquidity_level
+```
+
+**État réel de chaque colonne aujourd'hui (vérifié dans le code, jamais
+supposé)** : `timestamp` (`observed_at`), `swap_count_delta`
+(`swaps_delta`), `buy_count_delta`/`sell_count_delta`/`buy_volume_
+delta`/`sell_volume_delta`, `traders_delta`, `liquidity_added_delta`/
+`liquidity_removed_delta` (`liquidity_added_quote_delta`/`liquidity_
+removed_quote_delta` ou leur variante `_raw` pour v4) sont TOUS déjà
+persistés cycle par cycle dans `onchain_activity_observation_log`
+(Briques 1/2/3). **Deux colonnes du schéma cible n'ont PAS encore de
+persistance continue, gap identifié maintenant, pas encore comblé** :
+- `price` : déjà calculé à chaque événement (`EVMSwapSnapshot.price_quote`/
+  `price_usd`), mais `onchain_activity_observation.py` ne l'enregistre pas
+  aujourd'hui — seul `swap_count`/volume/traders/buy-sell/liquidity le sont.
+- `liquidity_level` (le niveau ABSOLU de profondeur présente, distinct des
+  deltas ajout/retrait ci-dessus) : correspond à `reserve_usd` (v2, exact)
+  ou `raw_liquidity` (v3/v4, abstrait) sur `EVMSwapSnapshot` — capturé
+  aujourd'hui par `discovery_liquidity_observation.py` mais seulement au
+  moment de la découverte initiale, pas en continu à chaque cycle comme le
+  reste de ce contrat l'exige.
+
+**Action explicitement PAS prise maintenant** : combler ce gap serait de la
+persistance/instrumentation, pas de la conception — hors du "sans coder"
+demandé pour cette période d'observation. À traiter soit comme un
+prolongement naturel de la Brique 5 (persistance complète) déjà posée plus
+haut, soit comme une petite extension additive de `record_observation()`
+une fois Brique 3 elle-même validée — jamais avant, pour ne pas fusionner
+deux briques dans un même changement.
+
+### Directions futures une fois ce contrat de ligne complet (candidats, PAS de formule)
+
+```
+-> accélérations (variation du delta dans le temps, pas le delta seul)
+-> persistance (le déséquilibre dure-t-il, ou s'épuise-t-il déjà)
+-> retracement duration (combien de temps le repli dure avant reprise/mort)
+-> higher lows (structure de la zone d'accumulation, déjà noté plus haut)
+-> flow/liquidity interaction (le principe consolidé posé plus haut)
+-> régime (position dans la trajectoire, déjà posé dans la roadmap complète)
+-> signal (uniquement une fois tout ce qui précède validé empiriquement)
+```
+
+Chaque flèche reste une DIRECTION de recherche, jamais une formule ou un
+seuil arrêté — cohérent avec le principe déjà gravé : les capteurs
+produisent des primitives brutes, le feature engine découvre ensuite les
+combinaisons, jamais l'inverse.
