@@ -305,3 +305,104 @@ collapse".
 Nuance de vocabulaire actée : remplacer "solitaire" par **indépendant du
 consensus** — ARIA n'a pas besoin d'être isolée, elle a besoin de ne pas
 suivre le narratif ambiant sans le vérifier par le flux réel.
+
+## Roadmap complète du moteur, au-delà des capteurs (29/08, décision opérateur)
+
+Trois éléments verrouillés en plus de la séquence capteurs -> backfill ->
+discovery -> replay -> shadow -> exécution déjà posée plus haut.
+
+### 1. Détecteur de phase de marché / régime — dimension du feature engine, pas un module à part
+
+Le même signal on-chain (buy flow élevé, par exemple) peut vouloir dire des
+choses différentes selon où le token se trouve dans sa trajectoire :
+
+```
+naissance -> découverte -> accélération -> expansion -> consolidation ->
+distribution -> exhaustion -> collapse
+```
+
+ARIA ne doit pas apprendre "buy flow élevé = intéressant" mais "buy flow
+élevé + accélération + participation croissante + POSITION DANS LA
+TRAJECTOIRE = intéressant". La phase devient une dimension fondamentale du
+feature engine — pas un module séparé qu'on branche après, un axe qui
+traverse toutes les features de la Brique 2/3 (les features sont
+interprétées différemment selon la phase où l'observation se situe).
+
+### 2. Temps de réaction / edge restant — le signal doit répondre à DEUX questions
+
+Directement lié à l'observation sur le décalage on-chain/frontend et à
+l'effet de synchronisation qui en découle :
+
+```
+détection on-chain -> visibilité probable publique -> réaction du marché ->
+temps avant exhaustion
+```
+
+Pas seulement "est-ce intéressant ?" mais surtout **"est-ce encore
+intéressant MAINTENANT ?"** — un signal statistiquement excellent qui
+n'apparaît qu'après +300% peut déjà être trop tardif pour être tradable.
+Métriques à construire plus tard (pas maintenant, notées pour la phase
+feature engine) : `lead_time_to_move`, `lead_time_to_visibility`,
+`time_from_signal_to_exhaustion`, `price_move_after_signal_1m/5m/10m` — pour
+mesurer la valeur temporelle réelle d'un capteur, pas seulement son pouvoir
+discriminant statique.
+
+### 3. Boucle complète détection -> entrée -> sortie -> apprentissage
+
+Le système ne s'arrête pas à `discovery -> replay -> shadow`. Le moteur
+final doit produire un journal causal exploitable, une ligne par trade
+simulé :
+
+```
+TOKEN -> SIGNAL -> POURQUOI SIGNAL -> ENTRÉE SIMULÉE -> ÉVOLUTION DU FLOW ->
+EXHAUSTION ? -> SORTIE -> MFE/MAE/PnL net -> POST-MORTEM -> AMÉLIORATION DU SIGNAL
+```
+
+Raison : pour une approche PvP, **entrée et sortie sont deux problèmes
+différents**. Un modèle peut exceller à détecter le début d'un mouvement et
+être médiocre à savoir quand sortir — et le second peut compter économiquement
+plus que le premier. Chaque étape (Brique 7 "signaux", replay causal, shadow)
+doit donc journaliser POURQUOI un signal s'est déclenché, pas seulement s'il
+s'est déclenché — pour permettre un vrai post-mortem qui améliore le signal,
+pas juste un score final agrégé.
+
+### Roadmap finale complète (remplace le schéma court plus haut)
+
+```
+CAPTEURS BRUTS
+      v
+BACKFILL
+      v
+FEATURES DYNAMIQUES
+      v
+PHASE / RÉGIME
+      v
+DISCOVERY A/B/C
+      v
+REPLAY CAUSAL
+      v
+MESURE DU LEAD TIME
+      v
+OOS (out-of-sample)
+      v
+PAPER / SHADOW
+      v
+SIMULATION EXÉCUTION
+      v
+ENTRÉE + GESTION + EXHAUSTION + SORTIE
+      v
+POST-MORTEM
+      ^ (boucle retour)
+DISCOVERY
+```
+
+### Objectif final du moteur (gravé, oriente toute conception future)
+
+**ARIA ne cherche pas à prédire "ce token va monter".** L'objectif est de
+détecter suffisamment tôt qu'un déséquilibre PvP est en train de
+s'auto-renforcer, mesurer si ce déséquilibre reste exploitable maintenant
+(pas seulement s'il a existé), puis détecter son épuisement avant le
+retournement. Cette formulation aligne les capteurs on-chain, la boucle
+réflexive frontend/FOMO, le backfill, le replay causal et l'exécution en un
+seul fil directeur — à ne jamais perdre de vue en construisant les briques
+suivantes.
