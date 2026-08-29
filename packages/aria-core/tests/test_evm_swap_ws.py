@@ -229,7 +229,10 @@ def test_handle_sync_computes_price_and_exact_reserve_usd_for_stable_quote():
     reserve1 = 20 * (10 ** 6)
     data = _u256(reserve0) + _u256(reserve1)
     feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
-    assert pool.swap_count == 1
+    # 29/08 fix: Sync alone (no accompanying V2 Swap event) never counts as
+    # a swap anymore -- see test_a_sync_only_event_never_counts_as_a_swap
+    # below for the Mint/Burn-signature regression guard this replaces.
+    assert pool.swap_count == 0
     assert pool.last_reserve_usd == pytest.approx(40.0)  # 2 * quote_reserve (20)
     assert pool.ticks[-1][1] == pytest.approx(2.0)
     assert pool.last_quote_reserve_raw == pytest.approx(20.0)  # unconditional, even for a stable quote
@@ -272,6 +275,96 @@ def test_handle_sync_skips_zero_reserve_without_recording_a_tick():
     feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
     assert len(pool.ticks) == 0
     assert pool.swap_count == 0
+
+
+# --- _handle_v2_swap: real V2 Swap event, distinct from Mint/Burn's Sync ---
+
+def _v2_swap_data(amount0_in: int, amount1_in: int, amount0_out: int, amount1_out: int) -> str:
+    return "0x" + (_u256(amount0_in) + _u256(amount1_in) + _u256(amount0_out) + _u256(amount1_out)).hex()
+
+
+def test_handle_v2_swap_decodes_volume_and_sender_and_increments_swap_count():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    # token is currency0 -> quote is currency1 (6 decimals): swapper paid
+    # 20 quote units in, received the tracked token out (a buy).
+    data = _v2_swap_data(amount0_in=0, amount1_in=20 * 10**6, amount0_out=5 * 10**18, amount1_out=0)
+    sender_topic = _FakeTopic(bytes.fromhex("00" * 12 + "bb" * 20))
+    topics = [MagicMock(), sender_topic]
+    feed._handle_v2_swap("0xpool", topics, {"data": data})
+    assert pool.swap_count == 1
+    assert pool.cumulative_volume_quote == pytest.approx(20.0)
+    assert "0x" + "bb" * 20 in pool.distinct_traders
+
+
+def test_handle_v2_swap_orientation_token_is_currency1():
+    """The quote leg is currency0 when the tracked token is currency1 --
+    same decoding, opposite side picked."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=False, decimals0=6, decimals1=18)
+    feed._pools["0xpool"] = pool
+    data = _v2_swap_data(amount0_in=30 * 10**6, amount1_in=0, amount0_out=0, amount1_out=7 * 10**18)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": data})
+    assert pool.cumulative_volume_quote == pytest.approx(30.0)
+
+
+def test_handle_v2_swap_ignores_unknown_pool():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    data = _v2_swap_data(0, 1, 1, 0)
+    feed._handle_v2_swap("0xunknown", [MagicMock(), MagicMock()], {"data": data})  # must not raise
+
+
+def test_a_sync_only_event_never_counts_as_a_swap_mint_burn_signature():
+    """THE regression guard for the 27/08-found, 29/08-fixed defect: a
+    Mint/Burn emits Sync but NEVER the real V2 Swap event. Simulates that
+    exact signature -- a Sync notification with no accompanying Swap --
+    and asserts swap_count/volume/distinct_traders all stay at zero."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6, quote_is_stable=True)
+    feed._pools["0xpool"] = pool
+    data = _u256(10 * 10**18) + _u256(20 * 10**6)
+    feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
+    assert pool.swap_count == 0
+    assert pool.cumulative_volume_quote == pytest.approx(0.0)
+    assert len(pool.distinct_traders) == 0
+    # The price itself IS still correctly updated by Sync -- Mint/Burn
+    # preserve the reserve ratio, so this part was never wrong.
+    assert pool.ticks[-1][1] == pytest.approx(2.0)
+
+
+def test_a_real_swap_transaction_sync_then_swap_counts_exactly_once():
+    """The real transaction shape: Sync arrives first (price), then the
+    real Swap event (volume/sender) in the same transaction. Must count
+    exactly once -- never twice, never zero."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6, quote_is_stable=True)
+    feed._pools["0xpool"] = pool
+    sync_data = _u256(10 * 10**18) + _u256(20 * 10**6)
+    feed._handle_sync("0xpool", {"data": "0x" + sync_data.hex()})
+    swap_data = _v2_swap_data(amount0_in=0, amount1_in=1 * 10**6, amount0_out=1 * 10**17, amount1_out=0)
+    feed._handle_v2_swap("0xpool", [MagicMock(), MagicMock()], {"data": swap_data})
+    assert pool.swap_count == 1
+    assert pool.last_reserve_usd == pytest.approx(40.0)  # from Sync, untouched by the Swap handler
+    assert pool.ticks[-1][1] == pytest.approx(2.0)  # price still comes from Sync only
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_includes_v2_swap_topic_in_the_v2v3_filter():
+    """Confirms the new topic is actually wired into the real subscription
+    filter (not just decodable in isolation) -- without this, the decoder
+    above would never receive a real V2 Swap notification in production."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = MagicMock()
+    feed._w3.eth.subscribe = AsyncMock(return_value="sub_v2v3")
+    feed._pools["0xpool"] = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=False, quote_is_stable=False,
+    )
+    await feed._resubscribe()
+    filter_arg = feed._w3.eth.subscribe.call_args[0][1]
+    assert m._V2_SWAP_TOPIC in filter_arg["topics"][0]
+    assert m._V2_SWAP_TOPIC not in (m._SYNC_TOPIC, m._SYNC_TOPIC_AERODROME, m._V3_SWAP_TOPIC)
 
 
 # --- _handle_v3_swap / _handle_v4_swap: sqrtPriceX96 + amounts + sender -----
@@ -385,7 +478,25 @@ def test_handle_notification_normalizes_missing_0x_prefix_and_dispatches_sync():
         "topics": [bare_topic0], "address": "0xpool", "data": "0x" + data.hex(),
     }}
     feed._handle_notification(payload)
+    # 29/08: Sync alone no longer increments swap_count (moved to the real
+    # V2 Swap event) -- the price update is what proves the dispatch fired.
+    assert len(pool.ticks) == 1
+    assert pool.ticks[-1][1] == pytest.approx(2.0)
+
+
+def test_handle_notification_dispatches_v2_swap():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    pool = _pool(family="v2", token_is_currency0=True, decimals0=18, decimals1=6)
+    feed._pools["0xpool"] = pool
+    data = _v2_swap_data(amount0_in=0, amount1_in=20 * 10**6, amount0_out=5 * 10**18, amount1_out=0)
+    bare_topic0 = _FakeTopic(bytes.fromhex(m._V2_SWAP_TOPIC[2:]))
+    sender_topic = _FakeTopic(bytes.fromhex("00" * 12 + "cc" * 20))
+    payload = {"result": {
+        "topics": [bare_topic0, sender_topic, MagicMock()], "address": "0xpool", "data": data,
+    }}
+    feed._handle_notification(payload)
     assert pool.swap_count == 1
+    assert "0x" + "cc" * 20 in pool.distinct_traders
 
 
 def test_handle_notification_ignores_empty_result():

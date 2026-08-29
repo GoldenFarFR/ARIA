@@ -162,6 +162,15 @@ _SYNC_TOPIC = _topic0("Sync(uint112,uint112)")
 # Verified live against aerodrome-finance/contracts IPool.sol (24/08),
 # never assumed compatible with Uniswap V2's signature.
 _SYNC_TOPIC_AERODROME = _topic0("Sync(uint256,uint256)")
+# 29/08 -- the real fix for the Mint/Burn-inflates-swap_count defect
+# documented on `_handle_sync` below: V2's OWN `Swap` event (distinct from
+# `Sync`, which also fires on Mint/Burn). A Mint/Burn NEVER emits this --
+# only a real swap does -- so `swap_count`/volume/`distinct_traders` derived
+# from THIS event are never inflated. Carries no price (V2's Swap doesn't
+# expose reserves) -- `_handle_sync`'s own price/tick update (from the same
+# transaction's preceding Sync) is untouched and still authoritative for
+# price. Same shape aria-94 (obv-ao-screener) already verified and decoded.
+_V2_SWAP_TOPIC = _topic0("Swap(address,uint256,uint256,uint256,uint256,address)")
 _V3_SWAP_TOPIC = _topic0("Swap(address,address,int256,int256,uint160,uint128,int24)")
 # Aerodrome Slipstream's CLPool emits the EXACT SAME Swap shape as Uniswap
 # V3 (verified live against aerodrome-finance/slipstream's ICLPoolEvents.sol,
@@ -258,7 +267,7 @@ class EVMSwapSnapshot:
     swap_count: int = 0  # real per-event count (undercounted by any 2s-
     # polling caller between reads, but exact from the feed's own side)
     cumulative_volume_quote: float = 0.0  # sum of |amount_quote| since add_pool()
-    distinct_traders_count: int = 0  # v3/v4 only, 0 for v2 (see _TrackedPool)
+    distinct_traders_count: int = 0  # v2/v3/v4, from the real Swap event's sender (see _TrackedPool)
     # 24/08 -- lets a caller resolve price_usd itself when the quote leg is
     # WETH (price_usd stays None here per the honesty rule above, this flag
     # is the caller's cue to multiply price_quote by doppler.eth_usd_rate()
@@ -306,11 +315,10 @@ class _TrackedPool:
     swap_count: int = 0  # real per-event count, distinct from _log_tick's
     # 2s-polled snapshot count (which undercounts bursts between polls)
     cumulative_volume_quote: float = 0.0  # sum of |amount_quote| per swap
-    distinct_traders: set = field(default_factory=set)  # v3/v4 only, from
-    # the Swap event's own indexed `sender` -- V2's Sync event carries no
-    # sender (that is a SEPARATE Swap event this module does not decode),
-    # so V2 pools never populate this, honestly left empty rather than
-    # approximated.
+    distinct_traders: set = field(default_factory=set)  # from the Swap
+    # event's own indexed `sender` -- v3/v4 via `_handle_v3_swap`/
+    # `_handle_v4_swap`, v2 via `_handle_v2_swap` (29/08, V2's OWN Swap
+    # event, distinct from Sync which carries no sender).
     last_tx_hash: str | None = None  # 28/08 -- provenance, see EVMSwapSnapshot
     last_block_number: int | None = None
 
@@ -846,7 +854,7 @@ class EVMSwapWebSocketFeed:
         if v2v3_addresses:
             sub_id = await self._w3.eth.subscribe(
                 "logs",
-                {"address": v2v3_addresses, "topics": [[_SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V3_SWAP_TOPIC]]},
+                {"address": v2v3_addresses, "topics": [[_SYNC_TOPIC, _SYNC_TOPIC_AERODROME, _V2_SWAP_TOPIC, _V3_SWAP_TOPIC]]},
             )
             self._active_sub_ids.append(sub_id)
         if v4_pool_ids:
@@ -935,6 +943,8 @@ class EVMSwapWebSocketFeed:
             address = (result.get("address") or "").lower()
             if topic0 in (_SYNC_TOPIC, _SYNC_TOPIC_AERODROME):
                 self._handle_sync(address, result)
+            elif topic0 == _V2_SWAP_TOPIC:
+                self._handle_v2_swap(address, topics, result)
             elif topic0 == _V3_SWAP_TOPIC:
                 self._handle_v3_swap(address, topics, result)
             elif topic0 == _V4_SWAP_TOPIC:
@@ -947,31 +957,19 @@ class EVMSwapWebSocketFeed:
         # (obv-ao-screener, a sibling project) -- `Sync(uint112,uint112)` is
         # emitted on EVERY reserve change, not just a swap: `Mint`/`Burn`
         # (add/remove liquidity) emit it too, in the same transaction. This
-        # module only subscribes to Sync/V3-Swap (see the `topics` filter in
-        # start()), never Mint/Burn, so a Mint/Burn's own Sync is silently
-        # treated the same as a real swap's.
+        # module only subscribed to Sync/V3-Swap (see the `topics` filter in
+        # start()), never Mint/Burn, so a Mint/Burn's own Sync used to be
+        # silently treated the same as a real swap's.
         #
         # Verified this does NOT corrupt `price` -- a standard V2 mint/burn
         # preserves the reserve RATIO by design (both legs move together),
-        # so the ratio computed below stays correct either way. The one real
-        # casualty is `pool.swap_count += 1` a few lines down: it counts a
-        # Mint/Burn as a swap. Grepped every caller in this repo (27/08):
-        # `swap_count` is exposed in `get_snapshot()` but consumed by NO
-        # other module today -- zero real impact right now.
+        # so the ratio computed below stays correct either way.
         #
-        # Correct fix (not applied here, deliberately) -- CORRECTED 27/08,
-        # aria-94 retracted her first proposal below: transactionHash
-        # correlation does NOT work, because Sync is always emitted FIRST in
-        # the transaction, before Mint/Burn/Swap -- there is no way to know
-        # at Sync-receipt-time whether a Mint/Burn will follow, so nothing to
-        # correlate against yet. Her corrected, simpler fix: never derive
-        # `swap_count` (or volume) from Sync at all -- move that tracking to
-        # the V2 `Swap` event instead (Mint/Burn never emit Swap, only Sync).
-        # This module doesn't currently subscribe to/decode V2 Swap at all
-        # (only Sync for V2, Swap for V3/V4) -- adding a `_handle_v2_swap`
-        # would be the real fix. Not built: `swap_count` is unused today
-        # (confirmed via grep, no other module reads it). Revisit if
-        # `swap_count` is ever wired into a real decision -- fix it THEN.
+        # FIXED 29/08: `swap_count`/volume/`distinct_traders` are no longer
+        # derived from Sync at all -- moved to `_handle_v2_swap` (V2's own
+        # `Swap` event, now subscribed alongside Sync/V3-Swap in `start()`).
+        # A Mint/Burn never emits `Swap`, only `Sync` -- so it can no longer
+        # be counted as a swap. Sync's only remaining job here is price.
         pool = self._pools.get(address)
         if pool is None or pool.family != "v2":
             return
@@ -997,9 +995,44 @@ class EVMSwapWebSocketFeed:
         pool.last_quote_reserve_raw = quote_reserve
         if pool.quote_is_stable:
             pool.last_reserve_usd = 2.0 * quote_reserve
-        pool.swap_count += 1
         self._record_provenance(pool, result)
         self._record_tick(pool, price)
+
+    def _handle_v2_swap(self, address: str, topics, result: dict) -> None:
+        """V2's OWN `Swap` event -- never emitted by Mint/Burn (only `Sync`
+        is), so `swap_count`/volume/`distinct_traders` derived from THIS
+        event are never inflated by a liquidity move. Carries no price (V2's
+        Swap doesn't expose reserves) -- `_handle_sync`'s price/tick update
+        from the same transaction's preceding Sync is untouched, never
+        duplicated here."""
+        pool = self._pools.get(address)
+        if pool is None or pool.family != "v2":
+            return
+        data = result.get("data")
+        raw = bytes.fromhex(data[2:]) if isinstance(data, str) else bytes(data)
+        if len(raw) < 128:  # 4 uint256 (amount0In, amount1In, amount0Out, amount1Out)
+            return
+        amount0_in = int.from_bytes(raw[0:32], "big")
+        amount1_in = int.from_bytes(raw[32:64], "big")
+        amount0_out = int.from_bytes(raw[64:96], "big")
+        amount1_out = int.from_bytes(raw[96:128], "big")
+        # The tracked token is currency0 -> the QUOTE side is token1, and
+        # vice versa. One side of the quote pair is always zero (a swapper
+        # either pays quote in or takes it out, never both in one swap).
+        if pool.token_is_currency0:
+            quote_in, quote_out, quote_decimals = amount1_in, amount1_out, pool.decimals1
+        else:
+            quote_in, quote_out, quote_decimals = amount0_in, amount0_out, pool.decimals0
+        quote_raw = quote_in + quote_out
+        pool.cumulative_volume_quote += quote_raw / (10 ** quote_decimals)
+        pool.swap_count += 1
+        # `sender` (topics[1]) is indexed -- same right-aligned-in-32-bytes
+        # extraction as _record_swap_amount's own v3/v4 handling below.
+        sender_topic = topics[1] if len(topics) > 1 else None
+        if sender_topic is not None:
+            sender_hex = sender_topic.hex() if hasattr(sender_topic, "hex") else str(sender_topic)
+            pool.distinct_traders.add(("0x" + sender_hex[-40:]).lower())
+        self._record_provenance(pool, result)
 
     @staticmethod
     def _to_signed256(raw_int: int) -> int:
