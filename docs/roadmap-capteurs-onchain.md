@@ -696,5 +696,71 @@ décodeur temps réel -- sinon on aurait deux définitions différentes de
 "liquidity_delta" selon la source, le même risque déjà identifié pour la
 frontière `v2_biased` avant/après le T0 de Brique 1.
 
+### Point de vigilance gravé (29/08, précisé par l'opérateur) — deux mesures distinctes, ne jamais les confondre
+
+Le commentaire sur V3 (`Burn` ne transfère pas forcément les tokens
+immédiatement, `collect()` séparé) implique qu'ARIA devra distinguer,
+maintenant et pour toujours, deux affirmations différentes :
+1. **"la position/liquidité active a été réduite"** — ce que Brique 3
+   mesure réellement (l'event `Burn`/`ModifyLiquidity` lui-même).
+2. **"des tokens ont effectivement quitté le pool à cet instant"** — une
+   affirmation plus forte, que Brique 3 ne prouve PAS pour V3 (le
+   règlement réel passe par `collect()`, un event distinct, pas encore
+   capturé).
+
+**Pour Brique 3 telle que scopée maintenant, la mesure (1) suffit** — mais
+il ne faut jamais lui faire dire (2) implicitement dans une future feature
+ou un futur signal. Si le règlement réel (`collect()`) devient un jour
+nécessaire, ce sera une brique/extension séparée, jamais supposée acquise
+par Brique 3 seule.
+
+### Ce que Brique 3 débloquera pour la lecture PvP (candidats de réflexion, PAS de code)
+
+Trois configurations qui peuvent toutes montrer un graphique en forte
+hausse, mais avec une mécanique sous-jacente différente une fois les 3 axes
+disponibles (BUY/SELL, LIQUIDITY, prix) :
+
+```
+Cas A: buy flow ↑, traders ↑, liquidité stable
+Cas B: buy flow ↑, traders ↑, liquidité ↑ (de nouveaux apporteurs rejoignent)
+Cas C: buy flow ↑, traders ↑, liquidité ↓↓↓ (la profondeur se retire pendant que le prix monte)
+```
+
+Le cas C est particulièrement intéressant pour la recherche d'exhaustion —
+**pas parce que "liquidité qui sort = dump" serait une règle valable en soi**
+(exactement le genre de raccourci que la règle "jamais coder un seuil sur
+une seule variable" interdit déjà), mais parce que ça donne une information
+supplémentaire sur la CAPACITÉ du marché à absorber une vente future — un
+pool dont la profondeur s'érode pendant que le prix monte a moins de
+marge pour encaisser un gros vendeur que celui dont la liquidité arrive en
+même temps que les acheteurs.
+
+Candidats de features combinées (Brique 7+, jamais avant validation sur
+le dataset A/B/C) : distinguer accumulation (liquidité + buy flow montent
+ensemble) de distribution (buy flow monte mais liquidité s'érode) de
+véritable exhaustion (les deux se retournent). Pure réflexion à ce stade,
+aucune formule/seuil arrêté.
+
+### Confirmation architecturale majeure (temps réel == backfill, même sémantique)
+
+Point le plus important validé par cette exploration : **le décodeur temps
+réel et le futur décodeur backfill peuvent utiliser exactement la même
+sémantique de données** (mêmes primitives, mêmes conventions V2/V3/V4).
+Ça évite de construire un moteur historique différent du moteur live — la
+chaîne `blockchain historique -> même décodage -> mêmes primitives ->
+mêmes features -> replay` doit produire des résultats comparables à
+`blockchain live -> même décodage -> mêmes primitives -> mêmes features ->
+signal`. C'est précisément ce qui permettra de faire confiance au replay
+plus tard — un backfill qui redéfinirait ses propres règles de décodage
+romprait cette confiance dès le départ.
+
+### Séquence des 3 dimensions maintenant disponibles (une fois Brique 3 validée)
+
+`Brique 1 = activité (quand quelqu'un trade) -> Brique 2 = direction (dans
+quel sens) -> Brique 3 = profondeur/liquidité (le marché se remplit ou se
+vide)`. Première fois qu'ARIA disposera des trois dimensions nécessaires
+pour commencer à comprendre ce qui se passe réellement derrière la courbe
+de prix, plutôt que le prix seul.
+
 **Statut : exploration terminée, mini-spec formelle PAS encore écrite,
 attend le checkpoint Brique 2 de 17:08Z avant de démarrer.**
