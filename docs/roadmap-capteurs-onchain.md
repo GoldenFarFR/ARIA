@@ -1227,3 +1227,68 @@ chantier actif, jamais du code, jamais une nouvelle "Brique Social". Le
 backfill permettra de mesurer objectivement quelle chaîne produit
 réellement le type de trajectoires recherchées, avant d'investir dans le
 feature engine qui teste cette hypothèse.
+
+## Extension — cohortes narratives et pistes de recherche complémentaires (29/08, formulation opérateur, AUCUN CODE)
+
+Déclenché par un cas concret (un token "$AI" couplé à un token NVDA
+tokenisé sur Robinhood, vault + burn/lock, position réelle d'un tiers
+passée de ~3 651$ à une position bien plus importante) et par la question
+"pourquoi CELUI-LÀ et pas un des ~15-20 clones nés au même moment avec le
+même narratif (AI + chien + NVDA + Robinhood) ?". Complète, ne remplace
+pas, la section précédente et le dataset A/B/C déjà posé plus haut.
+
+### Nouvelle unité d'analyse : la cohorte narrative
+
+Distincte du dataset A/B/C (qui compare des tokens indépendants) : un
+groupe de tokens nés à peu près au même moment, avec le même narratif/meme,
+traité comme UNE unité d'analyse. Question posée : parmi 15-20 clones
+qui partagent la même recette au lancement, quelle variable commence à
+diverger chez le futur leader dans les 5/10/20/30/60 premières minutes —
+avant que l'écart ne soit visible dans le prix ? Feature candidate propre
+à ce protocole (pas encore dans la liste précédente) : part du flux total
+de la cohorte captée par chaque token dans le temps (`cohort_flow_share`),
+plutôt qu'un volume absolu — un token peut devenir "le" narratif en
+prenant une part croissante de l'attention totale disponible sur sa
+cohorte, pas seulement en ayant un volume élevé dans l'absolu.
+
+### Quatre pistes de recherche complémentaires, pas encore couvertes explicitement plus haut
+
+1. **Renforcement du trader, pas seulement le token.** Pour une position
+   gagnante réelle (plusieurs renforcements successifs), reconstruire
+   l'état on-chain disponible dans les secondes précédant CHAQUE
+   renforcement (pas seulement l'achat initial) — objectif : extraire un
+   pattern de comportement des bons traders sans les copier, en isolant ce
+   qui était objectivement observable à chaque décision.
+2. **Anomalie relative au marché entier comme baseline dynamique.** Plutôt
+   qu'un seuil absolu par variable (deviné à l'avance), comparer un token
+   à la distribution de TOUS les tokens actifs suivis sur la même chaîne
+   au même instant (ex. écart-type par rapport à la cohorte active du
+   moment) — la question devient "ce token est-il anormalement différent
+   du marché maintenant ?" plutôt que "dépasse-t-il un chiffre fixe ?".
+3. **Faux leaders / concentration.** Volume et traders impressionnants
+   mais concentrés sur une poignée de wallets = signal non sain — précise
+   le Groupe C déjà posé (contrôles neutres) avec un critère de
+   concentration explicite, pas un nouveau groupe.
+4. **Absorption de la pression vendeuse.** Combien de sell flow le marché
+   encaisse-t-il avant que le prix ne casse et que la liquidité ne
+   s'érode — variante du principe déjà gravé (interaction flow/
+   participation/liquidité), appliquée spécifiquement au côté vendeur.
+
+### Décision méthodologique actée (confirme, n'ajoute pas de nouvelle règle)
+
+Reproduire ces hypothèses sur des trajectoires historiques DÉJÀ CONNUES
+(via Brique 6) plutôt qu'attendre qu'un nouveau cas se produise en temps
+réel — confirme la priorité déjà donnée au backfill et la discipline
+anti-look-ahead déjà gravées plus haut, aucune règle nouvelle. Un
+protocole qui échoue sur l'historique connu économise du temps et du
+capital réel avant même d'être tenté en shadow/paper.
+
+### Candidat de cohorte banqué (29/08, PAS encore vérifié par adresse)
+
+Couple $AI/NVDA sur Robinhood et sa vague de ~15-20 clones concurrents nés
+à la même période — candidat de cohorte narrative pour un futur backfill
+ciblé. **Aucune adresse de contrat vérifiée à ce stade** — à ne jamais
+deviner ; si l'opérateur fournit le contrat exact du token gagnant et de
+ses clones, ce candidat rejoint la liste de tokens déjà identifiés plus
+haut dans ce document, avec la même exigence de vérification par adresse
+(jamais par nom/symbole affiché, cf. l'incident COPPERINU).
