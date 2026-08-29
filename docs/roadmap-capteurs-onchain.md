@@ -98,6 +98,32 @@ gagnant/perdant sert UNIQUEMENT à l'analyse après coup, jamais à la sélectio
 ou au calcul des features elles-mêmes. Le dataset doit contenir gagnants,
 moyens ET perdants — sinon on construit un détecteur de passé, pas de futur.
 
+### Protocole de labellisation du dataset (ajouté 29/08, décision opérateur)
+
+Trois catégories, jamais deux : **pump durable / non-scam** (continuation
+organique), **pump-and-dump / scam** (piège), **contrôles neutres**
+(n'explosent jamais — sans eux, un modèle apprend juste "grosse hausse = bon",
+pas "pump sain vs pump toxique"). Cible : 10 + 10 + 10 minimum.
+
+**Deux règles non négociables sur les labels :**
+1. **Un label ne se fige jamais avant d'avoir une preuve suffisante.** Un
+   token vieux de quelques heures avec une variation extrême n'est PAS
+   labellisable "durable" — il peut encore dumper. Un token n'entre dans le
+   dataset "pump durable" qu'après avoir démontré une continuation réelle sur
+   une fenêtre de plusieurs jours/semaines après le pic initial.
+2. **"Scam" exige une preuve objective, jamais la seule baisse de prix.**
+   Une baisse de 90% n'est PAS automatiquement un scam. Preuves acceptées :
+   liquidité retirée (liquidité actuelle << liquidité au pic alors que le prix
+   a moins chuté), honeypot confirmé, concentration de supply suivie d'un
+   dump corrélé, abandon avec drawdown extrême ET signal de retrait
+   coordonné. Sans preuve concrète citée : étiqueter "baisse de prix sans
+   preuve de scam", jamais "scam confirmé" par défaut.
+
+Les labels doivent être **figés avant tout calcul de feature**, et
+**indépendants des features elles-mêmes** — jamais choisir un token parce
+qu'une feature candidate "marche dessus". Voir la règle anti-look-ahead
+ci-dessus, qui s'applique symétriquement au choix des labels.
+
 ### Architecture cible
 
 ```
