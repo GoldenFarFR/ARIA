@@ -1266,7 +1266,16 @@ cohorte, pas seulement en ayant un volume élevé dans l'absolu.
    l'état on-chain disponible dans les secondes précédant CHAQUE
    renforcement (pas seulement l'achat initial) — objectif : extraire un
    pattern de comportement des bons traders sans les copier, en isolant ce
-   qui était objectivement observable à chaque décision.
+   qui était objectivement observable à chaque décision. **Premier candidat
+   trader concret banqué (29/08)** : le trader Fomo `gkisokay`, deux cas
+   observés le même jour — $AI (13 achats étalés du 28/07 au 18/08 en zone
+   de range $1.3M-$4.1M MC, vente partielle le 21/08 à $25.1M MC, +3537%)
+   et $MEUGLEMENT/MOO (7 trades le 26/08 en zone $230-245K MC, position
+   +737% observée le 29/08) — les deux avec une thèse publique écrite
+   AVANT la confirmation du marché (narratif "board seat"/vault pour $AI,
+   spéculation sur une promotion discrète pour $MOO), pas après coup.
+   Wallet/pseudo à identifier par adresse on-chain (jamais par pseudo seul)
+   avant tout usage réel en backfill.
 2. **Anomalie relative au marché entier comme baseline dynamique.** Plutôt
    qu'un seuil absolu par variable (deviné à l'avance), comparer un token
    à la distribution de TOUS les tokens actifs suivis sur la même chaîne
