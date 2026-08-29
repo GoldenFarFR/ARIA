@@ -796,3 +796,113 @@ de prix, plutôt que le prix seul.
 
 **Statut : exploration terminée, mini-spec formelle PAS encore écrite,
 attend le checkpoint Brique 2 de 17:08Z avant de démarrer.**
+
+## Scénario post-capteurs — contrat de destination (29/08, document d'architecture expérimentale, AUCUN CODE, AUCUNE règle de trading)
+
+Écrit maintenant que Briques 1-2 ont suffisamment avancé, pour que chaque
+brique restante sache précisément à quoi ses données doivent servir ensuite.
+**Ce n'est pas une nouvelle brique à coder** — le jalon concret reste
+inchangé : checkpoint Brique 2 -> Brique 3 -> Brique 4 -> Brique 5 ->
+backfill -> features -> discovery -> replay. Ce document sert de contrat :
+quand les capteurs sont terminés, on sait exactement ce que leurs données
+doivent permettre de faire, avant même d'écrire la première ligne de code
+du feature engine.
+
+### Séquence complète (remplace/précise le schéma court de la section "Roadmap complète du moteur")
+
+```
+1.  CAPTER
+2.  NORMALISER / PERSISTER
+3.  RECONSTRUIRE L'HISTORIQUE (backfill, Brique 6)
+4.  CONSTRUIRE LES FEATURES DYNAMIQUES
+5.  DÉTECTER LE RÉGIME (phase de marché)
+6.  DISCOVERY A/B/C
+7.  REPLAY CAUSAL
+8.  TEST OOS (out-of-sample)
+9.  SHADOW / PAPER
+10. SIMULATION D'EXÉCUTION
+11. ENTRÉE
+12. GESTION
+13. EXHAUSTION / SORTIE
+14. POST-MORTEM
+     ^ (boucle retour vers DISCOVERY)
+```
+
+### Distinction fondamentale — simulation des DÉCISIONS, jamais simulation du MARCHÉ
+
+Point le plus important de ce document : à l'étape 10 (simulation d'exécution),
+ARIA simule des achats/ventes, mais **jamais des données**. Le déroulé réel :
+
+```
+t0 : prix réel, swaps réels, BUY/SELL réels, traders réels, liquidité réelle
+  -> SIGNAL à t0
+  -> simulation d'un ACHAT (jamais un vrai ordre)
+  -> prix d'entrée = le prix réellement observable à t0, rien d'estimé
+  -> on rejoue ensuite le marché RÉEL : t+1s, t+5s, t+10s, t+30s, t+1m, ...
+  -> question posée à chaque pas : aurait-elle pu sortir ? à quel prix
+     réel ? avec quel slippage estimé ? quel MFE ? quel MAE ? quel PnL
+     net ? combien de temps avant exhaustion ?
+```
+
+Le marché rejoué est toujours celui qui s'est réellement produit (backfill
+ou temps réel) — seule la DÉCISION d'entrer/gérer/sortir est simulée. Un
+moteur qui inventerait des trajectoires de marché fictives briserait toute
+la chaîne de confiance construite depuis Brique 1 (données brutes jamais
+fabriquées) jusqu'ici.
+
+### Deux scénarios opposés à écrire dès maintenant (vocabulaire de référence, pas encore des règles)
+
+**Scénario A — continuation** :
+
+```
+pump -> retracement -> buy flow revient -> nouveaux traders ->
+higher lows -> liquidité suffisamment saine -> reprise ->
+entrée simulée -> continuation -> exhaustion -> sortie
+```
+
+**Scénario B — piège** :
+
+```
+pump -> distribution -> buy flow ralentit -> retracement persistant ->
+nouveaux acheteurs insuffisants -> pression vendeuse ->
+liquidité se détériore -> collapse
+```
+
+**Le vrai objectif d'apprentissage n'est pas "A a gagné, B a perdu"** — c'est
+comprendre POURQUOI le replay causal aurait dû choisir A plutôt que B au
+moment de la décision (quelles features, quelle combinaison, quelle
+trajectoire les distinguaient déjà à cet instant), jamais se contenter de
+constater le résultat final a posteriori. Cohérent avec le dataset A/B/C
+(Brique 6) et avec le journal causal déjà posé plus haut (`POURQUOI SIGNAL`,
+pas seulement `SIGNAL`).
+
+### Troisième simulation à ajouter — signal tardif (répond à "est-ce encore rentable d'entrer maintenant ?")
+
+Distinct des deux scénarios ci-dessus : mesurer, pour un même token gagnant,
+la valeur d'un signal détecté à différents points de sa trajectoire plutôt
+que de chercher obsessionnellement le tout premier mouvement :
+
+```
+signal à +100%  ->  probabilité de continuation, rendement potentiel
+signal à +300%      restant, risque de retracement, temps jusqu'à
+signal à +500%      exhaustion, coût d'exécution -- mesurés SÉPARÉMENT
+signal à +800%      à chaque point d'entrée, jamais agrégés ensemble
+signal à +1200%
+```
+
+Directement lié aux métriques de lead-time déjà posées plus haut
+(`lead_time_to_move`, `time_from_signal_to_exhaustion`) — ici appliquées
+spécifiquement à la question du timing d'entrée tardif, pas seulement à la
+détection initiale. Réponse attendue empirique, jamais supposée à l'avance :
+un signal statistiquement excellent qui n'apparaît qu'après +500% peut très
+bien rester rentable, ou au contraire déjà trop tardif — seul le replay
+causal sur le dataset A/B/C tranchera, pas une intuition.
+
+### Ce que ce contrat de destination fige (et ce qu'il ne fige PAS)
+
+**Fige** : le vocabulaire de référence (scénarios A/B, notion de signal
+tardif, distinction décision-simulée vs marché-réel), la séquence complète
+des 14 étapes, l'exigence que chaque étape journalise le POURQUOI. **Ne fige
+PAS** : aucune formule, aucun seuil, aucun poids, aucune feature validée —
+tout ça reste à découvrir empiriquement une fois le backfill (Brique 6)
+possible, exactement comme le reste de ce document.
