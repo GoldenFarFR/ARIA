@@ -473,37 +473,37 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #375 (research-log promotion 24/08, verified) — Anthropic's own "Claude Security" plugin: 3-agent adversarial quorum verifies findings before patching. Comparison point to strengthen the Avocat du Diable mechanism. (full detail: `docs/backlog-technique.md`)
 - #376 (research-log promotion 24/08, verified) — Term Finance lost $8.5M to a pure governance-capture exploit (2 ETH bootstrapped majority vote control, no contract bug). New diligence criterion for any real deposit under the dormant-capital-on-Base plan. (full detail: `docs/backlog-technique.md`)
 - #377 (research-log promotion 24/08, verified arXiv 2603.27539) — "Regime-shift blindness" can flip a backtest's reported sign (FinMem +23%→-22% example). Add mandatory multi-regime coverage to the v8 validation protocol, distinct from #337's DSR/PSR correction. (full detail: `docs/backlog-technique.md`)
-- #382 (25/08) — Cred Protocol's Sybil Detection endpoint, method candidate for #379's `smart_money.py` extension, pricing unverified. (`docs/backlog-technique.md`)
-- #383 (25/08) — Bankrbot/Grok drained via Morse-encoded prompt injection past a plain-text filter; verify no text-reading skill can reach `agent_wallet_pilot` with an encoded instruction. (`docs/backlog-technique.md`)
-- #384 (25/08) — `services/jupiter.py` still quotes via legacy `lite-api.jup.ag`; Jupiter Ultra v3 (34x better sandwich protection) is live — evaluate before pilot scale-up. (`docs/backlog-technique.md`)
-- #385 (25/08) — Pump.fun's "Callouts" (public shill broadcast) is a new pre-pump signal; verify `signal_cascade_x`/`_web` already capture it. (`docs/backlog-technique.md`)
-- #386 (25/08) — Sandbox SAND bridge drained via LayerZero delegate-permission hijack; add "delegate/permission model audit" to CCIP diligence. (`docs/backlog-technique.md`)
-- #387 (25/08) — Confirms slippage≤10% empirically; candidate on-chain TWAP-deviation circuit breaker if the real Solana pilot scales. (`docs/backlog-technique.md`)
+- #382 (25/08) — Cred Protocol's Sybil Detection endpoint, method candidate for #379's `smart_money.py` extension, pricing unverified.
+- #383 (25/08) — Bankrbot/Grok drained via Morse-encoded prompt injection past a plain-text filter; verify no text-reading skill can reach `agent_wallet_pilot` with an encoded instruction.
+- #384 (25/08) — `services/jupiter.py` still quotes via legacy `lite-api.jup.ag`; Jupiter Ultra v3 (34x better sandwich protection) is live — evaluate before pilot scale-up.
+- #385 (25/08) — Pump.fun's "Callouts" (public shill broadcast) is a new pre-pump signal; verify `signal_cascade_x`/`_web` already capture it.
+- #386 (25/08) — Sandbox SAND bridge drained via LayerZero delegate-permission hijack; add "delegate/permission model audit" to CCIP diligence.
+- #387 (25/08) — Confirms slippage≤10% empirically; candidate on-chain TWAP-deviation circuit breaker if the real Solana pilot scales.
 - #388 (25/08) — Robinhood Chain now has two live public AMMs — updates the stale 23/08 "no swap mechanism" note. Full diligence: `docs/aria-learning-inbox/2026-08-25-diligence-robinhood-chain-amm-live.md`.
-- #389 (25/08) — `thewaltero/mythos-sentinel`: EIP-712 spend mandates + EAS attestation, real engineering quality, overlaps #378. Not wired: unmaintained, pre-1.0, unaudited. (`docs/backlog-technique.md`)
-- #390 (26/08) — Ledger clear-signing race condition (Azimuth/EVMBench). Test case for #369 (ERC-7730) + candidate audit tools. (`docs/backlog-technique.md`)
-- #391 (26/08) — MemeChain: 34,988-memecoin labelled dataset, first external ground truth to calibrate ARIA's legitimacy engine against. (`docs/backlog-technique.md`)
-- #392 (26/08) — Zscaler: 2 live indirect-prompt-injection campaigns vs AI agents. New test cases for mandate #192. (`docs/backlog-technique.md`)
-- #393 (26/08) — x401 (Proof): open agent-identity protocol, complementary to x402. Relevant only if agentic buyers require it (issue #245). (`docs/backlog-technique.md`)
-- #394 (Avocat du Diable, 28/08) — 5 duplicated pause modules, divergent fail-open/closed semantics; `pause_registry.py` proposed, needs operator go (touches `outgoing_pause.py`). (`docs/backlog-technique.md`)
-- #395 (28/08) — "Mind Viruses": self-propagating instructions can spread via persistent, agent-edited system-prompt files; CLAUDE.md is this kind of file — future warning-paragraph edit needs operator validation. (`docs/backlog-technique.md`)
-- #396 (28/08) — PIMiner: transferable prompt-injection library, 42.9% success vs Claude-Sonnet-4.5. Feeds mandate #192. (`docs/backlog-technique.md`)
-- #397 (28/08) — "Coordinated Sniper Cohorts on Pump.fun": 1012 wallet rings via rigorous clustering. Candidate method for #379. (`docs/backlog-technique.md`)
-- #398 (28/08) — Step Finance ($40M theft) fell to compromised EXECUTIVE DEVICES, not a contract bug — new diligence criterion. (`docs/backlog-technique.md`)
-- #399 (28/08) — "Hour-Aware Adaptive Risk Management": top 1.6% of trades = 100% of profit, cross-confirms ARIA's own 20/08 corollary. (`docs/backlog-technique.md`)
-- #400 (29/08) — Claude Code CLI/SDK 3-CVE chain, patched 2.1.92/0.1.56; VPS version never checked against it. (`docs/backlog-technique.md`)
-- #401 (29/08) — `thesis_journal.py`/`conviction_research`: no structural check that a thesis claim links to a fetched URL. (`docs/backlog-technique.md`)
-- #402 (29/08) — a financial-advisory skill can pass install-time scan clean, fetch malicious payload later; add to install checklist. (`docs/backlog-technique.md`)
-- #403 (29/08) — named real trading-agent exploits (Freysa/$47k, $216k); verify no ARIA guardrail is NL-instruction-only. (`docs/backlog-technique.md`)
-- #404 (29/08) — 45.6% of teams share API keys across agents (KuCoin); verify no non-wallet key shared with `agent_wallet_pilot`. (`docs/backlog-technique.md`)
-- #405 (29/08) — MetaMask "Agent Wallet" pairs trading with capped loss-insurance ($10k/month); reference idea only. (`docs/backlog-technique.md`)
-- #406 (29/08) — residual `geckoterminal_client` (4 sites, default param never triggered) in robinhood_pump_shadow.py/_v2 after specs/015 deployed (3806aa11); #269 not literally satisfied for Robinhood. (`docs/backlog-technique.md`)
-- #407 (30/08, verified arXiv 2607.02823, real) — Pump.fun launches with a Telegram link graduate 8.94x more (1.485% vs 0.166%, n=832,941). Add `has_telegram` reusing `_enrich_paid_profile`'s existing `dexscreener`/`project_links` fetch, zero extra API cost. (`docs/backlog-technique.md`)
-- #408 (30/08) — "Memory contracts": declare in advance what an agent may believe and from which source, complementary to A-MemGuard. Candidate hardening for `knowledge/*.yaml`/`truth_ledger` alongside #395. (`docs/backlog-technique.md`)
-- #409 (30/08, verified WebSearch, real, $5.72M/6 chains) — Cosmos Labs cleared a bug bounty finding as "safe" after testing only one deployed config; exploited 4 months later on a different config. New VC-thesis diligence criterion, same family as #377. (`docs/backlog-technique.md`)
-- #410 (30/08, verified WebSearch, real, $290-292M) — KelpDAO/LayerZero hack: single 1-of-1 DVN poisoned via compromised RPC nodes + DDoS-forced failover. Diligence checklist item for the still-unbuilt Base↔Solana/Robinhood CCIP bridge plan. (`docs/backlog-technique.md`)
-- #411 (30/08, verified WebSearch, real) — Base ran a single centralized sequencer with no failover, froze twice for ~2h each (25-26/06/2026). New risk factor for the dormant-capital-on-Base plan + candidate scenario for `docs/runbook-incident-agent.md`. (`docs/backlog-technique.md`)
-- #412 (30/08) — consolidated diligence on 6 price-API candidates for critical issues #271/#269 (CoinGecko/DexPaprika outages); 2 ruled out on inspection (sandbox-only / wrong DEX coverage), 4 untested. Full detail: `docs/aria-learning-inbox/2026-08-30-price-api-alternatives-271-269.md`.
+- #389 (25/08) — `thewaltero/mythos-sentinel`: EIP-712 spend mandates + EAS attestation, real engineering quality, overlaps #378. Not wired: unmaintained, pre-1.0, unaudited.
+- #390 (26/08) — Ledger clear-signing race condition (Azimuth/EVMBench). Test case for #369 (ERC-7730) + candidate audit tools.
+- #391 (26/08) — MemeChain: 34,988-memecoin labelled dataset, first external ground truth to calibrate ARIA's legitimacy engine against.
+- #392 (26/08) — Zscaler: 2 live indirect-prompt-injection campaigns vs AI agents. New test cases for mandate #192.
+- #393 (26/08) — x401 (Proof): open agent-identity protocol, complementary to x402. Relevant only if agentic buyers require it (issue #245).
+- #394 (Avocat du Diable, 28/08) — 5 duplicated pause modules, divergent fail-open/closed semantics; `pause_registry.py` proposed, needs operator go (touches `outgoing_pause.py`).
+- #395 (28/08) — "Mind Viruses": self-propagating instructions can spread via persistent, agent-edited system-prompt files; CLAUDE.md is this kind of file — future warning-paragraph edit needs operator validation.
+- #396 (28/08) — PIMiner: transferable prompt-injection library, 42.9% success vs Claude-Sonnet-4.5. Feeds mandate #192.
+- #397 (28/08) — "Coordinated Sniper Cohorts on Pump.fun": 1012 wallet rings via rigorous clustering. Candidate method for #379.
+- #398 (28/08) — Step Finance ($40M theft) fell to compromised EXECUTIVE DEVICES, not a contract bug — new diligence criterion.
+- #399 (28/08) — "Hour-Aware Adaptive Risk Management": top 1.6% of trades = 100% of profit, cross-confirms ARIA's own 20/08 corollary.
+- #400 (29/08) — Claude Code CLI/SDK 3-CVE chain, patched 2.1.92/0.1.56; VPS version never checked against it.
+- #401 (29/08) — `thesis_journal.py`/`conviction_research`: no structural check that a thesis claim links to a fetched URL.
+- #402 (29/08) — a financial-advisory skill can pass install-time scan clean, fetch malicious payload later; add to install checklist.
+- #403 (29/08) — named real trading-agent exploits (Freysa/$47k, $216k); verify no ARIA guardrail is NL-instruction-only.
+- #404 (29/08) — 45.6% of teams share API keys across agents (KuCoin); verify no non-wallet key shared with `agent_wallet_pilot`.
+- #405 (29/08) — MetaMask "Agent Wallet" pairs trading with capped loss-insurance ($10k/month); reference idea only.
+- #406 (29/08) — residual `geckoterminal_client` in robinhood_pump_shadow.py/_v2 after specs/015; #269 not fully satisfied.
+- #407 (30/08) — Telegram link -> 8.94x graduation rate. Add `has_telegram` via existing `dexscreener` fetch.
+- #408 (30/08) — "Memory contracts": declare what an agent may believe and from which source, complements A-MemGuard/#395.
+- #409 (30/08, $5.72M/6 chains) — Cosmos Labs cleared a bounty "safe" on one config, exploited 4mo later on another. Criterion, family of #377.
+- #410 (30/08, $290-292M) — KelpDAO/LayerZero: 1-of-1 DVN poisoned via RPC+DDoS. Diligence item for the CCIP bridge plan.
+- #411 (30/08) — Base ran a single sequencer, froze twice ~2h (25-26/06). Risk factor for dormant-capital-on-Base + incident runbook.
+- #412 (30/08) — 6 price-API candidates for #271/#269; 2 ruled out, 4 untested. Detail: `docs/aria-learning-inbox/2026-08-30-price-api-alternatives-271-269.md`.
 
 ## Required reading (the detailed brain)
 `docs/etat-systeme-cable.md` (wired state, established facts) · `docs/architecture-extensibilite.md` (first) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **If a VPS migration (physical machine change) is in progress or being considered: read `docs/runbook-migration-vps.md` FIRST** — ordered checklist + 6 pitfalls already encountered and their precise cause (20/07), to avoid falling into them again. **If VPS SSH access breaks: `docs/runbook-ssh-depannage.md`.** **Before switching REAL Solana trading on or off: `docs/runbook-activation-trading-reel-solana.md`** -- the two gates that must move together, what bounds each trade, and the three ways to stop. **If the agent itself seems compromised/misbehaving (supply-chain worm, prompt injection, actions no longer matching requests): `docs/runbook-incident-agent.md`** — operator-facing 4-step emergency checklist (stop first, repair from a clean machine, never rotate secrets from the infected machine).
