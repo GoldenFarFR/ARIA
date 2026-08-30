@@ -68,21 +68,19 @@ from aria_core.paths import aria_db_path
 # impact: solana_late_bonding_shadow's sourcing (pumpfun_curve_tracker.py) and
 # pricing (pumpswap_ws.py) both gate on chain_spend("solana") -- a 0 cap stops
 # both immediately, fail-closed, until the operator raises this back up.
-# 30/08, operator-directed temporary raise: Brique 6's Groupe C research
-# backfill (session scratchpad, not production) consumed the day's Robinhood
-# cap by ~19:44 UTC (403 568/400 000), blocking real production discovery
-# (onchain_pool_discovery[robinhood] stuck at qualified_this_cycle=0). Raised
-# to cover the backfill's remaining measured need (~111 candidates x ~813 RU
-# each, ~90k) plus headroom for production to keep running normally the rest
-# of the day, rather than leaving both blocked until the 00:00 UTC reset.
-# Revert to 400_000 once Groupe C's stage-2 backfill concludes (see
-# docs/HANDOFF_PIPELINE_MOMENTUM.md, 30/08 entry) -- this is not a new
-# calibration of Robinhood's real sustained capacity.
 DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
     "base": 100_000,
     "solana": 0,
-    "robinhood": 550_000,
+    "robinhood": 400_000,
 }
+# 30/08 incident (reverted, see system_issues #279 and
+# docs/HANDOFF_PIPELINE_MOMENTUM.md): Brique 6's Groupe C research backfill
+# (session scratchpad, not production) consumed the day's Robinhood cap by
+# ~19:44 UTC (403 568/400 000), blocking real production discovery. Cap was
+# temporarily raised to 550_000 (19:49:30Z, commit a56e2511) to let both
+# production and the backfill run through the rest of the day, then reverted
+# here once the backfill concluded (20:55:36Z, final usage 512 828 RU) --
+# this was never a new calibration of Robinhood's real sustained capacity.
 # Fallback for any future 4th chain never explicitly calibrated above --
 # same conservative default the shared constant used before this split.
 _DEFAULT_CAP = 200_000

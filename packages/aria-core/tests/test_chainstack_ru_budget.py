@@ -174,10 +174,7 @@ async def test_used_today_read_is_cached_within_the_ttl(monkeypatch):
 def test_cap_for_returns_the_calibrated_per_chain_value():
     assert budget.cap_for("base") == 100_000
     assert budget.cap_for("solana") == 0
-    # 30/08: temporarily 550_000 (Brique 6 Groupe C research backfill starved
-    # production's normal 400_000 cap, see system_issues #279) -- revert this
-    # assertion to 400_000 once the temporary raise is reverted.
-    assert budget.cap_for("robinhood") == 550_000
+    assert budget.cap_for("robinhood") == 400_000
 
 
 def test_cap_for_unknown_chain_falls_back_to_default():
