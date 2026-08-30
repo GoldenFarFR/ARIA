@@ -1048,7 +1048,26 @@ tests (plan ci-dessus, écrits AVANT le code) → implémentation → suite
 complète → déploiement → observation → checkpoint. Aucune ligne de code
 avant le GO.
 
-## Mini-spec Brique 5 — Persistance complète (30/08, PRÉPARÉE, PAS IMPLÉMENTÉE)
+### Découverte empirique post-déploiement (30/08) — le seuil de staleness peut être plus strict que le rythme naturel du pool de référence
+
+En vérifiant Brique 5 en production, un premier test (fenêtre 30s) a
+donné l'impression d'un échec de souscription websocket sur le pool de
+référence Base -- diagnostic infirmé par un second test avec une fenêtre
+de 150s : un vrai swap est arrivé à t=40s (`price_usd=2459.22`, tx/bloc
+réels confirmés), pas de bug de souscription/dispatch. Une lecture RPC
+directe (`eth_getLogs`, hors websocket) a confirmé 15 vrais swaps sur ce
+pool $116M dans les ~10 minutes précédentes, soit un espacement moyen
+d'environ 40s -- **du même ordre de grandeur que `_ETH_USD_RATE_MAX_STALE_SECONDS
+= 30.0`**. Conséquence probable en usage normal (pas un bug, le
+fail-closed fonctionne exactement comme prévu) : `onchain_eth_usd_rate()`
+va retourner `None` plus souvent que souhaitable, simplement parce que le
+pool de référence a des creux d'activité naturels proches du seuil de
+staleness lui-même. **Sujet de calibration ouvert, jamais tranché ici** --
+la valeur `30.0` reste une constante de sécurité déjà validée par
+l'opérateur dans cette mini-spec, à ne modifier qu'avec un GO explicite
+distinct, jamais silencieusement en marge d'une autre brique.
+
+## Mini-spec Brique 5 — Persistance complète (30/08, code implémenté + tests verts + déployée, checkpoint production en cours)
 
 Statut : Briques 1-4 closes/déployées sur Base ET Robinhood (Brique 4
 vérifiée en production le 30/08, cf. HANDOFF). **Cette mini-spec prépare
@@ -1621,3 +1640,124 @@ divergeait dans les toutes premières heures. **Adresses tronquées
 ci-dessus à compléter (clic direct, jamais deviné) avant tout usage réel
 en backfill** — ce tableau reste un candidat banqué, pas encore un
 dataset prêt à l'emploi.
+
+## Extension — LP dynamique piloté par le régime (30/08, formulation opérateur, AUCUN CODE)
+
+**Hors des briques 1-6, jamais une brique à intercaler.** Piste de
+recherche banquée pour APRÈS le dataset historique (Brique 6), à traiter
+comme une branche parallèle distincte du moteur de trading, jamais
+mélangée aux garde-fous/paramètres de stratégie réels.
+
+### Le concept
+
+Sur Uniswap V3/V4, la liquidité concentrée ne se déplace jamais
+automatiquement avec le prix — une position sort de sa range et cesse de
+gagner des frais tant qu'elle n'est pas repositionnée manuellement (ou
+par un tiers). Le concept exploré ici : un LP dynamique dont la range se
+déplace selon un état du marché mesuré, pas selon une règle fixe choisie
+une fois pour toutes.
+
+```
+prix monte
+   ↓
+range actuelle approche de sa borne haute
+   ↓
+retirer/repositionner
+   ↓
+nouvelle range centrée plus haut
+   ↓
+continuer à capter les frais
+```
+
+### Pourquoi c'est pertinent pour ARIA spécifiquement
+
+Les Briques 1-5 mesurent déjà exactement ce dont un tel pilotage aurait
+besoin : prix instantané, buy/sell flow, participation (traders
+distincts), liquidité et son évolution. Un LP piloté par le régime
+consommerait les MÊMES primitives que le moteur de trading, sans capteur
+supplémentaire :
+
+```
+                     MARCHÉ
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+       prix↑        flow↑↑       traders↑
+          │            │            │
+          └────────────┼────────────┘
+                       ↓
+              état du marché
+                       ↓
+             position LP active
+                       ↓
+       ┌───────────────┴───────────────┐
+       │                               │
+   range trop basse               range trop haute
+       │                               │
+   déplacer ↑                      déplacer ↓
+```
+
+### La vraie difficulté économique
+
+Déplacer une range coûte réellement (remove liquidity + claim fees +
+swap éventuel de rééquilibrage + add liquidity + gas) — repositionner à
+chaque mouvement de prix serait probablement destructeur de valeur. La
+question de recherche n'est donc jamais "faut-il suivre le prix" mais :
+**à partir de quel déplacement de prix attendu et de quel niveau de frais
+supplémentaires le repositionnement devient-il rentable ?** — rejoint
+directement la notion de lead time / edge restant déjà présente dans la
+roadmap du moteur plus haut.
+
+### Ce qu'il faudrait tester historiquement (une fois Brique 6 dispo), jamais codé maintenant
+
+LP statique vs LP à range fixe vs LP repositionné périodiquement vs LP
+repositionné seulement au changement de régime détecté — comparés sur :
+
+```
+revenus de fees
+− impermanent loss
+− pertes liées aux mouvements hors-range
+− coût des repositionnements
+− gas
+= rendement net
+```
+
+Piste la plus intéressante à l'intérieur de cette recherche : un LP qui
+accepte volontairement de ne PAS être toujours actif — ne pas poursuivre
+un pump violent, laisser la liquidité sortir progressivement, attendre
+une consolidation/higher-lows/flow durable, puis recentrer. Le problème
+devient alors quasiment celui du trading lui-même : détecter la phase de
+marché et placer le capital là où le flux futur est probablement le plus
+intéressant — avec une divergence intéressante : un token peut être un
+mauvais achat spéculatif tout en étant un excellent marché pour un LP
+(volatilité + volume + prix qui oscille dans une zone), et inversement.
+
+### Point de vigilance — la concentration extrême n'est pas automatiquement supérieure
+
+Une liquidité très concentrée en un point capte plus de frais par dollar
+de capital, mais sort aussi plus vite de sa range et accumule fortement
+un seul actif dès que le prix bouge. Le vrai problème de recherche :
+
+```
+CAPITAL × DENSITÉ DE LIQUIDITÉ × VOLUME FUTUR × PROBABILITÉ DE RESTER DANS LA RANGE
+  − impermanent loss − coût de repositionnement
+```
+
+Une vraie question de recherche empirique, jamais une intuition à coder
+directement.
+
+### Où ça s'accroche à la roadmap
+
+```
+Briques 1-6
+     ↓
+dataset historique
+     ├── branche A : moteur de trading
+     └── branche B : LP dynamique
+```
+
+La branche B réutiliserait les mêmes primitives de Brique 5 (prix
+instantané + liquidité + flow + participation) pour tester, sur
+l'historique reconstruit, si une position concentrée dynamiquement
+repositionnée bat réellement une position statique et le simple hold —
+jamais assumé, toujours à vérifier empiriquement avant tout code.
