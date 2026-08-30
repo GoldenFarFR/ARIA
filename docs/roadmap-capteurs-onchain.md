@@ -1067,7 +1067,7 @@ la valeur `30.0` reste une constante de sécurité déjà validée par
 l'opérateur dans cette mini-spec, à ne modifier qu'avec un GO explicite
 distinct, jamais silencieusement en marge d'une autre brique.
 
-## Mini-spec Brique 5 — Persistance complète (30/08, code implémenté + tests verts + déployée, checkpoint production en cours)
+## Mini-spec Brique 5 — Persistance complète (30/08, DÉPLOYÉE ET CHECKPOINT FERMÉ — voir `docs/HANDOFF_PIPELINE_MOMENTUM.md` entrée 2026.08.30)
 
 Statut : Briques 1-4 closes/déployées sur Base ET Robinhood (Brique 4
 vérifiée en production le 30/08, cf. HANDOFF). **Cette mini-spec prépare
