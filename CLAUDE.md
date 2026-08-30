@@ -270,25 +270,13 @@ research extension: `docs/roadmap-capteurs-onchain.md` — edit that file in
 place, never restate the detail here. Checkpoint facts:
 `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
 
-## Active state — Brique 6 methodical analysis / Groupe C construction (30/08)
-Iterative analysis on the FROZEN 9-pool dataset (`analysis_v001`->`v018`,
-session scratchpad) plus a neutral control group (Groupe C) under
-construction, in progress. Durable invariants to respect in any future
-session on this topic — full detail/current numbers never restated here,
-always `docs/HANDOFF_PIPELINE_MOMENTUM.md` (30/08 entry):
-- FROZEN dataset never rewritten, whatever new analysis runs.
-- Real time == backfill, same decoder/same semantics, always.
-- T0 (`activity_ratio_vs_baseline15m >= 5`) stays frozen — never lowered,
-  even when a control population rarely reaches it.
-- C0 (insufficient history to test the protocol) / C1 (tested, no shock) /
-  C2 (T0 detected) are three DISTINCT populations, never merged.
-- Groupe C (activity-shock control) is never mixed with category D
-  (no-event/no-T0 pools) — different experimental question.
-- Candidate selection for C is purely structural — never filtered on
-  price/activity/flow/liquidity; only the final label may depend on
-  future trajectory.
-- No opportunistic reclassification, no tuning after seeing results.
-- X/FOMO social-attention extension is banked, not an active workstream.
+## Active state — Brique 6 analysis / Groupe C (30/08)
+Iterative analysis on the FROZEN 9-pool dataset (`v001`->`v018`) plus a
+neutral control (Groupe C) under construction. Invariants: FROZEN never
+rewritten; T0 (`activity_ratio_vs_baseline15m >= 5`) never lowered;
+C0/C1/C2/D stay 4 distinct populations, never merged; C selection is
+purely structural, never filtered on price/activity/flow; no tuning
+after results. Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (30/08).
 
 ## Active state — pocket lineup (18/08, explicit operator decision, updated 28/08)
 **Active sourcing pockets**: swing + vc, `solana_late_bonding_shadow` (only Solana sourcing pocket since FAST discovery's 21/08 retirement — its exit tracking stays wired until open positions close, closures kept as the control group), `robinhood_pump_shadow`/`robinhood_pump_v2_shadow`, and `base_momentum_shadow`. Scalping v1-v9, "megacap", Solana FAST discovery, and — as of 28/08, code/tests/docs cleaned, verified never called anywhere and never above +25% PnL on the full closure sample — `solana_support_bounce_shadow`/`_v2` and `solana_variant_shadow` are fully retired. Two additions since 18/08: `solana_pump_shadow` ("tendance", already-graduated Solana pools, reactivated 23/08 after operator question, sourced via DexPaprika never GeckoTerminal) and `dip_recovery_v2_shadow` (Base+Robinhood, market-cap-bounded dip-buying, +25% take-profit/no stop-loss/168h timeout, gate `ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED` live since 27/08 — **its "100% winrate" reads are a structural artifact, not yet a real measurement**: with no stop-loss, a position can only close via take-profit or the 7-day timeout, and zero timeout has fired yet as of 28/08 — first real read possible starting ~02/09. Also has no latent/mark-to-market PnL on open positions today, only realized PnL at close). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 and 27/08 entries).
