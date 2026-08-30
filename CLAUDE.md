@@ -270,13 +270,14 @@ research extension: `docs/roadmap-capteurs-onchain.md` — edit that file in
 place, never restate the detail here. Checkpoint facts:
 `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
 
-## Active state — Brique 6 analysis / Groupe C (30/08)
-Iterative analysis on the FROZEN 9-pool dataset (`v001`->`v018`) plus a
-neutral control (Groupe C) under construction. Invariants: FROZEN never
-rewritten; T0 (`activity_ratio_vs_baseline15m >= 5`) never lowered;
-C0/C1/C2/D stay 4 distinct populations, never merged; C selection is
-purely structural, never filtered on price/activity/flow; no tuning
-after results. Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (30/08).
+## Active state — Brique 6 analysis / Groupe C FROZEN (30/08)
+Iterative analysis on the FROZEN 9-pool A/B dataset (`v001`->`v018`).
+Groupe C now FROZEN too: 11 pools, `groupC_dataset_FROZEN_2026-08-30.db`,
+never rewritten. Invariants: T0 (`activity_ratio_vs_baseline15m >= 5`)
+never lowered; C0/C1/C2/D stay 4 distinct populations, never merged; C
+selection was purely structural, never filtered on price/activity/flow;
+no tuning after results. Next: first A/B/C comparative analysis. Detail:
+`docs/HANDOFF_PIPELINE_MOMENTUM.md` (30/08).
 
 ## Active state — pocket lineup (18/08, explicit operator decision, updated 28/08)
 **Active sourcing pockets**: swing + vc, `solana_late_bonding_shadow` (only Solana sourcing pocket since FAST discovery's 21/08 retirement — its exit tracking stays wired until open positions close, closures kept as the control group), `robinhood_pump_shadow`/`robinhood_pump_v2_shadow`, and `base_momentum_shadow`. Scalping v1-v9, "megacap", Solana FAST discovery, and — as of 28/08, code/tests/docs cleaned, verified never called anywhere and never above +25% PnL on the full closure sample — `solana_support_bounce_shadow`/`_v2` and `solana_variant_shadow` are fully retired. Two additions since 18/08: `solana_pump_shadow` ("tendance", already-graduated Solana pools, reactivated 23/08 after operator question, sourced via DexPaprika never GeckoTerminal) and `dip_recovery_v2_shadow` (Base+Robinhood, market-cap-bounded dip-buying, +25% take-profit/no stop-loss/168h timeout, gate `ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED` live since 27/08 — **its "100% winrate" reads are a structural artifact, not yet a real measurement**: with no stop-loss, a position can only close via take-profit or the 7-day timeout, and zero timeout has fired yet as of 28/08 — first real read possible starting ~02/09. Also has no latent/mark-to-market PnL on open positions today, only realized PnL at close). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 and 27/08 entries).
