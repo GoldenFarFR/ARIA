@@ -1048,6 +1048,154 @@ tests (plan ci-dessus, écrits AVANT le code) → implémentation → suite
 complète → déploiement → observation → checkpoint. Aucune ligne de code
 avant le GO.
 
+## Mini-spec Brique 5 — Persistance complète (30/08, PRÉPARÉE, PAS IMPLÉMENTÉE)
+
+Statut : Briques 1-4 closes/déployées sur Base ET Robinhood (Brique 4
+vérifiée en production le 30/08, cf. HANDOFF). **Cette mini-spec prépare
+uniquement Brique 5** — aucune implémentation avant accord explicite de
+l'opérateur, même discipline que les briques précédentes.
+
+### Reformulation de l'objectif (cadrage opérateur, 30/08)
+
+Faire de `onchain_activity_observation_log` **la représentation temporelle
+complète** des primitives déjà validées (Briques 1-4), sans introduire de
+nouvelle sémantique ni de nouveau capteur. Concrètement : traiter
+explicitement `price` (prix instantané), `liquidity_level` (niveau de
+liquidité instantané, distinct des deltas déjà stockés), les deltas
+Brique 2/3 (déjà couverts, inchangés), la valeur USD issue de Brique 4, et
+les règles `baseline_reset`/restart existantes.
+
+### Point d'ancrage exact dans le code déjà déployé
+
+`onchain_activity_observation.py` (lu intégralement le 30/08) capture déjà
+trois axes -- A (activité : `swap_count`/`cumulative_volume_quote`/
+`distinct_traders_count`), B (direction : `buy_count`/`sell_count`/
+volumes), C (liquidité en MOUVEMENT : `liquidity_added_quote`/
+`liquidity_removed_quote`/leurs équivalents `_raw`) -- chacun avec ses
+deltas restart-safe (`_last_observed`, `baseline_reset`). **Ce qui manque,
+confirmé en relisant `EVMSwapSnapshot` (`evm_swap_ws.py:269-385`) champ par
+champ** : la table n'a AUCUNE colonne pour un état INSTANTANÉ -- ni le prix
+(`price_quote`/`price_usd`), ni le niveau de liquidité ABSOLU résident
+dans le pool à cet instant (`reserve_usd`/`raw_liquidity`/
+`quote_reserve_raw`). Elle ne répond aujourd'hui qu'à "qu'est-ce qui s'est
+passé depuis la dernière observation", jamais à "où en était le marché à
+cet instant T" -- exactement le trou que Brique 5 doit combler, sans
+toucher aux trois axes déjà câblés.
+
+Le point d'appel réel (`onchain_pool_discovery.py:425-449`, à étendre, pas
+réécrire) construit déjà chaque appel à `record_observation()` à partir du
+MÊME `snapshot` (`EVMSwapWebSocketFeed.get_snapshot()`) qui expose déjà
+`price_quote`/`price_usd`/`reserve_usd`/`raw_liquidity`/
+`quote_reserve_raw` -- zéro nouvel appel réseau, zéro nouveau capteur,
+strictement de la lecture de champs déjà résolus par les Briques 1-4.
+
+### Distinction cruciale -- valeurs cumulatives/delta (existant) vs valeurs instantanées/snapshot (nouveau)
+
+Les colonnes existantes (`swap_count`, `cumulative_volume_quote`,
+`buy_volume_quote`, `liquidity_added_quote`, etc.) sont des **cumulatifs
+depuis `add_pool()`**, avec un delta calculé contre la dernière
+observation via `_last_observed` -- ce mécanisme reste inchangé, Brique 5
+n'y touche pas.
+
+`price_quote`/`price_usd`/`reserve_usd`/`raw_liquidity`/
+`quote_reserve_raw` sont d'une nature DIFFÉRENTE : ce sont des valeurs
+**instantanées** (l'état du pool AU MOMENT de l'observation, pas une somme
+depuis le démarrage du suivi). Le concept de "delta contre la dernière
+observation" ne s'applique donc PAS à ces champs -- il n'y a rien à
+comparer, chaque observation enregistre l'état réel à cet instant, point.
+**Ne jamais réutiliser le mécanisme `_last_observed`/`baseline_reset`
+existant pour ces colonnes** -- ce serait une fausse delta sur une donnée
+qui n'en a pas besoin, et une confusion pour toute lecture future de la
+table. `baseline_reset` reste un signal valable pour les colonnes
+cumulatives existantes uniquement.
+
+### Valeur USD issue de Brique 4 (le second manque explicite du cadrage)
+
+Deux informations distinctes à distinguer, ne jamais les fusionner en une
+seule colonne :
+
+1. **`reserve_usd` du pool observé lui-même** -- déjà exposé par
+   `get_snapshot()`, résolu nativement pour `quote_is_stable`, et
+   maintenant aussi pour `quote_is_weth` via `_handle_sync` +
+   `onchain_eth_usd_rate()` (Brique 4, `evm_swap_ws.py`, commit
+   `649ba907`). Une simple lecture du snapshot, comme tous les autres
+   champs de cette section.
+2. **Le taux `onchain_eth_usd_rate(chain)` utilisé à ce moment précis** --
+   une donnée DIFFÉRENTE : le taux de référence lui-même, indépendant du
+   pool observé. Utile pour la traçabilité/le debug (comprendre POURQUOI
+   un `reserve_usd` a une certaine valeur, ou pourquoi il est resté `None`
+   un instant donné si le pool de référence était stale/non suivi) --
+   candidat à une colonne séparée (`eth_usd_rate_at_observation` ou
+   équivalent), à confirmer avec l'opérateur avant implémentation : ce
+   n'est pas strictement une primitive de POOL comme le reste de la
+   table, c'est une donnée de CONTEXTE partagée par tous les pools
+   `quote_is_weth` de la même chaîne au même instant.
+
+### Nouvelles colonnes proposées (additives, migration à chaud comme Briques 2/3)
+
+```
+price_quote REAL          -- snapshot.price_quote, instantané, jamais de delta
+price_usd REAL             -- snapshot.price_usd, instantané, jamais de delta
+reserve_usd REAL           -- snapshot.reserve_usd, instantané, jamais de delta
+raw_liquidity REAL         -- snapshot.raw_liquidity (v3/v4), instantané, jamais de delta
+quote_reserve_raw REAL     -- snapshot.quote_reserve_raw (v2), instantané, jamais de delta
+eth_usd_rate_at_observation REAL  -- CANDIDAT, à confirmer (cf. section ci-dessus)
+```
+
+Toutes `NULL` par défaut, jamais un `0.0` fabriqué -- même doctrine
+"`None` reste `None`" que le reste du module (docstring déjà en tête de
+fichier, inchangée).
+
+### Fail-closed / `None` reste `None` (même doctrine que Briques 1-4)
+
+`available=False` (déjà le branchement existant du module) doit continuer
+à enregistrer TOUTES les colonnes -- anciennes et nouvelles -- comme
+`NULL`. Un `price_usd`/`reserve_usd` à `None` dans le snapshot (pool
+`quote_is_weth` dont le taux Brique 4 n'a pas résolu) doit rester `None`
+dans la table, jamais une valeur de repli calculée localement dans ce
+module -- l'observation reste strictement un miroir du snapshot, jamais
+une seconde source de vérité.
+
+### Ce que Brique 5 ne fait PAS
+
+Aucun score, aucun seuil, aucune feature dérivée (ex. volatilité,
+acceleration de prix) calculée ou stockée ici -- strictement la même
+doctrine "log-only, best-effort" que les trois axes déjà en place. Ne
+touche pas au format des colonnes existantes ni à leur mécanisme de
+delta. Ne migre pas `discovery_liquidity_observation.py` (axe liquidité
+DEX-fournisseur séparé, hors scope). N'introduit aucune nouvelle connexion
+réseau -- 100% des champs proposés existent déjà sur `EVMSwapSnapshot`.
+
+### Plan de tests obligatoire (avant toute implémentation)
+
+1. Snapshot disponible avec `price_quote`/`price_usd`/`reserve_usd`
+   résolus (pool `quote_is_stable`) -> les trois colonnes enregistrées
+   exactement, aucun delta calculé pour elles.
+2. Snapshot disponible mais `price_usd`/`reserve_usd` à `None` (pool
+   `quote_is_weth`, taux Brique 4 indisponible) -> colonnes `NULL` dans la
+   table, jamais une valeur de repli.
+3. `available=False` -> toutes les colonnes (anciennes ET nouvelles)
+   `NULL`, comportement inchangé.
+4. Deux observations consécutives du même pool avec un prix différent ->
+   les deux valeurs enregistrées telles quelles, AUCUN champ delta associé
+   à `price_quote`/`price_usd`/`reserve_usd`/`raw_liquidity`/
+   `quote_reserve_raw` n'existe dans le schéma (vérifier qu'aucun a été
+   ajouté par erreur).
+5. Non-régression : les colonnes/deltas existants (axes A/B/C) restent
+   strictement inchangés en valeur et en comportement restart
+   (`baseline_reset`) pour une séquence d'observations identique à avant
+   Brique 5.
+6. Migration à chaud : une base déjà en production avec l'ancien schéma
+   (sans les nouvelles colonnes) doit passer par `db_migrations.ensure_columns`
+   sans perte des lignes existantes, même pattern que Briques 2/3.
+
+### Séquence d'exécution (même protocole que Briques 1-4)
+
+Documentation/mini-spec (ce document) → GO explicite de l'opérateur,
+notamment sur la colonne candidate `eth_usd_rate_at_observation` → tests
+(plan ci-dessus, écrits AVANT le code) → implémentation → suite complète →
+déploiement → observation → checkpoint. Aucune ligne de code avant le GO.
+
 ## Scénario post-capteurs — contrat de destination (29/08, document d'architecture expérimentale, AUCUN CODE, AUCUNE règle de trading)
 
 Écrit maintenant que Briques 1-2 ont suffisamment avancé, pour que chaque
