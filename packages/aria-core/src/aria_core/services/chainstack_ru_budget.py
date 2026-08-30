@@ -68,10 +68,16 @@ from aria_core.paths import aria_db_path
 # impact: solana_late_bonding_shadow's sourcing (pumpfun_curve_tracker.py) and
 # pricing (pumpswap_ws.py) both gate on chain_spend("solana") -- a 0 cap stops
 # both immediately, fail-closed, until the operator raises this back up.
+# 30/08, second temporary raise this same day, operator-directed pre-emptive
+# (not reactive this time): Groupe C2-bis's backfill (Brique 6, session
+# scratchpad, not production) re-exhausted the day's 400_000 cap by ~22:45
+# UTC (514 515/400 000) partway through a 300-candidate run. Same mitigation
+# as the first incident (see system_issues #279, #280) -- raise, let both
+# production and the backfill run, revert to 400_000 once the run concludes.
 DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
     "base": 100_000,
     "solana": 0,
-    "robinhood": 400_000,
+    "robinhood": 800_000,
 }
 # 30/08 incident (reverted, see system_issues #279 and
 # docs/HANDOFF_PIPELINE_MOMENTUM.md): Brique 6's Groupe C research backfill
