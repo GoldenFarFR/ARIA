@@ -1821,3 +1821,37 @@ le contrat de données de cette mesure (input à T, output futur incluant
 exit réalisable et exhaustion), puis vérifier empiriquement, out-of-sample,
 si ces distributions ont une vraie valeur prédictive — jamais assumé avant
 d'être testé sur le dataset réel.
+
+### Étape A, prototype 9 pools -- DATASET BRUT GELÉ (30/08)
+
+Backfill complet exécuté et vérifié sur les 9 pools validés (MSR/V2,
+Copper Inu V3+V4, PDEX/TWO/MU/CHARITY/PAWHOOD/HOODHIM/V4) — le protocole
+en 2 étapes de l'opérateur (dry-run coût/métadonnées, puis backfill
+complet) a été suivi intégralement, jamais raccourci. Bilan final :
+
+```
+9 pools, ~156k events décodés, 106 704 appels RPC total, 0 fenêtre FAILED
+(100% COMPLETE), 0 timestamp NULL après retry ciblé, 0 doublon,
+buy+sell+undetermined == swap_count vérifié sur les 9 pools.
+```
+
+**Distinction désormais actée, à respecter par toute session future** :
+
+- **Dataset brut gelé** — les événements tels que reconstruits on-chain
+  (`raw_event_log`/`normalized_event_log`/`backfill_window`/
+  `pool_metadata`), copie figée en lecture seule
+  (`brique6_dataset_FROZEN_2026-08-30.db`, scratchpad de cette session,
+  hash SHA-256 `6b2b1abf...082102a`) — **jamais réécrit**, quelle que soit
+  l'expérimentation analytique qui suit.
+- **Features analytiques** — tout ce qui se calcule PAR-DESSUS ce dataset
+  (delta-log du prix, vitesse/accélération, régimes ACCUMULATION->
+  EXPANSION->EXHAUSTION, market cap éventuel via `totalSupply()` — encore
+  absent du dataset brut, à ajouter uniquement côté feature, jamais en
+  rétro-modifiant le brut) — recalculable à volonté, jamais gravé.
+
+Un bug de perf réel trouvé et corrigé pendant ce backfill (récupération
+séquentielle des timestamps sans commit intermédiaire — 24 minutes de
+travail perdues une fois avant le fix) : détail dans
+`docs/HANDOFF_PIPELINE_MOMENTUM.md`. Prochaine étape, hors scope de cette
+entrée : l'analyse gagnants/perdants proprement dite, sur ce dataset gelé
+— pas avant une relecture de ce même document par la session qui l'entame.
