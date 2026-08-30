@@ -227,6 +227,35 @@ def test_missing_accounts_are_skipped_not_guessed(monkeypatch):
     assert t.progress_of("mintB") is None
 
 
+# --- dedicated node on/off switch (30/08) ------------------------------------
+# Operator-requested lever scoped to exactly this node -- distinct from
+# shadow_pause (whole standalone process) and ARIA_SOLANA_TRADE_PILOT_ENABLED
+# (real execution only). Must spend zero credits when off, and default to on
+# so an unset env never silently stops a tracker that was working before.
+
+def test_node_gate_off_spends_zero_credits(monkeypatch):
+    calls = {"n": 0}
+
+    async def counting(http_client, url, pubkeys):
+        calls["n"] += 1
+        import base64
+        return [{"data": [base64.b64encode(_curve_bytes(0.42)).decode(), "base64"]} for _ in pubkeys]
+
+    monkeypatch.setattr(tracker, "_rpc_get_multiple_accounts", counting)
+    monkeypatch.setenv("ARIA_SOLANA_CURVE_TRACKER_NODE_ENABLED", "false")
+    t = PumpFunCurveTracker(rpc_http_url="http://rpc.test")
+    t.add("mintA", "poolA")
+    moved = asyncio.run(t.poll_due(http_client=None, now=10_000.0))
+    assert moved == []
+    assert calls["n"] == 0
+    assert t.credits_spent == 0
+
+
+def test_node_gate_defaults_on_when_unset(monkeypatch):
+    monkeypatch.delenv("ARIA_SOLANA_CURVE_TRACKER_NODE_ENABLED", raising=False)
+    assert tracker.node_enabled() is True
+
+
 # --- state persistence -------------------------------------------------------
 # Real incident 2026.08.21: a restart emptied the tracker and a switchover done
 # in the following minute found it with nothing to offer. It only knows tokens

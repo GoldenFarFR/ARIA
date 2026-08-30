@@ -909,6 +909,13 @@ _KNOWN_ENABLED_GATES = {
     # gate: closing an account sends a real signed transaction, so cleanup
     # being on must never be implied by trading being on. Ships OFF.
     "ARIA_SOLANA_RENT_RECOVERY_ENABLED",
+    # 30/08, operator-requested -- a lever scoped to exactly the dedicated
+    # RPC node pumpfun_curve_tracker.py polls, distinct from shadow_pause
+    # (cuts the whole standalone process, Solana+Robinhood+Base together)
+    # and from ARIA_SOLANA_TRADE_PILOT_ENABLED (real execution only, never
+    # sourcing). Ships ON by default (fail-open, observation only, zero
+    # capital) -- operator flips it OFF explicitly to stop this node's spend.
+    "ARIA_SOLANA_CURVE_TRACKER_NODE_ENABLED",
     "ARIA_SIGNAL_CASCADE_FALSIFIABILITY_ENABLED",
     "ARIA_SKILL_PROJECTS_ENABLED",
     "ARIA_SMART_SWING_ENABLED",

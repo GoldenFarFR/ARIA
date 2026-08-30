@@ -84,6 +84,23 @@ def default_polling_rpc_url() -> str:
     return (os.environ.get(POLLING_RPC_HTTP_ENV, "") or "").strip() or RPC_HTTP_DEFAULT
 
 
+# 30/08, operator-requested: a lever scoped to exactly the RPC node this
+# tracker polls, nothing broader. Distinct from `shadow_pause` (which cuts
+# the WHOLE standalone process -- Solana AND Robinhood AND Base together)
+# and from `ARIA_SOLANA_TRADE_PILOT_ENABLED` (which only ever gates real
+# execution, never sourcing) -- neither let the operator turn off just this
+# one node's credit spend without also freezing Robinhood/Base tracking or
+# leaving the poll running regardless. Fails OPEN (default True) -- this is
+# observation only, zero capital, same doctrine as shadow_pause.is_paused().
+NODE_GATE_ENV = "ARIA_SOLANA_CURVE_TRACKER_NODE_ENABLED"
+
+
+def node_enabled() -> bool:
+    return os.environ.get(NODE_GATE_ENV, "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # Solana's hard per-call limit for getMultipleAccounts. The shared helper does
 # NOT chunk, so this module must.
 MAX_ACCOUNTS_PER_CALL = 100
@@ -402,6 +419,8 @@ class PumpFunCurveTracker:
         without re-reading the whole set.
         """
         now = time.monotonic() if now is None else now
+        if not node_enabled():
+            return []  # dedicated node switched off -- zero credits spent, zero mint lost (still tracked, just not polled)
         due = self.due(now=now)
         if not due:
             return []

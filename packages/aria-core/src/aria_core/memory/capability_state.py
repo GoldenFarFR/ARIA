@@ -22,6 +22,7 @@ _CAPABILITY_GATES: tuple[tuple[str, str], ...] = (
     ("ARIA_SEPOLIA_WALLET_ENABLED", "Rehearsal Sepolia — wallet testnet"),
     ("ARIA_SEPOLIA_AUTONOMOUS_ENABLED", "Rehearsal Sepolia — décision+exécution autonome (testnet)"),
     ("ARIA_BONDING_DISCOVERY_ENABLED", "Découverte tokens en phase de bonding (Virtuals)"),
+    ("ARIA_SOLANA_CURVE_TRACKER_NODE_ENABLED", "Nœud RPC Solana dédié au polling batché curve_tracker (défaut ON)"),
     ("ARIA_PAPER_TRADING_ENABLED", "Paper-trading 1M$ (portefeuille simulé)"),
     ("ARIA_MARKET_SENTIMENT_ENABLED", "Sentiment de marché continu (BTC/ETH)"),
     ("ARIA_PUMP_DUMP_AUTOPSY_ENABLED", "Autopsie pump/dump automatique"),
