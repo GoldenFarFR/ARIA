@@ -1761,3 +1761,63 @@ instantané + liquidité + flow + participation) pour tester, sur
 l'historique reconstruit, si une position concentrée dynamiquement
 repositionnée bat réellement une position statique et le simple hold —
 jamais assumé, toujours à vérifier empiriquement avant tout code.
+
+## Extension — moteur de scénarios conditionnels / capacité d'extraction réelle (30/08, formulation opérateur, AUCUN CODE)
+
+**Hors des briques 1-6, dépend directement du dataset de Brique 6.** Piste
+de recherche banquée, jamais un code à écrire avant que le backfill
+existe.
+
+### Le problème central
+
+Trois grandeurs distinctes, jamais interchangeables sur un memecoin peu
+liquide : `market cap` (valeur théorique de tous les tokens au dernier
+prix), `position value` (valeur affichée du portefeuille au dernier prix),
+`exit value` (ce qui est réellement récupérable en vendant, compte tenu du
+slippage et de la profondeur du pool). Un token à $20M de market cap avec
+$300K de liquidité peut rendre une position de $2M presque impossible à
+sortir proprement — la richesse affichée dépend de la continuité du jeu
+PvP, pas d'une valeur figée.
+
+### Ce que ça change pour ARIA
+
+Plutôt que de chercher "jusqu'où ce token peut monter" (prédiction de
+prix), la question utile devient une distribution empirique de
+trajectoires comparables, PUIS pour chaque trajectoire, ce qu'un
+participant aurait réellement pu extraire compte tenu de la liquidité
+disponible à chaque étape :
+
+```
+INPUT à T (état observable, zéro look-ahead)
+→ prix, liquidité, delta liquidité, buy/sell flow, participation, régime
+        ↓
+recherche de trajectoires historiques comparables (Brique 6)
+        ↓
+OUTPUT futur RÉEL de chaque trajectoire comparable
+→ mcap atteint, durée, drawdown avant niveau,
+  liquidité disponible à chaque palier,
+  EXIT RÉELLEMENT RÉALISABLE (jamais juste le prix atteint)
+```
+
+### Capacité d'absorption — la feature la plus prometteuse de cette extension
+
+À chaque instant, à partir de la liquidité courante + flow acheteur/
+vendeur + variation de liquidité (déjà mesurés par Briques 2-3-5, zéro
+nouveau capteur) : combien de pression vendeuse supplémentaire le marché
+peut-il absorber avant une dégradation importante du prix ? Cette courbe
+d'exit, comparée à la taille de position envisagée, ouvre la voie à un
+sizing piloté par la capacité d'extraction réelle plutôt que par un
+pourcentage fixe du capital.
+
+### Où ça s'accroche à la roadmap
+
+Directement à la séquence déjà posée dans "Architecture cible" plus haut
+(`HISTORICAL BACKFILL -> EVENTS -> FEATURE ENGINE -> DISCOVERY RULES ->
+REPLAY CAUSAL`) et au principe "exhaustion" du cadrage PvP : ARIA doit
+détecter non seulement le déséquilibre exploitable, mais aussi le montant
+réellement extractible à chaque étape avant qu'il ne disparaisse. Prochaine
+étape méthodologique, une fois Brique 6 disponible : définir précisément
+le contrat de données de cette mesure (input à T, output futur incluant
+exit réalisable et exhaustion), puis vérifier empiriquement, out-of-sample,
+si ces distributions ont une vraie valeur prédictive — jamais assumé avant
+d'être testé sur le dataset réel.
