@@ -277,6 +277,174 @@ def test_handle_sync_skips_zero_reserve_without_recording_a_tick():
     assert pool.swap_count == 0
 
 
+# --- onchain_eth_usd_rate (brique 4, roadmap-capteurs-onchain.md 29/08) -----
+
+def _base_ref_pool_key() -> str:
+    return m._ETH_USD_REFERENCE_POOL_BY_CHAIN["base"].lower()
+
+
+def _stable_ref_pool(**overrides) -> m._TrackedPool:
+    defaults = dict(
+        dex_id="uniswap_v3", family="v3", token_is_currency0=True,
+        decimals0=18, decimals1=6, quote_is_weth=False, quote_is_stable=True,
+    )
+    defaults.update(overrides)
+    return m._TrackedPool(**defaults)
+
+
+def test_onchain_eth_usd_rate_reads_the_reference_pool_price_usd():
+    """Plan de tests #1 -- pool de référence quote_is_stable=True déjà
+    suivi, snapshot disponible -> onchain_eth_usd_rate retourne son
+    price_usd exact, sans aucun appel réseau (get_snapshot uniquement)."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    ref_pool.ticks.append((time.monotonic(), 4321.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    assert feed.onchain_eth_usd_rate() == pytest.approx(4321.0)
+
+
+def test_onchain_eth_usd_rate_none_when_reference_pool_not_tracked():
+    """Plan de tests #2 -- pool de référence pas encore suivi -> None,
+    jamais une exception."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    assert feed.onchain_eth_usd_rate() is None
+
+
+def test_onchain_eth_usd_rate_none_for_a_chain_with_no_reference_pool_configured():
+    feed = m.EVMSwapWebSocketFeed(chain="some_future_chain", ws_url="wss://test.invalid", chain_id=1)
+    feed._connected = True
+    assert feed.onchain_eth_usd_rate() is None
+
+
+def test_onchain_eth_usd_rate_none_when_snapshot_stale():
+    """Plan de tests #3 -- snapshot périmé au-delà de
+    _ETH_USD_RATE_MAX_STALE_SECONDS -> None, jamais un taux périmé
+    silencieusement réutilisé."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    stale_at = time.monotonic() - (m._ETH_USD_RATE_MAX_STALE_SECONDS + 5.0)
+    ref_pool.ticks.append((stale_at, 4321.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    assert feed.onchain_eth_usd_rate() is None
+
+
+def test_onchain_eth_usd_rate_none_when_feed_not_connected():
+    """available requires self._connected True (get_snapshot's own
+    contract) -- a reference pool with ticks but a dead websocket must not
+    produce a rate."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    ref_pool.ticks.append((time.monotonic(), 4321.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = False
+    assert feed.onchain_eth_usd_rate() is None
+
+
+def test_eth_usd_reference_pool_addresses_are_well_formed_and_distinct():
+    """Adresses vérifiées par clic-through DexScreener (jamais devinées, cf.
+    roadmap-capteurs-onchain.md) -- bien formées, en minuscule (clé .lower()
+    de _pools) et distinctes par chaîne."""
+    addrs = m._ETH_USD_REFERENCE_POOL_BY_CHAIN
+    assert addrs["base"] == "0x6c561b446416e1a00e8e93e221854d6ea4171372"
+    assert addrs["robinhood"] == "0x52e65b17fb6e5ba00ed806f37afcd2daa50271ca"
+    for addr in addrs.values():
+        assert addr == addr.lower()
+        assert addr.startswith("0x") and len(addr) == 42
+    assert len(set(addrs.values())) == len(addrs)
+
+
+# --- _handle_sync extended for a WETH-quoted pool (brique 4) ---------------
+
+def test_handle_sync_computes_reserve_usd_for_a_weth_quote_when_reference_pool_available():
+    """Plan de tests #4 -- un pool quote_is_weth consommant le taux
+    on-chain calcule un reserve_usd cohérent (2.0 * quote_reserve_raw *
+    onchain_eth_usd_rate -- même convention "2x un côté = valeur totale de
+    la pool" que la branche quote_is_stable, cf. EVMSwapSnapshot.
+    quote_reserve_raw's own docstring), dans la MÊME instance de feed que
+    le pool de référence -- jamais doppler.eth_usd_rate()."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    ref_pool.ticks.append((time.monotonic(), 4000.0))  # ETH/USD = 4000
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=True, quote_is_stable=False,
+    )
+    feed._pools["0xpool"] = pool
+    reserve0 = 10 * (10 ** 18)
+    reserve1 = 5 * (10 ** 18)  # 5 WETH on the quote side
+    data = _u256(reserve0) + _u256(reserve1)
+    feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
+    assert pool.last_quote_reserve_raw == pytest.approx(5.0)
+    assert pool.last_reserve_usd == pytest.approx(2.0 * 5.0 * 4000.0)  # 40000.0
+
+
+def test_handle_sync_reserve_usd_stays_none_for_weth_quote_when_rate_stale():
+    """Même scénario que le test ci-dessus mais le pool de référence est
+    périmé -> reserve_usd reste None, jamais un taux périmé utilisé."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    stale_at = time.monotonic() - (m._ETH_USD_RATE_MAX_STALE_SECONDS + 5.0)
+    ref_pool.ticks.append((stale_at, 4000.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    pool = m._TrackedPool(
+        dex_id="uniswap_v2", family="v2", token_is_currency0=True,
+        decimals0=18, decimals1=18, quote_is_weth=True, quote_is_stable=False,
+    )
+    feed._pools["0xpool"] = pool
+    reserve0 = 10 * (10 ** 18)
+    reserve1 = 5 * (10 ** 18)
+    data = _u256(reserve0) + _u256(reserve1)
+    feed._handle_sync("0xpool", {"data": "0x" + data.hex()})
+    assert pool.last_reserve_usd is None
+    assert pool.last_quote_reserve_raw == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_reference_pool_wired_via_add_pool_is_auto_detected_as_stable_quote():
+    """Plan de tests #6 (wiring réel) -- l'appel add_pool() réellement
+    utilisé par shadow_persistent.py au démarrage, avec les adresses/token
+    de référence exacts de ce module, doit enregistrer le pool sous la même
+    clé (.lower()) que _ETH_USD_REFERENCE_POOL_BY_CHAIN ET le détecter
+    automatiquement quote_is_stable=True (via _KNOWN_USD_STABLES/
+    _WETH_ADDRESSES déjà existants, sans aucune modification à ces sets) --
+    puis un Sync réel sur CE pool alimente onchain_eth_usd_rate() bout en
+    bout, dans la même instance de feed."""
+    base_ref_pool = m._ETH_USD_REFERENCE_POOL_BY_CHAIN["base"]
+    base_weth = "0x4200000000000000000000000000000000000006"
+    base_usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(return_value=base_weth)
+    contract.functions.token1.return_value.call = AsyncMock(return_value=base_usdc)
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=18)
+    fake_w3.eth.contract.return_value = contract
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    feed._connected = True
+
+    ok = await feed.add_pool(base_ref_pool, dex_id="uniswap_v3", token_address=base_weth)
+    assert ok is True
+    assert base_ref_pool.lower() in feed._pools
+    tracked = feed._pools[base_ref_pool.lower()]
+    assert tracked.quote_is_stable is True
+    assert tracked.quote_is_weth is False
+
+    # A real Sync/Swap tick on this pool feeds onchain_eth_usd_rate() bout
+    # en bout -- family is "v3" here (add_pool's own dex_id), so drive it
+    # via _record_tick directly (same helper _handle_v3_swap itself calls),
+    # never re-deriving the decode.
+    feed._record_tick(tracked, 4500.0)
+    assert feed.onchain_eth_usd_rate() == pytest.approx(4500.0)
+
+
 # --- _handle_v2_swap: real V2 Swap event, distinct from Mint/Burn's Sync ---
 
 def _v2_swap_data(amount0_in: int, amount1_in: int, amount0_out: int, amount1_out: int) -> str:

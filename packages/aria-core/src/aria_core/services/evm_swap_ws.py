@@ -91,6 +91,14 @@ _TICK_HISTORY_SECONDS = 600.0
 _RECONNECT_MIN_SECONDS = 1.0
 _RECONNECT_MAX_SECONDS = 30.0
 
+# 29/08, brique 4 -- same staleness doctrine/precedent as pumpswap_ws.py's
+# own DEFAULT_MAX_STALENESS_SECONDS (30.0, the closest sibling: a live
+# websocket-pushed price feed's own staleness bound). A reference pool's
+# snapshot older than this is treated as unavailable rather than trusted --
+# onchain_eth_usd_rate() returns None, never a rate that might be minutes
+# old.
+_ETH_USD_RATE_MAX_STALE_SECONDS = 30.0
+
 # 24/08 -- mid-day circuit breaker cadence. add_pool()'s own can_spend()
 # check only stops the leak from GROWING (refuses new pools); it never
 # touches pools already subscribed before the cap was hit, because a push
@@ -145,6 +153,26 @@ _WETH_ADDRESSES = frozenset({
 _CBBTC_ADDRESSES = frozenset({
     "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",  # cbBTC (Base, Coinbase-issued canonical)
 })
+
+# 29/08, brique 4 (roadmap-capteurs-onchain.md, "Oracle WETH/USD on-chain")
+# -- one high-liquidity WETH/stable reference pool per chain, tracked
+# PERMANENTLY (wired at process startup by the caller, see shadow_persistent.
+# py -- never left to dynamic discovery, which could evict it) so
+# ``onchain_eth_usd_rate`` below always has a live feed to read. Both
+# addresses verified by direct DexScreener click-through, never guessed
+# (same discipline as every other address constant in this file) -- their
+# token0/token1 both already fall in ``_WETH_ADDRESSES``/
+# ``_KNOWN_USD_STABLES`` above, so ``add_pool`` auto-detects
+# ``quote_is_stable=True`` for them with zero change to those two sets.
+_ETH_USD_REFERENCE_POOL_BY_CHAIN: dict[str, str] = {
+    # WETH/USDC, Uniswap V3, $116M liquidity -- verified by DexScreener
+    # click-through 29/08 (same pool already used for Brique 3's decoder
+    # proof).
+    "base": "0x6c561b446416e1a00e8e93e221854d6ea4171372",
+    # WETH/USDG, Uniswap V3, $7.5M liquidity / $196M 24h volume -- verified
+    # by DexScreener click-through 29/08.
+    "robinhood": "0x52e65b17fb6e5ba00ed806f37afcd2daa50271ca",
+}
 
 # Event topic0 hashes, computed live (never hand-typed/guessed) so a typo
 # can never silently produce a filter that matches nothing.
@@ -848,6 +876,31 @@ class EVMSwapWebSocketFeed:
             liquidity_removed_raw=pool.liquidity_removed_raw,
         )
 
+    def onchain_eth_usd_rate(self) -> float | None:
+        """Brique 4 (roadmap-capteurs-onchain.md, 29/08) -- ETH/USD rate
+        resolved from THIS chain's own reference WETH/stable pool (see
+        ``_ETH_USD_REFERENCE_POOL_BY_CHAIN``), reusing ``get_snapshot``'s
+        already-decoded ``price_usd`` -- zero extra network I/O, same "no
+        network I/O in a decoder" rule as ``get_snapshot``'s own
+        ``quote_is_weth`` branch. Never ``doppler.eth_usd_rate()`` -- that
+        CoinGecko dependency is exactly what this brique exists to remove
+        for the on-chain sensors (incident #271, CoinGecko quota exhausted).
+
+        Fail-closed, same doctrine as Briques 1-3: ``None`` if this chain
+        has no reference pool configured, the reference pool isn't tracked
+        yet, its snapshot isn't available, or it is stale beyond
+        ``_ETH_USD_RATE_MAX_STALE_SECONDS`` -- never a fabricated or
+        silently-reused-stale rate."""
+        ref_pool = _ETH_USD_REFERENCE_POOL_BY_CHAIN.get(self.chain)
+        if ref_pool is None:
+            return None
+        snapshot = self.get_snapshot(ref_pool)
+        if not snapshot.available or snapshot.price_usd is None:
+            return None
+        if snapshot.stale_seconds is not None and snapshot.stale_seconds > _ETH_USD_RATE_MAX_STALE_SECONDS:
+            return None
+        return snapshot.price_usd
+
     # -- websocket loop ----------------------------------------------------
 
     async def _run(self) -> None:
@@ -1103,6 +1156,16 @@ class EVMSwapWebSocketFeed:
         pool.last_quote_reserve_raw = quote_reserve
         if pool.quote_is_stable:
             pool.last_reserve_usd = 2.0 * quote_reserve
+        elif pool.quote_is_weth:
+            # 29/08, brique 4 -- reuses this SAME feed instance's reference
+            # pool (see onchain_eth_usd_rate's own docstring), zero extra
+            # network call, never doppler.eth_usd_rate(). None (the
+            # reference pool not tracked/stale) leaves last_reserve_usd
+            # None -- same fail-closed rule as the quote_is_stable branch
+            # above, never a fabricated conversion.
+            eth_rate = self.onchain_eth_usd_rate()
+            if eth_rate is not None:
+                pool.last_reserve_usd = 2.0 * quote_reserve * eth_rate
         self._record_provenance(pool, result)
         self._record_tick(pool, price)
 
