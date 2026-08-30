@@ -940,7 +940,7 @@ Documentation/mini-spec (ci-dessus, verrouillée) → tests (plan ci-dessus,
 observation → checkpoint, exactement le même protocole que Briques 1/2,
 sans élargir le scope.
 
-## Mini-spec Brique 4 — Oracle WETH/USD on-chain (29/08, PRÉPARÉE, PAS IMPLÉMENTÉE)
+## Mini-spec Brique 4 — Oracle WETH/USD on-chain (29/08, DÉPLOYÉE 30/08 — voir `docs/HANDOFF_PIPELINE_MOMENTUM.md` entrée 2026.08.30)
 
 Statut : Briques 1-3 validées en production sur Base ET Robinhood
 (checkpoint live fermé 22:33Z, cf. HANDOFF). **Cette mini-spec prépare
