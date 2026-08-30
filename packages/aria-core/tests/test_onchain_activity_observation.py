@@ -301,3 +301,205 @@ async def test_unavailable_snapshot_stores_null_liquidity_never_zero(_tmp_db):
     assert row["liquidity_removed_quote"] is None
     assert row["liquidity_added_raw"] is None
     assert row["liquidity_removed_raw"] is None
+
+
+# --- brique 5 (30/08): instantaneous pool state + observation context ------
+# price_quote/price_usd/reserve_usd/raw_liquidity/quote_reserve_raw and
+# eth_usd_rate_at_observation are snapshots of "where the market was at
+# this instant" -- NOT cumulatives. They must never touch _last_observed,
+# must never grow a *_delta column, and must never be affected by
+# baseline_reset (operator-verified 30/08, see roadmap-capteurs-onchain.md).
+
+@pytest.mark.asyncio
+async def test_instantaneous_pool_state_is_recorded_exactly(_tmp_db):
+    """Point 1: a resolved snapshot (quote_is_stable pool) records the five
+    pool-state fields verbatim."""
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        price_quote=0.00042, price_usd=1850.30, reserve_usd=2_400_000.0,
+        raw_liquidity=987654321.0, quote_reserve_raw=None,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["price_quote"] == 0.00042
+    assert row["price_usd"] == 1850.30
+    assert row["reserve_usd"] == 2_400_000.0
+    assert row["raw_liquidity"] == 987654321.0
+    assert row["quote_reserve_raw"] is None
+
+
+@pytest.mark.asyncio
+async def test_pool_state_none_stays_null_never_a_local_fallback(_tmp_db):
+    """Point 2: a quote_is_weth pool whose brique-4 rate didn't resolve --
+    price_usd/reserve_usd stay NULL, never a value computed/guessed locally
+    by this observation-only module."""
+    await m.record_observation(
+        chain="robinhood", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=2, cumulative_volume_quote=10.0,
+        distinct_traders_count=1, last_swap_age_seconds=1.0, db_path=_tmp_db,
+        price_quote=0.0012, price_usd=None, reserve_usd=None,
+        raw_liquidity=555.0, quote_reserve_raw=None,
+        eth_usd_rate_at_observation=None,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["price_quote"] == 0.0012
+    assert row["price_usd"] is None
+    assert row["reserve_usd"] is None
+    assert row["eth_usd_rate_at_observation"] is None
+
+
+@pytest.mark.asyncio
+async def test_unavailable_snapshot_stores_null_pool_state_never_zero(_tmp_db):
+    """Point 3: available=False forces every pool-state/context field to
+    NULL, same doctrine as the other axes -- even if a caller mistakenly
+    passed a value alongside available=False."""
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=False, family=None, swap_count=None, cumulative_volume_quote=None,
+        distinct_traders_count=None, last_swap_age_seconds=None, db_path=_tmp_db,
+        price_quote=999.0, price_usd=999.0, reserve_usd=999.0,
+        raw_liquidity=999.0, quote_reserve_raw=999.0,
+        eth_usd_rate_at_observation=999.0,
+    )
+    row = (await _rows(_tmp_db))[0]
+    assert row["price_quote"] is None
+    assert row["price_usd"] is None
+    assert row["reserve_usd"] is None
+    assert row["raw_liquidity"] is None
+    assert row["quote_reserve_raw"] is None
+    assert row["eth_usd_rate_at_observation"] is None
+
+
+@pytest.mark.asyncio
+async def test_pool_state_never_produces_a_delta_column(_tmp_db):
+    """Point 4: two consecutive observations with different values each
+    record their own raw number -- the schema must not contain any *_delta
+    column for the six instantaneous fields, and baseline_reset must not
+    depend on them (it stays governed by the cumulative axes only)."""
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        price_quote=1.0, price_usd=1850.0, reserve_usd=1_000_000.0,
+    )
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=6, cumulative_volume_quote=120.0,
+        distinct_traders_count=3, last_swap_age_seconds=1.0, db_path=_tmp_db,
+        price_quote=1.05, price_usd=1943.0, reserve_usd=1_050_000.0,
+    )
+    async with aiosqlite.connect(_tmp_db) as c:
+        cur = await c.execute(f"PRAGMA table_info({m.TABLE})")
+        columns = {r[1] for r in await cur.fetchall()}
+    for forbidden in (
+        "price_quote_delta", "price_usd_delta", "reserve_usd_delta",
+        "raw_liquidity_delta", "quote_reserve_raw_delta",
+        "eth_usd_rate_at_observation_delta",
+    ):
+        assert forbidden not in columns
+    rows = await _rows(_tmp_db)
+    assert rows[0]["price_usd"] == 1850.0
+    assert rows[1]["price_usd"] == 1943.0  # its own raw value, not a delta
+    # baseline_reset stays 0 on the second row (cumulative axes DID have a
+    # prior observation) -- pool-state fields changing has no bearing on it.
+    assert rows[1]["baseline_reset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_reset_instantaneous_pool_state(_tmp_db):
+    """Point 4bis (mini-spec 'un restart ne remet pas ces colonnes à
+    zéro'): clearing _last_observed (the real restart trigger) still lets
+    the next observation record its real instantaneous price/reserve --
+    unlike the cumulative axes, there is no reset semantics to apply here."""
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=500, cumulative_volume_quote=9000.0,
+        distinct_traders_count=40, last_swap_age_seconds=3.0, db_path=_tmp_db,
+        price_usd=2000.0, reserve_usd=5_000_000.0,
+    )
+    m._last_observed.clear()  # process restart
+    await m.record_observation(
+        chain="base", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v3", swap_count=2, cumulative_volume_quote=30.0,
+        distinct_traders_count=1, last_swap_age_seconds=0.5, db_path=_tmp_db,
+        price_usd=2075.0, reserve_usd=5_120_000.0,
+    )
+    second = (await _rows(_tmp_db))[1]
+    assert second["baseline_reset"] == 1  # cumulative axes: real reset
+    assert second["price_usd"] == 2075.0  # pool-state: just the new real value
+    assert second["reserve_usd"] == 5_120_000.0
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_at_observation_is_context_not_pool_state(_tmp_db):
+    """Point 5 (mini-spec): two rows can share the same quote_reserve_raw
+    but a different reserve_usd because the WETH/USD rate differed --
+    eth_usd_rate_at_observation must be persisted per-row so this stays
+    traceable, never averaged/derived after the fact."""
+    await m.record_observation(
+        chain="robinhood", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v2", swap_count=5, cumulative_volume_quote=100.0,
+        distinct_traders_count=3, last_swap_age_seconds=2.0, db_path=_tmp_db,
+        quote_reserve_raw=10.0, reserve_usd=24_000.0,
+        eth_usd_rate_at_observation=2400.0,
+    )
+    await m.record_observation(
+        chain="robinhood", pool_address="0xpool", token_address="0xtoken",
+        available=True, family="v2", swap_count=6, cumulative_volume_quote=110.0,
+        distinct_traders_count=3, last_swap_age_seconds=1.0, db_path=_tmp_db,
+        quote_reserve_raw=10.0, reserve_usd=24_500.0,
+        eth_usd_rate_at_observation=2450.0,
+    )
+    rows = await _rows(_tmp_db)
+    assert rows[0]["quote_reserve_raw"] == rows[1]["quote_reserve_raw"] == 10.0
+    assert rows[0]["eth_usd_rate_at_observation"] == 2400.0
+    assert rows[1]["eth_usd_rate_at_observation"] == 2450.0
+    assert rows[0]["reserve_usd"] != rows[1]["reserve_usd"]
+
+
+@pytest.mark.asyncio
+async def test_hot_migration_adds_pool_state_columns_without_touching_existing_rows(_tmp_db):
+    """Point 6 (mini-spec, operator-confirmed): a shadow.db created before
+    brique 5 (old schema, no pool-state columns) must gain the new columns
+    via ensure_columns without altering any historical row already there."""
+    async with aiosqlite.connect(_tmp_db) as db:
+        await db.execute(
+            f"""
+            CREATE TABLE {m.TABLE} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observed_at TEXT NOT NULL, chain TEXT NOT NULL,
+                pool_address TEXT NOT NULL, token_address TEXT NOT NULL,
+                family TEXT, activity_quality TEXT, swap_count INTEGER,
+                cumulative_volume_quote REAL, distinct_traders_count INTEGER,
+                last_swap_age_seconds REAL, swaps_delta INTEGER,
+                volume_quote_delta REAL, traders_delta INTEGER,
+                baseline_reset INTEGER NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            f"""INSERT INTO {m.TABLE}
+                (observed_at, chain, pool_address, token_address, family,
+                 activity_quality, swap_count, cumulative_volume_quote,
+                 distinct_traders_count, last_swap_age_seconds, swaps_delta,
+                 volume_quote_delta, traders_delta, baseline_reset)
+                VALUES ('2026-08-01T00:00:00Z', 'base', '0xold', '0xtoken',
+                        'v3', 'v3v4_clean', 99, 500.0, 5, 1.0, NULL, NULL,
+                        NULL, 1)"""
+        )
+        await db.commit()
+
+    await m.record_observation(
+        chain="base", pool_address="0xnew", token_address="0xtoken",
+        available=True, family="v3", swap_count=1, cumulative_volume_quote=10.0,
+        distinct_traders_count=1, last_swap_age_seconds=0.5, db_path=_tmp_db,
+        price_usd=1900.0, reserve_usd=1_000_000.0,
+    )
+
+    rows = await _rows(_tmp_db)
+    old_row = next(r for r in rows if r["pool_address"] == "0xold")
+    assert old_row["swap_count"] == 99  # historical row untouched
+    assert old_row["price_usd"] is None  # new column, backfilled NULL
+    new_row = next(r for r in rows if r["pool_address"] == "0xnew")
+    assert new_row["price_usd"] == 1900.0

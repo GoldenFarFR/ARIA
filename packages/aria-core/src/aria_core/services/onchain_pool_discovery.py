@@ -449,6 +449,22 @@ class OnChainPoolDiscoveryFeed:
                 ),
                 liquidity_added_raw=snapshot.liquidity_added_raw if snapshot.available else None,
                 liquidity_removed_raw=snapshot.liquidity_removed_raw if snapshot.available else None,
+                # 30/08, brique 5/5 -- instantaneous pool state, read
+                # straight off the same snapshot, zero extra RPC call.
+                price_quote=snapshot.price_quote if snapshot.available else None,
+                price_usd=snapshot.price_usd if snapshot.available else None,
+                reserve_usd=snapshot.reserve_usd if snapshot.available else None,
+                raw_liquidity=snapshot.raw_liquidity if snapshot.available else None,
+                quote_reserve_raw=snapshot.quote_reserve_raw if snapshot.available else None,
+                # Context, not pool state (see onchain_activity_observation.py's
+                # own docstring) -- only meaningful for a quote_is_weth pool,
+                # None otherwise (never fabricated for a quote_is_stable pool
+                # that never needed the brique-4 oracle in the first place).
+                eth_usd_rate_at_observation=(
+                    self._ws_feed.onchain_eth_usd_rate()
+                    if snapshot.available and snapshot.quote_is_weth
+                    else None
+                ),
             )
             if not snapshot.available:
                 # 26/08 -- real incident: `add_pool` verification (a live

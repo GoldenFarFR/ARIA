@@ -64,6 +64,23 @@ never converted to quote units here (`liquidity_added_raw`/
 or stored here -- `net_liquidity_quote`/`net_liquidity_delta_raw` are
 read-time properties on `EVMSwapSnapshot`, never persisted.
 
+**Instantaneous pool state + observation context (30/08, brique 5/5,
+operator GO after brique 4's production checkpoint).** A structurally
+DIFFERENT kind of field from everything above: `price_quote`/`price_usd`/
+`reserve_usd`/`raw_liquidity`/`quote_reserve_raw` are the pool's state AT
+THIS INSTANT, not a cumulative since `add_pool()` -- there is nothing to
+compare against a prior observation, so unlike every axis above, these
+NEVER touch `_last_observed`, NEVER produce a `*_delta` column, and are
+completely unaffected by `baseline_reset`/a process restart: the next
+observation after a restart simply records the real instantaneous value,
+same as any other observation. `eth_usd_rate_at_observation` is not pool
+state either -- it's CONTEXT (the `onchain_eth_usd_rate(chain)` used to
+resolve this row's `reserve_usd`, when the pool is `quote_is_weth`),
+recorded per-row so two rows can be told apart later even when they share
+the same `quote_reserve_raw` but a different `reserve_usd` because the
+WETH/USD rate moved between them (see roadmap-capteurs-onchain.md, Brique 5
+mini-spec). Same `None` stays `None` rule as every other field here.
+
 **Strictly log-only, best-effort.** Same contract as
 ``discovery_liquidity_observation.py``: never influences the caller's own
 decision, never triggers a network call, records only values already
@@ -157,6 +174,12 @@ async def _ensure_table(db_path: str | None = None) -> None:
                 liquidity_removed_quote_delta REAL,
                 liquidity_added_raw_delta REAL,
                 liquidity_removed_raw_delta REAL,
+                price_quote REAL,
+                price_usd REAL,
+                reserve_usd REAL,
+                raw_liquidity REAL,
+                quote_reserve_raw REAL,
+                eth_usd_rate_at_observation REAL,
                 baseline_reset INTEGER NOT NULL
             )
             """
@@ -188,6 +211,15 @@ async def _ensure_table(db_path: str | None = None) -> None:
             ("liquidity_removed_quote_delta", "REAL"),
             ("liquidity_added_raw_delta", "REAL"),
             ("liquidity_removed_raw_delta", "REAL"),
+            # 30/08, brique 5/5 -- instantaneous pool state + observation
+            # context, see this module's own docstring above. Never paired
+            # with a *_delta column: these are not cumulatives.
+            ("price_quote", "REAL"),
+            ("price_usd", "REAL"),
+            ("reserve_usd", "REAL"),
+            ("raw_liquidity", "REAL"),
+            ("quote_reserve_raw", "REAL"),
+            ("eth_usd_rate_at_observation", "REAL"),
         ])
         await db.commit()
     _ensured_db_paths.add(path)
@@ -214,6 +246,12 @@ async def record_observation(
     liquidity_removed_quote: float | None = None,
     liquidity_added_raw: float | None = None,
     liquidity_removed_raw: float | None = None,
+    price_quote: float | None = None,
+    price_usd: float | None = None,
+    reserve_usd: float | None = None,
+    raw_liquidity: float | None = None,
+    quote_reserve_raw: float | None = None,
+    eth_usd_rate_at_observation: float | None = None,
     db_path: str | None = None,
 ) -> None:
     """One row per candidate check where the feed was asked for a snapshot.
@@ -226,7 +264,13 @@ async def record_observation(
     Buy/sell params default to ``None`` (rather than being required) so an
     existing caller upgraded only for the liquidity/activity axes keeps
     working unchanged -- brique 2/5, 29/08. Same for the liquidity-delta
-    params below -- brique 3/5, 29/08."""
+    params below -- brique 3/5, 29/08.
+
+    ``price_quote``/``price_usd``/``reserve_usd``/``raw_liquidity``/
+    ``quote_reserve_raw``/``eth_usd_rate_at_observation`` (brique 5/5,
+    30/08) are recorded verbatim, never through the delta cache -- they are
+    the pool's instantaneous state, not a cumulative. A restart never
+    resets them; there is nothing to reset."""
     path = db_path or _db_path()
     key = _cache_key(chain, pool_address)
 
@@ -245,6 +289,11 @@ async def record_observation(
         buy_volume_quote = sell_volume_quote = undetermined_volume_quote = None
         liquidity_added_quote = liquidity_removed_quote = None
         liquidity_added_raw = liquidity_removed_raw = None
+        # brique 5/5 -- no delta cache involved, but available=False must
+        # still force these to NULL, even if a caller mistakenly passed a
+        # value alongside it (same discipline as every other field here).
+        price_quote = price_usd = reserve_usd = None
+        raw_liquidity = quote_reserve_raw = eth_usd_rate_at_observation = None
     else:
         activity_quality = _activity_quality(family)
         prior = _last_observed.get(key)
@@ -317,8 +366,10 @@ async def record_observation(
                      liquidity_added_raw, liquidity_removed_raw,
                      liquidity_added_quote_delta, liquidity_removed_quote_delta,
                      liquidity_added_raw_delta, liquidity_removed_raw_delta,
+                     price_quote, price_usd, reserve_usd, raw_liquidity,
+                     quote_reserve_raw, eth_usd_rate_at_observation,
                      baseline_reset)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now(timezone.utc).isoformat(),
@@ -333,6 +384,8 @@ async def record_observation(
                     liquidity_added_raw, liquidity_removed_raw,
                     liquidity_added_quote_delta, liquidity_removed_quote_delta,
                     liquidity_added_raw_delta, liquidity_removed_raw_delta,
+                    price_quote, price_usd, reserve_usd, raw_liquidity,
+                    quote_reserve_raw, eth_usd_rate_at_observation,
                     int(baseline_reset),
                 ),
             )
