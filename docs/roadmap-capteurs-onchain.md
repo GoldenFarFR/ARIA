@@ -2318,6 +2318,79 @@ pools C_AGE déjà reconstruits ; (5) calculer la MÊME formule partout
 ensuite comparer A / B / C_AGE. Interdiction explicite de chercher à
 maximiser la séparation A/B en ajustant la définition.
 
+**RÉSULTAT (31/08, `persistence_by_age_2026-08-31.db`)** — 40 pools, 4
+populations, une seule formule appliquée partout : A=6, B=3, C_EVENT=11,
+C_AGE=20. Les séries minute de v003 restent des entrées valides malgré le
+bug currency0 : `ratio(m)` ne dépend QUE du compte de swaps par minute,
+jamais du prix/side/volume (vérifié pendant l'audit) — un bug de décodage
+de prix ne peut pas déplacer un compte de swaps. Seul MSR a dû être
+reconstruit, et il l'a été.
+
+**La nouvelle métrique NE sépare PAS A de B** — médianes quasi identiques
+à tous les âges, plages entièrement chevauchantes :
+
+```
+age   A (n=6)                        B (n=3)                        disjoint ?
+ 45   med 0.2283 [0.130,0.522]       med 0.1957 [0.130,0.565]       non
+105   med 0.3679 [0.311,0.528]       med 0.4057 [0.104,0.538]       non
+195   med 0.4184 [0.378,0.500]       med 0.4235 [0.082,0.526]       non
+```
+
+**Et le contrôle à condition de sélection ÉGALE ne sépare rien non plus** —
+distinction logique décisive entre deux comparaisons qui n'ont pas la même
+valeur probante :
+
+```
+A/B vs C_AGE    conditions de selection DIFFERENTES (A/B ont un T0, C_AGE non)
+                -> plages disjointes des 105min, tient au drop-top-1
+                -> MAIS confondu par la condition de selection elle-meme :
+                   14/20 pools C_AGE ont zero swap, et un pool sans swap a
+                   mecaniquement une persistance nulle. Meme restreint aux
+                   6 pools C_AGE ACTIFS, la mediane reste 0.0000.
+                   Cette separation ne demontre donc rien de plus que
+                   "A/B ont ete selectionnes pour avoir eu un choc".
+
+A/B vs C_EVENT  MEME condition de selection (les deux ont un T0)  <== decisif
+                -> chevauchement a TOUS les ages, ne tient jamais au drop-top-1
+```
+
+**Découverte principale : les deux métriques mesurent des choses
+réellement différentes, et l'écart entre elles est informatif.**
+L'ancienne `activity_persistence_post_t0` sépare A de B nettement
+(A [0.526, 0.584] vs B [0.009, 0.154], disjoint, facteur 3,4x, survit au
+drop-top-1). La nouvelle, âge-conditionnée, ne les sépare pas du tout.
+Deux tests de confondement, tous deux négatifs :
+
+```
+denominateur (available_post_t0+1) vs share : Spearman rho = -0.083  (n=9)
+age au T0                          vs share : Spearman rho = +0.233  (n=9)
+```
+
+Visuellement sans ambiguïté : MSR (T0=3min) et PAWHOOD (T0=208min) sont
+tous deux B avec une persistance faible ; TWO (T0=5min) et CHARITY
+(T0=175min) sont tous deux A avec une persistance forte. **Ni le
+dénominateur ni l'âge au T0 n'expliquent la séparation A/B.**
+
+**Conclusion — le contrôle d'âge n'invalide pas la propriété, il la
+PRÉCISE** : gagnants et perdants ont la même densité d'activité sur
+l'ensemble de leur vie (by_age identique), mais des comportements très
+différents APRÈS le choc (post_t0 disjoint). La réponse à la question
+ouverte de l'opérateur (« la persistance post-T0 est-elle en réalité une
+propriété plus générale du cycle de vie ? ») est donc **non, c'est
+l'inverse** : la propriété est spécifiquement post-choc, et n'existe pas
+comme propriété générale de maturité.
+
+`C_EVENT` chevauche les deux groupes sur `post_t0` ([0.0063, 1.0], n=11) —
+attendu et non contradictoire : un contrôle NEUTRE, ni gagnant ni perdant,
+doit s'étaler sur toute la plage si la métrique capture bien un axe
+gagnant/perdant.
+
+**Réserve de puissance statistique, jamais à oublier** : n=6 contre n=3.
+Ce résultat reste une indication sur 9 pools, pas une preuve. Statut de
+`activity_persistence_post_t0` : `candidate surviving preliminary
+controls` — le contrôle d'âge est passé, mais l'échantillon reste trop
+petit pour parler de signal.
+
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
 Contrôle âge-conditionné (jamais T0-conditionné), orthogonal à C_EVENT, conçu
