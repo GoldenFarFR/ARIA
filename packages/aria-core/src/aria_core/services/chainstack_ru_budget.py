@@ -77,16 +77,21 @@ from aria_core.paths import aria_db_path
 DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
     "base": 100_000,
     "solana": 0,
-    "robinhood": 800_000,
+    "robinhood": 400_000,
 }
-# 30/08 incident (reverted, see system_issues #279 and
-# docs/HANDOFF_PIPELINE_MOMENTUM.md): Brique 6's Groupe C research backfill
-# (session scratchpad, not production) consumed the day's Robinhood cap by
-# ~19:44 UTC (403 568/400 000), blocking real production discovery. Cap was
-# temporarily raised to 550_000 (19:49:30Z, commit a56e2511) to let both
-# production and the backfill run through the rest of the day, then reverted
-# here once the backfill concluded (20:55:36Z, final usage 512 828 RU) --
-# this was never a new calibration of Robinhood's real sustained capacity.
+# 30/08, TWO reverted incidents (see system_issues #279/#280 and
+# docs/HANDOFF_PIPELINE_MOMENTUM.md): Brique 6's Groupe C / C2-bis research
+# backfills (session scratchpad, not production) consumed the day's
+# Robinhood cap twice. Incident #1: ~19:44 UTC (403 568/400 000), blocking
+# real production discovery -- raised to 550_000 (19:49:30Z, commit
+# a56e2511), reverted to 400_000 once that backfill concluded (20:55:36Z,
+# final usage 512 828 RU, commit 30e65285). Incident #2: ~22:45 UTC
+# (514 515/400 000) during the C2-bis backfill -- raised proactively to
+# 800_000 (commit 3b82ea59) on prior explicit operator authorization, no
+# production blockage this time. Reverted back to 400_000 here once C2-bis
+# concluded (2026-08-31T01:13:03Z, final usage 270 874 RU for that run) --
+# neither incident was ever a new calibration of Robinhood's real sustained
+# capacity.
 # Fallback for any future 4th chain never explicitly calibrated above --
 # same conservative default the shared constant used before this split.
 _DEFAULT_CAP = 200_000
