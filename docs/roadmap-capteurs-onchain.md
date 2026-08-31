@@ -2015,8 +2015,94 @@ AUDIT      = CLOSED / PASS (5/5 niveaux)
 FROZEN     = IMMUTABLE (jamais reecrit)
 A/B        = reconstruction corrigee en attente de version finale (v019_corrected_v2)
 C_EVENT    = valide, inchange
-C_AGE      = pret pour le backfill (design fige avant l'audit, cf. section C_AGE)
+C_AGE      = run seed 2026083113 CLOS -- voir section C_AGE ci-dessous
 ```
+
+### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
+
+Contrôle âge-conditionné (jamais T0-conditionné), orthogonal à C_EVENT, conçu
+après le reframe C2-bis. **Métriques symétriques uniquement, décision
+opérateur explicite** : C_AGE n'a aucun token/quote "d'intérêt" prédéterminé
+(contrairement à A/B et C_EVENT), donc aucune primitive directionnelle
+(`buy_share`/`price_recovery`/`mfe`/`mae`) -- uniquement `swap_count`,
+`volume0`/`volume1` (les deux côtés de la paire, jamais fusionnés),
+`active_senders`/`new_senders`, `liquidity_added`/`removed` (par côté pour
+V2/V3, en unité L abstraite pour V4), `price_ratio_1_per_0` (ratio brut
+currency1/currency0, jamais orienté) et sa volatilité (log-return max
+absolu, écart-type). `token0`/`token1`/`currency0`/`currency1`/`family`
+restent dans le dataset -- disponibles mais sans signification économique
+attribuée que la sélection n'a jamais établie.
+
+**Population** : 20 pools tirés (seed `2026083113`) de l'univers structurel
+multi-famille (49252 candidats V2/V3/V4, exclusion A/B et C_EVENT vérifiée
+par identité réelle) -- composition **18 V4 / 1 V3 / 1 V2**, confirmée
+conforme à la composition attendue. Cibles d'âge : **45/75/105/135/165/195
+minutes**. Protocole par âge H : premier événement RÉEL (tout type, jamais
+seulement swap) à `age >= H`, jamais d'interpolation, `actual_age` toujours
+enregistré à côté de `H` cible.
+
+**Préflight (`cage_preflight.py`)** : 20/20 PASS (identité/creation_block
+plausible via `eth_getBlockByNumber`/famille/côtés bien formés/195min
+d'historique réel disponible/au moins un événement on-chain réel). Première
+version du check d'activité ne cherchait que le topic Swap (14/20 FAIL) --
+corrigée en topic-agnostique (tout événement compte, cohérent avec le
+principe "C_AGE ne conditionne jamais sur l'activité") après avoir confirmé
+via un cas réel (`0xc89f36de...`) que l'échec initial était un bug de mon
+propre script (ModifyLiquidity manqué), pas un vrai trou de donnée.
+
+**Backfill (`cage_backfill.py`)** : 20/20 pools, 1787 appels RPC, 0 fenêtre
+FAILED, 0 timestamp NULL, 0 violation `creation_block<=block_number`.
+Décodage indépendant (jamais via le pool-state directionnel du feed de
+production) -- 2 bugs trouvés et corrigés en relisant le code de production
+avant tout lancement : offsets Mint/Burn V3 (le layout Mint a un champ
+`sender` que Burn n'a pas, mon premier jet utilisait le même offset pour
+les deux) et offset `liquidityDelta` V4 ModifyLiquidity (3e mot, pas le
+2e). Écrit dans `cage_backfill_2026-08-31.db`, jamais dans le FROZEN.
+
+**Résultat (`cage_age_observations_2026-08-31.db`)** -- vérifié technique
+propre (0 `actual_age < target_age`, 0 compte négatif) puis confronté
+manuellement à un timestamp on-chain réel (bloc de fin de fenêtre du pool
+V2 : 254,68min réelles écoulées pour une cible de 255min -- la fenêtre de
+scan était correcte, pas un bug de calcul) :
+
+```
+17/20 pools -- rafale d'activite initiale (souvent < 10min) puis silence
+               total confirme jusqu'a la fin de la fenetre observee (255min)
+3/20 pools  -- atteignent au moins 45min
+2/20 pools  -- atteignent 135min
+0/20 pools  -- atteignent 165 ou 195min
+```
+
+**Double lecture, décision opérateur explicite (31/08)** :
+- **Comme contrôle d'âge** : couverture insuffisante pour comparer des
+  états A/B à 165/195min sur cette population -- **échec de couverture**,
+  pas un échec de pipeline.
+- **Comme observation de marché** : résultat réel et intéressant en soi --
+  confirme et amplifie la découverte C_EVENT du 20/08 (~4,3% des candidats
+  atteignent un vrai choc d'activité), ici sans même conditionner sur
+  l'éligibilité structurelle de C_EVENT. Consigné comme observation de
+  survie/activité post-lancement, jamais comme feature de trading.
+
+**Statut final** : `VALIDÉ COMME EXPÉRIENCE MÉTHODOLOGIQUE / INSUFFISANT
+COMME CONTRÔLE D'ÂGE COMPLET`. La grille d'âge (45-195min) N'EST PAS
+réduite après coup, aucun nouveau tirage n'est lancé pour "corriger" ce
+résultat (biaiserait vers les pools qui survivent), aucune extension de
+fenêtre de scan pour forcer une couverture -- les 3 mêmes garde-fous
+anti-biais que C2-bis. Les 17 pools silencieux restent dans le dataset,
+jamais traités comme "manquants".
+
+**Défaut de conception trouvé, à corriger dans une future mini-spec, PAS
+dans ce run** : le protocole actuel confond "état du pool à l'âge H" avec
+"présence d'un événement à l'âge H" -- un pool silencieux à 105min a un état
+réel (prix/liquidité) même sans événement à cet instant précis, mais le
+protocole actuel ne peut l'observer que via le premier événement réel
+suivant. Une observation d'état véritablement indépendante d'un événement
+(lecture on-chain ciblée à un bloc proche de `creation_block + H`, dans
+l'esprit de `resolve_cold`/`EVMSwapSnapshot` déjà existant pour V2/V3/V4)
+résoudrait ça mais constitue une redéfinition de C_AGE, pas une correction
+de ce run. Aucun nouveau sourcing C_AGE tant que cette distinction
+(événement-conditionné vs état-à-bloc-fixe) n'est pas verrouillée dans une
+mini-spec dédiée.
 
 **Distinction désormais actée, à respecter par toute session future** :
 
