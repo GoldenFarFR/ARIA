@@ -2013,10 +2013,94 @@ toute analyse future exploitant la liquidité.
 ```
 AUDIT      = CLOSED / PASS (5/5 niveaux)
 FROZEN     = IMMUTABLE (jamais reecrit)
-A/B        = reconstruction corrigee en attente de version finale (v019_corrected_v2)
+A/B        = v019_corrected_v2 CONSTRUIT (A=6, B=3 avec MSR) -- voir section ci-dessous
 C_EVENT    = valide, inchange
 C_AGE      = run seed 2026083113 CLOS -- voir section C_AGE ci-dessous
 ```
+
+### v019_corrected_v2 -- base analytique finale (31/08/2026)
+
+Dernier verrou analytique de Brique 6, construit après la clôture de
+l'audit d'intégrité. **Composition : A=6, B=3 (MSR réintégré), C_EVENT=11.**
+`compute_primitives` est IMPORTÉ depuis `brique6_analysis_v019_corrected.py`,
+jamais réimplémenté (même doctrine qui a permis d'attraper le bug
+currency0 : une convention re-dérivée est exactement comme deux générations
+de données divergent silencieusement).
+
+**Deux corrections intégrées** : (1) V4 `token_is_currency0` (MU /
+D227_1406fa / D51_73a6e5), reprise verbatim de `v019_corrected` ; (2)
+`creation_block` MSR — MSR est calculé pour la PREMIÈRE FOIS ici (il était
+absent de v006–v021, 0 ligne), T0=minute 3, label B conformément au
+protocole de labellisation figé.
+
+**Correction délibérément EXCLUE** (instruction opérateur explicite) : la
+normalisation Mint/Burn V2/V3. L'audit a confirmé que les primitives v019
+n'en dépendent pas (axe swap uniquement) — l'injecter ici fabriquerait un
+changement dont l'analyse n'a jamais dépendu. Elle reste corrigée dans la
+couche de reconstruction (`brique6_liquidity_redecoded_2026-08-31.db`)
+pour les futures features basées sur la liquidité uniquement.
+
+**Tableau de stabilité des conclusions** — critères de classification figés
+AVANT tout regard sur les résultats, et transition décomposée en deux
+étapes (l'effet de la correction V4 seule, puis l'effet de MSR seul) plutôt
+qu'un diff global qui masquerait laquelle des deux a causé quoi :
+
+```
+observation            correction V4        reintegration MSR    global                 discrimine A vs B ?
+---------------------  -------------------  -------------------  ---------------------  -------------------
+activity persistence   INVARIANT            CHANGED_NUMERICALLY  CHANGED_NUMERICALLY    HOLDS
+new sender share       INVARIANT            CHANGED_NUMERICALLY  CHANGED_NUMERICALLY    FRAGILE
+flow concentration     CHANGED_NUMERICALLY  CHANGED_NUMERICALLY  CHANGED_NUMERICALLY    FRAGILE
+MFE                    CHANGED_NUMERICALLY  CHANGED_NUMERICALLY  CHANGED_NUMERICALLY    FRAGILE
+MAE                    BECAME_INDETERMINATE CHANGED_NUMERICALLY  CHANGED_QUALITATIVELY  FRAGILE
+price recovery         INVARIANT            INVARIANT            INVARIANT              NON_DISCRIMINANT
+```
+
+La colonne « discrimine A vs B ? » répond à une question DIFFÉRENTE des
+autres (« l'observation a-t-elle changé ? » vs « sépare-t-elle réellement
+A de B ? ») — ajoutée après avoir vu le diff et étiquetée comme telle,
+jamais rétro-insérée dans les critères pré-enregistrés. `HOLDS` = médianes
+différentes, plages disjointes, ordre survit au retrait du pool le plus
+extrême. `FRAGILE` = plages qui se chevauchent, ou ordre qui bascule au
+drop-top-1. `NON_DISCRIMINANT` = médianes identiques entre groupes.
+
+**Ce qui survit réellement à l'audit de données** : **une seule observation
+sur six**. `activity persistence` (A médiane 0,538 [0,526–0,584] vs B
+médiane 0,124 [0,009–0,154], plages disjointes, survit au drop-top-1).
+`price recovery` est INVARIANT mais pour une raison dégénérée — sa médiane
+vaut 1 dans les trois groupes, elle ne sépare rien. Les 4 autres ont des
+plages A/B qui se chevauchent.
+
+**Fragilité structurelle à ne jamais oublier** : avec B à n=3, retirer un
+seul pool déplace la médiane de B de 25 % à 47 % selon l'observation (et
+celle de A jusqu'à 56 % sur le MFE — cohérent avec le corollaire déjà
+mesuré : 1,8 % des trades portent 100 % du gain). Aucune de ces lectures
+n'a la puissance statistique d'un résultat, ce sont des indications sur
+9 pools.
+
+**v020/v021 — recalcul CIBLÉ (`analysis_v020_v021_v2.db`)**, nécessité
+établie avant d'écrire le code et non supposée : MSR a un T0 à 3 min, or
+v021 avait conclu « zéro pool B ne chevauche la plage d'âge de C [1,18] ».
+Le bug V4 n'est PAS re-appliqué ici (T0 ne dépend que du compte de swaps
+par minute, jamais du prix/side/volume — vérifié pendant l'audit) : seule
+l'absence de MSR importait.
+
+```
+groupe  version      n   mediane   plage      valeurs
+A       inchange     6   100.5     [5,175]    [5,41,90,111,136,175]
+B       original     2   129.0     [50,208]   [50,208]
+B       v2 (+MSR)    3    50.0     [3,208]    [3,50,208]
+C       inchange    11     3.0     [1,18]     [1,1,2,2,2,3,5,6,8,15,18]
+```
+
+Conséquence : la formulation littérale de v021 (« zéro pool B ») est
+PÉRIMÉE (MSR à 3min est dans [1,18]), mais **la conclusion tient** — 2 des
+9 pools A/B dans la plage de C (TWO à 5min, déjà connu, plus MSR à 3min)
+reste très loin d'une distribution d'âge comparable, donc une comparaison
+A/B-vs-C corrigée de l'âge demeure structurellement impossible. MSR ne
+réhabilite PAS `new_sender_share`/`flow_concentration` — ils restent
+déclassés « confondus par l'âge », seul le libellé exact de v021 est
+obsolète.
 
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
