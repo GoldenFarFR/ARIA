@@ -270,14 +270,18 @@ research extension: `docs/roadmap-capteurs-onchain.md` — edit that file in
 place, never restate the detail here. Checkpoint facts:
 `docs/HANDOFF_PIPELINE_MOMENTUM.md`.
 
-## Active state — Brique 6 analysis / Groupe C FROZEN (30/08)
-Iterative analysis on the FROZEN 9-pool A/B dataset (`v001`->`v018`).
-Groupe C now FROZEN too: 11 pools, `groupC_dataset_FROZEN_2026-08-30.db`,
-never rewritten. Invariants: T0 (`activity_ratio_vs_baseline15m >= 5`)
-never lowered; C0/C1/C2/D stay 4 distinct populations, never merged; C
-selection was purely structural, never filtered on price/activity/flow;
-no tuning after results. Next: first A/B/C comparative analysis. Detail:
-`docs/HANDOFF_PIPELINE_MOMENTUM.md` (30/08).
+## Active state — Brique 6 analysis / Groupe C reframed as C_EVENT (31/08)
+FROZEN 9-pool A/B dataset (`v001`->`v018`) + FROZEN 11-pool Groupe C
+(`groupC_dataset_FROZEN_2026-08-30.db`). v020 found a confound (A/B
+median T0-age 100-129min, C 3min). C2-bis probe (300 of 748 untested
+candidates, age window [41,208]min from A/B) returned **0/300 eligible**
+— operator verdict 31/08: STOP, don't spend the remaining 448, this is a
+methodological result (late T0 structurally rare in neutral pools, A/B
+may not share C's event-generating process), not a sampling failure.
+Reframe: Groupe C -> **C_EVENT** (valid for event-conditioned analysis
+as-is). Future **C_AGE** (age-matched, no T0 condition) is a separate,
+not-yet-designed experiment. No v022/new code until operator reviews.
+Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (30-31/08).
 
 ## Active state — pocket lineup (18/08, explicit operator decision, updated 28/08)
 **Active sourcing pockets**: swing + vc, `solana_late_bonding_shadow` (only Solana sourcing pocket since FAST discovery's 21/08 retirement — its exit tracking stays wired until open positions close, closures kept as the control group), `robinhood_pump_shadow`/`robinhood_pump_v2_shadow`, and `base_momentum_shadow`. Scalping v1-v9, "megacap", Solana FAST discovery, and — as of 28/08, code/tests/docs cleaned, verified never called anywhere and never above +25% PnL on the full closure sample — `solana_support_bounce_shadow`/`_v2` and `solana_variant_shadow` are fully retired. Two additions since 18/08: `solana_pump_shadow` ("tendance", already-graduated Solana pools, reactivated 23/08 after operator question, sourced via DexPaprika never GeckoTerminal) and `dip_recovery_v2_shadow` (Base+Robinhood, market-cap-bounded dip-buying, +25% take-profit/no stop-loss/168h timeout, gate `ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED` live since 27/08 — **its "100% winrate" reads are a structural artifact, not yet a real measurement**: with no stop-loss, a position can only close via take-profit or the 7-day timeout, and zero timeout has fired yet as of 28/08 — first real read possible starting ~02/09. Also has no latent/mark-to-market PnL on open positions today, only realized PnL at close). Detail: `docs/HANDOFF_PIPELINE_MOMENTUM.md` (2026.08.18 and 27/08 entries).
@@ -400,87 +404,87 @@ Full detail (source, precise dev action) moved to **`docs/backlog-technique.md`*
 **`docs/task-backlog.md` (16/08, operator request) — persistent task tracker, distinct from this numbered research-lead list.** `TaskCreate`/`TaskList` (the Claude Code session tool) is NOT persistent across sessions on its own — a session that creates tasks there must replicate them into this file to survive past the session, and a new session should re-create the file's open tasks via `TaskCreate` at start for in-session tracking. Simple two-state format (open/done), no narrative promotion pipeline. Distinct real finding this same day: Devil's Advocate reports (`/opt/aria-data/architect-reports/archived/`) accumulate real, never-triaged findings that neither this list nor any HANDOFF tracks unless a session explicitly reads and files them — cross-check untracked reports there periodically (a report hash search across `docs/`/`CLAUDE.md`/`HANDOFF_*.md` finds what's already handled).
 Full detail (source, precise dev action) for every item below lives in `docs/backlog-technique.md` — this is a compact index only, never edited with new prose here. Each simple, externally-verified lead gets the next available `#N`; a lead needing real diligence goes to `docs/aria-learning-inbox/` instead. Edit the detail file IN PLACE.
 
-- #261 CODE — candle_staleness_shadow.py construit (mode shadow, jamais un hard-gate tant que non calibré), câblé dans _fetch_candles. (détail complet : `docs/backlog-technique.md`)
-- #268 évalué (recherche seule, pas de code touché) — base/eip-7702-proxy vérifié comme un patron sûr, décision de migration réelle... (détail complet : `docs/backlog-technique.md`)
-- #279 partiellement résolu — anti-memorization clause added to v8's 3 LLM gates; literal Look-Ahead-Bench replication (P1/P2... (détail complet : `docs/backlog-technique.md`)
-- #280 LATTICE 6-criteria grid (détail complet : `docs/backlog-technique.md`)
-- #286 reference — `webpro255/awesome-ai-agent-attacks` (verified real, sourced/dated incident timeline) as a consult-first resource... (détail complet : `docs/backlog-technique.md`)
-- #287 reference — `trailofbits/skills` (verified real) as a candidate security-audit toolkit for a future... (détail complet : `docs/backlog-technique.md`)
-- #288 pointer — CFTC Innovation Task Force (verified real, formed 24/03, staffed 10/04/2026, crypto+AI+prediction-markets mandate)... (détail complet : `docs/backlog-technique.md`)
-- #289 précisé 15/08 (pas RESOLVED, action dev reste ouverte) — GoPlus AI Agent Security API: tarif confirmé 9,90$/audit via x402... (détail complet : `docs/backlog-technique.md`)
-- #290 Trail of Bits Uniswap v4 hooks audit (verified real, Cork+Bunni $20M+) (détail complet : `docs/backlog-technique.md`)
-- #293 CODE COMPLETE (merged into backtest_robustness.py 13/08), standing action still open -- OHLCV intraday-signal falsification... (détail complet : `docs/backlog-technique.md`)
-- #295 Sybil-clustering ready-to-use candidates (Sybil Defender + Bubblemaps, verified real) for `smart_money.py`'s structural limit #1. (détail complet : `docs/backlog-technique.md`)
-- #296 Base Builder Grants (retroactive, no application) (détail complet : `docs/backlog-technique.md`)
-- #297 x402 Bazaar indexing (détail complet : `docs/backlog-technique.md`)
-- #298 ACP → ERC-8183 "Agentic Commerce" migration (Virtuals + Ethereum Foundation) (détail complet : `docs/backlog-technique.md`)
-- #299 Arkham now accepts x402 pay-per-call (no subscription) (détail complet : `docs/backlog-technique.md`)
-- #300 Coinbase CLI `--dry-run` mode (verified real) (détail complet : `docs/backlog-technique.md`)
-- #304 open verification, widened 16/08 — confirm that the Claude Code version used by ARIA sessions is indeed ≥2.0.65... (détail complet : `docs/backlog-technique.md`)
-- #305 Farcaster "Trade Webhooks" (Neynar, déjà partiellement dans le paysage via la source Farcaster du signal cascade) (détail complet : `docs/backlog-technique.md`)
-- #306 Kalshi domine 81% du volume de trading vs 19% pour Polymarket (données agrégées début 08/2026) (détail complet : `docs/backlog-technique.md`)
-- #310 open verification — two distinct angles on the real CDP swap (`agent_wallet_pilot.py`/`agent_wallet_cdp_adapter.execute_swap`,... (détail complet : `docs/backlog-technique.md`)
-- #314 CONFIRMED real gap, diagnosed 16/08 (workflow, not yet fixed — needs explicit operator go before touching the live payment... (détail complet : `docs/backlog-technique.md`)
-- #315 partially resolved 16/08 (workflow) — "Security in LLM-as-a-Judge" (arXiv 2603.29403): confirmed gap in Polymarket paper's... (détail complet : `docs/backlog-technique.md`)
-- #322 GoPlus "AgentGuard" — real-time hook before each risky agent action, candidate to harden the 10-25$ swap pilot, pricing/Base... (détail complet : `docs/backlog-technique.md`)
-- #323 Parallax/ClawSafety adversarial methodologies — ARIA's wallet_guard/agent_wallet_pilot decision/execution split never tested... (détail complet : `docs/backlog-technique.md`)
-- #325 Ghostjacking (log-poisoning DEFCON 34) — health-log.md/architect-review.log read by future Claude Code sessions, verify no... (détail complet : `docs/backlog-technique.md`)
-- #326 Agent Data Injection (ADI, arXiv 2607.05120) — tested successfully against Claude Code itself, add to mandate #192's vigilance... (détail complet : `docs/backlog-technique.md`)
-- #327 Dune "A-A Wash Trading Detection" — free candidate cross-check for the legitimacy engine (liquidity_depth.py never verifies pool... (détail complet : `docs/backlog-technique.md`)
-- #328 FARMA/GhostWriter memory-poisoning specifics — 2 concrete test criteria (reasoning-trace corruption, delayed activation) to add... (détail complet : `docs/backlog-technique.md`)
-- #329 shadow module unification (pump/support-bounce v1/v2/variant, ~4268 duplicated lines) — Devil's Advocate confirmed a 2nd time... (détail complet : `docs/backlog-technique.md`)
-- #330 (research-log promotion 19/08) — GoPlus "DeepScan" (#289) confirmed to ship a "Continuous Security Monitoring" module distinct... (détail complet : `docs/backlog-technique.md`)
-- #331 (research-log promotion 19/08) — Noxa launchpad collapse on Robinhood Chain (11-13/07/2026, ~72% DEX volume drop since mid-July... (détail complet : `docs/backlog-technique.md`)
-- #332 (research-log promotion 19/08) — KTD-Fin ("From Knowing to Doing", arXiv 2605.28359) anonymizes tickers/dates/prices to separate... (détail complet : `docs/backlog-technique.md`)
-- #333 (research-log promotion 19/08) — OpenAI→Hugging Face agent intrusion (07/2026) detailed disclosure: the compromised agent... (détail complet : `docs/backlog-technique.md`)
-- #334 (goplus-security-watch, 19/08) — GoPlus "DeepScan" (continuous post-deployment contract monitoring + pre-launch self-check),... (détail complet : `docs/backlog-technique.md`)
-- #335 (aria-learning-inbox review, 19/08) — ChainAware.ai deployer-wallet cross-token reputation signal, confirmed real complementary... (détail complet : `docs/backlog-technique.md`)
-- #336 (research-log promotion 21/08, verified WebSearch: Base docs/Unchained/Chainstack) — Base B20 native token standard (live since... (détail complet : `docs/backlog-technique.md`)
-- #337 (research-log promotion 21/08) — Deflated/Probabilistic Sharpe Ratio (DSR/PSR, López de Prado, established quant-finance... (détail complet : `docs/backlog-technique.md`)
-- #338 (research-log promotion 21/08, verified WebSearch: owasp.org/helpnetsecurity — real, released 01/06/2026) — OWASP "Agent Memory... (détail complet : `docs/backlog-technique.md`)
-- #339 (research-log promotion 21/08, verified WebSearch: arXiv 2604.08407, real — "Your Agent Is Mine", UC Berkeley) — malicious... (détail complet : `docs/backlog-technique.md`)
-- #340 (research-log promotion 21/08, verified WebSearch: arXiv 2602.13480, real — MELT/MemeTrans, Georgia Tech) — labeled dataset of... (détail complet : `docs/backlog-technique.md`)
-- #341 (research-log promotion 22/08, verified WebSearch: Computer Weekly/CSO Online/The Hacker News, real — UK AISI report, incident... (détail complet : `docs/backlog-technique.md`)
-- #342 (research-log promotion 22/08) — Claude Code (Aug 2026 update) ships native `allowed_domains`/`blocked_domains` scoping for... (détail complet : `docs/backlog-technique.md`)
-- #343 (research-log promotion 22/08) — Coinbase CDP now documents a native "Policy Engine"/Wallet Policies for Smart Accounts — an... (détail complet : `docs/backlog-technique.md`)
-- #344 (research-log promotion 22/08) — 1inch exposes a dedicated MCP server covering its full API (15 endpoints including Swap... (détail complet : `docs/backlog-technique.md`)
-- #345 (research-log promotion 22/08) — Base activated Flashblocks in production (16/07/2026, built with Flashbots): block time cut from... (détail complet : `docs/backlog-technique.md`)
-- #346 (research-log promotion 22/08) — Morpho launches "Midnight," a fixed-rate/fixed-term lending protocol on Base (first market... (détail complet : `docs/backlog-technique.md`)
-- #347 (research-log promotion 22/08) — Meta's "Rule of Two": a security design heuristic for agentic actions — in a single action, an... (détail complet : `docs/backlog-technique.md`)
-- #348 (research-log promotion 22/08, verified via research log sourcing AgentSeal/Cloud Security Alliance 2026 MCP prevalence study) —... (détail complet : `docs/backlog-technique.md`)
-- #349 (research-log promotion 22/08) — x402 Bazaar now also exposes a dedicated MCP server (via AWS Bedrock AgentCore Gateway)... (détail complet : `docs/backlog-technique.md`)
-- #350 (research-log promotion 22/08) — Two distinct infra-level agent-spend-cap proposals surfaced this pass, both enforcing bounds... (détail complet : `docs/backlog-technique.md`)
-- #351 (research-log promotion 22/08, verified WebSearch: Anthropic Frontier Red Team study, real, released Dec 2025) — Anthropic's own... (détail complet : `docs/backlog-technique.md`)
-- #352 (research-log promotion 22/08) — X ships "Smart Cashtags" (iPhone US/Canada: real-time price + dedicated mention feed tied to a... (détail complet : `docs/backlog-technique.md`)
-- #353 (research-log promotion 23/08, verified WebSearch: code.claude.com/docs/sandboxing) — Claude Code now ships sandbox-native secret... (détail complet : `docs/backlog-technique.md`)
-- #354 (research-log promotion 23/08) — VPIN (Volume-Synchronized Probability of Informed Trading, Easley/López de Prado) — established... (détail complet : `docs/backlog-technique.md`)
-- #355 (research-log promotion 23/08, verified WebSearch: Robinhood Chain docs/Chainlink blog, mainnet live 01/07/2026) — Chainlink Data... (détail complet : `docs/backlog-technique.md`)
-- #356 (research-log promotion 23/08) — "Exploring the Emerging Threats of the Agent Skill Ecosystem" (arXiv 2605.28588) scanned 3984... (détail complet : `docs/backlog-technique.md`)
-- #357 (research-log promotion 23/08) — Coinbase Agentic.Market — public, curated x402 service marketplace (live... (détail complet : `docs/backlog-technique.md`)
-- #358 (research-log promotion 23/08, verified WebSearch: credprotocol.com) — Cred Protocol exposes a dedicated MCP server (21 tools)... (détail complet : `docs/backlog-technique.md`)
-- #359 (research-log promotion 23/08) — ChainAware.ai advances #335 (confirmed complementary gap, never followed up) with concrete specs... (détail complet : `docs/backlog-technique.md`)
-- #360 (research-log promotion 23/08) — Polymarket has a real regulated US path: its ~$112M acquisition of QCX LLC (CFTC-licensed... (détail complet : `docs/backlog-technique.md`)
-- #361 (research-log promotion 23/08) — RepScore — Solana-native on-chain reputation service (single API call per wallet →... (détail complet : `docs/backlog-technique.md`)
-- #362 (research-log promotion 23/08, verified WebSearch: CVSS 9.9, patched service-side by Microsoft, August 2026) — CVE-2026-62830, a... (détail complet : `docs/backlog-technique.md`)
-- #363 (research-log promotion 23/08, verified WebSearch: Ethereum Foundation 2026 roadmap) — ERC-8004 ("Trustless Agents", Ethereum... (détail complet : `docs/backlog-technique.md`)
-- #364 (Avocat du Diable report, 09ae13a2213b, 22/08) — four independent Solana RPC throttle layers built across the same push window, real risk of compounded double-throttle or composed bursts piercing the RPC ceiling under load. (détail complet : `docs/backlog-technique.md`)
-- #365 (operator diligence, 24/08) — ERC-4337 account-abstraction ecosystem: Robinhood Chain documents Alchemy/ZeroDev, never Candide; only ZeroDev has a real Python path. Banked for a future need (gas sponsoring/passkeys), not the current pilot. (full detail: `docs/backlog-technique.md`)
-- #366 (workflow, 24/08) — Candide plugin catalogue diligence: SocialRecoveryModule rated MAYBE, found ARIA's own owner/delegate key collapsed into one (real lockout risk today). Nothing to integrate now. (full detail: `docs/backlog-technique.md`)
-- #367 (operator diligence, 24/08) — GoldenFarFR/ARIA has zero branch protection on `main` and no CONTRIBUTING.md; nothing structurally stops an external PR. Real supply-chain exposure given real-capital-adjacent code. (full detail: `docs/backlog-technique.md`)
-- #368 (operator diligence, 24/08) — `mitchellh/vouch` evaluated, not a fit (ARIA's gap is a malicious-PR risk, not AI-spam filtering). Opening ARIA to external contributions: NO for now. (full detail: `docs/backlog-technique.md`)
-- #378 (aria-learning-inbox triage, 24/08) — EAS (Ethereum Attestation Service) as the on-chain proof mechanism `docs/protocole-argent-reel.md` §2 already requires; evaluate vs the existing Sepolia hash anchor before real-money readiness. (full detail: `docs/backlog-technique.md`)
-- #379 (aria-learning-inbox triage, 24/08) — two `smart_money.py` extensions: cross-token diversification scoring + deposit-address clustering (Sybil detection) for the existing `>= 2 smart_wallets` convergence check. (full detail: `docs/backlog-technique.md`)
-- #380 (aria-learning-inbox triage, 24/08) — ClawHub security alert (1184 wallet-stealing malware skills purged, never install) + "Capability Evolver" deterministic regression-detector pattern as a from-scratch build candidate. (full detail: `docs/backlog-technique.md`)
-- #381 (aria-learning-inbox triage, 24/08, target reframed 25/08 — `/walletscore` retired) — Webacy: wallet-address reputation, complementary to GoPlus's contract-level scoring; candidate consumer now `agent_wallet_pilot`/`smart_money.py` convergence checks, real API pricing/Base coverage still unconfirmed. (full detail: `docs/backlog-technique.md`)
-- #369 (research-log promotion 24/08, verified) — ERC-7730 "Clear Signing" (Ethereum Foundation standard, MetaMask/Ledger/Trezor/Fireblocks) shows a wallet's real transaction intent before signing. Candidate hardening layer for `agent_wallet_pilot.py`'s CDP swap adapter. (full detail: `docs/backlog-technique.md`)
-- #370 (research-log promotion 24/08, verified) — Believe launches Solana tokens via an X reply to @launchcoin — the launch signal is itself a tweet, inside the stream `ARIA_X_SIGNAL_CASCADE_ENABLED` already watches. Verify coverage. (full detail: `docs/backlog-technique.md`)
-- #371 (research-log promotion 24/08, verified arXiv 2604.26747) — "Hypotheses to Factors" paper: append-only trace + falsifiable-hypothesis DSL + external deterministic engine, a candidate structuring pattern for v8's own self-improvement cycles. (full detail: `docs/backlog-technique.md`)
-- #372 (research-log promotion 24/08, verified) — Neynar (Clanker's owner, #276) has stepped back from day-to-day Farcaster/Clanker operations after ~99% revenue collapse. Re-verify who runs Clanker before any real ARIA tokenization. (full detail: `docs/backlog-technique.md`)
-- #373 (research-log promotion 24/08, verified) — Robinhood Chain TVL now driven by stablecoins, not the tokenized-stocks thesis it launched on (RWA share 33%→6% since July). Factor into any Robinhood Chain token read. (full detail: `docs/backlog-technique.md`)
-- #374 (research-log promotion 24/08) — "Quarter-Hour Effect" (arXiv 2607.09426): order-flow imbalance at hour/quarter-hour marks predicts 4-12h returns. Candidate shadow-only time-of-entry filter for v8/momentum, zero extra data cost. (full detail: `docs/backlog-technique.md`)
-- #375 (research-log promotion 24/08, verified) — Anthropic's own "Claude Security" plugin: 3-agent adversarial quorum verifies findings before patching. Comparison point to strengthen the Avocat du Diable mechanism. (full detail: `docs/backlog-technique.md`)
-- #376 (research-log promotion 24/08, verified) — Term Finance lost $8.5M to a pure governance-capture exploit (2 ETH bootstrapped majority vote control, no contract bug). New diligence criterion for any real deposit under the dormant-capital-on-Base plan. (full detail: `docs/backlog-technique.md`)
-- #377 (research-log promotion 24/08, verified arXiv 2603.27539) — "Regime-shift blindness" can flip a backtest's reported sign (FinMem +23%→-22% example). Add mandatory multi-regime coverage to the v8 validation protocol, distinct from #337's DSR/PSR correction. (full detail: `docs/backlog-technique.md`)
+- #261 CODE — candle_staleness_shadow.py construit (mode shadow, jamais un hard-gate tant que non calibré), câblé dans _fetch_candles.
+- #268 évalué (recherche seule, pas de code touché) — base/eip-7702-proxy vérifié comme un patron sûr, décision de migration réelle...
+- #279 partiellement résolu — anti-memorization clause added to v8's 3 LLM gates; literal Look-Ahead-Bench replication (P1/P2...
+- #280 LATTICE 6-criteria grid
+- #286 reference — `webpro255/awesome-ai-agent-attacks` (verified real, sourced/dated incident timeline) as a consult-first resource...
+- #287 reference — `trailofbits/skills` (verified real) as a candidate security-audit toolkit for a future...
+- #288 pointer — CFTC Innovation Task Force (verified real, formed 24/03, staffed 10/04/2026, crypto+AI+prediction-markets mandate)...
+- #289 précisé 15/08 (pas RESOLVED, action dev reste ouverte) — GoPlus AI Agent Security API: tarif confirmé 9,90$/audit via x402...
+- #290 Trail of Bits Uniswap v4 hooks audit (verified real, Cork+Bunni $20M+)
+- #293 CODE COMPLETE (merged into backtest_robustness.py 13/08), standing action still open -- OHLCV intraday-signal falsification...
+- #295 Sybil-clustering ready-to-use candidates (Sybil Defender + Bubblemaps, verified real) for `smart_money.py`'s structural limit #1.
+- #296 Base Builder Grants (retroactive, no application)
+- #297 x402 Bazaar indexing
+- #298 ACP → ERC-8183 "Agentic Commerce" migration (Virtuals + Ethereum Foundation)
+- #299 Arkham now accepts x402 pay-per-call (no subscription)
+- #300 Coinbase CLI `--dry-run` mode (verified real)
+- #304 open verification, widened 16/08 — confirm that the Claude Code version used by ARIA sessions is indeed ≥2.0.65...
+- #305 Farcaster "Trade Webhooks" (Neynar, déjà partiellement dans le paysage via la source Farcaster du signal cascade)
+- #306 Kalshi domine 81% du volume de trading vs 19% pour Polymarket (données agrégées début 08/2026)
+- #310 open verification — two distinct angles on the real CDP swap (`agent_wallet_pilot.py`/`agent_wallet_cdp_adapter.execute_swap`,...
+- #314 CONFIRMED real gap, diagnosed 16/08 (workflow, not yet fixed — needs explicit operator go before touching the live payment...
+- #315 partially resolved 16/08 (workflow) — "Security in LLM-as-a-Judge" (arXiv 2603.29403): confirmed gap in Polymarket paper's...
+- #322 GoPlus "AgentGuard" — real-time hook before each risky agent action, candidate to harden the 10-25$ swap pilot, pricing/Base...
+- #323 Parallax/ClawSafety adversarial methodologies — ARIA's wallet_guard/agent_wallet_pilot decision/execution split never tested...
+- #325 Ghostjacking (log-poisoning DEFCON 34) — health-log.md/architect-review.log read by future Claude Code sessions, verify no...
+- #326 Agent Data Injection (ADI, arXiv 2607.05120) — tested successfully against Claude Code itself, add to mandate #192's vigilance...
+- #327 Dune "A-A Wash Trading Detection" — free candidate cross-check for the legitimacy engine (liquidity_depth.py never verifies pool...
+- #328 FARMA/GhostWriter memory-poisoning specifics — 2 concrete test criteria (reasoning-trace corruption, delayed activation) to add...
+- #329 shadow module unification (pump/support-bounce v1/v2/variant, ~4268 duplicated lines) — Devil's Advocate confirmed a 2nd time...
+- #330 (research-log promotion 19/08) — GoPlus "DeepScan" (#289) confirmed to ship a "Continuous Security Monitoring" module distinct...
+- #331 (research-log promotion 19/08) — Noxa launchpad collapse on Robinhood Chain (11-13/07/2026, ~72% DEX volume drop since mid-July...
+- #332 (research-log promotion 19/08) — KTD-Fin ("From Knowing to Doing", arXiv 2605.28359) anonymizes tickers/dates/prices to separate...
+- #333 (research-log promotion 19/08) — OpenAI→Hugging Face agent intrusion (07/2026) detailed disclosure: the compromised agent...
+- #334 (goplus-security-watch, 19/08) — GoPlus "DeepScan" (continuous post-deployment contract monitoring + pre-launch self-check),...
+- #335 (aria-learning-inbox review, 19/08) — ChainAware.ai deployer-wallet cross-token reputation signal, confirmed real complementary...
+- #336 (research-log promotion 21/08, verified WebSearch: Base docs/Unchained/Chainstack) — Base B20 native token standard (live since...
+- #337 (research-log promotion 21/08) — Deflated/Probabilistic Sharpe Ratio (DSR/PSR, López de Prado, established quant-finance...
+- #338 (research-log promotion 21/08, verified WebSearch: owasp.org/helpnetsecurity — real, released 01/06/2026) — OWASP "Agent Memory...
+- #339 (research-log promotion 21/08, verified WebSearch: arXiv 2604.08407, real — "Your Agent Is Mine", UC Berkeley) — malicious...
+- #340 (research-log promotion 21/08, verified WebSearch: arXiv 2602.13480, real — MELT/MemeTrans, Georgia Tech) — labeled dataset of...
+- #341 (research-log promotion 22/08, verified WebSearch: Computer Weekly/CSO Online/The Hacker News, real — UK AISI report, incident...
+- #342 (research-log promotion 22/08) — Claude Code (Aug 2026 update) ships native `allowed_domains`/`blocked_domains` scoping for...
+- #343 (research-log promotion 22/08) — Coinbase CDP now documents a native "Policy Engine"/Wallet Policies for Smart Accounts — an...
+- #344 (research-log promotion 22/08) — 1inch exposes a dedicated MCP server covering its full API (15 endpoints including Swap...
+- #345 (research-log promotion 22/08) — Base activated Flashblocks in production (16/07/2026, built with Flashbots): block time cut from...
+- #346 (research-log promotion 22/08) — Morpho launches "Midnight," a fixed-rate/fixed-term lending protocol on Base (first market...
+- #347 (research-log promotion 22/08) — Meta's "Rule of Two": a security design heuristic for agentic actions — in a single action, an...
+- #348 (research-log promotion 22/08, verified via research log sourcing AgentSeal/Cloud Security Alliance 2026 MCP prevalence study) —...
+- #349 (research-log promotion 22/08) — x402 Bazaar now also exposes a dedicated MCP server (via AWS Bedrock AgentCore Gateway)...
+- #350 (research-log promotion 22/08) — Two distinct infra-level agent-spend-cap proposals surfaced this pass, both enforcing bounds...
+- #351 (research-log promotion 22/08, verified WebSearch: Anthropic Frontier Red Team study, real, released Dec 2025) — Anthropic's own...
+- #352 (research-log promotion 22/08) — X ships "Smart Cashtags" (iPhone US/Canada: real-time price + dedicated mention feed tied to a...
+- #353 (research-log promotion 23/08, verified WebSearch: code.claude.com/docs/sandboxing) — Claude Code now ships sandbox-native secret...
+- #354 (research-log promotion 23/08) — VPIN (Volume-Synchronized Probability of Informed Trading, Easley/López de Prado) — established...
+- #355 (research-log promotion 23/08, verified WebSearch: Robinhood Chain docs/Chainlink blog, mainnet live 01/07/2026) — Chainlink Data...
+- #356 (research-log promotion 23/08) — "Exploring the Emerging Threats of the Agent Skill Ecosystem" (arXiv 2605.28588) scanned 3984...
+- #357 (research-log promotion 23/08) — Coinbase Agentic.Market — public, curated x402 service marketplace (live...
+- #358 (research-log promotion 23/08, verified WebSearch: credprotocol.com) — Cred Protocol exposes a dedicated MCP server (21 tools)...
+- #359 (research-log promotion 23/08) — ChainAware.ai advances #335 (confirmed complementary gap, never followed up) with concrete specs...
+- #360 (research-log promotion 23/08) — Polymarket has a real regulated US path: its ~$112M acquisition of QCX LLC (CFTC-licensed...
+- #361 (research-log promotion 23/08) — RepScore — Solana-native on-chain reputation service (single API call per wallet →...
+- #362 (research-log promotion 23/08, verified WebSearch: CVSS 9.9, patched service-side by Microsoft, August 2026) — CVE-2026-62830, a...
+- #363 (research-log promotion 23/08, verified WebSearch: Ethereum Foundation 2026 roadmap) — ERC-8004 ("Trustless Agents", Ethereum...
+- #364 (Avocat du Diable report, 09ae13a2213b, 22/08) — four independent Solana RPC throttle layers built across the same push window, real risk of compounded double-throttle or composed bursts piercing the RPC ceiling under load.
+- #365 (operator diligence, 24/08) — ERC-4337 account-abstraction ecosystem: Robinhood Chain documents Alchemy/ZeroDev, never Candide; only ZeroDev has a real Python path. Banked for a future need (gas sponsoring/passkeys), not the current pilot.
+- #366 (workflow, 24/08) — Candide plugin catalogue diligence: SocialRecoveryModule rated MAYBE, found ARIA's own owner/delegate key collapsed into one (real lockout risk today). Nothing to integrate now.
+- #367 (operator diligence, 24/08) — GoldenFarFR/ARIA has zero branch protection on `main` and no CONTRIBUTING.md; nothing structurally stops an external PR. Real supply-chain exposure given real-capital-adjacent code.
+- #368 (operator diligence, 24/08) — `mitchellh/vouch` evaluated, not a fit (ARIA's gap is a malicious-PR risk, not AI-spam filtering). Opening ARIA to external contributions: NO for now.
+- #378 (aria-learning-inbox triage, 24/08) — EAS (Ethereum Attestation Service) as the on-chain proof mechanism `docs/protocole-argent-reel.md` §2 already requires; evaluate vs the existing Sepolia hash anchor before real-money readiness.
+- #379 (aria-learning-inbox triage, 24/08) — two `smart_money.py` extensions: cross-token diversification scoring + deposit-address clustering (Sybil detection) for the existing `>= 2 smart_wallets` convergence check.
+- #380 (aria-learning-inbox triage, 24/08) — ClawHub security alert (1184 wallet-stealing malware skills purged, never install) + "Capability Evolver" deterministic regression-detector pattern as a from-scratch build candidate.
+- #381 (aria-learning-inbox triage, 24/08, target reframed 25/08 — `/walletscore` retired) — Webacy: wallet-address reputation, complementary to GoPlus's contract-level scoring; candidate consumer now `agent_wallet_pilot`/`smart_money.py` convergence checks, real API pricing/Base coverage still unconfirmed.
+- #369 (research-log promotion 24/08, verified) — ERC-7730 "Clear Signing" (Ethereum Foundation standard, MetaMask/Ledger/Trezor/Fireblocks) shows a wallet's real transaction intent before signing. Candidate hardening layer for `agent_wallet_pilot.py`'s CDP swap adapter.
+- #370 (research-log promotion 24/08, verified) — Believe launches Solana tokens via an X reply to @launchcoin — the launch signal is itself a tweet, inside the stream `ARIA_X_SIGNAL_CASCADE_ENABLED` already watches. Verify coverage.
+- #371 (research-log promotion 24/08, verified arXiv 2604.26747) — "Hypotheses to Factors" paper: append-only trace + falsifiable-hypothesis DSL + external deterministic engine, a candidate structuring pattern for v8's own self-improvement cycles.
+- #372 (research-log promotion 24/08, verified) — Neynar (Clanker's owner, #276) has stepped back from day-to-day Farcaster/Clanker operations after ~99% revenue collapse. Re-verify who runs Clanker before any real ARIA tokenization.
+- #373 (research-log promotion 24/08, verified) — Robinhood Chain TVL now driven by stablecoins, not the tokenized-stocks thesis it launched on (RWA share 33%→6% since July). Factor into any Robinhood Chain token read.
+- #374 (research-log promotion 24/08) — "Quarter-Hour Effect" (arXiv 2607.09426): order-flow imbalance at hour/quarter-hour marks predicts 4-12h returns. Candidate shadow-only time-of-entry filter for v8/momentum, zero extra data cost.
+- #375 (research-log promotion 24/08, verified) — Anthropic's own "Claude Security" plugin: 3-agent adversarial quorum verifies findings before patching. Comparison point to strengthen the Avocat du Diable mechanism.
+- #376 (research-log promotion 24/08, verified) — Term Finance lost $8.5M to a pure governance-capture exploit (2 ETH bootstrapped majority vote control, no contract bug). New diligence criterion for any real deposit under the dormant-capital-on-Base plan.
+- #377 (research-log promotion 24/08, verified arXiv 2603.27539) — "Regime-shift blindness" can flip a backtest's reported sign (FinMem +23%→-22% example). Add mandatory multi-regime coverage to the v8 validation protocol, distinct from #337's DSR/PSR correction.
 - #382 (25/08) — Cred Protocol's Sybil Detection endpoint, method candidate for #379's `smart_money.py` extension, pricing unverified.
 - #383 (25/08) — Bankrbot/Grok drained via Morse-encoded prompt injection past a plain-text filter; verify no text-reading skill can reach `agent_wallet_pilot` with an encoded instruction.
 - #384 (25/08) — `services/jupiter.py` still quotes via legacy `lite-api.jup.ag`; Jupiter Ultra v3 (34x better sandwich protection) is live — evaluate before pilot scale-up.
@@ -512,13 +516,13 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #410 (30/08, $290-292M) — KelpDAO/LayerZero: 1-of-1 DVN poisoned via RPC+DDoS. Diligence item for the CCIP bridge plan.
 - #411 (30/08) — Base ran a single sequencer, froze twice ~2h (25-26/06). Risk factor for dormant-capital-on-Base + incident runbook.
 - #412 (30/08) — 6 price-API candidates for #271/#269; 2 ruled out, 4 untested. Detail: `docs/aria-learning-inbox/2026-08-30-price-api-alternatives-271-269.md`.
-- #413 (31/08, verified) — Robinhood Chain launchpad share flip: NOXA permanently shut down 11/07, Pons now dominant (52.1% mid-July). Verify `robinhood_pump_shadow`/_v2 sees Pons launches at all. (full detail: `docs/backlog-technique.md`)
-- #414 (31/08, verified) — SANDWORM_MODE npm worm writes a malicious local MCP server with prompt injection in its tool descriptions, exfiltrates LLM API keys — first real (not lab) attack on the MCP surface ARIA's sessions use. Verify no such artifact on the VPS; feeds mandate #192. (full detail: `docs/backlog-technique.md`)
-- #415 (31/08, verified) — Pump.fun shipped multi-chain swaps (07/08), breaking the "Pump.fun = Solana bonding only" assumption in the bonding-vs-classic-launch doctrine (28/07). Verify no non-Solana tokens transit it invisibly to Base/Robinhood crawlers. (full detail: `docs/backlog-technique.md`)
-- #416 (31/08, verified) — LunarCrush: aggregated anti-bot social score (X/Reddit/YouTube/TikTok), candidate cheap pre-filter before capped X/TwitterAPI.io requests. Verify pricing/coverage. (full detail: `docs/backlog-technique.md`)
-- #417 (31/08, verified) — Trust Wallet official MCP servers (address security checks) + Agent Kit. Candidate cross-check vs GoPlus on an uncovered signal, pricing/Base coverage unverified. (full detail: `docs/backlog-technique.md`)
-- #418 (31/08, verified) — Hexens "Glider": logic-level EVM contract vulnerability query engine, complement (not replacement) for `safety_screen.py`/`mint_authority.py` if GoPlus ever misses a logic bug. Pricing unverified. (full detail: `docs/backlog-technique.md`)
-- #419 (31/08, unverified beyond research-log sourcing) — "Fomo" multi-chain (incl. Base) wallet-tracking/copy-trading app, candidate feed for `smart_money.py`/`wallet_copy_shadow`. Data-API access/pricing not yet confirmed. (full detail: `docs/backlog-technique.md`)
+- #413 (31/08, verified) — Robinhood Chain launchpad share flip: NOXA permanently shut down 11/07, Pons now dominant (52.1% mid-July). Verify `robinhood_pump_shadow`/_v2 sees Pons launches at all.
+- #414 (31/08, verified) — SANDWORM_MODE npm worm writes a malicious local MCP server with prompt injection in its tool descriptions, exfiltrates LLM API keys — first real (not lab) attack on the MCP surface ARIA's sessions use. Verify no such artifact on the VPS; feeds mandate #192.
+- #415 (31/08, verified) — Pump.fun shipped multi-chain swaps (07/08), breaking the "Pump.fun = Solana bonding only" assumption in the bonding-vs-classic-launch doctrine (28/07). Verify no non-Solana tokens transit it invisibly to Base/Robinhood crawlers.
+- #416 (31/08, verified) — LunarCrush: aggregated anti-bot social score (X/Reddit/YouTube/TikTok), candidate cheap pre-filter before capped X/TwitterAPI.io requests. Verify pricing/coverage.
+- #417 (31/08, verified) — Trust Wallet official MCP servers (address security checks) + Agent Kit. Candidate cross-check vs GoPlus on an uncovered signal, pricing/Base coverage unverified.
+- #418 (31/08, verified) — Hexens "Glider": logic-level EVM contract vulnerability query engine, complement (not replacement) for `safety_screen.py`/`mint_authority.py` if GoPlus ever misses a logic bug. Pricing unverified.
+- #419 (31/08, unverified beyond research-log sourcing) — "Fomo" multi-chain (incl. Base) wallet-tracking/copy-trading app, candidate feed for `smart_money.py`/`wallet_copy_shadow`. Data-API access/pricing not yet confirmed.
 
 ## Required reading (the detailed brain)
 `docs/etat-systeme-cable.md` (wired state, established facts) · `docs/architecture-extensibilite.md` (first) · `docs/strategie-aria-investissement.md` · `docs/protocole-argent-reel.md` · `docs/roadmap-campagne.md` · `docs/playbook-editorial-aria.md`. **If a VPS migration (physical machine change) is in progress or being considered: read `docs/runbook-migration-vps.md` FIRST** — ordered checklist + 6 pitfalls already encountered and their precise cause (20/07), to avoid falling into them again. **If VPS SSH access breaks: `docs/runbook-ssh-depannage.md`.** **Before switching REAL Solana trading on or off: `docs/runbook-activation-trading-reel-solana.md`** -- the two gates that must move together, what bounds each trade, and the three ways to stop. **If the agent itself seems compromised/misbehaving (supply-chain worm, prompt injection, actions no longer matching requests): `docs/runbook-incident-agent.md`** — operator-facing 4-step emergency checklist (stop first, repair from a clean machine, never rotate secrets from the infected machine).
