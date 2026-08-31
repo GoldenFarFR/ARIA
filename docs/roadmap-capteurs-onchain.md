@@ -1860,6 +1860,26 @@ considérés comme des écarts postérieurs au gel :
   historique de ~1786,9 min et un `T0` réel à la minute 3. Le label
   historique de MSR reste B, conformément au protocole de labellisation
   figé avant tout calcul de feature.
+- **Normalisation Mint/Burn V2/V3 incomplète** — `brique6_etape2_backfill.py`
+  (script du 30/08) et son dérivé `msr_metadata_fix_backfill.py` décidaient
+  d'insérer une ligne normalisée en comparant `pool.liquidity_added_raw`/
+  `liquidity_removed_raw` avant/après chaque événement. Or les handlers de
+  production (`evm_swap_ws.py`) mettent à jour un champ différent pour
+  V2/V3 : `liquidity_added_quote`/`liquidity_removed_quote` (le champ
+  `_raw` n'est utilisé que par V4, par conception -- unité L abstraite vs
+  montant en quote-token, cf. le docstring du dataclass). Conséquence :
+  chaque Mint/Burn V2/V3 était bien capturé en brut mais jamais normalisé.
+  Ampleur mesurée par SQL pur (zéro RPC) : MSR (1 mint) et COPPERINU-V3
+  (2819 mint + 2809 burn) -- les 11 pools C_EVENT sont tous V4, donc non
+  exposés. Aucune primitive déjà calculée (T0, buy_share, mfe/mae,
+  new_sender_share, price_recovery) ne dépend de cet axe -- impact nul sur
+  les résultats déjà produits. Redécodé sans nouveau scan RPC (les
+  événements bruts existaient déjà) dans
+  `brique6_liquidity_redecoded_2026-08-31.db`, invariants vérifiés
+  (Mint/Burn ne modifie jamais swap_count ni buy/sell_count -- 0 violation
+  sur les 5629 événements), ModifyLiquidity V4 contrôlé par échantillon
+  (chaque événement ne touche qu'un seul côté added/removed, magnitudes
+  cohérentes en paires add/remove).
 
 Conséquence méthodologique : les bases/analyses `v019`–`v021` produites
 avant ces corrections restent conservées comme traces expérimentales
