@@ -2205,6 +2205,48 @@ les écarts v019 venaient du cycle de vie ; (H2) à âge comparable, certaines
 différences survivent → signal réel ; (H3) différence seulement à certains
 âges → interaction phase × comportement, plus intéressant qu'un seuil.
 
+**EXÉCUTÉ le 31/08 — `cage_v2_fixed_block_2026-08-31.db`** : les 20 pools
+reconstruits aux 6 âges, **120/120 observations exploitables** (contre
+**8/120** avec l'ancien protocole événement-conditionné). Prix ET liquidité
+reconstruits sur 120/120 — aucun `None`. 1556 appels RPC (résolution de
+bloc en entonnoir : estimation depuis le débit de blocs propre à chaque
+pool, puis marche locale jusqu'à la borne exacte, ~3-6 appels par cible au
+lieu de ~25 pour une recherche binaire aveugle sur 50M blocs).
+
+**Le trou méthodologique est comblé, chiffré** : **14 pools sur 20 ont zéro
+swap sur toute la fenêtre ET un état parfaitement reconstruit** aux 6 âges.
+Avec l'ancien protocole ils étaient invisibles (« aucune observation ») ;
+ils sont désormais ce qu'ils ont toujours été — des pools observables,
+silencieux.
+
+**Contrôles qualité A/B/C/D : ALL PASS.** (A) cohérence temporelle 120/120,
+`age_error <= 0` toujours ; (B) reproductibilité — re-résolution en direct
+de 5 cibles, même `reference_block` à chaque fois ; (C) monotonie
+cumulative — 10 compteurs × 20 pools, zéro violation ; (D) contrôle
+indépendant — relecture fraîche V2/V3/V4 au même bloc, prix et liquidité
+identiques au bit près.
+
+**`age_error = 0` sur 120/120, vérifié et expliqué plutôt que présumé** :
+Robinhood Chain produit ~7-10 blocs par seconde qui PARTAGENT le même
+timestamp entier (mesuré : blocs 48004700→48004706 tous à 1787890424, puis
+48004707 à 1787890425). Il existe donc quasi toujours un bloc exactement à
+la seconde cible. Vérification supplémentaire au niveau du bloc individuel :
+`reference_block + 1` a systématiquement un timestamp strictement supérieur
+à la cible — le résolveur retient bien le DERNIER bloc de l'intervalle,
+conformément à la convention figée, jamais le premier.
+
+**Obstacle méthodologique identifié pour la comparaison A/B vs C_AGE, à
+trancher AVANT de l'exécuter** : `activity persistence` — la seule
+observation survivante de `v019_corrected_v2` — est définie comme la
+fraction des minutes POST-T0 où `activity_ratio >= 1`. Elle dépend
+structurellement de T0, que C_AGE n'a pas et ne doit pas avoir. Elle n'est
+donc PAS directement transposable au protocole état-à-bloc-fixe. Comparer
+A/B et C_AGE exigera soit une redéfinition explicite et symétrique de la
+persistance (sans T0, par exemple sur une fenêtre d'âge fixe), soit de
+restreindre la comparaison aux métriques réellement communes aux deux
+protocoles. À ne jamais bricoler en silence — c'est une décision de
+protocole, pas un détail d'implémentation.
+
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
 Contrôle âge-conditionné (jamais T0-conditionné), orthogonal à C_EVENT, conçu
