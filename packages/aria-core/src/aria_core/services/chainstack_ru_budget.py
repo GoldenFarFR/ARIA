@@ -77,7 +77,7 @@ from aria_core.paths import aria_db_path
 DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
     "base": 100_000,
     "solana": 0,
-    "robinhood": 400_000,
+    "robinhood": 650_000,
 }
 # 30/08, TWO reverted incidents (see system_issues #279/#280 and
 # docs/HANDOFF_PIPELINE_MOMENTUM.md): Brique 6's Groupe C / C2-bis research
@@ -88,10 +88,17 @@ DAILY_UNIT_CAP_PER_CHAIN: dict[str, int] = {
 # final usage 512 828 RU, commit 30e65285). Incident #2: ~22:45 UTC
 # (514 515/400 000) during the C2-bis backfill -- raised proactively to
 # 800_000 (commit 3b82ea59) on prior explicit operator authorization, no
-# production blockage this time. Reverted back to 400_000 here once C2-bis
-# concluded (2026-08-31T01:13:03Z, final usage 270 874 RU for that run) --
-# neither incident was ever a new calibration of Robinhood's real sustained
-# capacity.
+# production blockage this time. Reverted back to 400_000 once C2-bis
+# concluded (2026-08-31T01:13:03Z, final usage 270 874 RU for that run).
+# Incident #3, 31/08 ~12:05 UTC: same-day production consumption alone
+# exhausted the 400_000 cap (400 546 used, 0 remaining) BEFORE any research
+# backfill this session -- discovered while about to backfill MSR's real
+# history after finding its creation_block metadata was wrong by ~1.06M
+# blocks (data-integrity checkpoint, Brique 6 audit). Raised to 650_000
+# proactively to cover MSR's full backfill (~1.13M blocks, estimated
+# several hundred RU) without starving production further. Revert to
+# 400_000 once that backfill concludes -- none of these three incidents was
+# ever a new calibration of Robinhood's real sustained capacity.
 # Fallback for any future 4th chain never explicitly calibrated above --
 # same conservative default the shared constant used before this split.
 _DEFAULT_CAP = 200_000

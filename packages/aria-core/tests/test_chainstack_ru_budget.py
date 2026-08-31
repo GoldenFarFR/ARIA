@@ -174,10 +174,10 @@ async def test_used_today_read_is_cached_within_the_ttl(monkeypatch):
 def test_cap_for_returns_the_calibrated_per_chain_value():
     assert budget.cap_for("base") == 100_000
     assert budget.cap_for("solana") == 0
-    # 30/08: two temporary raises during Brique 6 Groupe C/C2-bis backfills
-    # (see system_issues #279/#280), both reverted to the calibrated 400_000
-    # once their respective backfill concluded.
-    assert budget.cap_for("robinhood") == 400_000
+    # 31/08: third same-day temporary raise (Brique 6 MSR metadata-fix
+    # backfill, see chainstack_ru_budget.py's own comment) -- revert this
+    # assertion to 400_000 once reverted.
+    assert budget.cap_for("robinhood") == 650_000
 
 
 def test_cap_for_unknown_chain_falls_back_to_default():
