@@ -2102,6 +2102,109 @@ réhabilite PAS `new_sender_share`/`flow_concentration` — ils restent
 déclassés « confondus par l'âge », seul le libellé exact de v021 est
 obsolète.
 
+### MINI-SPEC C_AGE v2 -- état à bloc fixe (31/08/2026, GO opérateur)
+
+Résout le défaut de conception qui a rendu le premier run C_AGE insuffisant :
+**on observe désormais un pool à un âge donné, même lorsqu'il est
+silencieux.** Question posée : *à un âge donné du pool, indépendamment du
+fait qu'un événement ait eu lieu à cet instant, les états observables des
+pools A/B diffèrent-ils de ceux de contrôles neutres C_AGE ?* Cette brique
+ne cherche plus un événement, elle cherche un **état de marché à un instant
+déterminé par l'âge**.
+
+**Convention figée** : à chaque âge cible H, l'observation C_AGE est définie
+au **dernier bloc `reference_block` dont le timestamp est ≤
+`creation_timestamp + H`**, avec état instantané lu à ce bloc et cumul
+historique reconstruit depuis la création jusqu'à ce bloc. Aucun événement
+requis à H. Aucune interpolation. Aucune direction token/quote. Aucun T0.
+Aucun filtre d'activité. Aucun nouveau tirage.
+
+Convention retenue *contre* « premier événement après H » délibérément : on
+veut l'état du pool À H, pas l'état au prochain événement après H — sinon
+l'observation est décalée artificiellement par un swap survenant 20
+secondes plus tard.
+
+**1. Âges cibles verrouillés** : 45 / 75 / 105 / 135 / 165 / 195 min.
+Inchangés quels que soient les résultats.
+
+**2. Champs temporels obligatoires** : `target_timestamp`,
+`reference_block`, `reference_block_timestamp`, `actual_age`,
+`age_error` (= `reference_block_timestamp - target_timestamp`).
+
+**3. Mesures** — état instantané AU bloc (`price_state`,
+`liquidity_level`) séparé du cumul depuis la création JUSQU'AU bloc
+(`swap_count_cum`, `volume_total_cum`, `unique_senders_cum`,
+`new_senders_cum`, `liquidity_added_cum`, `liquidity_removed_cum`).
+
+**4. Aucune direction économique** (inchangé depuis le premier run) :
+C_AGE n'a pas de `token_of_interest` défini expérimentalement, donc jamais
+de `buy_share`/`sell_share`/`MFE`/`MAE`/`price_recovery`/`net_flow`.
+
+**5. Absence réelle vs non-reconstructible — distinction stricte** :
+`swap_count_delta = 0` signifie « aucun swap observé sur l'intervalle » ;
+`price = NULL` signifie « impossible de reconstruire ce prix ». `None`
+reste `None`, jamais une approximation (doctrine ARIA générale).
+
+**6. Lecture d'état historique — FAISABILITÉ VÉRIFIÉE EMPIRIQUEMENT
+AVANT de figer cette spec** (jamais supposée) :
+
+```
+Archive node Chainstack Robinhood : CONFIRME DISPONIBLE
+  (valeurs historiques a ~2M blocs de profondeur differentes des valeurs
+   courantes -- donc une vraie lecture d'archive, pas un fallback silencieux
+   vers "latest")
+
+V2  getReserves() @ block            -> OK, teste sur MSR
+V3  slot0() @ block                  -> OK, teste sur COPPERINU-V3
+V4  StateView de Base ABSENT sur Robinhood (eth_getCode = 0x)
+    -> extsload(bytes32) sur le PoolManager Robinhood
+       0x8366a39cc670b4001a1121b8f6a443a643e40951
+       slot de base = keccak256(poolId ++ uint256(6))
+       slot0     a l'offset +0 (sqrtPriceX96 = 160 bits de poids faible)
+       liquidity a l'offset +3 (128 bits de poids faible)
+    -> VALIDE EMPIRIQUEMENT 7/7 pools V4 du FROZEN : la valeur lue en
+       storage au bloc == le sqrtPriceX96/liquidity du vrai event Swap
+       de ce meme bloc
+```
+
+**Sémantique confirmée par un test dédié** : `eth_call` à un bloc N renvoie
+l'état à la **FIN** du bloc N. Vérifié sur TWO, qui a 13 swaps dans le même
+bloc — le storage correspond exactement au DERNIER (log_index 53), pas au
+premier. C'est la sémantique voulue pour « état du pool à l'âge H ».
+
+Si une primitive historique n'est pas reconstructible proprement pour une
+famille : `None`, jamais une approximation.
+
+**7. Population** : le tirage déjà réalisé (20 pools, 18 V4 / 1 V3 / 1 V2,
+seed `2026083113`) reste la population expérimentale. **On ne refait pas le
+tirage**, on reconstruit ses six états à bloc fixe.
+
+**8. Contrôles qualité obligatoires avant toute analyse** :
+- **A. Cohérence temporelle** : `creation_block <= reference_block`,
+  `reference_block_timestamp >= creation_timestamp`.
+- **B. Reproductibilité** : le même (pool, target_age) doit toujours
+  produire le même `reference_block`.
+- **C. Monotonie cumulative** : tous les compteurs cumulés doivent être
+  non-décroissants avec l'âge, pour un pool donné.
+- **D. Contrôle indépendant** : sur au moins un V2, un V3 et un V4,
+  comparer l'état reconstruit à l'état lu directement au
+  `reference_block` — particulièrement important après les trois bugs
+  trouvés le 31/08.
+
+**9. Statut de `activity persistence`** : après `v019_corrected_v2`, c'est
+la seule observation qui survit aux corrections ET conserve une séparation
+A/B. Statut explicite : **`candidate surviving preliminary controls`**,
+JAMAIS `signal`. Trajectoire : v019 → corrections V4/MSR →
+`v019_corrected_v2` → survit sur A/B → **C_AGE état-à-bloc-fixe →
+confirmation ou disparition**. C_AGE est précisément le test manquant
+avant de lui donner davantage de poids.
+
+**10. Ce que C_AGE pourra enfin tester** — trois hypothèses concurrentes,
+énoncées AVANT le calcul : (H1) à âge comparable, plus aucune différence →
+les écarts v019 venaient du cycle de vie ; (H2) à âge comparable, certaines
+différences survivent → signal réel ; (H3) différence seulement à certains
+âges → interaction phase × comportement, plus intéressant qu'un seuil.
+
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
 Contrôle âge-conditionné (jamais T0-conditionné), orthogonal à C_EVENT, conçu
