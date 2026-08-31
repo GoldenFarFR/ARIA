@@ -2247,6 +2247,77 @@ restreindre la comparaison aux métriques réellement communes aux deux
 protocoles. À ne jamais bricoler en silence — c'est une décision de
 protocole, pas un détail d'implémentation.
 
+### `activity_persistence_by_age` -- métrique symétrique (31/08/2026)
+
+**Définie et COMMITÉE avant tout calcul sur A/B/C_AGE** — la trace git de
+ce commit est la preuve que la formule n'a pas été choisie en regardant les
+résultats. C'est la contrainte centrale posée par l'opérateur : « la
+définition doit être faite sans voir les résultats, sinon on recréerait
+exactement le problème que l'audit vient de nous faire corriger ».
+
+**Étape 1 — l'ancienne métrique dépend structurellement de T0.** Relu dans
+le code (jamais de mémoire), `brique6_analysis_v019_corrected.py` ligne 159
+et `brique6_analysis_v003.py` lignes 126-128 :
+
+```
+activity_baseline(m) = mediane(swaps[max(0,m-15) .. m-1])     # causale, 15 min
+activity_ratio(m)    = swaps(m) / activity_baseline(m)  si baseline non nulle
+                     = None                              sinon
+persistence_minutes  = |{ m dans [T0, fin] : ratio(m) != None ET ratio(m) >= 1.0 }|
+persistence_share    = persistence_minutes / (available_post_t0 + 1)
+```
+
+La dépendance à T0 est double : borne INFÉRIEURE de la fenêtre (`m >= T0`)
+et DÉNOMINATEUR (`available_post_t0 + 1`). C_AGE n'a pas de T0 et ne doit
+pas en avoir — la métrique n'est donc pas transposable telle quelle.
+
+**Étape 2 — la nouvelle métrique, transformation minimale et fidèle.**
+Trois choses seulement changent, tout le reste est repris à l'identique :
+
+```
+activity_persistence_by_age(H) =
+    |{ m dans [0, H] : ratio(m) != None ET ratio(m) >= 1.0 }| / (H + 1)
+```
+
+- **ancrage** : T0 -> minute 0 (création du pool)
+- **borne supérieure** : fin de l'historique -> âge cible H
+- **dénominateur** : `available_post_t0 + 1` -> `H + 1`
+- **INCHANGÉ** : la formule du ratio (médiane causale sur 15 minutes), le
+  seuil (`>= 1.0`), l'unité (fraction de minutes), le traitement de
+  `None` (une minute dont la baseline est nulle ou absente n'est jamais
+  comptée comme persistante).
+
+Sémantique : *quelle fraction des minutes de vie du pool, jusqu'à l'âge H,
+son activité s'est-elle maintenue au moins au niveau de sa propre baseline
+récente ?* — une propriété de la trajectoire d'activité selon la maturité
+du pool, là où l'ancienne mesurait ce que devient l'activité après un choc.
+
+**Métriques d'accompagnement obligatoires, jamais des variables de
+décision** — elles servent uniquement à distinguer « silence réel » de
+« non mesurable », distinction gravée après les bugs du 31/08 :
+`minutes_with_computable_ratio` (combien de minutes ont une baseline
+exploitable) et `total_swaps_in_window`. Un pool à zéro swap obtient
+légitimement `persistence = 0` (il ne maintient aucune activité) — ce n'est
+PAS un `None`, et les deux ne doivent jamais être confondus.
+
+**Les deux métriques coexistent, aucune ne remplace l'autre** (décision
+opérateur explicite) :
+
+```
+activity_persistence_post_t0   -- que devient l'activite APRES un choc ?
+                                  conservee intacte comme artefact historique,
+                                  jamais recalculee ni renommee
+activity_persistence_by_age    -- comment evolue l'activite avec la MATURITE
+                                  du pool ? nouvelle, age-conditionnee
+```
+
+**Étapes 3 à 6, dans cet ordre strict** : (3) reconstruire les 9 pools A/B
+aux 6 âges fixes avec le protocole état-à-bloc-fixe ; (4) réutiliser les 20
+pools C_AGE déjà reconstruits ; (5) calculer la MÊME formule partout
+(mêmes fenêtres, même unité, même traitement des manquants) ; (6) seulement
+ensuite comparer A / B / C_AGE. Interdiction explicite de chercher à
+maximiser la séparation A/B en ajustant la définition.
+
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
 Contrôle âge-conditionné (jamais T0-conditionné), orthogonal à C_EVENT, conçu
