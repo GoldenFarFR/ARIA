@@ -1835,6 +1835,42 @@ complet) a été suivi intégralement, jamais raccourci. Bilan final :
 buy+sell+undetermined == swap_count vérifié sur les 9 pools.
 ```
 
+**Addendum (31/08/2026) — corrections découvertes après le gel du 30/08**
+
+Le dataset brut `brique6_dataset_FROZEN_2026-08-30.db` reste strictement
+immuable et n'est jamais corrigé en place. Les résultats et métriques du
+bloc du 30/08 ci-dessus décrivent fidèlement l'état de la reconstruction
+tel qu'il existait à cette date ; toutefois, deux défauts de reconstruction
+ont été identifiés lors de l'audit d'intégrité du 31/08 et doivent être
+considérés comme des écarts postérieurs au gel :
+
+- **Bug de décodage V4 `token_is_currency0`** — 3 pools affectés : `MU`
+  (A), `D227_1406fa` (C_EVENT) et `D51_73a6e5` (C_EVENT). Le code de
+  production a été corrigé (`evm_swap_ws.py`, commit `2bb42f28`) avec des
+  garde-fous de test supplémentaires. Les conséquences analytiques sont
+  recalculées dans des bases séparées ; aucune donnée du FROZEN n'est
+  modifiée.
+- **Métadonnée `creation_block` incorrecte pour MSR (V2)** — le bloc
+  enregistré initialement était `49930872` au lieu du bloc de création
+  réel `48869561`, confirmé indépendamment par recherche `eth_getCode` et
+  par `PairCreated`. Le backfill du 30/08 n'avait donc couvert qu'une
+  portion terminale d'environ 57 minutes au lieu de la vie réelle du pool
+  (~29,7 h). Une reconstruction complète séparée
+  (`msr_metadata_fix_series.db`) donne 993 événements normalisés, un
+  historique de ~1786,9 min et un `T0` réel à la minute 3. Le label
+  historique de MSR reste B, conformément au protocole de labellisation
+  figé avant tout calcul de feature.
+
+Conséquence méthodologique : les bases/analyses `v019`–`v021` produites
+avant ces corrections restent conservées comme traces expérimentales
+historiques, mais les conclusions A/B/C qui en dépendent ne doivent pas
+être considérées comme finales tant que les reconstructions corrigées
+correspondantes n'ont pas été recalculées.
+
+Cette note ne réécrit pas le compte-rendu du 30/08 ; elle documente
+explicitement les défauts découverts après son gel et la séparation entre
+données brutes immuables et reconstructions corrigées.
+
 **Distinction désormais actée, à respecter par toute session future** :
 
 - **Dataset brut gelé** — les événements tels que reconstruits on-chain
