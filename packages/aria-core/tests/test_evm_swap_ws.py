@@ -1329,6 +1329,43 @@ async def test_add_pool_v4_trusts_caller_supplied_currency_side():
     assert feed._pools["0xabc123"].family == "v4"
 
 
+@pytest.mark.asyncio
+async def test_add_pool_v4_trusts_caller_supplied_currency_side_currency1():
+    """Symmetric case to the one above -- both sides of the currency0/
+    currency1 literal must resolve correctly, not just the one already
+    covered."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool("0xdef456", dex_id="uniswap_v4", token_address="currency1")
+    assert ok is True
+    assert feed._pools["0xdef456"].token_is_currency0 is False
+
+
+@pytest.mark.asyncio
+async def test_add_pool_v4_refuses_a_real_hex_address_instead_of_currency_literal():
+    """Real incident (31/08, Brique 6 backfill research): a caller passed a
+    real hex token address instead of the literal 'currency0'/'currency1'
+    this API requires. The old equality check (`token_address ==
+    "currency0"`) silently resolved to token_is_currency0=False for ANY
+    unrecognized value -- correct by coincidence for most pools, but
+    inverted price/swapped buy-sell/6-orders-of-magnitude-wrong volume for
+    the ones where the real tracked token was actually currency0. Must now
+    fail loud (return False, never register the pool) instead of silently
+    defaulting to "currency1"."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.eth.subscribe = AsyncMock(return_value="sub1")
+    feed._w3 = fake_w3
+    ok = await feed.add_pool(
+        "0xrealbug", dex_id="uniswap_v4",
+        token_address="0x1111111111111111111111111111111111111111",
+    )
+    assert ok is False
+    assert "0xrealbug" not in feed._pools
+
+
 # --- add_pool / _handle_notification: daily RU budget (24/08) --------------
 
 @pytest.mark.asyncio

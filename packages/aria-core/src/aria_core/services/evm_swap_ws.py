@@ -684,6 +684,20 @@ class EVMSwapWebSocketFeed:
         key = pool_id_hex.lower()
         if key in self._pools:
             return True
+        # 31/08 -- real incident: a Brique 6 research backfill script passed
+        # a real hex token address here instead of the literal "currency0"/
+        # "currency1" this API actually requires, and the equality check
+        # below silently resolved to token_is_currency0=False every time
+        # (correct for 15/18 v4 pools by coincidence, wrong for 3 --
+        # inverted price, swapped buy/sell, volume off by ~6 orders of
+        # magnitude on the mispriced side). Fail loud instead of silently
+        # defaulting to "currency1" for anything unrecognized.
+        if token_address not in ("currency0", "currency1"):
+            logger.info(
+                "evm_swap_ws[%s]: v4 add_pool token_address must be the literal "
+                "'currency0'/'currency1', got %r -- refused", self.chain, token_address,
+            )
+            return False
         # v4 has no shared PoolManager contract to introspect either side
         # from -- unlike v2/v3, decimals are NOT auto-fetched here, same
         # trust-the-caller posture this function already applies to
