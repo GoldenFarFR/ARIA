@@ -27,24 +27,40 @@ never for this promotion pass.
 | **CoinMarketCap "Trial Pro" keyless tier** (logged 08-30) | 36 endpoints (19 Standard + 17 DEX), REST only, GET only, rate-limited, **no published numeric quota** | Free, zero signup | Real (confirmed via `coinmarketcap.com/academy`, launched 30/04/2026) -- but CMC's own docs say "products moving into production should use authenticated access," i.e. this tier is a prototyping sandbox, not a #271 fix | Verified real, explicitly NOT production-grade |
 | **CoinAPI "DEX Onchain Flat Files"** (logged 08-30) | Uniswap V2/V3, SushiSwap V2, Curve, Balancer V2, Dodo V2 only -- **five protocols, none of which are Aerodrome (Base) or any Solana/Robinhood DEX** | $250 per 1000 OHLCV download requests (S3 endpoint); dataset starts 2025-12-23, no multi-year depth | **Does not cover ARIA's actual chains/DEXs at all** -- verified via CoinAPI's own docs, this is a batch/historical product for a different protocol set entirely | Verified real, verified NOT applicable |
 
+| **Chainlink Data Feeds** (logged 08-31) | Native on-chain ETH/USD oracle, officially documented by Base itself (`docs.base.org`) -- read directly via RPC/contract call, no third-party API quota at all | No per-request billing (on-chain read via the Chainstack RPC node ARIA already queries) | Directly answers #271's WETH/USD gap on Base -- but the exact Base MAINNET feed contract address was NOT confirmed by this pass's WebSearch (only Base Goerli/testnet and Ethereum mainnet addresses surfaced); also overlaps `docs/roadmap-capteurs-onchain.md`'s brique 4 (on-chain WETH/USD oracle, not started) -- one mechanism could satisfy both needs | WebSearch-confirmed the product/doc page is real; mainnet contract address NOT yet confirmed -- do not cite a specific address without re-verifying directly against `docs.chain.link`'s Base mainnet feed list |
+
 ## What this table actually says
 
-Two of six candidates (CoinMarketCap keyless, CoinAPI flat files) fail on
-inspection once checked against ARIA's real needs -- the keyless tier is
-explicitly a sandbox, and the flat files product doesn't cover a single DEX
-ARIA actually sources from. That leaves four real candidates (Mobula,
-Bitquery for a different use case already, CoinStats, Birdeye) none of
-which has been tested against a real Base or Robinhood WETH/USD pool yet.
+This is a fundamentally different category from the other six: an on-chain
+oracle read via the RPC node ARIA already pays for, rather than a metered
+off-chain API. If the Base mainnet ETH/USD feed address checks out, it
+would have no monthly cap to exhaust (unlike CoinGecko) and no per-request
+fee (unlike Mobula/Bitquery/CoinStats) -- but it answers only the
+WETH/USD-conversion half of #271/#269, not the pool-discovery/OHLCV needs
+those issues also cover, and it requires roadmap brique 4 to actually get
+built (currently not started, per the on-chain sensors roadmap).
+
+Two of the six off-chain API candidates (CoinMarketCap keyless, CoinAPI
+flat files) fail on inspection once checked against ARIA's real needs --
+the keyless tier is explicitly a sandbox, and the flat files product
+doesn't cover a single DEX ARIA actually sources from. That leaves four
+real off-chain candidates (Mobula, Bitquery for a different use case
+already, CoinStats, Birdeye) none of which has been tested against a real
+Base or Robinhood WETH/USD pool yet.
 
 ## Recommended next step (not taken here)
 
-Before adding a seventh candidate to this list on the next research pass,
-a dev session should pick the two most promising (Mobula for Base/Robinhood
-coverage breadth, Birdeye if the fix is scoped to Solana pockets instead)
-and run the same kind of live cross-check already done for Bitquery's
-bonding-curve formula on 2026-08-21: fetch the same pool from ARIA's
-existing pipeline and from the candidate, compare, then decide -- rather
-than continuing to catalogue names.
+Before adding an eighth candidate to this list on the next research pass,
+a dev session should (1) confirm the real Base mainnet Chainlink ETH/USD
+feed contract address directly against `docs.chain.link` and, if it
+exists, evaluate it first (zero marginal cost, reuses the existing
+Chainstack RPC node) since it could resolve #271's WETH/USD gap outright;
+and in parallel (2) pick the two most promising off-chain candidates
+(Mobula for Base/Robinhood coverage breadth, Birdeye if the fix is scoped
+to Solana pockets instead) and run the same kind of live cross-check
+already done for Bitquery's bonding-curve formula on 2026-08-21: fetch the
+same pool from ARIA's existing pipeline and from the candidate, compare,
+then decide -- rather than continuing to catalogue names.
 
 ## Sources
 
@@ -53,3 +69,5 @@ than continuing to catalogue names.
 - [CoinMarketCap keyless Trial Pro API guide](https://coinmarketcap.com/academy/article/coinmarketcap-keyless-public-api-guide-no-key-crypto-data-for-developers)
 - [Birdeye Data Services](https://bds.birdeye.so/)
 - [Birdeye Data Services security product](https://bds.birdeye.so/user/security)
+- [Base docs -- Chainlink Data Feeds](https://docs.base.org/learn/onchain-app-development/finance/access-real-world-data-chainlink)
+- [Chainlink Data Feeds -- Consuming Data Feeds](https://docs.chain.link/data-feeds/getting-started)
