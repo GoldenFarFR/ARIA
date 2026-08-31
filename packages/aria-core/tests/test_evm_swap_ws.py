@@ -2194,3 +2194,120 @@ def test_get_snapshot_exposes_buy_sell_fields():
     assert snap.undetermined_count == 0
     assert snap.buy_volume_quote == pytest.approx(10.0)
     assert snap.net_flow_quote == pytest.approx(10.0)
+
+
+# --- eth/usd rate cost rewrite (31/08, system_issues #289) -------------------
+# The oracle used to REQUIRE the reference pool to be permanently subscribed,
+# which on Robinhood meant paying 1 RU per swap of the busiest pool on the
+# chain (~40-100k RU/h, 4-6x the daily cap). These guard the cheap path and,
+# above all, that it never fabricates or silently reuses a stale rate.
+
+def test_eth_usd_rate_falls_back_to_the_cached_cold_read_when_no_live_snapshot():
+    """The whole point of the rewrite: with the reference pool NOT
+    subscribed at all, a freshly cached cold read still answers."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    assert feed.onchain_eth_usd_rate() is None  # nothing tracked, nothing cached
+    feed._eth_usd_rate_cached = 4321.0
+    feed._eth_usd_rate_cached_at = time.monotonic()
+    assert feed.onchain_eth_usd_rate() == pytest.approx(4321.0)
+
+
+def test_eth_usd_rate_never_returns_a_cached_value_past_the_staleness_ceiling():
+    """Fail-closed doctrine: an expired cache is None, never a
+    silently-reused-stale rate."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    feed._eth_usd_rate_cached = 4321.0
+    feed._eth_usd_rate_cached_at = time.monotonic() - (m._ETH_USD_RATE_MAX_STALE_SECONDS + 1.0)
+    assert feed.onchain_eth_usd_rate() is None
+
+
+def test_eth_usd_rate_prefers_a_fresh_live_snapshot_over_the_cache():
+    """A caller that legitimately tracks the reference pool must not be
+    regressed onto the cache -- the live decoded price still wins."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    ref_pool.ticks.append((time.monotonic(), 4321.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    feed._eth_usd_rate_cached = 1111.0  # deliberately different
+    feed._eth_usd_rate_cached_at = time.monotonic()
+    assert feed.onchain_eth_usd_rate() == pytest.approx(4321.0)
+
+
+@pytest.mark.asyncio
+async def test_refresh_eth_usd_rate_pays_nothing_while_a_fresh_live_snapshot_exists():
+    """No read is issued when a live subscription already covers the pool --
+    the refresh must never add cost on top of an existing feed."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    ref_pool = _stable_ref_pool()
+    ref_pool.ticks.append((time.monotonic(), 4321.0))
+    feed._pools[_base_ref_pool_key()] = ref_pool
+    feed._connected = True
+    feed._w3 = object()  # non-None: connected enough to be allowed to read
+    calls = []
+
+    async def _never(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("resolve_cold must not be called here")
+
+    feed.resolve_cold = _never
+    await feed._refresh_eth_usd_rate()
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_eth_usd_rate_never_spends_while_the_breaker_is_open():
+    """The breaker exists to stop spending once the budget is blown --
+    the oracle refresh must respect it like every other path."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    feed._w3 = object()
+    feed._breaker_open = True
+
+    async def _never(*args, **kwargs):
+        raise AssertionError("resolve_cold must not be called while breaker is open")
+
+    feed.resolve_cold = _never
+    await feed._refresh_eth_usd_rate()
+    assert feed._eth_usd_rate_cached is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_eth_usd_rate_ignores_a_partial_cold_read():
+    """Same all-or-nothing contract as every other path: an unavailable or
+    price-less read never becomes a rate."""
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    feed._w3 = object()
+
+    async def _partial(*args, **kwargs):
+        return m.EVMSwapSnapshot(available=True, price_quote=1.0, price_usd=None)
+
+    feed.resolve_cold = _partial
+    await feed._refresh_eth_usd_rate()
+    assert feed._eth_usd_rate_cached is None
+    assert feed.onchain_eth_usd_rate() is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_eth_usd_rate_caches_a_complete_cold_read():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._connected = True
+    feed._w3 = object()
+
+    async def _complete(*args, **kwargs):
+        return m.EVMSwapSnapshot(available=True, price_quote=4321.0, price_usd=4321.0)
+
+    feed.resolve_cold = _complete
+    await feed._refresh_eth_usd_rate()
+    assert feed._eth_usd_rate_cached == pytest.approx(4321.0)
+    assert feed.onchain_eth_usd_rate() == pytest.approx(4321.0)
+
+
+def test_eth_usd_rate_refresh_interval_is_shorter_than_the_staleness_ceiling():
+    """A refresh interval >= the staleness ceiling would leave periodic gaps
+    where the oracle reports None for no reason -- guard the invariant, not
+    just the current numbers."""
+    assert m._ETH_USD_RATE_REFRESH_SECONDS < m._ETH_USD_RATE_MAX_STALE_SECONDS

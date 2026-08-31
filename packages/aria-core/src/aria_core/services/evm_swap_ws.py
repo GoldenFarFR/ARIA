@@ -98,6 +98,11 @@ _RECONNECT_MAX_SECONDS = 30.0
 # onchain_eth_usd_rate() returns None, never a rate that might be minutes
 # old.
 _ETH_USD_RATE_MAX_STALE_SECONDS = 30.0
+# 31/08 (system_issues #289) -- how often `_refresh_eth_usd_rate` pays for a
+# targeted cold read. Deliberately SHORTER than the staleness ceiling above,
+# so a cached rate is refreshed before it can expire; a value >= the ceiling
+# would leave periodic gaps where the oracle reports None for no reason.
+_ETH_USD_RATE_REFRESH_SECONDS = 20.0
 
 # 24/08 -- mid-day circuit breaker cadence. add_pool()'s own can_spend()
 # check only stops the leak from GROWING (refuses new pools); it never
@@ -451,6 +456,9 @@ class EVMSwapWebSocketFeed:
         # needs no fresh on-chain verification/RPC calls -- these pools were
         # already verified once). Moves back the moment the budget resets.
         self._breaker_open = False
+        # 31/08 (system_issues #289) -- see onchain_eth_usd_rate's docstring.
+        self._eth_usd_rate_cached: float | None = None
+        self._eth_usd_rate_cached_at: float | None = None
         self._evicted_pools: dict[str, _TrackedPool] = {}
         # 25/08 -- proactive twin of the budget breaker above. That one only
         # ever reacts AFTER the daily cap is already blown; this tracks how
@@ -523,6 +531,10 @@ class EVMSwapWebSocketFeed:
                 await self._check_idle_newheads()
             except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
                 logger.info("evm_swap_ws[%s]: idle newHeads check failed (%s)", self.chain, exc)
+            try:
+                await self._refresh_eth_usd_rate()
+            except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
+                logger.info("evm_swap_ws[%s]: eth/usd rate refresh failed (%s)", self.chain, exc)
             await asyncio.sleep(_BREAKER_CHECK_INTERVAL_SECONDS)
 
     async def _check_idle_newheads(self) -> None:
@@ -901,19 +913,77 @@ class EVMSwapWebSocketFeed:
         for the on-chain sensors (incident #271, CoinGecko quota exhausted).
 
         Fail-closed, same doctrine as Briques 1-3: ``None`` if this chain
-        has no reference pool configured, the reference pool isn't tracked
-        yet, its snapshot isn't available, or it is stale beyond
-        ``_ETH_USD_RATE_MAX_STALE_SECONDS`` -- never a fabricated or
-        silently-reused-stale rate."""
+        has no reference pool configured, no fresh rate could be resolved,
+        or the value is stale beyond ``_ETH_USD_RATE_MAX_STALE_SECONDS`` --
+        never a fabricated or silently-reused-stale rate.
+
+        **31/08 -- cost rewrite (system_issues #289, real production
+        incident).** This used to require the reference pool to be
+        PERMANENTLY SUBSCRIBED so ``get_snapshot`` would have a live
+        decoded price. That read was genuinely "zero extra network I/O",
+        but it displaced the whole cost onto the subscription feed: on
+        Robinhood the reference pool is the busiest on the chain ($196M
+        24h volume) and ``_handle_notification`` bills 1 RU per push, so
+        the oracle alone burned ~40-100k RU/h -- 4-6x the daily cap,
+        measured with zero research script running. A textbook case of a
+        design whose LOCAL cost is zero and whose SYSTEM cost is not.
+
+        Now the rate comes from a small cache refreshed by
+        ``_refresh_eth_usd_rate`` on the already-running breaker loop
+        (~1 targeted read per ``_ETH_USD_RATE_REFRESH_SECONDS``), so the
+        cost no longer scales with the reference pool's trading activity.
+        A live subscription snapshot is still PREFERRED when one happens to
+        exist and is fresh (a caller may legitimately track that pool for
+        its own reasons) -- the cache is the fallback, never a regression
+        for callers that already had a live feed. This stays synchronous:
+        no caller signature changes."""
         ref_pool = _ETH_USD_REFERENCE_POOL_BY_CHAIN.get(self.chain)
         if ref_pool is None:
             return None
         snapshot = self.get_snapshot(ref_pool)
-        if not snapshot.available or snapshot.price_usd is None:
+        if (
+            snapshot.available
+            and snapshot.price_usd is not None
+            and (snapshot.stale_seconds is None or snapshot.stale_seconds <= _ETH_USD_RATE_MAX_STALE_SECONDS)
+        ):
+            return snapshot.price_usd
+        if self._eth_usd_rate_cached is None or self._eth_usd_rate_cached_at is None:
             return None
-        if snapshot.stale_seconds is not None and snapshot.stale_seconds > _ETH_USD_RATE_MAX_STALE_SECONDS:
+        if time.monotonic() - self._eth_usd_rate_cached_at > _ETH_USD_RATE_MAX_STALE_SECONDS:
             return None
-        return snapshot.price_usd
+        return self._eth_usd_rate_cached
+
+    async def _refresh_eth_usd_rate(self) -> None:
+        """Targeted cold read of this chain's reference WETH/stable pool,
+        run on the breaker loop -- see ``onchain_eth_usd_rate``'s own
+        docstring for the incident this replaces. Cost is a couple of
+        ``eth_call`` reads per refresh, independent of how busy that pool
+        is, instead of 1 RU per swap it processes.
+
+        Skipped entirely while the breaker is open (the whole point of the
+        breaker is to stop spending once the budget is blown) and while a
+        live snapshot is already fresh (nothing to pay for)."""
+        ref_pool = _ETH_USD_REFERENCE_POOL_BY_CHAIN.get(self.chain)
+        if ref_pool is None or self._w3 is None or self._breaker_open:
+            return
+        if (
+            self._eth_usd_rate_cached_at is not None
+            and time.monotonic() - self._eth_usd_rate_cached_at < _ETH_USD_RATE_REFRESH_SECONDS
+        ):
+            return
+        snapshot = self.get_snapshot(ref_pool)
+        if (
+            snapshot.available
+            and snapshot.price_usd is not None
+            and (snapshot.stale_seconds is None or snapshot.stale_seconds <= _ETH_USD_RATE_MAX_STALE_SECONDS)
+        ):
+            return  # a live subscription already covers it, no read to pay for
+        cold = await self.resolve_cold(ref_pool, dex_id="uniswap_v3")
+        # Same all-or-nothing contract as every other path in this module:
+        # a partial read never becomes a rate.
+        if cold.available and cold.price_usd is not None:
+            self._eth_usd_rate_cached = cold.price_usd
+            self._eth_usd_rate_cached_at = time.monotonic()
 
     # -- websocket loop ----------------------------------------------------
 
