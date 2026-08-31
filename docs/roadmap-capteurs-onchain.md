@@ -1891,6 +1891,133 @@ Cette note ne réécrit pas le compte-rendu du 30/08 ; elle documente
 explicitement les défauts découverts après son gel et la séparation entre
 données brutes immuables et reconstructions corrigées.
 
+### Integrity Audit Closure -- 31/08/2026
+
+Checkpoint officiel de confiance du pipeline, à lire par toute session
+future AVANT de reprendre ce chantier -- remplace toute supposition sur
+l'état de fiabilité des données par un résultat vérifié et daté.
+
+```
+Niveau 1 -- Identity                              PASS
+  MSR creation_block corrige (eth_getCode + PairCreated, 2 methodes independantes)
+  9/9 pools A/B verifies (token-deploy proxy + Initialize log exact sur MU)
+
+Niveau 2 -- Golden dataset                        PASS
+  V2 (MSR)          buy/sell     -- hand-decode independant == production
+  V3 (COPPERINU-V3) buy/sell     -- hand-decode independant == production
+  V4 currency0-side (CHARITY, HOODHIM)  -- hand-decode independant == production
+  V4 currency1-side (PDEX)              -- hand-decode independant == production
+  Mint/Burn V2/V3   -- redecode complet, invariants verifies (0/5629 violation)
+  ModifyLiquidity V4 -- controle par echantillon (un seul cote added/removed)
+
+Niveau 3 -- Math invariants                       PASS
+  buy+sell+undetermined == swap_count (A/B, C_EVENT, MSR-corrige)
+  volume_quote_delta >= 0, price_quote > 0, liquidity added/removed >= 0
+  exactement un cote (added XOR removed) non-nul par ligne modify_liquidity
+
+Niveau 4 -- Temporal invariants                   PASS
+  creation_block <= block_number <= scan_ended_at_block (0 violation)
+  block_timestamp non-decroissant par pool (0 violation)
+  T0 jamais negatif, jamais au-dela de l'historique disponible (0 violation)
+  pool_age_at_t0_minutes jamais negatif (0 violation)
+
+Niveau 5 -- Live <-> Backfill                     PASS
+  bloc frais 50 886 336 (tip courant 50 886 696, hors horizon FROZEN 49 965 216)
+  decodage manuel independant == decodeur de production appele en direct
+  (side=buy, vol=48.789322, price=0.010917245806712609 -- match exact)
+```
+
+**Les trois défauts réels trouvés cette session** :
+
+```
+1. V4 token side / token_is_currency0
+   symptome    : prix inverse/faux de plusieurs ordres de grandeur, buy/sell permutes
+   cause       : script de sourcing passait un mauvais format d'argument a
+                 add_pool() -- token_address devait etre le litteral
+                 "currency0"/"currency1", pas une adresse hex, pour un pool V4
+   pools       : MU (A/B), D227_1406fa (C_EVENT), D51_73a6e5 (C_EVENT)
+   correction  : evm_swap_ws.py durci (_add_pool_v4 refuse desormais tout
+                 token_address non-litteral), 3 pools re-decodes depuis les
+                 RAW events FROZEN dans cage_currency0_bugfix_2026-08-31.db
+   commit      : 2bb42f28 (code + tests de non-regression)
+   impact      : T0 inchange (ne depend que du compte de swaps), mais
+                 buy_share/mfe/mae/price_recovery des 3 pools etaient faux
+                 dans v019 original -- recalcules dans v019_corrected
+
+2. MSR creation_block
+   symptome    : backfill original ne couvrait que les 57 dernieres minutes
+                 de vie du pool -- MSR jamais un point de donnee valide
+                 (t0_found=False, "no minute ever reached ratio>=5.0")
+   cause       : creation_block == scan_started_at_block pour les 9 pools
+                 A/B, jamais verifie independamment -- MSR seul avait un
+                 ecart reel (bloc declare 49930872, bloc reel 48869561)
+   pools       : MSR (A/B) -- seul pool touche, 8 autres verifies corrects
+   correction  : backfill complet depuis le vrai creation_block (565 fenetres,
+                 993 events) dans msr_metadata_fix.db/msr_metadata_fix_series.db
+   commit      : aucun (script scratchpad, jamais commite -- reconstruction
+                 de donnee uniquement, pas de code de production en cause)
+   impact      : MSR ABSENT de v006-v021 (0 ligne dans abc_pool_primitives) --
+                 pas une donnee fausse mais un point de donnee manquant.
+                 Desormais disponible : T0=minute 3, 993 events, ~29.7h
+                 post-T0. Label B confirme (protocole de labellisation,
+                 independant des features). A noter pour le recalcul futur :
+                 T0=3min est un outlier bas face aux 2 autres B (PAWHOOD
+                 208min, HOODHIM 50min).
+
+3. Normalisation Mint/Burn V2/V3
+   symptome    : evenements Mint/Burn reels captures en brut, absents de
+                 normalized_event_log
+   cause       : brique6_etape2_backfill.py detectait un changement d'etat
+                 via pool.liquidity_added_raw/removed_raw (champ V4 only) --
+                 les handlers V2/V3 de production touchent en realite
+                 liquidity_added_quote/removed_quote (par conception, cf.
+                 docstring evm_swap_ws.py ligne 380)
+   pools       : MSR (1 mint), COPPERINU-V3 (2819 mint + 2809 burn) -- 11
+                 pools C_EVENT tous V4, non exposes
+   correction  : redecode complet sans nouveau scan RPC (evenements deja
+                 captures) dans brique6_liquidity_redecoded_2026-08-31.db,
+                 invariants verifies (0/5629 violation)
+   commit      : aucun (bug dans un script scratchpad, jamais commite --
+                 evm_swap_ws.py de production etait deja correct par design)
+   impact      : NUL sur v006-v021 (aucune primitive n'utilise cet axe) --
+                 mais bloquant pour toute analyse future basee sur la
+                 liquidite (absorption, exhaustion) tant que non integree
+```
+
+**FROZEN reste immuable** : `brique6_dataset_FROZEN_2026-08-30.db` et
+`groupC_dataset_FROZEN_2026-08-30.db` n'ont jamais été réécrits. Toutes les
+corrections ci-dessus vivent dans des bases séparées
+(`cage_currency0_bugfix_2026-08-31.db`, `msr_metadata_fix.db`/
+`msr_metadata_fix_series.db`, `brique6_liquidity_redecoded_2026-08-31.db`).
+
+**Carte de contamination des analyses** :
+
+```
+v019 original        -> contamine par V4 (3 pools) + MSR absent (donnee
+                         insuffisante, jamais un point de donnee valide)
+v019_corrected        -> V4 corrige (3 pools) mais MSR toujours absent
+v019_corrected_v2     -> CIBLE, PAS ENCORE CONSTRUITE : 9 A/B (MSR integre)
+                         + 11 C_EVENT, toutes corrections integrees
+v020/v021              -> recalcul necessaire une fois v019_corrected_v2
+                         disponible (age-at-T0/support-overlap doivent
+                         inclure MSR comme 9e pool A/B, T0=3min)
+```
+
+Normalisation Mint/Burn : aucun impact démontré sur v006–v021 (ces analyses
+n'utilisent jamais cette primitive) ; la reconstruction corrigée
+(`brique6_liquidity_redecoded_2026-08-31.db`) est néanmoins nécessaire avant
+toute analyse future exploitant la liquidité.
+
+**État pour toute future session** :
+
+```
+AUDIT      = CLOSED / PASS (5/5 niveaux)
+FROZEN     = IMMUTABLE (jamais reecrit)
+A/B        = reconstruction corrigee en attente de version finale (v019_corrected_v2)
+C_EVENT    = valide, inchange
+C_AGE      = pret pour le backfill (design fige avant l'audit, cf. section C_AGE)
+```
+
 **Distinction désormais actée, à respecter par toute session future** :
 
 - **Dataset brut gelé** — les événements tels que reconstruits on-chain
