@@ -2366,10 +2366,18 @@ denominateur (available_post_t0+1) vs share : Spearman rho = -0.083  (n=9)
 age au T0                          vs share : Spearman rho = +0.233  (n=9)
 ```
 
-Visuellement sans ambiguïté : MSR (T0=3min) et PAWHOOD (T0=208min) sont
-tous deux B avec une persistance faible ; TWO (T0=5min) et CHARITY
-(T0=175min) sont tous deux A avec une persistance forte. **Ni le
-dénominateur ni l'âge au T0 n'expliquent la séparation A/B.**
+Visuellement : MSR (T0=3min) et PAWHOOD (T0=208min) sont tous deux B avec
+une persistance faible ; TWO (T0=5min) et CHARITY (T0=175min) sont tous
+deux A avec une persistance forte.
+
+**Portée exacte de ces deux tests, correction opérateur du 31/08 — une
+première rédaction disait « ni le dénominateur ni l'âge n'expliquent la
+séparation », ce qui est trop fort** : avec n=9, un rho de +0,233 ou
+-0,083 ne permet évidemment PAS d'exclure un confondant. Il permet
+seulement de dire que **ces deux explications simples ne rendent pas
+compte à elles seules de la séparation observée**. D'autres confondants
+non testés restent parfaitement possibles. Formulation à conserver telle
+quelle par toute session future.
 
 **Conclusion — le contrôle d'âge n'invalide pas la propriété, il la
 PRÉCISE** : gagnants et perdants ont la même densité d'activité sur
@@ -2390,6 +2398,88 @@ Ce résultat reste une indication sur 9 pools, pas une preuve. Statut de
 `activity_persistence_post_t0` : `candidate surviving preliminary
 controls` — le contrôle d'âge est passé, mais l'échantillon reste trop
 petit pour parler de signal.
+
+### PROCHAIN CHANTIER -- élargissement A/B (31/08/2026, protocole figé, PAS commencé)
+
+**Diagnostic partagé opérateur/Claude Code : le facteur limitant n'est plus
+l'instrumentation, c'est l'échantillon.** La chaîne
+`raw blockchain -> reconstruction -> identité vérifiée -> golden validation
+-> temporal validation -> live/backfill validation -> A/B + C_EVENT +
+C_AGE` est mature et auditée. Le meilleur rendement marginal est désormais
+`plus de A + plus de B`, PAS `v022/v023/v024`. **Décision explicite :
+arrêter de fabriquer de nouvelles métriques pendant un moment.**
+
+**Renommage CONCEPTUEL (jamais un renommage de colonne)** : ce que mesure
+`activity_persistence_post_t0` se décrit mieux comme **`post-shock activity
+retention`** — « après un choc, combien d'activité reste-t-il, et pendant
+combien de temps ? », plutôt que « beaucoup d'activité ? ». Le champ SQL
+garde son nom (décision antérieure : jamais renommé, jamais recalculé),
+seul le vocabulaire d'analyse évolue.
+
+**Hypothèse mécanique que ce résultat suggère, à tester sur plus de
+données — jamais à traiter comme acquise** :
+
+```
+Gagnant                          Perdant
+  activite ↑↑                      activite ↑↑
+  -> choc T0                       -> choc T0
+  -> activite reste elevee         -> activite s'effondre
+  -> nouveaux participants         -> pas de seconde vague
+  -> nouvelle acceleration         -> exhaustion / collapse
+```
+
+Ceci expliquerait précisément pourquoi `A ≈ B` sur la vie totale du pool
+mais `A ≠ B` sur `post_t0` : les agrégats historiques mélangent tout,
+tandis que la réponse au choc conserve l'information temporelle.
+
+**Contrainte non négociable, identique à celle des premiers labels** : la
+nouvelle population A/B doit être **définie AVANT toute lecture des
+features ARIA**. Ne JAMAIS choisir les nouveaux gagnants/perdants à partir
+de notre propre signal — ce serait exactement la circularité que tout
+l'audit du 31/08 visait à éliminer.
+
+```
+source externe independante
+  -> liste de trajectoires historiques
+  -> label attribue AVANT toute reconstruction on-chain
+  -> FREEZE (liste + hash, comme les datasets FROZEN existants)
+  -> backfill on-chain
+  -> features
+  -> analyse
+```
+
+**Diversité de population exigée** — ne PAS se contenter de « 20 nouveaux
+winners + 20 losers », ce qui ferait apprendre « longévité extrême = A »
+sans comprendre le mécanisme :
+
+```
+A+  tres gros runners durables
+A   gagnants moyens / continuations
+B+  pump-and-dump nets
+B   perdants plus progressifs
+C   controles neutres
+```
+
+Pas forcément quatre groupes dans le moteur final, mais assez de diversité
+pour que « gagnant » ne signifie pas toujours « énorme x ».
+
+**Nature du prochain dataset : une étude de ROBUSTESSE, pas un score.**
+
+```
+n augmente -> meme T0 -> meme metrique post-choc -> separation A/B
+           -> distribution -> effect size -> out-of-sample
+```
+
+Seulement si la séparation persiste sur un échantillon plus large, le
+statut passe de `candidate surviving preliminary controls` à
+`candidate feature` — et ensuite seulement viennent les interactions
+(participation, flow, liquidité, régime de marché). Aucun score composite
+n'est construit avant cette étape.
+
+**Ce qui est attendu de l'opérateur pour démarrer** : la liste externe de
+labels (même rôle que la liste DexScreener d'origine), avec sa source et sa
+date. Claude Code ne la génère pas et ne la dérive pas des données ARIA —
+c'est la condition même de validité de l'expérience.
 
 ### C_AGE -- run seed 2026083113 (31/08/2026), CLOS
 
