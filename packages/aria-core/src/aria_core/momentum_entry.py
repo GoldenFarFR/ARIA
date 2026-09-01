@@ -4371,7 +4371,7 @@ async def refresh_dex_composite_score(contract: str, chain: str):
     return await compute_dex_composite_score(contract, chain, pair=pair, security=security)
 
 
-async def evaluate_momentum_entry(
+async def _evaluate_momentum_entry_core(
     contract: str, chain: str, *, weekly_context: dict | None = None,
     current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
     rsi_watch_span: tuple[int, int] | None = None,
@@ -5320,3 +5320,31 @@ async def evaluate_momentum_entry(
         # by the caller (default behavior, never a fabricated regime).
         "regime": current_regime or "neutre",
     }
+
+
+async def evaluate_momentum_entry(
+    contract: str, chain: str, *, weekly_context: dict | None = None,
+    current_regime: str | None = None, relaxed: bool = False, mode: str = "standard",
+    rsi_watch_span: tuple[int, int] | None = None,
+) -> dict | None:
+    """Thin wrapper around ``_evaluate_momentum_entry_core`` (specs/016-
+    momentum-signal-observation-layer) -- calls the real decision logic
+    unchanged, then captures a read-after-decide observation in a
+    try/except the caller can never observe, then returns the core's
+    result completely unchanged. This is the ONLY way this feature touches
+    momentum_entry.py: the renamed core function above has zero internal
+    changes. See momentum_signal_observation.py's own docstring and
+    specs/016-momentum-signal-observation-layer/research.md §1 for why a
+    single wrapper here is used instead of instrumenting each of the
+    ~16+ internal early-return gates individually."""
+    result = await _evaluate_momentum_entry_core(
+        contract, chain, weekly_context=weekly_context, current_regime=current_regime,
+        relaxed=relaxed, mode=mode, rsi_watch_span=rsi_watch_span,
+    )
+    try:
+        from aria_core import momentum_signal_observation
+
+        await momentum_signal_observation.capture_observation(contract, chain, result)
+    except Exception:  # noqa: BLE001 -- observation-only, never blocks the real decision
+        pass
+    return result

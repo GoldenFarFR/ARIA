@@ -581,6 +581,13 @@ HEARTBEAT_TASKS = [
         enabled=False,
     ),
     HeartbeatTask(
+        id="momentum_signal_observation_forward_cycle",
+        name="Resolution prix forward -- couche d'observation momentum",
+        description="specs/016-momentum-signal-observation-layer -- resout les horizons +1m/+5m/+15m/+1h/+4h dus et non resolus (momentum_signal_observation.resolve_due_forward_prices), pour CHAQUE candidat momentum evalue (achete ou rejete), jamais seulement les positions ouvertes. Funnel SQL avant tout appel reseau (filtre horizons dus, dedoublonne par token), reutilise le client dexscreener deja throttle -- jamais un nouveau throttle. Cadence courte deliberee (~60s, pas le pattern paresseux de signal_cascade_convergence.refresh_forward_prices) car les horizons sont a l'echelle de la minute, pas du jour -- voir research.md #3 pour le raisonnement complet. Purement observationnel, ne touche jamais la decision d'achat. Toujours actif (pas de gate ARIA_*_ENABLED distinct) car la capture elle-meme (momentum_entry.evaluate_momentum_entry) tourne deja inconditionnellement -- desactiver seulement ce cycle laisserait les observations s'accumuler en 'pending' sans jamais se resoudre.",
+        interval_minutes=1,
+        enabled=True,
+    ),
+    HeartbeatTask(
         id="chain_liquidity_regime_cycle",
         name="Regime de liquidite par chaine (DefiLlama, exogene)",
         description="Rafraichit SANS expiration, pour Base/Robinhood/Solana, un signal de regime EXOGENE (TVL+volume DefiLlama vs EWMA 30j, confirmation TVL 3-7j) complementaire au regime ENDOGENE de chaque poche shadow (ses propres pics recents) -- utile des le jour 1 apres un reset, contrairement au signal endogene qui doit d'abord reaccumuler des candidats. Fail-open : seul un pic confirme TOXIQUE bloque une entree, jamais une donnee absente/insuffisante. Gate OFF par defaut.",
@@ -2078,6 +2085,11 @@ class AriaHeartbeat:
                     f"[sentiment] {', '.join(result['updated'])} rafraichi(s)"
                     + (f" ; echec : {', '.join(result['failed'])}" if result.get("failed") else ""),
                 )
+
+        elif task_id == "momentum_signal_observation_forward_cycle":
+            from aria_core import momentum_signal_observation
+
+            await momentum_signal_observation.resolve_due_forward_prices()
 
         elif task_id == "chain_liquidity_regime_cycle":
             from aria_core.skills import chain_liquidity_regime
