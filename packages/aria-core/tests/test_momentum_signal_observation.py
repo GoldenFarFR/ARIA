@@ -73,11 +73,24 @@ async def test_capture_observation_records_one_row_for_early_rejection():
 
 
 async def test_capture_observation_handles_none_core_result():
-    # `best is None` edge case (momentum_entry.py) -- no dict at all.
+    """`best is None` (momentum_entry): no tradeable pair exists at all. This
+    is an ABSENCE OF DATA, never a HOLD decision -- recording it as HOLD is
+    exactly the confusion this layer exists to prevent (found in the first 120
+    production observations, 02/09)."""
     await mso.capture_observation(CONTRACT, CHAIN, None)
     rows = await mso.list_recent(limit=10)
     assert len(rows) == 1
     assert rows[0]["reference_price_usd"] is None
+    assert rows[0]["decision_action"] == "NO_CANDIDATE_DATA"
+    assert rows[0]["decision_reason"] == "no_tradeable_pair_found"
+
+
+async def test_a_real_hold_stays_distinguishable_from_missing_data():
+    await mso.capture_observation(CONTRACT, CHAIN, {
+        "action": "HOLD", "chain": CHAIN, "reasons": ["r"], "hold_reason": "weak_rr",
+    })
+    row = (await mso.list_recent(limit=1))[0]
+    assert row["decision_action"] == "HOLD" and row["decision_reason"] == "weak_rr"
 
 
 async def test_two_evaluations_of_the_same_token_produce_two_distinct_observations():

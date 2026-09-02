@@ -210,10 +210,22 @@ async def capture_observation(contract: str, chain: str, core_result) -> None:
         decision_ts = datetime.now(timezone.utc).isoformat()
         core = core_result if isinstance(core_result, dict) else {}
 
-        decision_action = core.get("action") or ("HOLD" if core_result is None else "UNKNOWN")
-        decision_reason = core.get("hold_reason") or (
-            "; ".join(core.get("reasons") or []) if core.get("reasons") else None
-        )
+        # 02/09 -- found in production data: `evaluate_momentum_entry` returns
+        # None when no tradeable pair exists for the token at all (its `best is
+        # None` path). Recording that as "HOLD" turned an ABSENCE OF DATA into
+        # what reads like a decision the pipeline made -- exactly the confusion
+        # this whole layer exists to prevent (a HOLD means "looked, declined";
+        # None means "could not even look"). 25 of the first 120 production
+        # observations were this case, indistinguishable from a real HOLD.
+        # Rows captured before this fix keep the ambiguous "HOLD"/NULL-reason
+        # shape -- deliberately not rewritten (append-only).
+        if core_result is None:
+            decision_action, decision_reason = "NO_CANDIDATE_DATA", "no_tradeable_pair_found"
+        else:
+            decision_action = core.get("action") or "UNKNOWN"
+            decision_reason = core.get("hold_reason") or (
+                "; ".join(core.get("reasons") or []) if core.get("reasons") else None
+            )
         reference_price_usd = core.get("price")
 
         onchain_json = json.dumps(_build_onchain_block(core, decision_ts))
