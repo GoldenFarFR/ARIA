@@ -4614,6 +4614,37 @@ async def _evaluate_momentum_entry_core(
             # field was dead for the one caller (limit_order_chart.py) that
             # actually needed it. Added here too, at the actual return path.
             "pool_address": best.pair_address,
+            # 02/09 -- the technical analysis was computed one line above
+            # (``detect_entry``) and then DISCARDED on this path, so the
+            # observation layer recorded an empty chart block for it. Measured
+            # before the fix: chart available on 1 observation out of 895,
+            # while ``no_entry_signal`` alone was 51% of them -- the pipeline
+            # was doing the work and throwing the answer away. ``EntrySignal``
+            # exposes these fields precisely for the ``present=False`` case
+            # (item #182's own comment says so), and the golden-pocket-watch
+            # dict above (~line 4174) already sets gp_low/gp_high on a
+            # non-buy path for the same reason: "so the Telegram alert can
+            # render them without string-parsing".
+            #
+            # Purely additive: the decision is unchanged (action stays HOLD),
+            # no consumer tests for the PRESENCE of these keys, and
+            # paper_trader reads only price/chain/symbol/mode from this dict.
+            #
+            # ``align_score`` is DELIBERATELY absent even though
+            # ``_technical_alignment`` runs a few lines below: item #221 (see
+            # the comment further down) documents that risk_guard treats a
+            # MISSING align_score as "caller doesn't support this signal" and
+            # falls back to its 5% tier -- so adding it here would silently
+            # change position sizing, which is a trading decision, not an
+            # observation. Left out on purpose; the chart block reports it as
+            # not evaluated rather than risk a sizing side effect.
+            "gp_low": signal.gp_low,
+            "gp_high": signal.gp_high,
+            "rr": signal.rr,
+            "rsi_gap": signal.rsi_gap,
+            "in_golden_pocket": signal.in_golden_pocket,
+            "rsi_divergence": signal.rsi_divergence,
+            "regime": current_regime or "neutre",
         }
         # Item #182 (28/07), golden-pocket liberation (operator-confirmed,
         # "l'objectif d'avoir un score plus strict c'est de liberer le golden

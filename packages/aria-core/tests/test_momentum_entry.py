@@ -9506,3 +9506,68 @@ async def test_watchlist_refill_cycle_tolerates_discover_doppler_failure(monkeyp
 
     result = await me.run_watchlist_refill_cycle(discover=discover, discover_direct=_no_direct, discover_doppler=failing_doppler)
     assert result["candidates_seen"] == 1  # discover_momentum_candidates' own result survives
+
+
+def test_no_entry_signal_hold_carries_chart_fields_but_never_align_score():
+    """The ``no_entry_signal`` HOLD must expose the technical analysis it just
+    computed, and must NOT expose ``align_score`` (02/09).
+
+    Why this is locked mechanically rather than left to a comment: the two
+    halves have opposite failure modes, and both already happened here.
+
+    Omitting the chart fields is what made the observation layer blind -- chart
+    data was available on 1 observation out of 895 while this exact path
+    accounted for 51% of them, because ``detect_entry`` ran and its answer was
+    dropped one line later.
+
+    Adding ``align_score`` would be the opposite mistake, and a costlier one:
+    item #221 documents that ``risk_guard`` reads a MISSING align_score as
+    "caller doesn't support this signal" and falls back to its 5% tier. Setting
+    it here would silently change position sizing -- a trading decision made as
+    a side effect of an observability fix. AST-level so the check reads what the
+    code actually returns, not what a comment claims.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src" / "aria_core" / "momentum_entry.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    hold_dicts = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Dict)
+        and any(isinstance(t, ast.Name) and t.id == "hold" for t in node.targets)
+        and any(
+            isinstance(k, ast.Constant) and k.value == "hold_reason"
+            for k in node.value.keys
+            if k is not None
+        )
+    ]
+    assert hold_dicts, "no `hold = {...}` literal carrying a hold_reason was found"
+
+    for d in hold_dicts:
+        keys = {k.value for k in d.keys if isinstance(k, ast.Constant)}
+        reason = next(
+            (
+                v.value
+                for k, v in zip(d.keys, d.values)
+                if isinstance(k, ast.Constant)
+                and k.value == "hold_reason"
+                and isinstance(v, ast.Constant)
+            ),
+            None,
+        )
+        if reason != "no_entry_signal":
+            continue
+        missing = {"gp_low", "gp_high", "rr", "rsi_gap", "regime"} - keys
+        assert not missing, (
+            f"the no_entry_signal HOLD dropped already-computed chart fields: {sorted(missing)} "
+            "-- the observation layer records an empty chart block without them"
+        )
+        assert "align_score" not in keys, (
+            "align_score must NOT be set on this dict: risk_guard treats a missing value as "
+            "'unsupported' and falls back to its 5% tier, so adding it changes position sizing "
+            "(item #221). Report it as not-evaluated instead."
+        )
