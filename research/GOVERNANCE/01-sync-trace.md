@@ -78,3 +78,28 @@ knowable at any time.
                      arrived, together with its demonstration and a test locking
                      the invariant. Reported to B for arbitration rather than
                      kept silently -- see research/incidents/ and the report.
+
+---
+
+    DATE             2026-09-02
+    RULE / DECISION  Stop after every report to the operator, until he answers.
+                     "tant que je n'ai pas repondu a un de tes retours tu ne
+                     passes jamais a la suite." Not slowed, not queued: BLOCKED.
+                     B opens no new branch and sends A no new request; A starts
+                     nothing new. Finishing the CURRENT workstream's outstanding
+                     items is allowed -- those are finishing touches, not a
+                     continuation.
+                     Rationale, in B's words: reports were chained all day
+                     without waiting for answers, so the operator received a
+                     finding, then a correction of it, then a correction of the
+                     correction, while work continued behind. When he answers, he
+                     answers a state that no longer exists.
+                     Third rule of the evening in the same family as "one
+                     workstream at a time" and the synchronisation chain: no
+                     unmanaged parallelism, no progress without acknowledgement.
+    SOURCE           HUMAN
+    TRANSMITTED BY   B
+    RECEIVED BY      A
+    ACKNOWLEDGED BY  A
+    PERSISTED WHERE  research/GOVERNANCE/01-sync-trace.md (this entry)
+    STATUS           ACTIVE
