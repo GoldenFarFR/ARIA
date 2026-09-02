@@ -88,9 +88,9 @@ description: "Task list for the Live Signal Observer"
 ## Phase 6: Polish
 
 - [X] T017 Run `packages/aria-core/tests/test_live_signal_observer.py` plus the regression set `test_momentum_websocket.py`, `test_paper_trader.py`, `test_momentum_entry.py`, `test_momentum_signal_observation.py` — all green, aggregate count only.
-- [ ] T018 Commit; deploy per Zero-Permission Policy (`./vanguard/deploy.sh`); verify the served commit via `curl 127.0.0.1:<port>/api/health` against `git rev-parse main`; update `.claude/last-deployed-ref`.
+- [X] T018 Commit; deploy per Zero-Permission Policy (`./vanguard/deploy.sh`); verify the served commit via `curl 127.0.0.1:<port>/api/health` against `git rev-parse main`; update `.claude/last-deployed-ref`.
 - [ ] T019 Ask the operator to add `ARIA_LIVE_SIGNAL_OBSERVER_ENABLED=true` (and optionally `ARIA_SIGNAL_TELEGRAM_CHAT_ID`) to `vanguard/backend/.env` (never touched by this session), then redeploy; verify `docker inspect aria-api` shows the gate and logs show `live_signal_observer: started (4 endpoints)`; run quickstart.md Scenario 1 (SC-001/SC-002).
-- [ ] T020 Add the 3-line entry to `docs/HANDOFF_PIPELINE_MOMENTUM.md` with the real commit hash, same commit as `.claude/last-deployed-ref`.
+- [X] T020 Add the 3-line entry to `docs/HANDOFF_PIPELINE_MOMENTUM.md` with the real commit hash, same commit as `.claude/last-deployed-ref`.
 
 ---
 
