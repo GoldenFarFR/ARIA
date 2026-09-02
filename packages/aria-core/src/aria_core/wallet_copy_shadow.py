@@ -504,12 +504,20 @@ async def _current_price_and_liquidity_usd(contract: str) -> tuple[float | None,
         return None, None
 
 
-async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
+async def scan_wallet(wallet: str, meta: dict, *, allow_open: bool = True) -> ShadowScanResult:
     """One incremental pass over ``wallet``'s recent Base ERC-20 transfers --
     opens a fictional position on a detected buy (received a non-quote
     token), closes the matching open one on a detected sell (sent a
     non-quote token it currently holds a shadow position in). Best-effort:
-    a scan failure never raises, never blocks the other 7 wallets."""
+    a scan failure never raises, never blocks the other 7 wallets.
+
+    ``allow_open`` (02/09, Phase 0 of the core/pocket split -- research/
+    piped-percolating-dream.md): defaults to True so every existing caller
+    and test keeps its exact prior behavior. ``run_scan_cycle`` passes
+    False in production while the pocket is sourcing-off -- the cursor
+    still advances past a buy it skips (never reprocessed once discovery
+    resumes) and closes keep firing at a real market price, same motif as
+    shadow_persistent.py's discovery loops."""
     label = meta["label"]
     try:
         await _ensure_tables()
@@ -545,7 +553,7 @@ async def scan_wallet(wallet: str, meta: dict) -> ShadowScanResult:
             if not contract or contract in _QUOTE_TOKENS:
                 continue
             wallet_l = wallet.lower()
-            is_buy = (t.to_address or "").lower() == wallet_l
+            is_buy = allow_open and (t.to_address or "").lower() == wallet_l
             is_sell = (t.from_address or "").lower() == wallet_l
             if is_buy and not await _open_position_exists(wallet, contract):
                 spot, liquidity = await _current_price_and_liquidity_usd(contract)
@@ -597,15 +605,22 @@ async def refresh_open_marks(wallet: str) -> None:
         logger.info("wallet_copy_shadow: mark refresh failed for %s (%s)", wallet[:10], exc)
 
 
-async def run_scan_cycle() -> list[ShadowScanResult]:
+async def run_scan_cycle(*, allow_open: bool = False) -> list[ShadowScanResult]:
     """Scans every tracked wallet, one at a time (sequential -- Blockscout
     is a shared, rate-limited resource, no reason to burst it) -- the 8
     hand-picked static wallets. Never raises: a single wallet's failure is
-    reported in its own result, the others still run."""
+    reported in its own result, the others still run.
+
+    ``allow_open`` defaults to False (02/09, Phase 0 of the core/pocket
+    split -- research/piped-percolating-dream.md): the heartbeat's
+    production cycle no longer opens new copied positions until Phase 0's
+    exit condition is met (zero new entries demonstrated, every open
+    position resolved) -- exit tracking (closes) is unaffected. Re-enabling
+    needs an explicit operator "go", not a code change here."""
     all_wallets = dict(TRACKED_WALLETS)
     results: list[ShadowScanResult] = []
     for wallet, meta in all_wallets.items():
-        res = await scan_wallet(wallet, meta)
+        res = await scan_wallet(wallet, meta, allow_open=allow_open)
         results.append(res)
         await refresh_open_marks(wallet)
     return results

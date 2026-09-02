@@ -74,6 +74,53 @@ async def test_detected_buy_opens_a_fictional_position(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_allow_open_false_skips_the_buy_but_advances_the_cursor(monkeypatch):
+    """02/09, Phase 0 of the core/pocket split (research/piped-percolating
+    -dream.md): sourcing off, exit tracking stays. A detected buy opens
+    nothing when allow_open=False, but the cursor still moves past it --
+    re-scanning the same window must not re-open once discovery resumes."""
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    _mock_price(monkeypatch, 1.0)
+    result = await wcs.scan_wallet(WALLET, META, allow_open=False)
+    assert result.opened == 0
+    assert (await wcs.summary())[WALLET]["open_positions"] == 0
+
+    # Cursor advanced past 0xbuy1 -- an unchanged Blockscout window now
+    # returns nothing new to process, even with allow_open reverted to True.
+    result2 = await wcs.scan_wallet(WALLET, META, allow_open=True)
+    assert result2.opened == 0
+
+
+@pytest.mark.asyncio
+async def test_allow_open_false_still_closes_an_already_open_position(monkeypatch):
+    """The exit half must be unaffected by sourcing-off -- a position opened
+    before the cutover still closes at a real market price."""
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    _mock_price(monkeypatch, 1.0)
+    await wcs.scan_wallet(WALLET, META, allow_open=True)
+
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xsell1", from_address=WALLET)])
+    _mock_price(monkeypatch, 2.0)
+    result = await wcs.scan_wallet(WALLET, META, allow_open=False)
+    assert result.closed == 1
+    assert (await wcs.summary())[WALLET]["open_positions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_scan_cycle_defaults_to_sourcing_off(monkeypatch):
+    """The production entry point (heartbeat's wallet_copy_shadow_cycle
+    calls run_scan_cycle() with no arguments) must default to allow_open
+    =False until Phase 0's exit condition is met -- this is the one
+    assertion that actually protects production behavior; the unit tests
+    above only cover scan_wallet's own parameter."""
+    _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
+    _mock_price(monkeypatch, 1.0)
+    results = await wcs.run_scan_cycle()
+    assert sum(r.opened for r in results) == 0
+    assert (await wcs.summary())[WALLET]["open_positions"] == 0
+
+
+@pytest.mark.asyncio
 async def test_matching_sell_closes_the_position_and_computes_realized_pnl(monkeypatch):
     _mock_transfers(monkeypatch, [_transfer(tx_hash="0xbuy1", to_address=WALLET)])
     _mock_price(monkeypatch, 1.0)
@@ -375,7 +422,7 @@ async def test_run_scan_cycle_only_scans_static_wallets(monkeypatch):
     run_scan_cycle now only ever scans the 8 hand-picked TRACKED_WALLETS."""
     scanned = []
 
-    async def _fake_scan(wallet, meta):
+    async def _fake_scan(wallet, meta, **kwargs):
         scanned.append(wallet)
         return wcs.ShadowScanResult(wallet, 0, 0)
 
