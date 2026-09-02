@@ -151,6 +151,13 @@ async def flush(force: bool = False) -> int:
     if not rows:
         return 0
     try:
+        # The table may not exist yet: in production the live feed can start
+        # before any backfill has ever run, and a flush into a missing table
+        # would drop the buffer silently. Found by the acceptance test, which
+        # is exactly the scenario it was written to catch.
+        from aria_core.onchain_replay_backfill import _ensure_tables
+
+        await _ensure_tables()
         async with aiosqlite.connect(DB_PATH) as db:
             await db.executemany(
                 f"INSERT INTO {TABLE} "

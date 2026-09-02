@@ -4,6 +4,11 @@ description: "Task list for recalibrating the Solana late-bonding shadow pocket'
 
 # Tasks: Recalibrate the Solana late-bonding shadow pocket's regime gate
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: the session's work moved to the on-chain trajectory research
+(docs/mandat-recherche-alpha.md). Open tasks stay valid; not ABANDONED because
+closing a spec is the operator's call.
+
 **Input**: Design documents from `/specs/011-solana-regime-recalibration/`
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, quickstart.md (all present)
