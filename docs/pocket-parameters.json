@@ -245,7 +245,7 @@
         "why": "Bounds a single token's worst-case scan cost: 4 chunks * 500 blocks = ~2000 blocks =~ 1.1h at Base's ~2s/block (documented alongside this same constant in doppler.py) -- comfortably covers the \"early legitimacy\" window this module cares about without an unbounded scan."
       },
       "_PRICE_LOOKUP_TOLERANCE_HOURS": {
-        "line": 355,
+        "line": 361,
         "value": 2.0,
         "why": "Forward price tracking deliberately does NOT introduce a second write path -- it reads whatever candle_history_watchlist_cycle already collected for this token (same doctrine as dip_recovery_shadow_cycle: zero extra network call). Read-only helpers, computed on demand rather than stored, so a later change to the horizon set (e.g. adding +3d) never requires a migration or a backfill."
       }

@@ -70,7 +70,13 @@ _ZERO_RESOLVER = "0x0000000000000000000000000000000000000000"
 
 
 def _rpc_url() -> str:
-    return (os.environ.get("ARIA_BASE_RPC_URL", "") or "").strip() or _DEFAULT_RPC_URL
+    # 02/09 -- single resolution point (services/base_rpc.py). The old
+    # inline `or _DEFAULT_RPC_URL` only fell back on an EMPTY variable, so
+    # the retired Alchemy key was dialled anyway and its auth failure was
+    # converted into a verdict by this module's own fail-closed path.
+    from aria_core.services.base_rpc import base_rpc_url
+
+    return base_rpc_url()
 
 
 def _client(*, w3=None):
