@@ -65,10 +65,16 @@ Solana pools (`solana_pump_shadow`'s domain, a different pocket).
    resolver's `execution.v1` contract (this dataset's "realistic" price is
    not yet the resolver's `P_EXECUTABLE`).
 4. Effect is actually a liquidity proxy in disguise (progress correlates
-   with `reserve_usd` at entry) — not yet decomposed; a partial-correlation
-   check against liquidity is required before this hypothesis is called
-   independent of the liquidity-convergence hypothesis (Family B, see
-   registry).
+   with `reserve_usd` at entry). **PARTIALLY DEMONSTRATED ALREADY, 02/09 —
+   this falsifier is no longer merely pending.** The pocket's own code says
+   so: "the SAME liquidity floor that was supposed to protect this band was
+   ALSO lowered 5500$ -> 4000$ the same day -- so the one thing the test's
+   justification leaned on never actually held". `MIN_BONDING_PROGRESS` and
+   `MIN_LIQUIDITY_USD` were moved on the same days and re-checked on the same
+   samples (578 then 1609 closures), so their respective gains do not add up
+   and neither is attributable alone. Any revival of this hypothesis must
+   decompose the two effects BEFORE claiming anything — a partial-correlation
+   check is now a precondition, not a nice-to-have.
 
 ## Counterfactual
 
