@@ -826,6 +826,12 @@ _KNOWN_ENABLED_GATES = {
     # capital, never the $1M paper portfolio.
     "ARIA_DIP_RECOVERY_V2_SHADOW_ENABLED",
     "ARIA_DIRECTIVE_CHANNEL_ENABLED",
+    # 02/09 -- specs/017 live_signal_observer.py: discovers and evaluates
+    # momentum candidates while paper-trading is paused, persists via the
+    # specs/016 observation layer and sends a dedicated live-signal Telegram
+    # message. Observation + operator notification only -- structurally
+    # incapable of execution (AST-level + zero-row-delta tests). OFF by default.
+    "ARIA_LIVE_SIGNAL_OBSERVER_ENABLED",
     "ARIA_DIRECTIVE_PROPOSAL_ENABLED",
     "ARIA_DUNE_ENABLED",
     # 15/08 -- RPC-direct legitimacy signals (owner renouncement, LP lock/burn
