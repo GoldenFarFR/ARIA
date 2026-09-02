@@ -1176,6 +1176,52 @@ class EVMSwapWebSocketFeed:
             if not topic0.startswith("0x"):
                 topic0 = "0x" + topic0
             address = (result.get("address") or "").lower()
+
+            # 02/09 -- RESEARCH CAPTURE, strictly passive. The same events the
+            # historical backfill writes to `onchain_replay_raw` are mirrored
+            # there from the live feed, so `build_trajectory` works identically
+            # on the past and on what ARIA is watching right now: one analytical
+            # engine instead of two that would drift.
+            #
+            # The boundary is one-way and non-negotiable (operator, 02/09):
+            # nothing here returns a value this handler reads, no threshold is
+            # consulted, no decision changes. If the capture is broken, slow, or
+            # its table is missing, the trading feed carries on -- the research
+            # lab must never become a new point of failure for the pockets. That
+            # is why it sits inside its own try/except INSIDE a handler that
+            # already has one: a bug in the capture must not consume the outer
+            # handler's error budget for real decode failures.
+            try:
+                # Imported INSIDE the handler, not at module level: the capture
+                # module reaches back into onchain_replay_backfill, which imports
+                # this one -- a top-level import deadlocks on a circular chain.
+                # Python caches the module after the first call, so the cost
+                # here is a dict lookup, not a re-import.
+                from aria_core import onchain_live_capture as _live_capture
+
+                _live_capture.record_event(
+                    chain=self.chain,
+                    # Left empty ON PURPOSE: _TrackedPool does not carry the
+                    # token address, and inventing one here would put a guess
+                    # in the raw table. The pool_id is the durable key; the
+                    # token is resolved later from the pool's own Initialize
+                    # event, exactly as _resolve_token_side already does.
+                    token="",
+                    pool_id=(topics[1].hex() if len(topics) > 1 and hasattr(topics[1], "hex")
+                             else str(topics[1]) if len(topics) > 1 else address),
+                    block_number=int(result.get("blockNumber", "0x0"), 16)
+                    if isinstance(result.get("blockNumber"), str)
+                    else int(result.get("blockNumber") or 0),
+                    tx_hash=str(result.get("transactionHash") or ""),
+                    log_index=int(result.get("logIndex", "0x0"), 16)
+                    if isinstance(result.get("logIndex"), str)
+                    else int(result.get("logIndex") or 0),
+                    topics=[t.hex() if hasattr(t, "hex") else str(t) for t in topics],
+                    data_hex=str(result.get("data") or ""),
+                )
+            except Exception:  # noqa: BLE001 -- capture never disturbs the feed
+                pass
+
             if topic0 in (_SYNC_TOPIC, _SYNC_TOPIC_AERODROME):
                 self._handle_sync(address, result)
             elif topic0 == _V2_SWAP_TOPIC:
