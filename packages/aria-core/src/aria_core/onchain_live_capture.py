@@ -300,6 +300,10 @@ async def completeness_report(chain: str) -> dict:
     behind is complete and useless for the fast regime, and only these two
     numbers together tell them apart.
     """
+    # Readers guarantee the schema too: only flush() used to run the
+    # migration, so any read before the first write hit "no such column:
+    # source". Found on the live deployment, one minute after wiring.
+    await ensure_source_column()
     counters = stats()
     lost = counters["buffered"] - counters["persisted"] - counters["pending"]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -393,6 +397,10 @@ async def verify_against_chain(chain: str, pool_id: str, from_block: int, to_blo
 
 async def live_stats(chain: str) -> dict:
     """What the live path has actually stored -- read from storage, never memory."""
+    # Readers guarantee the schema too: only flush() used to run the
+    # migration, so any read before the first write hit "no such column:
+    # source". Found on the live deployment, one minute after wiring.
+    await ensure_source_column()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(

@@ -533,6 +533,19 @@ class EVMSwapWebSocketFeed:
                 logger.info("evm_swap_ws[%s]: idle newHeads check failed (%s)", self.chain, exc)
             try:
                 await self._refresh_eth_usd_rate()
+                # Drain the research capture's buffer on the SAME loop that
+                # already runs periodically -- record_event only buffers, and
+                # without this the buffer fills in memory and is never written.
+                # Found one minute after deployment: 0 rows captured while the
+                # feed was live. Deliberately on this loop rather than in the
+                # notification handler, which is synchronous and must stay free
+                # of I/O.
+                try:
+                    from aria_core import onchain_live_capture as _lc
+
+                    await _lc.flush()
+                except Exception:  # noqa: BLE001 -- capture never disturbs the feed
+                    pass
             except Exception as exc:  # noqa: BLE001 -- never let this ticker die the feed
                 logger.info("evm_swap_ws[%s]: eth/usd rate refresh failed (%s)", self.chain, exc)
             await asyncio.sleep(_BREAKER_CHECK_INTERVAL_SECONDS)
