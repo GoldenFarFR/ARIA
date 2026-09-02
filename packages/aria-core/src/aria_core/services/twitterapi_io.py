@@ -319,6 +319,161 @@ async def fetch_last_tweets(username: str, *, max_results: int = 20) -> list[Twi
     return tweets or None
 
 
+# Completeness states -- a caller must be able to tell "there is nothing" from
+# "we stopped looking" (02/09). The distinction is not cosmetic: reading 43
+# tweets as "only 43 exist" is exactly how the first social measurements in
+# this session produced false conclusions.
+SEARCH_COMPLETE = "complete"     # the index had no further page
+SEARCH_CAPPED = "capped"         # our own max_results stopped us, more exist
+SEARCH_EMPTY = "empty"           # the query genuinely returned nothing
+SEARCH_ERROR = "error"           # key missing, HTTP failure, unreadable body
+SEARCH_RATE_LIMITED = "rate_limited"   # 429 -- distinct from a generic error
+
+
+@dataclass(frozen=True)
+class TweetSearchResult:
+    """Tweets plus the honesty metadata about how complete they are.
+
+    ``status`` and ``has_next_page`` exist because the endpoint pages by
+    cursor at 20 results each: a bare list silently conflates "the whole
+    conversation" with "the first screenful of it".
+    """
+
+    tweets: list[dict]
+    status: str
+    pages_fetched: int = 0
+    has_next_page: bool = False
+    # Billed volume, not kept volume: dedupe and the max_results cut happen on
+    # our side AFTER the provider has charged for the page ($0.15/1k tweets).
+    # Reporting only what we kept would understate real spend.
+    tweets_billed: int = 0
+    rate_limited_hits: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return self.status == SEARCH_COMPLETE
+
+
+async def search_tweets_full(
+    query: str, *, max_results: int = 100, max_pages: int = 25,
+) -> TweetSearchResult:
+    """Cursor-paginated search -- the honest version of ``search_tweets``.
+
+    ``advanced_search`` returns **20 results per page** and exposes
+    ``has_next_page``/``next_cursor`` (verified against docs.twitterapi.io,
+    02/09). The previous single-page implementation fetched exactly one page
+    and truncated, so every measurement built on it was capped at ~20 tweets
+    regardless of the ``max_results`` asked for -- a token with 232M$ FDV
+    looked like it had 19 mentions.
+
+    Bounded on BOTH axes on purpose (operator, same day): ``max_results`` caps
+    the volume and ``max_pages`` caps the round-trips, so a broad query can
+    never turn into an unbounded crawl. Billing is per tweet returned
+    ($0.15/1k), so the cost is proportional and predictable -- 500 tweets is
+    under a tenth of a cent.
+
+    Never raises: any failure yields ``SEARCH_ERROR`` with whatever pages were
+    already collected, because partial data plus an honest status beats
+    discarding a successful first page over a failed third.
+    """
+    q = (query or "").strip()
+    if not q:
+        return TweetSearchResult(tweets=[], status=SEARCH_EMPTY)
+
+    api_key = os.environ.get("TWITTERAPI_IO_KEY", "").strip()
+    if not api_key:
+        return TweetSearchResult(tweets=[], status=SEARCH_ERROR)
+
+    limit = max(1, int(max_results))
+    tweets: list[dict] = []
+    seen_ids: set = set()
+    cursor = ""
+    pages = 0
+    has_next = False
+    billed = 0
+    rate_limited = 0
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+        while pages < max(1, int(max_pages)) and len(tweets) < limit:
+            await _throttle()
+            params = {"query": q[:500], "queryType": "Latest"}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                r = await client.get(
+                    _SEARCH_URL, params=params, headers={"X-API-Key": api_key},
+                )
+            except httpx.TransportError as exc:
+                logger.info("twitterapi_io: network failure search page %d (%s)", pages, exc)
+                return TweetSearchResult(tweets, SEARCH_ERROR, pages, has_next, billed, rate_limited)
+
+            # 429 is counted and surfaced separately: "we were throttled" is a
+            # capacity signal to act on, while a generic error is a fault. The
+            # dome's standing rule -- a throttle must be measured, never
+            # discovered later through missing data.
+            if r.status_code == 429:
+                rate_limited += 1
+                logger.info("twitterapi_io: 429 on search page %d (query %r)", pages, q[:40])
+                return TweetSearchResult(
+                    tweets, SEARCH_RATE_LIMITED, pages, has_next, billed, rate_limited,
+                )
+            if r.status_code != 200:
+                logger.info("twitterapi_io: HTTP %s on search page %d", r.status_code, pages)
+                return TweetSearchResult(tweets, SEARCH_ERROR, pages, has_next, billed, rate_limited)
+            try:
+                payload = r.json()
+            except Exception:  # noqa: BLE001 -- unreadable body, never bubbles
+                return TweetSearchResult(tweets, SEARCH_ERROR, pages, has_next, billed, rate_limited)
+            if not isinstance(payload, dict):
+                return TweetSearchResult(tweets, SEARCH_ERROR, pages, has_next, billed, rate_limited)
+
+            pages += 1
+            raw_tweets = payload.get("tweets")
+            if not isinstance(raw_tweets, list):
+                raw_tweets = []
+            billed += len(raw_tweets)
+            before = len(tweets)
+            for item in raw_tweets:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                tid = item.get("id")
+                # The cursor can overlap between pages; dedupe on tweet id so a
+                # repeated tweet never inflates a mention count.
+                if tid and tid in seen_ids:
+                    continue
+                if tid:
+                    seen_ids.add(tid)
+                author = item.get("author") if isinstance(item.get("author"), dict) else {}
+                tweets.append({
+                    "text": text,
+                    "created_at": _parse_twitter_format_created_at(item.get("createdAt")),
+                    "tweet_id": tid,
+                    "author_id": author.get("userName"),
+                })
+                if len(tweets) >= limit:
+                    break
+
+            # Waste guard: a page that adds nothing new means the cursor is
+            # looping or the tail is exhausted. Paying for further pages that
+            # return only duplicates is the "consommation inutile" this stops.
+            if len(tweets) == before:
+                logger.info("twitterapi_io: page %d added no new tweet, stopping", pages)
+                break
+
+            has_next = bool(payload.get("has_next_page"))
+            cursor = str(payload.get("next_cursor") or "")
+            if not has_next or not cursor:
+                break
+
+    if not tweets:
+        return TweetSearchResult([], SEARCH_EMPTY, pages, has_next, billed, rate_limited)
+    status = SEARCH_CAPPED if has_next else SEARCH_COMPLETE
+    return TweetSearchResult(tweets, status, pages, has_next, billed, rate_limited)
+
+
 async def search_tweets(query: str, *, max_results: int = 10) -> list[dict] | None:
     """Free-form keyword search (``GET /twitter/tweet/advanced_search``) --
     same role as ``gateway.x_twitter.search_recent_tweets`` (buzz search on a
@@ -331,57 +486,16 @@ async def search_tweets(query: str, *, max_results: int = 10) -> list[dict] | No
     ``created_at``/``tweet_id``/``author_id``) so callers (conviction_research.py)
     don't need a provider-specific branch -- ``author_id`` here is the
     author's @handle (twitterapi.io exposes no numeric id), never confused
-    with a real X API author_id."""
-    q = (query or "").strip()
-    if not q:
-        return None
+    with a real X API author_id.
 
-    api_key = os.environ.get("TWITTERAPI_IO_KEY", "").strip()
-    if not api_key:
-        return None
-
-    await _throttle()
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
-            r = await client.get(
-                _SEARCH_URL,
-                params={"query": q[:500], "queryType": "Latest"},
-                headers={"X-API-Key": api_key},
-            )
-    except httpx.TransportError as exc:
-        logger.info("twitterapi_io: network failure search_tweets (%s)", exc)
-        return None
-
-    if r.status_code != 200:
-        logger.info("twitterapi_io: HTTP %s for search_tweets %r", r.status_code, q)
-        return None
-
-    try:
-        payload = r.json()
-    except Exception:  # noqa: BLE001 -- unreadable body, never a bubbling exception
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-    raw_tweets = payload.get("tweets")
-    if not isinstance(raw_tweets, list):
-        return None
-
-    tweets: list[dict] = []
-    for item in raw_tweets[: max(1, min(int(max_results), 100))]:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or "").strip()
-        if not text:
-            continue
-        author = item.get("author") if isinstance(item.get("author"), dict) else {}
-        tweets.append({
-            "text": text,
-            "created_at": _parse_twitter_format_created_at(item.get("createdAt")),
-            "tweet_id": item.get("id"),
-            "author_id": author.get("userName"),
-        })
-    return tweets or None
+    Kept for the existing callers (``conviction_research``) which expect a
+    plain list or ``None``. Now a thin adapter over ``search_tweets_full``, so
+    they inherit pagination without a signature change -- but they cannot see
+    whether the result was capped. New code should call ``search_tweets_full``
+    and read its ``status``.
+    """
+    result = await search_tweets_full(query, max_results=max_results)
+    return result.tweets or None
 
 
 async def fetch_credit_balance() -> TwitterApiIoBalance | None:
