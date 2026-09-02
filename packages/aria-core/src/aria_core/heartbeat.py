@@ -932,11 +932,24 @@ def _sync_x_curiosity_enabled() -> None:
                     "ARIA_CANDLE_HISTORY_WATCHLIST_ENABLED", "",
                 ).strip().lower() in ("1", "true", "yes", "on")
             if task.id == "goplus_watchlist_cycle":
-                # 29/07 (Item #212) -- same double-gate pattern as
-                # daily_trade_floor_cycle above: this cycle only serves the
-                # momentum pipeline, so it needs BOTH the master paper-trading
-                # gate AND its own dedicated ARIA_GOPLUS_WATCHLIST_ENABLED.
-                from aria_core import paper_pause
+                # 29/07 (Item #212) -- double-gate: this cycle needs its own
+                # dedicated ARIA_GOPLUS_WATCHLIST_ENABLED AND at least one real
+                # CONSUMER of its verdicts, so it never burns GoPlus quota for
+                # nobody.
+                #
+                # 02/09 -- the "only consumer is paper-trading" premise became
+                # false the day specs/017's live_signal_observer shipped: that
+                # service evaluates candidates precisely WHILE paper-trading is
+                # paused, and every candidate it sees returns HOLD/
+                # honeypot_pending until this cycle clears it. Measured cost of
+                # the old wiring: with /offpaper armed since 24/08, the last
+                # honeypot check ran 17/08 (16 days), the watchlist sat full at
+                # MAX_WATCHLIST_SIZE evicting in a loop, and the live signal
+                # could never produce a single complete evaluation. Reading a
+                # honeypot verdict executes nothing -- the gate that must stay
+                # tied to paper_pause is the one that OPENS POSITIONS, not the
+                # one that checks whether a token is a scam.
+                from aria_core import live_signal_observer, paper_pause
 
                 paper_on = (
                     os.environ.get("ARIA_PAPER_TRADING_ENABLED", "").strip().lower() in (
@@ -947,7 +960,8 @@ def _sync_x_curiosity_enabled() -> None:
                 watchlist_on = os.environ.get("ARIA_GOPLUS_WATCHLIST_ENABLED", "").strip().lower() in (
                     "1", "true", "yes", "on",
                 )
-                task.enabled = paper_on and watchlist_on
+                consumer_on = paper_on or live_signal_observer.live_signal_observer_enabled()
+                task.enabled = consumer_on and watchlist_on
             if task.id == "polymarket_paper_cycle":
                 from aria_core.polymarket_paper_trader import polymarket_paper_enabled
 
