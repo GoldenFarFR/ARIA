@@ -2206,10 +2206,15 @@ class AriaHeartbeat:
             await self._notify_telegram(report)
 
         elif task_id == "regime_peak_digest_cycle":
-            from aria_core.regime_peak_digest import build_regime_peak_digest
+            # 02/09 -- the reading still happens every 30 min (it feeds the
+            # trend); only the SEND is conditional now: a gate change, or a
+            # daily reminder. See build_regime_peak_digest_if_noteworthy's
+            # own docstring for why (48 identical zero-valued messages/day).
+            from aria_core.regime_peak_digest import build_regime_peak_digest_if_noteworthy
 
-            digest = await build_regime_peak_digest()
-            await self._notify_telegram(digest)
+            digest = await build_regime_peak_digest_if_noteworthy()
+            if digest:
+                await self._notify_telegram(digest)
 
         elif task_id == "marketing_video_cycle":
             from aria_core.skills.marketing_video import run_marketing_video_cycle

@@ -118,3 +118,79 @@ async def test_build_regime_peak_digest_shows_a_trend_after_multiple_cycles(monk
         text = await digest.build_regime_peak_digest()
 
     assert "14.2->17.6->25.4" in text
+
+
+# ---------------------------------------------------------------------------
+# 02/09 -- conditional send (operator: "sur le canal telegram c'est le bordel")
+# ---------------------------------------------------------------------------
+
+def _fake_states(monkeypatch, *, solana_open, robinhood_open, base_open, median=10.0):
+    from aria_core import base_momentum_shadow, robinhood_pump_shadow, solana_late_bonding_shadow
+
+    def _state(is_open):
+        async def _fn():
+            return {"median_peak_pct": median, "threshold_pct": 25.0,
+                    "open": is_open, "samples": 30}
+        return _fn
+
+    monkeypatch.setattr(solana_late_bonding_shadow, "regime_state", _state(solana_open))
+    monkeypatch.setattr(robinhood_pump_shadow, "regime_state", _state(robinhood_open))
+    monkeypatch.setattr(base_momentum_shadow, "regime_state", _state(base_open))
+
+
+async def test_first_call_always_sends(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+
+
+async def test_identical_gate_state_is_silent_the_second_time(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+    assert await digest.build_regime_peak_digest_if_noteworthy() is None
+    assert await digest.build_regime_peak_digest_if_noteworthy() is None
+
+
+async def test_a_gate_change_breaks_the_silence(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+    assert await digest.build_regime_peak_digest_if_noteworthy() is None
+    _fake_states(monkeypatch, solana_open=True, robinhood_open=False, base_open=True)  # Solana opened
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+
+
+async def test_a_median_drift_alone_is_not_news(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True, median=14.2)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True, median=14.3)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is None
+
+
+async def test_losing_or_gaining_data_is_news(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True, median=14.2)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True, median=None)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+
+
+async def test_daily_reminder_fires_even_when_nothing_changed(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True)
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+    assert await digest.build_regime_peak_digest_if_noteworthy() is None
+
+    stale = (datetime.now(timezone.utc) - timedelta(hours=digest.DIGEST_REMINDER_HOURS + 1)).isoformat()
+    import aiosqlite
+    async with aiosqlite.connect(digest.DB_PATH) as db:
+        await db.execute(f"UPDATE {digest.NOTIFICATION_TABLE} SET notified_at = ? WHERE id = 1", (stale,))
+        await db.commit()
+
+    assert await digest.build_regime_peak_digest_if_noteworthy() is not None
+
+
+async def test_reading_and_trend_keep_accumulating_even_when_silent(monkeypatch):
+    _fake_states(monkeypatch, solana_open=False, robinhood_open=False, base_open=True, median=14.2)
+    await digest.build_regime_peak_digest_if_noteworthy()
+    await digest.build_regime_peak_digest_if_noteworthy()  # silent, but must still record
+    await digest.build_regime_peak_digest_if_noteworthy()
+    assert await digest.recent_trend("solana") == [14.2, 14.2, 14.2]
