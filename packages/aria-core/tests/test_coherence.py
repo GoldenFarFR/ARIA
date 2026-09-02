@@ -1596,6 +1596,13 @@ _SOLANA_RPC_ALLOWLIST = {
     "services/pumpfun_trade_stream.py",
     # EVM (Robinhood Chain), not Solana at all.
     "services/wallet_transfers_fast.py",
+    # EVM only (Base / Robinhood), never Solana -- and deliberately NOT paced
+    # by the gateway: this is a bounded historical backfill (eth_getLogs over a
+    # fixed block range), not a live feed competing for the same budget. It
+    # accounts every call through chainstack_ru_budget.record_usage_fast, which
+    # is the mechanism that actually matters here. Measured on its first real
+    # run: 3169 RU for a token's entire 24h history, 0.5% of the daily cap.
+    "onchain_replay_backfill.py",
 }
 
 
