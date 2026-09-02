@@ -1112,6 +1112,8 @@ async def test_summary_aggregates_open_closed_and_winrate(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_cycle_covers_both_chains(monkeypatch):
+    """allow_open=True exercises discovery -- covered on its own here,
+    separately from the production default (see the next test)."""
     seen_chains = []
 
     async def fake_trending(chain, **k):
@@ -1119,6 +1121,26 @@ async def test_run_cycle_covers_both_chains(monkeypatch):
         return TrendingPoolsResult(pools=[], available=True, error=None)
 
     monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
-    stats = await shadow.run_cycle()
+    stats = await shadow.run_cycle(allow_open=True)
     assert seen_chains == list(shadow.CHAINS)
+    assert stats["opened"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_defaults_to_sourcing_off(monkeypatch):
+    """02/09, Phase 0 of the core/pocket split (research/piped-percolating
+    -dream.md): the heartbeat's production call (dip_recovery_v2_shadow_
+    cycle -> run_cycle() with no arguments) must never call discovery until
+    Phase 0's exit condition is met -- exit tracking is unaffected, checked
+    separately in this file's advance_open_positions tests."""
+    called = False
+
+    async def fake_trending(chain, **k):
+        nonlocal called
+        called = True
+        return TrendingPoolsResult(pools=[], available=True, error=None)
+
+    monkeypatch.setattr(shadow.dexpaprika, "get_trending_pools", fake_trending)
+    stats = await shadow.run_cycle()
+    assert called is False
     assert stats["opened"] == 0

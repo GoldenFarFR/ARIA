@@ -581,13 +581,23 @@ async def _advance_one_position(row: dict) -> None:
         await db.commit()
 
 
-async def run_cycle() -> dict:
+async def run_cycle(*, allow_open: bool = False) -> dict:
     """Called once per heartbeat passage -- both chains, discovery then
     exit-tracking. Never touches the real $1M paper portfolio or any real
-    capital, purely observational."""
+    capital, purely observational.
+
+    ``allow_open`` defaults to False (02/09, Phase 0 of the core/pocket
+    split -- research/piped-percolating-dream.md): 17 of this pocket's
+    positions are due to time out within 24h and would be its first
+    unbiased measurement (its 41 prior closures are ALL take-profits, since
+    every losing position was still open when this was written) -- see the
+    plan's Phase 0. Discovery is skipped, exit tracking (advance_open_
+    positions/archive_recently_closed) is unaffected. Re-enabling needs an
+    explicit operator "go", not a code change here."""
     stats = {"opened": 0, "checked": 0, "closed_take_profit": 0, "closed_timeout": 0}
     for chain in CHAINS:
-        stats["opened"] += await discover_and_record(chain)
+        if allow_open:
+            stats["opened"] += await discover_and_record(chain)
         chain_stats = await advance_open_positions(chain)
         stats["checked"] += chain_stats["checked"]
         stats["closed_take_profit"] += chain_stats["closed_take_profit"]
