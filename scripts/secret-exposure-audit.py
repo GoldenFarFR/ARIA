@@ -204,7 +204,7 @@ def main() -> int:
             # silently, and the invariant is locked by a test so a future edit
             # that DID print a value would fail rather than inherit this
             # suppression. See test_secret_exposure.py.
-            print(f"  {'':<22} {marker} {name}  fp={fp}")  # codeql[py/clear-text-logging-sensitive-data]
+            print(f"  {'':<22} {marker} {name}  fp={fp}")
     print()
     print("=" * 64)
     if total_findings == 0:
