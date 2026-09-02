@@ -33,11 +33,12 @@ of one side" rule is therefore 2.5% of ``reserve_usd``.
 """
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, field
 from typing import Any
 
 import aiosqlite
+
+from aria_core import market_impact
 
 from aria_core.paths import shadow_db_path
 
@@ -47,13 +48,16 @@ from aria_core.paths import shadow_db_path
 # where it dies.
 DEFAULT_SIZES_USD: tuple[float, ...] = (2.0, 10.0, 25.0, 50.0, 100.0, 250.0, 1000.0)
 
-# Which module owns the impact function for a given pocket table. Imported, never
-# reimplemented -- the fee is chain-specific and a local copy would silently drift.
-_IMPACT_MODULE_BY_PREFIX: dict[str, str] = {
-    "solana_pump": "aria_core.solana_pump_shadow",
-    "solana_late_bonding": "aria_core.solana_pump_shadow",
-    "robinhood_pump": "aria_core.robinhood_pump_shadow",
-    "base_momentum": "aria_core.base_momentum_shadow",
+# Which CHAIN a pocket table belongs to. The impact function itself now lives in
+# `market_impact`, shared infrastructure -- 02/09, after finding it duplicated
+# character-for-character in EIGHT pockets. It measures what a real trade would
+# cost, which is not a pocket's business logic, and this module must keep working
+# when those pockets are gone.
+_CHAIN_BY_PREFIX: dict[str, str] = {
+    "solana_pump": "solana",
+    "solana_late_bonding": "solana",
+    "robinhood_pump": "robinhood",
+    "base_momentum": "base",
 }
 
 # Rejection reasons. A rejected row is never a WIN nor a LOSS -- it leaves the
@@ -66,9 +70,21 @@ REJ_EXIT_TOO_DEEP = "exit_impact_exceeds_depth"
 
 
 def _impact_fn(table: str):
-    for prefix, module in _IMPACT_MODULE_BY_PREFIX.items():
+    """Impact function bound to this table's chain fee.
+
+    Returns a callable with the same signature the pockets' own copies had, so
+    every caller and test is unchanged -- only where the arithmetic LIVES moved.
+    """
+    for prefix, chain in _CHAIN_BY_PREFIX.items():
         if table.startswith(prefix):
-            return importlib.import_module(module)._apply_price_impact_and_fee
+            fee = market_impact.fee_pct_for(chain)
+
+            def _impact(price, *, trade_size_usd, reserve_usd, side, _fee=fee):
+                return market_impact.apply_price_impact_and_fee(
+                    price, trade_size_usd=trade_size_usd,
+                    reserve_usd=reserve_usd, side=side, fee_pct=_fee,
+                )
+            return _impact
     raise ValueError(f"no impact function registered for table {table!r}")
 
 

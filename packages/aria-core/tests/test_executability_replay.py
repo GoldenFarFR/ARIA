@@ -94,11 +94,33 @@ async def test_missing_inputs_are_rejected_never_defaulted():
                           "final_multiplier": None}, 25.0, impact)[1] == er.REJ_NO_OUTCOME
 
 
-async def test_impact_function_is_imported_per_pocket_never_copied():
-    """The DEX fee differs by chain (Solana 1.25%, Robinhood 1.0%). A local copy
-    would drift silently, so the registry must resolve to the pocket's own."""
-    from aria_core.robinhood_pump_shadow import _apply_price_impact_and_fee as rh
-    assert er._impact_fn("solana_pump_shadow_archive") is impact
-    assert er._impact_fn("robinhood_pump_shadow_log") is rh
+async def test_impact_comes_from_shared_infrastructure_not_from_a_pocket():
+    """Invariant deliberately CHANGED on 02/09, recorded here rather than silently.
+
+    It used to assert the opposite: that the impact function was imported from
+    each pocket. That was the defect, not the design -- the same arithmetic sat
+    duplicated character-for-character in EIGHT pockets, and this research tool
+    could not outlive them. It now comes from `market_impact`, shared
+    infrastructure, with the chain's fee passed in since that is the only thing
+    that varies.
+
+    The pockets keep their own copies for now, deliberately: removing them would
+    touch files the out-of-repo production process imports, and that decision is
+    the operator's.
+    """
+    from aria_core import market_impact
+
+    solana = er._impact_fn("solana_pump_shadow_archive")
+    robinhood = er._impact_fn("robinhood_pump_shadow_log")
+
+    # Same input, different chain fee -- proof the fee really is bound per chain.
+    args = dict(trade_size_usd=25.0, reserve_usd=500_000.0, side="buy")
+    assert solana(1e-4, **args) != robinhood(1e-4, **args)
+
+    # And each matches the shared function called with that chain's fee.
+    for fn, chain in ((solana, "solana"), (robinhood, "robinhood")):
+        assert fn(1e-4, **args) == market_impact.apply_price_impact_and_fee(
+            1e-4, fee_pct=market_impact.fee_pct_for(chain), **args)
+
     with pytest.raises(ValueError):
         er._impact_fn("some_unregistered_table")
