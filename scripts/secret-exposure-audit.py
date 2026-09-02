@@ -191,7 +191,20 @@ def main() -> int:
         print(f"  {'':<22} ({why})")
         for name, fp, sev in sorted(found, key=lambda r: (r[2] != SEVERITY_PRIVATE, r[0])):
             marker = "!!" if sev == SEVERITY_PRIVATE else "  "
-            print(f"  {'':<22} {marker} {name}  fp={fp}")
+            # CodeQL flags this as py/clear-text-logging-sensitive-data because
+            # `name` is unpacked from a dict whose VALUES are secrets, so its
+            # taint analysis marks the key as sensitive too. It is not: `name`
+            # is the ENVIRONMENT VARIABLE NAME (e.g. "ARIA_TELEGRAM_TOKEN") and
+            # `fp` is `fingerprint(value)`, a SHA-256 truncated to 8 hex chars,
+            # irreversible by construction. No secret VALUE is ever printed here
+            # or anywhere else in this file -- printing metadata rather than
+            # values is precisely what this project's secrets rule requires
+            # ("prefer metadata: variable name, configured=true, truncated
+            # sha256 fingerprint"). Suppressed with justification rather than
+            # silently, and the invariant is locked by a test so a future edit
+            # that DID print a value would fail rather than inherit this
+            # suppression. See test_secret_exposure.py.
+            print(f"  {'':<22} {marker} {name}  fp={fp}")  # codeql[py/clear-text-logging-sensitive-data]
     print()
     print("=" * 64)
     if total_findings == 0:

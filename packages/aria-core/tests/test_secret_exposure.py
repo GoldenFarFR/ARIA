@@ -155,3 +155,36 @@ def test_entrypoint_never_prints_an_environment_value():
                 target = getattr(arg.value, "attr", None) or getattr(arg.value, "id", None)
                 if target == "environ":
                     raise AssertionError("docker-entrypoint.py prints an os.environ lookup")
+
+
+def test_audit_script_never_prints_a_secret_value():
+    """Locks the invariant the CodeQL suppression relies on.
+
+    `scripts/secret-exposure-audit.py` carries a
+    `codeql[py/clear-text-logging-sensitive-data]` suppression on the line that
+    prints a finding. That suppression is only legitimate while the line prints
+    metadata -- the variable NAME and an irreversible fingerprint -- and never
+    the value. Without this test, a later edit that started printing the value
+    would silently inherit the suppression, which is strictly worse than having
+    no audit tool at all: it would give false assurance.
+    """
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[3] / "scripts" / "secret-exposure-audit.py"
+    text = src.read_text(encoding="utf-8")
+
+    # The fingerprint must stay one-way. If this constant changes, the whole
+    # premise of the suppression is gone.
+    assert "hashlib.sha256(value.encode" in text
+    assert ".hexdigest()[:8]" in text
+
+    # No print/log statement may interpolate the raw secret. `value` is the
+    # variable holding it throughout the module.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("print(") or ".info(" in stripped
+                or ".warning(" in stripped or ".error(" in stripped):
+            continue
+        assert "{value" not in stripped, f"a secret value reaches output: {stripped}"
+        assert "+ value" not in stripped, f"a secret value reaches output: {stripped}"
+        assert "(value)" not in stripped, f"a secret value reaches output: {stripped}"
