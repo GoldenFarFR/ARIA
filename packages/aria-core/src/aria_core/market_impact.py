@@ -30,14 +30,30 @@ most 5% of one side" rule is therefore 2.5% of ``reserve_usd``.
 """
 from __future__ import annotations
 
+from aria_core.risk_guard import DEX_SWAP_FEE_PCT as _BASE_DEX_SWAP_FEE_FRACTION
+
 # Per-chain DEX fee, in percent. Sourced 17/08 against the real launchpads, never
 # assumed: Robinhood Chain's pools.trade charges 0.25% (Uniswap v4 base) and
 # Robinpad 1% (Uniswap v3 LP), so 1.0% is the conservative middle; Solana's
 # pump.fun-family pools measured at 1.25%. Base derives its own from
 # _BASE_DEX_SWAP_FEE_FRACTION. A caller passing an explicit fee overrides these.
+#
+# "base" was MISSING from this table until 02/09, and the omission was silent:
+# fee_pct_for("base") fell through to the 1.25% fallback while
+# base_momentum_shadow's own copy of this function used 0.3%
+# (risk_guard.DEX_SWAP_FEE_PCT * 100). Measured consequence on a $25 trade into
+# a $50k pool: 2.664% round-trip friction instead of the real 0.797% -- 3.3x
+# too expensive. Since executability_replay.py resolves its fee through
+# fee_pct_for(chain), the replay was structurally HARSHER than the pocket it
+# replays, which is the plan's own blind spot #3 ("simulation can never be
+# stricter than production" -- otherwise you reject as unprofitable what was
+# in fact executable). Imported from risk_guard rather than restated as a
+# literal: a fee value copied here would diverge again the next time the
+# source moves, which is exactly how this defect happened.
 DEX_FEE_PCT_BY_CHAIN: dict[str, float] = {
     "solana": 1.25,
     "robinhood": 1.0,
+    "base": _BASE_DEX_SWAP_FEE_FRACTION * 100.0,
 }
 _FALLBACK_FEE_PCT = 1.25  # the most conservative of the measured ones
 

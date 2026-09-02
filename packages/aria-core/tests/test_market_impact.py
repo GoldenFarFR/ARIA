@@ -87,3 +87,36 @@ def test_no_default_trade_size_exists_in_this_module():
     sig = inspect.signature(mi.apply_price_impact_and_fee)
     assert sig.parameters["trade_size_usd"].default is inspect.Parameter.empty
     assert sig.parameters["fee_pct"].default is inspect.Parameter.empty
+
+
+def test_every_pocket_chain_has_its_own_fee_never_the_fallback():
+    """Regression guard for a real, measured defect (02/09).
+
+    "base" was missing from DEX_FEE_PCT_BY_CHAIN, so fee_pct_for("base")
+    silently fell through to the 1.25% fallback while base_momentum_shadow's
+    own copy used 0.3%. Because executability_replay resolves its fee through
+    fee_pct_for(chain), the replay charged 2.664% round-trip friction where
+    the pocket charged 0.797% -- 3.3x too expensive, making the SIMULATION
+    STRICTER THAN PRODUCTION (the plan's blind spot #3: you then reject as
+    unprofitable trades that were in fact executable).
+
+    A fallback is correct for a genuinely unknown chain; it is a bug for a
+    chain this project actually trades. This test fails if a traded chain is
+    ever added to a pocket without its fee being registered here."""
+    from aria_core import market_impact
+
+    for chain in ("solana", "robinhood", "base"):
+        assert chain in market_impact.DEX_FEE_PCT_BY_CHAIN, (
+            f"{chain} is traded by a pocket but has no registered fee -- "
+            f"fee_pct_for('{chain}') would silently return the fallback"
+        )
+
+
+def test_base_fee_is_imported_from_its_source_not_restated():
+    """The fee must track risk_guard.DEX_SWAP_FEE_PCT, not a literal copied
+    beside it -- a copied value is exactly how the original divergence
+    happened, and it would silently reappear the next time the source moves."""
+    from aria_core import market_impact
+    from aria_core.risk_guard import DEX_SWAP_FEE_PCT
+
+    assert market_impact.fee_pct_for("base") == DEX_SWAP_FEE_PCT * 100.0
