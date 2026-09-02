@@ -4,6 +4,12 @@ description: "Task list for calibrating Robinhood shadow pocket's day-zero liqui
 
 # Tasks: Calibrate Robinhood shadow pocket's day-zero liquidity gate
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: Robinhood workstream frozen by the operator that day ("on gele
+completement le chantier Robinhood"). Same standing as specs/004 and 007 -- the open
+tasks stay valid, they cannot advance while the pocket is frozen. Not ABANDONED: closing
+a spec is the operator's call.
+
 **Input**: Design documents from `/specs/010-robinhood-dayzero-liquidity/`
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, quickstart.md (all present)
