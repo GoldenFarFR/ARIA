@@ -433,16 +433,33 @@ class GoPlusClient:
 
         while True:
             await self._throttle()
+            # 02/09 -- operator P0 #3: count every REAL network call, here and
+            # nowhere else. This is the single point where budget is actually
+            # spent, and it deliberately sits INSIDE the retry loop: a 429
+            # retry costs the account just as much as a successful call, so
+            # counting only outcomes (_record_success/_record_failure, which
+            # fire once per _get_json) would under-report real consumption --
+            # exactly the kind of comfortable number that hides an exhausted
+            # quota. Pure meter, never a gate (see goplus_call_budget.py).
+            from aria_core import goplus_call_budget
+
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     response = await client.get(url, params=params, headers=headers)
             except httpx.TransportError as exc:
+                await goplus_call_budget.record_call("error")
                 if not retried:
                     retried = True
                     await asyncio.sleep(5.0)
                     continue
                 self._record_failure(f"{url} -> {exc}")
                 return None, f"{UNAVAILABLE} (timeout GoPlus)"
+
+            await goplus_call_budget.record_call(
+                "ok" if response.status_code < 400
+                else "rate_limited" if response.status_code == 429
+                else "error"
+            )
 
             if response.status_code == 429:
                 attempt_429 += 1

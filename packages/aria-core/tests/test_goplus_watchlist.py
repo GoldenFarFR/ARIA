@@ -232,3 +232,83 @@ async def test_solana_contract_case_preserved():
     await wl.add_or_touch(mixed, "solana", 10.0)
     rows = await wl.list_all()
     assert rows[0]["contract"] == mixed
+
+
+# ---------------------------------------------------------------------------
+# 02/09 -- queue reordering (operator P0 #4): live candidates before dead ones
+# ---------------------------------------------------------------------------
+
+async def _age_entry(contract: str, chain: str, *, checked_hours_ago: float | None,
+                     seen_hours_ago: float | None) -> None:
+    """Rewrites the two timestamps directly -- the only way to simulate an
+    entry that went stale during the 9 days the cycle was off."""
+    import aiosqlite
+    from datetime import datetime, timedelta, timezone
+    from aria_core.paths import aria_db_path
+
+    now = datetime.now(timezone.utc)
+    checked = (now - timedelta(hours=checked_hours_ago)).isoformat() if checked_hours_ago is not None else None
+    seen = (now - timedelta(hours=seen_hours_ago)).isoformat() if seen_hours_ago is not None else None
+    async with aiosqlite.connect(str(aria_db_path())) as db:
+        await db.execute(
+            "UPDATE goplus_watchlist SET last_checked_at = ?, last_seen_at = ? WHERE contract = ? AND chain = ?",
+            (checked, seen, contract, chain),
+        )
+        await db.commit()
+
+
+async def test_a_live_candidate_is_served_before_an_older_stale_one():
+    """The exact production situation on 02/09: a token the radar just saw,
+    queued behind August leftovers."""
+    await wl.add_or_touch(CONTRACT_A, "base", 10.0)   # vieux, jamais vu recemment
+    await wl.add_or_touch(CONTRACT_B, "base", 10.0)   # vu a l'instant par la decouverte
+    await _age_entry(CONTRACT_A, "base", checked_hours_ago=400, seen_hours_ago=400)
+    await _age_entry(CONTRACT_B, "base", checked_hours_ago=100, seen_hours_ago=0.1)
+
+    due = await wl.next_due(limit=2)
+    assert [d["contract"] for d in due] == [CONTRACT_B, CONTRACT_A]
+
+
+async def test_within_the_live_tier_the_better_score_goes_first():
+    await wl.add_or_touch(CONTRACT_A, "base", 5.0)
+    await wl.add_or_touch(CONTRACT_B, "base", 90.0)
+    for c in (CONTRACT_A, CONTRACT_B):
+        await _age_entry(c, "base", checked_hours_ago=100, seen_hours_ago=0.1)
+
+    due = await wl.next_due(limit=2)
+    assert [d["contract"] for d in due] == [CONTRACT_B, CONTRACT_A]
+
+
+async def test_a_still_fresh_verdict_is_never_re_served():
+    """Prevents the new ordering from burning budget re-checking a live token
+    whose verdict is minutes old -- impossible under the old ordering, real
+    risk under this one."""
+    await wl.add_or_touch(CONTRACT_A, "base", 50.0)
+    await _age_entry(CONTRACT_A, "base", checked_hours_ago=1, seen_hours_ago=0.1)  # frais
+    assert await wl.next_due(limit=5) == []
+
+    await _age_entry(CONTRACT_A, "base", checked_hours_ago=wl.WATCHLIST_FRESHNESS_HOURS + 1,
+                     seen_hours_ago=0.1)
+    assert [d["contract"] for d in await wl.next_due(limit=5)] == [CONTRACT_A]
+
+
+async def test_the_old_universe_still_refreshes_behind_the_live_tier():
+    """The tail must not starve -- with no live candidate, the historical
+    round-robin (never-checked first, then oldest) is unchanged."""
+    await wl.add_or_touch(CONTRACT_A, "base", 10.0)
+    await wl.add_or_touch(CONTRACT_B, "base", 10.0)
+    await _age_entry(CONTRACT_A, "base", checked_hours_ago=200, seen_hours_ago=None)
+    await _age_entry(CONTRACT_B, "base", checked_hours_ago=None, seen_hours_ago=None)  # jamais verifie
+
+    due = await wl.next_due(limit=2)
+    assert [d["contract"] for d in due] == [CONTRACT_B, CONTRACT_A]
+
+
+async def test_add_or_touch_refreshes_last_seen_on_an_existing_entry():
+    await wl.add_or_touch(CONTRACT_A, "base", 10.0)
+    await _age_entry(CONTRACT_A, "base", checked_hours_ago=100, seen_hours_ago=500)
+    await wl.add_or_touch(CONTRACT_A, "base", 12.0)  # la decouverte le revoit
+
+    due = await wl.next_due(limit=1)
+    assert due and due[0]["contract"] == CONTRACT_A
+    assert due[0]["last_seen_at"] is not None

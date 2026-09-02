@@ -74,6 +74,14 @@ MAX_WATCHLIST_SIZE = 2000
 # length: worst case, an entry is re-checked right as it goes stale.
 WATCHLIST_FRESHNESS_HOURS = 48.0
 
+# 02/09 -- how recently the live discovery must have touched an entry
+# (``last_seen_at``) for it to jump the queue in ``next_due``. Starting value,
+# NOT calibrated: one hour is long enough to cover a full discovery/drain
+# round-trip (30s drain, 4h rescan cooldown) without letting yesterday's
+# candidates claim live priority forever. Revisit once the real ratio of
+# live-tier vs tail-tier entries per cycle is measured.
+LIVE_SEEN_WINDOW_HOURS = 1.0
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -101,7 +109,21 @@ def _normalize(contract: str, chain: str) -> tuple[str, str]:
 # has what it needs at zero extra network cost -- the PairSnapshot's
 # `project_links` is already resolved by the caller (evaluate_hard_gates)
 # at the exact moment `add_or_touch` runs.
-_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (("links_json", "TEXT"),)
+# 02/09 -- operator P0 #4 ("réorganiser la file pour que les nouveaux
+# candidats intéressants passent avant les vieux tokens morts"). Measured
+# cause: nothing in this table distinguished a candidate the live discovery
+# just saw from a token added weeks ago -- `added_at` is only ever written by
+# the INSERT, and `add_or_touch` refreshes the score but no date. So
+# `next_due`'s only possible order was "oldest checked first", and with 1702
+# entries gone stale during the 9 days the cycle was off (see heartbeat.py's
+# goplus_watchlist_cycle gate), a token discovered live today queued behind
+# ~12h of August leftovers. `last_seen_at` is that missing link: refreshed on
+# every discovery touch, it lets the queue serve what the radar is actually
+# looking at right now, without abandoning the rest (see next_due).
+_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("links_json", "TEXT"),
+    ("last_seen_at", "TEXT"),
+)
 
 
 async def _ensure_table() -> None:
@@ -172,9 +194,9 @@ async def add_or_touch(
         ).fetchone()
         if existing is not None:
             await db.execute(
-                "UPDATE goplus_watchlist SET priority_score = ?, links_json = COALESCE(?, links_json) "
-                "WHERE contract = ? AND chain = ?",
-                (priority_score, links_json, contract, chain),
+                "UPDATE goplus_watchlist SET priority_score = ?, links_json = COALESCE(?, links_json), "
+                "last_seen_at = ? WHERE contract = ? AND chain = ?",
+                (priority_score, links_json, _now_iso(), contract, chain),
             )
             await db.commit()
             return True
@@ -205,9 +227,9 @@ async def add_or_touch(
             (worst[0], worst[1]),
         )
         await db.execute(
-            "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at, links_json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (contract, chain, priority_score, _now_iso(), links_json),
+            "INSERT INTO goplus_watchlist (contract, chain, priority_score, added_at, links_json, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (contract, chain, priority_score, _now_iso(), links_json, _now_iso()),
         )
         await db.commit()
         logger.info(
@@ -249,18 +271,48 @@ async def get_fresh(contract: str, chain: str, *, max_age_hours: float = WATCHLI
 
 
 async def next_due(limit: int = 1) -> list[dict]:
-    """Candidates most in need of a refresh for the background cycle --
-    never-checked entries first (NULL sorts first via the boolean ordering
-    below), then oldest-checked first (round-robin)."""
+    """Candidates most in need of a refresh for the background cycle.
+
+    02/09 -- reordered (operator P0 #4). The old order was purely
+    "never-checked first, then oldest-checked first": a pure round-robin over
+    the whole 2000-slot universe. That is the right policy when every entry
+    matters equally, and the wrong one for a LIVE radar -- measured in
+    production the same day, a token the discovery feed had just surfaced
+    queued behind 1702 entries gone stale while the cycle was off, i.e. ~12h
+    of August leftovers before its own honeypot verdict could exist.
+
+    New order, three tiers:
+      1. entries the live discovery touched inside ``LIVE_SEEN_WINDOW_HOURS``
+         (``last_seen_at``) -- what the radar is looking at right now;
+      2. inside each tier, never-checked first, then highest priority score
+         (liquidity + real activity, see ``compute_priority_score``);
+      3. oldest-checked last -- the old round-robin, preserved as the tail so
+         the rest of the universe still refreshes, just never ahead of a live
+         candidate.
+
+    Also newly bounded by a WHERE clause: an entry whose verdict is still
+    fresh (< ``WATCHLIST_FRESHNESS_HOURS``) is never served. Under the old
+    ordering that could not happen (fresh entries sorted last by
+    construction); under the new one a just-checked live token would
+    otherwise be re-served immediately and burn the budget it was meant to
+    save."""
     await _ensure_table()
+    now = datetime.now(timezone.utc)
+    stale_cutoff = (now - timedelta(hours=WATCHLIST_FRESHNESS_HOURS)).isoformat()
+    live_cutoff = (now - timedelta(hours=LIVE_SEEN_WINDOW_HOURS)).isoformat()
     async with aiosqlite.connect(str(aria_db_path())) as db:
         db.row_factory = aiosqlite.Row
         rows = await (
             await db.execute(
                 "SELECT * FROM goplus_watchlist "
-                "ORDER BY (last_checked_at IS NULL) DESC, last_checked_at ASC "
+                "WHERE last_checked_at IS NULL OR last_checked_at < ? "
+                "ORDER BY "
+                "  (last_seen_at IS NOT NULL AND last_seen_at >= ?) DESC, "
+                "  (last_checked_at IS NULL) DESC, "
+                "  priority_score DESC, "
+                "  last_checked_at ASC "
                 "LIMIT ?",
-                (max(0, limit),),
+                (stale_cutoff, live_cutoff, max(0, limit)),
             )
         ).fetchall()
     return [dict(r) for r in rows]
