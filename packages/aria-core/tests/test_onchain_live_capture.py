@@ -226,3 +226,58 @@ async def test_trajectory_identical_after_deferred_resolution(isolated_db):
     assert len(ref_shape) == len(got_shape), "shape length diverges"
     for a, b in zip(ref_shape, got_shape):
         assert abs(a - b) < 1e-9, f"shape diverges: {a} vs {b}"
+
+
+async def test_handler_shaped_topics_still_reproduce_the_backfill(isolated_db):
+    """The gate the other tests could not see: the handler does not hand strings.
+
+    Every test above feeds ``record_event`` topics that are already
+    ``"0x"``-prefixed, so all of them pass while the real path is broken.
+    ``evm_swap_ws``'s handler hands ``HexBytes.hex()`` values, which carry NO
+    prefix (hexbytes 1.3.1). Fed that shape, the pre-fix code resolved
+    ``_TOPIC_TO_EVENT[topic0]`` to ``None`` and dropped EVERY event as
+    ``ignored_topic`` -- zero rows, no error, no red test. And had they been
+    stored, ``pool_id`` would have been written 64 chars unprefixed against the
+    backfill's 66, so ``onchain_trajectory`` (which selects on
+    ``chain`` + ``pool_id`` alone) would never have joined the two halves of the
+    same pool.
+
+    This test therefore asserts what matters -- the two paths produce the SAME
+    key from the SAME event -- rather than asserting a format.
+    """
+    from hexbytes import HexBytes
+
+    events = _events()
+    await _write_backfill_style(isolated_db, events)
+    backfilled = await _fetch_rows(isolated_db, lc.SOURCE_BACKFILL)
+
+    for e in events:
+        # Exactly the transformation evm_swap_ws applies before calling us.
+        handler_topics = [HexBytes(t).hex() for t in e["topics"]]
+        assert not handler_topics[0].startswith("0x"), "shape under test is wrong"
+        lc.record_event(
+            chain=CHAIN, token=CONTRACT_ADDR,
+            pool_id=handler_topics[1],
+            block_number=e["block_number"], tx_hash=e["tx_hash"] + "_live",
+            log_index=e["log_index"], topics=handler_topics,
+            data_hex=e["data_hex"],
+        )
+    written = await lc.flush(force=True)
+    assert written == len(events), "handler-shaped events were dropped"
+
+    live = await _fetch_rows(isolated_db, lc.SOURCE_LIVE)
+    assert len(live) == len(backfilled)
+    for b, l in zip(backfilled, live):
+        assert l[5] == b[5], "event_type diverges -- topic0 lookup failed"
+        assert l[6] == b[6], "topics_json diverges between the two paths"
+
+    async with aiosqlite.connect(isolated_db) as db:
+        cur = await db.execute(
+            f"SELECT DISTINCT pool_id FROM {orb.TABLE} WHERE source=?",
+            (lc.SOURCE_LIVE,),
+        )
+        live_pools = [r[0] for r in await cur.fetchall()]
+    assert live_pools == [POOL], (
+        "the live key must be character-for-character the backfill's key, "
+        "otherwise a pool's live and historical halves never join"
+    )

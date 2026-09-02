@@ -138,6 +138,36 @@ async def ensure_source_column() -> None:
         await db.commit()
 
 
+def _canonical_hex(value: object) -> str:
+    """The exact key shape the backfill writes: lowercase, "0x"-prefixed.
+
+    Not cosmetic, and not a format preference. ``HexBytes.hex()`` (web3.py's
+    topic type, hexbytes 1.3.1, verified in this venv) returns 64 characters
+    WITHOUT the "0x" prefix, while every key in ``_TOPIC_TO_EVENT`` and all
+    189,062 rows the backfill has written carry it, lowercase (verified: 100%
+    of `pool_id` values, both the 66-char v4 ids and the 42-char v2/v3
+    addresses). An unprefixed topic0 therefore resolves to ``None`` in the
+    lookup below, the event is counted as ``ignored_topic`` and dropped: the
+    entire live path would have recorded NOTHING, silently, with a green test
+    suite -- a test calls ``record_event`` with already-prefixed strings, so it
+    can never see what the real handler produces. The same divergence on
+    ``pool_id`` would have made live rows unjoinable to the backfill's rows for
+    the same pool, since ``onchain_trajectory`` selects only on
+    ``chain`` + ``pool_id``.
+
+    Placed here rather than at the call site on purpose: this is the single
+    write point of the raw table, so canonicalising here covers every present
+    and future caller instead of trusting each one to remember.
+    ``evm_swap_ws`` normalises ``topic0`` and ``last_tx_hash`` inline for its
+    own decoding (the 24/08 incident, same root cause); those call sites sit on
+    the pockets' live decision path and are deliberately left untouched.
+    """
+    text = (value.hex() if hasattr(value, "hex") else str(value)).lower()
+    if not text:
+        return ""
+    return text if text.startswith("0x") else "0x" + text
+
+
 def record_event(
     *,
     chain: str,
@@ -158,7 +188,11 @@ def record_event(
     """
     try:
         _stats["received"] += 1
-        topic0 = (topics[0] if topics else "").lower()
+        # Canonicalise BEFORE anything reads them -- see _canonical_hex.
+        topics = [_canonical_hex(t) for t in topics]
+        pool_id = _canonical_hex(pool_id)
+        tx_hash = _canonical_hex(tx_hash)
+        topic0 = topics[0] if topics else ""
         event_type = _TOPIC_TO_EVENT.get(topic0)
         if event_type is None:
             # Not a loss: a real event we deliberately do not track. Counted
