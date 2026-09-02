@@ -1,5 +1,11 @@
 # Feature Specification: Migrate Solana streaming off Helius onto Chainstack WSS
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: the migration this spec covers is deployed (Helius retired dome-wide 26/08,
+one documented exception). The 4 open tasks are follow-ups, not blockers, and none has moved in
+a week. Marked PAUSED rather than ABANDONED precisely because a session should not decide that
+on its own -- the operator closes or resumes it.
+
 **Feature Branch**: `007-solana-chainstack-wss`
 
 **Created**: 2026-08-25

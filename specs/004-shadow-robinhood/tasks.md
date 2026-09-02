@@ -1,5 +1,10 @@
 # Tasks: Shadow pockets tuning -- Robinhood Chain
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: the operator froze the Robinhood workstream that day, verbatim -- "on gele
+completement le chantier Robinhood". The remaining task (external cross-check of peak price)
+stays valid and is NOT abandoned; it cannot advance while the pocket it audits is frozen.
+
 **Input**: spec.md in this directory. No fixed end date -- this file closes when no further bug/improvement is found (same doctrine as `001-audit-code-sans`), numbering continues indefinitely (T001, T002, ...).
 
 - [x] T001 [P1] CONFIRMED REAL BUG (25/08) -- verified against GeckoTerminal's real OHLCV history (`mode="scalping_5m"`, the exact mode this pocket itself uses) for 9 of the top-20 trades in `robinhood_pump_shadow_log_archive_nofloor_age25_20260823`: 2/9 (22%) have a stored `peak_price` far above the real historical high of their own pool -- id=448 (the #1 ranked trade, reported x9.09) stored `peak_price=8.946e-07` vs a real max high of `1.04433305507929e-09` (856x inflated -- this trade's REAL peak never exceeded its own entry price); id=383 (#7 ranked, reported x3.03) stored `peak_price=1.071e-07` vs real max `5.19e-09` (20.6x inflated). The other 7 checked (id=542/585/384/553/487, ratio 0.15-0.99) are consistent with the real market, no anomaly. `ws_feed` is confirmed never instantiated in prod (only in tests) so the live price cascade actually used is DexScreener-first, GeckoTerminal-fallback -- the exact source of the bad reading at trade time could not be reproduced retroactively (DexScreener has no historical archive for this pool, `shadow_candle_archive` has almost no rows for this module). Impact on the headline figure: the outlier test (avg without top5) already excludes id=448 (the worst offender) but NOT id=383 (ranked #7) -- so even the "outlier-resistant" +27.78% figure reported earlier still carries at least one confirmed artifact. Root cause (a bad DexScreener/GeckoTerminal read on an illiquid pool, or a decimals/token-confusion bug) not yet isolated -- no historical log of the exact price read at trade time exists to confirm which.

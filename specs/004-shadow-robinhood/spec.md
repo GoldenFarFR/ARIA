@@ -1,5 +1,12 @@
 # Feature Specification: Shadow pockets tuning -- Robinhood Chain
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: the operator froze the Robinhood workstream that day, verbatim -- "on gele
+completement le chantier Robinhood". The one open task (external cross-check of peak price
+against an outside source) stays valid and is NOT abandoned; it simply cannot advance while the
+pocket it audits is frozen. Nothing here was deleted or decided -- resume date set by a session,
+to be confirmed or changed by the operator.
+
 **Feature Branch**: `004-shadow-robinhood`
 
 **Created**: 2026-08-25

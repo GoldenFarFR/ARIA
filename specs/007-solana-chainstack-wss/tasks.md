@@ -1,5 +1,10 @@
 # Tasks: Migrate Solana streaming off Helius onto Chainstack WSS
 
+Status: PAUSED (resume: 2026-09-25)
+Paused 2026-09-02: the migration this spec covers is deployed (Helius retired dome-wide 26/08,
+one documented exception). The remaining tasks are follow-ups, not blockers. Marked PAUSED and
+not ABANDONED on purpose -- closing a spec is the operator's call, not a session's.
+
 **Input**: spec.md in this directory. No fixed end date -- closes when no further bug/improvement is found.
 
 - [x] T001 [P1] DONE 25/08 -- confirmed live: Chainstack Solana WSS reachable by deriving it from `ARIA_SOLANA_RPC_HTTP_POLLING` (same host/token, `https://`->`wss://`), no new env var/credential needed. `getVersion` round-trip succeeded.

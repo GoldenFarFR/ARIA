@@ -55,6 +55,12 @@ from aria_core.services import chainstack_ru_budget
 from aria_core.services.doppler import POOL_MANAGER_ADDRESS
 from aria_core.services.evm_swap_ws import (
     _POOL_MANAGER_BY_CHAIN,
+    _V2_BURN_TOPIC,
+    _V2_MINT_TOPIC,
+    _V2_SWAP_TOPIC,
+    _V3_BURN_TOPIC,
+    _V3_MINT_TOPIC,
+    _V3_SWAP_TOPIC,
     _V4_MODIFY_LIQUIDITY_TOPIC,
     _V4_SWAP_TOPIC,
     _topic0,
@@ -88,7 +94,23 @@ _TOPIC_TO_EVENT = {
     _V4_INITIALIZE_TOPIC.lower(): EVENT_INITIALIZE,
     _V4_SWAP_TOPIC.lower(): EVENT_SWAP,
     _V4_MODIFY_LIQUIDITY_TOPIC.lower(): EVENT_MODIFY_LIQUIDITY,
+    # v2/v3 -- a pool there IS its own contract, so these are filtered by
+    # ADDRESS rather than by an indexed poolId. Same three event families,
+    # different plumbing; the raw table stores whichever identifier the version
+    # uses under ``pool_id`` (a bytes32 id for v4, the pool address for v2/v3),
+    # because what the replay needs is a stable key, not a uniform shape.
+    _V2_SWAP_TOPIC.lower(): EVENT_SWAP,
+    _V3_SWAP_TOPIC.lower(): EVENT_SWAP,
+    _V2_MINT_TOPIC.lower(): EVENT_MODIFY_LIQUIDITY,
+    _V2_BURN_TOPIC.lower(): EVENT_MODIFY_LIQUIDITY,
+    _V3_MINT_TOPIC.lower(): EVENT_MODIFY_LIQUIDITY,
+    _V3_BURN_TOPIC.lower(): EVENT_MODIFY_LIQUIDITY,
 }
+
+_V2_V3_TOPICS = [
+    _V2_SWAP_TOPIC, _V3_SWAP_TOPIC,
+    _V2_MINT_TOPIC, _V2_BURN_TOPIC, _V3_MINT_TOPIC, _V3_BURN_TOPIC,
+]
 
 _HTTP_TIMEOUT_S = 60.0
 _MAX_RETRIES = 4
@@ -458,18 +480,25 @@ async def backfill(
         # an event: it returns the timestamp AND every tx.from in that block,
         # so it replaces one getTransactionByHash per swap whenever a block
         # holds more than one event. Strictly cheaper, never worse.
+        # Timestamps are ALWAYS resolved: an event without its own time cannot
+        # be replayed, so skipping them would produce rows that look complete
+        # and are useless. Only the SENDERS are optional -- found the hard way
+        # by running with resolve_senders=False and getting 9185 rows with a
+        # NULL timestamp. What the flag changes is `full`: True also carries
+        # every tx.from in the block, False is the same call with far less
+        # transport when wallets are not wanted.
         ts_by_block: dict[int, int] = {}
         sender_by_tx: dict[str, str] = {}
-        if resolve_senders:
-            for bn in sorted(by_block):
-                blk = await rpc.call("eth_getBlockByNumber", [hex(bn), True])
-                if not blk:
-                    continue
-                ts_by_block[bn] = int(blk["timestamp"], 16)
+        for bn in sorted(by_block):
+            blk = await rpc.call("eth_getBlockByNumber", [hex(bn), resolve_senders])
+            if not blk:
+                continue
+            ts_by_block[bn] = int(blk["timestamp"], 16)
+            if resolve_senders:
                 for tx in blk.get("transactions") or []:
                     if isinstance(tx, dict) and tx.get("hash"):
                         sender_by_tx[tx["hash"].lower()] = (tx.get("from") or "").lower()
-            result.blocks_resolved = len(ts_by_block)
+        result.blocks_resolved = len(ts_by_block)
 
         final_rows = [
             (r[0], r[1], r[2], r[3], ts_by_block.get(r[3]), r[5], r[6], r[7], r[8], r[9],
@@ -479,10 +508,19 @@ async def backfill(
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.executemany(
-                f"INSERT OR IGNORE INTO {TABLE} "
+                # ON CONFLICT ... DO UPDATE, not INSERT OR IGNORE: a row
+                # written by an earlier, cheaper pass (senders skipped) must be
+                # COMPLETABLE by a later one. Plain IGNORE leaves a NULL
+                # timestamp NULL forever, which is how a re-run silently fails
+                # to fix what it was run to fix. COALESCE keeps existing values
+                # -- a second pass can only add, never erase.
+                f"INSERT INTO {TABLE} "
                 f"(chain, token, pool_id, block_number, block_timestamp, tx_hash, log_index, "
                 f"event_type, topics_json, data_hex, tx_sender, rpc_provider, fetched_at) "
-                f"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                f"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                f"ON CONFLICT(chain, tx_hash, log_index) DO UPDATE SET "
+                f"block_timestamp=COALESCE(excluded.block_timestamp, block_timestamp), "
+                f"tx_sender=COALESCE(excluded.tx_sender, tx_sender)",
                 final_rows,
             )
             await db.commit()
@@ -490,6 +528,137 @@ async def backfill(
                 f"SELECT COUNT(*), MIN(block_number), MAX(block_number), "
                 f"MIN(block_timestamp), MAX(block_timestamp) FROM {TABLE} WHERE chain=? AND token=?",
                 (chain, token.lower()),
+            )
+            row = await cur.fetchone()
+
+        result.events_written = row[0] if row else 0
+        result.first_block, result.last_block = (row[1], row[2]) if row else (None, None)
+        result.first_timestamp, result.last_timestamp = (row[3], row[4]) if row else (None, None)
+        result.rpc_calls = rpc.calls
+
+    await chainstack_ru_budget.flush_pending()
+    return result
+
+
+async def backfill_pool(
+    pool_address: str,
+    chain: str,
+    *,
+    token: str | None = None,
+    lookback_blocks: int = 900_000,
+    resolve_senders: bool = True,
+    provider: str = "chainstack",
+) -> BackfillResult:
+    """Same raw collection for a v2/v3 pool, addressed directly.
+
+    Why a separate entry point rather than a flag on ``backfill``: on v2/v3 a
+    pool is its own contract, so there is nothing to discover and nothing to
+    select -- the caller already holds the address. Folding that into the v4
+    path would mean a discovery step that does nothing, and a "selected pool"
+    decision with a single candidate, both of which would be theatre.
+
+    This is what makes the screener's 1,288 Robinhood pairs reachable: they are
+    20-byte addresses (v2/v3), not the 32-byte poolIds v4 uses, so ``backfill``
+    could never have touched them. Needed for the control dataset -- without
+    losers and false positives, any pattern found on MEOW alone is fitted to
+    MEOW alone.
+    """
+    result = BackfillResult(token=(token or pool_address).lower(), chain=chain)
+    url = rpc_url(chain)
+    if not url:
+        result.error = f"no RPC configured for chain '{chain}'"
+        return result
+    if not await chainstack_ru_budget.can_spend(chain):
+        result.error = "chainstack RU budget exhausted for today"
+        return result
+
+    await _ensure_tables()
+    pool_l = pool_address.lower()
+
+    async with _Rpc(chain, url) as rpc:
+        head = int(await rpc.call("eth_blockNumber", []), 16)
+        rows: list[tuple] = []
+        by_block: dict[int, list[int]] = {}
+
+        block = max(0, head - lookback_blocks)
+        while block <= head:
+            end = min(block + MAX_BLOCK_RANGE, head)
+            logs = await rpc.call("eth_getLogs", [{
+                "fromBlock": hex(block), "toBlock": hex(end),
+                "address": pool_address, "topics": [_V2_V3_TOPICS],
+            }]) or []
+            for log in logs:
+                tp = log.get("topics") or []
+                if not tp:
+                    continue
+                etype = _TOPIC_TO_EVENT.get(tp[0].lower())
+                if etype is None:
+                    continue
+                bn = int(log["blockNumber"], 16)
+                li = int(log["logIndex"], 16)
+                by_block.setdefault(bn, []).append(li)
+                rows.append((
+                    chain, result.token, pool_l, bn, None,
+                    log["transactionHash"], li, etype,
+                    json.dumps(tp), log.get("data", ""), None, provider, _now_iso(),
+                ))
+            block = end + 1
+
+        result.events_seen = len(rows)
+        if not rows:
+            result.rpc_calls = rpc.calls
+            result.error = "no v2/v3 event found for this pool in the window"
+            return result
+
+        # Timestamps are ALWAYS resolved: an event without its own time cannot
+        # be replayed, so skipping them would produce rows that look complete
+        # and are useless. Only the SENDERS are optional -- found the hard way
+        # by running with resolve_senders=False and getting 9185 rows with a
+        # NULL timestamp. What the flag changes is `full`: True also carries
+        # every tx.from in the block, False is the same call with far less
+        # transport when wallets are not wanted.
+        ts_by_block: dict[int, int] = {}
+        sender_by_tx: dict[str, str] = {}
+        for bn in sorted(by_block):
+            blk = await rpc.call("eth_getBlockByNumber", [hex(bn), resolve_senders])
+            if not blk:
+                continue
+            ts_by_block[bn] = int(blk["timestamp"], 16)
+            if resolve_senders:
+                for tx in blk.get("transactions") or []:
+                    if isinstance(tx, dict) and tx.get("hash"):
+                        sender_by_tx[tx["hash"].lower()] = (tx.get("from") or "").lower()
+        result.blocks_resolved = len(ts_by_block)
+
+        final_rows = [
+            (r[0], r[1], r[2], r[3], ts_by_block.get(r[3]), r[5], r[6], r[7], r[8], r[9],
+             sender_by_tx.get(r[5].lower()), r[11], r[12])
+            for r in rows
+        ]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executemany(
+                # ON CONFLICT ... DO UPDATE, not INSERT OR IGNORE: a row
+                # written by an earlier, cheaper pass (senders skipped) must be
+                # COMPLETABLE by a later one. Plain IGNORE leaves a NULL
+                # timestamp NULL forever, which is how a re-run silently fails
+                # to fix what it was run to fix. COALESCE keeps existing values
+                # -- a second pass can only add, never erase.
+                f"INSERT INTO {TABLE} "
+                f"(chain, token, pool_id, block_number, block_timestamp, tx_hash, log_index, "
+                f"event_type, topics_json, data_hex, tx_sender, rpc_provider, fetched_at) "
+                f"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                f"ON CONFLICT(chain, tx_hash, log_index) DO UPDATE SET "
+                f"block_timestamp=COALESCE(excluded.block_timestamp, block_timestamp), "
+                f"tx_sender=COALESCE(excluded.tx_sender, tx_sender)",
+                final_rows,
+            )
+            await db.commit()
+            cur = await db.execute(
+                f"SELECT COUNT(*), MIN(block_number), MAX(block_number), "
+                f"MIN(block_timestamp), MAX(block_timestamp) FROM {TABLE} "
+                f"WHERE chain=? AND pool_id=?",
+                (chain, pool_l),
             )
             row = await cur.fetchone()
 
