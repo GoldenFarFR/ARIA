@@ -59,19 +59,42 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-ENV_RAW="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>&1)"
-STATUS=$?
+# Source des gates : le FICHIER MONTÉ, plus `docker inspect` (02/09).
+# Pourquoi ce changement : --env-file recopiait chaque secret dans les
+# métadonnées Docker, ce qui a fait fuiter une clé privée -- le conteneur lit
+# désormais un montage lecture seule (vanguard/docker-entrypoint.py), donc
+# `docker inspect` ne contient plus que la configuration Docker elle-même.
+# Le filtre strict ci-dessous est INCHANGÉ et reste la vraie garantie : seul
+# un booléen `ARIA_*_ENABLED=` peut sortir d'ici, jamais une valeur de secret.
+ENV_FILE="${ARIA_ENV_FILE:-/opt/aria/vanguard/backend/.env}"
 
-if [ "$STATUS" -ne 0 ]; then
+if [ ! -r "$ENV_FILE" ]; then
   echo "## État des gates ARIA : INDISPONIBLE"
-  echo "docker inspect sur '$CONTAINER' a echoue (conteneur absent ou docker injoignable) -- ne jamais se fier a CLAUDE.md seul pour l'etat des gates tant que cette commande echoue."
-  echo "Détail : $ENV_RAW" | head -3
+  echo "fichier de configuration illisible ('$ENV_FILE') -- ne jamais se fier a CLAUDE.md seul pour l'etat des gates tant que c'est le cas."
   exit 0
 fi
 
+# On ne garde JAMAIS le fichier entier en variable : un grep direct, pour que
+# rien d'autre qu'un booléen ne transite par ce script.
+ENV_RAW="$(grep -E '^(ARIA_[A-Z0-9_]*ENABLED|ARIA_X402_SELLER_MAINNET)=' "$ENV_FILE" || true)"
 GATES="$(printf '%s\n' "$ENV_RAW" | grep -E '^ARIA_[A-Z0-9_]*ENABLED=' | sort)"
 
-echo "## État réel des gates ARIA (conteneur '$CONTAINER', lu maintenant via docker inspect)"
+# Divergence fichier/conteneur : le conteneur charge ce fichier AU DÉMARRAGE.
+# Modifié depuis, il annonce donc un état que le process ne suit pas encore --
+# angle mort que l'ancienne lecture via `docker inspect` ne détectait pas non plus,
+# et qui vaut mieux affiché qu'implicite.
+STALE_WARNING=""
+STARTED_AT="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
+if [ -n "$STARTED_AT" ]; then
+  START_EPOCH="$(date -d "$STARTED_AT" +%s 2>/dev/null || echo 0)"
+  FILE_EPOCH="$(stat -c %Y "$ENV_FILE" 2>/dev/null || echo 0)"
+  if [ "$START_EPOCH" -gt 0 ] && [ "$FILE_EPOCH" -gt "$START_EPOCH" ]; then
+    STALE_WARNING="⚠️  Le fichier a été modifié APRÈS le démarrage du conteneur : les valeurs ci-dessous ne sont pas encore celles que le process applique (redéploiement requis)."
+  fi
+fi
+
+echo "## État réel des gates ARIA (lu maintenant dans la configuration montée)"
+[ -n "$STALE_WARNING" ] && { echo; echo "$STALE_WARNING"; }
 echo
 if [ -n "$GATES" ]; then
   echo "$GATES"

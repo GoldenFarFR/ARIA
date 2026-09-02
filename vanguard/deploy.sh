@@ -82,12 +82,21 @@ ACTIVE_PORT="$(read_active_port "$NGINX_UPSTREAM_FILE")"
 STANDBY_PORT="$(standby_port "$ACTIVE_PORT")"
 echo "    actif=$ACTIVE_PORT standby=$STANDBY_PORT"
 
+# NE JAMAIS revenir à `--env-file` ici (02/09, correctif de sécurité mesuré).
+# --env-file recopie chaque variable dans les métadonnées Docker : `docker inspect`
+# renvoyait alors 62 valeurs secrètes en clair, dont 2 clés privées, à quiconque
+# atteint le démon Docker -- et c'est exactement le chemin qu'une session a
+# emprunté en vérifiant un gate, ce qui a fait fuiter une clé. Le fichier est
+# désormais monté en lecture seule et parsé par vanguard/docker-entrypoint.py.
+# Vérification après tout changement ici : `python3 scripts/secret-exposure-audit.py`
+# doit rendre "docker inspect CLEAN". Ce que ce correctif ne couvre PAS, et qu'il
+# ne faut pas croire couvert : /proc/<pid>/environ reste lisible par root.
 echo "==> [5/8] Lancement du nouveau conteneur sur le port standby ($STANDBY_PORT)"
 docker rm -f aria-api-next >/dev/null 2>&1 || true
 docker run -d --name aria-api-next --restart unless-stopped \
   -p "127.0.0.1:${STANDBY_PORT}:8000" \
   -v "$DATA_DIR":/app/backend/data \
-  --env-file "$ENV_FILE" \
+  -v "$ENV_FILE":/run/aria/env:ro \
   -e ARIA_HEARTBEAT_STANDBY=1 \
   "$IMAGE:latest"
 

@@ -97,4 +97,13 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
 # Les deux valeurs sont listées (127.0.0.1 aussi) pour rester robuste à un appel local
 # direct (tests, health-check) sans dépendre d'une IP de passerelle qui pourrait varier si
 # la topologie réseau change un jour.
-CMD ["sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info --proxy-headers --forwarded-allow-ips=127.0.0.1,172.17.0.1"]
+# Configuration arrives through a READ-ONLY MOUNT parsed by this entrypoint,
+# never through `docker run --env-file` (02/09). Reason, measured not assumed:
+# --env-file copies every variable into Docker's own metadata, so
+# `docker inspect` returned 62 secret values in clear text -- including 2
+# private keys -- to anything reaching the Docker daemon. That is the exact
+# path a session walked while checking a gate, and it leaked a key. The
+# entrypoint's docstring carries the full reasoning, including why a shell
+# `. file` would have been an injection bug rather than a fix.
+COPY vanguard/docker-entrypoint.py ./
+CMD ["python", "/app/backend/docker-entrypoint.py", "sh", "-c", "echo \"aria-api boot commit=${GIT_COMMIT} PORT=${PORT:-8000}\" && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info --proxy-headers --forwarded-allow-ips=127.0.0.1,172.17.0.1"]
