@@ -30,6 +30,7 @@ deployment on a security metric invites someone to bypass it in a hurry.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import os
 import re
@@ -144,6 +145,47 @@ SURFACES = [
 ]
 
 
+@dataclass(frozen=True)
+class Finding:
+    """A finding, carrying METADATA ONLY -- never a secret value.
+
+    The whole point of this type is what it does NOT have: no field holds a
+    secret. Everything downstream of ``scan_surface`` works with these, so the
+    reporting code has no value to leak even if someone edits it carelessly.
+    That is a guarantee by CONSTRUCTION rather than by test, which is why this
+    exists on top of ``test_audit_script_never_prints_a_secret_value`` rather
+    than instead of it -- the test remains as a second barrier.
+    """
+    name: str            # the ENVIRONMENT VARIABLE NAME, e.g. ARIA_TELEGRAM_TOKEN
+    fingerprint: str     # sha256(value)[:8] -- irreversible by construction
+    severity: str
+
+
+def scan_surface(blob: str, secrets: dict[str, tuple[str, str]]) -> list[Finding]:
+    """The ONLY place a secret value is compared against a probed surface.
+
+    Values enter here and never leave: what comes out is name + fingerprint +
+    severity. Keeping this boundary in one small function is what lets every
+    caller be obviously safe instead of carefully safe.
+    """
+    return [
+        Finding(name=name, fingerprint=fingerprint(value), severity=sev)
+        for name, (value, sev) in secrets.items()
+        if value in blob
+    ]
+
+
+def render_findings(surface_name: str, why: str, findings: list[Finding]) -> None:
+    """Print a surface's result. Structurally incapable of leaking a value:
+    it receives ``Finding`` objects, which have no value field at all."""
+    private = sum(1 for f in findings if f.severity == SEVERITY_PRIVATE)
+    print(f"  {surface_name:<22} EXPOSED: {len(findings)} secret(s), {private} private-key-class")
+    print(f"  {'':<22} ({why})")
+    for f in sorted(findings, key=lambda r: (r.severity != SEVERITY_PRIVATE, r.name)):
+        marker = "!!" if f.severity == SEVERITY_PRIVATE else "  "
+        print(f"  {'':<22} {marker} {f.name}  fp={f.fingerprint}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--env-file", default=os.environ.get("ARIA_AUDIT_ENV_FILE", DEFAULT_ENV_FILE))
@@ -177,34 +219,12 @@ def main() -> int:
         if not blob:
             print(f"  {surface_name:<22} unavailable (not probed)")
             continue
-        found = [
-            (name, fingerprint(value), sev)
-            for name, (value, sev) in secrets.items()
-            if value in blob
-        ]
-        total_findings += len(found)
-        if not found:
+        findings = scan_surface(blob, secrets)
+        total_findings += len(findings)
+        if not findings:
             print(f"  {surface_name:<22} CLEAN")
             continue
-        priv = sum(1 for _n, _f, s in found if s == SEVERITY_PRIVATE)
-        print(f"  {surface_name:<22} EXPOSED: {len(found)} secret(s), {priv} private-key-class")
-        print(f"  {'':<22} ({why})")
-        for name, fp, sev in sorted(found, key=lambda r: (r[2] != SEVERITY_PRIVATE, r[0])):
-            marker = "!!" if sev == SEVERITY_PRIVATE else "  "
-            # CodeQL flags this as py/clear-text-logging-sensitive-data because
-            # `name` is unpacked from a dict whose VALUES are secrets, so its
-            # taint analysis marks the key as sensitive too. It is not: `name`
-            # is the ENVIRONMENT VARIABLE NAME (e.g. "ARIA_TELEGRAM_TOKEN") and
-            # `fp` is `fingerprint(value)`, a SHA-256 truncated to 8 hex chars,
-            # irreversible by construction. No secret VALUE is ever printed here
-            # or anywhere else in this file -- printing metadata rather than
-            # values is precisely what this project's secrets rule requires
-            # ("prefer metadata: variable name, configured=true, truncated
-            # sha256 fingerprint"). Suppressed with justification rather than
-            # silently, and the invariant is locked by a test so a future edit
-            # that DID print a value would fail rather than inherit this
-            # suppression. See test_secret_exposure.py.
-            print(f"  {'':<22} {marker} {name}  fp={fp}")
+        render_findings(surface_name, why, findings)
     print()
     print("=" * 64)
     if total_findings == 0:

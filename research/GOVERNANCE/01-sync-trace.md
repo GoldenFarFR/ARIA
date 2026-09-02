@@ -103,3 +103,36 @@ knowable at any time.
     ACKNOWLEDGED BY  A
     PERSISTED WHERE  research/GOVERNANCE/01-sync-trace.md (this entry)
     STATUS           ACTIVE
+
+---
+
+    DATE             2026-09-02
+    RULE / DECISION  Cause versus symptom. When A states "the problem is X", B
+                     must not take it as a conclusion: B verifies whether X is
+                     the real cause or only the symptom. Four cases from this
+                     day where that check changed the answer: the CodeQL taint,
+                     the v2/v3 actors, the dependency override, and the
+                     performance history. In all four the first explanation was
+                     not the right one -- and in several of them it was A that
+                     corrected B's reading. The method runs both ways.
+    SOURCE           HUMAN
+    TRANSMITTED BY   B
+    RECEIVED BY      A
+    ACKNOWLEDGED BY  A
+    PERSISTED WHERE  research/GOVERNANCE/01-sync-trace.md (this entry)
+    STATUS           ACTIVE
+
+---
+
+    DATE             2026-09-02
+    RULE / DECISION  Explicit closure. No more interim reports while work
+                     continues behind. Before closing a cycle B must ask A
+                     explicitly, and wait for the answer: "AS-TU ENCORE QUELQUE
+                     CHOSE A FAIRE SUR CETTE DEMANDE ?" A cycle closes only on a
+                     NO from A AND satisfied criteria.
+    SOURCE           HUMAN
+    TRANSMITTED BY   B
+    RECEIVED BY      A
+    ACKNOWLEDGED BY  A
+    PERSISTED WHERE  research/GOVERNANCE/01-sync-trace.md (this entry)
+    STATUS           ACTIVE

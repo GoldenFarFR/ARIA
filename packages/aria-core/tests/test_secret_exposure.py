@@ -188,3 +188,45 @@ def test_audit_script_never_prints_a_secret_value():
         assert "{value" not in stripped, f"a secret value reaches output: {stripped}"
         assert "+ value" not in stripped, f"a secret value reaches output: {stripped}"
         assert "(value)" not in stripped, f"a secret value reaches output: {stripped}"
+
+
+def test_reporting_layer_cannot_receive_a_secret_value():
+    """The structural boundary, not just the behavioural one.
+
+    `test_audit_script_never_prints_a_secret_value` above DETECTS a value
+    reaching output. This one checks that it CANNOT: `scan_surface` is the only
+    function that touches secret values and it returns `Finding` objects, whose
+    fields are name / fingerprint / severity and nothing else. `render_findings`
+    therefore has no value to leak even if edited carelessly.
+
+    Guarantee by construction rather than by test -- the two coexist on purpose,
+    this being the first barrier and the other the second.
+    """
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[3] / "scripts"
+           / "secret-exposure-audit.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+
+    assert "Finding" in classes, "the metadata-only carrier must exist"
+    fields = {n.target.id for n in classes["Finding"].body
+              if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
+    assert fields == {"name", "fingerprint", "severity"}, (
+        f"Finding must carry metadata only, got {fields}")
+
+    assert "render_findings" in funcs and "scan_surface" in funcs
+
+    # The reporting layer's executable body must never mention the variable that
+    # holds a secret. Docstrings are excluded: they explain precisely this.
+    render = funcs["render_findings"]
+    body = [n for n in render.body if not (isinstance(n, ast.Expr)
+                                           and isinstance(n.value, ast.Constant))]
+    code = "\n".join(ast.get_source_segment(src, n) or "" for n in body)
+    assert "value" not in code, f"reporting layer touches a value: {code}"
+
+    # And it must be the caller that hands it findings, never the secrets dict.
+    args = [a.arg for a in render.args.args]
+    assert "secrets" not in args, "the reporting layer must not receive the secrets dict"
