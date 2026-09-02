@@ -1,10 +1,15 @@
 # H-BONDING-PROGRESS — later entry on the Pump.fun bonding curve improves risk/reward
 
-status: PRE_REGISTERED (2026-09-02) — falsifiers and cohort frozen below,
-verdict not yet run through a Phase-2 resolver (Phase 2 core does not exist
-yet, cf. `piped-percolating-dream` plan). This file freezes the definition so
-the exploratory numbers already produced cannot silently mutate once the lab
-exists.
+status: **REFUTED IN-SAMPLE (2026-09-02, same day it was pre-registered)** —
+falsifier #4 was run and the hypothesis did not survive it. The pre-registered
+definition below is left EXACTLY as it was written before the test; only this
+header and the "Falsifier #4 result" section were added afterwards. That
+ordering is the whole point — the falsifier was fixed before the measurement,
+so the result cannot be an after-the-fact rationalisation.
+
+A refutation is a success of the protocol, not a failure of it: this is the
+first hypothesis ARIA has actually tried to kill, and it died in a few hours
+against its own recorded data.
 
 ## Why this hypothesis, and not another, first
 
@@ -75,6 +80,64 @@ Solana pools (`solana_pump_shadow`'s domain, a different pocket).
    and neither is attributable alone. Any revival of this hypothesis must
    decompose the two effects BEFORE claiming anything — a partial-correlation
    check is now a precondition, not a nice-to-have.
+
+## Falsifier #4 result — RUN 2026-09-02, HYPOTHESIS DOES NOT SURVIVE
+
+**Method**: stratify the frozen cohort (`archive_floor3000_20260822`, n=1655,
+one stop config) into liquidity terciles by `reserve_usd` at entry, then
+re-measure the bonding-progress effect INSIDE each stratum. An effect that
+vanishes at comparable liquidity was liquidity, not bonding progress.
+
+**Finding 1 — the two groups barely overlap, so the original comparison was
+never like-for-like.**
+
+| bonding progress | liq. tercile 1 | tercile 2 | tercile 3 | total |
+|---|---|---|---|---|
+| low (<70%) | **477** | 36 | 1 | 514 |
+| high (>=70%) | 70 | 511 | 546 | 1127 |
+
+93% of low-progress entries sit in the lowest-liquidity tercile; 94% of
+high-progress entries sit in terciles 2-3. Bonding progress and entry
+liquidity are very nearly the same variable in this dataset. The headline
+result (31.5% -> 48.0% winrate) compares two populations that differ in
+liquidity at least as much as in bonding progress.
+
+**Finding 2 — where a real comparison IS possible (tercile 1, n=472 vs 64),
+the effect disappears and slightly reverses once outliers are removed.**
+
+| tercile 1 | n | all | minus top 2 | minus top 5 | winrate |
+|---|---|---|---|---|---|
+| low progress | 472 | 0.924 | 0.866 | **0.838** | 29.9% |
+| high progress | 64 | 0.933 | 0.839 | **0.774** | 40.6% |
+
+Both lose money. After removing each group's 5 best closures, the high-progress
+group is *worse*, not better — its apparent edge was more outlier-dependent
+than the low-progress group's.
+
+**Finding 3 — tercile 2's apparent reversal is itself an outlier artifact, and
+I nearly reported it as a result.** Raw numbers there read low 1.332 vs high
+1.120, i.e. an inversion. Removing the top 5: low collapses to **0.896** (n=40,
+single best trade 13.13x) while high holds at **1.084** (n=495). The inversion
+was carried by two trades. This is recorded because I stated the inversion
+out loud before running the outlier test — the exact ordering error the
+standing mandate forbids ("un chiffre présenté sans son n et sans son test
+d'outliers est une opinion, pas une mesure"). The test was run seconds later
+and reversed the reading.
+
+**Finding 4 — the whole cohort spans 3 distinct days.** 1655 closures, 3 days.
+Same failure mode as the 22/08 incident (439 closures all from a single day).
+A large n here is not coverage.
+
+**Verdict**: the effect is not attributable to bonding progress. It is
+inseparable from entry liquidity on this data, and in the one stratum where
+they can be separated it does not survive an outlier test. Falsifier #4 is
+DEMONSTRATED, not merely suspected.
+
+**What this does NOT establish**: that late bonding entries are worthless. It
+establishes that THIS evidence never supported the claim. A properly designed
+test — matched liquidity by construction, several distinct days, out-of-sample
+cohort — has never been run. The hypothesis is not disproven about the market;
+it is disproven about our data.
 
 ## Counterfactual
 
