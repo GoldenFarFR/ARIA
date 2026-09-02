@@ -120,11 +120,20 @@ async def test_absent_chart_signals_are_not_available_never_neutral():
     await mso.capture_observation(CONTRACT, CHAIN, core_result)
     obs = (await mso.list_recent(limit=1))[0]
 
-    for key in ("golden_pocket_present", "rsi_divergence_present", "risk_reward_ratio", "technical_align_score", "rvol_confirmed", "market_regime"):
+    # obs-v2 (02/09): this core_result has no "gp_low" key, so detect_entry never
+    # ran -> every chart field is gate_not_reached. The one exception is
+    # technical_align_score, which is EXCLUDED_BY_DESIGN on every path: its
+    # absence is a deliberate choice to avoid changing risk_guard's sizing tier
+    # (item #221), never a statement about this token.
+    for key in ("golden_pocket_present", "rsi_divergence_present", "risk_reward_ratio", "rvol_confirmed", "market_regime"):
         sub = obs["chart"][key]
         assert sub["available"] is False, f"{key} should be not-available on an early rejection"
-        assert sub["reason"] == "not_evaluated_this_gate"
+        assert sub["reason"] == mso.GATE_NOT_REACHED, f"{key} carried {sub['reason']}"
         assert "value" not in sub
+
+    align = obs["chart"]["technical_align_score"]
+    assert align["available"] is False
+    assert align["reason"] == mso.EXCLUDED_BY_DESIGN
 
 
 async def test_computed_neutral_chart_value_is_distinguishable_from_not_available():
@@ -152,7 +161,10 @@ async def test_onchain_composite_absent_before_buy_stage_is_not_available():
     await mso.capture_observation(CONTRACT, CHAIN, core_result)
     obs = (await mso.list_recent(limit=1))[0]
     assert obs["onchain"]["composite_score"]["available"] is False
-    assert obs["onchain"]["composite_score"]["reason"] == "not_evaluated_this_gate"
+    # obs-v2 (02/09): this core_result carries no "dex_security_score" KEY at
+    # all, so the producing stage never ran -> gate_not_reached, distinct from
+    # "it ran and found nothing". The four reasons are not interchangeable.
+    assert obs["onchain"]["composite_score"]["reason"] == mso.GATE_NOT_REACHED
 
 
 async def test_onchain_composite_available_on_buy_path():
@@ -350,3 +362,45 @@ async def test_resolver_never_raises_on_price_lookup_failure(_isolated_db, monke
     fwd = await mso.forward_performance_for(obs_id)
     assert all(r["status"] == "unavailable" for r in fwd)
     assert all(r["unavailable_reason"] == "token_unpriceable" for r in fwd)
+
+
+async def test_the_four_unavailability_reasons_stay_distinct():
+    """obs-v2 (02/09): four reasons, and no code path may collapse them again.
+
+    v1 wrote ``not_evaluated_this_gate`` for every absence, which made these
+    indistinguishable in storage even though they mean opposite things to a
+    replay: a gate that never ran, a gate that ran and found nothing, a field
+    our own pipeline never forwards, and a field deliberately withheld. Reading
+    the third as the second blames a token for our blind spot; reading the
+    second as the first hides that we did measure and found nothing.
+
+    The version bump is part of the invariant: rows written under v1 and v2 use
+    different vocabularies and must never be pooled in one replay.
+    """
+    reasons = {mso.GATE_NOT_REACHED, mso.COMPUTED_NO_VALUE,
+               mso.NOT_INSTRUMENTED, mso.EXCLUDED_BY_DESIGN}
+    assert len(reasons) == 4, "two reasons collapsed onto the same string"
+    assert "not_evaluated_this_gate" not in reasons, "the ambiguous v1 label came back"
+    assert mso.SIGNAL_VERSION != "obs-v1", "vocabulary changed but the version did not"
+
+    # gate never ran: no producing key present at all
+    await mso.capture_observation(CONTRACT, CHAIN, {
+        "action": "HOLD", "chain": CHAIN, "hold_reason": "blacklisted", "reasons": [],
+    })
+    early = (await mso.list_recent(limit=1))[0]
+    assert early["chart"]["risk_reward_ratio"]["reason"] == mso.GATE_NOT_REACHED
+
+    # gate ran (gp_low key present) but produced nothing for this token
+    await mso.capture_observation(CONTRACT, CHAIN, {
+        "action": "HOLD", "chain": CHAIN, "hold_reason": "no_entry_signal", "reasons": [],
+        "gp_low": None, "gp_high": None, "rr": None,
+    })
+    ran = (await mso.list_recent(limit=1))[0]
+    assert ran["chart"]["risk_reward_ratio"]["reason"] == mso.COMPUTED_NO_VALUE, (
+        "a stage that ran and found nothing must not look like a stage that never ran"
+    )
+    # same row: a field this path does not forward at all is OUR gap, not the token's
+    assert ran["chart"]["rvol_confirmed"]["reason"] == mso.NOT_INSTRUMENTED
+
+    # never exposed on any path -> always our gap
+    assert ran["onchain"]["holder_concentration_top10_pct"]["reason"] == mso.NOT_INSTRUMENTED

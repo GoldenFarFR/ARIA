@@ -29,10 +29,18 @@ present in ``core_result`` when the pipeline reached that stage (the
 they are correctly absent, not hidden. Two sub-signals named in the
 target architecture (``holder_concentration_top10_pct``,
 ``smart_money_rescue_triggered``) are not currently exposed on
-``evaluate_momentum_entry``'s return value at all -- they stay
-permanently ``not_evaluated_this_gate`` until a future change (out of
-this feature's scope, FR-009) surfaces them there; this module never
-reaches into momentum_entry.py's internals to fetch them itself.
+``evaluate_momentum_entry``'s return value at all -- they are therefore
+recorded as ``not_instrumented`` (our pipeline's gap), never as a gate
+outcome, until a future change (out of this feature's scope, FR-009)
+surfaces them there; this module never reaches into momentum_entry.py's
+internals to fetch them itself.
+
+Unavailability vocabulary (obs-v2, 02/09) -- four reasons, never one:
+``gate_not_reached`` (evaluation stopped upstream), ``computed_no_value``
+(the stage ran, no value exists for this token), ``not_instrumented``
+(the pipeline never forwards this field), ``excluded_by_design``
+(deliberately withheld -- see ``technical_align_score``). Collapsing them,
+as v1 did, makes a replay read our own blind spots as facts about a token.
 """
 from __future__ import annotations
 
@@ -53,7 +61,13 @@ DB_PATH = str(aria_db_path())
 # sub-signal added/removed/restructured) -- never for an unrelated
 # momentum_entry.py threshold tweak. Deliberate, explicit, documented in
 # the commit that changes it (data-model.md's "signal_version scheme").
-SIGNAL_VERSION = "obs-v1"
+# obs-v2 (02/09): the unavailability vocabulary changed shape, so rows written
+# before and after CANNOT be pooled in a replay. v1 collapsed four different
+# meanings into "not_evaluated_this_gate"; v2 separates gate_not_reached /
+# computed_no_value / not_instrumented / excluded_by_design. Bumping the
+# version is the whole point of the column -- a replay that mixes the two
+# would read v1's silence as v2's "computed, nothing found".
+SIGNAL_VERSION = "obs-v2"
 
 _HORIZONS: dict[str, timedelta] = {
     "1m": timedelta(minutes=1),
@@ -113,6 +127,31 @@ async def _ensure_tables() -> None:
         await db.commit()
 
 
+# Why an absent value needs FOUR distinct reasons and not one (02/09).
+#
+# ``not_evaluated_this_gate`` used to cover every absence, which made the four
+# cases below indistinguishable in storage -- and they mean opposite things to
+# anyone replaying this data later. The operator's standing principle applies
+# directly: an absence of signal is not a negative signal. A replay that reads
+# "R/R absent" as "R/R was bad" draws the wrong conclusion; one that reads
+# "never instrumented" as "not computable for this token" blames the token for
+# a gap in our own code.
+#
+# The distinction is derived MECHANICALLY, never from a maintained list of
+# reason codes:
+#   - the technical analysis ran iff ``core`` CONTAINS the "gp_low" key (the
+#     key is written by every path that reaches ``detect_entry``, with None as
+#     a legitimate value) -- so key presence proves execution, and its value
+#     reports the outcome;
+#   - a key present but None means the computation ran and produced nothing;
+#   - a key absent while the analysis DID run means this code path does not
+#     forward that field yet -- our gap, not the token's.
+GATE_NOT_REACHED = "gate_not_reached"          # evaluation stopped upstream (blacklist, honeypot...)
+COMPUTED_NO_VALUE = "computed_no_value"        # the gate ran; no value exists for this token
+NOT_INSTRUMENTED = "not_instrumented"          # the pipeline never forwards this field (our gap)
+EXCLUDED_BY_DESIGN = "excluded_by_design"      # deliberately omitted (see technical_align_score)
+
+
 def _avail(value: object, data_timestamp: str) -> dict:
     return {"available": True, "value": value, "data_timestamp": data_timestamp}
 
@@ -121,17 +160,39 @@ def _unavail(reason: str) -> dict:
     return {"available": False, "reason": reason}
 
 
+def _absent(core: dict, key: str, *, ran: bool) -> dict:
+    """The reason a field carries no value, derived from the dict's own shape.
+
+    ``ran`` says whether the producing stage executed at all. Given that, the
+    presence of ``key`` in ``core`` separates "computed, nothing to report"
+    from "this path never forwards it".
+    """
+    if not ran:
+        return _unavail(GATE_NOT_REACHED)
+    return _unavail(COMPUTED_NO_VALUE if key in core else NOT_INSTRUMENTED)
+
+
 def _build_onchain_block(core: dict, decision_ts: str) -> dict:
     score = core.get("dex_security_score")
     breakdown = core.get("dex_security_breakdown")
     return {
-        "composite_score": _avail(score, decision_ts) if score is not None else _unavail("not_evaluated_this_gate"),
-        "composite_pillars": _avail(breakdown, decision_ts) if breakdown is not None else _unavail("not_evaluated_this_gate"),
-        # Not exposed on evaluate_momentum_entry's return value today --
-        # see this module's own docstring. Permanently not_evaluated_this_gate
-        # until a separate future change surfaces them there.
-        "holder_concentration_top10_pct": _unavail("not_evaluated_this_gate"),
-        "smart_money_rescue_triggered": _unavail("not_evaluated_this_gate"),
+        "composite_score": (
+            _avail(score, decision_ts) if score is not None
+            else _absent(core, "dex_security_score", ran="dex_security_score" in core)
+        ),
+        "composite_pillars": (
+            _avail(breakdown, decision_ts) if breakdown is not None
+            else _absent(core, "dex_security_breakdown", ran="dex_security_breakdown" in core)
+        ),
+        # NOT_INSTRUMENTED, not "not evaluated": these two are computed inside
+        # evaluate_hard_gates but never placed on its return value, so they are
+        # absent for EVERY token on EVERY path. Measured 02/09: the on-chain
+        # block was available on 0 of 895 observations. Recording that as a
+        # gate outcome would tell a replay the data was uncomputable for these
+        # tokens -- it is our pipeline that drops it. Surfacing them is a
+        # separate change; this only stops mislabelling the gap.
+        "holder_concentration_top10_pct": _unavail(NOT_INSTRUMENTED),
+        "smart_money_rescue_triggered": _unavail(NOT_INSTRUMENTED),
     }
 
 
@@ -145,14 +206,45 @@ def _build_chart_block(core: dict, decision_ts: str) -> dict:
     rvol_multiple = core.get("rvol_multiple")
     regime = core.get("regime")
 
+    # Did the technical stage run at all? The "gp_low" KEY is written by every
+    # path that reaches detect_entry (with None as a legitimate value), so its
+    # presence -- not its value -- is the proof. Never a list of reason codes
+    # to keep in sync with momentum_entry's control flow.
+    ran = "gp_low" in core
+
     golden_pocket_present = gp_low is not None and gp_high is not None
     return {
-        "golden_pocket_present": _avail(golden_pocket_present, decision_ts) if (gp_low is not None or gp_high is not None or rr is not None) else _unavail("not_evaluated_this_gate"),
-        "rsi_divergence_present": _avail(rsi_gap is not None, decision_ts) if rsi_gap is not None else _unavail("not_evaluated_this_gate"),
-        "risk_reward_ratio": _avail(rr, decision_ts) if rr is not None else _unavail("not_evaluated_this_gate"),
-        "technical_align_score": _avail(align_score, decision_ts) if align_score is not None else _unavail("not_evaluated_this_gate"),
-        "rvol_confirmed": _avail({"confirmed": volume_confirmed, "multiple": rvol_multiple}, decision_ts) if volume_confirmed is not None else _unavail("not_evaluated_this_gate"),
-        "market_regime": _avail(regime, decision_ts) if regime else _unavail("not_evaluated_this_gate"),
+        "golden_pocket_present": (
+            _avail(golden_pocket_present, decision_ts)
+            if (gp_low is not None or gp_high is not None or rr is not None)
+            else _absent(core, "gp_low", ran=ran)
+        ),
+        "rsi_divergence_present": (
+            _avail(rsi_gap is not None, decision_ts) if rsi_gap is not None
+            else _absent(core, "rsi_gap", ran=ran)
+        ),
+        "risk_reward_ratio": (
+            _avail(rr, decision_ts) if rr is not None else _absent(core, "rr", ran=ran)
+        ),
+        # NEVER _absent(): align_score's absence is a deliberate decision, not
+        # a measurement. momentum_entry withholds it on the no_entry_signal
+        # path because risk_guard reads a MISSING align_score as "caller
+        # doesn't support this signal" and falls back to its 5% sizing tier
+        # (item #221) -- forwarding it would turn an observability field into
+        # a trading decision. Recording that as "computed_no_value" would tell
+        # a future replay the analysis found nothing, which is false.
+        "technical_align_score": (
+            _avail(align_score, decision_ts) if align_score is not None
+            else _unavail(EXCLUDED_BY_DESIGN)
+        ),
+        "rvol_confirmed": (
+            _avail({"confirmed": volume_confirmed, "multiple": rvol_multiple}, decision_ts)
+            if volume_confirmed is not None
+            else _absent(core, "volume_confirmed", ran=ran)
+        ),
+        "market_regime": (
+            _avail(regime, decision_ts) if regime else _absent(core, "regime", ran=ran)
+        ),
     }
 
 
@@ -180,7 +272,10 @@ async def _build_social_block(core: dict, contract: str, chain: str, decision_ts
     potential_score = core.get("potential_score")
     cascade_rows = await _read_signal_cascade_convergence(contract, chain)
     return {
-        "conviction_research_score": _avail(potential_score, decision_ts) if potential_score is not None else _unavail("not_evaluated_this_gate"),
+        "conviction_research_score": (
+            _avail(potential_score, decision_ts) if potential_score is not None
+            else _absent(core, "potential_score", ran="potential_score" in core)
+        ),
         "signal_cascade_convergence": (
             _avail(
                 [
