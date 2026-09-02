@@ -1,6 +1,6 @@
 """CLI : dry-run du grant Spend Permission via Tangem (lecture on-chain seule,
 aucun tap, aucune transaction). Usage :
-`docker exec aria-api python scripts/tangem_grant_dry_run.py`
+`docker exec aria-api python /app/backend/docker-entrypoint.py python scripts/tangem_grant_dry_run.py`
 """
 from __future__ import annotations
 

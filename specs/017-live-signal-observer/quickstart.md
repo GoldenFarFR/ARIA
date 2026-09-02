@@ -16,7 +16,7 @@ docker logs aria-api --since 5m 2>&1 | grep live_signal_observer | tail -5
 Expect `live_signal_observer: started (4 endpoints)` and drain lines. Then:
 
 ```bash
-docker exec aria-api python3 -c "
+docker exec aria-api python /app/backend/docker-entrypoint.py python3 -c "
 import asyncio; from aria_core import bootstrap; bootstrap.configure_data_dir('/app/backend/data')
 from aria_core import momentum_signal_observation as m
 async def go():

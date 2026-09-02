@@ -6,7 +6,7 @@ or "base" depending on the track) -- same side effect as the real heartbeat
 cycle, but triggered once, by hand, to read the result before arming the gate.
 
 Usage (on the VPS, network available):
-    docker exec aria-api python -m aria_core.dry_run_bonding_discovery
+    docker exec aria-api python /app/backend/docker-entrypoint.py python -m aria_core.dry_run_bonding_discovery
 """
 from __future__ import annotations
 

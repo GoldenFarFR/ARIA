@@ -11,8 +11,8 @@ is printed to be followed by eye:
   6. EXPORT: the journal as readable .txt
 
 Usage (on the VPS, network + LLM available):
-    docker exec aria-api python -m aria_core.simulate_lifecycle 0xCONTRACT
-    docker exec aria-api python -m aria_core.simulate_lifecycle           # discovers a top pool
+    docker exec aria-api python /app/backend/docker-entrypoint.py python -m aria_core.simulate_lifecycle 0xCONTRACT
+    docker exec aria-api python /app/backend/docker-entrypoint.py python -m aria_core.simulate_lifecycle           # discovers a top pool
 
 No financial action: read + write to the local journal only.
 """

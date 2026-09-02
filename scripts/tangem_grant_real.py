@@ -1,7 +1,7 @@
 """CLI : grant RÉEL de la Spend Permission via Tangem (dry_run=False).
 Génère un lien WalletConnect à ouvrir dans l'app Tangem, attend le tap de
 l'opérateur, puis vérifie la confirmation on-chain. Usage :
-`docker exec aria-api python scripts/tangem_grant_real.py`
+`docker exec aria-api python /app/backend/docker-entrypoint.py python scripts/tangem_grant_real.py`
 """
 from __future__ import annotations
 

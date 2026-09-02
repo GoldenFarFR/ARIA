@@ -9,7 +9,7 @@ silently returns False when `ARIA_VECTOR_MEMORY_ENABLED` is off, and both
 
 All logic reused from `aria_core.conviction_research`/`aria_core.memory.vector`
 -- this file only calls and prints.
-Usage : `docker exec aria-api python scripts/conviction_research_lookup.py <contract> [--chain base]`
+Usage : `docker exec aria-api python /app/backend/docker-entrypoint.py python scripts/conviction_research_lookup.py <contract> [--chain base]`
 """
 from __future__ import annotations
 

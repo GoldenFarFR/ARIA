@@ -2,7 +2,7 @@
 
 Toute la logique vit dans `aria_core.paper_ledger_report` (importée aussi par la
 commande Telegram `/ledger`) -- ce fichier ne fait que l'appeler et imprimer.
-Usage : `docker exec aria-api python scripts/paper_ledger_report.py`.
+Usage : `docker exec aria-api python /app/backend/docker-entrypoint.py python scripts/paper_ledger_report.py`.
 """
 from __future__ import annotations
 
