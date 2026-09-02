@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     tx_sender TEXT,
     rpc_provider TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
+    -- Which path wrote this row. The FORMAT is deliberately identical between
+    -- the historical backfill and the live capture (one analytical engine for
+    -- past and present); this column is what still lets an audit tell them
+    -- apart. Added 02/09 with the live wiring.
+    source TEXT NOT NULL DEFAULT 'backfill',
     UNIQUE(chain, tx_hash, log_index)
 )
 """
