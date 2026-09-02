@@ -59,13 +59,13 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-# Source des gates : le FICHIER MONTÉ, plus `docker inspect` (02/09).
-# Pourquoi ce changement : --env-file recopiait chaque secret dans les
-# métadonnées Docker, ce qui a fait fuiter une clé privée -- le conteneur lit
-# désormais un montage lecture seule (vanguard/docker-entrypoint.py), donc
-# `docker inspect` ne contient plus que la configuration Docker elle-même.
-# Le filtre strict ci-dessous est INCHANGÉ et reste la vraie garantie : seul
-# un booléen `ARIA_*_ENABLED=` peut sortir d'ici, jamais une valeur de secret.
+# Gate source: the MOUNTED FILE, no longer `docker inspect` (02/09).
+# Why it changed: --env-file copied every secret into Docker's metadata, which
+# leaked a private key. The container now reads a read-only mount
+# (vanguard/docker-entrypoint.py), so `docker inspect` carries Docker's own
+# configuration and nothing else.
+# The strict filter below is UNCHANGED and remains the real guarantee: only an
+# `ARIA_*_ENABLED=` boolean can leave this script, never a secret value.
 ENV_FILE="${ARIA_ENV_FILE:-/opt/aria/vanguard/backend/.env}"
 
 if [ ! -r "$ENV_FILE" ]; then
@@ -74,15 +74,15 @@ if [ ! -r "$ENV_FILE" ]; then
   exit 0
 fi
 
-# On ne garde JAMAIS le fichier entier en variable : un grep direct, pour que
-# rien d'autre qu'un booléen ne transite par ce script.
+# The whole file is NEVER held in a variable: a direct grep, so that nothing
+# but a boolean ever transits through this script.
 ENV_RAW="$(grep -E '^(ARIA_[A-Z0-9_]*ENABLED|ARIA_X402_SELLER_MAINNET)=' "$ENV_FILE" || true)"
 GATES="$(printf '%s\n' "$ENV_RAW" | grep -E '^ARIA_[A-Z0-9_]*ENABLED=' | sort)"
 
-# Divergence fichier/conteneur : le conteneur charge ce fichier AU DÉMARRAGE.
-# Modifié depuis, il annonce donc un état que le process ne suit pas encore --
-# angle mort que l'ancienne lecture via `docker inspect` ne détectait pas non plus,
-# et qui vaut mieux affiché qu'implicite.
+# File/container divergence: the container loads this file AT STARTUP. Edited
+# since, it announces a state the running process is not applying yet -- a blind
+# spot the old `docker inspect` read did not catch either, and one better shown
+# than left implicit.
 STALE_WARNING=""
 STARTED_AT="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
 if [ -n "$STARTED_AT" ]; then

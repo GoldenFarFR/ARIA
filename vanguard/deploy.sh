@@ -82,15 +82,15 @@ ACTIVE_PORT="$(read_active_port "$NGINX_UPSTREAM_FILE")"
 STANDBY_PORT="$(standby_port "$ACTIVE_PORT")"
 echo "    actif=$ACTIVE_PORT standby=$STANDBY_PORT"
 
-# NE JAMAIS revenir à `--env-file` ici (02/09, correctif de sécurité mesuré).
-# --env-file recopie chaque variable dans les métadonnées Docker : `docker inspect`
-# renvoyait alors 62 valeurs secrètes en clair, dont 2 clés privées, à quiconque
-# atteint le démon Docker -- et c'est exactement le chemin qu'une session a
-# emprunté en vérifiant un gate, ce qui a fait fuiter une clé. Le fichier est
-# désormais monté en lecture seule et parsé par vanguard/docker-entrypoint.py.
-# Vérification après tout changement ici : `python3 scripts/secret-exposure-audit.py`
-# doit rendre "docker inspect CLEAN". Ce que ce correctif ne couvre PAS, et qu'il
-# ne faut pas croire couvert : /proc/<pid>/environ reste lisible par root.
+# NEVER go back to `--env-file` here (02/09, measured security fix).
+# --env-file copies every variable into Docker's metadata, so `docker inspect`
+# returned 62 secret values in clear text -- 2 of them private keys -- to
+# anything reaching the Docker daemon. That is the exact path a session walked
+# while checking a gate, and it leaked a key. The file is now mounted read-only
+# and parsed by vanguard/docker-entrypoint.py.
+# After ANY change here: `python3 scripts/secret-exposure-audit.py` must report
+# "docker inspect CLEAN". What this fix does NOT cover, and must not be assumed
+# covered: /proc/<pid>/environ stays readable by root.
 echo "==> [5/8] Lancement du nouveau conteneur sur le port standby ($STANDBY_PORT)"
 docker rm -f aria-api-next >/dev/null 2>&1 || true
 docker run -d --name aria-api-next --restart unless-stopped \
