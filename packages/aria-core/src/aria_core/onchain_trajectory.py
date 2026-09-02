@@ -39,6 +39,7 @@ wrongly labelled one silently inverts every buy/sell feature downstream.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 from dataclasses import dataclass, field
@@ -209,12 +210,39 @@ async def _resolve_token_side(pool_id: str, chain: str, token: str | None) -> in
             (chain, pool_id),
         )
         row = await cur.fetchone()
-    if row is None:
-        return None
     tl = token.lower()
-    if (row["currency0"] or "").lower() == tl:
+    if row is not None:
+        if (row["currency0"] or "").lower() == tl:
+            return 0
+        if (row["currency1"] or "").lower() == tl:
+            return 1
+
+    # Fallback on the stored Initialize event (02/09). The discovery table is
+    # empty whenever backfill ran with `known_pool_ids` -- an optimisation that
+    # skips discovery to save ~7,800 calls on a wide window, and silently cost
+    # the token's side, hence every price, drawdown and outcome. The data was
+    # never missing: Initialize carries currency0/currency1 as INDEXED topics,
+    # and the raw table already holds that event. Read it instead of paying a
+    # network round-trip for something collected an hour ago.
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT topics_json FROM {TABLE} "
+            f"WHERE chain=? AND pool_id=? AND event_type='initialize' LIMIT 1",
+            (chain, pool_id),
+        )
+        init = await cur.fetchone()
+    if init is None:
+        return None
+    try:
+        topics = json.loads(init["topics_json"])
+    except (ValueError, TypeError):
+        return None
+    if len(topics) < 4:
+        return None
+    if ("0x" + topics[2][-40:]).lower() == tl:
         return 0
-    if (row["currency1"] or "").lower() == tl:
+    if ("0x" + topics[3][-40:]).lower() == tl:
         return 1
     return None
 
@@ -400,3 +428,162 @@ def to_series(traj: Trajectory) -> dict:
             "unique_wallets": traj.unique_wallets, "price_basis": traj.price_basis,
         },
     }
+
+
+async def walk(
+    pool_id: str,
+    chain: str,
+    *,
+    token: str | None = None,
+    step_seconds: int = 300,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    points: int = 60,
+    outcome_horizons: tuple[int, ...] = (300, 900, 1800, 3600, 7200),
+) -> list[dict]:
+    """Walk a token's whole life, one causal snapshot per step.
+
+    This is the shape the operator asked for and the reason the whole module
+    exists: not "what happened to MEOW", but *"a 13h42, est-ce que les
+    informations disponibles permettaient deja de distinguer MEOW d'un token
+    qui allait mourir ?"*. Answering that needs the state at EVERY instant, not
+    only at the one where a human happened to buy.
+
+    Two blocks per row, never merged:
+
+    ``state_at_t``   -- built by ``build_trajectory``, which reads only events
+                        at ``<= t``. This is what a live engine could have seen.
+    ``outcome_after_t`` -- forward returns, computed from events STRICTLY AFTER
+                        t. Kept in its own block, with its own key, so no
+                        feature can accidentally consume it. It exists to score
+                        a decision, never to make one.
+
+    A row where the future is not yet available (the last steps of a token's
+    recorded life) carries ``None`` for those horizons rather than a shortened
+    window -- absence of outcome is not a zero return.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT MIN(block_timestamp) a, MAX(block_timestamp) b FROM {TABLE} "
+            f"WHERE chain=? AND pool_id=? AND block_timestamp IS NOT NULL",
+            (chain, pool_id),
+        )
+        span = await cur.fetchone()
+    if not span or span["a"] is None:
+        return []
+
+    t_first, t_last = int(span["a"]), int(span["b"])
+    side = await _resolve_token_side(pool_id, chain, token)
+
+    # Absolute prices for the outcome side, in one pass. Deliberately NOT
+    # reusing build_trajectory here: the outcome needs the raw price at a given
+    # instant, not a normalized window, and normalizing twice against different
+    # baselines is how a return silently becomes meaningless.
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT block_timestamp, data_hex FROM {TABLE} "
+            f"WHERE chain=? AND pool_id=? AND event_type=? AND block_timestamp IS NOT NULL "
+            f"ORDER BY block_timestamp ASC, log_index ASC",
+            (chain, pool_id, EVENT_SWAP),
+        )
+        price_series: list[tuple[int, float]] = []
+        for row in await cur.fetchall():
+            d = decode_swap(row["data_hex"] or "")
+            if d is None:
+                continue
+            p = price_from_amounts(d["amount0"], d["amount1"], token_side=side)
+            if p and p > 0:
+                price_series.append((int(row["block_timestamp"]), p))
+
+    # Timestamps split out once so lookups are binary, not linear. On AI
+    # (151,193 swaps x 5 horizons x ~180 steps) the linear scan was ~136M
+    # iterations; bisect makes it ~1,600 comparisons. Same answer, and the
+    # difference between a minute and ten.
+    _price_ts = [t for t, _ in price_series]
+
+    def price_at(ts: int) -> float | None:
+        """Last price observed at or before ts -- never an interpolation, and
+        never a later trade dragged backwards."""
+        i = bisect.bisect_right(_price_ts, ts)
+        return price_series[i - 1][1] if i else None
+
+    # Wallets seen BEFORE each step, to measure renewal. Operator hypothesis
+    # (02/09): a token whose activity holds while its narrative dies is
+    # distributing, not accumulating -- "une narrative sociale defectueuse qui
+    # n'a pas suivie le long du graphique". No dated social trace exists for
+    # these tokens (the signal cascade covers 244 Base tokens and 2 Robinhood
+    # ones, none of them ours), so this is the on-chain PROXY: a live narrative
+    # brings NEW wallets, a dead one is the same hands passing the bag. Fully
+    # causal -- "new at t" means never seen at or before t, which needs no
+    # future knowledge.
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            f"SELECT block_timestamp, tx_sender FROM {TABLE} "
+            f"WHERE chain=? AND pool_id=? AND event_type=? AND tx_sender IS NOT NULL "
+            f"AND block_timestamp IS NOT NULL ORDER BY block_timestamp ASC",
+            (chain, pool_id, EVENT_SWAP),
+        )
+        sender_events = [(int(r["block_timestamp"]), r["tx_sender"]) for r in await cur.fetchall()]
+
+    def renewal_at(t_lo: int, t_hi: int) -> tuple[int, int, float | None]:
+        """(new wallets, active wallets, ratio) over (t_lo, t_hi].
+
+        A wallet is NEW when it has never appeared at or before t_lo. The ratio
+        is None when nobody traded -- an empty window has no renewal rate, and
+        reporting 0.0 there would read as "no new blood" instead of "no data".
+        """
+        prior, active = set(), set()
+        for ts, w in sender_events:
+            if ts <= t_lo:
+                prior.add(w)
+            elif ts <= t_hi:
+                active.add(w)
+        if not active:
+            return 0, 0, None
+        fresh = active - prior
+        return len(fresh), len(active), round(len(fresh) / len(active), 4)
+
+    rows: list[dict] = []
+    t = t_first + window_seconds
+    while t <= t_last:
+        traj = await build_trajectory(
+            pool_id, chain, t, token=token,
+            window_seconds=window_seconds, points=points,
+        )
+        base = price_at(t)
+        _nw, _aw, _rr = renewal_at(t - window_seconds, t)
+        outcome: dict[str, float | None] = {}
+        for h in outcome_horizons:
+            target = t + h
+            # Beyond what we recorded, the answer is unknown -- not zero.
+            if target > t_last or base is None or base <= 0:
+                outcome[f"return_{h}s"] = None
+                continue
+            future = price_at(target)
+            outcome[f"return_{h}s"] = (
+                round(future / base - 1.0, 6) if future and future > 0 else None
+            )
+
+        rows.append({
+            "t": t,
+            "state_at_t": {
+                "price_rel_last": traj.points[-1].price_rel if traj.points else None,
+                "shape": normalized_shape(traj),
+                "drawdown_from_peak": traj.drawdown_from_peak,
+                "runup_from_low": traj.runup_from_low,
+                "swaps": traj.swaps_used,
+                "unique_wallets": traj.unique_wallets,
+                "coverage_ratio": traj.coverage_ratio,
+                "flow0": sum(p.flow0 for p in traj.points),
+                "flow1": sum(p.flow1 for p in traj.points),
+                "liquidity_events": sum(p.liquidity_events for p in traj.points),
+                "new_wallets": _nw,
+                "active_wallets": _aw,
+                "renewal_ratio": _rr,
+            },
+            "outcome_after_t": outcome,
+        })
+        t += step_seconds
+    return rows

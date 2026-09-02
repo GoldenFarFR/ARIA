@@ -262,6 +262,34 @@ class _Rpc:
         raise RuntimeError(f"rpc {method} failed after {_MAX_RETRIES} attempts: {type(last_exc).__name__}")
 
 
+async def find_block_by_timestamp(rpc: "_Rpc", target_ts: int, *, head: int | None = None) -> int:
+    """The last block at or before ``target_ts``, by binary search.
+
+    Why not a rule of three: block time is an AVERAGE, not a constant. Robinhood
+    measures 0.101s today, but extrapolating that backwards over 42 million
+    blocks put the estimate 7.5 HOURS off the real creation time -- enough to
+    miss a token's entire first hour, which is precisely the window that
+    matters when studying how a launch behaved.
+
+    ~25 calls for a 50-million-block range (log2), versus a scan that would
+    never terminate. Returns the floor block, so a caller asking for "the state
+    at 17:48" never accidentally starts after it.
+    """
+    lo = 0
+    hi = head if head is not None else int(await rpc.call("eth_blockNumber", []), 16)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        blk = await rpc.call("eth_getBlockByNumber", [hex(mid), False])
+        if blk is None:
+            hi = mid - 1
+            continue
+        if int(blk["timestamp"], 16) <= target_ts:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 async def _ensure_tables() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(_RAW_DDL)
@@ -395,6 +423,9 @@ async def backfill(
     chain: str,
     *,
     lookback_blocks: int = 900_000,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
+    known_pool_ids: list[str] | None = None,
     resolve_senders: bool = True,
     provider: str = "chainstack",
 ) -> BackfillResult:
@@ -419,16 +450,43 @@ async def backfill(
 
     async with _Rpc(chain, url) as rpc:
         head = int(await rpc.call("eth_blockNumber", []), 16)
-        from_block = max(0, head - lookback_blocks)
+        # Absolute window when given -- see backfill_pool's own note: reaching a
+        # 50-day-old launch through a lookback would mean scanning 42M blocks to
+        # study 24h of it.
+        if from_ts is not None:
+            from_block = await find_block_by_timestamp(rpc, from_ts, head=head)
+            head_scan = (
+                await find_block_by_timestamp(rpc, to_ts, head=head)
+                if to_ts is not None else head
+            )
+        else:
+            from_block, head_scan = max(0, head - lookback_blocks), head
+        head = head_scan
 
-        pools = await discover_pools(rpc, token, chain, from_block, head)
-        if not pools:
-            result.error = "no pool found on chain for this token in the window"
-            result.rpc_calls = rpc.calls
-            return result
+        if known_pool_ids:
+            # Discovery and the activity count each rescan the WHOLE range, so
+            # on a 25.9M-block window they would cost ~7,800 calls to rediscover
+            # what the caller already knows. Skipping them is not a shortcut, it
+            # is the funnel pattern: never pay a scan for an answer you hold.
+            # The pools are still persisted with an explicit reason, so the
+            # replay stays as auditable as the discovered path.
+            pools = [
+                PoolCandidate(
+                    pool_id=pid, selected=True,
+                    decision_reason="selected: supplied by caller (discovery skipped)",
+                )
+                for pid in known_pool_ids
+            ]
+            selected = pools
+        else:
+            pools = await discover_pools(rpc, token, chain, from_block, head)
+            if not pools:
+                result.error = "no pool found on chain for this token in the window"
+                result.rpc_calls = rpc.calls
+                return result
 
-        await _count_pool_activity(rpc, chain, pools, from_block, head)
-        selected = select_pools(pools)
+            await _count_pool_activity(rpc, chain, pools, from_block, head)
+            selected = select_pools(pools)
         await _persist_pools(token, chain, pools)
         result.pools = pools
         if not selected:
@@ -546,6 +604,8 @@ async def backfill_pool(
     *,
     token: str | None = None,
     lookback_blocks: int = 900_000,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
     resolve_senders: bool = True,
     provider: str = "chainstack",
 ) -> BackfillResult:
@@ -580,9 +640,23 @@ async def backfill_pool(
         rows: list[tuple] = []
         by_block: dict[int, list[int]] = {}
 
-        block = max(0, head - lookback_blocks)
-        while block <= head:
-            end = min(block + MAX_BLOCK_RANGE, head)
+        # An absolute time window beats a lookback whenever the period of
+        # interest is a token's FIRST hours rather than its last: a 50-day-old
+        # pool would need a 42-million-block lookback to reach its birth, and
+        # scanning all of it to study 24h would be brute force. Resolved by
+        # binary search because block time is an average, not a constant.
+        if from_ts is not None:
+            start_block = await find_block_by_timestamp(rpc, from_ts, head=head)
+            end_block = (
+                await find_block_by_timestamp(rpc, to_ts, head=head)
+                if to_ts is not None else head
+            )
+        else:
+            start_block, end_block = max(0, head - lookback_blocks), head
+
+        block = start_block
+        while block <= end_block:
+            end = min(block + MAX_BLOCK_RANGE, end_block)
             logs = await rpc.call("eth_getLogs", [{
                 "fromBlock": hex(block), "toBlock": hex(end),
                 "address": pool_address, "topics": [_V2_V3_TOPICS],
