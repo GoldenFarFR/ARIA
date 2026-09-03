@@ -382,9 +382,41 @@ L'indépendance vient exclusivement de l'**autorité des données** :
 - une conclusion n'est jamais fournie à l'étape censée la dériver ;
 - les expériences sont pré-enregistrées, falsifieurs écrits avant la mesure ;
 - les tests adversariaux sont indépendants de l'implémentation qu'ils attaquent ;
-- le `JUDGE` ne reçoit jamais de conclusion préformée ;
 - les résultats sont persistés avec leur provenance ;
 - les erreurs deviennent des régressions.
+
+### Le JUDGE a une interface de données différente, pas seulement des données différentes
+
+Dire « le `JUDGE` ne reçoit jamais de conclusion préformée » ne suffit pas, parce qu'une conclusion se
+renomme trivialement : `analysis`, `assessment`, `finding`, `status`, `summary`. Le problème est
+sémantique, et le verrou doit donc porter sur **ce que le JUDGE est capable de reconstruire** :
+
+    ARCHITECT → HYPOTHÈSE / EXPÉRIENCE → OBSERVATIONS IMMUABLES → SELF-ATTACK → JUDGE
+
+et jamais :
+
+    ARCHITECT → "RESULT = PASS" → JUDGE
+
+Le `JUDGE` doit pouvoir recalculer le verdict lui-même à partir de : `experiment` + `raw observations`
++ `provenance` + `coverage` + `self_attack` + `environment identity` + `temporal evidence`.
+
+C'est la différence entre *« je demande à Claude si Claude a raison »* et *« je donne au JUDGE les
+éléments à partir desquels il est autorisé à savoir »*.
+
+Le contrat doit donc rendre une conclusion pré-calculée **impossible ou détectable**, faute de quoi
+l'autorité fuit par l'interface — un champ ajouté demain, même valant `UNKNOWN`, suffirait :
+
+    ENTRÉE AUTORISÉE                    ENTRÉE INTERDITE
+      experiment_definition               verdict · status · assessment
+      immutable_observations              finding · conclusion · recommendation
+      provenance                          preliminary_status
+      coverage                            tout dérivé porteur de conclusion
+      environment_identity
+      temporal_evidence
+      self_attack
+
+    SORTIE DU JUDGE
+      verdict · justification · evidence_refs · uncertainty · unmet_conditions
 
 Les modes changent l'angle. Seule la discipline des données change l'autorité.
 
@@ -397,7 +429,191 @@ Borne non négociable : le cerveau peut **mesurer** l'efficacité de ses modes, 
 **déclarer lui-même** qu'il est devenu meilleur. Cette statistique oriente un budget ; elle n'autorise
 aucune conclusion, et elle ne remonte jamais d'un cran l'échelle d'autonomie.
 
+## 21. Les skills sont des capacités, pas des autorités
+
+Le cerveau ne remplace aucune skill existante — `speckit-specify`, `speckit-plan`, `speckit-tasks`,
+l'import de spec, les analyseurs. Il devient le **métacontrôleur** qui décide :
+
+- quand utiliser une skill, et laquelle ;
+- lesquelles de ses sorties sont des **observations directement établies** ;
+- lesquelles sont des **interprétations** ou des **hypothèses** ;
+- lesquelles sont des **informations perdues ou ambiguës** à la conversion ;
+- lesquelles doivent être **vérifiées** avant usage ;
+- lesquelles sont **interdites comme preuve** ;
+- quand une recherche ou une expérience est nécessaire ;
+- quand une spec doit simplement rester `UNKNOWN`.
+
+    DOCUMENT / SPEC / IDÉE EXTERNE
+              ↓
+        SKILL D'INGESTION
+        ┌─────┴─────┐
+     FAITS      HYPOTHÈSES          ← la séparation est faite ICI, pas après
+        └─────┬─────┘
+              ↓
+       CERVEAU ÉPISTÉMIQUE
+     contradictions · UNKNOWNs · falsifieurs
+              ↓
+       RECHERCHE → EXPÉRIENCE → SELF-ATTACK → JUDGE
+              ↓
+       SPEC / PLAN / TASKS → IMPLÉMENTATION
+
+**Le cerveau doit aussi auditer l'outil d'ingestion lui-même**, parce qu'un importeur est un
+instrument comme un autre et peut donc mentir de la même façon :
+
+- transforme-t-il une hypothèse en exigence ?
+- perd-il une contrainte pendant la conversion ?
+- une spec ambiguë ressort-elle artificiellement certaine ?
+- le plan généré suppose-t-il déjà que la solution est correcte ?
+- les tâches produites couvrent-elles réellement les critères de falsification ?
+
+Une spec sur-interprétée par un importeur est exactement la même classe d'erreur qu'un scanner qui
+rend `PASS` sans avoir mesuré. Elle appartient donc à la suite de régression cognitive.
+
+## 22. L'épistémologie ne remplace pas le moteur de décision
+
+**Règle anti-paralysie, et elle prime sur tout le reste en contexte de trading.** Un cerveau qui
+transforme `UNKNOWN` en interdiction d'agir détruirait exactement ce qu'ARIA cherche à faire :
+exploiter l'incertitude d'un marché pendant que la qualité des décisions s'améliore.
+
+> `UNKNOWN` signifie **« nous ne savons pas suffisamment »**, jamais « ne jamais agir ».
+> Autrement dit : `UNKNOWN → ne prétends pas savoir`, et non `UNKNOWN → n'agis pas`.
+
+Une décision reste valide sous incertitude si celle-ci est **explicitement quantifiée, bornée et
+intégrée** au risque, au sizing ou au niveau de confiance. Le rôle du cerveau est de mesurer,
+qualifier, réduire et **exposer** l'incertitude — pour que le moteur de décision puisse l'utiliser.
+
+    OBSERVE → MEASURE → IDENTIFY UNCERTAINTY → PEUT-ON LA RÉDUIRE ?
+                                                ├── OUI → recherche / expérience → signal amélioré
+                                                └── NON → quantifier → le moteur l'intègre
+                                                          → décision · sizing · confiance
+
+Deux cerveaux, deux questions, et le premier n'étouffe jamais le second :
+
+| | Sa question |
+|---|---|
+| **Cerveau épistémique** | qu'avons-nous réellement le droit d'affirmer ? |
+| **Cerveau de trading** | compte tenu de ce qu'on sait, de ce qu'on ignore et du risque, quelle action maximise l'objectif ? |
+
+Exemple concret : sécurité `PASS`, liquidité `PASS`, momentum `PASS`, social `UNKNOWN`, analogue
+historique `UNKNOWN` → **trade possible**, confiance réduite, sizing adapté, observation renforcée.
+Pas un blocage.
+
+Et c'est ainsi que le cerveau *améliore* le trading plutôt que de le freiner : *« ce pattern semble
+performant »* devient, après Attacker/Causal/Temporal/Falsifier, *« le pattern seul n'est pas
+discriminant, mais pattern + accumulation ciblée + récupération structurelle l'est beaucoup plus »*.
+L'intuition faible est devenue un signal meilleur — aucune stratégie n'a été bloquée.
+
+**Ne jamais confondre prudence épistémique et aversion au risque.**
+
+## 23. Le cerveau est un protocole obligatoire, pas une capacité optionnelle
+
+Un document que l'on peut oublier sera oublié. Le cerveau ne doit donc pas être rangé comme une skill
+parmi d'autres : il s'applique **avant** le choix des skills.
+
+    SESSION START → ROUTEUR → CERVEAU → CLASSIFICATION DE LA MISSION
+                                      → SÉLECTION DES SKILLS → EXÉCUTION
+
+**Ne jamais demander « as-tu utilisé le cerveau ? »** — la réponse serait toujours oui. Ce qui se
+vérifie, ce sont les **artefacts produits** : `question · known · unknown · assumptions · evidence ·
+falsifiers · self_attack · conclusion`. Pour une mission non triviale, l'absence inexpliquée d'une de
+ces pièces est détectable.
+
+Séparation des rôles de contrôle, à ne pas confondre :
+
+| | Ce qu'il vérifie |
+|---|---|
+| **Watchdog** | le protocole a-t-il été appliqué ? (jamais la qualité du raisonnement) |
+| **JUDGE** | la conclusion est-elle justifiée ? |
+| **Cerveau** | comment raisonner ? |
+| **Skills** | comment réaliser l'opération ? |
+
+**Profondeur adaptative** — sinon le cerveau devient l'usine à procédures qu'il fallait éviter :
+
+    TRIVIAL                       cerveau minimal
+    NORMAL                        classification + contrôles pertinents
+    HIGH IMPACT                   protocole adversarial complet
+    FINANCIER / SÉCURITÉ CRITIQUE protocole maximal + autorité indépendante
+
+Le protocole est toujours actif ; c'est sa **profondeur** qui varie. Un mode peut être désactivé sans
+que le cerveau le soit. Et cette profondeur a un coût réel — tokens, latence, parfois une opportunité
+de marché — donc elle se mesure : `valeur de l'information obtenue / coût du raisonnement`. Une
+procédure qui supprime 2 % de faux `PASS` en ajoutant 40 secondes est excellente pour la sécurité et
+mauvaise pour un signal meme coin.
+
+**Le protocole est versionné** (`ARIA-EPISTEMIC vN`, horodaté à son chargement) : dans six mois il
+faut pouvoir dire avec quelle version du cerveau une décision a été prise, et quelle règle manquait.
+
+## 24. Quand le cerveau est lui-même le problème
+
+Un cerveau ne peut pas prouver sa propre santé avec ses propres règles — ce serait une boucle
+auto-validante. Deux mécanismes évitent l'impasse.
+
+**La stagnation est une observation sur le raisonnement, pas un échec de recherche.** Quand
+`UNKNOWN` persiste, que les contradictions ne se résolvent pas, qu'aucune hypothèse n'est
+discriminante et que le gain d'information tombe à zéro, itérer davantage dans le même cadre ne sert
+à rien. Le bon réflexe est de conclure : *« mon modèle du problème est peut-être faux »*, et de
+déclencher une **évasion cognitive** : changer d'unité d'analyse, changer d'échelle temporelle,
+chercher une variable cachée, abandonner l'hypothèse centrale, reconstruire le problème de zéro,
+demander la donnée manquante, ou solliciter une évaluation externe.
+
+Cette stagnation s'enregistre (`classe de problème`, `version du cerveau`, `tentatives`,
+`hypothèses`, `gain d'information`, `motifs répétés`) et devient une régression cognitive : la
+prochaine fois qu'un problème lui ressemble, l'évasion se déclenche **plus tôt**.
+
+**Trois niveaux d'autonomie sur soi-même, et la frontière est nette :**
+
+| | Autorisé seul |
+|---|---|
+| Auto-diagnostic — « cette règle échoue dans cette classe de situations » | oui |
+| Auto-recherche — proposer une règle, écrire ses tests, comparer Vn et Vn+1 | oui |
+| **Auto-déploiement** — activer durablement la nouvelle version | **non** |
+
+Le cerveau peut concevoir son successeur ; il ne peut pas s'auto-déclarer amélioré. La régression
+`qui évalue l'évaluateur ?` est infinie, donc la fondation doit être **hors opinion du cerveau** :
+observations immuables, tests reproductibles, environnement contrôlé, métriques historiques,
+expériences pré-enregistrées, provenance, régressions — et, pour tout changement important, autorité
+humaine.
+
+> Un cerveau capable d'évoluer seul, jamais capable de se convaincre seul qu'il évolue.
+
+**La mémoire des erreurs porte sur les classes, pas sur les cas.** Ne pas mémoriser « attention au
+lookahead », mais : l'erreur, son contexte, *pourquoi le raisonnement semblait correct*, comment
+l'attaque l'a cassé, quel signal précoce l'aurait révélée, la régression créée, et à quels domaines
+elle s'applique. C'est ce « pourquoi ça semblait correct » qui a de la valeur — c'est lui qui se
+répétera.
+
+## Verrou final : diversité ≠ indépendance
+
+> **La diversité cognitive n'est pas une preuve d'indépendance.**
+>
+> Plusieurs raisonnements produits par le même modèle constituent plusieurs *analyses*, pas plusieurs
+> *autorités*.
+>
+> L'indépendance doit être obtenue par la séparation des données, de la provenance, des critères de
+> décision et, lorsque nécessaire, par des mécanismes d'évaluation externes au producteur.
+
+Corollaire architectural : il n'y a pas besoin de douze Claude. Un seul cerveau peut passer
+`Architect → Attacker → Falsifier → Measurement Auditor → Path Hunter → Judge` — à condition de savoir
+que ces changements de perspective **n'ont aucune valeur probante en eux-mêmes**.
+
+La puissance cognitive vient des angles multiples.
+La fiabilité vient de l'architecture qui empêche ces angles de se transformer en consensus artificiel.
+
 ## Invariant ultime
 
 > **Le système doit être incapable de produire `PASS` à partir d'une information qu'il n'avait pas
 > légitimement le moyen de connaître.**
+
+Et son corollaire, qui vaut pour chaque capacité que le système utilise :
+
+> **Aucune capacité ne devient une autorité simplement parce qu'elle est sophistiquée, spécialisée ou
+> produite par une IA.**
+>
+> Une skill produit une sortie. Un analyseur produit une mesure. Un LLM produit un raisonnement. Un
+> mode cognitif produit une perspective. Aucun de ces éléments ne constitue à lui seul une preuve.
+>
+> L'autorité vient de la provenance, de l'observation, de la couverture, de la reproductibilité et du
+> protocole de décision.
+
+C'est ce corollaire qui permet au cerveau d'être **très agressif** dans la recherche d'alpha sans que
+cette agressivité dégrade la qualité épistémique du système.
