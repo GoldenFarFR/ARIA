@@ -25,16 +25,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Iterable, Sequence
 
-PASS = "PASS"        # complete, fresh proof that the surface is healthy
-FAIL = "FAIL"        # proof of an actual problem
-UNKNOWN = "UNKNOWN"  # insufficient proof: measurement failed, or coverage is partial
-STALE = "STALE"      # proof exists and was healthy, but is too old to trust now
+PASS = "PASS"              # complete, fresh proof that the surface is healthy
+FAIL = "FAIL"              # proof of an actual problem
+UNOBSERVED = "UNOBSERVED"  # the surface is unknown, or nothing is looking at it
+UNKNOWN = "UNKNOWN"        # insufficient proof: measurement failed, or coverage is partial
+STALE = "STALE"            # proof exists and was healthy, but is too old to trust now
 
-VALID_STATUSES = (PASS, FAIL, UNKNOWN, STALE)
+VALID_STATUSES = (PASS, FAIL, UNOBSERVED, UNKNOWN, STALE)
 
-# Worst-wins ordering. The only property that really matters: PASS is LAST, so
-# it can never mask an UNKNOWN or a STALE sitting next to it.
-_SEVERITY = {FAIL: 0, UNKNOWN: 1, STALE: 2, PASS: 3}
+# Worst-wins ordering. Two properties carry the design:
+#   - PASS is LAST, so it can never mask a weaker neighbour;
+#   - UNOBSERVED outranks UNKNOWN, because partial knowledge beats none at all.
+# FAIL stays first: a proven problem is actionable now, where UNOBSERVED is
+# insidious but not urgent.
+_SEVERITY = {FAIL: 0, UNOBSERVED: 1, UNKNOWN: 2, STALE: 3, PASS: 4}
 
 
 @dataclass
@@ -109,12 +113,69 @@ def measured(
     )
 
 
+def surface_coverage(
+    id: str,
+    *,
+    discovered: bool,
+    observed: bool,
+    verified: bool = False,
+    detail: str = "",
+    checked_at: float | None = None,
+    max_age_seconds: int | None = None,
+    source: str = "",
+) -> Evidence:
+    """Derive a status from the four coverage properties of a surface.
+
+    UNOBSERVED is never declared by a collector -- it FALLS OUT of this
+    comparison. A collector only ever reports on what it already knows to look
+    at, which is precisely why the 21/07 incident had no status able to express
+    it: a production venv existed, nothing watched it, and every check on the
+    board was green.
+
+        discovered?  is the surface known to the system at all
+        observed?    does any mechanism actually look at it
+        verified?    did that mechanism really measure
+        freshness?   is that measurement still valid
+
+    Undiscovered, or discovered but unwatched, is UNOBSERVED. Watched but
+    unmeasured is UNKNOWN -- a lesser problem, because something IS looking.
+    """
+    if not discovered or not observed:
+        why = "not discovered" if not discovered else "discovered but no mechanism observes it"
+        return Evidence(
+            id=id,
+            status=UNOBSERVED,
+            detail=f"{detail} ({why})".strip(),
+            checked_at=checked_at,
+            max_age_seconds=max_age_seconds,
+            source=source,
+        )
+    if not verified:
+        return Evidence(
+            id=id,
+            status=UNKNOWN,
+            detail=f"{detail} (observed but not verified)".strip(),
+            checked_at=checked_at,
+            max_age_seconds=max_age_seconds,
+            source=source,
+        )
+    return Evidence(
+        id=id,
+        status=PASS,
+        detail=detail,
+        checked_at=checked_at,
+        max_age_seconds=max_age_seconds,
+        source=source,
+    )
+
+
 def apply_freshness(ev: Evidence, now: float) -> Evidence:
     """Age a PASS into STALE once its proof is older than max_age_seconds.
 
     Only a PASS decays. A FAIL stays a FAIL when it gets old -- an unfixed
-    problem does not become a measurement gap -- and UNKNOWN is already the
-    weakest state there is.
+    problem does not become a measurement gap -- and neither UNKNOWN nor
+    UNOBSERVED can soften with time: an unwatched surface does not become
+    watched by waiting.
     """
     if ev.status != PASS:
         return ev
