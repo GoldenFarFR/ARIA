@@ -347,6 +347,19 @@ class TrendingPool:
     dex_name: str | None = None
     volume_usd_24h: float | None = None
     transactions_24h: int | None = None
+    # 03/09 -- purely additive, same doctrine as the 18/08 pass above.
+    # Populated only by ``onchain_pool_discovery.py`` from the WS activity
+    # snapshot it already computes at qualification time (see
+    # ``onchain_activity_observation.py``) -- ``None`` for GeckoTerminal/
+    # DexPaprika, which never observe live swap direction. First consumer:
+    # the qualified-candidate radar notification (real buy/sell/volume,
+    # never a fabricated momentum figure -- see that module's docstring).
+    buy_count: int | None = None
+    sell_count: int | None = None
+    buy_volume_quote: float | None = None
+    sell_volume_quote: float | None = None
+    cumulative_volume_quote: float | None = None
+    distinct_traders_count: int | None = None
 
 
 @dataclass

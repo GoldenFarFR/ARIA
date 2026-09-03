@@ -616,6 +616,20 @@ class OnChainPoolDiscoveryFeed:
                 price_usd=price_usd, price_change_pct={}, transactions_m15=None,
                 volume_usd_m15=None, reserve_usd=reserve_usd,
                 pool_created_at=cand.pool_created_at, dex_id=cand.dex_id,
+                # 03/09 -- same `snapshot` already computed above for
+                # onchain_activity_observation.record_observation, reused
+                # here rather than a second read. None when the WS snapshot
+                # was never available for this candidate (never fabricated).
+                buy_count=snapshot.buy_count if snapshot.available else None,
+                sell_count=snapshot.sell_count if snapshot.available else None,
+                buy_volume_quote=snapshot.buy_volume_quote if snapshot.available else None,
+                sell_volume_quote=snapshot.sell_volume_quote if snapshot.available else None,
+                cumulative_volume_quote=(
+                    snapshot.cumulative_volume_quote if snapshot.available else None
+                ),
+                distinct_traders_count=(
+                    snapshot.distinct_traders_count if snapshot.available else None
+                ),
             ))
             expired_keys.append(key)
         for key in expired_keys:
