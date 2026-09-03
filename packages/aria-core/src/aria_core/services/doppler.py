@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import httpx
 
@@ -67,6 +68,16 @@ _ETH_COINGECKO_ID = "ethereum"
 # would multiply a token/cbBTC ratio by the wrong asset's price (BTC trades
 # at a very different level than ETH).
 _BTC_COINGECKO_ID = "bitcoin"
+
+# 2026-09-03 (#271 root cause) -- eth_usd_rate/btc_usd_rate had no cache at
+# all: CoinGecko's entire monthly quota (9500 credits, Demo tier) was found
+# spent in 8 hours on 2026-09-01, one call per pool needing a WETH/USD
+# conversion. Same TTL-cache doctrine as sol_usd_rate.py's proven
+# sol_usd_cached -- a rate this stable doesn't need a fresh read every call.
+ETH_USD_TTL_SECONDS = 60.0
+BTC_USD_TTL_SECONDS = 60.0
+_eth_usd_cache: tuple[float, float] | None = None
+_btc_usd_cache: tuple[float, float] | None = None
 
 _Q96 = 2 ** 96
 
@@ -216,43 +227,91 @@ def price_from_sqrt_price_x96(
     return human_ratio if token_is_currency0 else (1.0 / human_ratio)
 
 
-async def eth_usd_rate() -> float | None:
-    """Current ETH/USD rate (WETH == ETH for valuation purposes) -- ``None``
-    on any CoinGecko failure, fail-open, same pattern as
-    ``services.virtuals.virtual_usd_rate``. Callers must never fabricate a
-    USD price from a WETH-denominated one when this returns ``None``."""
-    from aria_core.services.coingecko import coingecko_client
+async def _usd_rate_via_dexscreener(token_address: str) -> float | None:
+    """Reads a token's USD price directly from its most-liquid DexScreener
+    pair on Base -- no monthly quota, unlike CoinGecko (#271's root cause).
+    Same "free/on-chain-adjacent source first" doctrine as sol_usd_cached's
+    Jupiter-first design. The highest-liquidity pair wins, never just the
+    first one, so a thin/stale pair can't silently outrank a deep one."""
+    from aria_core.services import dexscreener
 
     try:
-        result = await coingecko_client.get_simple_price([_ETH_COINGECKO_ID], vs_currencies=["usd"])
+        pairs = await dexscreener.fetch_token_pairs(token_address, chain="base")
     except Exception as exc:  # noqa: BLE001
-        logger.info("doppler.eth_usd_rate: CoinGecko failed (%s)", exc)
+        logger.info("doppler._usd_rate_via_dexscreener: failed (%s)", exc)
         return None
-    if not result.available:
+    candidates = [p for p in pairs if p.price_usd > 0]
+    if not candidates:
         return None
-    rate = result.prices.get(_ETH_COINGECKO_ID, {}).get("usd")
-    if not rate or rate <= 0:
-        return None
-    return rate
+    best = max(candidates, key=lambda p: p.liquidity_usd)
+    return best.price_usd
+
+
+async def eth_usd_rate() -> float | None:
+    """Current ETH/USD rate (WETH == ETH for valuation purposes), at most
+    ``ETH_USD_TTL_SECONDS`` old. DexScreener (WETH/Base pairs) is tried
+    first, CoinGecko only as a fallback -- ``None`` only if both fail with no
+    prior cached value, fail-open, same pattern as
+    ``services.virtuals.virtual_usd_rate``. Callers must never fabricate a
+    USD price from a WETH-denominated one when this returns ``None``."""
+    global _eth_usd_cache
+    now = time.monotonic()
+    if _eth_usd_cache and now - _eth_usd_cache[0] < ETH_USD_TTL_SECONDS:
+        return _eth_usd_cache[1]
+
+    rate = await _usd_rate_via_dexscreener(WETH_ADDRESS)
+
+    if rate is None:
+        from aria_core.services.coingecko import coingecko_client
+
+        try:
+            result = await coingecko_client.get_simple_price([_ETH_COINGECKO_ID], vs_currencies=["usd"])
+            if result.available:
+                candidate = result.prices.get(_ETH_COINGECKO_ID, {}).get("usd")
+                if candidate and candidate > 0:
+                    rate = candidate
+        except Exception as exc:  # noqa: BLE001
+            logger.info("doppler.eth_usd_rate: CoinGecko fallback failed (%s)", exc)
+
+    if rate is not None:
+        _eth_usd_cache = (now, rate)
+        return rate
+    # Both sources failed/unavailable -- keep the last known rate rather
+    # than returning None outright -- a slightly stale rate is a better
+    # basis than none, same doctrine as sol_usd_rate.py's sol_usd_cached.
+    return _eth_usd_cache[1] if _eth_usd_cache else None
 
 
 async def btc_usd_rate() -> float | None:
-    """Current BTC/USD rate (cbBTC == BTC for valuation purposes) -- same
-    fail-open contract as ``eth_usd_rate`` above, same CoinGecko call
-    (shares its budget, no extra client)."""
-    from aria_core.services.coingecko import coingecko_client
+    """Current BTC/USD rate (cbBTC == BTC for valuation purposes), at most
+    ``BTC_USD_TTL_SECONDS`` old. DexScreener (cbBTC/Base pairs) is tried
+    first, CoinGecko only as a fallback -- same doctrine and caching contract
+    as ``eth_usd_rate`` above."""
+    global _btc_usd_cache
+    now = time.monotonic()
+    if _btc_usd_cache and now - _btc_usd_cache[0] < BTC_USD_TTL_SECONDS:
+        return _btc_usd_cache[1]
 
-    try:
-        result = await coingecko_client.get_simple_price([_BTC_COINGECKO_ID], vs_currencies=["usd"])
-    except Exception as exc:  # noqa: BLE001
-        logger.info("doppler.btc_usd_rate: CoinGecko failed (%s)", exc)
-        return None
-    if not result.available:
-        return None
-    rate = result.prices.get(_BTC_COINGECKO_ID, {}).get("usd")
-    if not rate or rate <= 0:
-        return None
-    return rate
+    from aria_core.services.evm_swap_ws import _CBBTC_ADDRESSES
+
+    rate = await _usd_rate_via_dexscreener(next(iter(_CBBTC_ADDRESSES)))
+
+    if rate is None:
+        from aria_core.services.coingecko import coingecko_client
+
+        try:
+            result = await coingecko_client.get_simple_price([_BTC_COINGECKO_ID], vs_currencies=["usd"])
+            if result.available:
+                candidate = result.prices.get(_BTC_COINGECKO_ID, {}).get("usd")
+                if candidate and candidate > 0:
+                    rate = candidate
+        except Exception as exc:  # noqa: BLE001
+            logger.info("doppler.btc_usd_rate: CoinGecko fallback failed (%s)", exc)
+
+    if rate is not None:
+        _btc_usd_cache = (now, rate)
+        return rate
+    return _btc_usd_cache[1] if _btc_usd_cache else None
 
 
 _BLOCKSCOUT_BASE_URL = "https://base.blockscout.com/api/v2"

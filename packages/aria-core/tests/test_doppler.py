@@ -18,6 +18,21 @@ import pytest
 
 from aria_core.services import doppler
 
+
+@pytest.fixture(autouse=True)
+def _reset_rate_caches(monkeypatch):
+    monkeypatch.setattr(doppler, "_eth_usd_cache", None)
+    monkeypatch.setattr(doppler, "_btc_usd_cache", None)
+    # Default: DexScreener finds nothing, so every existing CoinGecko-only
+    # test keeps exercising the fallback path unchanged. Tests specific to
+    # the DexScreener-first behavior override this locally.
+    from aria_core.services import dexscreener
+
+    async def _empty_pairs(contract, *, chain="base"):
+        return []
+
+    monkeypatch.setattr(dexscreener, "fetch_token_pairs", _empty_pairs)
+
 CLOWNS = "0x8DfBb49b689644454cf9D924fD426E1df53c2bA3"
 WETH = doppler.WETH_ADDRESS
 REAL_SQRT_PRICE_X96_AT_INIT = 10764248344314596577690877662916079
@@ -386,6 +401,149 @@ async def test_btc_usd_rate_network_error_returns_none(monkeypatch):
 
     monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
     assert await doppler.btc_usd_rate() is None
+
+
+# ── eth_usd_rate/btc_usd_rate caching (#271 root cause, 2026-09-03) ─────────
+# CoinGecko's whole monthly quota (9500 credits) was found spent in 8 hours
+# on 2026-09-01 -- eth_usd_rate/btc_usd_rate had no cache at all, so every
+# pool needing a WETH/USD conversion triggered a fresh call. Same pattern as
+# sol_usd_rate.py's already-proven sol_usd_cached (TTL cache, same doctrine).
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_two_close_calls_only_hit_coingecko_once(monkeypatch):
+    from aria_core.services import coingecko
+
+    calls = 0
+
+    class _FakeResult:
+        available = True
+        prices = {"ethereum": {"usd": 1859.16}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        nonlocal calls
+        calls += 1
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    rate1 = await doppler.eth_usd_rate()
+    rate2 = await doppler.eth_usd_rate()
+    assert rate1 == rate2 == pytest.approx(1859.16)
+    assert calls == 1, "a second call within the TTL must reuse the cached rate, never re-hit CoinGecko"
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_refreshes_after_ttl_expires(monkeypatch):
+    from aria_core.services import coingecko
+
+    monkeypatch.setattr(doppler, "_eth_usd_cache", (0.0, 1800.0))
+
+    class _FakeResult:
+        available = True
+        prices = {"ethereum": {"usd": 1900.0}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    monkeypatch.setattr(doppler.time, "monotonic", lambda: 0.0 + doppler.ETH_USD_TTL_SECONDS + 1)
+    rate = await doppler.eth_usd_rate()
+    assert rate == pytest.approx(1900.0), "a stale cache entry past its TTL must trigger a fresh call"
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_failed_refresh_keeps_last_known_rate(monkeypatch):
+    from aria_core.services import coingecko
+
+    monkeypatch.setattr(doppler, "_eth_usd_cache", (0.0, 1800.0))
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        raise RuntimeError("CoinGecko down")
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    monkeypatch.setattr(doppler.time, "monotonic", lambda: 0.0 + doppler.ETH_USD_TTL_SECONDS + 1)
+    rate = await doppler.eth_usd_rate()
+    assert rate == pytest.approx(1800.0), (
+        "a failed refresh must fall back to the last known rate, never None, "
+        "when a (possibly stale) cached value exists -- same doctrine as sol_usd_cached"
+    )
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_prefers_dexscreener_over_coingecko(monkeypatch):
+    """DexScreener has no monthly quota, unlike CoinGecko (#271's root
+    cause) -- same "free/on-chain source first, paid/capped API as fallback"
+    doctrine as sol_usd_cached (Jupiter first, CoinGecko fallback)."""
+    from aria_core.services import dexscreener
+
+    coingecko_calls = 0
+
+    class _Pair:
+        def __init__(self, price_usd, liquidity_usd):
+            self.price_usd = price_usd
+            self.liquidity_usd = liquidity_usd
+
+    async def _fake_fetch_token_pairs(contract, *, chain="base"):
+        assert contract == doppler.WETH_ADDRESS
+        assert chain == "base"
+        # Two pairs -- the highest-liquidity one must win, never the first.
+        return [_Pair(1850.0, 500_000.0), _Pair(1859.16, 9_000_000.0)]
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        nonlocal coingecko_calls
+        coingecko_calls += 1
+        raise AssertionError("CoinGecko must not be called when DexScreener succeeds")
+
+    monkeypatch.setattr(dexscreener, "fetch_token_pairs", _fake_fetch_token_pairs)
+    from aria_core.services import coingecko
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+
+    rate = await doppler.eth_usd_rate()
+    assert rate == pytest.approx(1859.16), "must pick the highest-liquidity pair's price"
+    assert coingecko_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_eth_usd_rate_falls_back_to_coingecko_when_dexscreener_empty(monkeypatch):
+    from aria_core.services import dexscreener
+
+    async def _fake_fetch_token_pairs(contract, *, chain="base"):
+        return []
+
+    class _FakeResult:
+        available = True
+        prices = {"ethereum": {"usd": 1859.16}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        return _FakeResult()
+
+    monkeypatch.setattr(dexscreener, "fetch_token_pairs", _fake_fetch_token_pairs)
+    from aria_core.services import coingecko
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+
+    rate = await doppler.eth_usd_rate()
+    assert rate == pytest.approx(1859.16)
+
+
+@pytest.mark.asyncio
+async def test_btc_usd_rate_two_close_calls_only_hit_coingecko_once(monkeypatch):
+    from aria_core.services import coingecko
+
+    calls = 0
+
+    class _FakeResult:
+        available = True
+        prices = {"bitcoin": {"usd": 95412.30}}
+
+    async def _fake_get_simple_price(self, coin_ids, *, vs_currencies=None):
+        nonlocal calls
+        calls += 1
+        return _FakeResult()
+
+    monkeypatch.setattr(coingecko.CoinGeckoClient, "get_simple_price", _fake_get_simple_price)
+    rate1 = await doppler.btc_usd_rate()
+    rate2 = await doppler.btc_usd_rate()
+    assert rate1 == rate2 == pytest.approx(95412.30)
+    assert calls == 1
 
 
 # ── get_token_price_usd (end-to-end, everything mocked) ─────────────────────
