@@ -43,10 +43,17 @@ short_runs=0
 while true; do
     CLAUDE_BIN=$(resolve_cli)
 
-    # `--continue` reattaches to the conversation this directory last used, but
-    # the CLI only records it for roughly 4 hours -- past that it exits with an
-    # error. So we try it first (a short outage keeps the same conversation) and
-    # fall through to a fresh session when it is too old to reattach.
+    # `--continue` reattaches to the conversation this directory last used.
+    # NOTE (03/09, corrected): the "~4h, then it errors out" claim that used to
+    # be here was never actually verified -- its own introducing commit
+    # (bf450354) said so explicitly ("Not verified: the first real restart").
+    # Official docs (code.claude.com/docs/en/sessions) document no such cutoff:
+    # local transcripts default to a 30-day retention (`cleanupPeriodDays`),
+    # and the only time-based behavior is prompt-cache expiry (~1h idle, >100k
+    # tokens), which changes the cost of the next request, never blocks resume.
+    # We still try `--continue` first and fall through on failure below --
+    # that fallback is correct regardless of what the real cutoff turns out to
+    # be, so no logic here depends on the false "~4h" number.
     if [ "$short_runs" -ge 2 ]; then
         # Repeated instant exits: stop passing optional flags entirely.
         ARGS=(remote-control)
