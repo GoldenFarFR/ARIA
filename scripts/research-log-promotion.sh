@@ -45,6 +45,22 @@ echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- demarrage passage promotion ===" >> 
 
 cd /opt/aria || { echo "cd /opt/aria a echoue" >> "$RUN_LOG"; exit 1; }
 
+# --- Garde-fou de budget CLAUDE.md (03/09, apres incident reel) --------------
+# Le 03/09 ce passage a ajoute 8 entrees de ~500 caracteres directement dans
+# CLAUDE.md, qui a franchi son plafond CI de 100 Ko et bloque le push de trois
+# sessions. Le prompt a ete corrige pour router le detail vers docs/, mais une
+# INSTRUCTION DANS UN PROMPT N'EST PAS UNE GARANTIE : on mesure donc avant et
+# apres, mecaniquement.
+#
+# Ce garde-fou ne REPARE jamais le fichier lui-meme -- un "git checkout
+# CLAUDE.md" ecraserait le travail d'une session soeur en cours (il y en avait
+# une ce jour-la). Il detecte, signale, et sort en non-zero. La reparation
+# reste une decision humaine.
+CLAUDE_MD_BUDGET=102400
+CLAUDE_MD_SIZE_BEFORE=$(stat -c %s /opt/aria/CLAUDE.md 2>/dev/null || echo 0)
+CLAUDE_MD_HEADROOM=$(( CLAUDE_MD_BUDGET - CLAUDE_MD_SIZE_BEFORE ))
+echo "budget CLAUDE.md : ${CLAUDE_MD_SIZE_BEFORE}/${CLAUDE_MD_BUDGET} octets, marge ${CLAUDE_MD_HEADROOM}" >> "$RUN_LOG"
+
 PROMPT=$(cat <<'PROMPT_EOF'
 Tu es la session commandement du projet ARIA, qui tourne directement sur le
 VPS de production (/opt/aria, repo git GoldenFarFR/ARIA). Contexte : un cron
@@ -78,15 +94,35 @@ ETAPES :
    aveuglement, applique la meme rigueur que pour toute revue croisee
    externe (Gemini/ChatGPT) deja pratiquee dans ce projet.
 
-4. Pour ce qui est reellement actionnable :
-   - Point simple et clair (correction ciblee, piste de config) : ajoute
-     un nouveau bullet numerote au backlog dans CLAUDE.md, style et
-     emplacement coherents avec le reste du fichier. Utilise le prochain
-     numero #N disponible (cherche le plus grand #N deja utilise).
+4. Pour ce qui est reellement actionnable. ROUTAGE OBLIGATOIRE, corrige le
+   03/09 apres un incident reel : le detail va TOUJOURS dans docs/, jamais
+   dans CLAUDE.md. Le 03/09 ce script a ajoute 8 entrees de ~500 caracteres
+   directement dans CLAUDE.md, qui a franchi son plafond CI de 100 Ko et a
+   bloque le push de trois sessions. CLAUDE.md est un ROUTEUR : il dit ce
+   qui existe, jamais le detail.
+   - Point simple et clair (correction ciblee, piste de config) : ecris
+     l'entree COMPLETE (source, action dev precise) dans
+     /opt/aria/docs/backlog-technique.md. Utilise le prochain numero #N
+     disponible (cherche le plus grand #N deja utilise, dans les deux
+     fichiers). Dans CLAUDE.md, AU PLUS une ligne d'index de 100
+     CARACTERES MAXIMUM au format "- #N (JJ/MM) — <sujet en 6 mots>.
+     Detail: `docs/backlog-technique.md`." Si plusieurs entrees sortent
+     du meme passage, REGROUPE-LES en une seule ligne d'index
+     ("- #N..#M (JJ/MM, detail `docs/backlog-technique.md`) — sujet1 ;
+     sujet2 ; ..."). Verifie que le detail existe REELLEMENT dans
+     backlog-technique.md avant d'ecrire le pointeur : un pointeur vers
+     un detail absent est un mensonge, et il y en a deja eu.
    - Sujet meritant d'etre creuse en profondeur avant d'etre actionnable :
      cree une fiche /opt/aria/docs/aria-learning-inbox/AAAA-MM-JJ-sujet.md
-     (lis-en une ou deux existantes pour le format), et ajoute une ligne
-     dans CLAUDE.md pointant vers cette fiche.
+     (lis-en une ou deux existantes pour le format), et ajoute dans
+     CLAUDE.md une ligne d'index de 100 caracteres maximum pointant vers
+     cette fiche.
+   - BUDGET : avant d'ecrire dans CLAUDE.md, mesure sa taille
+     ("stat -c %s /opt/aria/CLAUDE.md"). Le plafond CI est 102400 octets.
+     Si ton ajout ferait franchir ce plafond, N'ECRIS RIEN dans CLAUDE.md :
+     mets tout dans docs/, et signale-le explicitement dans ton rapport
+     final. Un backlog complet dans docs/ sans ligne d'index vaut
+     infiniment mieux qu'une CI rouge.
    - N'INTEGRE JAMAIS directement dans du CODE ou dans un fichier de
      garde-fou (permission_mode, wallet_guard, regles-uniques,
      config.toml, tout .env). Cette tache se limite a la
@@ -106,7 +142,10 @@ ETAPES :
    disque).
 
 7. Si tu as modifie CLAUDE.md et/ou ajoute des fichiers dans
-   docs/aria-learning-inbox/ : relis CLAUDE.md INTEGRALEMENT apres ta
+   docs/ : verifie D'ABORD que CLAUDE.md tient sous son plafond
+   ("stat -c %s /opt/aria/CLAUDE.md" doit rendre moins de 102400) -- si
+   non, retire tes lignes d'index de CLAUDE.md avant toute autre chose,
+   le detail dans docs/ suffit. Puis relis CLAUDE.md INTEGRALEMENT apres ta
    modification pour verifier la coherence (norme absolue du projet,
    section "Regles absolues"), puis commit et push directement sur main
    (tu as l'autorite de commit etablie en tant que session commandement)
@@ -151,6 +190,25 @@ claude -p "$PROMPT" \
   --add-dir /opt/aria-data/research-loop \
   -n research-log-promotion \
   >> "$RUN_LOG" 2>&1
+
+# --- Verification mecanique du budget, apres coup ---------------------------
+CLAUDE_MD_SIZE_AFTER=$(stat -c %s /opt/aria/CLAUDE.md 2>/dev/null || echo 0)
+echo "CLAUDE.md apres passage : ${CLAUDE_MD_SIZE_AFTER} octets (avant ${CLAUDE_MD_SIZE_BEFORE})" >> "$RUN_LOG"
+
+if [ "$CLAUDE_MD_SIZE_AFTER" -gt "$CLAUDE_MD_BUDGET" ]; then
+  OVER=$(( CLAUDE_MD_SIZE_AFTER - CLAUDE_MD_BUDGET ))
+  echo "ECHEC BUDGET : CLAUDE.md depasse de ${OVER} octets -- la CI va refuser le push" >> "$RUN_LOG"
+  DB="/opt/aria-data/aria.db"
+  if [ -f "$DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+    NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    DETAIL="CLAUDE.md fait ${CLAUDE_MD_SIZE_AFTER} octets pour un plafond CI de ${CLAUDE_MD_BUDGET} (depassement ${OVER}). Le passage de promotion a ecrit dans CLAUDE.md au lieu de router le detail vers docs/backlog-technique.md. Le fichier n a PAS ete repare automatiquement : une session soeur peut y travailler. Action : deplacer le detail vers docs/, ne garder qu une ligne d index de 100 caracteres maximum."
+    sqlite3 -cmd ".timeout 5000" "$DB" \
+      "INSERT INTO system_issues (source, title, detail, severity, status, dedup_key, opened_at)
+       SELECT 'research-log-promotion', 'Promotion : CLAUDE.md a franchi son plafond CI', '${DETAIL}', 'critical', 'open', 'promotion-claude-md-budget', '${NOW_ISO}'
+       WHERE NOT EXISTS (SELECT 1 FROM system_issues WHERE dedup_key='promotion-claude-md-budget' AND status='open');" 2>/dev/null
+  fi
+  exit 2
+fi
 EXIT_CODE=$?
 
 echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) -- fin passage (exit ${EXIT_CODE}) ===" >> "$RUN_LOG"
