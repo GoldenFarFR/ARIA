@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Import a GoldenFarFR repository on demand (03/09, operator decision:
-# "le repo officiel de travail soit aria et les autres ils doivent les importer
-# si je leur demande d'y travailler").
+# Import a GoldenFarFR repository on demand. Operator decision, 03/09: ARIA is
+# the official working tree, every other repo gets imported only when work on it
+# is actually requested.
 #
 # ARIA is the only permanently checked-out repository on this host. Everything
 # else is pulled in when the operator actually asks for work on it, then can be
