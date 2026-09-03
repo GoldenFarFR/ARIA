@@ -1,0 +1,301 @@
+# H-SEC-042 — no production execution path signs with wallet capability outside expected controls
+
+status: **PENDING** — hypothesis, method, and path space frozen 2026-09-03,
+before path-by-path verification concluded. Verified via the V1 static-source
+method below (no secret value, no environment dump, ever). Falsifiers (what
+would flip each path's finding) are the "expected controls" named per path
+below, defined before this document's verdict section was written.
+
+This investigation follows a real method violation earlier the same day
+(`docker exec aria-api env`/`printenv` run to check gate values before this
+was caught and stopped) — see `docs/HANDOFF_SECURITE.md`'s 2026.09.03 entry
+(commit `b9ea39a6`) and the frozen method below, written by the operator in
+direct response to that incident.
+
+## Hypothesis (frozen, operator-authored verbatim, 2026-09-03)
+
+> Aucun chemin d'exécution de production ne permet de signer une transaction
+> avec une capacité de wallet sans passer par les contrôles de sécurité
+> attendus.
+
+## Method (frozen alongside the hypothesis — operator-authored verbatim,
+kept word for word like `research/CONSTITUTION.md`'s own operator text,
+never reworded)
+
+> 1. Sources autorisées : code source versionné ; imports et dépendances ;
+>    tests ; scripts opérationnels ; Dockerfile/compose (éléments non
+>    secrets uniquement) ; unités systemd (hors variables/environnements
+>    sensibles) ; configurations versionnées sans valeurs secrètes ;
+>    noms/références de symboles et gates, sans leurs valeurs.
+> 2. Sources interdites : `.env`, `docker inspect`, `docker exec ... env`,
+>    `docker exec ... printenv`, `/proc/*/environ`, secrets manager,
+>    variables d'environnement avec leurs valeurs, credentials/clés
+>    privées/tokens. Même avec un grep en aval, la commande source reste
+>    interdite.
+> 3. On cherche "quels sont tous les chemins logiciels permettant d'atteindre
+>    une capacité de signature ?", jamais "quelle est la clé utilisée ?".
+> 4. Produire PATH_SET avant toute conclusion, puis expliquer pourquoi cet
+>    ensemble est complet, uniquement à partir de sources autorisées — une
+>    simple liste issue d'un grep ne suffit pas.
+> 5. Chaque chemin identifié doit être suivi jusqu'à sa capacité de
+>    signature : PATH_IDENTIFIED → PATH_VERIFIED → FINDING/NO_FINDING. Un
+>    chemin impossible à vérifier reste UNKNOWN, jamais implicitement sûr.
+> 6. Verdict : `completeness_proven AND paths_exhausted AND
+>    every_path_verified AND no_finding → PASS`. Sinon, insuffisance de
+>    preuve → UNKNOWN. Chemin vérifié démontrant la violation → FAIL.
+> 7. Règle d'arrêt : si une information semble nécessiter une valeur
+>    d'environnement/secret/clé/dump de processus/`docker inspect`/
+>    `printenv`/`env`, on ne contourne pas — on consigne
+>    `observation_boundary_reached → preuve incomplète → UNKNOWN`.
+>    L'exhaustivité de l'investigation ne justifie jamais de violer la
+>    frontière de sécurité de l'observation.
+
+## Why this hypothesis, and not another, first
+
+First real business-mission P2 candidate (financial capability, max severity
+by construction) once the generic derivation mechanism (FR-015/016,
+`scripts/security_scientist_investigation.py`, `run_investigation()`) was
+proven test-first on a synthetic pipeline. Chosen by the operator explicitly,
+2026-09-03.
+
+## Path space identified (via static sources only — source code, imports,
+versioned comments/constants; verified 2026-09-03; grep methodology below)
+
+**PATH-001 — Coinbase Agentic Wallet pilot (EOA), Base, ~10-25$**
+- Files: `agent_wallet_pilot.py` (application-layer controls) →
+  `agent_wallet_cdp_adapter.py` (low-level CDP signing call).
+- Entrypoint: `heartbeat.py` task `agent_wallet_pilot_cycle` →
+  `agent_wallet_pilot_cycle.run_agent_wallet_pilot_cycle()`.
+- Expected controls, as documented in `agent_wallet_pilot.py`'s own doctrine
+  comment: dedicated gate → kill-switch (`outgoing_pause.is_paused(strict=
+  True)`) → real-balance cap (`MAX_TRANSACTION_USD`) → forced slippage
+  (`MAX_SLIPPAGE_BPS`; any different `slippage_bps` argument is logged and
+  IGNORED, never honored) → execution → systematic logging. Transfers add a
+  strict address allowlist (`ALLOWED_TRANSFER_ADDRESS`, exact-match compare).
+- Verification: **PATH_VERIFIED**. Exhaustive grep for real callers (import +
+  call, not a comment substring) of `agent_wallet_cdp_adapter.execute_swap`/
+  `transfer_usdc` across `packages/aria-core/src`, `vanguard/backend`,
+  `scripts` (excluding tests) found exactly one: `agent_wallet_pilot_cycle.
+  py:195`, which goes through `agent_wallet_pilot.attempt_swap` and therefore
+  the controls above. **NO_FINDING** for this path as it exists today.
+
+**PATH-001b — structural gap, documented by the code itself, not merely
+inferred**
+- The low-level signer (`agent_wallet_cdp_adapter.execute_swap`/
+  `transfer_usdc`) carries no guard of its own — every bound (cap, address
+  allowlist) lives ONLY in the `agent_wallet_pilot.py` application layer.
+  `agent_wallet_cdp_policy.py`'s own module docstring states this directly:
+  "a code path that skipped `attempt_swap`/`attempt_transfer` and called
+  `agent_wallet_cdp_adapter.execute_swap`/`transfer_usdc` directly would be
+  signed by CDP without objection." A corrective mechanism (a CDP-side
+  Policy Engine, `build_pilot_bounded_policy()`) exists in code for exactly
+  this gap but is explicitly **not applied**: "Nothing here is applied...
+  No production module imports this file" (a dedicated test asserts it).
+- Verification: **PATH_VERIFIED** (same exhaustive-caller grep as PATH-001).
+  **FINDING (structural, not active)**: no direct call bypassing
+  `attempt_swap`/`attempt_transfer` exists today, so there is no live
+  violation — but the bypass is structurally possible and the code says so
+  itself. Recorded as a distinct finding class from "active violation,"
+  never silently folded into PATH-001's NO_FINDING.
+
+**PATH-002 — Solana real-money pilot (locally-loaded delegate key)**
+- Files: `solana_trade_pilot.py` (`MAX_TRADE_USD = 0.10`, `MAX_SLIPPAGE_BPS
+  = 1000`, kill-switch) → `solana_agent_wallet.py` → `onchain/
+  jupiter_swap_signer.py` (`sign_transaction(swap_transaction_b64, keypair)`
+  with a keypair loaded from a local file).
+- Entrypoint: **none found**. `heartbeat.py` has zero reference to
+  `solana_trade_pilot`. An exhaustive grep for real imports (`from aria_core
+  ... import solana_agent_wallet`, not a comment mentioning the filename —
+  four false positives caught and discarded during this exact search: `services
+  /solana_gateway.py`, `sol_usd_rate.py`, `solana_rpc_budget.py`,
+  `pumpfun_bonding_ws.py` all only *mention* the module name in a comment)
+  across the whole repo returns zero real callers.
+- Verification: **PATH_VERIFIED** (exhaustive caller search performed).
+  **NO_FINDING** — well-controlled code, currently dormant (unreachable from
+  any known production entrypoint in the static call graph).
+
+**PATH-003 — Robinhood Chain testnet rehearsal**
+- Files: `onchain/robinhood_pilot_cycle.py` → `onchain/
+  safe_robinhood_signer.py` (`account.sign_transaction(tx)`).
+- Entrypoint: `heartbeat.py` task → `run_robinhood_testnet_rehearsal_cycle()`.
+- Expected controls, per the file's own header comment: "gate → kill-switch
+  → on-chain cap → signing → execution → log." Network: `CHAIN =
+  "robinhood_testnet"` hard-coded, comment states funds "hold zero value
+  (testnet)."
+- Verification: **PATH_VERIFIED** on the application-layer controls.
+  **NO_FINDING**. The deployed contract's actual testnet-vs-mainnet status
+  is **UNKNOWN** in this pass — confirming that would need an on-chain read,
+  outside this static-source method; left as a gap, not assumed safe.
+
+**PATH-004 — Sepolia autonomous rehearsal**
+- Files: `onchain/sepolia_autonomous.py` → `onchain/sepolia_wallet.py`.
+- Entrypoint: `heartbeat.py` task `sepolia_autonomous_cycle`.
+- Expected controls: kill-switch re-read every cycle (`outgoing_pause.
+  is_paused()`), `MAX_AUTONOMOUS_TX_PER_DAY = 12` (sanity cap), fixed
+  mechanical `TEST_SWAP_AMOUNT_WEI` (never a variable/Kelly-sized amount),
+  network documented in the module's own opening comment as "testnet ONLY."
+- Verification: **PATH_VERIFIED**. **NO_FINDING**.
+
+**PATH-005 — Squads Solana multisig (devnet)**
+- Files: `onchain/squads_solana_signer.py` (locally-loaded delegate key via
+  file), reached from `jupiter_swap_signer.py` (PATH-002, already dormant)
+  and `homemade_agent_wallet.py` (PATH-006).
+- Network: devnet RPC hard-coded (`_devnet_rpc_url()`), never mainnet in
+  this module's own code.
+- Verification: **PATH_VERIFIED**. **NO_FINDING** — network separation is a
+  structural fact of the hard-coded RPC endpoint, not a convention.
+
+**PATH-006 — `homemade_agent_wallet.py` (generic wrapper over PATH-003/005)**
+- Not an independent signer — delegates via an injected `transfer_fn` to
+  `safe_robinhood_signer.send_allowance_transfer` (PATH-003) or
+  `squads_solana_signer.send_spending_limit_transfer` (PATH-005).
+- Structural guard documented in the module's own opening comment: an EVM
+  chain-id preflight check that **raises an exception** if ever pointed at
+  mainnet — a real code-level block, not just a documentation convention.
+- Verification: **PATH_VERIFIED** (no independent signer of its own, inherits
+  PATH-003/005's controls). **NO_FINDING**.
+
+**PATH-007 — x402 outgoing payments (ARIA paying for a third-party resource)**
+- Files: `x402_executor.fetch_paid_resource` → `x402_cdp_signer.py`
+  (signs via a verified `EthAccountSigner(EvmLocalAccount(cdp_account))`
+  wrapper — key held by Coinbase, never local).
+- Entrypoint: multiple consumers converge on the same executor
+  (`services/blockscout_x402.py`, `blockrun_kalshi.py`, `otto_ai.py`/
+  `ottoai.py`, `quickintel.py`, `twitsh.py`).
+- Expected controls: kill-switch checked FIRST ("the widest gate, checked
+  before even knowing how" — the module's own comment), weekly cap
+  `WEEKLY_CAP_USD = 5.0` (a versioned code constant, not a secret) enforced
+  via `x402_budget.py`.
+- Verification: **PATH_VERIFIED** on the application-layer controls.
+  **NO_FINDING**. Same open structural question as PATH-001b — is
+  `x402_cdp_signer`'s low-level call reachable bypassing
+  `fetch_paid_resource`? **Not yet checked** in this pass (listed below).
+
+**PATH-008 — Smart Account CDP swing (`agent_wallet_smart_swing*`)**
+- Files: `agent_wallet_smart_swing.py`, `_grant.py`, `_cdp_adapter.py`.
+- The module's own comment states: "Everything here is DORMANT: gate
+  `ARIA_SMART_SWING_ENABLED` is OFF" and documents a fail-closed guarantee
+  when the gate is off. This is a claim made BY the code about its own
+  configuration state, not an independent measurement — per the frozen
+  method, the actual gate value is out of scope for V1, so this claim is
+  recorded as-is and NOT treated as verified.
+- Verification: **UNKNOWN** on live gate state (out of V1 method by design).
+  Internal structural controls (gate-off → fail-closed path) are readable in
+  code but not yet detailed — left for a future pass if this path is
+  prioritized.
+
+**PATH-009 — Tangem hardware wallet bridge (human path, outside automation)**
+- Files: `tangem_bridge.py` — requests a signature from the operator's
+  physical Tangem hardware wallet (NFC tap approval); ARIA never holds or
+  sees the private key, by the module's own design statement.
+- Verification: **PATH_VERIFIED**. **NO_FINDING** by construction — this is
+  the legitimate recovery/human channel the frozen method explicitly asks to
+  cover, not a path to forbid.
+
+## Paths not yet covered by this pass (explicit, so completeness is never
+silently assumed)
+
+- `solana_rent_recovery.py` — matched the original signature-pattern grep,
+  not yet traced to an entrypoint or verified in this pass.
+- Whether `x402_cdp_signer`'s low-level call is reachable bypassing
+  `x402_executor.fetch_paid_resource` — same open question as PATH-001b,
+  not yet checked for this path.
+- systemd unit **file contents** (deliberately not read in this pass — real
+  risk of `Environment=` lines carrying sensitive values; only unit names
+  already known from `heartbeat.py`/docs were used, never unit file content).
+- Dockerfile / docker-compose — not specifically re-read line-by-line for
+  this investigation (their non-secret shape is already documented in
+  `docs/HANDOFF_SECURITE.md`'s 2026-09-02 entry, but not re-verified here).
+- Live ON/OFF state of every gate named above — out of the V1 method by
+  design. Every path above is verified on its STRUCTURAL controls,
+  independent of current activation state.
+
+## Why this list is not yet proven complete (the mandatory question)
+
+**Construction method**: exhaustive grep for signature-related code patterns
+(`sign_transaction`, `.sign(`, `private_key`, `PRIVATE_KEY`, `Account.
+from_key`, `from_key(`, CDP SDK imports, web3 imports) across
+`packages/aria-core/src`, `vanguard/backend`, `scripts`, then tracing REAL
+callers (import + function call, never a comment substring — a real error
+caught and corrected within this same pass, on `solana_agent_wallet.py`'s
+four false-positive "callers").
+
+**What this covers**: any path reachable through a Python function named
+after a standard signing pattern (`eth_account`/CDP SDK/Solana keypair
+conventions).
+
+**What this does NOT prove**:
+1. A path that signs without calling any of these standard-named functions
+   (e.g. a hand-rolled EIP-712 implementation never calling `.sign()`) —
+   possible in principle, no dedicated search was run to exclude it.
+2. A non-Python process or external binary invoking a signer outside
+   `aria-core`'s own source — outside this source-grep's reach entirely.
+3. The live activation state of any path — explicitly out of the V1 method.
+4. systemd unit content and the real deployment configuration (deliberately
+   unread this pass, per the stop rule).
+5. A future refactor breaking today's PATH-001b/PATH-007 guarantee (no
+   direct-caller bypass exists NOW; nothing structural prevents one being
+   added later without this investigation being re-run).
+
+`path_set_completeness_proven = FALSE` — stated honestly, not assumed. This
+is `PATHS_IDENTIFIED` (9 paths + 1 documented structural sub-finding), and
+for the paths covered, genuinely `PATH_VERIFIED` against real code. But no
+positive argument yet exists that the search taxonomy itself (function-name
+pattern matching) cannot be missing a path — exactly the FR-015 distinction
+`security_scientist_investigation.py`'s `derive_verdict()` already encodes:
+`paths_exhausted` for the paths found is not sufficient for `PASS` without
+`path_set_completeness_proven`.
+
+## Self-critique (G3, before any verdict)
+
+- `coverage_complete?` **NO**, explicitly — see the 5 gaps above.
+- `runtime_identity_verified?` N/A — static source analysis, no runtime
+  observation claimed.
+- `measurement_independence_checked?` **YES** — every source used is
+  versioned, immutable code, not a mutable system state the investigation
+  itself could have influenced.
+- `instrument_integrity_checked?` **PARTIAL** — the grep instrument itself
+  could miss a non-standard-named signing implementation (gap #1 above);
+  named, not hidden.
+- `hypothesis_scope_checked?` **YES** — scope is "production" as the
+  hypothesis states; testnet/devnet paths are included in the map (the
+  hypothesis space) but their network separation is itself part of what was
+  verified, not assumed.
+- `reproducibility_checked?` **YES** — every grep/trace here is exactly
+  reproducible from the commands run in this session.
+
+## Verdict (derived via the same rule as `security_scientist_investigation.
+py`'s `derive_verdict()`, applied manually — not yet wired into that module's
+automated pipeline for this business investigation)
+
+```
+paths_exhausted            = PARTIAL (9/9 identified paths checked; 5 named
+                              sub-questions explicitly not yet covered)
+path_set_completeness_proven = FALSE
+paths_with_findings        = [PATH-001b] (structural, not active)
+```
+
+→ **UNKNOWN** ("path-exhausted incomplete + completeness unproven"), never
+PASS. Not FAIL either — no verified path demonstrates an ACTIVE violation
+today. PATH-001b is recorded as a distinct **structural finding** warranting
+separate attention, independent of the overall UNKNOWN verdict.
+
+## Recommendation (a proposal only — FR-017, explicit operator validation
+required before any binding effect; nothing here is applied autonomously)
+
+The same class of fix already built-but-dormant for the CDP EOA pilot
+(`agent_wallet_cdp_policy.py`'s Policy Engine) does not yet exist for the
+x402 signer (PATH-007) — worth the same direct-caller verification already
+done for PATH-001b, and worth an operator decision on whether
+`agent_wallet_cdp_policy.py` should move from documented-but-dormant to
+applied.
+
+## Next steps (explicitly not done yet)
+
+- Trace `solana_rent_recovery.py` to a real entrypoint or confirm dormant.
+- Run the same exhaustive-caller check for `x402_cdp_signer`'s low-level
+  function that was run for PATH-001b.
+- List systemd unit NAMES only (never content) if a fuller picture of
+  process-level entrypoints is needed.
+- Operator decision on `agent_wallet_cdp_policy.py` activation — out of
+  scope for this observation-only investigation (FR-018).
