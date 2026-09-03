@@ -515,13 +515,13 @@ Full detail (source, precise dev action) for every item below lives in `docs/bac
 - #406 (29/08) — residual `geckoterminal_client` in robinhood_pump_shadow.py/_v2 after specs/015; #269 not fully satisfied.
 - #407 (30/08) — Telegram link -> 8.94x graduation rate. Add `has_telegram` via existing `dexscreener` fetch.
 - #408 (30/08) — "Memory contracts": declare what an agent may believe and from which source, complements A-MemGuard/#395.
-- #409 (30/08, $5.72M/6 chains) — Cosmos Labs cleared a bounty "safe" on one config, exploited 4mo later on another. Criterion, family of #377.
-- #410 (30/08, $290-292M) — KelpDAO/LayerZero: 1-of-1 DVN poisoned via RPC+DDoS. Diligence item for the CCIP bridge plan.
+- #409 (30/08) — Cosmos Labs bounty "safe" on one config, exploited 4mo later; family of #377.
+- #410 (30/08) — KelpDAO/LayerZero DVN poisoning ($290-292M); CCIP bridge diligence item.
 - #411 (30/08) — Base ran a single sequencer, froze twice ~2h (25-26/06). Risk factor for dormant-capital-on-Base + incident runbook.
 - #412 (30/08) — 6 price-API candidates for #271/#269; 2 ruled out, 4 untested.
-- #413 (31/08, verified) — Robinhood Chain launchpad share flip: NOXA permanently shut down 11/07, Pons now dominant (52.1% mid-July). Verify `robinhood_pump_shadow`/_v2 sees Pons launches at all.
-- #414 (31/08, verified) — SANDWORM_MODE npm worm writes a malicious local MCP server with prompt injection in its tool descriptions, exfiltrates LLM API keys — first real (not lab) attack on the MCP surface ARIA's sessions use. Verify no such artifact on the VPS; feeds mandate #192.
-- #415 (31/08, verified) — Pump.fun shipped multi-chain swaps (07/08), breaking the "Pump.fun = Solana bonding only" assumption in the bonding-vs-classic-launch doctrine (28/07). Verify no non-Solana tokens transit it invisibly to Base/Robinhood crawlers.
+- #413 (31/08) — Robinhood launchpad share flip (NOXA shut down, Pons dominant); verify pocket coverage.
+- #414 (31/08) — SANDWORM_MODE npm worm (malicious MCP server, prompt injection, key exfil); verify VPS clean, feeds #192.
+- #415 (31/08) — Pump.fun multi-chain swaps break the Solana-only bonding assumption; verify no cross-chain leakage.
 - #416 (31/08, verified) — LunarCrush: aggregated anti-bot social score (X/Reddit/YouTube/TikTok), candidate cheap pre-filter before capped X/TwitterAPI.io requests. Verify pricing/coverage.
 - #417 (31/08, verified) — Trust Wallet official MCP servers (address security checks) + Agent Kit. Candidate cross-check vs GoPlus on an uncovered signal, pricing/Base coverage unverified.
 - #418 (31/08, verified) — Hexens "Glider": logic-level EVM contract vulnerability query engine, complement (not replacement) for `safety_screen.py`/`mint_authority.py` if GoPlus ever misses a logic bug. Pricing unverified.
