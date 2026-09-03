@@ -85,6 +85,14 @@ comme pour `hooks-changelog.md`.
 | `willfarrell/autoheal` | 🟢 actif | redémarre un conteneur `unhealthy` |
 | `autoheal-circuit-breaker.sh` | 🟢 actif | plafonne à 3 redémarrages/10min, pause autoheal sinon |
 
+### Outils de secours manuels (hors automatisation, jamais déclenchés seuls)
+
+| Nom | Statut | Pourquoi |
+|---|---|---|
+| `real-trade-watch/liquider-tout.py` | 🟡 OUTIL DE SECOURS MANUEL / NON INTÉGRÉ | vente d'urgence de toutes les positions Solana réelles, écrit le 22/08 après une panne simultanée Helius+Chainstack qui avait bloqué les ventes une nuit (deux pertes de 80% cette nuit-là selon son propre docstring) |
+
+**`real-trade-watch/liquider-tout.py`** (03/09, décision opérateur explicite après lecture intégrale par aria-02) : hors du repo git `/opt/aria` (vit dans `/opt/aria-data/real-trade-watch/`) — décision délibérée, pas un oubli. Lit la clé même si le fichier de config est `.disabled` (liquider sans réactiver le trading), fallback sur un RPC public, vend tout ce qui a une route Jupiter, ferme les comptes vides pour récupérer le rent, réconcilie la DB après coup. Garde-fous déjà en place : slippage plafonné à 1000 bps (10%, conforme à la règle CLAUDE.md), confirmation manuelle obligatoire ("tape OUI"), rien n'est signé avant l'inventaire imprimé, chaque vente vérifiée contre la chaîne après coup. **Décision opérateur (03/09)** : reste hors repo pour l'instant — le déplacer/committer maintenant créerait une illusion de normalisation d'un outil manuel, dormant, issu d'un incident ponctuel, qui n'a pas encore été revu/testé/intégré au pipeline de production. Versionnement + intégration officielle (option "committer dans `/opt/aria`") seulement s'il devient un jour un composant opérationnel décidé comme tel — jamais pour la seule commodité de visibilité d'une session.
+
 ### Hors scope de ce registre (mécanismes auto-correctifs, pas des déclencheurs événementiels)
 
 Les auto-régulations câblées DANS le heartbeat (pas des hooks/crons séparés) --
