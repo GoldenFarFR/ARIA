@@ -1,8 +1,15 @@
 # ARIA — Cerveau épistémique des sessions Claude
 
+<!-- BRAIN-PROTOCOL: ARIA-EPISTEMIC v1.0 -->
+
 > Mandat opérateur verbatim, 2026-09-03. Texte de cadrage du raisonnement, distinct de tout plan
 > d'implémentation. Il dit COMMENT PENSER pendant un chantier ARIA, pas quoi construire.
 > Ne pas résumer dans `CLAUDE.md` : ce fichier est la source, `CLAUDE.md` route seulement vers lui.
+>
+> **Ce fichier n'est pas une lecture facultative.** Il est chargé mécaniquement par
+> `.claude/hooks/cognitive-runtime.sh` à chaque démarrage de session ET après chaque compactage, avec
+> vérification de version et d'empreinte. Le modèle ne décide pas de l'activer : il l'est déjà. La
+> trace de chargement vit dans `/opt/aria-data/cognitive-runtime/loaded.log`.
 
 ## Pourquoi ce texte existe
 
