@@ -598,6 +598,42 @@ class OnChainPoolDiscoveryFeed:
             # DexPaprika's `_resolve_base_token` with a direct `symbol()`
             # eth_call, never fabricated, None on any resolution failure).
             symbol = await self._ws_feed.resolve_token_symbol(cand.token_address)
+            # 03/09, operator go -- same funnel doctrine as symbol() above:
+            # only QUALIFIED candidates reach this line, cosmetic/display
+            # only, never gates qualification. market_cap_usd is computed
+            # HERE (not downstream) so a reader never re-derives it from a
+            # possibly-stale price.
+            total_supply = await self._ws_feed.resolve_token_total_supply(cand.token_address)
+            market_cap_usd = (
+                price_usd * total_supply
+                if total_supply is not None and price_usd is not None
+                else None
+            )
+            # 03/09 -- cumulative_volume_quote is in the pool's quote-token
+            # unit (see onchain_activity_observation.py's own field
+            # comment), never USD by itself. Converts it using the SAME
+            # doppler rate already resolved above for price_usd/reserve_usd
+            # (cached TTL, never a duplicate network call) -- None only when
+            # the rate itself is unavailable, never a raw quote-unit number
+            # mislabeled as USD.
+            volume_usd = buy_volume_usd = sell_volume_usd = None
+            if snapshot.available:
+                vol_rate = None
+                if snapshot.quote_is_weth:
+                    from aria_core.services.doppler import eth_usd_rate
+                    vol_rate = await eth_usd_rate()
+                elif snapshot.quote_is_btc:
+                    from aria_core.services.doppler import btc_usd_rate
+                    vol_rate = await btc_usd_rate()
+                else:
+                    # neither WETH nor BTC -- quote leg is already USD/stable,
+                    # same convention as `price_usd = snapshot.price_quote`
+                    # in the elif branch above.
+                    vol_rate = 1.0
+                if vol_rate is not None:
+                    volume_usd = snapshot.cumulative_volume_quote * vol_rate
+                    buy_volume_usd = snapshot.buy_volume_quote * vol_rate
+                    sell_volume_usd = snapshot.sell_volume_quote * vol_rate
             # 29/08, same observation point as the rejects above -- the
             # qualified branch of the same verdict, so the eventual analysis
             # has a real denominator (qualified + rejected) rather than a
@@ -630,6 +666,9 @@ class OnChainPoolDiscoveryFeed:
                 distinct_traders_count=(
                     snapshot.distinct_traders_count if snapshot.available else None
                 ),
+                total_supply=total_supply, market_cap_usd=market_cap_usd, volume_usd=volume_usd,
+                swap_count=snapshot.swap_count if snapshot.available else None,
+                buy_volume_usd=buy_volume_usd, sell_volume_usd=sell_volume_usd,
             ))
             expired_keys.append(key)
         for key in expired_keys:

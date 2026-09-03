@@ -94,24 +94,170 @@ def test_buy_sell_na_when_unavailable():
     assert "N/A" in text.split("Buy/Sell")[1].split("\n")[0]
 
 
-def test_volume_rendered_when_available_never_labeled_usd():
-    """cumulative_volume_quote is in the pool's quote-token unit, not USD --
-    labeling it '$' would fabricate a conversion that never happened."""
+def test_volume_rendered_in_usd_when_converted():
+    """03/09 -- volume_usd is the ALREADY-CONVERTED figure (same
+    doppler rate as price_usd/reserve_usd), never the raw quote-unit
+    number. Only volume_usd renders '$', never cumulative_volume_quote
+    directly."""
     text = format_qualified_candidate(
-        _pool(cumulative_volume_quote=12.5),
+        _pool(volume_usd=1234.5, cumulative_volume_quote=0.5),
         chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
     )
     volume_line = text.split("Volume")[1].split("\n")[0]
-    assert "12.5" in volume_line
-    assert "$" not in volume_line
+    assert "1,234" in volume_line or "1234" in volume_line
+    assert "$" in volume_line
 
 
-def test_volume_na_when_unavailable():
+def test_volume_na_when_conversion_unavailable():
+    """volume_usd is None (rate unavailable) even though the raw quote
+    figure exists -- must render N/A, never fall back to a mislabeled
+    raw quote-unit number."""
     text = format_qualified_candidate(
-        _pool(cumulative_volume_quote=None),
+        _pool(volume_usd=None, cumulative_volume_quote=0.5),
         chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
     )
     assert "N/A" in text.split("Volume")[1].split("\n")[0]
+
+
+def test_market_cap_rendered_when_available():
+    text = format_qualified_candidate(
+        _pool(market_cap_usd=45231.0, total_supply=1_000_000.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    mcap_line = text.split("Market Cap")[1].split("\n")[0]
+    assert "45,231" in mcap_line or "45231" in mcap_line
+    assert "$" in mcap_line
+
+
+def test_market_cap_na_when_unavailable_never_fabricated():
+    text = format_qualified_candidate(
+        _pool(market_cap_usd=None, total_supply=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "N/A" in text.split("Market Cap")[1].split("\n")[0]
+
+
+def test_supply_rendered_when_available():
+    text = format_qualified_candidate(
+        _pool(total_supply=1_000_000_000.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    supply_line = text.split("Supply")[1].split("\n")[0]
+    assert "1,000,000,000" in supply_line or "1000000000" in supply_line
+
+
+def test_supply_na_when_unavailable():
+    text = format_qualified_candidate(
+        _pool(total_supply=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "N/A" in text.split("Supply")[1].split("\n")[0]
+
+
+def test_market_cap_never_used_as_a_qualification_signal():
+    """Operator-explicit: mcap is display-only, never a filter/criterion --
+    this alert must never claim otherwise in its own text."""
+    text = format_qualified_candidate(
+        _pool(market_cap_usd=45231.0, total_supply=1_000_000.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    for forbidden in ("filtre", "critere", "critère", "seuil mcap", "seuil market cap"):
+        assert forbidden not in text.lower()
+
+
+def test_dexscreener_link_present_and_correct():
+    text = format_qualified_candidate(
+        _pool(pool_address="0xABCDEF"),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "https://dexscreener.com/robinhood/0xABCDEF" in text
+
+
+def test_fomo_family_link_present_and_correct_domain():
+    """The real domain is fomo.family, NOT fomo.io (fomo.io is an unrelated
+    crypto casino, verified live 03/09) -- the wrong domain would send the
+    operator to a completely different product."""
+    text = format_qualified_candidate(
+        _pool(token_address="0xTOKEN123"),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "https://fomo.family/tokens/robinhood/0xTOKEN123" in text
+    assert "fomo.io" not in text
+
+
+def test_candidate_id_is_chain_and_pool_address():
+    """No separate sequential-ID system invented -- reuses the exact key
+    already used by brain_correlation.py (chain, pool_address), so a
+    future consumer never has to reconcile two different candidate
+    identifiers for the same pool."""
+    text = format_qualified_candidate(
+        _pool(pool_address="0xABC"),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "robinhood:0xABC" in text
+
+
+def test_pool_age_rendered_in_seconds_when_fresh():
+    now = datetime(2026, 9, 3, 12, 0, 43, tzinfo=timezone.utc)
+    text = format_qualified_candidate(
+        _pool(pool_created_at=datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0, now=now,
+    )
+    age_line = text.split("Pool age")[1].split("\n")[0]
+    assert "43" in age_line
+    assert "sec" in age_line
+
+
+def test_pool_age_rendered_in_minutes_when_older():
+    now = datetime(2026, 9, 3, 12, 5, 0, tzinfo=timezone.utc)
+    text = format_qualified_candidate(
+        _pool(pool_created_at=datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0, now=now,
+    )
+    age_line = text.split("Pool age")[1].split("\n")[0]
+    assert "5.0 min" in age_line
+
+
+def test_pool_age_na_when_pool_created_at_missing():
+    text = format_qualified_candidate(
+        _pool(pool_created_at=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "N/A" in text.split("Pool age")[1].split("\n")[0]
+
+
+def test_swap_count_rendered_when_available():
+    text = format_qualified_candidate(
+        _pool(swap_count=7),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "7" in text.split("Swaps")[1].split("\n")[0]
+
+
+def test_swap_count_na_when_unavailable():
+    text = format_qualified_candidate(
+        _pool(swap_count=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "N/A" in text.split("Swaps")[1].split("\n")[0]
+
+
+def test_buy_sell_volume_usd_rendered_when_available():
+    text = format_qualified_candidate(
+        _pool(buy_volume_usd=120.5, sell_volume_usd=30.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    line = text.split("Buy/Sell $")[1].split("\n")[0]
+    assert "120.5" in line or "120.50" in line
+    assert "30.0" in line or "30.00" in line
+
+
+def test_buy_sell_volume_usd_na_when_unavailable():
+    text = format_qualified_candidate(
+        _pool(buy_volume_usd=None, sell_volume_usd=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=4000.0,
+    )
+    assert "N/A" in text.split("Buy/Sell $")[1].split("\n")[0]
 
 
 def test_liquidity_shows_real_reserve_usd():

@@ -29,6 +29,8 @@ never a parallel system).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from aria_core.services.geckoterminal import TrendingPool
 
 _NA = "N/A — non calculé"
@@ -47,27 +49,62 @@ def _fmt_price(value: float | None) -> str:
     return f"${value:.6f}" if value < 1 else f"${value:,.4f}"
 
 
+def _fmt_supply(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.0f}"
+
+
+def _fmt_age(pool_created_at: datetime | None, now: datetime) -> str:
+    if pool_created_at is None:
+        return "N/A"
+    seconds = (now - pool_created_at).total_seconds()
+    if seconds < 60:
+        return f"{seconds:.0f} sec"
+    return f"{seconds / 60.0:.1f} min"
+
+
+def _fmt_pair_usd(a: float | None, b: float | None) -> str:
+    if a is None or b is None:
+        return "N/A"
+    return f"${a:,.2f} / ${b:,.2f}"
+
+
 def format_qualified_candidate(
     pool: TrendingPool, *, chain: str, regime_open: bool, liquidity_floor_usd: float,
+    now: datetime | None = None,
 ) -> str:
     """Render the ARIA RADAR V1 text for one just-qualified candidate.
 
     ``regime_open`` reflects the chain-level regime gate's CURRENT state --
     informational only, never gates whether this function is called (the
-    caller decides that; see this module's own docstring)."""
+    caller decides that; see this module's own docstring).
+
+    03/09, operator go -- Market Cap/Supply added (real ``totalSupply()``
+    eth_call, same pattern/budget as ``symbol()``, computed in
+    ``onchain_pool_discovery.py`` and never re-derived here). Display only,
+    operator-explicit: "Ne surtout pas utiliser le mcap pour filtrer" --
+    this alert must never claim mcap is a qualification criterion. Volume
+    now renders the doppler-converted USD figure (``pool.volume_usd``),
+    never the raw quote-unit number, which SafePons' first real radar
+    showed as an unreadable "3e-06 (quote units)"."""
+    at = now or datetime.now(timezone.utc)
     symbol = pool.symbol or "?"
+    candidate_id = f"{chain}:{pool.pool_address}"
 
     buy_sell = (
         f"{pool.buy_count}/{pool.sell_count}"
         if pool.buy_count is not None and pool.sell_count is not None
         else "N/A"
     )
-    volume = (
-        f"{pool.cumulative_volume_quote:.4g} (quote units)"
-        if pool.cumulative_volume_quote is not None
-        else "N/A"
-    )
+    volume = _fmt_usd(pool.volume_usd)
+    pool_age = _fmt_age(pool.pool_created_at, at)
+    buy_sell_usd = _fmt_pair_usd(pool.buy_volume_usd, pool.sell_volume_usd)
+    swaps = str(pool.swap_count) if pool.swap_count is not None else "N/A"
     regime_label = "OPEN" if regime_open else "CLOSED"
+
+    dexscreener_link = f"https://dexscreener.com/{chain}/{pool.pool_address}"
+    fomo_link = f"https://fomo.family/tokens/{chain}/{pool.token_address or ''}"
 
     why_now = ["• Candidat vient de passer la qualification (on-chain, day-zero)"]
     if pool.reserve_usd is not None:
@@ -88,16 +125,23 @@ def format_qualified_candidate(
 
 STATUS: QUALIFIED
 Chain: {chain}
+Candidate: {candidate_id}
+Observed: {at.strftime("%H:%M:%S")}
 
 {_SEP}
 ⛓️ ON-CHAIN
 {_SEP}
 
 Prix:           {_fmt_price(pool.price_usd)}
+Pool age:       {pool_age}
 Momentum:       {_NA} (day-zero, pas de fenêtre de variation mesurée)
 Liquidity:      {_fmt_usd(pool.reserve_usd)}
 Reserve:        {_fmt_usd(pool.reserve_usd)}
+Market Cap:     {_fmt_usd(pool.market_cap_usd)}
+Supply:         {_fmt_supply(pool.total_supply)}
+Swaps:          {swaps}
 Buy/Sell:       {buy_sell}
+Buy/Sell $:     {buy_sell_usd}
 Volume:         {volume}
 Acceleration:   {_NA} (dérive du Momentum, non disponible)
 
@@ -119,6 +163,13 @@ SOCIAL:    {_NA}
 {_SEP}
 
 {chr(10).join(risks)}
+
+{_SEP}
+🔗 LIENS
+{_SEP}
+
+DexScreener: {dexscreener_link}
+fomo.family: {fomo_link}
 
 {_SEP}
 📊 DÉCISION

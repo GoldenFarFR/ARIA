@@ -56,6 +56,9 @@ def _make_feed(chain: str = "base") -> m.OnChainPoolDiscoveryFeed:
         available=False, reserve_usd=None, price_usd=None, price_quote=None, quote_is_weth=False,
     ))
     ws_feed.resolve_token_symbol = AsyncMock(return_value=None)
+    # 03/09 -- same "nothing resolves by default" doctrine as resolve_cold/
+    # resolve_token_symbol above, for the new market-cap eth_call.
+    ws_feed.resolve_token_total_supply = AsyncMock(return_value=None)
     feed = m.OnChainPoolDiscoveryFeed(chain=chain, ws_url="wss://test.invalid", ws_feed=ws_feed)
     return feed
 

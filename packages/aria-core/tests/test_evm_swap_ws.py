@@ -2124,6 +2124,43 @@ async def test_resolve_token_symbol_returns_none_on_failure_never_raises():
     assert symbol is None
 
 
+# --- 03/09, operator go: resolve_token_total_supply (display only, market cap) ---
+
+@pytest.mark.asyncio
+async def test_resolve_token_total_supply_divides_by_real_decimals():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.totalSupply.return_value.call = AsyncMock(return_value=1_000_000_000 * 10**9)
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=9)
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+    supply = await feed.resolve_token_total_supply("0xtoken")
+    assert supply == 1_000_000_000.0
+
+
+@pytest.mark.asyncio
+async def test_resolve_token_total_supply_returns_none_on_failure_never_raises():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.totalSupply.return_value.call = AsyncMock(side_effect=Exception("no totalSupply()"))
+    fake_w3.eth.contract.return_value = contract
+    feed._w3 = fake_w3
+    supply = await feed.resolve_token_total_supply("0xtoken")
+    assert supply is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_token_total_supply_returns_none_when_no_w3():
+    feed = m.EVMSwapWebSocketFeed(chain="base", ws_url="wss://test.invalid", chain_id=8453)
+    feed._w3 = None
+    supply = await feed.resolve_token_total_supply("0xtoken")
+    assert supply is None
+
+
 # --- brique 2/5: net_flow_quote, mixed sequences, invariants, get_snapshot --
 
 def test_net_flow_quote_is_buy_minus_sell():

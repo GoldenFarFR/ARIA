@@ -360,6 +360,28 @@ class TrendingPool:
     sell_volume_quote: float | None = None
     cumulative_volume_quote: float | None = None
     distinct_traders_count: int | None = None
+    # 03/09, operator go -- real totalSupply() eth_call, same pattern/budget
+    # as symbol(). market_cap_usd = price_usd * total_supply, computed by
+    # the caller and stored alongside (never re-derived downstream, so a
+    # reader never divides by a stale price). Both None when the eth_call
+    # fails or the token has no total_supply concept -- never fabricated,
+    # never used to filter/qualify (operator-directed: display only).
+    total_supply: float | None = None
+    market_cap_usd: float | None = None
+    # 03/09 -- cumulative_volume_quote converted to USD using the SAME
+    # eth_usd_rate()/btc_usd_rate() the qualification path already resolves
+    # for price_usd/reserve_usd (cached, so this is never a second real
+    # network call within the TTL window). None when the quote token is
+    # neither stable/WETH/BTC or the rate is unavailable -- never a raw
+    # "quote units" number mislabeled as USD.
+    volume_usd: float | None = None
+    # 03/09, operator go (P0 batch 2) -- real per-swap count from the same
+    # WS activity snapshot (see swap_count above the buy/sell fields).
+    swap_count: int | None = None
+    # buy_volume_quote/sell_volume_quote converted to USD, same doppler
+    # rate/doctrine as volume_usd above -- never a raw quote-unit number.
+    buy_volume_usd: float | None = None
+    sell_volume_usd: float | None = None
 
 
 @dataclass

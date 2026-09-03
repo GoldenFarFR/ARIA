@@ -875,6 +875,30 @@ class EVMSwapWebSocketFeed:
             logger.info("evm_swap_ws[%s]: symbol() failed for %s (%s)", self.chain, token_address, exc)
             return None
 
+    async def resolve_token_total_supply(self, token_address: str) -> float | None:
+        """03/09, operator go -- real ``totalSupply()`` eth_call, same
+        pattern/budget as ``resolve_token_symbol`` above. Additive/display
+        only: the caller may derive ``market_cap_usd = price_usd *
+        total_supply``, but this method itself never gates qualification --
+        same doctrine as symbol resolution. Returns the HUMAN-readable
+        supply (raw value already divided by ``decimals()``, reusing
+        ``_fetch_decimals`` -- never a raw on-chain integer that would look
+        like a fabricated number of tokens)."""
+        if self._w3 is None:
+            return None
+        if not await chainstack_ru_budget.can_spend(self.chain):
+            return None
+        try:
+            checksum = self._w3.to_checksum_address(token_address)
+            contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_TOTAL_SUPPLY_ABI)
+            raw_supply = await contract.functions.totalSupply().call()
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
+            decimals = await self._fetch_decimals(token_address)
+            return float(raw_supply) / (10 ** decimals)
+        except Exception as exc:  # noqa: BLE001 -- cosmetic lookup, never blocks the caller
+            logger.info("evm_swap_ws[%s]: totalSupply() failed for %s (%s)", self.chain, token_address, exc)
+            return None
+
     # -- snapshot --------------------------------------------------------
 
     def get_snapshot(self, pool_address_or_id: str, *, window_seconds: float = 300.0) -> EVMSwapSnapshot:
@@ -1615,4 +1639,9 @@ _MINIMAL_V3_LIQUIDITY_ABI = [
 
 _MINIMAL_SYMBOL_ABI = [
     {"constant": True, "inputs": [], "name": "symbol", "outputs": [{"name": "", "type": "string"}], "type": "function"},
+]
+
+# 03/09, operator go -- real totalSupply() for market-cap display.
+_MINIMAL_TOTAL_SUPPLY_ABI = [
+    {"constant": True, "inputs": [], "name": "totalSupply", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
 ]
