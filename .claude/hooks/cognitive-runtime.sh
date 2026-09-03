@@ -1,54 +1,57 @@
 #!/bin/bash
-# COGNITIVE RUNTIME -- charge le cerveau epistemique a chaque demarrage de session
-# ET apres chaque compactage. Branche sur SessionStart (tous matchers).
+# COGNITIVE RUNTIME -- loads the epistemic brain at every session start AND
+# after every compaction. Wired on SessionStart (no matcher, all sources).
 #
-# Pourquoi ce hook existe (03/09, exigence operateur explicite) : un document que
-# le modele PEUT lire est un document qu'il finira par ne pas lire. Le cerveau ne
-# doit pas dependre d'une decision volontaire du modele -- il doit etre deja actif
-# quand la session commence a penser.
+# Why this hook exists (03/09, explicit operator requirement): a document the
+# model CAN read is a document it will eventually not read. The brain must not
+# depend on a voluntary decision by the model -- it must already be active
+# before the session starts reasoning.
 #
-# Le patron est deja prouve sur ce projet : french-reasoning-reminder.sh reinjecte
-# une regle a CHAQUE message parce qu'elle derapait malgre sa presence dans
-# CLAUDE.md. Meme mecanisme, applique a la gouvernance cognitive.
+# The pattern is already proven on this project: french-reasoning-reminder.sh
+# re-injects a rule on EVERY message because it kept drifting despite its
+# presence in CLAUDE.md. Same mechanism, applied to cognitive governance.
 #
-# Point technique decisif, deja verifie ici le 03/08 : PostCompact existe mais son
-# stdout est IGNORE. SessionStart avec matcher "compact" est le seul evenement dont
-# le stdout est reellement injecte apres un compactage. Ce hook est donc branche
-# sans matcher (tous demarrages) et couvre les deux cas.
+# Decisive technical point, already verified here on 03/08: PostCompact exists
+# but its stdout is IGNORED. SessionStart with matcher "compact" is the only
+# event whose stdout is actually injected after a compaction. This hook is
+# therefore wired with no matcher (every startup) and covers both cases.
 #
-# Ce hook n'injecte PAS les 35 Ko du cerveau : 100 % verifie n'est pas 100 % garde
-# en contexte actif. Il injecte l'identite (version + empreinte, la preuve), les
-# invariants qui ne doivent jamais etre perdus, et le pointeur. Le reste est route
-# a la demande. "Permanent" ne veut pas dire "verbeux".
+# This hook does NOT inject the full 35KB brain: 100% verified is not 100% kept
+# in active context. It injects identity (version + fingerprint, the proof),
+# the invariants that must never be lost, and the pointer. Everything else is
+# routed on demand. "Permanent" does not mean "verbose".
 set -uo pipefail
 
-# Chemins surchargeables par les tests (jamais par un usage normal) -- pour
-# qu'un test puisse fournir une fixture ou verifier la detection de derive
-# SANS jamais toucher au vrai cerveau ni polluer la vraie trace de production.
+# Paths overridable by tests (never by normal usage) -- so a test can supply a
+# fixture or verify drift detection WITHOUT ever touching the real brain or
+# polluting the real production trace.
 BRAIN="${COGNITIVE_RUNTIME_BRAIN_OVERRIDE:-/opt/aria/docs/cerveau-epistemique-sessions.md}"
 REGRESSIONS="${COGNITIVE_RUNTIME_REGRESSIONS_OVERRIDE:-/opt/aria/docs/regressions-cognitives.md}"
 TRACE_DIR="${COGNITIVE_RUNTIME_TRACE_DIR_OVERRIDE:-/opt/aria-data/cognitive-runtime}"
 TRACE="$TRACE_DIR/loaded.log"
 mkdir -p "$TRACE_DIR" 2>/dev/null || true
 
-# --- Identite de session : lue dans le JSON stdin du hook, jamais inventee ----
-# Corrige le 03/09 : la version precedente jetait stdin (`cat >/dev/null`) puis
-# lisait ${CLAUDE_SESSION_ID:-unknown}, une variable que le harness ne definit
-# jamais (confirme contre code.claude.com/docs/en/hooks : SessionStart transmet
-# session_id/source par JSON sur stdin, pas par variable d'environnement -- aucun
-# autre hook du projet n'utilise CLAUDE_SESSION_ID). Consequence reelle du bug :
-# toute ligne de trace portait "session=unknown", donc la detection de derive
-# (ligne PREV plus bas) ne trouvait jamais de ligne "d'une autre session" a
-# comparer -- elle etait silencieusement inoperante depuis l'origine.
+# --- Session identity: read from the hook's stdin JSON, never invented ------
+# Fixed 03/09: the previous version discarded stdin (`cat >/dev/null`) then
+# read ${CLAUDE_SESSION_ID:-unknown}, a variable the harness never sets
+# (confirmed against code.claude.com/docs/en/hooks: SessionStart carries
+# session_id/source as stdin JSON, never as an environment variable -- no
+# other hook in this project uses CLAUDE_SESSION_ID). Real consequence of the
+# bug: every trace line said "session=unknown", so drift detection (the PREV
+# line below) never found a line "from another session" to compare against --
+# it was silently inoperative from the start.
 INPUT="$(cat 2>/dev/null || true)"
 SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)"
 SESSION_ID="${SESSION_ID:-unknown}"
 SOURCE="${SOURCE:-unknown}"
 
-# --- Identite du cerveau : version declaree + empreinte reelle ----------------
+# --- Brain identity: declared version + real fingerprint --------------------
 if [ ! -r "$BRAIN" ]; then
-  # Fail-visible, jamais fail-silent : une session sans cerveau doit le SAVOIR.
+  # Fail-visible, never fail-silent: a session without a brain must KNOW it.
+  # Payload stays in French, same convention as french-reasoning-reminder.sh
+  # and session-compact-reminder.sh: this text governs the model's runtime
+  # reasoning for a French-language project, it is not repo documentation.
   cat <<'MISSING'
 {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"⚠️ COGNITIVE RUNTIME INDISPONIBLE : docs/cerveau-epistemique-sessions.md est introuvable ou illisible. Cette session n'est PAS gouvernee par le cerveau epistemique. Signale-le a l'operateur avant toute mission significative -- ne poursuis pas en supposant que les invariants cognitifs s'appliquent."}}
 MISSING
@@ -61,18 +64,22 @@ SECTIONS=$(grep -c '^## ' "$BRAIN" 2>/dev/null)
 NREG=$(grep -c '^## COGNITIVE-' "$REGRESSIONS" 2>/dev/null || echo 0)
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# --- Preuve mecanique : qui a charge quoi, et quand ---------------------------
-# Un message du modele disant "brain loaded" ne prouve rien. Cette ligne, si.
+# --- Mechanical proof: who loaded what, and when -----------------------------
+# A model message saying "brain loaded" proves nothing. This line does.
 echo "$NOW session=$SESSION_ID source=$SOURCE protocol=${VERSION:-UNVERSIONED} hash=$HASH sections=$SECTIONS regressions=$NREG" >> "$TRACE" 2>/dev/null || true
 
-# --- Detection de changement de cerveau ---------------------------------------
+# --- Brain change detection ---------------------------------------------------
 PREV=$(grep -v "session=$SESSION_ID " "$TRACE" 2>/dev/null | tail -1 | grep -oE 'hash=[a-f0-9]+' | cut -d= -f2)
 DRIFT=""
 if [ -n "$PREV" ] && [ "$PREV" != "$HASH" ]; then
   DRIFT=" ATTENTION : le cerveau a CHANGE depuis la derniere session (empreinte $PREV -> $HASH) -- relis-le integralement avant toute mission significative, une regle a pu etre ajoutee ou retiree."
 fi
 
-# --- Contexte injecte : identite + invariants + routage, jamais le texte entier -
+# --- Injected context: identity + invariants + routing, never the full text -
+# Payload stays in French (see the fail-visible branch above for why): it
+# governs the model's runtime reasoning on a French-language project, same
+# convention as every other hook that injects context to the model rather
+# than documenting code for a human reader.
 python3 - "$VERSION" "$HASH" "$SECTIONS" "$NREG" "$DRIFT" <<'PY'
 import json, sys
 version, h, sections, nreg, drift = sys.argv[1:6]
