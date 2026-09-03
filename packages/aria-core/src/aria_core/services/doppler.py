@@ -58,16 +58,13 @@ POOL_MANAGER_ADDRESS = "0x498581ff718922c3f8e6a244956af099b2652b2b"
 STATE_VIEW_ADDRESS = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
 
 WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
-_ETH_COINGECKO_ID = "ethereum"
 # 27/08 -- cbBTC (Coinbase Wrapped BTC, Base's own canonical BTC token,
 # 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf) confirmed as a real, actively
-# used quote token on Base (not just a widely-held asset): GeckoTerminal's
-# live top-pools listing shows genuine third-party tokens quoted directly
-# against it (e.g. "SOL/cbBTC"), same pairing role as WETH/USDC. Needed its
-# own BTC/USD rate -- reusing eth_usd_rate()'s ETH rate for a BTC-quoted pool
-# would multiply a token/cbBTC ratio by the wrong asset's price (BTC trades
-# at a very different level than ETH).
-_BTC_COINGECKO_ID = "bitcoin"
+# used quote token on Base (not just a widely-held asset): live third-party
+# pools quote directly against it (e.g. "SOL/cbBTC"), same pairing role as
+# WETH/USDC. Needed its own BTC/USD rate -- reusing eth_usd_rate()'s ETH rate
+# for a BTC-quoted pool would multiply a token/cbBTC ratio by the wrong
+# asset's price (BTC trades at a very different level than ETH).
 
 # 2026-09-03 (#271 root cause) -- eth_usd_rate/btc_usd_rate had no cache at
 # all: CoinGecko's entire monthly quota (9500 credits, Demo tier) was found
@@ -249,11 +246,11 @@ async def _usd_rate_via_dexscreener(token_address: str) -> float | None:
 
 async def eth_usd_rate() -> float | None:
     """Current ETH/USD rate (WETH == ETH for valuation purposes), at most
-    ``ETH_USD_TTL_SECONDS`` old. DexScreener (WETH/Base pairs) is tried
-    first, CoinGecko only as a fallback -- ``None`` only if both fail with no
-    prior cached value, fail-open, same pattern as
-    ``services.virtuals.virtual_usd_rate``. Callers must never fabricate a
-    USD price from a WETH-denominated one when this returns ``None``."""
+    ``ETH_USD_TTL_SECONDS`` old, read from the highest-liquidity WETH pair on
+    Base via DexScreener -- ``None`` if unavailable with no prior cached
+    value, fail-open, same pattern as ``services.virtuals.virtual_usd_rate``.
+    Callers must never fabricate a USD price from a WETH-denominated one
+    when this returns ``None``."""
     global _eth_usd_cache
     now = time.monotonic()
     if _eth_usd_cache and now - _eth_usd_cache[0] < ETH_USD_TTL_SECONDS:
@@ -261,32 +258,20 @@ async def eth_usd_rate() -> float | None:
 
     rate = await _usd_rate_via_dexscreener(WETH_ADDRESS)
 
-    if rate is None:
-        from aria_core.services.coingecko import coingecko_client
-
-        try:
-            result = await coingecko_client.get_simple_price([_ETH_COINGECKO_ID], vs_currencies=["usd"])
-            if result.available:
-                candidate = result.prices.get(_ETH_COINGECKO_ID, {}).get("usd")
-                if candidate and candidate > 0:
-                    rate = candidate
-        except Exception as exc:  # noqa: BLE001
-            logger.info("doppler.eth_usd_rate: CoinGecko fallback failed (%s)", exc)
-
     if rate is not None:
         _eth_usd_cache = (now, rate)
         return rate
-    # Both sources failed/unavailable -- keep the last known rate rather
-    # than returning None outright -- a slightly stale rate is a better
-    # basis than none, same doctrine as sol_usd_rate.py's sol_usd_cached.
+    # DexScreener unavailable -- keep the last known rate rather than
+    # returning None outright -- a slightly stale rate is a better basis
+    # than none, same doctrine as sol_usd_rate.py's sol_usd_cached.
     return _eth_usd_cache[1] if _eth_usd_cache else None
 
 
 async def btc_usd_rate() -> float | None:
     """Current BTC/USD rate (cbBTC == BTC for valuation purposes), at most
-    ``BTC_USD_TTL_SECONDS`` old. DexScreener (cbBTC/Base pairs) is tried
-    first, CoinGecko only as a fallback -- same doctrine and caching contract
-    as ``eth_usd_rate`` above."""
+    ``BTC_USD_TTL_SECONDS`` old, read from the highest-liquidity cbBTC pair
+    on Base via DexScreener -- same doctrine and caching contract as
+    ``eth_usd_rate`` above."""
     global _btc_usd_cache
     now = time.monotonic()
     if _btc_usd_cache and now - _btc_usd_cache[0] < BTC_USD_TTL_SECONDS:
@@ -295,18 +280,6 @@ async def btc_usd_rate() -> float | None:
     from aria_core.services.evm_swap_ws import _CBBTC_ADDRESSES
 
     rate = await _usd_rate_via_dexscreener(next(iter(_CBBTC_ADDRESSES)))
-
-    if rate is None:
-        from aria_core.services.coingecko import coingecko_client
-
-        try:
-            result = await coingecko_client.get_simple_price([_BTC_COINGECKO_ID], vs_currencies=["usd"])
-            if result.available:
-                candidate = result.prices.get(_BTC_COINGECKO_ID, {}).get("usd")
-                if candidate and candidate > 0:
-                    rate = candidate
-        except Exception as exc:  # noqa: BLE001
-            logger.info("doppler.btc_usd_rate: CoinGecko fallback failed (%s)", exc)
 
     if rate is not None:
         _btc_usd_cache = (now, rate)
