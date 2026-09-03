@@ -34,7 +34,9 @@ resolve_cli() {
 
 cd /opt/aria || { log "FATAL: /opt/aria unreachable"; exit 1; }
 
-SESSION_NAME=aria-vps
+# Overridable so this one script can back several independent persistent
+# sessions (each its own tmux session + systemd unit), not just aria-vps.
+SESSION_NAME="${SESSION_NAME:-aria-vps}"
 backoff=5
 short_runs=0
 
