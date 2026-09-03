@@ -32,9 +32,56 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aria_core.services.geckoterminal import TrendingPool
+from aria_core.services.goplus import TokenSecurity
 
 _NA = "N/A — non calculé"
 _SEP = "━━━━━━━━━━━━━━━━"
+
+# 03/09, operator go -- PROVISIONAL DISPLAY THRESHOLD, not a scientifically
+# calibrated one (same "recalibrate on real closures" doctrine as every
+# other threshold in this pipeline, e.g. MIN_LIQUIDITY_USD_DAY_ZERO).
+# Purely factual: renders the RAW buy/sell counts and volumes, never a
+# causal/security conclusion ("wash trading"/"scam"/"rug" are explicitly
+# banned from this text -- that verdict needs a real security brain, not
+# yet built). Found live 03/09 on $R404 (41 buys/0 sells), independently
+# flagged "Potential scam" by fomo.io the same minute.
+_FLOW_IMBALANCE_MIN_BUYS = 10
+
+# 03/09, operator go -- Telegram ELIGIBILITY threshold, deliberately
+# DISTINCT from and never touching onchain_pool_discovery's own
+# MIN_LIQUIDITY_USD_DAY_ZERO ($200, discovery/logging qualification --
+# unchanged). A candidate below this line is still discovered, logged, and
+# fed into record_signals/regime tracking exactly as before; it simply
+# never reaches this alert. Same "provisional, recalibrate on real
+# closures" doctrine as every other threshold in this pipeline -- operator
+# rationale: "$20k n'est pas zero risque, ca reduit un risque precis
+# (illiquidite/impact de sortie)", not a security guarantee.
+RADAR_ELIGIBLE_LIQUIDITY_USD = 20_000.0
+
+
+def is_radar_eligible(pool: TrendingPool, *, threshold_usd: float = RADAR_ELIGIBLE_LIQUIDITY_USD) -> bool:
+    """Fail-closed, same doctrine as the rest of this pipeline: an unknown
+    reserve is never treated as notify-worthy."""
+    return pool.reserve_usd is not None and pool.reserve_usd >= threshold_usd
+
+
+def is_security_blocked(security: TokenSecurity) -> bool:
+    """03/09, operator go -- minimal GoPlus honeypot gate, confirmed live to
+    cover Robinhood Chain (chain_id 4663, real call on the exact $R404 pool
+    fomo.io independently flagged "Potential scam" the same minute).
+
+    Deliberately narrow scope: only the 3 "can I resell at all" flags
+    (is_honeypot/cannot_sell_all/cannot_buy) -- the single least-ambiguous
+    signal GoPlus exposes, per its own module docstring ("the most
+    important: is resale possible at all?"). FAIL-OPEN on unknown, same
+    doctrine as goplus.py itself: a None flag (network outage, no data,
+    GoPlus never responded) never blocks -- only a POSITIVELY confirmed
+    signal does. This is NOT the operator's full "Security Gate" vision
+    (liquidity stability, contract anomalies, etc.) -- that remains a
+    future, separately-scoped chantier."""
+    if not security.available:
+        return False
+    return bool(security.is_honeypot) or bool(security.cannot_sell_all) or bool(security.cannot_buy)
 
 
 def _fmt_usd(value: float | None) -> str:
@@ -115,7 +162,18 @@ def format_qualified_candidate(
     if pool.buy_count is not None and pool.sell_count is not None:
         why_now.append(f"• Buy/Sell observé: {buy_sell}")
 
-    risks = [
+    risks = []
+    if (
+        pool.buy_count is not None and pool.sell_count is not None
+        and pool.sell_count == 0 and pool.buy_count >= _FLOW_IMBALANCE_MIN_BUYS
+    ):
+        risks.append(
+            f"⚠️ FLOW IMBALANCE\n"
+            f"{pool.buy_count} buys / {pool.sell_count} sells\n"
+            f"Buy volume: {_fmt_usd(pool.buy_volume_usd)}\n"
+            f"Sell volume: {_fmt_usd(pool.sell_volume_usd)}"
+        )
+    risks += [
         "• Poche day-zero — pas de garantie de profondeur au-delà de la liquidité observée",
         "• Aucun score CHARTISTE/SOCIAL à ce stade (Fusion Engine non construit)",
         f"• Régime: {regime_label}",
@@ -136,7 +194,6 @@ Prix:           {_fmt_price(pool.price_usd)}
 Pool age:       {pool_age}
 Momentum:       {_NA} (day-zero, pas de fenêtre de variation mesurée)
 Liquidity:      {_fmt_usd(pool.reserve_usd)}
-Reserve:        {_fmt_usd(pool.reserve_usd)}
 Market Cap:     {_fmt_usd(pool.market_cap_usd)}
 Supply:         {_fmt_supply(pool.total_supply)}
 Swaps:          {swaps}

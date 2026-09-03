@@ -15,8 +15,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from aria_core.qualified_candidate_radar import format_qualified_candidate
+from aria_core.qualified_candidate_radar import (
+    format_qualified_candidate, is_radar_eligible, is_security_blocked,
+)
 from aria_core.services.geckoterminal import TrendingPool
+from aria_core.services.goplus import TokenSecurity
 
 
 def _pool(**overrides) -> TrendingPool:
@@ -29,6 +32,12 @@ def _pool(**overrides) -> TrendingPool:
     )
     base.update(overrides)
     return TrendingPool(**base)
+
+
+def _security(**overrides) -> TokenSecurity:
+    base = dict(address="0xtoken", available=True)
+    base.update(overrides)
+    return TokenSecurity(**base)
 
 
 def test_status_qualified_never_a_trade_verdict():
@@ -301,3 +310,117 @@ def test_no_field_left_blank():
     for label in ("Momentum", "Liquidity", "Buy/Sell", "Volume", "Acceleration"):
         line = text.split(label)[1].split("\n")[0].strip(": \t")
         assert line, f"{label} line rendered empty"
+
+
+# --- 03/09, operator go: FLOW IMBALANCE -- factual only, never a causal/
+# security conclusion ("wash trading"/"scam"/"rug" are explicitly banned) ---
+
+def test_flow_imbalance_shown_when_zero_sells_and_enough_buys():
+    text = format_qualified_candidate(
+        _pool(buy_count=41, sell_count=0, buy_volume_usd=784.21, sell_volume_usd=0.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=200.0,
+    )
+    assert "FLOW IMBALANCE" in text
+    assert "41 buys / 0 sells" in text
+    assert "784.21" in text
+    assert "Sell volume: $0" in text or "Sell volume: $0.00" in text
+
+
+def test_flow_imbalance_never_states_a_causal_security_conclusion():
+    text = format_qualified_candidate(
+        _pool(buy_count=41, sell_count=0, buy_volume_usd=784.21, sell_volume_usd=0.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=200.0,
+    )
+    for forbidden in (
+        "wash trading", "wash-trading", "scam", "rug", "arnaque", "manipulation",
+    ):
+        assert forbidden not in text.lower()
+
+
+def test_flow_imbalance_absent_when_some_sells_exist():
+    text = format_qualified_candidate(
+        _pool(buy_count=41, sell_count=1, buy_volume_usd=784.21, sell_volume_usd=5.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=200.0,
+    )
+    assert "FLOW IMBALANCE" not in text
+
+
+def test_flow_imbalance_absent_below_the_provisional_buy_threshold():
+    """sell_count == 0 but too few buys to say anything -- threshold is
+    explicitly provisional/display-only, see the module's own comment."""
+    text = format_qualified_candidate(
+        _pool(buy_count=3, sell_count=0, buy_volume_usd=12.0, sell_volume_usd=0.0),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=200.0,
+    )
+    assert "FLOW IMBALANCE" not in text
+
+
+def test_flow_imbalance_absent_when_counts_unavailable():
+    text = format_qualified_candidate(
+        _pool(buy_count=None, sell_count=None),
+        chain="robinhood", regime_open=False, liquidity_floor_usd=200.0,
+    )
+    assert "FLOW IMBALANCE" not in text
+
+
+# --- 03/09, operator go: is_radar_eligible -- Telegram threshold ($20k),
+# distinct from and never touching the discovery/logging qualification
+# threshold (MIN_LIQUIDITY_USD_DAY_ZERO, $200, unchanged). Sub-threshold
+# candidates keep being discovered/recorded, just not sent to Telegram. ---
+
+def test_radar_eligible_above_threshold():
+    assert is_radar_eligible(_pool(reserve_usd=20_000.0)) is True
+    assert is_radar_eligible(_pool(reserve_usd=50_000.0)) is True
+
+
+def test_radar_not_eligible_below_threshold():
+    assert is_radar_eligible(_pool(reserve_usd=19_999.99)) is False
+    assert is_radar_eligible(_pool(reserve_usd=5_000.0)) is False
+
+
+def test_radar_not_eligible_when_reserve_unknown_fail_closed():
+    """Same fail-closed doctrine as the rest of this pipeline (never treat
+    an unmeasurable pool as tradable/notify-worthy)."""
+    assert is_radar_eligible(_pool(reserve_usd=None)) is False
+
+
+def test_radar_eligible_threshold_is_overridable_for_recalibration():
+    assert is_radar_eligible(_pool(reserve_usd=5_000.0), threshold_usd=4_000.0) is True
+
+
+# --- 03/09, operator go: is_security_blocked -- minimal GoPlus honeypot
+# gate. Confirmed live (real API call, chain_id=4663) that GoPlus DOES
+# cover Robinhood Chain, on the exact $R404 pool independently flagged
+# "Potential scam" by fomo.io the same minute. Never blocks on unknown
+# (None) -- same doctrine as goplus.py's own module docstring: only a
+# POSITIVELY confirmed signal penalizes, a network outage never bans a
+# good token. ---
+
+def test_security_blocked_on_confirmed_honeypot():
+    assert is_security_blocked(_security(is_honeypot=True)) is True
+
+
+def test_security_blocked_on_confirmed_cannot_sell_all():
+    assert is_security_blocked(_security(cannot_sell_all=True)) is True
+
+
+def test_security_blocked_on_confirmed_cannot_buy():
+    assert is_security_blocked(_security(cannot_buy=True)) is True
+
+
+def test_security_not_blocked_when_everything_confirmed_clean():
+    assert is_security_blocked(
+        _security(is_honeypot=False, cannot_sell_all=False, cannot_buy=False)
+    ) is False
+
+
+def test_security_not_blocked_on_unknown_never_fail_open_to_fail_closed():
+    """None (unknown) must never block -- a network outage/no-data result
+    must never ban a good token, same doctrine as the rest of the pipeline."""
+    assert is_security_blocked(
+        _security(is_honeypot=None, cannot_sell_all=None, cannot_buy=None)
+    ) is False
+
+
+def test_security_not_blocked_when_goplus_unavailable():
+    assert is_security_blocked(_security(available=False)) is False
