@@ -98,6 +98,16 @@ DEFAULT_WINDOW_SECONDS = 300.0
 # 04/09, second pass -- see module docstring. Starting points, not measured
 # thresholds; revisit once Chantier A has accumulated enough trajectories to
 # measure "the age at which the signal becomes discriminant" empirically.
+# 04/09, operator-directed clarification after $GIL: this value is a
+# TECHNICAL calculability floor (enough of a trajectory exists to compute
+# has_minimum_onchain_trajectory at all), NOT a validated security/maturation
+# delay -- do not read 60.0 as "60 seconds is long enough to trust a
+# candidate". The real question of how long a pool must be observed before a
+# coordinated-funding cluster would become visible stays explicitly OPEN,
+# to be formally decided later, never inferred from this constant. Telegram
+# itself stays OFF regardless of this value until the X-account and
+# funding-cluster gates exist (see shadow_persistent.py's own comment on the
+# disabled send).
 MIN_ONCHAIN_TRAJECTORY_SECONDS = 60.0
 MIN_ONCHAIN_OBSERVATIONS = 1
 SECURITY_RETRY_INTERVAL_SECONDS = 20.0
