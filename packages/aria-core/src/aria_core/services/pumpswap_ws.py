@@ -33,7 +33,12 @@ field is what actually moves on every buy/sell. This module:
 
 **Coverage limitation, stated honestly (never silently assumed complete)**:
 USD pricing only works for a WSOL-quoted pool (single SOL/USD calibration
-via ``coingecko_client``). A real sample taken while building the
+via ``sol_usd_rate.sol_usd_cached()``, Jupiter first / CoinGecko fallback --
+04/09, was a direct standalone ``coingecko_client`` call with no fallback,
+went dark for hours during CoinGecko's 08/2026 monthly-quota exhaustion,
+system_issues #271; same real incident already fixed once in
+``pumpfun_bonding_ws.py``, see ``sol_usd_rate.py``'s own docstring). A real
+sample taken while building the
 originating probe found the MAJORITY of the freshest open PumpSwap positions
 (7/8 on one sample) were quoted against a Token-2022 asset, not WSOL --
 ``PumpSwapLiveSnapshot.available`` is honestly ``False`` for those, never a
@@ -61,7 +66,7 @@ from dataclasses import dataclass
 import base58
 import httpx
 
-from aria_core.services.coingecko import coingecko_client
+from aria_core.services import sol_usd_rate
 
 logger = logging.getLogger(__name__)
 
@@ -208,8 +213,6 @@ SETUP_REQUEST_GAP_SECONDS = 0.4  # keeps sequential setup calls well under the v
 # zero trading activity -- this module can't fully distinguish the two, so
 # age past this bound is the honest, conservative signal either way).
 DEFAULT_MAX_STALENESS_SECONDS = 30.0
-
-SOL_USD_CALIBRATION_REFRESH_SECONDS = 240.0
 
 _SUBSCRIBE_CONFIRM_TIMEOUT_SECONDS = 15.0
 _RECV_POLL_TIMEOUT_SECONDS = 5.0
@@ -574,7 +577,6 @@ class PumpSwapWebSocketFeed:
         self._ws = None
 
         self._sol_usd: float | None = None
-        self._last_calibration_at: float = 0.0
 
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
@@ -817,19 +819,20 @@ class PumpSwapWebSocketFeed:
         return confirmed
 
     async def _maybe_refresh_calibration(self) -> None:
-        now = time.time()
-        if self._sol_usd is not None and (now - self._last_calibration_at) < SOL_USD_CALIBRATION_REFRESH_SECONDS:
-            return
+        """04/09 -- delegates to the shared ``sol_usd_rate.sol_usd_cached()``
+        (Jupiter first, CoinGecko fallback, own internal TTL cache) instead
+        of calling ``coingecko_client`` directly with no fallback and no
+        shared cache -- the exact real incident already fixed once in
+        ``pumpfun_bonding_ws.py`` (system_issues #271: CoinGecko's monthly
+        quota exhausted, this calibration went dark for hours with no
+        alternative source). Never duplicated back into a standalone call
+        per this dome's "cohérence architecturale absolue" doctrine."""
         try:
-            result = await coingecko_client.get_simple_price(["solana"], vs_currencies=["usd"])
-            if result.available:
-                price = result.prices.get("solana", {}).get("usd")
-                if price is not None:
-                    self._sol_usd = price
+            price = await sol_usd_rate.sol_usd_cached()
+            if price is not None:
+                self._sol_usd = price
         except Exception as exc:  # noqa: BLE001 -- calibration is best-effort, never fatal
             logger.info("pumpswap_ws: SOL/USD calibration failed (%s)", exc)
-        finally:
-            self._last_calibration_at = now
 
     def _price_usd_now(self, pool_address: str) -> float | None:
         """Shared by ``_apply_notification`` (to track high/low across

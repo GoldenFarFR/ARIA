@@ -23,6 +23,16 @@ from aria_core.services.coingecko import SimplePriceResult
 _TEST_RPC = "https://rpc.test.invalid"
 
 
+@pytest.fixture(autouse=True)
+def _reset_sol_usd_cache(monkeypatch):
+    """04/09 -- ``_maybe_refresh_calibration`` now delegates to the shared,
+    module-level-cached ``sol_usd_rate.sol_usd_cached()`` -- same reset
+    discipline as ``test_sol_usd_rate.py``'s own fixture, to avoid a value
+    cached by one test leaking into the next (real incident, 20/08, on the
+    sibling coingecko_client singleton this replaced)."""
+    monkeypatch.setattr(pumpswap_ws.sol_usd_rate, "_sol_usd_cache", None)
+
+
 def _pk_bytes(label: str) -> bytes:
     """Deterministic 32-byte fake pubkey, unique per label."""
     return hashlib.sha256(label.encode()).digest()
@@ -423,20 +433,12 @@ async def test_feed_start_subscribes_and_applies_a_real_notification(monkeypatch
     accounts = _accounts()
     ws = FakeWebSocket()
 
-    async def _fake_get_simple_price(coin_ids, *, vs_currencies=None):
-        return SimplePriceResult(prices={"solana": {"usd": 150.0}}, available=True)
+    async def _fake_fetch_quote(*a, **k):
+        return {"outAmount": str(150_000_000)}  # 150.0 USDC (6 decimals) for 1 SOL
 
-    # Patch the CLASS, not the instance -- setattr on the singleton instance
-    # leaves a permanent residual instance attribute once monkeypatch
-    # "restores" it (the pre-patch value it captures via getattr is the
-    # class-bound method, and restoring re-assigns that onto the instance),
-    # which then shadows any later test's class-level monkeypatch on this
-    # same shared coingecko_client singleton (real incident, 20/08: broke
-    # test_paper_trader_risk.py's usdc_depeg_pct tests whenever this file
-    # ran first in the same pytest session).
-    monkeypatch.setattr(
-        type(pumpswap_ws.coingecko_client), "get_simple_price", staticmethod(_fake_get_simple_price)
-    )
+    # 04/09 -- calibration now goes through sol_usd_rate.sol_usd_cached()
+    # (Jupiter first), not coingecko_client directly.
+    monkeypatch.setattr(pumpswap_ws.sol_usd_rate.jupiter, "fetch_quote", _fake_fetch_quote)
 
     feed = pumpswap_ws.PumpSwapWebSocketFeed(connect_fn=lambda url: ws, max_staleness_seconds=1000.0)
     feed._pools["poolA"] = accounts
