@@ -22,8 +22,8 @@ def test_extract_project_links_websites_and_socials():
     }
     links = _extract_project_links(raw)
     assert {"label": "Website", "url": "https://atlas.example"} in links
-    assert {"label": "X (Twitter)", "url": "https://x.com/atlas"} in links
-    assert {"label": "Telegram", "url": "https://t.me/atlas"} in links
+    assert {"label": "X (Twitter)", "url": "https://x.com/atlas", "kind": "twitter"} in links
+    assert {"label": "Telegram", "url": "https://t.me/atlas", "kind": "telegram"} in links
 
 
 def test_extract_project_links_no_info_is_empty():
@@ -48,7 +48,7 @@ def test_extract_project_links_farcaster_mapped_explicitly():
     _SOCIAL_LABELS, pas seulement via le repli .capitalize()."""
     raw = {"info": {"socials": [{"type": "farcaster", "url": "https://warpcast.com/atlas"}]}}
     links = _extract_project_links(raw)
-    assert links == [{"label": "Farcaster", "url": "https://warpcast.com/atlas"}]
+    assert links == [{"label": "Farcaster", "url": "https://warpcast.com/atlas", "kind": "farcaster"}]
 
 
 def test_extract_project_links_unknown_social_type_capitalized():
@@ -56,7 +56,7 @@ def test_extract_project_links_unknown_social_type_capitalized():
     jamais être perdu -- repli sur son nom capitalisé plutôt qu'un libellé vide."""
     raw = {"info": {"socials": [{"type": "lens", "url": "https://hey.xyz/atlas"}]}}
     links = _extract_project_links(raw)
-    assert links == [{"label": "Lens", "url": "https://hey.xyz/atlas"}]
+    assert links == [{"label": "Lens", "url": "https://hey.xyz/atlas", "kind": "lens"}]
 
 
 def test_extract_project_links_missing_url_skipped():

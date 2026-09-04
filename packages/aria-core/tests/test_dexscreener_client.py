@@ -112,6 +112,50 @@ async def test_fetch_token_pairs_parses_real_shape(monkeypatch):
     assert pairs[0].liquidity_unknown is False
 
 
+def test_extract_project_links_includes_the_raw_social_kind():
+    """04/09 -- the X-transparency gate (early_life_observation's future
+    X gate) must identify an X/Twitter link WITHOUT depending on the
+    human-readable ``label`` (which is presentation text, not a stable key).
+    ``kind`` is the normalized DexScreener ``type`` field, lowercased,
+    exposed alongside ``label``/``url`` for exactly this purpose."""
+    raw = {
+        "info": {
+            "socials": [
+                {"type": "twitter", "url": "https://x.com/realproject"},
+                {"type": "telegram", "url": "https://t.me/realproject"},
+            ],
+        },
+    }
+    links = ds._extract_project_links(raw)
+    kinds = {link["kind"]: link["url"] for link in links}
+    assert kinds["twitter"] == "https://x.com/realproject"
+    assert kinds["telegram"] == "https://t.me/realproject"
+
+
+def test_extract_x_link_finds_a_twitter_type_social():
+    links = [{"label": "X (Twitter)", "url": "https://x.com/realproject", "kind": "twitter"}]
+    assert ds.extract_x_link(links) == "https://x.com/realproject"
+
+
+def test_extract_x_link_finds_an_x_type_social():
+    """DexScreener uses both "twitter" and "x" as the raw type -- both must
+    resolve, same as _SOCIAL_LABELS already maps both to the same label."""
+    links = [{"label": "X (Twitter)", "url": "https://x.com/realproject", "kind": "x"}]
+    assert ds.extract_x_link(links) == "https://x.com/realproject"
+
+
+def test_extract_x_link_none_when_no_x_social_present():
+    links = [
+        {"label": "Telegram", "url": "https://t.me/realproject", "kind": "telegram"},
+        {"label": "Site officiel", "url": "https://realproject.io"},  # a website link, no "kind"
+    ]
+    assert ds.extract_x_link(links) is None
+
+
+def test_extract_x_link_none_on_empty_list():
+    assert ds.extract_x_link([]) is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_token_pairs_liquidity_key_absent_flagged_unknown(monkeypatch):
     """02/08 -- real bug found live: DexScreener can omit the "liquidity" key

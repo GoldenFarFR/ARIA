@@ -143,7 +143,7 @@ def _fmt_age_compact(pool_created_at: datetime | None, now: datetime) -> str:
 
 def format_candidate_alert(
     pool: TrendingPool, *, chain: str, regime_open: bool, security_status: str,
-    now: datetime | None = None,
+    x_handle: str, now: datetime | None = None,
 ) -> str:
     """A short (5-8 line) human summary for the "Candidate" state --
     04/09, operator go, twice-revised the SAME day as
@@ -170,7 +170,17 @@ def format_candidate_alert(
     ``"safe"``, never re-decides safety) -- deliberately never called with
     anything else in production (a candidate only reaches this alert once
     ``security_status == "safe"``), but rendered honestly (uppercased
-    as-is) rather than assumed if it somehow were."""
+    as-is) rather than assumed if it somehow were.
+
+    ``x_handle`` (04/09, operator-directed minimum-transparency gate) is
+    REQUIRED, never optional/defaulted -- the caller only reaches this
+    function once ``early_life_observation.update_x_status`` found a
+    project-declared X/Twitter link (``x_status == "found"``); a candidate
+    with no X link never gets this far, so there is no honest "N/A" case to
+    render here. Shown explicitly so transparency is immediately verifiable
+    by the reader, never just a boolean gate result -- "un minimum de
+    transparence, pas un signal positif de qualite du token" (operator's
+    own framing, never rendered as an endorsement)."""
     at = now or datetime.now(timezone.utc)
     symbol = pool.symbol or "?"
     chain_label = _CHAIN_ABBREV.get(chain, chain.upper())
@@ -192,7 +202,7 @@ def format_candidate_alert(
         f"🚨 ARIA — ${symbol}\n"
         f"⛓️ {chain_label} · age {age} · liq {liquidity} · B/S {buy_sell}\n"
         f"📈 Volume {volume} · acceleration N/A\n"
-        f"🛡️ Security {security_label}\n"
+        f"🛡️ Security {security_label} · X {x_handle}\n"
         f"⚠️ Day-zero · regime {regime_label}\n"
         f"👁️ Observation only\n"
         f"🔗 {dexscreener_link} · {fomo_link}"

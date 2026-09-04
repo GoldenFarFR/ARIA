@@ -109,6 +109,18 @@ DEFAULT_WINDOW_SECONDS = 300.0
 MIN_ONCHAIN_TRAJECTORY_SECONDS = 600.0
 MIN_ONCHAIN_OBSERVATIONS = 1
 SECURITY_RETRY_INTERVAL_SECONDS = 20.0
+# 04/09, operator-directed X-transparency gate: a Candidate ($OPENAI/$GIL-
+# style coordinated-funding clusters, or a bare rug, both reached Telegram
+# without ANY declared social identity) additionally needs a project-
+# declared X/Twitter link before Telegram fires -- "ce gate X est un
+# minimum de transparence, pas un signal positif de qualite du token."
+# Same retry doctrine as SECURITY: DexScreener's info.socials on a very
+# young pool is often simply not indexed yet, never a confirmed absence --
+# "not observed yet" != "confirmed absent" (operator's own wording). No
+# terminal "absent" status exists on purpose: a candidate that ages out of
+# its window without ever finding an X link is just never promoted to
+# Telegram, exactly like any other gate that never resolves.
+X_CHECK_RETRY_INTERVAL_SECONDS = 20.0
 
 _ensured_db_paths: set[str] = set()
 
@@ -153,6 +165,9 @@ async def _ensure_table() -> None:
             ("last_security_check_at", "TEXT"),
             ("candidate_suppressed_at", "TEXT"),
             ("candidate_suppressed_reason", "TEXT"),
+            ("x_status", "TEXT"),
+            ("x_handle", "TEXT"),
+            ("last_x_check_at", "TEXT"),
         ])
         await db.commit()
     _ensured_db_paths.add(path)
@@ -212,7 +227,7 @@ async def list_active(
             f"SELECT chain, pool_address, token_address, qualified_at, symbol, "
             f"total_supply, market_cap_usd, pool_created_at, candidate_validated_at, "
             f"security_status, last_security_check_at, candidate_suppressed_at, "
-            f"candidate_suppressed_reason FROM {TABLE} "
+            f"candidate_suppressed_reason, x_status, x_handle, last_x_check_at FROM {TABLE} "
             f"WHERE chain = ? AND qualified_at >= ?",
             (chain, cutoff),
         )
@@ -317,6 +332,19 @@ async def has_minimum_onchain_trajectory(
     return count >= min_observations
 
 
+def _should_retry(
+    last_check_at: str | None, *, now: datetime | None, min_interval_seconds: float,
+) -> bool:
+    """Shared throttle logic behind ``should_retry_security_check`` and
+    ``should_retry_x_check`` -- both gates need the exact same "never
+    checked, or checked long enough ago" rule, only the constant differs."""
+    if last_check_at is None:
+        return True
+    at = now or datetime.now(timezone.utc)
+    last = datetime.fromisoformat(last_check_at)
+    return (at - last).total_seconds() >= min_interval_seconds
+
+
 def should_retry_security_check(
     last_check_at: str | None, *, now: datetime | None = None,
     min_interval_seconds: float = SECURITY_RETRY_INTERVAL_SECONDS,
@@ -325,11 +353,18 @@ def should_retry_security_check(
     or the last one is older than ``min_interval_seconds`` -- throttles
     GoPlus retries so a candidate stuck in "unknown" for its whole tracking
     window doesn't hammer the API once per discovery cycle (~5s)."""
-    if last_check_at is None:
-        return True
-    at = now or datetime.now(timezone.utc)
-    last = datetime.fromisoformat(last_check_at)
-    return (at - last).total_seconds() >= min_interval_seconds
+    return _should_retry(last_check_at, now=now, min_interval_seconds=min_interval_seconds)
+
+
+def should_retry_x_check(
+    last_check_at: str | None, *, now: datetime | None = None,
+    min_interval_seconds: float = X_CHECK_RETRY_INTERVAL_SECONDS,
+) -> bool:
+    """Same retry doctrine as ``should_retry_security_check``, for the
+    X-transparency gate -- see ``X_CHECK_RETRY_INTERVAL_SECONDS``'s own
+    comment on why "not yet found" must keep retrying rather than becoming
+    a terminal rejection."""
+    return _should_retry(last_check_at, now=now, min_interval_seconds=min_interval_seconds)
 
 
 async def touch_security_check_at(chain: str, pool_address: str, *, at: datetime | None = None) -> None:
@@ -365,6 +400,42 @@ async def update_security_status(
             f"UPDATE {TABLE} SET security_status = ?, last_security_check_at = ? "
             f"WHERE chain = ? AND pool_address = ?",
             (status, checked_at, chain, pool_address),
+        )
+        await db.commit()
+
+
+async def touch_x_check_at(chain: str, pool_address: str, *, at: datetime | None = None) -> None:
+    """Records that an X-link check just ran and found nothing YET -- updates
+    only the retry throttle timestamp, never ``x_status``. Mirrors
+    ``touch_security_check_at`` exactly: "not found in this pass" is never
+    promoted to a terminal negative value (operator's own wording: "not
+    observed yet" != "confirmed absent")."""
+    await _ensure_table()
+    checked_at = (at or datetime.now(timezone.utc)).isoformat()
+    async with aiosqlite.connect(_db_path()) as db:
+        await db.execute(
+            f"UPDATE {TABLE} SET last_x_check_at = ? WHERE chain = ? AND pool_address = ?",
+            (checked_at, chain, pool_address),
+        )
+        await db.commit()
+
+
+async def update_x_status(
+    chain: str, pool_address: str, x_handle: str, *, at: datetime | None = None,
+) -> None:
+    """Persists a project-declared X/Twitter link found in DexScreener's
+    ``info.socials`` (``dexscreener.extract_x_link``) -- ``x_status``
+    becomes ``"found"``, permanent, never re-checked again. Never called
+    with an absence: no code path sets a terminal "not found" value (see
+    ``touch_x_check_at``) -- a minimum-transparency signal, never a quality
+    signal (operator's own framing)."""
+    await _ensure_table()
+    checked_at = (at or datetime.now(timezone.utc)).isoformat()
+    async with aiosqlite.connect(_db_path()) as db:
+        await db.execute(
+            f"UPDATE {TABLE} SET x_status = 'found', x_handle = ?, last_x_check_at = ? "
+            f"WHERE chain = ? AND pool_address = ?",
+            (x_handle, checked_at, chain, pool_address),
         )
         await db.commit()
 
@@ -422,6 +493,27 @@ async def list_pending_candidate_evaluation(
         cand for cand in active
         if cand["candidate_validated_at"] is None
         and cand["security_status"] != "blocked"
+        and cand["candidate_suppressed_at"] is None
+    ]
+
+
+async def list_pending_x_evaluation(
+    chain: str, *, now: datetime | None = None, window_seconds: float = DEFAULT_WINDOW_SECONDS,
+) -> list[dict]:
+    """Active, already-validated Candidates (ON-CHAIN+SECURITY) not yet
+    suppressed, with no X link found yet -- the work list for the
+    X-transparency gate. Deliberately a SEPARATE list from
+    ``list_pending_candidate_evaluation``: a validated Candidate is excluded
+    from that list forever (its ON-CHAIN+SECURITY state is terminal), but
+    must keep being re-evaluated here until an X link is found or its
+    window expires -- "Candidate" (this module's existing meaning,
+    unchanged) is distinct from "Candidate Telegram" (ON-CHAIN+SECURITY+X,
+    the operator's own distinction)."""
+    active = await list_active(chain, now=now, window_seconds=window_seconds)
+    return [
+        cand for cand in active
+        if cand["candidate_validated_at"] is not None
+        and cand["x_status"] != "found"
         and cand["candidate_suppressed_at"] is None
     ]
 

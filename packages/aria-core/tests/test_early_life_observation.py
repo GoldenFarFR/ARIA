@@ -266,6 +266,85 @@ async def test_list_pending_candidate_evaluation_excludes_expired():
     assert pending == []
 
 
+def test_should_retry_x_check_true_when_never_checked():
+    assert early_life_observation.should_retry_x_check(None, now=_t(0)) is True
+
+
+def test_should_retry_x_check_false_within_interval():
+    last = _t(0).isoformat()
+    assert early_life_observation.should_retry_x_check(
+        last, now=_t(5), min_interval_seconds=20.0,
+    ) is False
+
+
+def test_should_retry_x_check_true_past_interval():
+    last = _t(0).isoformat()
+    assert early_life_observation.should_retry_x_check(
+        last, now=_t(21), min_interval_seconds=20.0,
+    ) is True
+
+
+async def test_update_x_status_persists_handle_and_is_readable():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.update_x_status("robinhood", "0xpool", "https://x.com/realproject", at=_t(10))
+    active = await early_life_observation.list_active("robinhood", now=_t(11))
+    assert active[0]["x_status"] == "found"
+    assert active[0]["x_handle"] == "https://x.com/realproject"
+    assert active[0]["last_x_check_at"] == _t(10).isoformat()
+
+
+async def test_touch_x_check_at_updates_timestamp_never_status():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.touch_x_check_at("robinhood", "0xpool", at=_t(5))
+    active = await early_life_observation.list_active("robinhood", now=_t(6))
+    assert active[0]["last_x_check_at"] == _t(5).isoformat()
+    assert active[0]["x_status"] is None
+    assert active[0]["x_handle"] is None
+
+
+async def test_list_pending_x_evaluation_excludes_not_yet_candidate():
+    """Not yet ON-CHAIN+SECURITY validated -- the X gate only evaluates
+    candidates that already reached "Candidate", per the operator's own
+    distinction between "Candidate" (unchanged, ON-CHAIN+SECURITY) and
+    "Candidate Telegram" (ON-CHAIN+SECURITY+X, this new layer)."""
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    pending = await early_life_observation.list_pending_x_evaluation("robinhood", now=_t(10))
+    assert pending == []
+
+
+async def test_list_pending_x_evaluation_includes_validated_candidate_without_x():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.mark_candidate_validated("robinhood", "0xpool", at=_t(5))
+    pending = await early_life_observation.list_pending_x_evaluation("robinhood", now=_t(10))
+    assert len(pending) == 1
+    assert pending[0]["pool_address"] == "0xpool"
+
+
+async def test_list_pending_x_evaluation_excludes_x_already_found():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.mark_candidate_validated("robinhood", "0xpool", at=_t(5))
+    await early_life_observation.update_x_status("robinhood", "0xpool", "https://x.com/realproject", at=_t(6))
+    pending = await early_life_observation.list_pending_x_evaluation("robinhood", now=_t(10))
+    assert pending == []
+
+
+async def test_list_pending_x_evaluation_excludes_suppressed():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.mark_candidate_validated("robinhood", "0xpool", at=_t(5))
+    await early_life_observation.mark_candidate_suppressed("robinhood", "0xpool", "dup", at=_t(6))
+    pending = await early_life_observation.list_pending_x_evaluation("robinhood", now=_t(10))
+    assert pending == []
+
+
+async def test_list_pending_x_evaluation_excludes_expired():
+    await early_life_observation.start_tracking("robinhood", "0xpool", "0xtoken", qualified_at=_t(0))
+    await early_life_observation.mark_candidate_validated("robinhood", "0xpool", at=_t(5))
+    pending = await early_life_observation.list_pending_x_evaluation(
+        "robinhood", now=_t(301), window_seconds=300.0,
+    )
+    assert pending == []
+
+
 async def test_build_snapshot_pool_none_for_unknown_pool():
     pool = await early_life_observation.build_snapshot_pool("robinhood", "0xghost")
     assert pool is None

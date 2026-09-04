@@ -209,9 +209,32 @@ def _extract_project_links(raw: dict) -> list[dict]:
         if not url.lower().startswith(("http://", "https://")):
             continue
         kind = str(social.get("type") or "").strip().lower()
-        links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url})
+        links.append({"label": _SOCIAL_LABELS.get(kind, kind.capitalize() or "Lien"), "url": url, "kind": kind})
 
     return links
+
+
+# 04/09 -- the X-transparency gate: DexScreener reports both "twitter" and
+# "x" as the raw social type (see _SOCIAL_LABELS, both already map to the
+# same display label) -- never match on the label text, it's presentation,
+# not a stable key.
+_X_SOCIAL_KINDS = frozenset({"twitter", "x"})
+
+
+def extract_x_link(project_links: list[dict]) -> str | None:
+    """The project's own declared X/Twitter URL from ``PairSnapshot.
+    project_links`` (``_extract_project_links``'s output), or ``None`` if
+    none is present in THIS snapshot -- never fabricated, never guessed from
+    a free-text search. A website-only link (no ``kind``, e.g. the "Site
+    officiel" entry from ``info.websites``) never matches.
+
+    Caller's responsibility, not this function's: ``None`` here means
+    "not found in this snapshot", never "confirmed absent forever" -- a
+    fresh pool's DexScreener metadata can simply not be indexed yet."""
+    for link in project_links:
+        if link.get("kind") in _X_SOCIAL_KINDS:
+            return link.get("url")
+    return None
 
 
 def _safe_float(value: object) -> float | None:
