@@ -2287,9 +2287,9 @@ async def test_refresh_eth_usd_rate_pays_nothing_while_a_fresh_live_snapshot_exi
 
     async def _never(*args, **kwargs):
         calls.append(args)
-        raise AssertionError("resolve_cold must not be called here")
+        raise AssertionError("_cold_read_ref_pool must not be called here")
 
-    feed.resolve_cold = _never
+    feed._cold_read_ref_pool = _never
     await feed._refresh_eth_usd_rate()
     assert calls == []
 
@@ -2304,9 +2304,9 @@ async def test_refresh_eth_usd_rate_never_spends_while_the_breaker_is_open():
     feed._breaker_open = True
 
     async def _never(*args, **kwargs):
-        raise AssertionError("resolve_cold must not be called while breaker is open")
+        raise AssertionError("_cold_read_ref_pool must not be called while breaker is open")
 
-    feed.resolve_cold = _never
+    feed._cold_read_ref_pool = _never
     await feed._refresh_eth_usd_rate()
     assert feed._eth_usd_rate_cached is None
 
@@ -2322,7 +2322,7 @@ async def test_refresh_eth_usd_rate_ignores_a_partial_cold_read():
     async def _partial(*args, **kwargs):
         return m.EVMSwapSnapshot(available=True, price_quote=1.0, price_usd=None)
 
-    feed.resolve_cold = _partial
+    feed._cold_read_ref_pool = _partial
     await feed._refresh_eth_usd_rate()
     assert feed._eth_usd_rate_cached is None
     assert feed.onchain_eth_usd_rate() is None
@@ -2337,10 +2337,60 @@ async def test_refresh_eth_usd_rate_caches_a_complete_cold_read():
     async def _complete(*args, **kwargs):
         return m.EVMSwapSnapshot(available=True, price_quote=4321.0, price_usd=4321.0)
 
-    feed.resolve_cold = _complete
+    feed._cold_read_ref_pool = _complete
     await feed._refresh_eth_usd_rate()
     assert feed._eth_usd_rate_cached == pytest.approx(4321.0)
     assert feed.onchain_eth_usd_rate() == pytest.approx(4321.0)
+
+
+@pytest.mark.asyncio
+async def test_refresh_eth_usd_rate_resolves_the_real_untracked_reference_pool():
+    """04/09, real production bug found live (all Robinhood reserve_usd/
+    price_usd stayed NULL on every post-qualification observation):
+    _refresh_eth_usd_rate calls ``resolve_cold(ref_pool, dex_id="uniswap_v3")``
+    with NO ``token_address`` -- and the reference pool is never pre-
+    registered by any caller (shadow_persistent.py, verified live, does not
+    call add_pool on it despite the module docstring's claim it would be
+    "wired at process startup by the caller"). resolve_cold's own documented
+    contract (test_resolve_cold_returns_unavailable_when_untracked_and_no_
+    registration_args) is that an untracked pool with no token_address
+    returns unavailable=False, by design -- so this combination silently
+    starves the oracle forever, with zero error logged anywhere (no
+    exception is ever raised, just an early return). Every prior test of
+    _refresh_eth_usd_rate mocked resolve_cold directly, so this integration
+    gap was never exercised. This test uses the REAL resolve_cold, an
+    UNTRACKED reference pool (the real production state), and asserts the
+    rate resolves anyway -- proving the fix reads the pool directly, never
+    silently returning None."""
+    feed = m.EVMSwapWebSocketFeed(chain="robinhood", ws_url="wss://test.invalid", chain_id=4663)
+    feed._connected = True
+    ref_pool = m._ETH_USD_REFERENCE_POOL_BY_CHAIN["robinhood"]
+    assert ref_pool.lower() not in feed._pools  # the real, unpatched production state
+
+    fake_w3 = MagicMock()
+    fake_w3.to_checksum_address = lambda a: a
+    contract = MagicMock()
+    contract.functions.token0.return_value.call = AsyncMock(
+        return_value="0x0bd7d308f8e1639fab988df18a8011f41eacad73"  # WETH (Robinhood)
+    )
+    contract.functions.token1.return_value.call = AsyncMock(return_value="0xusdg")
+    contract.functions.decimals.return_value.call = AsyncMock(return_value=18)
+    sqrt_price = _sqrt_price_x96_for_price(2600.0)
+    contract.functions.slot0.return_value.call = AsyncMock(
+        return_value=(sqrt_price, 0, 0, 0, 0, 0, True)
+    )
+    contract.functions.liquidity.return_value.call = AsyncMock(return_value=123456)
+    fake_w3.eth.contract.return_value = contract
+    fake_w3.eth.subscribe = AsyncMock(side_effect=AssertionError("must never subscribe for the oracle"))
+    feed._w3 = fake_w3
+
+    await feed._refresh_eth_usd_rate()
+
+    assert feed.onchain_eth_usd_rate() == pytest.approx(2600.0, rel=1e-3)
+    # The fix must never register a live subscription for the reference
+    # pool -- exactly the cost incident (system_issues #289) this brique's
+    # own docstring already documents fixing once.
+    assert ref_pool.lower() not in feed._pools
 
 
 def test_eth_usd_rate_refresh_interval_is_shorter_than_the_staleness_ceiling():

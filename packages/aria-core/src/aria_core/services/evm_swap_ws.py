@@ -160,15 +160,14 @@ _CBBTC_ADDRESSES = frozenset({
 })
 
 # 29/08, brique 4 (roadmap-capteurs-onchain.md, "Oracle WETH/USD on-chain")
-# -- one high-liquidity WETH/stable reference pool per chain, tracked
-# PERMANENTLY (wired at process startup by the caller, see shadow_persistent.
-# py -- never left to dynamic discovery, which could evict it) so
-# ``onchain_eth_usd_rate`` below always has a live feed to read. Both
-# addresses verified by direct DexScreener click-through, never guessed
-# (same discipline as every other address constant in this file) -- their
-# token0/token1 both already fall in ``_WETH_ADDRESSES``/
-# ``_KNOWN_USD_STABLES`` above, so ``add_pool`` auto-detects
-# ``quote_is_stable=True`` for them with zero change to those two sets.
+# -- one high-liquidity WETH/stable reference pool per chain, read via a
+# dedicated one-shot cold-read path (``_cold_read_ref_pool``, never
+# ``add_pool``/a live subscription -- see that method's own docstring,
+# system_issues #289) so ``onchain_eth_usd_rate`` below always has a small
+# cache to read from. Both addresses verified by direct DexScreener
+# click-through, never guessed (same discipline as every other address
+# constant in this file) -- their token0/token1 both already fall in
+# ``_WETH_ADDRESSES``/``_KNOWN_USD_STABLES`` above.
 _ETH_USD_REFERENCE_POOL_BY_CHAIN: dict[str, str] = {
     # WETH/USDC, Uniswap V3, $116M liquidity -- verified by DexScreener
     # click-through 29/08 (same pool already used for Brique 3's decoder
@@ -459,6 +458,11 @@ class EVMSwapWebSocketFeed:
         # 31/08 (system_issues #289) -- see onchain_eth_usd_rate's docstring.
         self._eth_usd_rate_cached: float | None = None
         self._eth_usd_rate_cached_at: float | None = None
+        # 04/09 -- see _resolve_ref_pool_meta's own docstring: token0/token1/
+        # decimals for the reference pool, resolved via a real eth_call
+        # exactly ONCE (the pool's token pairing never changes), never
+        # re-derived on every refresh.
+        self._ref_pool_meta: dict[str, tuple[bool, int, int]] = {}
         self._evicted_pools: dict[str, _TrackedPool] = {}
         # 25/08 -- proactive twin of the budget breaker above. That one only
         # ever reacts AFTER the daily cap is already blown; this tracks how
@@ -857,6 +861,100 @@ class EVMSwapWebSocketFeed:
             logger.info("evm_swap_ws[%s]: resolve_cold failed for %s (%s)", self.chain, pool_address, exc)
         return EVMSwapSnapshot(available=False)
 
+    async def _resolve_ref_pool_meta(self, ref_pool: str) -> tuple[bool, int, int] | None:
+        """One-shot token0/token1/decimals resolution for a chain's ETH/USD
+        reference pool (``_ETH_USD_REFERENCE_POOL_BY_CHAIN``) -- deliberately
+        separate from ``add_pool``/``_add_pool_v2v3``, which would register
+        the pool into ``self._pools`` and trigger a live ``_resubscribe()``.
+        See ``_cold_read_ref_pool``'s own docstring for why that must never
+        happen here (system_issues #289). A pool's token ordering/decimals
+        never change, so this resolves once per process and is cached
+        forever in ``self._ref_pool_meta`` -- never re-derived on every
+        refresh."""
+        key = ref_pool.lower()
+        cached = self._ref_pool_meta.get(key)
+        if cached is not None:
+            return cached
+        if self._w3 is None:
+            return None
+        try:
+            checksum = self._w3.to_checksum_address(ref_pool)
+            contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_TOKEN01_ABI)
+            token0 = (await contract.functions.token0().call()).lower()
+            token1 = (await contract.functions.token1().call()).lower()
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
+            weth_is_currency0 = token0 in _WETH_ADDRESSES
+            if not weth_is_currency0 and token1 not in _WETH_ADDRESSES:
+                logger.info(
+                    "evm_swap_ws[%s]: ref pool %s has neither side as WETH (token0=%s token1=%s) -- refused",
+                    self.chain, ref_pool, token0, token1,
+                )
+                return None
+            decimals0 = await self._fetch_decimals(token0)
+            decimals1 = await self._fetch_decimals(token1)
+            meta = (weth_is_currency0, decimals0, decimals1)
+            self._ref_pool_meta[key] = meta
+            return meta
+        except Exception as exc:  # noqa: BLE001 -- best-effort, same doctrine as resolve_cold
+            logger.info("evm_swap_ws[%s]: ref pool %s meta resolution failed (%s)", self.chain, ref_pool, exc)
+            return None
+
+    async def _cold_read_ref_pool(self, ref_pool: str) -> EVMSwapSnapshot:
+        """Dedicated one-shot Uniswap V3 cold read for a chain's ETH/USD
+        reference pool -- deliberately NOT ``resolve_cold()``: that path
+        falls back to ``add_pool`` for an untracked pool (its own
+        documented, tested contract), which registers it into
+        ``self._pools`` and triggers a live WS subscription via
+        ``_resubscribe()``. This reference pool is read on every
+        ``_refresh_eth_usd_rate`` tick and must NEVER be tracked that way --
+        system_issues #289 is exactly this reference pool, on Robinhood
+        (the chain's busiest, $196M 24h volume), burning ~40-100k RU/h once
+        under a permanent subscription. Reuses ``_resolve_ref_pool_meta``
+        for the one-time token/decimals resolution and the identical
+        slot0()+liquidity() all-or-nothing v3 math ``resolve_cold`` uses, so
+        a cold read here and a live decoded event can never silently
+        diverge on convention.
+
+        04/09 -- real production bug this replaces: before this method
+        existed, ``_refresh_eth_usd_rate`` called
+        ``resolve_cold(ref_pool, dex_id="uniswap_v3")`` with no
+        ``token_address`` -- and the reference pool was never pre-registered
+        by any caller (despite ``_ETH_USD_REFERENCE_POOL_BY_CHAIN``'s own
+        docstring claiming it would be), so ``resolve_cold`` silently
+        returned ``available=False`` forever, with zero exception raised or
+        logged anywhere. Every Robinhood post-qualification observation's
+        ``reserve_usd``/``price_usd`` stayed ``NULL`` as a result."""
+        if self._w3 is None:
+            return EVMSwapSnapshot(available=False)
+        meta = await self._resolve_ref_pool_meta(ref_pool)
+        if meta is None:
+            return EVMSwapSnapshot(available=False)
+        weth_is_currency0, decimals0, decimals1 = meta
+        if not await chainstack_ru_budget.can_spend(self.chain):
+            return EVMSwapSnapshot(available=False)
+        try:
+            checksum = self._w3.to_checksum_address(ref_pool)
+            slot0_contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_V3_SLOT0_ABI)
+            liquidity_contract = self._w3.eth.contract(address=checksum, abi=_MINIMAL_V3_LIQUIDITY_ABI)
+            slot0 = await slot0_contract.functions.slot0().call()
+            sqrt_price_x96 = slot0[0]
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
+            raw_liquidity = await liquidity_contract.functions.liquidity().call()
+            chainstack_ru_budget.record_usage_fast(self.chain, 1)
+            if not sqrt_price_x96 or raw_liquidity is None:
+                return EVMSwapSnapshot(available=False)  # both must resolve together
+            price_quote = price_from_sqrt_price_x96(
+                sqrt_price_x96, token_is_currency0=weth_is_currency0,
+                decimals0=decimals0, decimals1=decimals1,
+            )
+            return EVMSwapSnapshot(
+                available=True, price_quote=price_quote, price_usd=price_quote,
+                raw_liquidity=float(raw_liquidity),
+            )
+        except Exception as exc:  # noqa: BLE001 -- a cold read failing must never fabricate a rate
+            logger.info("evm_swap_ws[%s]: ref pool %s cold read failed (%s)", self.chain, ref_pool, exc)
+            return EVMSwapSnapshot(available=False)
+
     async def resolve_token_symbol(self, token_address: str) -> str | None:
         """Cosmetic only, per spec.md's Edge Cases -- never gates
         qualification, replaces DexPaprika's ``_resolve_base_token`` role
@@ -1015,7 +1113,7 @@ class EVMSwapWebSocketFeed:
             and (snapshot.stale_seconds is None or snapshot.stale_seconds <= _ETH_USD_RATE_MAX_STALE_SECONDS)
         ):
             return  # a live subscription already covers it, no read to pay for
-        cold = await self.resolve_cold(ref_pool, dex_id="uniswap_v3")
+        cold = await self._cold_read_ref_pool(ref_pool)
         # Same all-or-nothing contract as every other path in this module:
         # a partial read never becomes a rate.
         if cold.available and cold.price_usd is not None:
