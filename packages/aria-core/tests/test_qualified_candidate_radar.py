@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aria_core.qualified_candidate_radar import (
-    format_qualified_candidate, is_radar_eligible, is_security_blocked,
+    format_candidate_alert, format_qualified_candidate, is_radar_eligible, is_security_blocked,
 )
 from aria_core.services.geckoterminal import TrendingPool
 from aria_core.services.goplus import TokenSecurity
@@ -424,3 +424,136 @@ def test_security_not_blocked_on_unknown_never_fail_open_to_fail_closed():
 
 def test_security_not_blocked_when_goplus_unavailable():
     assert is_security_blocked(_security(available=False)) is False
+
+
+# ---------------------------------------------------------------------------
+# format_candidate_alert -- 04/09, operator go: RADAR V1's 40-line dump is
+# a "Candidate" state event now, not an investable verdict (see
+# early_life_observation.py's own module docstring for the full history of
+# that decision). Telegram is a HUMAN SUMMARY SCREEN, never a data dump --
+# operator verbatim: "Telegram ne doit afficher que: Qu'est-ce qu'ARIA
+# vient de faire / pense / observe ?". Target: 5-8 lines, not 40. Every
+# field the pipeline doesn't measure stays an explicit N/A, same doctrine
+# as format_qualified_candidate -- the full data never disappears, it just
+# moves out of Telegram (stays in early_life_tracking/onchain_activity_
+# observation_log for ARIA's own reasoning).
+# ---------------------------------------------------------------------------
+
+def test_candidate_alert_is_short():
+    text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert len(text.splitlines()) <= 8
+
+
+def test_candidate_alert_never_a_trade_verdict():
+    text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "Observation only" in text
+    for forbidden in ("BUY", "SELL", "WATCH", "IGNORE", "QUALIFIED"):
+        assert forbidden not in text
+
+
+def test_candidate_alert_renders_symbol():
+    text = format_candidate_alert(
+        _pool(symbol="MOONCAT"), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "MOONCAT" in text
+
+
+def test_candidate_alert_abbreviates_known_chains():
+    assert "RH" in format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "BASE" in format_candidate_alert(
+        _pool(), chain="base", regime_open=False, security_status="safe",
+    )
+
+
+def test_candidate_alert_unknown_chain_never_crashes():
+    text = format_candidate_alert(
+        _pool(), chain="polygon", regime_open=False, security_status="safe",
+    )
+    assert "POLYGON" in text
+
+
+def test_candidate_alert_renders_age():
+    text = format_candidate_alert(
+        _pool(pool_created_at=datetime(2026, 9, 4, 11, 59, 56, tzinfo=timezone.utc)),
+        chain="robinhood", regime_open=False, security_status="safe",
+        now=datetime(2026, 9, 4, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    assert "4s" in text
+
+
+def test_candidate_alert_renders_liquidity_compact():
+    text = format_candidate_alert(
+        _pool(reserve_usd=51_099.81), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "51.1k" in text
+
+
+def test_candidate_alert_liquidity_na_when_unknown():
+    text = format_candidate_alert(
+        _pool(reserve_usd=None), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "N/A" in text
+
+
+def test_candidate_alert_renders_buy_sell():
+    text = format_candidate_alert(
+        _pool(buy_count=11, sell_count=0), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "11/0" in text
+
+
+def test_candidate_alert_buy_sell_na_when_unknown():
+    text = format_candidate_alert(
+        _pool(buy_count=None, sell_count=None), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "N/A" in text
+
+
+def test_candidate_alert_renders_volume():
+    text = format_candidate_alert(
+        _pool(volume_usd=0.01), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "0.01" in text
+
+
+def test_candidate_alert_acceleration_always_na():
+    """Never computed anywhere in the pipeline today -- must always render
+    N/A, never a fabricated figure (same doctrine as format_qualified_
+    candidate's Momentum/Acceleration fields)."""
+    text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "acceleration N/A" in text
+
+
+def test_candidate_alert_renders_security_status():
+    text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "PASS" in text
+
+
+def test_candidate_alert_renders_regime_open_and_closed():
+    open_text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=True, security_status="safe",
+    )
+    closed_text = format_candidate_alert(
+        _pool(), chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "OPEN" in open_text
+    assert "CLOSED" in closed_text
+
+
+def test_candidate_alert_renders_clickable_links():
+    text = format_candidate_alert(
+        _pool(pool_address="0xabc", token_address="0xdef"),
+        chain="robinhood", regime_open=False, security_status="safe",
+    )
+    assert "https://dexscreener.com/robinhood/0xabc" in text
+    assert "https://fomo.family/tokens/robinhood/0xdef" in text
