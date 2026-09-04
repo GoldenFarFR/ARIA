@@ -86,6 +86,21 @@ logger = logging.getLogger(__name__)
 # so a caller asking for a wider window than 5min is never starved).
 _TICK_HISTORY_SECONDS = 600.0
 
+# 04/09, operator-directed: web3.py's own PersistentConnectionProvider.
+# connect() retries internally up to _CONNECT_ATTEMPTS_PER_CYCLE times with
+# its own 1.75x backoff (~1.75s/3.06s/5.36s/9.38s, ~20s total) BEFORE
+# raising and letting the loop below take over with its own, far more
+# patient backoff (_RECONNECT_MIN_SECONDS -> _RECONNECT_MAX_SECONDS,
+# doubling to 30s). Left at web3.py's default of 5, a sustained "node under
+# resource pressure" condition (a real, repeated HTTP 503 pattern observed
+# live on Robinhood 04/09 -- Chainstack's own error reference documents 503
+# as exactly that, recommending backoff, never a fixed retry count) gets
+# hammered with 5 rapid internal reconnection attempts per cycle instead of
+# falling back to the slower, more considerate outer backoff sooner. Lower,
+# not zero -- a lone transient blip still gets one quick local retry before
+# paying the outer loop's full cycle cost (log line + `_resubscribe()`).
+_CONNECT_ATTEMPTS_PER_CYCLE = 2
+
 # Reconnect backoff -- same shape as every other long-running feed in this
 # dome (doubling, capped), never a tight retry loop against a real RPC.
 _RECONNECT_MIN_SECONDS = 1.0
@@ -1129,7 +1144,9 @@ class EVMSwapWebSocketFeed:
         backoff = _RECONNECT_MIN_SECONDS
         while not self._stopped:
             try:
-                async with AsyncWeb3(WebSocketProvider(self._ws_url)) as w3:
+                async with AsyncWeb3(
+                    WebSocketProvider(self._ws_url, max_connection_retries=_CONNECT_ATTEMPTS_PER_CYCLE),
+                ) as w3:
                     self._w3 = w3
                     self._connected = True
                     # A fresh connection invalidates every subscription id
