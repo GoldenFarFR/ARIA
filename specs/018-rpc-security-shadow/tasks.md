@@ -5,6 +5,8 @@ description: "Task list for the RPC Security Shadow experiment"
 
 # Tasks: RPC Security Shadow
 
+**Status: PAUSED (resume: 2026-09-25)** — spec/research/data-model/contracts/quickstart are drafted but zero implementation tasks have started as of 11/09 (9 days untouched); no operator "go" recorded yet on this chantier vs. other in-flight work (Brique 6 analysis, roadmap-capteurs-onchain). Flagged for operator review at the resume date rather than left silently stale.
+
 **Input**: Design documents from `/specs/018-rpc-security-shadow/`
 
 **Prerequisites**: spec.md, plan.md, research.md, data-model.md, contracts/rpc_security_engine.md, quickstart.md
