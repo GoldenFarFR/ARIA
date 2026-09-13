@@ -13,3 +13,9 @@ The paper's central framing is novel versus everything already catalogued under 
 - Real cost/complexity of building even a small-scale replica (a handful of adversarial cases against `conviction_research`, not the full 264-case benchmark) — not scoped yet.
 
 No code action: pure research, evaluate as a candidate addition to mandate #192's test suite during a future security-audit pass, never on this reading alone.
+
+## Addition (13/09) — the vendor/platform-victim angle, not just the buyer/executor angle
+
+The research log resurfaced StakeBench with a detail not captured above: the paper's 12 attack objectives are deliberately split across 3 STAKEHOLDER classes — end user, third-party vendor, and the platform itself. Every read of mandate #192 to date (including this fiche's own framing above) treats ARIA as the potentially-deceived AGENT (buyer/executor of a trade or recommendation). It has never been read from the angle of ARIA as the EXPOSED PLATFORM/VENDOR — the dormant x402 seller channel (`/api/x402/b20score`, #245), where ARIA serves a paid response to an external caller rather than consuming external content itself.
+
+Action: no code — when mandate #192 is next revisited, add one explicit question never asked before: could adversarial input in a request to `/api/x402/b20score` manipulate what ARIA's endpoint SERVES BACK to a paying caller, as distinct from every existing test (which only checks whether ARIA-as-reader can be misled by content it consumes)? Read-only until then.
