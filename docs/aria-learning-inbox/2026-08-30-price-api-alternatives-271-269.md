@@ -29,6 +29,8 @@ never for this promotion pass.
 
 | **Chainlink Data Feeds** (logged 08-31) | Native on-chain ETH/USD oracle, officially documented by Base itself (`docs.base.org`) -- read directly via RPC/contract call, no third-party API quota at all | No per-request billing (on-chain read via the Chainstack RPC node ARIA already queries) | Directly answers #271's WETH/USD gap on Base -- but the exact Base MAINNET feed contract address was NOT confirmed by this pass's WebSearch (only Base Goerli/testnet and Ethereum mainnet addresses surfaced); also overlaps `docs/roadmap-capteurs-onchain.md`'s brique 4 (on-chain WETH/USD oracle, not started) -- one mechanism could satisfy both needs | WebSearch-confirmed the product/doc page is real; mainnet contract address NOT yet confirmed -- do not cite a specific address without re-verifying directly against `docs.chain.link`'s Base mainnet feed list |
 
+| **DIA** (logged 09-19, #543) | 3000+ tokens, 65+ chains including Base explicitly, raw trade data scraped from 100+ CEX/DEX (no third-party aggregator in the chain), REST + GraphQL | Free, no API key or signup required | Lowest trial cost of any candidate here (zero friction) -- but real rate limit under sustained load, and actual Robinhood Chain coverage, are unconfirmed | WebSearch-confirmed the free/keyless product is real; NOT live-tested against ARIA's own pools |
+
 ## What this table actually says
 
 This is a fundamentally different category from the other six: an on-chain
