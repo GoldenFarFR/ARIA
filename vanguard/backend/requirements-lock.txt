@@ -82,7 +82,7 @@ orjson==3.11.9
 packaging==26.3
 pandas==3.0.5
 parsimonious==0.10.0
-pillow==12.3.0
+pillow==13.0.0
 playwright==1.62.0
 pluggy==1.6.0
 propcache==0.5.2
