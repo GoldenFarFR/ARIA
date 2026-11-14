@@ -29,7 +29,7 @@ cryptography==50.0.0
 cytoolz==1.1.0
 deprecation==2.1.0
 detect-installer==0.1.0
-dnspython==2.8.0
+dnspython==2.9.2
 email-validator==2.3.0
 eth-account==0.13.7
 eth-hash==0.8.0
